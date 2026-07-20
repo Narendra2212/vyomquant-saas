@@ -1,0 +1,405 @@
+# =============================================================================
+# STEP 2: BACKEND HORIZONTAL SCALING — Kubernetes Deployment
+# =============================================================================
+#
+# Horizontal scaling of backend API with:
+# - Multiple replicas (3-20)
+# - HPA (Horizontal Pod Autoscaler)
+# - Round-robin service
+# - Health checks
+# - PodDisruptionBudget
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trading-platform
+  labels:
+    environment: production
+    tier: backend
+
+---
+# =============================================================================
+# ConfigMap: Backend Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: trading-platform
+data:
+  ENV: "production"
+  WORKERS: "4"
+  REDIS_URL: "redis://redis-service:6379"
+  REDIS_REPLICA_URL: "redis://redis-replica:6379"
+  LOG_LEVEL: "info"
+  # Stateless mode - all state in Redis
+  STATE_STORAGE: "redis"
+
+---
+# =============================================================================
+# Deployment: Backend API (Horizontal Scaling)
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-api
+  namespace: trading-platform
+  labels:
+    app: backend-api
+    tier: backend
+    version: v1
+spec:
+  replicas: 3  # Base replicas for ~150 active users
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  selector:
+    matchLabels:
+      app: backend-api
+  template:
+    metadata:
+      labels:
+        app: backend-api
+        tier: backend
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/trading-platform/backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: backend-config
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "1000m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+          # Liveness probe - restart if unhealthy
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness probe - remove from service if not ready
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Startup probe - allow time to start
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30
+          lifecycle:
+            preStop:
+              exec:
+                # Graceful shutdown - finish processing requests
+                command: ["/bin/sh", "-c", "sleep 10"]
+
+---
+# =============================================================================
+# Service: Backend API (Round Robin)
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-api
+  namespace: trading-platform
+  labels:
+    app: backend-api
+    tier: backend
+  annotations:
+    # Session affinity disabled for true round-robin
+    service.beta.kubernetes.io/session-affinity: "None"
+spec:
+  type: ClusterIP
+  selector:
+    app: backend-api
+  ports:
+    - port: 80
+      targetPort: 8000
+      name: http
+  # Distribute traffic evenly (round-robin)
+  sessionAffinity: None
+
+---
+# =============================================================================
+# HorizontalPodAutoscaler: Backend API
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-api-hpa
+  namespace: trading-platform
+  labels:
+    app: backend-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend-api
+  minReplicas: 3   # Minimum for ~150 active users
+  maxReplicas: 20  # Maximum for 500+ users
+  metrics:
+    # Scale on CPU utilization
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    # Scale on memory utilization
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+    # Scale on custom metric (requests per second)
+    - type: Pods
+      pods:
+        metric:
+          name: http_requests_per_second
+        target:
+          type: AverageValue
+          averageValue: "100"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Min
+
+---
+# =============================================================================
+# PodDisruptionBudget: Backend API
+# =============================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-api-pdb
+  namespace: trading-platform
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: backend-api
+
+---
+# =============================================================================
+# Ingress: Backend API
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: backend-ingress
+  namespace: trading-platform
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    # No sticky sessions - true round-robin
+    nginx.ingress.kubernetes.io/affinity: "none"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+    - hosts:
+        - api.trading-platform.example.com
+      secretName: backend-tls
+  rules:
+    - host: api.trading-platform.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-api
+                port:
+                  number: 80
+
+---
+# =============================================================================
+# ServiceMonitor: Prometheus Scraping
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: backend-api-metrics
+  namespace: trading-platform
+  labels:
+    app: backend-api
+spec:
+  selector:
+    matchLabels:
+      app: backend-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+
+---
+# =============================================================================
+# PrometheusRule: Backend Alerts
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: backend-api-alerts
+  namespace: trading-platform
+  labels:
+    app: backend-api
+spec:
+  groups:
+    - name: backend-api
+      rules:
+        - alert: BackendApiDown
+          expr: up{job="backend-api"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Backend API instance is down"
+            description: "Backend API {{ $labels.instance }} has been down for more than 1 minute"
+        
+        - alert: BackendHighCPU
+          expr: container_cpu_usage_seconds_total{pod=~"backend-api-.*"} > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Backend API high CPU usage"
+            description: "Backend API {{ $labels.pod }} CPU usage is above 80%"
+        
+        - alert: BackendHighMemory
+          expr: container_memory_working_set_bytes{pod=~"backend-api-.*"} / container_spec_memory_limit_bytes > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Backend API high memory usage"
+            description: "Backend API {{ $labels.pod }} memory usage is above 85%"
+        
+        - alert: BackendHighErrorRate
+          expr: rate(http_requests_total{job="backend-api",status=~"5.."}[5m]) > 0.05
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Backend API high error rate"
+            description: "Backend API error rate is above 5%"
+        
+        - alert: BackendHighLatency
+          expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="backend-api"}[5m])) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Backend API high latency"
+            description: "Backend API P95 latency is above 2 seconds"
+        
+        - alert: BackendHPAMaxedOut
+          expr: kube_deployment_status_replicas{deployment="backend-api"} == kube_deployment_spec_replicas{deployment="backend-api"}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Backend API HPA at maximum"
+            description: "Backend API has been running at max replicas for 10 minutes"
+
+---
+# =============================================================================
+# NetworkPolicy: Backend API
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-api-network-policy
+  namespace: trading-platform
+spec:
+  podSelector:
+    matchLabels:
+      app: backend-api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # Allow to Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Allow to external services (exchanges, etc.)
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80

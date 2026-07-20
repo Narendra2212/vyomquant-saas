@@ -1,0 +1,212 @@
+# STEP 1: WEBSOCKET SCALING — Dedicated WebSocket Server
+#
+# Docker Compose configuration for running WebSocket server separately
+#
+# BENEFITS:
+# - WebSocket load isolated from REST API
+# - Can scale WebSocket independently
+# - Better resource allocation
+# - Zero-downtime deployments
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # REDIS (Message Bus)
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: trading-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - trading-network
+
+  # =============================================================================
+  # WEBSOCKET SERVER (Dedicated)
+  # =============================================================================
+  websocket-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.websocket
+    container_name: trading-websocket-server
+    ports:
+      - "8002:8002"
+    environment:
+      - WS_SERVER_HOST=0.0.0.0
+      - WS_SERVER_PORT=8002
+      - WS_SERVER_WORKERS=4
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=info
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://websocket:8002/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '1.0'
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # WEBSOCKET SERVER 2 (Additional instance for load balancing)
+  # =============================================================================
+  websocket-server-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.websocket
+    container_name: trading-websocket-server-2
+    ports:
+      - "8003:8002"
+    environment:
+      - WS_SERVER_HOST=0.0.0.0
+      - WS_SERVER_PORT=8002
+      - WS_SERVER_WORKERS=4
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=info
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://websocket:8002/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '1.0'
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # BACKEND API (Without WebSocket)
+  # =============================================================================
+  backend-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: trading-backend-api
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=production
+      - REDIS_URL=redis://redis:6379
+      - WS_SERVER_URL=ws://websocket-server:8002
+      - LOG_LEVEL=info
+    depends_on:
+      redis:
+        condition: service_healthy
+      websocket-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://backend:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # NGINX LOAD BALANCER (For WebSocket servers)
+  # =============================================================================
+  nginx-ws:
+    image: nginx:alpine
+    container_name: trading-nginx-ws
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx-websocket.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - websocket-server
+      - websocket-server-2
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # PROMETHEUS (Metrics)
+  # =============================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: trading-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus-websocket.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # GRAFANA (Dashboards)
+  # =============================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: trading-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  trading-network:
+    driver: bridge

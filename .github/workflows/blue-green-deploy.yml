@@ -1,0 +1,302 @@
+# STEP 8.11: Blue-Green Deployment Workflow
+#
+# GitHub Actions workflow for zero-downtime deployments
+# Uses blue-green deployment strategy
+
+name: Blue-Green Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: true
+        type: string
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+      action:
+        description: 'Deployment action'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full          # Deploy and switch
+          - deploy-only   # Deploy to green only
+          - switch-only   # Switch traffic to green
+          - rollback      # Rollback to blue
+          - promote       # Promote green to blue
+
+env:
+  NAMESPACE: ${{ github.event.inputs.environment }}
+
+jobs:
+  # =============================================================================
+  # Deploy to Green
+  # =============================================================================
+  deploy-green:
+    name: Deploy to Green
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'full' || github.event.inputs.action == 'deploy-only'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      
+      - name: Configure kubectl
+        run: |
+          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} \
+            --name trading-platform-${{ github.event.inputs.environment }}
+      
+      - name: Deploy to Green
+        run: |
+          echo "Deploying image: ${{ github.event.inputs.image_tag }}"
+          
+          # Make script executable
+          chmod +x scripts/blue-green-deploy.sh
+          
+          # Deploy to green
+          ./scripts/blue-green-deploy.sh deploy "${{ github.event.inputs.image_tag }}"
+        env:
+          NAMESPACE: ${{ github.event.inputs.environment }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      
+      - name: Notify deployment
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "🚀 Blue-Green: Deployed to GREEN",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Blue-Green Deployment*\n• Environment: ${{ github.event.inputs.environment }}\n• Image: ${{ github.event.inputs.image_tag }}\n• Status: GREEN ready for switch"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # =============================================================================
+  # Switch Traffic to Green
+  # =============================================================================
+  switch-traffic:
+    name: Switch Traffic
+    runs-on: ubuntu-latest
+    needs: deploy-green
+    if: github.event.inputs.action == 'full'
+    environment:
+      name: ${{ github.event.inputs.environment }}-approval
+      url: https://api.trading-platform.example.com/health
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      
+      - name: Configure kubectl
+        run: |
+          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} \
+            --name trading-platform-${{ github.event.inputs.environment }}
+      
+      - name: Switch traffic to Green
+        run: |
+          chmod +x scripts/blue-green-deploy.sh
+          ./scripts/blue-green-deploy.sh switch
+        env:
+          NAMESPACE: ${{ github.event.inputs.environment }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      
+      - name: Monitor after switch
+        run: |
+          echo "Monitoring for 60 seconds after switch..."
+          sleep 60
+          
+          # Check health
+          kubectl get pods -n ${{ github.event.inputs.environment }} -l version=green
+          
+          # Check for errors
+          ERROR_COUNT=$(kubectl logs -n ${{ github.event.inputs.environment }} \
+            -l version=green --since=2m 2>/dev/null | grep -c ERROR || echo "0")
+          
+          if [ "$ERROR_COUNT" -gt 10 ]; then
+            echo "⚠️ High error count detected: $ERROR_COUNT"
+            echo "Consider rolling back"
+          else
+            echo "✅ Monitoring passed"
+          fi
+      
+      - name: Notify switch
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "🚦 Blue-Green: Traffic switched to GREEN",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Traffic Switched* ✅\n• Environment: ${{ github.event.inputs.environment }}\n• Active: GREEN\n• Run 'promote' workflow to finalize"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # =============================================================================
+  # Manual Switch (Separate workflow)
+  # =============================================================================
+  manual-switch:
+    name: Manual Switch
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'switch-only'
+    environment:
+      name: ${{ github.event.inputs.environment }}-approval
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      
+      - name: Configure kubectl
+        run: |
+          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} \
+            --name trading-platform-${{ github.event.inputs.environment }}
+      
+      - name: Switch traffic
+        run: |
+          chmod +x scripts/blue-green-deploy.sh
+          ./scripts/blue-green-deploy.sh switch
+        env:
+          NAMESPACE: ${{ github.event.inputs.environment }}
+
+  # =============================================================================
+  # Rollback
+  # =============================================================================
+  rollback:
+    name: Emergency Rollback
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'rollback'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      
+      - name: Configure kubectl
+        run: |
+          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} \
+            --name trading-platform-${{ github.event.inputs.environment }}
+      
+      - name: Rollback to Blue
+        run: |
+          chmod +x scripts/blue-green-deploy.sh
+          ./scripts/blue-green-deploy.sh rollback
+        env:
+          NAMESPACE: ${{ github.event.inputs.environment }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      
+      - name: Notify rollback
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "🚨 Blue-Green: EMERGENCY ROLLBACK",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*ROLLBACK EXECUTED* 🚨\n• Environment: ${{ github.event.inputs.environment }}\n• Reverted to: BLUE\n• Reason: Manual rollback triggered"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # =============================================================================
+  # Promote Green to Blue
+  # =============================================================================
+  promote:
+    name: Promote Green to Blue
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'promote'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      
+      - name: Configure kubectl
+        run: |
+          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} \
+            --name trading-platform-${{ github.event.inputs.environment }}
+      
+      - name: Promote to Blue
+        run: |
+          chmod +x scripts/blue-green-deploy.sh
+          ./scripts/blue-green-deploy.sh promote
+        env:
+          NAMESPACE: ${{ github.event.inputs.environment }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      
+      - name: Notify promotion
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "✅ Blue-Green: Promotion Complete",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Deployment Promoted* ✅\n• Environment: ${{ github.event.inputs.environment }}\n• GREEN → BLUE\n• Blue now running latest version"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

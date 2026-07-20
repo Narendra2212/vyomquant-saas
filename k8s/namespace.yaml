@@ -1,0 +1,8 @@
+# STEP 8.2 — Kubernetes Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aerora-production
+  labels:
+    name: aerora-production
+    environment: production

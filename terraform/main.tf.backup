@@ -1,0 +1,185 @@
+# STEP 8.2 — Terraform Infrastructure (AWS)
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+  
+  backend "s3" {
+    bucket = "aerora-terraform-state"
+    key    = "production/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+# VPC and Networking
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 5.0"
+  
+  name = "aerora-vpc"
+  cidr = "10.0.0.0/16"
+  
+  azs             = ["${var.aws_region}a", "${var.aws_region}b", "${var.aws_region}c"]
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+  
+  enable_nat_gateway = true
+  enable_vpn_gateway = false
+  
+  tags = {
+    Environment = "production"
+    Project     = "aerora"
+  }
+}
+
+# STEP 8.2: EKS Cluster
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 19.0"
+  
+  cluster_name    = "aerora-production"
+  cluster_version = "1.28"
+  
+  vpc_id                         = module.vpc.vpc_id
+  subnet_ids                     = module.vpc.private_subnets
+  control_plane_subnet_ids       = module.vpc.private_subnets
+  
+  # STEP 8.4: Managed node groups for auto-scaling
+  eks_managed_node_groups = {
+    general = {
+      min_size       = 3
+      max_size       = 20
+      desired_size   = 3
+      
+      instance_types = ["m6i.xlarge"]  # 4 vCPU, 16GB RAM
+      
+      labels = {
+        workload = "general"
+      }
+      
+      # STEP 8.10: Security
+      iam_role_additional_policies = {
+        CloudWatchAgentServerPolicy = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+        AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      }
+    }
+    
+    # STEP 8.4: Spot instances for cost optimization
+    spot = {
+      min_size       = 1
+      max_size       = 10
+      desired_size   = 2
+      
+      instance_types = ["m6i.large", "m5.large", "m5a.large"]
+      capacity_type  = "SPOT"
+      
+      labels = {
+        workload = "spot"
+      }
+    }
+  }
+  
+  tags = {
+    Environment = "production"
+  }
+}
+
+# STEP 8.2: RDS PostgreSQL
+module "rds" {
+  source  = "terraform-aws-modules/rds/aws"
+  version = "~> 6.0"
+  
+  identifier = "aerora-production"
+  
+  # STEP 8.5: Database optimization
+  engine               = "postgres"
+  engine_version       = "15.4"
+  family               = "postgres15"
+  major_engine_version = "15"
+  instance_class       = "db.r6g.xlarge"  # 4 vCPU, 32GB RAM
+  
+  allocated_storage     = 100
+  max_allocated_storage = 500
+  storage_encrypted   = true
+  
+  db_name  = "aerora"
+  username = "aerora_admin"
+  port     = 5432
+  
+  # STEP 8.5: Multi-AZ for high availability
+  multi_az = true
+  
+  # STEP 8.5: Backup
+  backup_retention_period = 7
+  backup_window          = "03:00-04:00"
+  maintenance_window     = "Mon:04:00-Mon:05:00"
+  
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnets
+  
+  # STEP 8.5: Connection pooling with RDS Proxy
+  create_db_proxy = true
+  
+  # STEP 8.10: Security
+  deletion_protection = true
+  
+  tags = {
+    Environment = "production"
+  }
+}
+
+# STEP 8.6: ElastiCache Redis
+module "redis" {
+  source  = "terraform-aws-modules/elasticache/aws"
+  version = "~> 1.0"
+  
+  cluster_id           = "aerora-production"
+  description          = "Aerora Redis Cluster"
+  
+  node_type            = "cache.r6g.large"
+  num_cache_nodes      = 2
+  
+  engine_version       = "7.0"
+  port                 = 6379
+  
+  # STEP 8.6: Separate node groups for cache/queues/events
+  parameter_group_name = "default.redis7"
+  
+  subnet_ids           = module.vpc.private_subnets
+  vpc_id               = module.vpc.vpc_id
+  
+  # STEP 8.6: Multi-AZ
+  multi_az_enabled     = true
+  
+  tags = {
+    Environment = "production"
+  }
+}
+
+# STEP 8.8: CloudWatch Log Group
+resource "aws_cloudwatch_log_group" "aerora" {
+  name              = "/aws/eks/aerora-production/cluster"
+  retention_in_days = 30
+  
+  tags = {
+    Environment = "production"
+  }
+}
+
+# STEP 8.10: Secrets Manager
+resource "aws_secretsmanager_secret" "aerora" {
+  name                    = "aerora/production"
+  description             = "Aerora Production Secrets"
+  recovery_window_in_days = 7
+  
+  tags = {
+    Environment = "production"
+  }
+}

@@ -1,0 +1,347 @@
+﻿
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\App.jsx
+    11:3   warning  'useReactFlow' is defined but never used                        no-unused-vars
+    12:3   warning  'ReactFlowProvider' is defined but never used                   no-unused-vars
+    18:20  warning  'LineChart' is defined but never used                           no-unused-vars
+    18:31  warning  'Line' is defined but never used                                no-unused-vars
+    18:37  warning  'BarChart' is defined but never used                            no-unused-vars
+    18:47  warning  'Bar' is defined but never used                                 no-unused-vars
+    20:24  warning  'ReferenceLine' is defined but never used                       no-unused-vars
+    20:39  warning  'ComposedChart' is defined but never used                       no-unused-vars
+    20:54  warning  'Scatter' is defined but never used                             no-unused-vars
+    26:24  warning  'ChevronRight' is defined but never used                        no-unused-vars
+    29:15  warning  'FileText' is defined but never used                            no-unused-vars
+    31:3   warning  'ArrowDownRight' is defined but never used                      no-unused-vars
+    32:26  warning  'MessageSquare' is defined but never used                       no-unused-vars
+    32:41  warning  'Volume2' is defined but never used                             no-unused-vars
+    33:8   warning  'HardDrive' is defined but never used                           no-unused-vars
+    33:25  warning  'Database' is defined but never used                            no-unused-vars
+    34:15  warning  'PieIcon' is defined but never used                             no-unused-vars
+    34:24  warning  'Calendar' is defined but never used                            no-unused-vars
+    34:34  warning  'Sliders' is defined but never used                             no-unused-vars
+    35:3   warning  'UserCheck' is defined but never used                           no-unused-vars
+    35:14  warning  'AlertCircle' is defined but never used                         no-unused-vars
+    35:42  warning  'Flame' is defined but never used                               no-unused-vars
+    36:3   warning  'TrendingDown' is defined but never used                        no-unused-vars
+    36:26  warning  'Hash' is defined but never used                                no-unused-vars
+    37:16  warning  'Smartphone' is defined but never used                          no-unused-vars
+    38:17  warning  'StopCircle' is defined but never used                          no-unused-vars
+    38:29  warning  'MoreHorizontal' is defined but never used                      no-unused-vars
+    39:34  warning  'Minus' is defined but never used                               no-unused-vars
+    39:41  warning  'Triangle' is defined but never used                            no-unused-vars
+    40:3   warning  'Hexagon' is defined but never used                             no-unused-vars
+    40:12  warning  'Crosshair' is defined but never used                           no-unused-vars
+    40:30  warning  'Maximize2' is defined but never used                           no-unused-vars
+    40:41  warning  'Minimize2' is defined but never used                           no-unused-vars
+    41:3   warning  'Package' is defined but never used                             no-unused-vars
+    41:12  warning  'Tag' is defined but never used                                 no-unused-vars
+    41:17  warning  'Bookmark' is defined but never used                            no-unused-vars
+    41:27  warning  'Flag' is defined but never used                                no-unused-vars
+    41:33  warning  'Rss' is defined but never used                                 no-unused-vars
+    46:8   warning  'DrawdownMonitor' is defined but never used                     no-unused-vars
+    46:27  warning  'DRAWDOWN_LEVELS' is defined but never used                     no-unused-vars
+    47:8   warning  'KillSwitchBanner' is defined but never used                    no-unused-vars
+    48:8   warning  'LiveRiskAlerts' is defined but never used                      no-unused-vars
+    49:8   warning  'StrategyDashboard' is defined but never used                   no-unused-vars
+    50:8   warning  'SignalTracePanel' is defined but never used                    no-unused-vars
+    53:8   warning  'InfrastructureOperations' is defined but never used            no-unused-vars
+    55:3   warning  'EquityCurveChart' is defined but never used                    no-unused-vars
+    60:3   warning  'RiskAlertBanner' is defined but never used                     no-unused-vars
+    85:5   error    'navigator' is not defined                                      no-undef
+   516:7   warning  'Table' is assigned a value but never used                      no-unused-vars
+   522:7   warning  'TableHead' is assigned a value but never used                  no-unused-vars
+   530:7   warning  'TableHeader' is assigned a value but never used                no-unused-vars
+   544:7   warning  'TableRow' is assigned a value but never used                   no-unused-vars
+   562:7   warning  'TableCell' is assigned a value but never used                  no-unused-vars
+   620:7   warning  'LoadingOverlay' is assigned a value but never used             no-unused-vars
+   639:7   warning  'LiveStatus' is assigned a value but never used                 no-unused-vars
+   859:25  warning  '_' is defined but never used                                   no-unused-vars
+   869:7   warning  'useLoading' is assigned a value but never used                 no-unused-vars
+   888:7   warning  'setGlobalLoading' is assigned a value but never used           no-unused-vars
+   910:7   warning  'SkeletonCard' is assigned a value but never used               no-unused-vars
+   927:7   warning  'SkeletonTable' is assigned a value but never used              no-unused-vars
+   950:7   warning  'ErrorState' is assigned a value but never used                 no-unused-vars
+   996:7   warning  'usePolling' is assigned a value but never used                 no-unused-vars
+  1033:7   warning  'LiveLogStream' is assigned a value but never used              no-unused-vars
+  1153:7   warning  'AsyncBtn' is assigned a value but never used                   no-unused-vars
+  1269:23  error    'performance' is not defined                                    no-undef
+  1280:9   error    'requestAnimationFrame' is not defined                          no-undef
+  1286:5   error    'requestAnimationFrame' is not defined                          no-undef
+  1609:30  warning  'go' is defined but never used                                  no-unused-vars
+  2322:17  error    'alert' is not defined                                          no-undef
+  2830:7   warning  'MetricCard' is assigned a value but never used                 no-unused-vars
+  2886:30  warning  'setRecentTransactions' is assigned a value but never used      no-unused-vars
+  2888:27  warning  'setIsLoadingRecent' is assigned a value but never used         no-unused-vars
+  2890:22  warning  'setActiveBots' is assigned a value but never used              no-unused-vars
+  2891:31  warning  'setIsLoadingActiveBots' is assigned a value but never used     no-unused-vars
+  2893:26  warning  'setStrategyStatus' is assigned a value but never used          no-unused-vars
+  2894:27  warning  'setActivePositions' is assigned a value but never used         no-unused-vars
+  2895:22  warning  'setTotalStats' is assigned a value but never used              no-unused-vars
+  2919:11  warning  'normalizeStats' is assigned a value but never used             no-unused-vars
+  2928:11  warning  'normalizeRecent' is assigned a value but never used            no-unused-vars
+  2957:11  warning  'normalizeActiveBots' is assigned a value but never used        no-unused-vars
+  2997:16  warning  'error' is defined but never used                               no-unused-vars
+  3350:28  error    'AbortController' is not defined                                no-undef
+  3351:11  warning  'API_BASE' is assigned a value but never used                   no-unused-vars
+  3413:9   warning  'API_BASE' is assigned a value but never used                   no-unused-vars
+  3603:31  warning  'setAvailableTimeframes' is assigned a value but never used     no-unused-vars
+  3617:28  warning  'setDataAvailability' is assigned a value but never used        no-unused-vars
+  3659:11  warning  'exchange' is assigned a value but never used                   no-unused-vars
+  3740:7   error    There is no `cause` attached to the symptom error being thrown  preserve-caught-error
+  3759:13  warning  'exchange' is assigned a value but never used                   no-unused-vars
+  4101:7   error    There is no `cause` attached to the symptom error being thrown  preserve-caught-error
+  4685:7   error    There is no `cause` attached to the symptom error being thrown  preserve-caught-error
+  4946:9   warning  'glowKey' is assigned a value but never used                    no-unused-vars
+  4965:9   warning  'color' is assigned a value but never used                      no-unused-vars
+  5012:11  warning  'pipelineMode' is assigned a value but never used               no-unused-vars
+  5016:5   warning  'availableTimeframes' is assigned a value but never used        no-unused-vars
+  5021:5   warning  'fetchOrderbookImbalance' is assigned a value but never used    no-unused-vars
+  5032:5   warning  'computeIndicator' is assigned a value but never used           no-unused-vars
+  5033:5   warning  'computeIndicatorsBatch' is assigned a value but never used     no-unused-vars
+  5034:5   warning  'indicatorCache' is assigned a value but never used             no-unused-vars
+  5035:5   warning  'clearIndicatorCache' is assigned a value but never used        no-unused-vars
+  5038:5   warning  'lastComputation' is assigned a value but never used            no-unused-vars
+  5039:5   warning  'getAvailableOutputs' is assigned a value but never used        no-unused-vars
+  5040:5   warning  'validateIndicatorParams' is assigned a value but never used    no-unused-vars
+  5045:5   warning  'evaluateLogic' is assigned a value but never used              no-unused-vars
+  5046:5   warning  'evaluateLogicBatch' is assigned a value but never used         no-unused-vars
+  5047:5   warning  'logicCache' is assigned a value but never used                 no-unused-vars
+  5048:5   warning  'clearLogicCache' is assigned a value but never used            no-unused-vars
+  5052:5   warning  'getAvailableOperators' is assigned a value but never used      no-unused-vars
+  5053:5   warning  'getConditionTemplate' is assigned a value but never used       no-unused-vars
+  5061:5   warning  'executionCache' is assigned a value but never used             no-unused-vars
+  5062:5   warning  'clearExecutionCache' is assigned a value but never used        no-unused-vars
+  5066:5   warning  'generateExecutionId' is assigned a value but never used        no-unused-vars
+  5094:10  warning  'period' is assigned a value but never used                     no-unused-vars
+  5094:18  warning  'setPeriod' is assigned a value but never used                  no-unused-vars
+  5158:10  warning  'futureStates' is assigned a value but never used               no-unused-vars
+  5191:9   error    'addEdge' is not defined                                        no-undef
+  5431:28  error    'AbortController' is not defined                                no-undef
+  5440:16  warning  'err' is defined but never used                                 no-unused-vars
+  5580:30  warning  'warnings' is assigned a value but never used                   no-unused-vars
+  6120:28  error    'AbortController' is not defined                                no-undef
+  6137:16  warning  'err' is defined but never used                                 no-unused-vars
+  6186:15  warning  'rightInd' is assigned a value but never used                   no-unused-vars
+  6373:10  warning  'Portfolio' is defined but never used                           no-unused-vars
+  6387:11  warning  'money' is assigned a value but never used                      no-unused-vars
+  6392:11  warning  'pct' is assigned a value but never used                        no-unused-vars
+  6401:16  warning  'error' is defined but never used                               no-unused-vars
+  6401:23  error    Empty block statement                                           no-empty
+  6545:10  warning  'TradeHistory' is defined but never used                        no-unused-vars
+  6552:28  error    'AbortController' is not defined                                no-undef
+  6615:22  error    'Blob' is not defined                                           no-undef
+  6725:9   warning  'chartContainerRef' is assigned a value but never used          no-unused-vars
+  6726:9   warning  'chartRef' is assigned a value but never used                   no-unused-vars
+  6727:9   warning  'seriesRef' is assigned a value but never used                  no-unused-vars
+  6740:41  warning  'signal' is defined but never used                              no-unused-vars
+  6751:28  error    'AbortController' is not defined                                no-undef
+  6836:14  warning  'err' is defined but never used                                 no-unused-vars
+  6983:28  error    'AbortController' is not defined                                no-undef
+  7050:14  warning  'err' is defined but never used                                 no-unused-vars
+  7088:16  warning  'err' is defined but never used                                 no-unused-vars
+  7212:28  error    'AbortController' is not defined                                no-undef
+  7457:10  warning  'SecurityLogs' is defined but never used                        no-unused-vars
+  7496:22  error    'Blob' is not defined                                           no-undef
+  7584:28  error    'AbortController' is not defined                                no-undef
+  7613:13  error    'navigator' is not defined                                      no-undef
+  7615:14  warning  'err' is defined but never used                                 no-unused-vars
+  7792:28  error    'AbortController' is not defined                                no-undef
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\SupportPage.jsx
+  1:20  warning  'useEffect' is defined but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\apiClient.js
+   154:25  error    'crypto' is not defined                                                 no-undef
+   166:12  warning  'error' is defined but never used                                       no-unused-vars
+   250:27  error    'URLSearchParams' is not defined                                        no-undef
+   276:12  warning  'error' is defined but never used                                       no-unused-vars
+   680:11  warning  'duration' is assigned a value but never used                           no-unused-vars
+   851:60  warning  'attempt' is assigned a value but never used                            no-unused-vars
+   852:7   error    The value assigned to 'lastError' is not used in subsequent statements  no-useless-assignment
+  1138:20  error    'error' is not defined                                                  no-undef
+  1214:20  error    'error' is not defined                                                  no-undef
+  1291:20  error    'error' is not defined                                                  no-undef
+  1357:27  error    'URLSearchParams' is not defined                                        no-undef
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\api\modules\orders.js
+   62:24  error  'URLSearchParams' is not defined  no-undef
+   82:24  error  'URLSearchParams' is not defined  no-undef
+   96:24  error  'URLSearchParams' is not defined  no-undef
+  106:33  error  'URLSearchParams' is not defined  no-undef
+  118:24  error  'URLSearchParams' is not defined  no-undef
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\api\modules\portfolio.js
+    6:21  warning  'put' is defined but never used   no-unused-vars
+    6:26  warning  'del' is defined but never used   no-unused-vars
+   49:24  error    'URLSearchParams' is not defined  no-undef
+   83:24  error    'URLSearchParams' is not defined  no-undef
+  103:24  error    'URLSearchParams' is not defined  no-undef
+  114:24  error    'URLSearchParams' is not defined  no-undef
+  133:24  error    'URLSearchParams' is not defined  no-undef
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\api\typed-client.ts
+  23:13  error  Parsing error: Unexpected token {
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\BotMonitoringConsole.jsx
+    1:8   warning  'React' is defined but never used                     no-unused-vars
+    1:38  warning  'useCallback' is defined but never used               no-unused-vars
+    4:25  warning  'CheckCircle' is defined but never used               no-unused-vars
+    5:27  warning  'Radio' is defined but never used                     no-unused-vars
+    5:34  warning  'Zap' is defined but never used                       no-unused-vars
+    6:3   warning  'TrendingUp' is defined but never used                no-unused-vars
+    6:15  warning  'TrendingDown' is defined but never used              no-unused-vars
+    6:29  warning  'Minus' is defined but never used                     no-unused-vars
+    7:18  warning  'Cpu' is defined but never used                       no-unused-vars
+    7:23  warning  'HardDrive' is defined but never used                 no-unused-vars
+   10:8   warning  'SignalTraceVisualization' is defined but never used  no-unused-vars
+  116:3   warning  'accountId' is defined but never used                 no-unused-vars
+  117:3   warning  'onBotError' is defined but never used                no-unused-vars
+  372:19  warning  'StatusIcon' is assigned a value but never used       no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\Button.jsx
+  1:8  warning  'React' is defined but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\Card.jsx
+  1:8  warning  'React' is defined but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\CommandPalette.jsx
+   1:8   warning  'React' is defined but never used  no-unused-vars
+  11:60  error    'alert' is not defined             no-undef
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\DashboardUpgrades.jsx
+  11:8   warning  'React' is defined but never used         no-unused-vars
+  13:15  warning  'TrendingDown' is defined but never used  no-unused-vars
+  15:21  warning  'PieChart' is defined but never used      no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\DrawdownMonitor.jsx
+   1:8   warning  'React' is defined but never used               no-unused-vars
+  25:10  warning  'isBlocked' is assigned a value but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\EventDagRunner.jsx
+  18:8   warning  'React' is defined but never used        no-unused-vars
+  18:27  warning  'useEffect' is defined but never used    no-unused-vars
+  18:38  warning  'useCallback' is defined but never used  no-unused-vars
+  81:15  warning  'stats' is defined but never used        no-unused-vars
+  89:7   error    'alert' is not defined                   no-undef
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\EventLogPanel.jsx
+    1:8   warning  'React' is defined but never used                   no-unused-vars
+   52:22  warning  'setAutoScroll' is assigned a value but never used  no-unused-vars
+  283:22  error    'Blob' is not defined                               no-undef
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\ExecutionBlotter.jsx
+  1:8   warning  'React' is defined but never used        no-unused-vars
+  1:44  warning  'useCallback' is defined but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\InfrastructureOperations.jsx
+    1:8   warning  'React' is defined but never used             no-unused-vars
+    1:38  warning  'useCallback' is defined but never used       no-unused-vars
+    4:19  warning  'Activity' is defined but never used          no-unused-vars
+    4:29  warning  'AlertTriangle' is defined but never used     no-unused-vars
+    5:36  warning  'Radio' is defined but never used             no-unused-vars
+    6:3   warning  'Zap' is defined but never used               no-unused-vars
+    6:8   warning  'AlertOctagon' is defined but never used      no-unused-vars
+    6:27  warning  'TrendingUp' is defined but never used        no-unused-vars
+    7:3   warning  'TrendingDown' is defined but never used      no-unused-vars
+    7:32  warning  'Flame' is defined but never used             no-unused-vars
+  106:3   warning  'accountId' is defined but never used         no-unused-vars
+  140:10  warning  'history' is assigned a value but never used  no-unused-vars
+  142:25  error    'useRef' is not defined                       no-undef
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\KillSwitchBanner.jsx
+  1:8  warning  'React' is defined but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\LatencyMonitor.jsx
+    1:8   warning  'React' is defined but never used                      no-unused-vars
+   97:11  warning  'originalRequest' is assigned a value but never used   no-unused-vars
+   98:11  warning  'originalResponse' is assigned a value but never used  no-unused-vars
+  101:11  warning  'requestTimes' is assigned a value but never used      no-unused-vars
+  156:16  warning  'err' is defined but never used                        no-unused-vars
+  196:16  warning  'err' is defined but never used                        no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\LiveRiskAlerts.jsx
+   1:8  warning  'React' is defined but never used      no-unused-vars
+  30:3  warning  'accountId' is defined but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\MonitoringTerminal.jsx
+  1:8  warning  'React' is defined but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\NotificationsPage.jsx
+  15:8  warning  'React' is defined but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\OperatorMode.jsx
+   1:8   warning  'React' is defined but never used  no-unused-vars
+  11:11  error    'alert' is not defined             no-undef
+  21:9   error    'alert' is not defined             no-undef
+  28:9   error    'alert' is not defined             no-undef
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\RiskCommandCenter.jsx
+   1:8   warning  'React' is defined but never used                          no-unused-vars
+   6:28  warning  'setExchangeExposure' is assigned a value but never used   no-unused-vars
+   7:29  warning  'setMarginUtilization' is assigned a value but never used  no-unused-vars
+  82:9   error    'alert' is not defined                                     no-undef
+  84:9   error    'alert' is not defined                                     no-undef
+  88:7   error    'alert' is not defined                                     no-undef
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\SignalTracePanel.jsx
+  1:8  warning  'React' is defined but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\SignalTraceVisualization.jsx
+    1:8   warning  'React' is defined but never used        no-unused-vars
+    1:46  warning  'useCallback' is defined but never used  no-unused-vars
+    3:13  warning  'Clock' is defined but never used        no-unused-vars
+    4:3   warning  'ArrowRight' is defined but never used   no-unused-vars
+    6:35  warning  'Layers' is defined but never used       no-unused-vars
+  128:3   warning  'accountId' is defined but never used    no-unused-vars
+  129:3   warning  'onNodeClick' is defined but never used  no-unused-vars
+  288:39  warning  'idx' is defined but never used          no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\StatCard.jsx
+  1:8  warning  'React' is defined but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\StrategyBuilder.jsx
+   1:8   warning  'React' is defined but never used              no-unused-vars
+  29:17  warning  'setNodes' is assigned a value but never used  no-unused-vars
+  30:17  warning  'setEdges' is assigned a value but never used  no-unused-vars
+  78:25  warning  'node' is defined but never used               no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\StrategyControlPanel.jsx
+    1:8   warning  'React' is defined but never used                         no-unused-vars
+  102:3   warning  'apiClient' is defined but never used                     no-unused-vars
+  764:28  warning  'setActiveStrategies' is assigned a value but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\StrategyDashboard.jsx
+    1:8  warning  'React' is defined but never used                  no-unused-vars
+   50:3  warning  'accountId' is defined but never used              no-unused-vars
+  209:9  warning  'totalStopped' is assigned a value but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\StrategyRiskIndicator.jsx
+  311:48  error  Parsing error: Unexpected token `>`. Did you mean `&gt;` or `{">"}`?
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\components\WebSocketReconnectManager.jsx
+   15:8  warning  'React' is defined but never used                         no-unused-vars
+   17:8  warning  'WS_CHANNELS' is defined but never used                   no-unused-vars
+  234:5  warning  'lastEventTimestamps' is assigned a value but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\hooks\useEventDag.js
+  19:8  warning  'wsClient' is defined but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\layouts\WorkspaceLayout.jsx
+   1:8  warning  'React' is defined but never used          no-unused-vars
+  11:8  warning  'EventLogPanel' is defined but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\store\useWorkspaceStore.js
+  27:26  error  'Blob' is not defined  no-undef
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\supabase.js
+  28:14  warning  'e' is defined but never used  no-unused-vars
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\types\api.types.ts
+  20:8  error  Parsing error: Unexpected token type
+
+D:\aerora_quant_backend_updated_final1\algo22-terminal\src\websocketClient.js
+   74:18  warning  'e' is defined but never used  no-unused-vars
+  423:16  warning  'e' is defined but never used  no-unused-vars
+
+Γ£û 270 problems (53 errors, 217 warnings)
+

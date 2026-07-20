@@ -1,0 +1,75 @@
+name: Deploy to AWS ECS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-southeast-1
+  ECR_REPOSITORY_API: vyomquant-api
+  ECR_REPOSITORY_TEE: vyomquant-tee
+  ECR_REPOSITORY_MDS: vyomquant-mds
+  ECS_CLUSTER: vyomquant-cluster-prod
+  ECS_SERVICE_API: vyomquant-api-service-prod
+  ECS_SERVICE_TEE: vyomquant-tee-service-prod
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push API image to Amazon ECR
+        id: build-image-api
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_API:$IMAGE_TAG -f Dockerfile.backend .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY_API:$IMAGE_TAG
+          echo "image_api=$ECR_REGISTRY/$ECR_REPOSITORY_API:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Build, tag, and push TEE image to Amazon ECR
+        id: build-image-tee
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_TEE:$IMAGE_TAG -f Dockerfile.tee .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY_TEE:$IMAGE_TAG
+          echo "image_tee=$ECR_REGISTRY/$ECR_REPOSITORY_TEE:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      # Download existing task definitions or template them here
+      # For simplicity, assuming we update the service with the new image
+      - name: Update ECS service for API
+        run: |
+          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE_API --force-new-deployment
+
+      - name: Update ECS service for TEE
+        run: |
+          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE_TEE --force-new-deployment
+
+      - name: Wait for API service stability
+        run: |
+          aws ecs wait services-stable --cluster $ECS_CLUSTER --services $ECS_SERVICE_API
+
+      - name: Wait for TEE service stability
+        run: |
+          aws ecs wait services-stable --cluster $ECS_CLUSTER --services $ECS_SERVICE_TEE

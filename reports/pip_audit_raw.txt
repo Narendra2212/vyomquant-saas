@@ -1,0 +1,86 @@
+﻿pip-audit : ERROR:pip_audit._virtual_env:internal pip failure:   error: subprocess-exited-with-error
+At line:1 char:302
++ ... ng]::UTF8); pip-audit -r reports/requirements_utf8.txt --format markd ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ERROR:pip_audit...ited-with-error:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+  
+
+  Getting requirements to build wheel did not run successfully.
+
+  exit code: 1
+
+  
+
+  [24 lines of output]
+
+  Traceback (most recent call last):
+
+    File "C:\Users\user\AppData\Local\Temp\tmp5kroembz\Lib\site-packages\pip\_vendor\pyproject_hooks\_in_process\_in_pr
+ocess.py", line 389, in <module>
+
+      main()
+
+      ~~~~^^
+
+    File "C:\Users\user\AppData\Local\Temp\tmp5kroembz\Lib\site-packages\pip\_vendor\pyproject_hooks\_in_process\_in_pr
+ocess.py", line 373, in main
+
+      json_out["return_val"] = hook(**hook_input["kwargs"])
+
+                               ~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+
+    File "C:\Users\user\AppData\Local\Temp\tmp5kroembz\Lib\site-packages\pip\_vendor\pyproject_hooks\_in_process\_in_pr
+ocess.py", line 143, in get_requires_for_build_wheel
+
+      return hook(config_settings)
+
+    File "C:\Users\user\AppData\Local\Temp\pip-build-env-7qzitvai\overlay\Lib\site-packages\setuptools\build_meta.py", 
+line 333, in get_requires_for_build_wheel
+
+      return self._get_build_requires(config_settings, requirements=[])
+
+             ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    File "C:\Users\user\AppData\Local\Temp\pip-build-env-7qzitvai\overlay\Lib\site-packages\setuptools\build_meta.py", 
+line 301, in _get_build_requires
+
+      self.run_setup()
+
+      ~~~~~~~~~~~~~~^^
+
+    File "C:\Users\user\AppData\Local\Temp\pip-build-env-7qzitvai\overlay\Lib\site-packages\setuptools\build_meta.py", 
+line 520, in run_setup
+
+      super().run_setup(setup_script=setup_script)
+
+      ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    File "C:\Users\user\AppData\Local\Temp\pip-build-env-7qzitvai\overlay\Lib\site-packages\setuptools\build_meta.py", 
+line 317, in run_setup
+
+      exec(code, locals())
+
+      ~~~~^^^^^^^^^^^^^^^^
+
+    File "<string>", line 51, in <module>
+
+    File "<string>", line 48, in _guard_py_ver
+
+  RuntimeError: Cannot install on Python version 3.14.3; only versions >=3.9,<3.13 are supported.
+
+  [end of output]
+
+  
+
+  note: This error originates from a subprocess, and is likely not a problem with pip.
+
+ERROR: Failed to build 'numba' when getting requirements to build wheel
+
+
+ERROR:pip_audit._cli:Failed to install packages: 
+['C:\\Users\\user\\AppData\\Local\\Temp\\tmp5kroembz\\Scripts\\python.exe', '-m', 'pip', 'install', '--no-input', 
+'--keyring-provider=subprocess', '--dry-run', '--report', 
+'C:\\Users\\user\\AppData\\Local\\Temp\\tmp_r49gsdp\\tmp4m7lpm9y', '-r', 'reports\\requirements_utf8.txt']

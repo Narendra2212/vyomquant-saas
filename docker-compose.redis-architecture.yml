@@ -1,0 +1,149 @@
+# =============================================================================
+# STEP 3: REDIS ARCHITECTURE — Split Redis Usage
+# =============================================================================
+#
+# GOAL: Separate Redis into 3 databases for different workloads
+# 
+# DATABASES:
+#   DB 0 → Cache: Short-lived data, LRU eviction
+#   DB 1 → Task Queue: Persistent tasks, AOF enabled
+#   DB 2 → Events/Streams: Time-series data, capped collections
+#
+# BENEFITS:
+#   - No Redis contention between workloads
+#   - Faster queue processing
+#   - Different eviction policies per use case
+#   - Better monitoring and debugging
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # REDIS SINGLE INSTANCE (with multiple databases)
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: trading-redis-split
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    networks:
+      - redis-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # REDIS INSIGHT (GUI for monitoring Redis)
+  # =============================================================================
+  redis-insight:
+    image: redis/redisinsight:latest
+    container_name: trading-redis-insight
+    ports:
+      - "5540:5540"
+    volumes:
+      - redis_insight_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - redis-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # PROMETHEUS EXPORTER (Redis metrics)
+  # =============================================================================
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: trading-redis-exporter
+    ports:
+      - "9121:9121"
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - redis-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # TEST SERVICES (To verify Redis architecture)
+  # =============================================================================
+  redis-test-cache:
+    image: python:3.11-slim
+    container_name: trading-redis-test-cache
+    volumes:
+      - ./tests/redis_test_cache.py:/test.py:ro
+      - ./requirements.txt:/requirements.txt:ro
+    command: >
+      sh -c "pip install -q redis && python /test.py"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - redis-network
+    profiles:
+      - test
+
+  redis-test-queue:
+    image: python:3.11-slim
+    container_name: trading-redis-test-queue
+    volumes:
+      - ./tests/redis_test_queue.py:/test.py:ro
+      - ./requirements.txt:/requirements.txt:ro
+    command: >
+      sh -c "pip install -q redis && python /test.py"
+    environment:
+      - REDIS_URL=redis://redis:6379/1
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - redis-network
+    profiles:
+      - test
+
+  redis-test-events:
+    image: python:3.11-slim
+    container_name: trading-redis-test-events
+    volumes:
+      - ./tests/redis_test_events.py:/test.py:ro
+      - ./requirements.txt:/requirements.txt:ro
+    command: >
+      sh -c "pip install -q redis && python /test.py"
+    environment:
+      - REDIS_URL=redis://redis:6379/2
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - redis-network
+    profiles:
+      - test
+
+volumes:
+  redis_data:
+  redis_insight_data:
+
+networks:
+  redis-network:
+    driver: bridge

@@ -1,0 +1,98 @@
+# STEP 8.10: Paper Trading Exchange Simulator Dockerfile
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    websockets \
+    aiohttp
+
+# Copy simulator code from canonical backend package
+COPY backend_app/backend/exchange_simulator.py ./exchange_simulator.py
+
+
+# Create simple FastAPI wrapper
+RUN cat > main.py << 'EOF'
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+import asyncio
+import uvicorn
+from exchange_simulator import get_paper_exchange
+
+app = FastAPI(title="Paper Trading Exchange Simulator")
+
+exchange = get_paper_exchange()
+
+@app.on_event("startup")
+async def startup():
+    await exchange.connect()
+
+@app.on_event("shutdown")
+async def shutdown():
+    await exchange.disconnect()
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "mode": "paper_trading"}
+
+@app.get("/balance")
+async def get_balance():
+    return exchange.get_balance()
+
+@app.get("/positions")
+async def get_positions():
+    return exchange.get_positions()
+
+@app.post("/orders")
+async def place_order(order: dict):
+    result = await exchange.place_order(
+        symbol=order.get("symbol"),
+        side=order.get("side"),
+        quantity=order.get("quantity"),
+        order_type=order.get("order_type", "market"),
+        price=order.get("price"),
+        client_order_id=order.get("client_order_id")
+    )
+    return result
+
+@app.get("/orders/{order_id}")
+async def get_order(order_id: str):
+    order = await exchange.get_order(order_id)
+    if order:
+        return order
+    raise HTTPException(status_code=404, detail="Order not found")
+
+@app.get("/orders/history")
+async def get_order_history(limit: int = 100):
+    return exchange.get_order_history(limit)
+
+@app.delete("/orders/{order_id}")
+async def cancel_order(order_id: str):
+    return await exchange.cancel_order(order_id)
+
+@app.get("/market/{symbol}")
+async def get_market_data(symbol: str):
+    price = exchange._get_current_price(symbol)
+    return {
+        "symbol": symbol,
+        "price": price,
+        "timestamp": exchange._get_current_price(symbol)
+    }
+
+@app.post("/reset")
+async def reset_account():
+    """Reset paper trading account (staging only)."""
+    exchange.reset()
+    return {"status": "reset", "balance": exchange.initial_balance}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8080)
+EOF
+
+EXPOSE 8080 8081
+
+CMD ["python", "main.py"]

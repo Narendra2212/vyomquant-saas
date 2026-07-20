@@ -1,0 +1,243 @@
+# =============================================================================
+# STEP 4: DAG TASK QUEUE SCALING — Worker Fleet
+# =============================================================================
+#
+# GOAL: Scale workers for parallel execution, no DAG backlog
+#
+# WORKER TYPES:
+#   1. DAG Worker        → Processes DAG tasks
+#   2. Execution Worker  → Processes order execution (high priority)
+#   3. Portfolio Worker  → Processes portfolio/PnL updates
+#
+# CONCURRENCY: 5 concurrent operations per worker type
+#
+# BENEFITS:
+#   - Parallel execution
+#   - No DAG backlog
+#   - Dedicated workers per task type
+#   - Better resource allocation
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # REDIS (Task Queue - DB 1)
+  # =============================================================================
+  redis-queue:
+    image: redis:7-alpine
+    container_name: trading-redis-queue
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_queue_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks:
+      - worker-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # DAG WORKER
+  # =============================================================================
+  dag-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: trading-dag-worker
+    environment:
+      - WORKER_ID=dag-1
+      - WORKER_CONCURRENCY=5
+      - REDIS_URL=redis://redis-queue:6379/1
+      - LOG_LEVEL=info
+    depends_on:
+      redis-queue:
+        condition: service_healthy
+    command: >
+      sh -c "cd /app && python -m backend_app.backend.dag_worker"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    networks:
+      - worker-network
+    restart: unless-stopped
+
+  dag-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: trading-dag-worker-2
+    environment:
+      - WORKER_ID=dag-2
+      - WORKER_CONCURRENCY=5
+      - REDIS_URL=redis://redis-queue:6379/1
+      - LOG_LEVEL=info
+    depends_on:
+      redis-queue:
+        condition: service_healthy
+    command: >
+      sh -c "cd /app && python -m backend_app.backend.dag_worker"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    networks:
+      - worker-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # EXECUTION WORKER (High priority - order execution)
+  # =============================================================================
+  execution-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: trading-execution-worker
+    environment:
+      - WORKER_ID=execution-1
+      - WORKER_CONCURRENCY=5
+      - WORKER_POLL_INTERVAL=0.5
+      - REDIS_URL=redis://redis-queue:6379/1
+      - LOG_LEVEL=info
+    depends_on:
+      redis-queue:
+        condition: service_healthy
+    command: >
+      sh -c "cd /app && python -m backend_app.backend.execution_worker"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    networks:
+      - worker-network
+    restart: unless-stopped
+
+  execution-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: trading-execution-worker-2
+    environment:
+      - WORKER_ID=execution-2
+      - WORKER_CONCURRENCY=5
+      - WORKER_POLL_INTERVAL=0.5
+      - REDIS_URL=redis://redis-queue:6379/1
+      - LOG_LEVEL=info
+    depends_on:
+      redis-queue:
+        condition: service_healthy
+    command: >
+      sh -c "cd /app && python -m backend_app.backend.execution_worker"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    networks:
+      - worker-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # PORTFOLIO WORKER (PnL calculations, margin updates)
+  # =============================================================================
+  portfolio-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: trading-portfolio-worker
+    environment:
+      - WORKER_ID=portfolio-1
+      - WORKER_CONCURRENCY=5
+      - WORKER_POLL_INTERVAL=1.0
+      - REDIS_URL=redis://redis-queue:6379/1
+      - LOG_LEVEL=info
+    depends_on:
+      redis-queue:
+        condition: service_healthy
+    command: >
+      sh -c "cd /app && python -m backend_app.backend.portfolio_worker"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    networks:
+      - worker-network
+    restart: unless-stopped
+
+  portfolio-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: trading-portfolio-worker-2
+    environment:
+      - WORKER_ID=portfolio-2
+      - WORKER_CONCURRENCY=5
+      - WORKER_POLL_INTERVAL=1.0
+      - REDIS_URL=redis://redis-queue:6379/1
+      - LOG_LEVEL=info
+    depends_on:
+      redis-queue:
+        condition: service_healthy
+    command: >
+      sh -c "cd /app && python -m backend_app.backend.portfolio_worker"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    networks:
+      - worker-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # WORKER MONITORING (Prometheus metrics)
+  # =============================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: worker-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus-workers.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - worker-network
+    restart: unless-stopped
+
+volumes:
+  redis_queue_data:
+  prometheus_data:
+
+networks:
+  worker-network:
+    driver: bridge
