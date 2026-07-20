@@ -2,76 +2,62 @@ version: 0.2
 
 env:
   variables:
-    AWS_DEFAULT_REGION: ap-southeast-1
+    AWS_DEFAULT_REGION: "ap-southeast-1"
     AWS_ACCOUNT_ID: "273709947018"
 
-    API_REPOSITORY: vyomquant-api
-    FRONTEND_REPOSITORY: vyomquant-frontend
-    MDS_REPOSITORY: vyomquant-mds
-    TEE_REPOSITORY: vyomquant-tee
-    WORKER_REPOSITORY: vyomquant-worker
+    API_REPOSITORY: "vyomquant-api"
+    FRONTEND_REPOSITORY: "vyomquant-frontend"
+    MDS_REPOSITORY: "vyomquant-mds"
+    TEE_REPOSITORY: "vyomquant-tee"
+    WORKER_REPOSITORY: "vyomquant-worker"
 
 phases:
-
-  install:
-    runtime-versions:
-      docker: 20
 
   pre_build:
     commands:
       - echo "Logging into Amazon ECR..."
       - ACCOUNT_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
-
+      - aws --version
+      - docker --version
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ACCOUNT_URI
-
-      - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
-
-      - echo "Image Tag = $IMAGE_TAG"
+      - IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION:=latest}
+      - IMAGE_TAG=$(echo $IMAGE_TAG | cut -c1-7)
+      - echo "Image tag = $IMAGE_TAG"
 
   build:
     commands:
 
-      ###################################################
-      # Backend API
-      ###################################################
-
-      - echo "Building Backend API..."
+      - echo "==============================="
+      - echo "Building Backend API"
+      - echo "==============================="
       - docker build -f Dockerfile.backend -t $API_REPOSITORY:$IMAGE_TAG .
       - docker tag $API_REPOSITORY:$IMAGE_TAG $ACCOUNT_URI/$API_REPOSITORY:$IMAGE_TAG
       - docker tag $API_REPOSITORY:$IMAGE_TAG $ACCOUNT_URI/$API_REPOSITORY:latest
 
-      ###################################################
-      # Frontend
-      ###################################################
-
-      - echo "Building Frontend..."
+      - echo "==============================="
+      - echo "Building Frontend"
+      - echo "==============================="
       - docker build -f algo22-terminal/Dockerfile.frontend -t $FRONTEND_REPOSITORY:$IMAGE_TAG algo22-terminal
       - docker tag $FRONTEND_REPOSITORY:$IMAGE_TAG $ACCOUNT_URI/$FRONTEND_REPOSITORY:$IMAGE_TAG
       - docker tag $FRONTEND_REPOSITORY:$IMAGE_TAG $ACCOUNT_URI/$FRONTEND_REPOSITORY:latest
 
-      ###################################################
-      # Market Data Service
-      ###################################################
-
-      - echo "Building MDS..."
+      - echo "==============================="
+      - echo "Building MDS"
+      - echo "==============================="
       - docker build -f Dockerfile.mds -t $MDS_REPOSITORY:$IMAGE_TAG .
       - docker tag $MDS_REPOSITORY:$IMAGE_TAG $ACCOUNT_URI/$MDS_REPOSITORY:$IMAGE_TAG
       - docker tag $MDS_REPOSITORY:$IMAGE_TAG $ACCOUNT_URI/$MDS_REPOSITORY:latest
 
-      ###################################################
-      # Trusted Execution Environment
-      ###################################################
-
-      - echo "Building TEE..."
+      - echo "==============================="
+      - echo "Building TEE"
+      - echo "==============================="
       - docker build -f Dockerfile.tee -t $TEE_REPOSITORY:$IMAGE_TAG .
       - docker tag $TEE_REPOSITORY:$IMAGE_TAG $ACCOUNT_URI/$TEE_REPOSITORY:$IMAGE_TAG
       - docker tag $TEE_REPOSITORY:$IMAGE_TAG $ACCOUNT_URI/$TEE_REPOSITORY:latest
 
-      ###################################################
-      # Worker
-      ###################################################
-
-      - echo "Building Worker..."
+      - echo "==============================="
+      - echo "Building Worker"
+      - echo "==============================="
       - docker build -f Dockerfile.backend -t $WORKER_REPOSITORY:$IMAGE_TAG .
       - docker tag $WORKER_REPOSITORY:$IMAGE_TAG $ACCOUNT_URI/$WORKER_REPOSITORY:$IMAGE_TAG
       - docker tag $WORKER_REPOSITORY:$IMAGE_TAG $ACCOUNT_URI/$WORKER_REPOSITORY:latest
@@ -99,9 +85,9 @@ phases:
       - docker push $ACCOUNT_URI/$WORKER_REPOSITORY:$IMAGE_TAG
       - docker push $ACCOUNT_URI/$WORKER_REPOSITORY:latest
 
-      - echo "======================================="
-      - echo "Build Completed Successfully"
-      - echo "======================================="
+      - echo "====================================="
+      - echo "BUILD COMPLETED SUCCESSFULLY"
+      - echo "====================================="
 
 artifacts:
   files:
