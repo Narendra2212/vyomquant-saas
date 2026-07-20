@@ -1,0 +1,187 @@
+{
+  "dashboard": {
+    "title": "Aerora Trading System",
+    "tags": ["aerora", "trading"],
+    "timezone": "UTC",
+    "refresh": "10s",
+    "panels": [
+      {
+        "title": "Order Success Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(rate(order_total{status=\"completed\"}[5m])) / sum(rate(order_total[5m])) * 100",
+            "legendFormat": "Success Rate %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 90},
+                {"color": "green", "value": 95}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0}
+      },
+      {
+        "title": "Active Orders",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "orders_active",
+            "legendFormat": "Active"
+          },
+          {
+            "expr": "orders_stuck_pending",
+            "legendFormat": "Stuck"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0}
+      },
+      {
+        "title": "Total PnL",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(pnl_total)",
+            "legendFormat": "Total PnL"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD"
+          }
+        },
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0}
+      },
+      {
+        "title": "Circuit Breaker State",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "circuit_breaker_state",
+            "legendFormat": "{{ name }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              {"options": {"0": {"text": "CLOSED", "color": "green"}}},
+              {"options": {"1": {"text": "OPEN", "color": "red"}}},
+              {"options": {"2": {"text": "HALF-OPEN", "color": "yellow"}}}
+            ]
+          }
+        },
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0}
+      },
+      {
+        "title": "Order Latency (P99)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(order_latency_bucket[5m])) by (le))",
+            "legendFormat": "P99"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(order_latency_bucket[5m])) by (le))",
+            "legendFormat": "P95"
+          }
+        ],
+        "yAxes": [{"format": "ms"}],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4}
+      },
+      {
+        "title": "Order Throughput",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "sum(rate(order_total[1m])) by (status)",
+            "legendFormat": "{{ status }}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4}
+      },
+      {
+        "title": "PnL Over Time",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "pnl_total",
+            "legendFormat": "Total PnL"
+          },
+          {
+            "expr": "pnl_realized",
+            "legendFormat": "Realized"
+          },
+          {
+            "expr": "pnl_unrealized",
+            "legendFormat": "Unrealized"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12}
+      },
+      {
+        "title": "PnL Drift",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "pnl_drift_percent",
+            "legendFormat": "Drift %"
+          }
+        ],
+        "alert": {
+          "conditions": [
+            {
+              "query": {"params": ["A", "1m", "now"]},
+              "reducer": {"type": "last"},
+              "evaluator": {"params": [1], "type": "gt"}
+            }
+          ]
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12}
+      },
+      {
+        "title": "Error Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "sum(rate(order_total{status=\"failed\"}[5m])) / sum(rate(order_total[5m])) * 100",
+            "legendFormat": "Error Rate %"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20}
+      },
+      {
+        "title": "API Response Time",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))",
+            "legendFormat": "P99"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20}
+      },
+      {
+        "title": "System Resources",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "container_cpu_usage_seconds_total{pod=~\"aerora-backend.*\"}",
+            "legendFormat": "{{ pod }} CPU"
+          },
+          {
+            "expr": "container_memory_working_set_bytes{pod=~\"aerora-backend.*\"} / 1024 / 1024",
+            "legendFormat": "{{ pod }} Memory MB"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 28}
+      }
+    ]
+  }
+}

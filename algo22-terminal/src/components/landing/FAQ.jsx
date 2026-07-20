@@ -1,0 +1,41 @@
+import React from 'react'
+import { Accordion } from '../ui/Accordion'
+
+const platformFaqs = [
+  { question: 'Do I need coding experience to use VyomQuant?', answer: 'No. VyomQuant is built as a visual node interface. All strategy logic is constructed via drag-and-drop DAG. Programming knowledge is not required.' },
+  { question: 'What is the difference between Paper Trading and Live Trading?', answer: 'Paper trading executes against live market data with simulated capital. Live trading routes orders to connected exchanges via your API credentials. Paper is the default deployment mode.' },
+  { question: 'Which exchanges are supported?', answer: '50+ exchanges via CCXT.pro integration, including Binance, Bybit, OKX, Kraken, and Coinbase. See documentation for the full list.' },
+  { question: 'Can I use machine learning models without knowing Python?', answer: 'Yes. The XGBoost node accepts parameter configuration through the visual interface. Model training runs on managed infrastructure. No local Python environment required.' },
+]
+
+const billingFaqs = [
+  { question: 'Is my exchange API key information secure?', answer: 'AES-256 encryption at rest. Keys never traverse the frontend. Row-level security isolation ensures your credentials are logically separated from all other users.' },
+  { question: 'Can I cancel or change my subscription tier at any time?', answer: 'Yes. Modify or cancel your subscription at any time from the account panel. Changes take effect at the next billing cycle.' },
+  { question: 'What happens to my strategies if I downgrade to Free?', answer: 'Your strategies remain in read-only state. Live bots are paused. You retain access to paper mode and community features.' },
+  { question: 'Is there a free trial for Pro or Elite features?', answer: 'The Free tier provides full platform access with capacity limits. Upgrade to Pro or Elite when you require additional bots, backtests, or ML slots.' },
+]
+
+export default function FAQ() {
+  return (
+    <section id="faq" className="py-24 lg:py-32 border-t border-border-default">
+      <div className="section-container">
+        <div className="section-inner">
+          <div className="text-center mb-16">
+            <div className="text-xs font-mono text-accent-cyan uppercase tracking-wider mb-3">FAQ</div>
+            <h2 className="text-3xl sm:text-4xl font-black text-text-primary">Common Questions</h2>
+          </div>
+          <div className="max-w-3xl mx-auto space-y-10">
+            <div>
+              <div className="text-xs font-mono text-text-muted mb-4">// PLATFORM</div>
+              <Accordion items={platformFaqs} defaultOpen={[0]} />
+            </div>
+            <div>
+              <div className="text-xs font-mono text-text-muted mb-4">// BILLING</div>
+              <Accordion items={billingFaqs} defaultOpen={[0]} />
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}

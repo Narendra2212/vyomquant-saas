@@ -1,0 +1,11 @@
+{
+  "scripts": {
+    "backend": "python -m uvicorn main:app --reload --port 8000",
+    "frontend": "cd algo22-terminal && npm run dev",
+    "dev": "npx concurrently \"npm run backend\" \"npm run frontend\""
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "concurrently": "^9.2.1"
+  }
+}

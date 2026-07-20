@@ -1,0 +1,93 @@
+# Grafana Configuration
+# Institutional-grade visualization and alerting
+
+apiVersion: 1
+
+# Grafana configuration
+grafana:
+  security:
+    admin_user: admin
+    admin_password: admin123
+  server:
+    domain: grafana.local
+    root_url: https://grafana.local
+  database:
+    type: postgres
+    host: grafana-db:5432
+    name: grafana
+    user: grafana
+    password: grafana123
+  smtp:
+    enabled: true
+    host: smtp.gmail.com:587
+    user: alerts@algo-trading.com
+    password: smtp_password
+    from_address: alerts@algo-trading.com
+
+# Datasources
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: 5s
+      queryTimeout: 60s
+      httpMethod: POST
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: true
+    jsonData:
+      maxLines: 1000
+
+  - name: QuestDB
+    type: prometheus
+    access: proxy
+    url: http://questdb:9000
+    editable: true
+
+# Dashboard providers
+dashboardProviders:
+  - name: 'default'
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+
+# Alerting
+alerting:
+  enabled: true
+  execute_alerts: true
+
+# Notification channels
+notifiers:
+  - name: slack-alerts
+    type: slack
+    uid: slack-alerts
+    settings:
+      url: https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK
+      username: Grafana
+      icon_emoji: ':grafana:'
+      channel: '#alerts'
+
+  - name: email-alerts
+    type: email
+    uid: email-alerts
+    settings:
+      addresses: ops@algo-trading.com
+
+  - name: pagerduty-alerts
+    type: pagerduty
+    uid: pagerduty-alerts
+    settings:
+      integrationKey: YOUR_PAGERDUTY_KEY
+      severity: critical

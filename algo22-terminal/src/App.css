@@ -1,0 +1,2 @@
+/* App.css — re-exports the merged index.css for the existing import chain in main.jsx */
+@import './index.css';

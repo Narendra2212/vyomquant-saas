@@ -1,0 +1,66 @@
+# STEP 8.4 — Horizontal Pod Autoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: aerora-backend-hpa
+  namespace: aerora-production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: aerora-backend
+  
+  # STEP 8.4: Scale limits
+  minReplicas: 3
+  maxReplicas: 20
+  
+  # STEP 8.4: Scale metrics
+  metrics:
+    # Scale on CPU
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    
+    # Scale on memory
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+    
+    # Scale on custom metric (active users)
+    - type: Pods
+      pods:
+        metric:
+          name: active_users
+        target:
+          type: AverageValue
+          averageValue: "100"
+  
+  # STEP 8.4: Scale behavior
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+      selectPolicy: Max
+    
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Min

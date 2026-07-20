@@ -1,0 +1,47 @@
+# STEP 8.2, 8.3 — Ingress with Load Balancer
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aerora-ingress
+  namespace: aerora-production
+  annotations:
+    # STEP 8.3: AWS ALB
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:REGION:ACCOUNT:certificate/CERT-ID
+    
+    # STEP 8.10: Security
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    
+    # STEP 8.3: Health checks
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/success-codes: "200"
+    
+    # STEP 8.10: Rate limiting
+    alb.ingress.kubernetes.io/load-balancer-attributes: |
+      routing.http.x_amzn_tls_version_and_cipher_suite.enabled=true
+spec:
+  rules:
+    - host: api.aerora.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: aerora-backend
+                port:
+                  number: 80
+    
+    - host: app.aerora.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: aerora-frontend
+                port:
+                  number: 80

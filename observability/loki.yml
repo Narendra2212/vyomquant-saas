@@ -1,0 +1,105 @@
+# Loki Configuration
+# Institutional-grade log aggregation and analysis
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+
+ingester:
+  lifecycler:
+    address: 127.0.0.1
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+    final_sleep: 0s
+    num_workers: 8
+    write_backoff_min: 10ms
+    write_backoff_max: 100ms
+  max_transfer_retries: 0
+  chunk_idle_period: 1h
+  max_chunk_age: 1h
+  chunk_target_size: 1048576
+  chunk_retain_period: 30s
+  max_chunk_retries: 5
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: boltdb-shipper
+      object_store: s3
+      schema: v11
+      index:
+        prefix: index_
+        period: 24h
+      chunks:
+        prefix: chunk_
+        period: 24h
+
+storage_config:
+  boltdb_shipper:
+    active_index_directory: /loki/boltdb-shipper-active
+    cache_location: /loki/boltdb-shipper-cache
+    shared_store: s3
+    cache_ttl: 24h
+  s3:
+    s3: http://minio:9000
+    bucket_names: loki-chunks
+    access_key_id: minioadmin
+    secret_access_key: minioadmin
+    s3forcepathstyle: true
+
+limits_config:
+  enforce_metric_name: false
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  max_concurrent_tail_requests: 10
+
+chunk_store_config:
+  max_look_back_period: 0s
+
+table_manager:
+  retention_deletes_enabled: false
+  retention_period: 0s
+
+ruler:
+  storage:
+    s3:
+      s3: http://minio:9000
+      bucket_names: loki-ruler
+      access_key_id: minioadmin
+      secret_access_key: minioadmin
+      s3forcepathstyle: true
+  rule_path: /tmp/rules
+  alertmanager_url: http://alertmanager:9093
+  ring:
+    kvstore:
+      store: inmemory
+  enable_alertmanager_v2:
+    enabled: true
+    send_native: true
+
+# By default, Loki will listen for HTTP requests on port 3100.
+# For production deployments, you should configure TLS.
+frontend:
+  max_outstanding_per_tenant: 2048
+  max_outstanding_global: 4096
+  compress_responses: true
+  log_received_requests: true
+
+# Query limits
+query_range:
+  parallelise_shardable_queries: true
+  max_retries: 5
+  split_queries_by_interval: 15m
+  cache_split_queries: true
+
+# Ingester limits
+ingester_client:
+  max_concurrent_sent: 10
+  max_concurrent_received: 10
+  grpc_client_config:
+    max_send_msg_size: 1048576
+    grpc_compression: gzip

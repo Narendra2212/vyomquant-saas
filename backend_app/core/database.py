@@ -1,0 +1,107 @@
+"""
+core/database.py — Database engine with connection pooling.
+
+STEP 7: OPTIMIZE DB CONNECTIONS
+
+Updated to use connection pooling for better performance under load.
+See core/database_pool.py for full implementation details.
+"""
+
+import os
+import logging
+
+# Import from new pooling module
+try:
+    from backend_app.core.database_pool import get_db_pool, get_db as _get_db_pool
+    # Re-export for backward compatibility
+    get_db = _get_db_pool
+    POOLING_AVAILABLE = True
+except ImportError:
+    POOLING_AVAILABLE = False
+    logging.warning("[Database] Connection pooling not available, using fallback")
+
+# Fallback for compatibility (if pooling module fails)
+if not POOLING_AVAILABLE:
+    from sqlalchemy import create_engine
+    from sqlalchemy.ext.declarative import declarative_base
+    from sqlalchemy.orm import sessionmaker
+    from contextlib import contextmanager
+    
+    # Use SQLite as a minimal default (won't be used in production)
+    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./algo22.db")
+    
+    # STEP 7: Add connection pooling configuration
+    if "sqlite" in DATABASE_URL.lower():
+        # SQLite doesn't benefit much from pooling
+        engine = create_engine(
+            DATABASE_URL,
+            connect_args={"check_same_thread": False}
+        )
+    else:
+        # PostgreSQL with connection pooling
+        POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
+        MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+        POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+        POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))
+        
+        engine = create_engine(
+            DATABASE_URL,
+            pool_size=POOL_SIZE,
+            max_overflow=MAX_OVERFLOW,
+            pool_timeout=POOL_TIMEOUT,
+            pool_recycle=POOL_RECYCLE,
+            pool_pre_ping=True,  # Verify connections before use
+            pool_use_lifo=True,   # Reuse most recent connections
+            echo=False,
+        )
+        logging.info(
+            f"[Database] Pool configured: size={POOL_SIZE}, "
+            f"overflow={MAX_OVERFLOW}, timeout={POOL_TIMEOUT}s"
+        )
+    
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base = declarative_base()
+    
+    @contextmanager
+    def get_db():
+        """Dependency for getting DB sessions."""
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+
+# Re-export Base for models
+if POOLING_AVAILABLE:
+    from backend_app.core.database_pool import Base
+
+# Export engine for direct access
+if POOLING_AVAILABLE:
+    from backend_app.core.database_pool import get_db_pool
+    engine = get_db_pool().engine
+    SessionLocal = get_db_pool().get_session
+else:
+    # Already defined above in fallback
+    pass
+
+
+# Health check function
+async def check_db_health():
+    """Check database health including pool status."""
+    try:
+        from backend_app.core.database_pool import check_database_health
+        return await check_database_health()
+    except ImportError:
+        # Fallback health check
+        try:
+            with get_db() as session:
+                session.execute("SELECT 1")
+            return {"status": "healthy", "pooling": False}
+        except Exception as e:
+            return {"status": "unhealthy", "error": str(e)}
+
+
+logger = logging.getLogger("Database")
+logger.info("[Database] Module loaded with connection pooling support")
+

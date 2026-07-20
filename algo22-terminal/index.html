@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ALGO22 Quant Terminal</title>
+  <script>
+    // Safe global fallbacks for E2E testing
+    window.TEST_USER = window.TEST_USER || {
+      id: 'dev_user',
+      email: 'test@test.com'
+    };
+  </script>
+  <!-- Native Lightweight Telemetry for Beta (avoids vendor lock-in build deps) -->
+  <script type="text/javascript">
+    (function () {
+      var sentryDsn = "%VITE_SENTRY_DSN%";
+      var isDummy = function (val) {
+        if (!val || val === "%" + "VITE_SENTRY_DSN" + "%") return true;
+        return val.toLowerCase().indexOf("dummy") !== -1;
+      };
+
+      if (!isDummy(sentryDsn)) {
+        var script = document.createElement("script");
+        script.src = "https://js.sentry-cdn.com/browser.min.js";
+        script.crossOrigin = "anonymous";
+        script.onload = function() {
+          if (window.Sentry) {
+            window.Sentry.init({
+              dsn: sentryDsn,
+              tracesSampleRate: 1.0,
+            });
+            console.log("Telemetry: Sentry initialized in browser.");
+          }
+        };
+        document.head.appendChild(script);
+      } else {
+        window.onerror = function(msg, url, lineNo, columnNo, error) {
+          console.error("[DEV Telemetry Captured Error] ", msg, url, lineNo, columnNo, error);
+          return false;
+        };
+      }
+    })();
+  </script>
+  <!-- Dynamic Google Analytics and Microsoft Clarity Loader -->
+  <script type="text/javascript">
+    (function () {
+      var gaId = "%VITE_GA_TRACKING_ID%";
+      var clarityId = "%VITE_CLARITY_PROJECT_ID%";
+
+      var isDummy = function (val) {
+        if (!val || val === "%" + "VITE_GA_TRACKING_ID" + "%" || val === "%" + "VITE_CLARITY_PROJECT_ID" + "%") return true;
+        var lower = val.toLowerCase();
+        return lower.indexOf("dummy") !== -1 || lower.indexOf("placeholder") !== -1 || lower.indexOf("test") !== -1;
+      };
+
+      if (!isDummy(gaId)) {
+        var script = document.createElement("script");
+        script.async = true;
+        script.src = "https://www.googletagmanager.com/gtag/js?id=" + gaId;
+        document.head.appendChild(script);
+
+        window.dataLayer = window.dataLayer || [];
+        window.gtag = function () { window.dataLayer.push(arguments); };
+        window.gtag('js', new Date());
+        window.gtag('config', gaId);
+        console.log("GA4 initialized with ID:", gaId);
+      } else {
+        window.gtag = function () {
+          console.log("[DEV/TEST] Google Analytics Event:", arguments);
+        };
+      }
+
+      if (!isDummy(clarityId)) {
+        (function (c, l, a, r, i, t, y) {
+          c[a] = c[a] || function () { (c[a].q = c[a].q || []).push(arguments) };
+          t = l.createElement(r); t.async = 1; t.src = "https://www.clarity.ms/tag/" + i;
+          y = l.getElementsByTagName(r)[0]; y.parentNode.insertBefore(t, y);
+        })(window, document, "clarity", "script", clarityId);
+        console.log("Microsoft Clarity initialized with ID:", clarityId);
+      } else {
+        window.clarity = function () {
+          console.log("[DEV/TEST] Microsoft Clarity Event:", arguments);
+        };
+      }
+    })();
+  </script>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+
+</html>

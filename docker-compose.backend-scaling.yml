@@ -1,0 +1,249 @@
+# =============================================================================
+# STEP 2: BACKEND HORIZONTAL SCALING — Multiple Backend Instances
+# =============================================================================
+#
+# GOAL: Scale backend to handle 500 users (150 active)
+# 
+# STRATEGY:
+# - Run multiple backend instances (4 workers × N replicas)
+# - Stateless design (all state in Redis)
+# - Nginx load balancer with round-robin
+# - Health checks for automatic failover
+# - Auto-scaling based on load
+#
+# ARCHITECTURE:
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │                           NGINX LOAD BALANCER                        │
+# │                              (Round Robin)                           │
+# └──────────────┬────────────────────────────────┬──────────────────────┘
+#                │                                │
+#       ┌────────▼────────┐            ┌────────▼────────┐
+#       │  Backend-1      │            │  Backend-2      │
+#       │  Port 8000      │            │  Port 8001      │
+#       │  Workers: 4     │            │  Workers: 4     │
+#       └────────┬────────┘            └────────┬────────┘
+#                │                                │
+#                └──────────────┬─────────────────┘
+#                               │
+#                    ┌──────────▼──────────┐
+#                    │   Redis Cluster     │
+#                    │  (Shared State)     │
+#                    └─────────────────────┘
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # REDIS (Shared State Store)
+  # =============================================================================
+  redis-primary:
+    image: redis:7-alpine
+    container_name: backend-redis-primary
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_primary_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks:
+      - backend-network
+
+  redis-replica:
+    image: redis:7-alpine
+    container_name: backend-redis-replica
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_replica_data:/data
+    command: >
+      redis-server
+      --replicaof redis-primary 6379
+      --appendonly yes
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks:
+      - backend-network
+
+  # =============================================================================
+  # BACKEND INSTANCES (Multiple for Horizontal Scaling)
+  # =============================================================================
+  backend-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: trading-backend-1
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=production
+      - WORKERS=4
+      - REDIS_URL=redis://redis-primary:6379
+      - REDIS_REPLICA_URL=redis://redis-replica:6379
+      - INSTANCE_ID=backend-1
+      - LOG_LEVEL=info
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+      redis-replica:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://backend:8000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    networks:
+      - backend-network
+    restart: unless-stopped
+
+  backend-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: trading-backend-2
+    ports:
+      - "8001:8000"
+    environment:
+      - ENV=production
+      - WORKERS=4
+      - REDIS_URL=redis://redis-primary:6379
+      - REDIS_REPLICA_URL=redis://redis-replica:6379
+      - INSTANCE_ID=backend-2
+      - LOG_LEVEL=info
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+      redis-replica:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://backend:8000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    networks:
+      - backend-network
+    restart: unless-stopped
+
+  backend-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: trading-backend-3
+    ports:
+      - "8002:8000"
+    environment:
+      - ENV=production
+      - WORKERS=4
+      - REDIS_URL=redis://redis-primary:6379
+      - REDIS_REPLICA_URL=redis://redis-replica:6379
+      - INSTANCE_ID=backend-3
+      - LOG_LEVEL=info
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+      redis-replica:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://backend:8000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    networks:
+      - backend-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # NGINX LOAD BALANCER (Round Robin)
+  # =============================================================================
+  nginx-backend:
+    image: nginx:alpine
+    container_name: trading-nginx-backend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx-backend-lb.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend-1
+      - backend-2
+      - backend-3
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://nginx/nginx-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - backend-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # MONITORING
+  # =============================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: backend-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus-backend.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+    networks:
+      - backend-network
+    restart: unless-stopped
+
+volumes:
+  redis_primary_data:
+  redis_replica_data:
+  prometheus_data:
+
+networks:
+  backend-network:
+    driver: bridge

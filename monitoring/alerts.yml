@@ -1,0 +1,112 @@
+# STEP 8.8 — Prometheus Alert Rules
+groups:
+  - name: aerora-critical
+    rules:
+      # STEP 7.6: Circuit breaker alert
+      - alert: CircuitBreakerOpen
+        expr: circuit_breaker_state == 1
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit breaker OPEN - Trading stopped"
+          description: "Circuit {{ $labels.name }} is OPEN. Trading halted."
+      
+      # STEP 7.7: Order error rate
+      - alert: HighOrderErrorRate
+        expr: (
+          sum(rate(order_total{status="failed"}[5m])) 
+          / 
+          sum(rate(order_total[5m]))
+        ) * 100 > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High order error rate"
+          description: "Error rate is {{ $value }}% (threshold: 10%)"
+      
+      # STEP 7.1: Stuck orders
+      - alert: StuckOrders
+        expr: orders_stuck_pending > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Stuck orders detected"
+          description: "{{ $value }} orders stuck for > 5 minutes"
+      
+      # STEP 7.7: PnL drift
+      - alert: PnLDrift
+        expr: abs(pnl_drift_percent) > 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Significant PnL drift detected"
+          description: "PnL drift is {{ $value }}% (threshold: 1%)"
+      
+      # STEP 7.9: Exchange connection
+      - alert: ExchangeDisconnected
+        expr: exchange_connected == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Exchange disconnected"
+          description: "Connection to {{ $labels.exchange }} lost"
+      
+      # STEP 8.8: High latency
+      - alert: HighLatency
+        expr: histogram_quantile(0.99, rate(order_latency_bucket[5m])) > 5000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High order latency"
+          description: "P99 latency is {{ $value }}ms (threshold: 5000ms)"
+      
+      # STEP 8.8: System resources
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value }}%"
+      
+      - alert: HighMemoryUsage
+        expr: (
+          node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes
+        ) / node_memory_MemTotal_bytes * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value }}%"
+      
+      # STEP 8.5: Database connection
+      - alert: DatabaseConnectionsHigh
+        expr: pg_stat_activity_count > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High DB connection count"
+          description: "{{ $value }} active connections (threshold: 80)"
+      
+      # STEP 8.12: Scale alert
+      - alert: ScaleUpNeeded
+        expr: (
+          sum(rate(container_cpu_usage_seconds_total{pod=~"aerora-backend.*"}[5m]))
+          /
+          sum(kube_pod_container_resource_limits{resource="cpu",pod=~"aerora-backend.*"})
+        ) > 0.8
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Scale up recommended"
+          description: "CPU utilization at {{ $value }}%, consider scaling"

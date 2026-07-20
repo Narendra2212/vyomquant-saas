@@ -1,0 +1,394 @@
+# Kubernetes Horizontal Pod Autoscaler (HPA) Configuration
+# STEP 10: AUTO-SCALING INFRASTRUCTURE
+#
+# This file defines HPA resources for automatic scaling based on:
+# - CPU utilization
+# - Queue size (custom metrics)
+# - WebSocket connections (custom metrics)
+#
+# REQUIRED:
+# - Kubernetes cluster with metrics-server
+# - Prometheus for custom metrics
+# - KEDA for advanced scaling (optional but recommended)
+
+---
+# ============================================================================
+# BACKEND API AUTOSCALER (CPU + Memory)
+# ============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-api-hpa
+  namespace: trading
+  labels:
+    app: backend-api
+    component: autoscaler
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend-api
+  
+  minReplicas: 3
+  maxReplicas: 20
+  
+  metrics:
+    # Scale based on CPU utilization
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    
+    # Scale based on memory utilization
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 5
+          periodSeconds: 60
+      selectPolicy: Max
+    
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Min
+
+---
+# ============================================================================
+# WEBSOCKET SERVER AUTOSCALER (WebSocket Connections)
+# ============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: websocket-server-hpa
+  namespace: trading
+  labels:
+    app: websocket-server
+    component: autoscaler
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: websocket-server
+  
+  minReplicas: 4
+  maxReplicas: 20
+  
+  metrics:
+    # Scale based on CPU
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+    
+    # Custom metric: WebSocket connections per pod
+    # Requires Prometheus Adapter
+    - type: Pods
+      pods:
+        metric:
+          name: websocket_connections_per_pod
+        target:
+          type: AverageValue
+          averageValue: "500"  # Scale when >500 connections per pod
+  
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+    
+    scaleDown:
+      stabilizationWindowSeconds: 180
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+
+---
+# ============================================================================
+# DAG WORKER AUTOSCALER (Queue Size)
+# ============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: dag-worker-hpa
+  namespace: trading
+  labels:
+    app: dag-worker
+    component: autoscaler
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: dag-worker
+  
+  minReplicas: 2
+  maxReplicas: 50
+  
+  metrics:
+    # Custom metric: DAG queue size
+    # Requires Prometheus Adapter or KEDA
+    - type: External
+      external:
+        metric:
+          name: dag_queue_size
+          selector:
+            matchLabels:
+              queue: dag_tasks
+        target:
+          type: AverageValue
+          averageValue: "50"  # Scale when >50 tasks per worker
+    
+    # Scale based on CPU
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+  
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 10  # Scale up to 10 pods at a time
+          periodSeconds: 30
+    
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+
+---
+# ============================================================================
+# EXECUTION WORKER AUTOSCALER (Order Queue)
+# ============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: execution-worker-hpa
+  namespace: trading
+  labels:
+    app: execution-worker
+    component: autoscaler
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: execution-worker
+  
+  minReplicas: 3
+  maxReplicas: 30
+  
+  metrics:
+    # Custom metric: Execution queue size
+    - type: External
+      external:
+        metric:
+          name: execution_queue_size
+          selector:
+            matchLabels:
+              queue: execution_tasks
+        target:
+          type: AverageValue
+          averageValue: "20"  # Scale when >20 orders per worker
+  
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 15  # Fast scaling for orders
+      policies:
+        - type: Pods
+          value: 5
+          periodSeconds: 15
+    
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+
+---
+# ============================================================================
+# KEDA SCALED OBJECT (Advanced Scaling with Redis Queue)
+# ============================================================================
+# Requires KEDA installation: https://keda.sh
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: dag-worker-keda
+  namespace: trading
+spec:
+  scaleTargetRef:
+    name: dag-worker
+  
+  pollingInterval: 10
+  cooldownPeriod: 300
+  minReplicaCount: 2
+  maxReplicaCount: 50
+  advanced:
+    restoreToOriginalReplicaCount: false
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 30
+          policies:
+            - type: Pods
+              value: 10
+              periodSeconds: 30
+  
+  triggers:
+    # Scale based on Redis queue length
+    - type: redis
+      metadata:
+        address: redis-cluster:6379
+        listName: dag_tasks
+        listLength: "50"  # Target 50 tasks per pod
+      authenticationRef:
+        name: keda-redis-auth
+    
+    # Scale based on CPU
+    - type: cpu
+      metadata:
+        type: Utilization
+        value: "70"
+
+---
+# ============================================================================
+# KEDA AUTHENTICATION (Redis)
+# ============================================================================
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: keda-redis-auth
+  namespace: trading
+spec:
+  secretTargetRef:
+    - parameter: password
+      name: redis-secret
+      key: password
+
+---
+# ============================================================================
+# PROMETHEUS RULES (Custom Metrics)
+# ============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: trading-autoscaling-metrics
+  namespace: monitoring
+spec:
+  groups:
+    - name: autoscaling
+      interval: 15s
+      rules:
+        # WebSocket connections per pod
+        - record: websocket_connections_per_pod
+          expr: |
+            sum(websocket_active_connections) by (pod) / 
+            count(websocket_active_connections) by (pod)
+        
+        # DAG queue size
+        - record: dag_queue_size
+          expr: |
+            sum(redis_queue_length{queue="dag_tasks"})
+        
+        # Execution queue size
+        - record: execution_queue_size
+          expr: |
+            sum(redis_queue_length{queue="execution_tasks"})
+        
+        # Request latency (for predictive scaling)
+        - record: api_request_latency_p99
+          expr: |
+            histogram_quantile(0.99, rate(api_request_duration_seconds_bucket[5m]))
+
+---
+# ============================================================================
+# CUSTOM METRICS API SERVICE (Prometheus Adapter)
+# ============================================================================
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1beta1.custom.metrics.k8s.io
+spec:
+  service:
+    name: prometheus-adapter
+    namespace: monitoring
+  group: custom.metrics.k8s.io
+  version: v1beta1
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 100
+  versionPriority: 100
+
+---
+# ============================================================================
+# PROMETHEUS ADAPTER CONFIGMAP
+# ============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-adapter-config
+  namespace: monitoring
+data:
+  config.yaml: |
+    rules:
+      # WebSocket connections per pod
+      - seriesQuery: 'websocket_active_connections{namespace="trading"}'
+        resources:
+          overrides:
+            namespace:
+              resource: namespace
+            pod:
+              resource: pod
+        name:
+          matches: "websocket_active_connections"
+          as: "websocket_connections_per_pod"
+        metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+      
+      # Queue sizes
+      - seriesQuery: 'redis_queue_length{namespace="trading"}'
+        resources:
+          overrides:
+            namespace:
+              resource: namespace
+        name:
+          matches: "redis_queue_length"
+          as: "dag_queue_size"
+        metricsQuery: 'sum(<<.Series>>{queue="dag_tasks",<<.LabelMatchers>>})'
+      
+      - seriesQuery: 'redis_queue_length{namespace="trading"}'
+        resources:
+          overrides:
+            namespace:
+              resource: namespace
+        name:
+          matches: "redis_queue_length"
+          as: "execution_queue_size"
+        metricsQuery: 'sum(<<.Series>>{queue="execution_tasks",<<.LabelMatchers>>})'

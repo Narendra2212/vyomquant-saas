@@ -1,0 +1,108 @@
+# STEP 8.2 — Backend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aerora-backend
+  namespace: aerora-production
+  labels:
+    app: aerora-backend
+spec:
+  # STEP 8.4: Initial replicas (will be scaled by HPA)
+  replicas: 3
+  selector:
+    matchLabels:
+      app: aerora-backend
+  template:
+    metadata:
+      labels:
+        app: aerora-backend
+    spec:
+      # STEP 8.10: Security
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      
+      containers:
+        - name: backend
+          image: aerora/backend:latest
+          imagePullPolicy: Always
+          
+          ports:
+            - containerPort: 8000
+              name: http
+          
+          # Environment from secrets/configmaps
+          envFrom:
+            - configMapRef:
+                name: aerora-config
+            - secretRef:
+                name: aerora-secrets
+          
+          # Resource limits (STEP 8.4)
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+          
+          # Health checks
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          # Volume mounts
+          volumeMounts:
+            - name: logs
+              mountPath: /app/logs
+      
+      volumes:
+        - name: logs
+          emptyDir: {}
+      
+      # STEP 8.4: Pod distribution
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - aerora-backend
+                topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aerora-backend
+  namespace: aerora-production
+  labels:
+    app: aerora-backend
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: aerora-backend

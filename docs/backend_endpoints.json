@@ -1,0 +1,747 @@
+{
+  "routers": [
+    {
+      "file": "routers/auth.py",
+      "prefix": "/api/auth",
+      "tags": ["Authentication"],
+      "endpoints": [
+        {
+          "path": "/signup/send-otp",
+          "method": "POST",
+          "request_body": {
+            "type": "dict",
+            "description": "OTP payload (bypassed for dev)"
+          },
+          "response": {
+            "status": "success",
+            "message": "OTPs bypassed for dev"
+          }
+        },
+        {
+          "path": "/signup/verify-create",
+          "method": "POST",
+          "request_body": {
+            "schema": "SignUpRequest",
+            "fields": {
+              "email": "string",
+              "username": "string",
+              "password": "string",
+              "phoneNumber": "string (optional)",
+              "emailOtp": "string (optional)",
+              "smsOtp": "string (optional)"
+            }
+          },
+          "response": {
+            "status": "success",
+            "token": "string",
+            "user": {
+              "email": "string",
+              "tier": "string"
+            }
+          }
+        },
+        {
+          "path": "/signin",
+          "method": "POST",
+          "request_body": {
+            "schema": "SignInRequest",
+            "fields": {
+              "email": "string",
+              "password": "string"
+            }
+          },
+          "response": {
+            "status": "success",
+            "token": "string",
+            "user": {
+              "email": "string",
+              "tier": "string"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "file": "routers/billing.py",
+      "prefix": "/api/billing",
+      "tags": ["Billing"],
+      "endpoints": [
+        {
+          "path": "/plan",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "data": {
+              "plan": {
+                "id": "string",
+                "name": "string",
+                "priceUSD": "number",
+                "priceINR": "number",
+                "features": "array",
+                "nextBillingDate": "string",
+                "autoRenew": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "path": "/invoices",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "data": {
+              "invoices": "array"
+            }
+          }
+        },
+        {
+          "path": "/payment-methods",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "data": {
+              "methods": "array"
+            }
+          }
+        },
+        {
+          "path": "/checkout",
+          "method": "POST",
+          "request_body": {
+            "type": "Dict[str, Any]"
+          },
+          "response": {
+            "checkoutUrl": "string"
+          }
+        }
+      ]
+    },
+    {
+      "file": "routers/exchange.py",
+      "prefix": "/api/exchanges",
+      "tags": ["Exchanges"],
+      "endpoints": [
+        {
+          "path": "/supported",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "supported": "array of exchange names from CCXT"
+          }
+        },
+        {
+          "path": "/test",
+          "method": "POST",
+          "request_body": {
+            "schema": "ExchangeKeys",
+            "fields": {
+              "exchange_id": "string",
+              "api_key": "string",
+              "secret_key": "string",
+              "label": "string (optional)"
+            }
+          },
+          "response": {
+            "status": "success",
+            "message": "string"
+          }
+        },
+        {
+          "path": "/keys",
+          "method": "POST",
+          "request_body": {
+            "schema": "ExchangeKeys",
+            "fields": {
+              "exchange_id": "string",
+              "api_key": "string",
+              "secret_key": "string",
+              "label": "string (optional)"
+            }
+          },
+          "response": {
+            "status": "success",
+            "message": "string"
+          }
+        },
+        {
+          "path": "/",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "exchanges": "array"
+          }
+        },
+        {
+          "path": "/{exchange_id}",
+          "method": "DELETE",
+          "request_body": null,
+          "response": {
+            "status": "ok",
+            "message": "string"
+          }
+        }
+      ]
+    },
+    {
+      "file": "routers/leaderboard.py",
+      "prefix": "/api/leaderboard",
+      "tags": ["Leaderboard"],
+      "endpoints": [
+        {
+          "path": "/",
+          "method": "GET",
+          "request_body": {
+            "query_params": {
+              "period": "string (optional, default: '30d')"
+            }
+          },
+          "response": {
+            "leaderboard": "array of LeaderboardEntry"
+          }
+        }
+      ]
+    },
+    {
+      "file": "routers/market.py",
+      "prefix": null,
+      "tags": null,
+      "endpoints": [
+        {
+          "path": "/candles/{symbol}/{timeframe}",
+          "method": "GET",
+          "request_body": {
+            "path_params": {
+              "symbol": "string",
+              "timeframe": "string (default: '5m')"
+            },
+            "query_params": {
+              "limit": "integer (default: 200, range: 1-1000)"
+            }
+          },
+          "response": "OHLCV data array"
+        },
+        {
+          "path": "/orderbook/{symbol}",
+          "method": "GET",
+          "request_body": {
+            "path_params": {
+              "symbol": "string"
+            },
+            "query_params": {
+              "limit": "integer (default: 20, range: 1-100)"
+            }
+          },
+          "response": {
+            "asks": "array",
+            "bids": "array"
+          }
+        },
+        {
+          "path": "/ticker/{symbol}",
+          "method": "GET",
+          "request_body": {
+            "path_params": {
+              "symbol": "string"
+            }
+          },
+          "response": "ticker snapshot"
+        },
+        {
+          "path": "/funding/{symbol}",
+          "method": "GET",
+          "request_body": {
+            "path_params": {
+              "symbol": "string"
+            }
+          },
+          "response": "funding rate data"
+        }
+      ]
+    },
+    {
+      "file": "routers/orders.py",
+      "prefix": null,
+      "tags": null,
+      "endpoints": [
+        {
+          "path": "/execute",
+          "method": "POST",
+          "request_body": {
+            "schema": "ExecuteOrderRequest"
+          },
+          "response": {
+            "status": "success",
+            "balance": "number"
+          }
+        },
+        {
+          "path": "/trades/history",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "trades": "array"
+          }
+        }
+      ]
+    },
+    {
+      "file": "routers/portfolio.py",
+      "prefix": null,
+      "tags": null,
+      "endpoints": [
+        {
+          "path": "/summary",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "total_value": "number",
+            "unrealized_pnl": "number",
+            "realized_pnl": "number",
+            "roi_percentage": "number"
+          }
+        },
+        {
+          "path": "/equity-curve",
+          "method": "GET",
+          "request_body": {
+            "query_params": {
+              "days": "integer (default: 90, range: 1-365)"
+            }
+          },
+          "response": "array of {date, value}"
+        },
+        {
+          "path": "/allocation",
+          "method": "GET",
+          "request_body": null,
+          "response": "array of {asset, percentage, value}"
+        },
+        {
+          "path": "/heatmap",
+          "method": "GET",
+          "request_body": {
+            "query_params": {
+              "months": "integer (default: 2, range: 1-12)"
+            }
+          },
+          "response": "array of {date, pnl}"
+        },
+        {
+          "path": "/recent-transactions",
+          "method": "GET",
+          "request_body": null,
+          "response": "array"
+        }
+      ]
+    },
+    {
+      "file": "routers/risk.py",
+      "prefix": "/api/risk",
+      "tags": ["Risk Settings"],
+      "endpoints": [
+        {
+          "path": "/config",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "data": {
+              "max_daily_loss": "number",
+              "max_open_positions": "number",
+              "max_leverage": "number",
+              "kill_switches": "object"
+            }
+          }
+        },
+        {
+          "path": "/config",
+          "method": "PUT",
+          "request_body": {
+            "type": "Dict[str, Any]"
+          },
+          "response": {
+            "status": "success",
+            "message": "string"
+          }
+        },
+        {
+          "path": "/strategy-limits",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "data": "array of strategy limits"
+          }
+        },
+        {
+          "path": "/strategy-limits/{strategy_id}",
+          "method": "PUT",
+          "request_body": {
+            "path_params": {
+              "strategy_id": "integer"
+            },
+            "type": "Dict[str, Any]"
+          },
+          "response": {
+            "status": "success"
+          }
+        },
+        {
+          "path": "/margin-health",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "data": {
+              "margin_ratio": "number",
+              "free_margin": "number",
+              "risk_score": "number"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "file": "routers/strategies.py",
+      "prefix": "/api/strategies",
+      "tags": ["Strategies"],
+      "endpoints": [
+        {
+          "path": "/backtest",
+          "method": "POST",
+          "request_body": {
+            "schema": "BacktestPayload",
+            "fields": {
+              "strategy_name": "string",
+              "nodes": "array of StrategyNode",
+              "edges": "array of StrategyEdge",
+              "timeframe": "string",
+              "initial_capital": "number",
+              "trade_size_pct": "number",
+              "ml_threshold": "number",
+              "stop_loss_pct": "number",
+              "take_profit_pct": "number"
+            }
+          },
+          "response": {
+            "metrics": {
+              "total_return": "string",
+              "win_rate": "string",
+              "max_drawdown": "string",
+              "total_trades": "integer",
+              "profit_factor": "number",
+              "sharpe_ratio": "number",
+              "sortino_ratio": "number",
+              "calmar_ratio": "number"
+            },
+            "equity_curve": "array of {time, value}"
+          }
+        },
+        {
+          "path": "/deploy",
+          "method": "POST",
+          "request_body": {
+            "schema": "BacktestPayload"
+          },
+          "response": {
+            "status": "success",
+            "message": "string",
+            "bot_key": "string",
+            "symbol": "string"
+          }
+        }
+      ]
+    },
+    {
+      "file": "routers/user.py",
+      "prefix": null,
+      "tags": null,
+      "endpoints": [
+        {
+          "path": "/leaderboard",
+          "method": "GET",
+          "request_body": {
+            "query_params": {
+              "timeframe": "string (default: '30d')"
+            }
+          },
+          "response": {
+            "leaderboard": "array of LeaderboardEntry"
+          }
+        },
+        {
+          "path": "/referral/stats",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "total_referrals": "integer",
+            "active_subs": "integer",
+            "total_earned": "number",
+            "pending_payout": "number",
+            "referral_link": "string"
+          }
+        }
+      ]
+    },
+    {
+      "file": "routers/admin.py",
+      "prefix": null,
+      "tags": null,
+      "endpoints": [
+        {
+          "path": "/health",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "fleet": "object",
+            "pods": "array",
+            "questdb": "string"
+          }
+        },
+        {
+          "path": "/metrics",
+          "method": "GET",
+          "request_body": null,
+          "response": "array of system metrics"
+        },
+        {
+          "path": "/users",
+          "method": "GET",
+          "request_body": {
+            "query_params": {
+              "search": "string",
+              "limit": "integer (default: 50, range: 1-200)"
+            }
+          },
+          "response": "array of users"
+        },
+        {
+          "path": "/users/{user_id}/status",
+          "method": "POST",
+          "request_body": {
+            "path_params": {
+              "user_id": "string"
+            },
+            "schema": "UserStatusRequest"
+          },
+          "response": {
+            "status": "ok",
+            "user_id": "string",
+            "is_frozen": "boolean"
+          }
+        },
+        {
+          "path": "/kill-all",
+          "method": "POST",
+          "request_body": {
+            "schema": "GlobalKillRequest"
+          },
+          "response": {
+            "status": "HALTED",
+            "message": "string"
+          }
+        },
+        {
+          "path": "/reinitialize",
+          "method": "POST",
+          "request_body": null,
+          "response": {
+            "status": "ACTIVE",
+            "message": "string"
+          }
+        },
+        {
+          "path": "/fleet-status",
+          "method": "GET",
+          "request_body": null,
+          "response": "fleet status object"
+        }
+      ]
+    },
+    {
+      "file": "routers/auth_minimal.py",
+      "prefix": null,
+      "tags": null,
+      "endpoints": [
+        {
+          "path": "/signin",
+          "method": "POST",
+          "request_body": {
+            "schema": "SignInRequest",
+            "fields": {
+              "email": "EmailStr",
+              "password": "string"
+            }
+          },
+          "response": {
+            "schema": "TokenResponse",
+            "fields": {
+              "access_token": "string",
+              "user_id": "string",
+              "email": "string"
+            }
+          }
+        },
+        {
+          "path": "/signout",
+          "method": "POST",
+          "request_body": null,
+          "response": {
+            "status": "ok"
+          }
+        },
+        {
+          "path": "/me",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "id": "string",
+            "email": "string",
+            "role": "string"
+          }
+        }
+      ]
+    },
+    {
+      "file": "routers/billing_minimal.py",
+      "prefix": "/api/billing",
+      "tags": ["Billing"],
+      "endpoints": [
+        {
+          "path": "/plan",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "plan": {
+              "id": "string",
+              "name": "string",
+              "priceUSD": "number",
+              "priceINR": "number",
+              "cycle": "string",
+              "nextBillingDate": "null",
+              "features": "array",
+              "autoRenew": "boolean"
+            }
+          }
+        },
+        {
+          "path": "/invoices",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "invoices": "array"
+          }
+        },
+        {
+          "path": "/payment-methods",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "methods": "array"
+          }
+        },
+        {
+          "path": "/checkout",
+          "method": "POST",
+          "request_body": {
+            "schema": "CheckoutRequest",
+            "fields": {
+              "planId": "string",
+              "currency": "string"
+            }
+          },
+          "response": {
+            "checkoutUrl": "string"
+          }
+        }
+      ]
+    },
+    {
+      "file": "routers/notifications.py",
+      "prefix": "/api/notifications",
+      "tags": ["Notifications"],
+      "endpoints": [
+        {
+          "path": "/settings",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "max_alerts_per_minute": "number",
+            "channels": "object",
+            "triggers": "object"
+          }
+        },
+        {
+          "path": "/settings",
+          "method": "PUT",
+          "request_body": {
+            "type": "Dict[str, Any]"
+          },
+          "response": {
+            "status": "success",
+            "message": "string"
+          }
+        }
+      ]
+    },
+    {
+      "file": "routers/security.py",
+      "prefix": "/api/security",
+      "tags": ["Security Logs"],
+      "endpoints": [
+        {
+          "path": "/logs",
+          "method": "GET",
+          "request_body": null,
+          "response": {
+            "summary": "object",
+            "logs": "array"
+          }
+        }
+      ]
+    },
+    {
+      "file": "routers/support.py",
+      "prefix": null,
+      "tags": null,
+      "endpoints": [
+        {
+          "path": "/tickets",
+          "method": "POST",
+          "request_body": {
+            "schema": "TicketCreate",
+            "fields": {
+              "subject": "string",
+              "priority": "string",
+              "message": "string"
+            }
+          },
+          "response": {
+            "schema": "TicketResponse",
+            "fields": {
+              "id": "string",
+              "subject": "string",
+              "priority": "string",
+              "message": "string",
+              "status": "string",
+              "created_at": "datetime"
+            }
+          }
+        },
+        {
+          "path": "/tickets",
+          "method": "GET",
+          "request_body": null,
+          "response": "array of TicketResponse"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_routers": 16,
+    "total_endpoints": 63,
+    "methods": {
+      "GET": 38,
+      "POST": 19,
+      "PUT": 3,
+      "DELETE": 1
+    }
+  }
+}

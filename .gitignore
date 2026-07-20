@@ -1,0 +1,300 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  AERORA QUANT PLATFORM — Comprehensive .gitignore
+#  Git Release Engineer — Audited 2026-07-20
+#  NEVER commit: secrets, keys, databases, caches, compiled files, large binaries
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── SECRETS & CREDENTIALS (CRITICAL — NEVER COMMIT) ──────────────────────────
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+.env.development
+.env.test
+.env.corrupt*
+.env.backup*
+.env.txt
+*.env
+
+# Secret key files
+exchange_keys.json
+exchange_keys*.json
+decrypt_keys.py
+cert_auth_*.json
+*.key
+*.pem
+*.pfx
+*.p12
+*.crt
+*.csr
+*.cer
+supabase.crt
+temp_key.txt
+token.txt
+valid_token.txt
+jwt_token*.txt
+*.token
+railway_vars.txt
+
+# ── PYTHON ───────────────────────────────────────────────────────────────────
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-link
+MANIFEST
+.installed.cfg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+.codex_verify_venv/
+python_portable/
+*_venv/
+**/venv/
+**/.venv/
+
+# ── NODE / FRONTEND ──────────────────────────────────────────────────────────
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+.npm
+.yarn-integrity
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# Build outputs
+dist/
+build/
+.next/
+.nuxt/
+out/
+.output/
+.cache/
+.parcel-cache/
+
+# ── DATABASES ────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+algo22.db
+aerora_fallback.db
+test_*.db
+test_*.db-journal
+
+# ── LOGS ─────────────────────────────────────────────────────────────────────
+*.log
+*.log.*
+logs/
+**/logs/
+burn_in.log
+burn_in*.log
+soak_test_raw.jsonl
+*.jsonl
+
+# ── CACHES ───────────────────────────────────────────────────────────────────
+.pytest_cache/
+**/.pytest_cache/
+.ruff_cache/
+**/.ruff_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.hypothesis/
+.cache/
+**/.cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+.tox/
+.nox/
+
+# ── IDE & EDITOR FILES ───────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.bak
+*.orig
+.windsurf/
+*.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ── OS FILES ─────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Thumbs.db:encryptable
+
+# ── LARGE BINARY / ARCHIVE FILES ─────────────────────────────────────────────
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.gz
+*.bz2
+*.xz
+*.pkg
+*.dmg
+*.iso
+questdb*.tar.gz
+questdb-*/
+python.zip
+get-pip.py
+
+# ── TEMPORARY / SCRATCH FILES ────────────────────────────────────────────────
+*.tmp
+*.temp
+*.swp
+*_tmp/
+_copilot_integration_tmp/
+project_tree.txt
+ws_test_out.txt
+burn_in_results.txt
+test_output.txt
+dead_code_report.txt
+unused_imports_report.txt
+duplicate_report.txt
+
+# ── ARCHIVED / LEGACY DIRECTORIES (not for production) ───────────────────────
+archive/
+**/archive/
+archived/
+**/archived/
+claude_audit_package/
+audit_package/
+audit_package*/
+
+# ── DUPLICATE / LEGACY BACKEND DIRECTORIES ───────────────────────────────────
+# aerora_quant_platform/ — monorepo scaffold with duplicated code, not deployed
+aerora_quant_platform/
+# aerora_quant_backend_updated_final1/ — nested full-repo copy (older, flat-import version)
+aerora_quant_backend_updated_final1/
+# connection_layer/ — confirmed duplicate of backend_app/ (older flat-import style)
+# backend_app/ is the canonical backend; connection_layer/ is excluded
+connection_layer/
+# NOTE: algo22-terminal/ is the CANONICAL frontend — it is NOT ignored here
+
+# ── TEST ARTIFACTS ───────────────────────────────────────────────────────────
+test_db_cert_*.db
+test_live_cert_*.db
+test_exch_cert_*.db
+test_dup_cert_*.db
+test_ws_cert_*.db
+test_restart_cert_*.db
+test_certification_temp.db
+test_*.db-journal
+*.json.bak
+
+# ── DOCKER (local override files only) ───────────────────────────────────────
+docker-compose.override.yml
+docker-compose.local.yml
+
+# ── TERRAFORM STATE ──────────────────────────────────────────────────────────
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+
+# ── KUBERNETES SECRETS ───────────────────────────────────────────────────────
+*secret*.yaml
+*secret*.yml
+!*secret*.example.yaml
+!*secret*.example.yml
+
+# ── NGINX SSL ────────────────────────────────────────────────────────────────
+nginx/ssl/
+
+# ── QUESTDB BINARIES ─────────────────────────────────────────────────────────
+**/questdb*/
+questdb-*/
+
+# ── PATCH FILES ──────────────────────────────────────────────────────────────
+*.patch
+diff_sec.patch
+diff_tel.patch
+
+# ── MISC GENERATED FILES ─────────────────────────────────────────────────────
+schema.json
+openapi.json
+*.pyc
+burnin_report.json
+captured_events.json
+cert_results*.json
+chaos_test_results.json
+comprehensive_smoke_test_results.json
+diff_results.json
+exchange_keys*.json
+git_files.txt
+launch_audit_bundle.zip
+live_telemetry_results.json
+load_test_results.json
+production_recert_results.json
+railway_vars.txt
+res.json
+signal_trace_results.json
+smoke_test_results.json
+sprint1f_final_patch.json
+sprint1f_patch_results.json
+sprint1f_results.json
+validation_results.json
+validation_run_results.json
+deployment_architecture_inventory.md
+backend_file_list.md
+connection_layer_file_list.md
+import_dependency_graph.md
+dead_code_report.md
+safe_delete_candidates.md
+
+# ── PDF / DOCS (large non-code files) ────────────────────────────────────────
+*.pdf
+dwd.pdf
+
+# ── RAILWAY DEPLOYMENT SECRETS ───────────────────────────────────────────────
+railway_vars.txt

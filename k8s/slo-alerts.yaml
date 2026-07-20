@@ -1,0 +1,554 @@
+# Kubernetes SLO (Service Level Objective) Configuration
+# STEP 11: PRODUCTION SAFETY WITH ALERT-DRIVEN ROLLBACK
+#
+# This file defines:
+# - SLOs for critical services
+# - Prometheus alert rules
+# - Rollback triggers
+# - Production safety gates
+#
+# REQUIRED:
+# - Prometheus Operator
+# - AlertManager
+# - ArgoCD or similar for GitOps rollback
+
+---
+# ============================================================================
+# SLO RECORDING RULES (Prometheus)
+# ============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: trading-slos
+  namespace: monitoring
+  labels:
+    app: prometheus
+    component: slo
+spec:
+  groups:
+    # ═══════════════════════════════════════════════════════════════════════
+    # LATENCY SLOs
+    # ═══════════════════════════════════════════════════════════════════════
+    - name: latency-slos
+      interval: 30s
+      rules:
+        # API Latency SLO: 99% of requests < 200ms
+        - record: slo:api_latency:p99
+          expr: |
+            histogram_quantile(0.99, 
+              sum(rate(api_request_duration_seconds_bucket[5m])) by (le)
+            )
+        
+        # WebSocket Latency SLO: 95% of messages < 100ms
+        - record: slo:websocket_latency:p95
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(websocket_message_latency_seconds_bucket[5m])) by (le)
+            )
+        
+        # Order Execution Latency SLO: 99% of orders < 500ms
+        - record: slo:order_execution_latency:p99
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(order_execution_duration_seconds_bucket[5m])) by (le)
+            )
+        
+        # SLO Compliance Tracking
+        - record: slo:api_latency:compliance
+          expr: |
+            (
+              sum(rate(api_request_duration_seconds_bucket{le="0.2"}[5m]))
+              /
+              sum(rate(api_request_duration_seconds_count[5m]))
+            ) > bool 0.99
+        
+        - record: slo:websocket_latency:compliance
+          expr: |
+            (
+              sum(rate(websocket_message_latency_seconds_bucket{le="0.1"}[5m]))
+              /
+              sum(rate(websocket_message_latency_seconds_count[5m]))
+            ) > bool 0.95
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # SUCCESS RATE SLOs
+    # ═══════════════════════════════════════════════════════════════════════
+    - name: success-rate-slos
+      interval: 30s
+      rules:
+        # API Success Rate SLO: 99.9% of requests succeed
+        - record: slo:api_success_rate
+          expr: |
+            (
+              sum(rate(api_requests_total{status=~"2..|3.."}[5m]))
+              /
+              sum(rate(api_requests_total[5m]))
+            )
+        
+        # Order Success Rate SLO: 99.5% of orders placed successfully
+        - record: slo:order_success_rate
+          expr: |
+            (
+              sum(rate(orders_placed_total{status="success"}[5m]))
+              /
+              sum(rate(orders_placed_total[5m]))
+            )
+        
+        # WebSocket Connection Success SLO: 99% connection rate
+        - record: slo:websocket_success_rate
+          expr: |
+            (
+              sum(rate(websocket_connections_total{status="connected"}[5m]))
+              /
+              sum(rate(websocket_connections_total[5m]))
+            )
+        
+        # SLO Compliance
+        - record: slo:api_success:compliance
+          expr: slo:api_success_rate > bool 0.999
+        
+        - record: slo:order_success:compliance
+          expr: slo:order_success_rate > bool 0.995
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # ERROR RATE SLOs
+    # ═══════════════════════════════════════════════════════════════════════
+    - name: error-rate-slos
+      interval: 30s
+      rules:
+        # API Error Rate SLO: < 0.1% error rate
+        - record: slo:api_error_rate
+          expr: |
+            (
+              sum(rate(api_requests_total{status=~"5.."}[5m]))
+              /
+              sum(rate(api_requests_total[5m]))
+            )
+        
+        # Database Error Rate SLO: < 0.01% error rate
+        - record slo:database_error_rate
+          expr: |
+            (
+              sum(rate(database_query_errors_total[5m]))
+              /
+              sum(rate(database_queries_total[5m]))
+            )
+        
+        # Exchange API Error Rate SLO: < 1% error rate
+        - record: slo:exchange_error_rate
+          expr: |
+            (
+              sum(rate(exchange_api_errors_total[5m]))
+              /
+              sum(rate(exchange_api_requests_total[5m]))
+            )
+        
+        # SLO Compliance
+        - record: slo:api_error:compliance
+          expr: slo:api_error_rate < bool 0.001
+        
+        - record: slo:database_error:compliance
+          expr: slo:database_error_rate < bool 0.0001
+
+---
+# ============================================================================
+# CRITICAL ALERTS (SLO Violations)
+# ============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: slo-alerts
+  namespace: monitoring
+  labels:
+    app: prometheus
+    severity: critical
+spec:
+  groups:
+    - name: slo-violation-alerts
+      interval: 30s
+      rules:
+        # ═════════════════════════════════════════════════════════════════
+        # LATENCY ALERTS
+        # ═════════════════════════════════════════════════════════════════
+        - alert: APIHighLatency
+          expr: slo:api_latency:p99 > 0.2
+          for: 2m
+          labels:
+            severity: critical
+            slo: latency
+            service: api
+          annotations:
+            summary: "API P99 latency exceeds 200ms"
+            description: "API P99 latency is {{ $value }}s, exceeding 200ms SLO"
+            runbook_url: "https://wiki/runbooks/api-high-latency"
+            action: "investigate_api_performance"
+        
+        - alert: WebSocketHighLatency
+          expr: slo:websocket_latency:p95 > 0.1
+          for: 2m
+          labels:
+            severity: critical
+            slo: latency
+            service: websocket
+          annotations:
+            summary: "WebSocket P95 latency exceeds 100ms"
+            description: "WebSocket message latency is {{ $value }}s"
+            action: "check_websocket_cluster"
+        
+        - alert: OrderExecutionSlow
+          expr: slo:order_execution_latency:p99 > 0.5
+          for: 1m
+          labels:
+            severity: critical
+            slo: latency
+            service: execution
+          annotations:
+            summary: "Order execution P99 exceeds 500ms"
+            description: "Order execution is {{ $value }}s, affecting trading"
+            action: "scale_execution_workers"
+        
+        # ═════════════════════════════════════════════════════════════════
+        # SUCCESS RATE ALERTS
+        # ═════════════════════════════════════════════════════════════════
+        - alert: APILowSuccessRate
+          expr: slo:api_success_rate < 0.999
+          for: 1m
+          labels:
+            severity: critical
+            slo: success_rate
+            service: api
+          annotations:
+            summary: "API success rate below 99.9%"
+            description: "API success rate is {{ $value | humanizePercentage }}, below SLO"
+            action: "investigate_api_errors"
+        
+        - alert: OrderPlacementFailing
+          expr: slo:order_success_rate < 0.995
+          for: 30s
+          labels:
+            severity: critical
+            slo: success_rate
+            service: order-engine
+          annotations:
+            summary: "Order success rate below 99.5%"
+            description: "Orders are failing at {{ $value | humanizePercentage }} rate"
+            action: "rollback_deployment"
+            severity_level: "p0"
+        
+        - alert: WebSocketConnectionFailures
+          expr: slo:websocket_success_rate < 0.99
+          for: 2m
+          labels:
+            severity: warning
+            slo: success_rate
+            service: websocket
+          annotations:
+            summary: "WebSocket connections failing"
+            action: "check_ws_load_balancer"
+        
+        # ═════════════════════════════════════════════════════════════════
+        # ERROR RATE ALERTS
+        # ═════════════════════════════════════════════════════════════════
+        - alert: APIHighErrorRate
+          expr: slo:api_error_rate > 0.001
+          for: 1m
+          labels:
+            severity: critical
+            slo: error_rate
+            service: api
+          annotations:
+            summary: "API error rate exceeds 0.1%"
+            description: "API error rate is {{ $value | humanizePercentage }}"
+            action: "investigate_api_errors"
+        
+        - alert: DatabaseErrorSpike
+          expr: slo:database_error_rate > 0.0001
+          for: 1m
+          labels:
+            severity: critical
+            slo: error_rate
+            service: database
+          annotations:
+            summary: "Database error rate exceeds 0.01%"
+            description: "DB errors: {{ $value | humanizePercentage }}"
+            action: "check_database_health"
+        
+        - alert: ExchangeAPIErrors
+          expr: slo:exchange_error_rate > 0.01
+          for: 2m
+          labels:
+            severity: warning
+            slo: error_rate
+            service: exchange
+          annotations:
+            summary: "Exchange API error rate high"
+            description: "Exchange errors: {{ $value | humanizePercentage }}"
+            action: "check_rate_limiter"
+        
+        # ═════════════════════════════════════════════════════════════════
+        # ROLLBACK TRIGGER ALERTS (Severe SLO Violations)
+        # ═════════════════════════════════════════════════════════════════
+        - alert: CriticalSLOViolationRollback
+          expr: |
+            (
+              slo:api_success_rate < 0.98 or
+              slo:order_success_rate < 0.98 or
+              slo:api_error_rate > 0.01
+            )
+          for: 30s
+          labels:
+            severity: p0
+            slo: rollback_trigger
+            service: production
+          annotations:
+            summary: "CRITICAL: SLO violated - Initiating rollback"
+            description: "Severe degradation detected. Automatic rollback recommended."
+            action: "rollback_deployment"
+            auto_rollback: "true"
+        
+        - alert: MultipleServicesDegraded
+          expr: |
+            (
+              sum(slo:api_success:compliance == 0) +
+              sum(slo:websocket_success:compliance == 0) +
+              sum(slo:order_success:compliance == 0)
+            ) >= 2
+          for: 1m
+          labels:
+            severity: p0
+            slo: rollback_trigger
+            service: multiple
+          annotations:
+            summary: "Multiple services degraded"
+            description: "2+ SLOs violated simultaneously"
+            action: "rollback_deployment"
+
+---
+# ============================================================================
+# ALERTMANAGER CONFIGURATION (Routing and Actions)
+# ============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: AlertmanagerConfig
+metadata:
+  name: slo-alerts-routing
+  namespace: monitoring
+spec:
+  route:
+    groupBy: ['alertname', 'slo', 'service']
+    groupWait: 10s
+    groupInterval: 30s
+    repeatInterval: 5m
+    receiver: 'default'
+    routes:
+      # Critical SLO violations → PagerDuty + Rollback webhook
+      - match:
+          severity: p0
+        receiver: 'critical-with-rollback'
+        continue: true
+      
+      # Latency alerts → Slack
+      - match:
+          slo: latency
+          severity: critical
+        receiver: 'slack-performance'
+      
+      # Error rate alerts → PagerDuty
+      - match:
+          slo: error_rate
+        receiver: 'pagerduty'
+      
+      # Success rate alerts → Both Slack and PagerDuty
+      - match:
+          slo: success_rate
+        receiver: 'slack-pagerduty'
+  
+  receivers:
+    - name: 'default'
+      slackConfigs:
+        - apiURL:
+            key: slack-webhook-url
+            name: alertmanager-secrets
+          channel: '#alerts'
+          title: 'SLO Alert: {{ .GroupLabels.alertname }}'
+          text: '{{ .CommonAnnotations.summary }}'
+    
+    - name: 'critical-with-rollback'
+      slackConfigs:
+        - apiURL:
+            key: slack-webhook-url
+            name: alertmanager-secrets
+          channel: '#critical-alerts'
+          title: 'CRITICAL SLO Violation - Rollback Triggered'
+          text: |
+            {{ .CommonAnnotations.summary }}
+            
+            Action: {{ .CommonAnnotations.action }}
+            Service: {{ .GroupLabels.service }}
+            
+            Initiating automatic rollback...
+      
+      webhookConfigs:
+        - url: 'http://gitops-controller.monitoring.svc:8080/rollback'
+          sendResolved: false
+          httpConfig:
+            headers:
+              Authorization: 
+                key: rollback-token
+                name: alertmanager-secrets
+          
+    - name: 'pagerduty'
+      pagerdutyConfigs:
+        - serviceKey:
+            key: pagerduty-service-key
+            name: alertmanager-secrets
+          severity: '{{ .GroupLabels.severity }}'
+          description: '{{ .CommonAnnotations.summary }}'
+    
+    - name: 'slack-pagerduty'
+      slackConfigs:
+        - apiURL:
+            key: slack-webhook-url
+            name: alertmanager-secrets
+          channel: '#slo-alerts'
+          title: 'SLO Violation: {{ .GroupLabels.service }}'
+      
+      pagerdutyConfigs:
+        - serviceKey:
+            key: pagerduty-service-key
+            name: alertmanager-secrets
+
+---
+# ============================================================================
+# ROLLBACK CONTROLLER (Deployment)
+# ============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slo-rollback-controller
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: slo-rollback-controller
+  template:
+    metadata:
+      labels:
+        app: slo-rollback-controller
+    spec:
+      serviceAccountName: rollback-controller
+      containers:
+        - name: controller
+          image: trading-platform/slo-rollback-controller:v1.0.0
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ROLLBACK_STRATEGY
+              value: "immediate"  # immediate | gradual | canary
+            - name: ARGOCD_SERVER
+              value: "argocd-server.argocd.svc:443"
+            - name: SLO_VIOLATION_THRESHOLD
+              value: "30s"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+
+---
+# ============================================================================
+# ROLLBACK CONTROLLER SERVICE ACCOUNT
+# ============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rollback-controller
+  namespace: monitoring
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rollback-controller
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "watch", "update"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rollback-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rollback-controller
+subjects:
+  - kind: ServiceAccount
+    name: rollback-controller
+    namespace: monitoring
+
+---
+# ============================================================================
+# SLO DASHBOARD CONFIG (Grafana)
+# ============================================================================
+apiVersion: integreatly.org/v1alpha1
+kind: GrafanaDashboard
+metadata:
+  name: slo-dashboard
+  namespace: monitoring
+spec:
+  json: |
+    {
+      "dashboard": {
+        "title": "Trading Platform SLOs",
+        "panels": [
+          {
+            "title": "API Latency SLO",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "slo:api_latency:compliance",
+                "legendFormat": "Compliance"
+              }
+            ]
+          },
+          {
+            "title": "API Success Rate SLO",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "slo:api_success:compliance",
+                "legendFormat": "Compliance"
+              }
+            ]
+          },
+          {
+            "title": "Error Rate SLO",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "slo:api_error:compliance",
+                "legendFormat": "Compliance"
+              }
+            ]
+          },
+          {
+            "title": "SLO Overview",
+            "type": "table",
+            "targets": [
+              {
+                "expr": "slo:.*:compliance",
+                "format": "table"
+              }
+            ]
+          }
+        ]
+      }
+    }

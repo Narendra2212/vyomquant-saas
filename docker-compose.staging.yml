@@ -1,0 +1,222 @@
+# AERORA QUANT — UNIFIED STAGING ARCHITECTURE
+#
+# This file consolidates the REST API, WebSocket scaling cluster, Frontend, 
+# and supporting infrastructure (PostgreSQL, Redis, Nginx, Prometheus, Grafana) 
+# into a single, deployable staging environment.
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # FRONTEND
+  # =============================================================================
+  frontend:
+    build:
+      context: ./algo22-terminal
+      dockerfile: Dockerfile.frontend
+    container_name: aerora-staging-frontend
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost/api}
+      - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL:-ws://localhost/ws}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend-api
+      - websocket-server
+    networks:
+      - aerora_staging_network
+
+  # =============================================================================
+  # REST API BACKEND
+  # =============================================================================
+  backend-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: aerora-staging-backend
+    restart: unless-stopped
+    environment:
+      - ENV=staging
+      - SANDBOX_MODE=true
+      - DATABASE_URL=postgresql://aerora:${DB_PASSWORD}@postgres:5432/aerora
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_QUEUE_URL=redis://redis:6379/1
+      - REDIS_CACHE_URL=redis://redis:6379/2
+      - WS_SERVER_URL=ws://websocket-server:8002
+      - ALERTS_ENABLED=true
+      - ALERT_TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - ALERT_TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - LOG_LEVEL=info
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - staging_backend_logs:/app/logs
+    networks:
+      - aerora_staging_network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # =============================================================================
+  # WEBSOCKET SERVER
+  # =============================================================================
+  websocket-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.websocket
+    container_name: aerora-staging-websocket
+    restart: unless-stopped
+    environment:
+      - WS_SERVER_HOST=0.0.0.0
+      - WS_SERVER_PORT=8002
+      - WS_SERVER_WORKERS=4
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://aerora:${DB_PASSWORD}@postgres:5432/aerora
+      - LOG_LEVEL=info
+    ports:
+      - "8002:8002"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - aerora_staging_network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '1.0'
+
+  # =============================================================================
+  # DATABASE (PostgreSQL)
+  # =============================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: aerora-staging-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=aerora
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=aerora
+    volumes:
+      - staging_postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - aerora_staging_network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+  # =============================================================================
+  # MESSAGE BUS / CACHE (Redis)
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: aerora-staging-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - staging_redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - aerora_staging_network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # =============================================================================
+  # NGINX LOAD BALANCER
+  # =============================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: aerora-staging-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx-staging.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - staging_nginx_logs:/var/log/nginx
+    depends_on:
+      - backend-api
+      - frontend
+      - websocket-server
+    networks:
+      - aerora_staging_network
+
+  # =============================================================================
+  # PROMETHEUS (Metrics)
+  # =============================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aerora-staging-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - staging_prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+    ports:
+      - "9090:9090"
+    networks:
+      - aerora_staging_network
+
+  # =============================================================================
+  # GRAFANA (Dashboards)
+  # =============================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aerora-staging-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - staging_grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - aerora_staging_network
+
+volumes:
+  staging_postgres_data:
+  staging_redis_data:
+  staging_backend_logs:
+  staging_nginx_logs:
+  staging_prometheus_data:
+  staging_grafana_data:
+
+networks:
+  aerora_staging_network:
+    driver: bridge

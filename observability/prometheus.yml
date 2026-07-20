@@ -1,0 +1,115 @@
+# Prometheus Configuration
+# Institutional-grade observability stack for distributed trading system
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'algo-trading'
+    environment: 'production'
+
+rule_files:
+  - "alert_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Node Exporter for system metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  # Application metrics
+  - job_name: 'algo-trading-api'
+    static_configs:
+      - targets: ['api-server:8000']
+    scrape_interval: 5s
+    metrics_path: /metrics
+    scrape_timeout: 4s
+
+  # Distributed execution workers
+  - job_name: 'execution-workers'
+    static_configs:
+      - targets: 
+        - 'worker-1:8080'
+        - 'worker-2:8080'
+        - 'worker-3:8080'
+        - 'worker-4:8080'
+        - 'worker-5:8080'
+    scrape_interval: 5s
+    metrics_path: /metrics
+
+  # Redis metrics
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  # WebSocket server metrics
+  - job_name: 'websocket-server'
+    static_configs:
+      - targets: ['websocket-server:8081']
+    scrape_interval: 5s
+    metrics_path: /metrics
+
+  # Exchange gateway metrics
+  - job_name: 'exchange-gateways'
+    static_configs:
+      - targets:
+        - 'gateway-binance:8082'
+        - 'gateway-coinbase:8083'
+        - 'gateway-kraken:8084'
+    scrape_interval: 5s
+    metrics_path: /metrics
+
+  # QuestDB metrics
+  - job_name: 'questdb'
+    static_configs:
+      - targets: ['questdb:9000']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  # Supabase metrics
+  - job_name: 'supabase'
+    static_configs:
+      - targets: ['supabase:3000']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  # Kubernetes pods (if deployed in K8s)
+  - job_name: 'kubernetes-pods'
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+
+# Remote write configuration for long-term storage
+remote_write:
+  - url: "http://prometheus-remote-storage:9201/api/v1/write"
+    queue_config:
+      max_samples_per_send: 1000
+      max_shards: 200
+      capacity: 2500
