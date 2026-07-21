@@ -99,7 +99,7 @@ class DataEngine:
                     yield [candle]
         except asyncio.CancelledError:
             await pubsub.unsubscribe(channel)
-            break
+            raise
         except Exception as e:
             await self._handle_stream_error("MDS OHLCV Stream", e)
 
