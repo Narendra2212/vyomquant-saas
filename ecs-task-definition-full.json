@@ -88,8 +88,12 @@
           "value": "true"
         },
         {
-          "name": "RATE_LIMIT_REQUESTS_PER_MINUTE",
+          "name": "RATE_LIMIT_PER_MINUTE",
           "value": "60"
+        },
+        {
+          "name": "EXCHANGE_ID",
+          "value": "binance"
         },
         {
           "name": "FEATURE_TRADING_ENABLED",

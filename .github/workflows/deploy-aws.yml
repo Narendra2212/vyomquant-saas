@@ -11,9 +11,9 @@ env:
   ECR_REPOSITORY_API: vyomquant-api
   ECR_REPOSITORY_TEE: vyomquant-tee
   ECR_REPOSITORY_MDS: vyomquant-mds
-  ECS_CLUSTER: vyomquant-cluster-prod
-  ECS_SERVICE_API: vyomquant-api-service-prod
-  ECS_SERVICE_TEE: vyomquant-tee-service-prod
+  ECS_CLUSTER: vyomquant-cluster
+  ECS_SERVICE_API: vyomquant-api-service-cjema2sl
+  # ECS_SERVICE_TEE: vyomquant-tee-service-prod  # Commented out as this service does not exist in the cluster
 
 jobs:
   build-and-deploy:
@@ -42,8 +42,9 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_API:$IMAGE_TAG -f Dockerfile.backend .
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_API:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY_API:latest -f Dockerfile.backend .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY_API:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY_API:latest
           echo "image_api=$ECR_REGISTRY/$ECR_REPOSITORY_API:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       - name: Build, tag, and push TEE image to Amazon ECR
@@ -52,19 +53,22 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_TEE:$IMAGE_TAG -f Dockerfile.tee .
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_TEE:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY_TEE:latest -f Dockerfile.tee .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY_TEE:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY_TEE:latest
           echo "image_tee=$ECR_REGISTRY/$ECR_REPOSITORY_TEE:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       # Download existing task definitions or template them here
       # For simplicity, assuming we update the service with the new image
       - name: Update ECS service for API
         run: |
-          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE_API --force-new-deployment
+          TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://ecs-task-definition-full.json --query 'taskDefinition.taskDefinitionArn' --output text)
+          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE_API --task-definition $TASK_DEF_ARN --force-new-deployment
 
       - name: Update ECS service for TEE
         run: |
-          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE_TEE --force-new-deployment
+          # aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE_TEE --force-new-deployment
+          echo "Skipping TEE service update as the service is not yet created in the cluster."
 
       - name: Wait for API service stability
         run: |
@@ -72,4 +76,5 @@ jobs:
 
       - name: Wait for TEE service stability
         run: |
-          aws ecs wait services-stable --cluster $ECS_CLUSTER --services $ECS_SERVICE_TEE
+          # aws ecs wait services-stable --cluster $ECS_CLUSTER --services $ECS_SERVICE_TEE
+          echo "Skipping TEE service wait."
