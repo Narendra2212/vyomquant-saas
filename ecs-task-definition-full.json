@@ -57,7 +57,7 @@
         },
         {
           "name": "SUPABASE_URL",
-          "value": "REPLACE_WITH_YOUR_SUPABASE_URL"
+          "value": "https://wrkexcjqnidkdrayhlsi.supabase.co"
         },
         {
           "name": "REDIS_URL",
