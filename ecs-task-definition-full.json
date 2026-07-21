@@ -1,0 +1,178 @@
+{
+  "family": "vyomquant-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::273709947018:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::273709947018:role/ecsTaskExecutionRole",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "containerDefinitions": [
+    {
+      "name": "vyomquant-api",
+      "image": "273709947018.dkr.ecr.ap-southeast-1.amazonaws.com/vyomquant-api:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "AERORA_MODE",
+          "value": "paper"
+        },
+        {
+          "name": "ENV",
+          "value": "production"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "INFO"
+        },
+        {
+          "name": "LOG_FORMAT",
+          "value": "json"
+        },
+        {
+          "name": "PYTHONUNBUFFERED",
+          "value": "1"
+        },
+        {
+          "name": "PYTHONPATH",
+          "value": "/app"
+        },
+        {
+          "name": "PORT",
+          "value": "8000"
+        },
+        {
+          "name": "WORKERS",
+          "value": "2"
+        },
+        {
+          "name": "SUPABASE_URL",
+          "value": "REPLACE_WITH_YOUR_SUPABASE_URL"
+        },
+        {
+          "name": "REDIS_URL",
+          "value": "redis://localhost:6379"
+        },
+        {
+          "name": "CORS_ORIGINS",
+          "value": "https://app.vyomquant.com,https://vyomquant.com"
+        },
+        {
+          "name": "DEFAULT_EXCHANGE",
+          "value": "binance"
+        },
+        {
+          "name": "QUESTDB_HOST",
+          "value": "127.0.0.1"
+        },
+        {
+          "name": "QUESTDB_PORT",
+          "value": "9000"
+        },
+        {
+          "name": "PRODUCTION_ROUTER_ENABLED",
+          "value": "False"
+        },
+        {
+          "name": "RATE_LIMIT_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "RATE_LIMIT_REQUESTS_PER_MINUTE",
+          "value": "60"
+        },
+        {
+          "name": "FEATURE_TRADING_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "FEATURE_WEBSOCKET_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "FEATURE_BACKTESTING_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "FEATURE_ML_PREDICTIONS_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "FEATURE_RISK_MANAGEMENT_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "FEATURE_EMERGENCY_LIQUIDATION_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "FEATURE_DEBUG_ENDPOINTS_ENABLED",
+          "value": "false"
+        },
+        {
+          "name": "FEATURE_MOCK_EXCHANGE_ENABLED",
+          "value": "false"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "SUPABASE_SERVICE_ROLE_KEY",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/SUPABASE_SERVICE_ROLE_KEY"
+        },
+        {
+          "name": "SUPABASE_ANON_KEY",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/SUPABASE_ANON_KEY"
+        },
+        {
+          "name": "SUPABASE_JWT_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/SUPABASE_JWT_SECRET"
+        },
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/DATABASE_URL"
+        },
+        {
+          "name": "MASTER_ENCRYPTION_KEYS",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/MASTER_ENCRYPTION_KEYS"
+        },
+        {
+          "name": "JWT_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/JWT_SECRET"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/vyomquant-api",
+          "awslogs-region": "ap-southeast-1",
+          "awslogs-stream-prefix": "ecs",
+          "awslogs-create-group": "true"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "curl -f http://localhost:8000/health/live || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 10,
+        "retries": 3,
+        "startPeriod": 60
+      },
+      "stopTimeout": 30,
+      "linuxParameters": {
+        "initProcessEnabled": true
+      }
+    }
+  ]
+}
