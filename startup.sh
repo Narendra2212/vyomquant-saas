@@ -1,67 +1,98 @@
 #!/bin/bash
 set -e
 
-echo "Running production startup checks..."
+echo "=========================================="
+echo " VyomQuant Backend — ECS Fargate Startup "
+echo "=========================================="
 
-# 1. Check required env vars
-if [ -z "$DATABASE_URL" ]; then
-    echo "ERROR: DATABASE_URL is missing."
-    exit 1
-fi
+# ── 1. Validate mandatory environment variables ────────────────────────────
+echo "[startup] Checking required environment variables..."
+
+MISSING_VARS=0
+
 if [ -z "$SUPABASE_URL" ]; then
-    echo "ERROR: SUPABASE_URL is missing."
-    exit 1
+    echo "[startup] FATAL: SUPABASE_URL is missing."
+    MISSING_VARS=1
 fi
-if [ -z "$SUPABASE_KEY" ]; then
-    echo "ERROR: SUPABASE_KEY is missing."
+
+if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+    echo "[startup] FATAL: SUPABASE_SERVICE_ROLE_KEY is missing."
+    MISSING_VARS=1
+fi
+
+if [ -z "$SUPABASE_ANON_KEY" ]; then
+    echo "[startup] FATAL: SUPABASE_ANON_KEY is missing."
+    MISSING_VARS=1
+fi
+
+if [ -z "$MASTER_ENCRYPTION_KEYS" ]; then
+    echo "[startup] FATAL: MASTER_ENCRYPTION_KEYS is missing."
+    MISSING_VARS=1
+fi
+
+if [ -z "$DATABASE_URL" ]; then
+    echo "[startup] FATAL: DATABASE_URL is missing."
+    MISSING_VARS=1
+fi
+
+if [ "$MISSING_VARS" -ne 0 ]; then
+    echo "[startup] ERROR: One or more required environment variables are missing. Exiting."
     exit 1
 fi
 
-echo "All required environment variables are present."
+echo "[startup] All required environment variables are present."
 
-# 2. Connection Validation (Redis & Supabase)
-python -c "
-import os, sys
+# ── 2. Optional: Redis connectivity check (non-fatal) ─────────────────────
+# Redis is optional at startup — the app handles Redis fallback gracefully.
+# A failed ping here will NOT abort startup.
+echo "[startup] Checking Redis connectivity (non-fatal)..."
+python3 -c "
+import os
 try:
     import redis
-    import httpx
-except ImportError as e:
-    print('Failed to import dependencies:', e)
-    sys.exit(1)
-
-print('Validating Redis connection...')
-try:
     redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
-    r = redis.from_url(redis_url)
+    r = redis.from_url(redis_url, socket_connect_timeout=3)
     r.ping()
-    print('✓ Redis connection successful.')
+    print('[startup] Redis: CONNECTED (' + redis_url + ')')
 except Exception as e:
-    print('✗ Redis connection failed:', str(e))
-    sys.exit(1)
+    print('[startup] Redis: UNAVAILABLE (' + str(e) + ') — app will start in fallback mode')
+" || true
 
-print('Validating Supabase connection...')
+# ── 3. Optional: Supabase reachability check (non-fatal) ──────────────────
+# The app's SecurityVault will do its own strict validation on boot.
+# This check only warns if the endpoint is unreachable at pre-flight.
+echo "[startup] Checking Supabase reachability (non-fatal)..."
+python3 -c "
+import os
 try:
-    url = os.environ['SUPABASE_URL']
-    key = os.environ['SUPABASE_KEY']
-    headers = {'apikey': key, 'Authorization': f'Bearer {key}'}
-    # Simple GET request to check Supabase health
-    res = httpx.get(f'{url}/rest/v1/', headers=headers, timeout=5.0)
-    if res.status_code >= 400 and res.status_code != 404:
-        print('✗ Supabase connection failed with status:', res.status_code)
-        sys.exit(1)
-    print('✓ Supabase connection successful.')
+    import httpx
+    url = os.environ.get('SUPABASE_URL', '')
+    key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
+    if url and key:
+        headers = {'apikey': key, 'Authorization': 'Bearer ' + key}
+        res = httpx.get(url + '/rest/v1/', headers=headers, timeout=5.0)
+        if res.status_code < 500:
+            print('[startup] Supabase: REACHABLE (HTTP ' + str(res.status_code) + ')')
+        else:
+            print('[startup] Supabase: WARNING — HTTP ' + str(res.status_code) + ' (will retry on boot)')
 except Exception as e:
-    print('✗ Supabase connection failed:', str(e))
-    sys.exit(1)
-"
+    print('[startup] Supabase: WARNING — unreachable (' + str(e) + ') — app will fail on boot if persistent')
+" || true
 
-if [ $? -ne 0 ]; then
-    echo "ERROR: Startup validation failed."
-    exit 1
-fi
+# ── 4. Launch Gunicorn with Uvicorn workers ────────────────────────────────
+echo "[startup] Starting Gunicorn with Uvicorn workers..."
+echo "[startup] Entry point: backend_app.main:app"
+echo "[startup] Port: ${PORT:-8000}"
+echo "[startup] Mode: ${AERORA_MODE:-paper}"
 
-echo "Starting Gunicorn with Uvicorn workers..."
-# 3. Start Gunicorn with Uvicorn Workers
-# Uses backend_app.main:app — the canonical package-qualified entry point.
-# PYTHONPATH=/app is set in the Dockerfile so backend_app is importable.
-exec gunicorn backend_app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 120
+# PYTHONPATH=/app is set in the Dockerfile so backend_app is importable as a package.
+exec gunicorn backend_app.main:app \
+    --workers "${WORKERS:-2}" \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --bind "0.0.0.0:${PORT:-8000}" \
+    --timeout 120 \
+    --graceful-timeout 30 \
+    --keep-alive 5 \
+    --access-logfile - \
+    --error-logfile - \
+    --log-level "${LOG_LEVEL:-info}"

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Auth Middleware — Supabase ES256 JWKS Validation (HOTFIX)
 
 Replaces HS256 shared-secret validation with proper Supabase JWKS-based
@@ -18,14 +18,27 @@ import jwt
 from jwt import PyJWKClient, ExpiredSignatureError, InvalidAudienceError, InvalidTokenError
 import time
 import threading
+import os
 from backend_app.core.config import settings
 
 security = HTTPBearer()
 
 # ---------------------------------------------------------------------------
 # JWKS Client — module-level singleton, thread-safe, keys cached in-process
+# Dynamically constructed from SUPABASE_URL environment variable.
 # ---------------------------------------------------------------------------
-_SUPABASE_JWKS_URL = "https://YOUR_PROJECT_REF.supabase.co/auth/v1/.well-known/jwks.json"
+
+def _build_jwks_url() -> str:
+    """
+    Build the Supabase JWKS URL from SUPABASE_URL env var.
+    e.g. https://abc123.supabase.co → https://abc123.supabase.co/auth/v1/.well-known/jwks.json
+    Falls back to a placeholder so import does not crash if env var missing.
+    """
+    supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    if supabase_url:
+        return f"{supabase_url}/auth/v1/.well-known/jwks.json"
+    # Fallback — JWKS validation will fail gracefully; HS256 path will still work.
+    return "https://placeholder.supabase.co/auth/v1/.well-known/jwks.json"
 
 _jwks_client: PyJWKClient | None = None
 _jwks_lock = threading.Lock()
@@ -35,6 +48,7 @@ def _get_jwks_client() -> PyJWKClient:
     """
     Return the module-level PyJWKClient singleton.
     Lazily initialised and thread-safe. Keys are cached in-process.
+    Constructed from SUPABASE_URL at first call (after env vars are loaded).
     cache_keys=True avoids repeated network fetches; PyJWT auto-refreshes
     on unknown kid.
     """
@@ -43,7 +57,7 @@ def _get_jwks_client() -> PyJWKClient:
         with _jwks_lock:
             if _jwks_client is None:
                 _jwks_client = PyJWKClient(
-                    _SUPABASE_JWKS_URL,
+                    _build_jwks_url(),
                     cache_keys=True,
                     lifespan=3600,   # refresh JWKS every 1 hour max
                 )
