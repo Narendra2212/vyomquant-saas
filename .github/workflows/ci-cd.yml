@@ -19,6 +19,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   PYTHON_VERSION: '3.11'
+  AWS_REGION: ap-southeast-1
 
 jobs:
   # =============================================================================
@@ -205,7 +206,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
       
       - name: Deploy to ECS Staging
         run: |
@@ -216,7 +217,7 @@ jobs:
       
       - name: Deploy to EKS Staging
         run: |
-          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name trading-platform-staging
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name trading-platform-staging
           kubectl set image deployment/trading-backend \
             backend=${{ needs.build.outputs.image_tag }} \
             -n staging
@@ -302,11 +303,11 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
       
       - name: Deploy to EKS Production (Canary)
         run: |
-          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name trading-platform-production
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name trading-platform-production
           
           # Deploy canary (10% traffic)
           kubectl set image deployment/trading-backend-canary \

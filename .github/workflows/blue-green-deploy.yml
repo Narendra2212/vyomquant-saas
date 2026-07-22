@@ -34,6 +34,7 @@ on:
 
 env:
   NAMESPACE: ${{ github.event.inputs.environment }}
+  AWS_REGION: ap-southeast-1
 
 jobs:
   # =============================================================================
@@ -53,11 +54,11 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
       
       - name: Configure kubectl
         run: |
-          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} \
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} \
             --name trading-platform-${{ github.event.inputs.environment }}
       
       - name: Deploy to Green
@@ -113,11 +114,11 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
       
       - name: Configure kubectl
         run: |
-          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} \
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} \
             --name trading-platform-${{ github.event.inputs.environment }}
       
       - name: Switch traffic to Green
@@ -185,11 +186,11 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
       
       - name: Configure kubectl
         run: |
-          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} \
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} \
             --name trading-platform-${{ github.event.inputs.environment }}
       
       - name: Switch traffic
@@ -216,11 +217,11 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
       
       - name: Configure kubectl
         run: |
-          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} \
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} \
             --name trading-platform-${{ github.event.inputs.environment }}
       
       - name: Rollback to Blue
@@ -267,11 +268,11 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
       
       - name: Configure kubectl
         run: |
-          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} \
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} \
             --name trading-platform-${{ github.event.inputs.environment }}
       
       - name: Promote to Blue
