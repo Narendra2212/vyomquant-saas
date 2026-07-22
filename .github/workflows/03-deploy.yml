@@ -89,7 +89,7 @@ jobs:
       - name: Execute Automated Deployment & Self-Healing Diagnostic Engine
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: python scripts/ecs_deploy_and_diagnose.py
 
       - name: Generate Reports

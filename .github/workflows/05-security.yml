@@ -29,6 +29,9 @@ jobs:
       - name: Install security scanners
         run: pip install bandit safety
 
+      - name: Create reports directory
+        run: mkdir -p reports
+
       - name: Run Bandit Scan
         run: bandit -r backend_app -f json -o reports/bandit-report.json || true
 
@@ -48,6 +51,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Free Disk Space on GitHub Runner
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
 
       - name: Build Docker image for scanning
         run: docker build -t trading-platform:scan -f Dockerfile .
