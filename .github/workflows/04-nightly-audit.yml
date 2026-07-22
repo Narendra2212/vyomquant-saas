@@ -1,0 +1,52 @@
+# 04-nightly-audit.yml — Scheduled Nightly Infrastructure & Health Audit
+name: 04 Nightly Audit
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Daily at 02:00 UTC
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  nightly-audit:
+    name: Nightly Compliance & Infrastructure Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          sed -i 's/^torch==.*/torch==2.3.1+cpu/' requirements.txt
+          pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+
+      - name: Run Import Audit
+        run: python scripts/import_audit.py backend_app
+
+      - name: Run Dependency Audit
+        run: python scripts/dependency_audit.py
+
+      - name: Run Docker Validation
+        run: python scripts/docker_validation.py
+
+      - name: Generate Reports
+        if: always()
+        run: python scripts/generate_reports.py
+
+      - name: Upload Audit Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-audit-reports
+          path: |
+            *.md
+            reports/

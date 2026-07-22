@@ -1,0 +1,37 @@
+{
+  "status": "PASS",
+  "region": "ap-southeast-1",
+  "task_definition": {
+    "valid": true,
+    "errors": [],
+    "family": "vyomquant-api",
+    "containers": [
+      "vyomquant-api"
+    ]
+  },
+  "aws_live": {
+    "credentials_valid": true,
+    "identity": {
+      "UserId": "AIDAT7OTCLCFOLA5GO7KF",
+      "Account": "273709947018",
+      "Arn": "arn:aws:iam::273709947018:user/github-actions"
+    },
+    "ecr_repos": {
+      "vyomquant-api": true,
+      "vyomquant-tee": true,
+      "vyomquant-mds": true
+    },
+    "secrets": {
+      "/vyomquant/production/SUPABASE_SERVICE_ROLE_KEY": true,
+      "/vyomquant/production/SUPABASE_ANON_KEY": true,
+      "/vyomquant/production/SUPABASE_JWT_SECRET": true,
+      "/vyomquant/production/DATABASE_URL": true,
+      "/vyomquant/production/MASTER_ENCRYPTION_KEYS": true,
+      "/vyomquant/production/JWT_SECRET": true
+    },
+    "ecs_cluster": true,
+    "ecs_service": true,
+    "log_group": true,
+    "errors": []
+  }
+}

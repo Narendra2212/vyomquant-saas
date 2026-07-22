@@ -1,0 +1,15 @@
+{
+  "status": "PASS",
+  "static_validation": {
+    "found": [
+      "Dockerfile",
+      "Dockerfile.backend",
+      "Dockerfile.tee",
+      "Dockerfile.websocket"
+    ],
+    "issues": [],
+    "valid": true
+  },
+  "docker_available": false,
+  "runtime": {}
+}
