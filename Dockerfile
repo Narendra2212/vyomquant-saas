@@ -18,12 +18,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install Python dependencies
-# Use backend_app/requirements.txt — canonical backend requirements
+# Install Python dependencies (use CPU-only index for PyTorch to reduce image size by ~2.5GB)
 COPY backend_app/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir gunicorn httpx redis && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu && \
+    find /opt/venv -type f -name '*.pyc' -delete && \
+    find /opt/venv -type d -name '__pycache__' -delete
 
 # =============================================================================
 # Stage 2: Production
@@ -46,7 +47,6 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy canonical backend package
-# backend_app/ is the ONLY backend — aerora_quant_backend_updated_final1/ is excluded
 COPY --chown=appuser:appuser backend_app/ ./backend_app/
 
 # Copy startup scripts
@@ -70,7 +70,6 @@ EXPOSE 8000
 ENV PYTHONUNBUFFERED=1
 ENV LOG_LEVEL=INFO
 ENV LOG_FORMAT=json
-# PYTHONPATH ensures backend_app package is importable from /app
 ENV PYTHONPATH=/app
 
 # Run application using the startup script

@@ -1,61 +1,84 @@
-__pycache__
+# ═══════════════════════════════════════════════════════════════════════
+# Aerora Quant Backend — Production .dockerignore
+# Excludes unnecessary files to minimize Docker build context size
+# ═══════════════════════════════════════════════════════════════════════
+
+# Version Control & IDEs
+.git
+.github
+.gitignore
+.vscode
+.idea
+.windsurf
+
+# Python Caches & Virtual Environments
+__pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
 env/
 venv/
-.env
-.venv
-*.db
-.git
-.github
-.pytest_cache
-.ruff_cache
-.windsurf
+.venv/
+.codex_verify_venv/
+python_portable/
+
+# Testing & Quality Assurance Caches
+.pytest_cache/
+**/.pytest_cache/
+.ruff_cache/
+**/.ruff_cache/
+.mypy_cache/
+**/.mypy_cache/
+coverage/
+.coverage
+htmlcov/
+
+# Logs & Temporary Files
 logs/
+**/*.log
 *.log
 
-# Exclude node_modules and frontend folders for Railway backend deploy
+# Frontend & Node Artifacts
 node_modules/
 **/node_modules/
+dist/
+build/
 aerora_quant_platform/
 algo22-terminal/
 
-# Recursive database and compression exclusions
+# Large Local Archives & Package Bundles
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.pdf
+wheels/
+
+# SQLite Databases & Local Storage
+*.db
+*.db-journal
 **/*.db
 **/*.db-journal
-**/*.zip
-**/*.tar.gz
-**/questdb*
-**/questdb-9.3.5-rt-windows-x86-64/
-**/audit_package/
-**/claude_audit_package/
-**/logs/
-**/*.log
-.git
-.github
-node_modules
-algo22-terminal/node_modules
-algo22-terminal/dist
-__pycache__
-*.pyc
-*.pyo
-*.db
-*.log
+test_db_cert_*.db
+test_live_cert_*.db
+test_dup_cert_*.db
+test_ws_cert_*.db
+
+# Environment & Secret Files
 .env
+.env.*
+!.env.example
 backend_app/.env
 algo22-terminal/.env
-archive
-audit_package
-claude_audit_package
-python_portable
-Git
-logs
-*.zip
-*.pdf
-**/__pycache__/
-**/.pytest_cache/
-**/.ruff_cache/
+
+# Non-Production Documentation & Runbooks
+docs/
+examples/
+notebooks/
 archive/
 **/archive/
+audit_package/
+claude_audit_package/
+reports/

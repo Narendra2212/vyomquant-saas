@@ -8,7 +8,7 @@ import asyncio
 import pytest
 from datetime import datetime
 
-from core.rate_limiter import RateLimiter, RateLimitExceeded
+from backend_app.core.rate_limiter import RateLimiter, RateLimitExceeded
 
 
 @pytest.fixture(autouse=True)
