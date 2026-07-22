@@ -23,27 +23,22 @@ Security:
   - Input validated via Pydantic models
 """
 
+import json
 import logging
 import os
-import json
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, validator
-from supabase import create_client
-
-from backend_app.core.dependencies import (
-    get_current_user,
-    get_admin_user,
-    create_request_supabase,
-    bearer_scheme,
-)
-from backend_app.core.rate_limit import limiter
-from fastapi.security import HTTPAuthorizationCredentials
-from fastapi import Request
 import redis
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import BaseModel, Field, validator
+
+from backend_app.core.dependencies import (bearer_scheme, get_admin_user,
+                                           get_current_user)
+from backend_app.core.rate_limit import limiter
+from supabase import create_client
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 try:
@@ -260,7 +255,8 @@ async def browse_library(
                 user_id = None
                 if credentials:
                     try:
-                        from backend_app.core.auth_middleware import decode_token_local
+                        from backend_app.core.auth_middleware import \
+                            decode_token_local
                         payload = decode_token_local(credentials.credentials)
                         user_id = payload.get("sub")
                     except Exception:

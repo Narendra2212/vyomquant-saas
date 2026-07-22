@@ -8,16 +8,15 @@ Author: Principal HFT Infrastructure Engineer
 """
 
 import asyncio
-import time
-import psutil
-import threading
-import statistics
-from typing import Dict, List, Any, Optional, Callable, Union
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import asynccontextmanager
 import logging
+import statistics
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import List, Optional
+
+import psutil
 
 logger = logging.getLogger("load_testing_harness")
 
@@ -114,10 +113,10 @@ class HFTLoadTestHarness:
         """Initialize load testing components."""
         try:
             # Import optimized observability components
+            import backend_app.backend.observability.optimized_logging as optimized_logging
             import backend_app.backend.observability.optimized_metrics_exporter as optimized_metrics
             import backend_app.backend.observability.optimized_tracing as optimized_tracing
-            import backend_app.backend.observability.optimized_logging as optimized_logging
-            
+
             # Initialize optimized systems
             self.metrics_collector = optimized_metrics.optimized_metrics_collector()
             self.tracing_system = optimized_tracing.get_optimized_trading_tracer()

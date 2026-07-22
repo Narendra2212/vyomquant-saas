@@ -3,21 +3,21 @@ core/models/dag_task.py — DAG Task Models.
 
 Pydantic and SQLAlchemy models for the dag_tasks table.
 """
-
-from datetime import datetime
-from typing import Optional, Dict, Any, List
+from datetime import datetime, timedelta
 from enum import Enum
+from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy import (
-    Column, String, Integer, Float, DateTime, Text, 
-    ForeignKey, Index, Enum as SQLEnum, func, JSON
-)
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import JSON, Column, DateTime
+from sqlalchemy import Enum as SQLEnum
+from sqlalchemy import (Float, Index, Integer, String, Text, and_, asc, desc,
+                        func)
+from sqlalchemy.orm import Session
 
-# Import Base from core.database to ensure table creation works
 from backend_app.core.database import Base
 
+# Import Base from core.database to ensure table creation works
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ENUMS
@@ -272,9 +272,7 @@ class DAGTaskRetryPolicy(BaseModel):
 # REPOSITORY
 # ═══════════════════════════════════════════════════════════════════════════
 
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc, asc
-from typing import List, Optional
+
 
 
 class DAGTaskRepository:
@@ -461,4 +459,3 @@ class DAGTaskRepository:
         return result
 
 
-from datetime import timedelta

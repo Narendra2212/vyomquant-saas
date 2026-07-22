@@ -3,10 +3,10 @@ Strategy registry for managing available trading strategies.
 Add new strategies here to make them available to the backtest engine.
 """
 
-from backend_app.strategies.rsi_strategy import RSIStrategy
-from backend_app.strategies.base import BaseStrategy
 from typing import Dict, Type
 
+from backend_app.strategies.base import BaseStrategy
+from backend_app.strategies.rsi_strategy import RSIStrategy
 
 # Registry of available strategies
 # Key: strategy name (string)

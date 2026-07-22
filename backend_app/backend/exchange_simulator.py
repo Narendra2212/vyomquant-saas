@@ -45,14 +45,13 @@ Usage:
 """
 
 import asyncio
-import json
-import time
-import random
 import logging
-from typing import Dict, List, Optional, Any
+import random
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("ExchangeSimulator")
 

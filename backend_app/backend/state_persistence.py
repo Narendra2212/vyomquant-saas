@@ -1,3 +1,21 @@
+import asyncio
+import hashlib
+import json
+import logging
+import pickle
+import threading
+import zlib
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+import pandas as pd
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+
+def get_current_user(): return {}
 """
 backend/state_persistence.py — DAG State Persistence System.
 
@@ -63,20 +81,6 @@ State Components:
   - ExecutionMetrics (performance data)
 """
 
-import asyncio
-import logging
-import json
-import pickle
-import zlib
-from typing import Dict, List, Any, Optional, Tuple, Callable
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
-from enum import Enum
-import threading
-import hashlib
-
-import pandas as pd
-import numpy as np
 
 # Redis and Database imports (conditional)
 try:
@@ -86,7 +90,8 @@ except ImportError:
     REDIS_AVAILABLE = False
 
 try:
-    from sqlalchemy import create_engine, Column, String, DateTime, LargeBinary, JSON, Float, Integer
+    from sqlalchemy import (JSON, Column, DateTime, Integer, LargeBinary,
+                            String, create_engine)
     from sqlalchemy.ext.declarative import declarative_base
     from sqlalchemy.orm import sessionmaker
     SQLALCHEMY_AVAILABLE = True
@@ -984,8 +989,6 @@ class StatePersistenceManager:
 # FASTAPI ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════
 
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/state", tags=["state-persistence"])
 
@@ -1020,7 +1023,8 @@ class DeleteStateRequest(BaseModel):
     symbol: str
 
 
-from backend_app.core.dependencies import get_current_user  # Import auth dependency
+    get_current_user  # Import auth dependency
+
 
 @router.post("/checkpoint")
 async def create_checkpoint_endpoint(

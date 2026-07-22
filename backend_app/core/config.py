@@ -5,10 +5,11 @@ Loads environment variables from .env file and provides typed settings access.
 All sensitive values should be stored in .env file, never committed to git.
 """
 
-from dotenv import load_dotenv
 import os
-from typing import Optional
 from enum import Enum
+from typing import Optional
+
+from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()

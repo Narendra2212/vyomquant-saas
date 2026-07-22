@@ -21,11 +21,11 @@ Terminal States: FILLED, FAILED, CANCELLED, REJECTED
 Any state can transition to: FAILED, CANCELLED, REJECTED
 """
 
-from enum import Enum, auto
-from typing import Dict, Set, Optional, Callable, List
+import logging
 from dataclasses import dataclass
 from datetime import datetime
-import logging
+from enum import Enum
+from typing import Callable, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 

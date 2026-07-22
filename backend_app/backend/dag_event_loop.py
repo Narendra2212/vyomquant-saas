@@ -1,3 +1,22 @@
+import asyncio
+import json
+import logging
+import time
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional, Set
+
+import numpy as np
+import pandas as pd
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
+
+from backend_app.backend.dag_engine import DAGEngine, NodeExecutor
+from backend_app.core.feature_flags import ExecutionContext, ExecutionFlags
+from backend_app.core.safety_monitor import log_blocked_execution
+
 """
 backend/dag_event_loop.py — Event-Driven DAG Execution System.
 
@@ -14,19 +33,7 @@ Architecture:
                               RollingWindowState (stateful indicators)
 """
 
-import asyncio
-import logging
-from typing import Dict, List, Any, Optional, Callable, Set, Tuple
-from dataclasses import dataclass, field
-from collections import deque
-from datetime import datetime, timedelta
-import pandas as pd
-import numpy as np
-from enum import Enum
 
-from backend_app.backend.dag_engine import DAGEngine, NodeExecutor
-from backend_app.core.feature_flags import ExecutionFlags, ExecutionContext
-from backend_app.core.safety_monitor import log_blocked_execution
 
 logger = logging.getLogger("DAGEventLoop")
 
@@ -561,7 +568,7 @@ class DAGEventLoop:
         
         try:
             from backend_app.core.redis_client import redis_client
-            
+
             # Try to acquire lock with 5 second timeout
             lock_acquired = await redis_client.set(
                 lock_key, 
@@ -650,7 +657,7 @@ class DAGEventLoop:
         Combines symbol, timestamp, and node_id to create deterministic hash.
         """
         import hashlib
-        
+
         # Normalize timestamp to ISO format
         ts_str = timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp)
         
@@ -714,7 +721,7 @@ class DAGEventLoop:
             )
             
             logger.warning(
-                f"🚫 SIGNAL BLOCKED: Event loop trading disabled (STEP 1 safety lockdown)."
+                "🚫 SIGNAL BLOCKED: Event loop trading disabled (STEP 1 safety lockdown)."
             )
             return
 
@@ -736,8 +743,10 @@ class DAGEventLoop:
         logger.debug(f"✅ Signal marked for execution: signal_id={signal_id}, symbol={symbol}")
         
         try:
-            from backend_app.backend.ws_event_stream import ws_streamer, publish_signal_trace as ws_publish_signal_trace
             from backend_app.backend.event_publisher import get_event_publisher
+            from backend_app.backend.ws_event_stream import \
+                publish_signal_trace as ws_publish_signal_trace
+            from backend_app.backend.ws_event_stream import ws_streamer
             
             market_data_delay_ms = (datetime.now() - timestamp).total_seconds() * 1000 if timestamp else 50.0
             
@@ -1079,9 +1088,7 @@ class SimulatedEventSource(EventSource):
 # FASTAPI ENDPOINTS FOR EVENT-DRIVEN DAG
 # ═══════════════════════════════════════════════════════════════════════════
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
-from typing import List, Dict, Any
+
 
 router = APIRouter(prefix="/api/strategies/events", tags=["event-driven-dag"])
 

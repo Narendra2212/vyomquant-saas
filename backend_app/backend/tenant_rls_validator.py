@@ -15,13 +15,11 @@ This module provides:
 Author: Principal Institutional Execution Consistency Engineer
 """
 
-import asyncio
 import logging
-import json
-from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime
-from uuid import UUID, uuid4
+from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -117,7 +115,7 @@ class TenantRlsValidator:
         """Check if RLS is enabled on a table."""
         try:
             result = self.db.execute(
-                text(f"""
+                text("""
                     SELECT relrowsecurity
                     FROM pg_class
                     WHERE relname = :table_name
@@ -169,7 +167,7 @@ class TenantRlsValidator:
         """Check if RLS policies are tenant-scoped."""
         try:
             result = self.db.execute(
-                text(f"""
+                text("""
                     SELECT pg_get_expr(qual, pg_class.oid) as policy_expr
                     FROM pg_policy
                     JOIN pg_class ON pg_class.oid = pg_policy.polrelid
@@ -446,7 +444,7 @@ class ServiceRoleGuard:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Clear tenant context."""
         self.db.execute(text("RESET app.current_tenant_id"))
-        logger.info(f"[ServiceRoleGuard] Tenant context cleared")
+        logger.info("[ServiceRoleGuard] Tenant context cleared")
         return False
 
 

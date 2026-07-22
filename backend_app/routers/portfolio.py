@@ -11,12 +11,14 @@ CRITICAL FIXES APPLIED:
 
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
-from typing import Optional, List
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Header
-from backend_app.core.dependencies import get_current_user, get_telemetry, get_vault, get_ws_manager
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+
+from backend_app.core.dependencies import (get_current_user, get_telemetry,
+                                           get_vault, get_ws_manager)
 from backend_app.core.models import CloseAllPositionsRequest
 
 router = APIRouter()
@@ -53,7 +55,8 @@ async def _get_portfolio_state(user_id: str, exchange_id: str, vault) -> dict:
         
         if not cached_balance:
             # Fallback to calculating from position manager (still cached in memory)
-            from backend_app.backend.portfolio_management import get_portfolio_manager
+            from backend_app.backend.portfolio_management import \
+                get_portfolio_manager
             pm = get_portfolio_manager()
             
             # Get snapshot from portfolio manager (in-memory cached state)
@@ -244,19 +247,19 @@ async def close_all_positions(
     """
     from datetime import datetime
     from uuid import UUID as UUID_TYPE
+
     from backend_app.backend.execution_guard import ExecutionGuard
     from backend_app.backend.safety_config import SafetyMonitor
-    from backend_app.backend.metrics import record_trade_blocked
     # CRITICAL FIX C4: Use shared Redis pool
     from backend_app.core.cache.redis_manager import redis_manager
-    
+
     # ═══════════════════════════════════════════════════════════════════
     # STEP 1: AUTHENTICATION & TENANT SETUP
     # ═══════════════════════════════════════════════════════════════════
     tenant_id = UUID_TYPE(user["id"])
     assert tenant_id is not None, "CRITICAL: tenant_id cannot be None"
     
-    safe_uid = _safe_uid(user["id"])
+    _safe_uid(user["id"])
     
     # ═══════════════════════════════════════════════════════════════════
     # STEP 2: SAFETY CHECKS

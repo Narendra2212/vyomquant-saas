@@ -1,7 +1,13 @@
-﻿import os, asyncio, traceback, httpx
+import asyncio
+import os
+import traceback
+
+import httpx
 from dotenv import load_dotenv
-load_dotenv('d:/aerora_quant_backend_updated_final1/backend_app/.env')
+
 from supabase import create_client
+
+load_dotenv('d:/aerora_quant_backend_updated_final1/backend_app/.env')
 
 supabase_url = os.environ.get('SUPABASE_URL')
 supabase_key = os.environ.get('SUPABASE_ANON_KEY')
@@ -26,7 +32,7 @@ async def test():
             await fetch_endpoint(client, "http://127.0.0.1:8000/api/analytics/performance?days=30", headers)
             await fetch_endpoint(client, "http://127.0.0.1:8000/api/portfolio/heatmap?months=3", headers)
 
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
 
 asyncio.run(test())

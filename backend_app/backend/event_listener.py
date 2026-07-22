@@ -31,14 +31,12 @@ STEP 5.9: Idempotent processing - same event twice = no issue
 import asyncio
 import json
 import logging
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal
-from enum import Enum, auto
-from typing import Dict, List, Optional, Any, Callable, Set
-from uuid import UUID
-import time
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +224,7 @@ class EventListener:
         self._processed_event_ids: Set[str] = set()
         self._running = False
         self._listener_task: Optional[asyncio.Task] = None
-        self._event_router: Optional['EventRouter'] = None
+        self._event_router: Optional['Any'] = None
         
         logger.info("EventListener initialized")
     
@@ -294,7 +292,7 @@ class EventListener:
         }
         return priority_map.get(event_type, EventPriority.NORMAL.value)
     
-    async def start(self, event_router: 'EventRouter'):
+    async def start(self, event_router: 'Any'):
         """Start event listener and processing loop."""
         self._running = True
         self._event_router = event_router

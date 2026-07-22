@@ -45,16 +45,15 @@ EXPECTED RESULT:
 """
 
 import asyncio
-import logging
+import hashlib
 import json
+import logging
 import time
-from typing import Dict, List, Optional, Any, Callable
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from contextlib import asynccontextmanager
-import hashlib
+from typing import Any, Callable, Dict, List, Optional
 
 # Redis imports
 try:
@@ -65,10 +64,11 @@ except ImportError:
 
 # Database imports
 try:
+    from sqlalchemy import (JSON, Column, DateTime, Integer, Numeric, String,
+                            select, update)
+#     from sqlalchemy.dialects.postgresql import UUID
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-    from sqlalchemy.orm import sessionmaker, declarative_base
-    from sqlalchemy import Column, String, DateTime, Numeric, JSON, Integer, select, update
-    from sqlalchemy.dialects.postgresql import UUID
+    from sqlalchemy.orm import declarative_base, sessionmaker
     SQLALCHEMY_AVAILABLE = True
 except ImportError:
     SQLALCHEMY_AVAILABLE = False

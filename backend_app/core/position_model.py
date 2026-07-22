@@ -32,22 +32,21 @@ Position Lifecycle:
 └─────────────────────────────────────────────────────────────────┘
 """
 
+import logging
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
-from dataclasses import dataclass, field
 
-from pydantic import BaseModel, Field, EmailStr, field_validator, validator, ConfigDict
-from sqlalchemy import (
-    Column, String, DateTime, Numeric, Index, Enum as SQLEnum
-)
+from pydantic import BaseModel, ConfigDict, Field, validator
+from sqlalchemy import Column, DateTime
+from sqlalchemy import Enum as SQLEnum
+from sqlalchemy import Index, String
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Session
 
 from backend_app.core.database import Base
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +290,7 @@ class PositionBase(BaseModel):
             v = str(v)
         try:
             Decimal(v)
-        except:
+        except Exception:
             raise ValueError(f'Invalid decimal value: {v}')
         return v
     

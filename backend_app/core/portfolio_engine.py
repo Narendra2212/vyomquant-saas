@@ -3,7 +3,7 @@ Production-grade Portfolio Engine for Trading System
 Allocates capital across multiple symbols while enforcing risk limits
 """
 
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Optional, Tuple
 
 
 class PortfolioEngine:

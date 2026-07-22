@@ -65,16 +65,15 @@ EXPECTED RESULT:
   ✔ Separate concerns (isolated databases)
 """
 
-import asyncio
 import logging
-from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, field
-from enum import Enum
 from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, List, Optional, Union
 
 # Redis imports
 try:
-    import redis.asyncio as redis
+#     import redis.asyncio as redis
     from redis.asyncio.cluster import RedisCluster
     from redis.cluster import ClusterNode
     REDIS_AVAILABLE = True
@@ -208,7 +207,7 @@ class RedisClusterManager:
             self._healthy = True
             self._last_health_check = datetime.utcnow()
             
-            logger.info(f"[RedisClusterManager] Connected to cluster")
+            logger.info("[RedisClusterManager] Connected to cluster")
             logger.info(f"  Nodes: {len(self.config.startup_nodes)}")
             logger.info(f"  Databases: {len(RedisDatabase)}")
             

@@ -1,3 +1,4 @@
+
 """
 routers/orders.py — Order execution pipeline.
 
@@ -67,48 +68,31 @@ SCALE: _build_execution_engine uses exchange pool (one CCXT socket per user).
 
 ═══════════════════════════════════════════════════════════════════════════════
 """
-
 import asyncio
-import logging
-import re
 import json
+import logging
 import os
-from typing import Optional, Dict, Any, Set, Union
+import re
+import time
 from datetime import datetime
 from decimal import Decimal
+from typing import Any, Dict, Optional, Union
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Header
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
-
-# CRITICAL FIX C4: Use shared Redis pool instead of per-request connections
-from backend_app.core.cache.redis_manager import redis_manager
-
-from backend_app.core.models import (
-    ExecuteOrderRequest,
-    StopLossRequest,
-    TakeProfitRequest,
-    CancelAllRequest,
-    CancelOrderRequest,
-)
-from backend_app.core.event_bus import publish_command
-from backend_app.core.dependencies import (
-    get_current_user,
-    get_vault,
-    get_risk,
-    get_telemetry,
-    get_alert,
-    get_ws_manager,
-)
 
 from backend_app.backend.connection_engine import get_or_create_exchange
 from backend_app.backend.data_seeking_engine import DataEngine
-from backend_app.backend.risk_manager import RiskVerdict
+from backend_app.backend.execution_guard import ExecutionGuard
+# CRITICAL FIX C4: Use shared Redis pool instead of per-request connections
+from backend_app.core.cache.redis_manager import redis_manager
+from backend_app.core.dependencies import (get_current_user, get_telemetry,
+                                           get_vault, get_ws_manager)
 from backend_app.core.execution_engine import ExecutionEngine
-from backend_app.core.safety_config import ExecutionFlags, SafetyMonitor
-from backend_app.backend.execution_guard import ExecutionGuard, validate_and_decide
-from backend_app.backend.metrics import record_trade_blocked
-from uuid import UUID
-import hashlib
+from backend_app.core.models import (CancelAllRequest, CancelOrderRequest,
+                                     ExecuteOrderRequest)
+from backend_app.core.safety_config import SafetyMonitor
 
 router = APIRouter()
 
@@ -456,7 +440,8 @@ async def get_portfolio_state(user_id: str, exchange_id: str, vault) -> Dict[str
                 
                 # Send critical alert to operators
                 try:
-                    from backend_app.backend.alert_system import get_alert_system
+                    from backend_app.backend.alert_system import \
+                        get_alert_system
                     alert_system = get_alert_system()
                     await alert_system.send_critical_alert(
                         title="PORTFOLIO CACHE STALE - TRADING BLOCKED",
@@ -485,7 +470,8 @@ async def get_portfolio_state(user_id: str, exchange_id: str, vault) -> Dict[str
         
         if not cached_balance:
             # Fallback to calculating from position manager (still cached in memory)
-            from backend_app.backend.portfolio_management import get_portfolio_manager
+            from backend_app.backend.portfolio_management import \
+                get_portfolio_manager
             pm = get_portfolio_manager()
             
             # Get snapshot from portfolio manager (in-memory cached state)
@@ -557,7 +543,6 @@ async def get_portfolio_state(user_id: str, exchange_id: str, vault) -> Dict[str
 # 🔴 STEP 1: MANUAL EXECUTION BLOCKER — Reject ALL fake strategy_ids
 # ═══════════════════════════════════════════════════════════════════════════════
 
-import json
 
 def load_blocked_strategy_ids():
     try:

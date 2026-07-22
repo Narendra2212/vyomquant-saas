@@ -8,8 +8,8 @@ Author: Principal Institutional Validation Engineer
 """
 
 import logging
-from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
 
@@ -128,7 +128,7 @@ class FailoverValidationRunner:
             pattern = f"failover_ownership:{tenant_id}:*" if tenant_id else "failover_ownership:*:*"
             keys = await self.redis.keys(pattern)
             
-            current_time = datetime.now(timezone.utc)
+            datetime.now(timezone.utc)
             stale_threshold = 300  # 5 minutes
             
             for key in keys:

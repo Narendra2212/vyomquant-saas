@@ -7,10 +7,11 @@ FIXES APPLIED:
   C4: Removed stale empty stub references — import directly from backend/
   DEV: Safe imports - engines fail gracefully, app always starts
 """
-
+import logging
 import os
 import sys
-import logging
+from dataclasses import dataclass, field
+from typing import Any
 
 logger = logging.getLogger("AppState")
 
@@ -19,8 +20,6 @@ _backend_path = os.path.join(os.path.dirname(__file__), "..", "backend")
 if _backend_path not in sys.path:
     sys.path.insert(0, os.path.abspath(_backend_path))
 
-from dataclasses import dataclass, field
-from typing import Any
 
 # ── DEV MODE: Detect if we should use mock engines
 DEV_MODE = os.environ.get("DEV_MODE", "false").lower() == "true" or \
@@ -61,7 +60,8 @@ try:
     from backend_app.api_ws.ws_manager import ConnectionManager
 except Exception as e:
     logger.warning(f"Failed to import ConnectionManager: {e}")
-    ConnectionManager = lambda: MockEngine("MockConnectionManager")
+    def ConnectionManager():
+        return MockEngine("MockConnectionManager")
 
 
 @dataclass

@@ -20,13 +20,14 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
+import logging
 import os
 import re
-import logging
 from typing import Optional
 
-from supabase import create_client, Client
-from cryptography.fernet import Fernet, MultiFernet, InvalidToken
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
+
+from supabase import Client, create_client
 
 # FIX VA-3: Remove logging.basicConfig() — let the application configure logging.
 #            Never call basicConfig inside a library/module.

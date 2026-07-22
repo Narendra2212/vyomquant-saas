@@ -10,19 +10,16 @@ import asyncio
 import json
 import logging
 import time
-import uuid
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Set, Tuple
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
-from backend_app.core.database_pool import get_db_session
-from .orchestration_safety_guarantees import (
-    DeterministicAssignmentGuarantee,
-    OperationIsolationGuarantee,
-    SplitBrainPreventionGuarantee
-)
+
+from .orchestration_safety_guarantees import (DeterministicAssignmentGuarantee,
+                                              OperationIsolationGuarantee,
+                                              SplitBrainPreventionGuarantee)
 
 logger = logging.getLogger(__name__)
 
@@ -627,7 +624,7 @@ class HeartbeatManager:
             "network_io": metrics.network_io,
             "response_time_p95_ms": metrics.response_time_ms,
             "error_rate": metrics.error_rate,
-            "processing_rate": metrics.throughput,
+            "throughput": metrics.throughput,
             "active_connections": metrics.active_connections,
             "queue_depth": metrics.queue_depth,
             "processing_rate": metrics.processing_rate
@@ -784,7 +781,7 @@ class HeartbeatManager:
             
             for component_id, health_info in self.health_status.items():
                 status = health_info.get("status", "unknown")
-                health_score = health_info.get("health_score", 0.0)
+                health_info.get("health_score", 0.0)
                 
                 if status in health_counts:
                     health_counts[status] += 1
@@ -1112,7 +1109,7 @@ class HeartbeatGenerator:
                     "network_io": heartbeat.metrics.network_io,
                     "response_time_p95_ms": heartbeat.metrics.response_time_ms,
                     "error_rate": heartbeat.metrics.error_rate,
-                    "processing_rate": heartbeat.metrics.throughput,
+                    "throughput": heartbeat.metrics.throughput,
                     "active_connections": heartbeat.metrics.active_connections,
                     "queue_depth": heartbeat.metrics.queue_depth,
                     "processing_rate": heartbeat.metrics.processing_rate

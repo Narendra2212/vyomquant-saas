@@ -31,14 +31,12 @@ Alert Levels:
 └─────────────────────────────────────────────────────────────────┘
 """
 
-import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Any, Optional, List
-import json
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +109,7 @@ class TelegramAlertChannel(AlertChannel):
         try:
             # Import here to avoid dependency if not used
             import aiohttp
-            
+
             # Format message
             emoji_map = {
                 AlertLevel.INFO: "ℹ️",
@@ -200,10 +198,11 @@ class EmailAlertChannel(AlertChannel):
             return False
         
         try:
-            import aiosmtplib
-            from email.mime.text import MIMEText
             from email.mime.multipart import MIMEMultipart
-            
+            from email.mime.text import MIMEText
+
+            import aiosmtplib
+
             # Build HTML email
             subject = f"[{alert.level.value.upper()}] {alert.title}"
             
@@ -488,7 +487,7 @@ def get_alert_system() -> AlertSystem:
         
         # Configure from environment if available
         import os
-        
+
         # Telegram
         telegram_token = os.getenv("ALERT_TELEGRAM_BOT_TOKEN")
         telegram_chat = os.getenv("ALERT_TELEGRAM_CHAT_ID")

@@ -8,18 +8,18 @@ Author: Principal Distributed Trading Systems Architect
 """
 
 import asyncio
-import json
-import time
-import uuid
-from decimal import Decimal
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Callable
 import logging
+import time
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
 
-from .queue_manager import ExecutionJob, JobStatus, JobPriority, queue_manager, QueueType
-from .execution_worker import WorkerPool, ExchangeGateway
-from .job_persistence import job_persistence
 from backend_app.backend.exchange_telemetry import exchange_telemetry
+
+from .execution_worker import ExchangeGateway, WorkerPool
+from .job_persistence import job_persistence
+from .queue_manager import (ExecutionJob, JobPriority, JobStatus, QueueType,
+                            queue_manager)
 
 logger = logging.getLogger("execution_orchestrator")
 
@@ -230,7 +230,7 @@ class ExecutionOrchestrator:
         try:
             # This would need to be implemented in the queue backend
             queue_depth = 0  # Placeholder
-        except:
+        except Exception:
             pass
         
         # Get worker pool status

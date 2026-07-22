@@ -6,9 +6,9 @@ Used for security auditing and compliance.
 """
 
 import logging
-from datetime import datetime
-from typing import Dict, Any, Optional
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 

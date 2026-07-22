@@ -2,7 +2,9 @@
 
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, JSON, Index
+
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String
+
 from backend_app.core.database import Base
 
 

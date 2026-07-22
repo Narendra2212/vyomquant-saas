@@ -4,25 +4,24 @@ core/models/execution_record.py — Execution Record Models.
 Pydantic and SQLAlchemy models for the execution_records table.
 Tracks individual strategy executions (orders/trades).
 """
-
 import hashlib
 import logging
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, validator, ConfigDict
-
-logger = logging.getLogger("ExecutionRecord")
-from sqlalchemy import (
-    Column, String, DateTime, JSON, ForeignKey, Index, Enum as SQLEnum, bindparam
-)
+from pydantic import BaseModel, ConfigDict, Field, validator
+from sqlalchemy import JSON, Column, DateTime
+from sqlalchemy import Enum as SQLEnum
+from sqlalchemy import Index, String, bindparam, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import Session
 
 from backend_app.core.database import Base
 from backend_app.core.metrics import execution_metrics
+
+logger = logging.getLogger("ExecutionRecord")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -262,8 +261,6 @@ class ExecutionRecordModel(Base):
 # REPOSITORY PATTERN
 # ═══════════════════════════════════════════════════════════════════════════════
 
-from sqlalchemy.orm import Session
-from sqlalchemy import text
 
 
 class ExecutionRecordRepository:

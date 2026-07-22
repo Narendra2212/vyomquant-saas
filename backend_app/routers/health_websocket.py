@@ -13,10 +13,10 @@ Usage:
     GET /health/websockets - Returns WebSocket connection status
 """
 
-from fastapi import APIRouter, Response
-from typing import Dict, Any
 import asyncio
 import logging
+
+from fastapi import APIRouter, Response
 
 from backend_app.backend.websocket_monitor import get_websocket_monitor
 

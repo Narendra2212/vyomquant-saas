@@ -8,33 +8,33 @@ Author: Senior Institutional Systems Architect
 """
 
 import asyncio
+import logging
 import time
-import uuid
-from typing import Dict, Any, Optional, List, Callable
 from contextlib import asynccontextmanager, contextmanager
-from datetime import datetime, timezone
 from dataclasses import dataclass
 from enum import Enum
-import logging
+from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger("opentelemetry_tracing")
 
 # OpenTelemetry imports
 try:
-    from opentelemetry import trace, baggage, context
+    from opentelemetry import baggage, trace
+    #     from opentelemetry.baggage.propagation import W3CBaggagePropagator
     from opentelemetry.exporter.jaeger.thrift import JaegerExporter
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    from opentelemetry.sdk.resources import Resource
-    from opentelemetry.semconv.trace import SpanKind, SpanAttributes
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import \
+        OTLPSpanExporter
+    from opentelemetry.instrumentation.aiohttp_client import \
+        AioHttpClientInstrumentor
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-    from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
     from opentelemetry.instrumentation.redis import RedisInstrumentor
     from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
     from opentelemetry.propagate import set_global_textmap
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.semconv.trace import SpanAttributes, SpanKind
     from opentelemetry.trace.propagation.textmap import TextMapPropagator
-    from opentelemetry.baggage.propagation import W3CBaggagePropagator
     from opentelemetry.trace.status import Status, StatusCode
     
     OPENTELEMETRY_AVAILABLE = True

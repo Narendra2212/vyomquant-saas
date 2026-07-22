@@ -30,18 +30,17 @@ PnL Formulas:
 └─────────────────────────────────────────────────────────────────┘
 """
 
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Dict, List, Optional, Any
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import logging
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from backend_app.core.position_model import (
-    PositionModel, PositionSide, PositionStatus,
-    PositionCalculator, PositionRepository, get_position_repository
-)
+from backend_app.core.position_model import (PositionCalculator, PositionModel,
+                                             PositionSide, PositionStatus,
+                                             get_position_repository)
 
 logger = logging.getLogger(__name__)
 
@@ -349,7 +348,7 @@ class PnLEngine:
         """
         # Query closed positions in date range
         end_date = datetime.utcnow()
-        start_date = end_date - timedelta(days=days)
+        end_date - timedelta(days=days)
         
         # This would typically query a trades/closed_positions table
         # For now, return placeholder structure

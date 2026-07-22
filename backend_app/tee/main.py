@@ -2,13 +2,13 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timezone
+
 from aiohttp import web
-from supabase import create_client
 
 # Import legacy engine components to execute locally within this process
 from backend_app.core.cache import redis_manager
 from backend_app.core.fleet_manager import get_fleet_manager
+from supabase import create_client
 
 logger = logging.getLogger("TEE")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")

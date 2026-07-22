@@ -12,14 +12,14 @@ Author: Principal Institutional Recovery and Failover Engineer
 import asyncio
 import json
 import logging
-import uuid
-from datetime import datetime, timezone, timedelta
-from dataclasses import dataclass, asdict
-from enum import Enum
-from typing import Dict, List, Optional, Any, Set
 from collections import deque
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional, Set
 
 from backend_app.core.cache.redis_manager import redis_manager
+
 from .immutable_journal import immutable_journal
 
 logger = logging.getLogger("recovery_authority_manager")

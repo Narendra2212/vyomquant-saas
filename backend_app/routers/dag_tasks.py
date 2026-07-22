@@ -1,21 +1,28 @@
+import asyncio
+import logging
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+from uuid import UUID
+
+from fastapi import (APIRouter, BackgroundTasks, Depends, HTTPException,
+                     WebSocket)
+from pydantic import BaseModel, Field
+
+from backend_app.backend.dag_worker import WorkerPool, worker_pool
+from backend_app.backend.redis_manager import redis_manager
+from backend_app.backend.task_recovery import task_recovery_service
+from backend_app.core.dag_task_queue import TaskQueueKeyBuilder, dag_task_queue
+from backend_app.core.dependencies import get_current_user
+
+logger = logging.getLogger(__name__)
 """
 routers/dag_tasks.py — DAG Task Queue API Endpoints.
 
 API for submitting, monitoring, and managing DAG execution tasks.
 """
 
-import asyncio
-import logging
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, WebSocket
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-from datetime import datetime
 
-from backend_app.core.dependencies import get_current_user
-from backend_app.core.hard_quota_enforcer import hard_quota_enforcer, EnforcementContext
-from backend_app.core.dag_task_queue import dag_task_queue, DAGTask, TaskQueueKeyBuilder, TaskStatus
-from backend_app.backend.dag_worker import worker_pool
-from backend_app.backend.task_recovery import task_recovery_service
+
 
 router = APIRouter(prefix="/api/dag/tasks", tags=["dag-tasks"])
 
@@ -404,7 +411,7 @@ async def get_recovery_stats(
         
         # Get retry queue size (pending tasks across all tenants)
         from backend_app.core.cache import redis_manager
-        retry_queue_size = 0
+        0
         # This would need to iterate all tenant queues - simplified here
         
         # Get dead letter count
@@ -477,10 +484,11 @@ async def get_dead_letter_tasks(
     Returns failed tasks that exceeded max retries.
     """
     try:
-        from backend_app.core.cache import redis_manager
         from sqlalchemy import text
+
+        from backend_app.core.cache import redis_manager
         from backend_app.core.database import SessionLocal
-        
+
         # Get task IDs from dead letter queue
         dead_letter_key = TaskQueueKeyBuilder.dead_letter_queue()
         task_ids = await redis_manager.lrange(dead_letter_key, 0, limit - 1)
@@ -496,7 +504,7 @@ async def get_dead_letter_tasks(
             for task_id_str in task_ids:
                 try:
                     task_id = UUID(task_id_str)
-                except:
+                except Exception:
                     continue
                 
                 result = db_session.execute(

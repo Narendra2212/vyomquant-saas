@@ -28,8 +28,7 @@ EXPECTED RESULT:
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional, List
-from uuid import UUID
+from typing import Optional
 
 logger = logging.getLogger("ReconciliationScheduler")
 
@@ -122,11 +121,8 @@ class ReconciliationScheduler:
           3. Re-escalate long-standing ESCALATED mismatches.
         """
         from backend_app.core.database import get_db
-        from backend_app.core.models.reconciliation import (
-            ReconciliationMismatchRepository,
-            MismatchSeverity,
-            MismatchStatus,
-        )
+        from backend_app.core.models.reconciliation import \
+            ReconciliationMismatchRepository
 
         with get_db() as db:
             repo = ReconciliationMismatchRepository(db)
@@ -159,9 +155,10 @@ class ReconciliationScheduler:
         HIGH     → alert only
         MEDIUM   → alert only
         """
-        from backend_app.core.models.reconciliation import MismatchSeverity
+        from backend_app.core.alerting_system import (AlertSeverity,
+                                                      get_alerting_system)
         from backend_app.core.global_safety import get_global_kill_switch
-        from backend_app.core.alerting_system import get_alerting_system, AlertSeverity
+        from backend_app.core.models.reconciliation import MismatchSeverity
 
         mismatch_id = mismatch.mismatch_id
         severity = mismatch.severity
@@ -206,7 +203,7 @@ class ReconciliationScheduler:
                 MismatchSeverity.HIGH:     AlertSeverity.HIGH,
                 MismatchSeverity.MEDIUM:   AlertSeverity.MEDIUM,
             }
-            alert_severity = alert_severity_map.get(severity, AlertSeverity.HIGH)
+            alert_severity_map.get(severity, AlertSeverity.HIGH)
 
             await alerting.alert_reconciliation_mismatch(
                 tenant_id=str(mismatch.tenant_id),
@@ -256,7 +253,8 @@ class ReconciliationScheduler:
 
     async def _re_escalate(self, mismatch, repo) -> None:
         """Send a follow-up alert for a mismatch that remains unresolved."""
-        from backend_app.core.alerting_system import get_alerting_system, AlertSeverity, AlertType
+        from backend_app.core.alerting_system import (AlertSeverity, AlertType,
+                                                      get_alerting_system)
 
         mismatch_id = mismatch.mismatch_id
         round_num = (mismatch.escalation_count or 0) + 1

@@ -15,15 +15,16 @@ Key Features:
 Author: Principal Institutional Algo Execution Validation Engineer
 """
 
-import logging
 import hashlib
 import json
+import logging
 import uuid
-from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
+
 from .immutable_journal import immutable_journal
 
 logger = logging.getLogger("atomic_failover_sequencing")

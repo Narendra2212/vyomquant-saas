@@ -7,15 +7,15 @@ Tracks execution, WebSocket, infrastructure, and exchange metrics.
 Author: Senior Institutional Systems Architect
 """
 
-import time
 import asyncio
-import psutil
-from typing import Dict, Any, Optional
-from decimal import Decimal
-from datetime import datetime, timezone
-from prometheus_client import Counter, Histogram, Gauge, Summary, start_http_server, CollectorRegistry, CONTENT_TYPE_LATEST
-from prometheus_client.exposition import generate_latest
 import logging
+import time
+from typing import Any, Dict
+
+import psutil
+from prometheus_client import (CollectorRegistry, Counter, Gauge, Histogram,
+                               start_http_server)
+from prometheus_client.exposition import generate_latest
 
 logger = logging.getLogger("metrics_exporter")
 

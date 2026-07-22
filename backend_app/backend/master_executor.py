@@ -15,56 +15,39 @@
 ║  ME-6  No timeout on ML inference thread — hangs the tick loop           ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
-
 import asyncio
 import logging
 import os
 import time
-from typing import Optional
 from decimal import Decimal
+from typing import Optional
+
 import numpy as np
 
-from backend_app.backend.ml_models import create_ml_block
 from backend_app.backend.data_processing_engine import DataProcessorEngine
-from backend_app.backend.strategy_builder import StrategyEngine
+from backend_app.backend.indicators_backend import (adx, atr,
+                                                    awesome_oscillator,
+                                                    bollinger_bands, cci,
+                                                    choppiness_index, cmf,
+                                                    donchian_channel, ema,
+                                                    fisher_transform,
+                                                    historical_volatility, hma,
+                                                    ichimoku_cloud,
+                                                    keltner_channels, macd,
+                                                    mfi, momentum, obv,
+                                                    pivot_standard, psar, roc,
+                                                    rolling_vwap,
+                                                    rolling_z_score, rsi, sma,
+                                                    stochastic, supertrend,
+                                                    trix, vortex_indicator,
+                                                    williams_r, wma)
+from backend_app.backend.ml_models import create_ml_block
 from backend_app.backend.risk_manager import RiskVerdict
+from backend_app.backend.strategy_builder import StrategyEngine
 
 logger = logging.getLogger("BotRunner")
 
 # All Numba indicators — import from the single indicators module
-from backend_app.backend.indicators_backend import (
-    rsi,
-    ema,
-    sma,
-    macd,
-    atr,
-    bollinger_bands,
-    stochastic,
-    cci,
-    williams_r,
-    obv,
-    mfi,
-    adx,
-    supertrend,
-    hma,
-    wma,
-    trix,
-    vortex_indicator,
-    choppiness_index,
-    awesome_oscillator,
-    fisher_transform,
-    rolling_z_score,
-    historical_volatility,
-    rolling_vwap,
-    momentum,
-    roc,
-    donchian_channel,
-    keltner_channels,
-    ichimoku_cloud,
-    cmf,
-    psar,
-    pivot_standard,
-)
 
 # Timeframe name → seconds
 TF_SEC = {
@@ -416,7 +399,9 @@ class BotRunner:
                 # STEP 1: Generate execution_id for idempotency and locking using the deterministic logic
                 import uuid
                 from datetime import datetime
-                from backend_app.core.models.execution_record import generate_execution_id
+
+                from backend_app.core.models.execution_record import \
+                    generate_execution_id
                 execution_id = generate_execution_id(
                     tenant_id=uuid.UUID(self.user_id),
                     strategy_id=self.blueprint.get("strategy_id", "default"),
@@ -444,6 +429,7 @@ class BotRunner:
 
                 try:
                     import uuid
+
                     # ── Execute trade through unified engine ────────────────
                     # execution_engine.execute_with_idempotency is now async
                     result = await self.execution_engine.execute_with_idempotency(

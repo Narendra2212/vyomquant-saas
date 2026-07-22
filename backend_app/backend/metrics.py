@@ -33,13 +33,13 @@ Usage:
     metrics_text = metrics_collector.get_prometheus_metrics()
 """
 
-import time
+import logging
 import threading
-from typing import Dict, List, Optional, Any
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-import logging
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("Metrics")
 
@@ -64,13 +64,13 @@ class Counter:
     
     def inc(self, value: float = 1, **label_values):
         """Increment counter."""
-        key = tuple(label_values.get(l, "") for l in self.label_names)
+        key = tuple(label_values.get(low, "") for low in self.label_names)
         with self._lock:
             self.values[key] = self.values.get(key, 0) + value
     
     def get(self, **label_values) -> float:
         """Get current value."""
-        key = tuple(label_values.get(l, "") for l in self.label_names)
+        key = tuple(label_values.get(low, "") for low in self.label_names)
         with self._lock:
             return self.values.get(key, 0)
     
@@ -114,7 +114,7 @@ class Histogram:
     
     def observe(self, value: float, **label_values):
         """Observe a value."""
-        key = tuple(label_values.get(l, "") for l in self.label_names)
+        key = tuple(label_values.get(low, "") for low in self.label_names)
         
         with self._lock:
             if key not in self.bucket_counts:
@@ -172,19 +172,19 @@ class Gauge:
     
     def set(self, value: float, **label_values):
         """Set gauge value."""
-        key = tuple(label_values.get(l, "") for l in self.label_names)
+        key = tuple(label_values.get(low, "") for low in self.label_names)
         with self._lock:
             self.values[key] = value
     
     def inc(self, value: float = 1, **label_values):
         """Increment gauge."""
-        key = tuple(label_values.get(l, "") for l in self.label_names)
+        key = tuple(label_values.get(low, "") for low in self.label_names)
         with self._lock:
             self.values[key] = self.values.get(key, 0) + value
     
     def dec(self, value: float = 1, **label_values):
         """Decrement gauge."""
-        key = tuple(label_values.get(l, "") for l in self.label_names)
+        key = tuple(label_values.get(low, "") for low in self.label_names)
         with self._lock:
             self.values[key] = self.values.get(key, 0) - value
     

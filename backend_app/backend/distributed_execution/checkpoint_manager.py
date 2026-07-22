@@ -1,3 +1,4 @@
+
 """
 Checkpoint Manager for Fast Recovery Points
 
@@ -7,18 +8,18 @@ deterministic creation and restoration.
 
 Author: Principal Replay and Recovery Engineer
 """
-
 import asyncio
+import gzip
+import json
+import logging
 import time
 import uuid
-import json
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Tuple, Union
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-import logging
+from typing import Any, Dict, List, Optional, Union
 
-from .immutable_journal import immutable_journal, ExecutionEvent, EventType
+from .immutable_journal import ExecutionEvent, immutable_journal
 from .sequence_manager import sequence_manager
 
 logger = logging.getLogger("checkpoint_manager")
@@ -957,7 +958,7 @@ class CheckpointManager:
         """Calculate checksum for checkpoint data."""
         try:
             import hashlib
-            
+
             # Create canonical representation
             canonical_data = json.dumps(checkpoint_data, sort_keys=True, separators=(',', ':'))
             
@@ -995,7 +996,7 @@ class CheckpointManager:
             if isinstance(checkpoint_data, bytes):
                 try:
                     checkpoint_data = json.loads(checkpoint_data.decode('utf-8'))
-                except:
+                except Exception:
                     checkpoint_data = await self._decompress_checkpoint_data(checkpoint_data)
                     checkpoint_data = json.loads(checkpoint_data.decode('utf-8'))
             

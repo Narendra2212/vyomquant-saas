@@ -6,24 +6,19 @@ FastAPI middleware for tenant context extraction and cross-tenant access protect
 
 import logging
 import time
-from typing import Optional, Callable, List
 from datetime import datetime
+from typing import List, Optional
 
-from fastapi import Request, HTTPException, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Depends, HTTPException, Request
+from fastapi.security import HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from backend_app.core.tenant import (
-    TenantContext,
-    TenantQuota,
-    TenantPlan,
-    TenantKeyBuilder,
-    QuotaExceededError,
-    RateLimitExceededError,
-    CrossTenantAccessError,
-)
 from backend_app.core.cache import redis_manager
+from backend_app.core.tenant import (CrossTenantAccessError,
+                                     QuotaExceededError,
+                                     RateLimitExceededError, TenantContext,
+                                     TenantKeyBuilder, TenantPlan, TenantQuota)
 
 logger = logging.getLogger("TenantMiddleware")
 

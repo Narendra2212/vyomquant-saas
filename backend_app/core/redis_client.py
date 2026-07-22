@@ -4,10 +4,10 @@ core/redis_client.py — Redis connection manager.
 DEV_MODE: Falls back to in-memory mock if Redis unavailable.
 """
 
-import os
 import json
 import logging
-from typing import Optional, Any
+import os
+from typing import Any, Optional
 
 logger = logging.getLogger("Redis")
 

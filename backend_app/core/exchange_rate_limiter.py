@@ -36,12 +36,12 @@ USAGE:
 """
 
 import asyncio
-import time
 import logging
-from typing import Dict, Optional, List, Callable, Any
+import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from contextlib import asynccontextmanager
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger("ExchangeRateLimiter")
 
@@ -89,10 +89,8 @@ class DistributedRateLimiterIntegration:
         """
         try:
             from backend_app.core.distributed_rate_limiter import (
-                get_distributed_rate_limiter,
-                RateLimitType
-            )
-            
+                RateLimitType, get_distributed_rate_limiter)
+
             # Map operation to limit type
             limit_type_map = {
                 "orders": RateLimitType.ORDERS_PER_MINUTE,
@@ -543,7 +541,7 @@ class ExchangeRateLimiter:
         async with self.acquire(exchange, priority=priority):
             try:
                 return await coro(*args, **kwargs)
-            except Exception as e:
+            except Exception:
                 self._stats[exchange]["errors"] += 1
                 raise
     

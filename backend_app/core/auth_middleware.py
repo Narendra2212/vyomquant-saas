@@ -12,13 +12,16 @@ Changes:
 - Preserves latency logging (< 0.3s target)
 """
 
-from fastapi import HTTPException, Request, Depends
-from fastapi.security import HTTPBearer
-import jwt
-from jwt import PyJWKClient, ExpiredSignatureError, InvalidAudienceError, InvalidTokenError
-import time
-import threading
 import os
+import threading
+import time
+
+import jwt
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPBearer
+from jwt import (ExpiredSignatureError, InvalidAudienceError,
+                 InvalidTokenError, PyJWKClient)
+
 from backend_app.core.config import settings
 
 security = HTTPBearer()
@@ -91,7 +94,8 @@ def decode_token_local(token: str) -> dict:
         )
         return payload
     elif alg == "HS256" or alg is None:
-        import os, base64
+        import base64
+        import os
         secret = os.environ.get("SUPABASE_JWT_SECRET") or settings.JWT_SECRET
         if not secret:
             raise jwt.exceptions.InvalidTokenError("SUPABASE_JWT_SECRET or JWT_SECRET is not configured")

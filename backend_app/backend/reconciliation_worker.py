@@ -76,15 +76,18 @@ METRICS:
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any, Set, Tuple, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
 
 # Try imports with fallbacks
 try:
-    from backend_app.backend.state_service import state_service, Order, Position, OrderStatus, PositionSide
+    from backend_app.backend.state_service import (Order, OrderStatus,
+                                                   Position, PositionSide,
+                                                   state_service)
+    _ = (Order, OrderStatus, Position, PositionSide, state_service)
     STATE_SERVICE_AVAILABLE = True
 except ImportError:
     STATE_SERVICE_AVAILABLE = False
@@ -98,13 +101,13 @@ except ImportError:
         REJECTED = "rejected"
 
 try:
-    import ccxt.async_support as ccxt
+#     import ccxt.async_support as ccxt
     CCXT_AVAILABLE = True
 except ImportError:
     CCXT_AVAILABLE = False
 
 try:
-    from backend_app.core.reconciliation_engine import ReconciliationEngine
+#     from backend_app.core.reconciliation_engine import ReconciliationEngine
     RECONCILIATION_ENGINE_AVAILABLE = True
 except ImportError:
     RECONCILIATION_ENGINE_AVAILABLE = False
@@ -426,8 +429,8 @@ class ReconciliationWorker:
                         async def update_position(self, tenant_id, data):
                             logger.info(f"[ReconciliationWorker] Would update position: {data}")
                     
-                    exchange_wrapper = ExchangeClientWrapper(client)
-                    state_wrapper = StateServiceWrapper()
+                    ExchangeClientWrapper(client)
+                    StateServiceWrapper()
                     
                     # Run ReconciliationEngine
                     engine_result = await self.reconciliation_engine.reconcile(

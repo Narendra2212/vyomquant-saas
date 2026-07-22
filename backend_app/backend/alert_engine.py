@@ -18,10 +18,10 @@
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any
-from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("AlertEngine")
 
@@ -121,7 +121,7 @@ class DiscordProvider(AlertProvider):
                             continue
                         logger.error(f"[Discord] HTTP {resp.status}")
                         return
-                except Exception as e:
+                except Exception:
                     if attempt < max_retries - 1:
                         await asyncio.sleep(2**attempt)
                     else:
@@ -190,7 +190,7 @@ class TelegramProvider(AlertProvider):
                             continue
                         logger.error(f"[Telegram] HTTP {resp.status}")
                         return
-                except Exception as e:
+                except Exception:
                     if attempt < max_retries - 1:
                         await asyncio.sleep(2**attempt)
                     else:
@@ -233,9 +233,10 @@ class EmailProvider(AlertProvider):
             return False
         
         try:
-            import aiosmtplib
-            from email.mime.text import MIMEText
             from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+
+            import aiosmtplib
         except ImportError:
             logger.warning("[Email] aiosmtplib not installed, using sync fallback")
             return await self._send_sync(message)
@@ -272,9 +273,8 @@ class EmailProvider(AlertProvider):
     
     async def _send_sync(self, message: AlertMessage) -> bool:
         """Synchronous fallback using smtplib."""
-        import smtplib
-        from email.mime.text import MIMEText
         from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
         
         try:
             msg = MIMEMultipart()
@@ -359,7 +359,7 @@ class WebhookProvider(AlertProvider):
                             continue
                         logger.error(f"[Webhook] HTTP {resp.status}")
                         return
-                except Exception as e:
+                except Exception:
                     if attempt < max_retries - 1:
                         await asyncio.sleep(2**attempt)
                     else:

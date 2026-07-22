@@ -8,11 +8,12 @@ Ensures every failure is explicit and debugging becomes trivial.
 """
 
 import logging
-from typing import Any, Optional, List, Dict, Union
 from dataclasses import dataclass
 from datetime import datetime
-import pandas as pd
+from typing import Any, Dict, List, Optional
+
 import numpy as np
+import pandas as pd
 
 logger = logging.getLogger("PipelineGuard")
 

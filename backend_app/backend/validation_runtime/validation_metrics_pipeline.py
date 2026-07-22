@@ -7,11 +7,11 @@ institutional-grade operational validation of the strict algo trading platform.
 Author: Principal Institutional Operational Validation Engineer
 """
 
-import logging
 import asyncio
-from typing import Dict, Any, List, Optional
-from datetime import datetime, timezone, timedelta
+import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional
 
 from .validation_result_store import ValidationResultStore
 

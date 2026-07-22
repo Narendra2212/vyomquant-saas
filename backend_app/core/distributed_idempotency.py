@@ -23,8 +23,8 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from typing import Optional, Any, Callable
 from datetime import datetime
+from typing import Any, Callable, Optional
 
 from backend_app.backend.redis_manager import redis_manager
 from backend_app.core.global_safety import get_global_kill_switch
@@ -342,12 +342,12 @@ class DistributedIdempotencyLayer:
             
             return result
             
-        except Exception as e:
+        except Exception:
             # Clear processing state on failure
             key = self._generate_key(tenant_id, client_order_id)
             try:
                 await redis_manager.delete(key)
-            except:
+            except Exception:
                 pass
             
             # Re-raise the original exception

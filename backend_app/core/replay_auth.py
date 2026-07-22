@@ -15,14 +15,12 @@ Key Features:
 Author: Principal Institutional Platform Security Engineer
 """
 
-import logging
 import hashlib
-from typing import Optional, Dict, Any
+import logging
 from datetime import datetime, timezone
+from typing import Dict, Optional
 
 from fastapi import HTTPException, Request, status
-from backend_app.core.dependencies import get_current_user
-from backend_app.core.tenant import TenantContext
 
 logger = logging.getLogger("ReplayAuth")
 

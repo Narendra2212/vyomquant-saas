@@ -31,19 +31,17 @@ Metrics:
 └─────────────────────────────────────────────────────────────────┘
 """
 
-import asyncio
 import logging
-import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Dict, List, Optional, Any
-from collections import deque
+from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
-from backend_app.core.models.execution_record import ExecutionRecordModel, ExecutionStatus
+from backend_app.core.models.execution_record import (ExecutionRecordModel,
+                                                      ExecutionStatus)
 from backend_app.core.position_model import PositionModel
 
 logger = logging.getLogger(__name__)
@@ -275,13 +273,14 @@ class MetricsSystem:
         
         # Circuit breaker states
         try:
-            from backend_app.backend.circuit_breaker import get_circuit_breaker_manager
+            from backend_app.backend.circuit_breaker import \
+                get_circuit_breaker_manager
             cb_manager = get_circuit_breaker_manager()
             cb_states = {
                 name: metrics["state"]
                 for name, metrics in cb_manager.get_all_metrics().items()
             }
-        except:
+        except Exception:
             cb_states = {}
         
         metrics = SystemMetrics(

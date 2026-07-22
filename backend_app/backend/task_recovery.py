@@ -7,20 +7,15 @@ Detects and recovers tasks from crashed workers based on stale heartbeats.
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
-from uuid import UUID
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from backend_app.core.database import SessionLocal
-from backend_app.core.models.dag_task import (
-    DAGTaskRepository, 
-    DAGTaskModel, 
-    TaskStatus as DBTaskStatus
-)
-from backend_app.core.dag_task_queue import dag_task_queue, TaskQueueKeyBuilder, TaskStatus
 from backend_app.core.cache import redis_manager
+from backend_app.core.dag_task_queue import TaskQueueKeyBuilder, TaskStatus
+from backend_app.core.database import SessionLocal
+from backend_app.core.models.dag_task import DAGTaskModel
 
 logger = logging.getLogger("TaskRecovery")
 
@@ -223,7 +218,7 @@ class TaskRecoveryService:
             True if recovery successful, False otherwise
         """
         task_id = str(task.task_id)
-        tenant_id = str(task.tenant_id)
+        str(task.tenant_id)
         
         db_session = SessionLocal()
         try:

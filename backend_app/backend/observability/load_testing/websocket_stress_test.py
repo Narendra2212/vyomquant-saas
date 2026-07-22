@@ -8,14 +8,15 @@ Author: Principal HFT Infrastructure Engineer
 """
 
 import asyncio
-import time
-import random
-import logging
-from typing import Dict, List, Any, Optional
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
-import websockets
 import json
+import logging
+import random
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+import websockets
 
 logger = logging.getLogger("websocket_stress_test")
 

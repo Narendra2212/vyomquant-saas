@@ -15,37 +15,31 @@ DAG Architecture:
 """
 
 import logging
-from typing import Dict, List, Any, Optional, Set, Tuple
-from collections import defaultdict, deque
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-import pandas as pd
+from typing import Any, Dict, List, Optional, Set, Tuple
+
 import numpy as np
-from enum import Enum
-
-# 🚨 SYSTEM FREEZE: Safety config must be imported first
-from backend_app.core.safety_config import ExecutionFlags, SafetyMonitor
-
-# 🚨 Feature validation - ALL ML features must pass validation
-from backend_app.backend.feature_validator import (
-    FeatureValidator, FeatureSchema,
-    FeatureValidationError, ModelMismatchError
-)
-
-# 🚨 Pipeline guard - FAIL-FAST at every stage
-from backend_app.core.pipeline_guard import (
-    PipelineGuard, PipelineStage, PipelineError,
-    guard_market_data, guard_indicators, guard_features,
-    guard_ml_prediction, guard_signal_generation
-)
+import pandas as pd
 
 # 🚨 Data observability - real-time quality monitoring
-from backend_app.backend.data_observability import (
-    DataObservability, DataQualityMetrics,
-    observe_market_data, observe_indicators,
-    observe_features, observe_ml_predictions,
-    dashboard
-)
+from backend_app.backend.data_observability import (dashboard,
+                                                    observe_features,
+                                                    observe_indicators,
+                                                    observe_market_data,
+                                                    observe_ml_predictions)
+# 🚨 Feature validation - ALL ML features must pass validation
+from backend_app.backend.feature_validator import (FeatureValidationError,
+                                                   FeatureValidator,
+                                                   ModelMismatchError)
+# 🚨 Pipeline guard - FAIL-FAST at every stage
+from backend_app.core.pipeline_guard import (PipelineError, guard_features,
+                                             guard_indicators,
+                                             guard_market_data,
+                                             guard_ml_prediction)
+# 🚨 SYSTEM FREEZE: Safety config must be imported first
+from backend_app.core.safety_config import SafetyMonitor
 
 logger = logging.getLogger("DAGEngine")
 
@@ -372,7 +366,7 @@ class MLExecutor(NodeExecutor):
         """Execute ML node with strict validation."""
         node_id = node.get("id", "unknown")
         model_id = node.get("model_id", "default")
-        threshold = node.get("confidence_threshold", 0.7)
+        node.get("confidence_threshold", 0.7)
         
         # �️ STRICT INPUT CONTRACT VALIDATION
         try:
@@ -502,7 +496,7 @@ class MLExecutor(NodeExecutor):
             result = pd.Series(predictions, index=market_data.index)
             try:
                 # Final validation - ensure no NaN after scaling
-                if prepared.isna().any().any():
+                if None.isna().any().any():
                     raise FeatureValidationError("NaN values introduced during scaling")
             
                 # OUTPUT CONTRACT VALIDATION
@@ -513,7 +507,7 @@ class MLExecutor(NodeExecutor):
                     expected_index=market_data.index
                 )
             
-                return prepared
+                return None
             except Exception as e:
                 logger.critical(f" Model prediction failed: {e}")
                 raise RuntimeError(f"Model prediction failed: {e}")
@@ -640,7 +634,7 @@ class ActionExecutor(NodeExecutor):
         # Get signal from inputs - MUST be from SIGNAL or LOGIC node
         signal = pd.Series(0, index=market_data.index)
         signal_found = False
-        valid_signal_source = False
+        False
         
         for input_id, value in inputs.items():
             if isinstance(value, pd.Series):
@@ -648,7 +642,7 @@ class ActionExecutor(NodeExecutor):
                 signal_found = True
                 # Check if input is from a valid signal source
                 # (This would need to be passed through from node metadata)
-                valid_signal_source = True
+                True
                 break
         
         if not signal_found:
@@ -898,7 +892,7 @@ class DAGEngine:
             if source and target:
                 raise ValueError("DAG contains cycles - cannot execute")
         
-        return result
+        return None
     
     def get_execution_trace(self) -> List[Dict[str, Any]]:
         """Get full execution trace for debugging."""
@@ -942,8 +936,9 @@ class DAGEngine:
             return None
         
         try:
-            from backend_app.core.redis_client import redis_client
             import json
+
+            from backend_app.core.redis_client import redis_client
             
             stream_key = self._event_buffer_key.format(tenant_id=tenant_id)
             
@@ -981,8 +976,9 @@ class DAGEngine:
             List of events from newest to oldest
         """
         try:
-            from backend_app.core.redis_client import redis_client
             import json
+
+            from backend_app.core.redis_client import redis_client
             
             stream_key = self._event_buffer_key.format(tenant_id=tenant_id)
             

@@ -1,3 +1,25 @@
+import asyncio
+import json
+import logging
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional, Set
+
+from backend_app.core.cache.redis_manager import redis_manager
+
+from .heartbeat_architecture import HeartbeatCollector, HeartbeatGenerator
+from .lease_management_architecture import (LeaseManager, LeaseRequest,
+                                            LeaseType)
+from .orchestration_safety_guarantees import (AtomicTransactionGuarantee,
+                                              DeterministicAssignmentGuarantee,
+                                              SplitBrainPreventionGuarantee)
+from .orphan_recovery_architecture import OrphanDetector, OrphanRecoverer
+from .queue_manager import DistributedQueueManager, ExecutionJob, QueueType
+from .worker_registry import DeterministicReassignmentCoordinator
+from .worker_topology_architecture import WorkerRegistry
+
 """
 Distributed Execution Coordinator
 
@@ -7,31 +29,8 @@ worker coordination, and resource allocation while preserving deterministic
 guarantees and replay safety.
 """
 
-import asyncio
-import json
-import logging
-import uuid
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Set, Tuple
-from dataclasses import dataclass, field
-from enum import Enum
 
-from backend_app.core.cache.redis_manager import redis_manager
-from backend_app.core.database_pool import get_db_session
-from backend_app.core.models.dag_task import DAGTaskModel as DAGTask, TaskStatus
-from .queue_manager import DistributedQueueManager, QueueType, ExecutionJob
-from .replay_engine import immutable_journal, sequence_manager
-from .replay_validator import event_signer
-from .lease_management_architecture import LeaseManager, LeaseRequest, LeaseType
-from .worker_topology_architecture import WorkerRegistry, WorkerInfo
-from .heartbeat_architecture import HeartbeatCollector, HeartbeatGenerator
-from .orphan_recovery_architecture import OrphanDetector, OrphanRecoverer
-from .deterministic_reassignment_model import DeterministicReassignmentCoordinator
-from .orchestration_safety_guarantees import (
-    DeterministicAssignmentGuarantee,
-    AtomicTransactionGuarantee,
-    SplitBrainPreventionGuarantee
-)
+
 
 logger = logging.getLogger(__name__)
 

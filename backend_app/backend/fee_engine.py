@@ -22,16 +22,16 @@ Realized PnL = (exit_price - entry_price) × size - fees
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Dict, List, Optional, Any
+from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import (
-    Column, String, DateTime, Numeric, Enum as SQLEnum, ForeignKey, Index
-)
+from sqlalchemy import Column, DateTime
+from sqlalchemy import Enum as SQLEnum
+from sqlalchemy import ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Session
 
@@ -411,7 +411,8 @@ class FeeEngine:
     
     def _get_tenant_id_from_execution(self, execution_id: str) -> UUID:
         """Look up tenant ID from execution record."""
-        from backend_app.core.models.execution_record import ExecutionRecordModel
+        from backend_app.core.models.execution_record import \
+            ExecutionRecordModel
         
         record = self.db.query(ExecutionRecordModel).filter(
             ExecutionRecordModel.execution_id == execution_id

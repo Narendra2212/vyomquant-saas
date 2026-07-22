@@ -1,12 +1,13 @@
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
 import logging
-from typing import Optional
 from decimal import Decimal
+from typing import Optional
 
-from backend_app.core.unified_execution_engine import UnifiedExecutionEngine
-from backend_app.core.feature_flags import ExecutionContext
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
 from backend_app.core.dependencies import get_current_user
+from backend_app.core.feature_flags import ExecutionContext
+from backend_app.core.unified_execution_engine import UnifiedExecutionEngine
 
 logger = logging.getLogger(__name__)
 

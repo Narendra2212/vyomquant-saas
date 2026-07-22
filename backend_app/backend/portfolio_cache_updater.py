@@ -31,7 +31,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
 
@@ -128,9 +128,10 @@ class PortfolioCacheUpdater:
             user_id: User identifier
             exchange_id: Exchange identifier (e.g., "binance")
         """
-        from backend_app.backend.connection_engine import get_or_create_exchange
+        from backend_app.backend.connection_engine import \
+            get_or_create_exchange
         from backend_app.backend.key_manager import KeyVault
-        
+
         # Build cache keys
         balance_key = f"portfolio:{user_id}:{exchange_id}:balance"
         position_key = f"portfolio:{user_id}:{exchange_id}:positions"

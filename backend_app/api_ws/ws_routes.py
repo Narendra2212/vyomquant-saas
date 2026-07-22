@@ -10,25 +10,24 @@ FIXES:
          the heartbeat loop running correctly instead of blocking on gather()
   WSR-5: STEP 4 - Stale data detection (>30s drop, >60s reconnect)
 """
-
 import asyncio
+import json
 import logging
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Set
+import os
+import time
+from datetime import datetime, timezone
+from typing import Dict, Optional
 from urllib.parse import unquote
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
 
-from backend_app.core.dependencies import get_ws_manager, get_vault
-from backend_app.core.websocket_auth import _decode_hs256_token
-from backend_app.core.state import app_state
-
-from backend_app.backend.connection_engine import (
-    ConnectionEngine,
-    get_or_create_exchange,
-)  # WSR-3: shared pool
+from backend_app.backend.connection_engine import (  # WSR-3: shared pool
+    ConnectionEngine, get_or_create_exchange)
 from backend_app.backend.data_seeking_engine import DataEngine
+from backend_app.core.dependencies import get_vault, get_ws_manager
+from backend_app.core.state import app_state
+from backend_app.core.websocket_auth import _decode_hs256_token
 
 logger = logging.getLogger("WSRoutes")
 ws_router = APIRouter()

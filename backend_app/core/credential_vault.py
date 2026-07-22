@@ -16,22 +16,21 @@ Key Features:
 Author: Principal Institutional Platform Security Engineer
 """
 
-import logging
-import json
+import base64
 import hashlib
-from typing import Dict, Optional, List, Any
-from datetime import datetime, timezone, timedelta
-from dataclasses import dataclass, field, asdict
+import json
+import logging
+import os
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-import base64
-import os
 
 from backend_app.core.cache import redis_manager
-from backend_app.core.tenant import TenantContext
 
 logger = logging.getLogger("CredentialVault")
 

@@ -54,10 +54,8 @@ class DeprecatedOrderEngine:
         )
         # ═══════════════════════════════════════════════════════════
         
-        self.exchange = exchange_instance
-        self.max_retries = max_retries
-        self.user_id = user_id
-
+        self.exchange = None
+                
     # ══════════════════════════════════════════════════════════════════════
     #  CORE EXECUTION
     # ══════════════════════════════════════════════════════════════════════

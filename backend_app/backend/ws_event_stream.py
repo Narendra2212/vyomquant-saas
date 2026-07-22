@@ -8,23 +8,23 @@ Author: Senior Realtime Systems Engineer
 
 import asyncio
 import json
+import logging
 import time
 import uuid
-from typing import Dict, Set, List, Optional, Any, Callable, Awaitable
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
-from collections import deque, defaultdict
-import logging
+from typing import Any, Dict, List, Optional, Set
 
 # Import canonical channel constants
 # P0-04 FIX: Support both package-level import (backend.ws_channels) and
 # direct sys.path import (ws_channels) so this module loads correctly whether
 # executed as `python -m backend.ws_event_stream` or via sys.path injection.
 try:
-    from backend_app.backend.ws_channels import ChannelType, EventType, is_valid_channel, assert_valid_channel
+    from backend_app.backend.ws_channels import (ChannelType, EventType,
+                                                                                                  is_valid_channel)
 except ImportError:
-    from ws_channels import ChannelType, EventType, is_valid_channel, assert_valid_channel
+    from ws_channels import ChannelType, EventType, is_valid_channel
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -405,7 +405,7 @@ class EventReplayBuffer:
                     # Parse ISO format timestamp
                     dt = datetime.fromisoformat(message.timestamp.replace('Z', '+00:00'))
                     msg_timestamp = dt.timestamp()
-                except:
+                except Exception:
                     pass
             
             event_entry = {
@@ -458,7 +458,7 @@ class EventReplayBuffer:
                 try:
                     dt = datetime.fromisoformat(since_timestamp.replace('Z', '+00:00'))
                     parsed_timestamp = dt.timestamp()
-                except:
+                except Exception:
                     parsed_timestamp = 0
             else:
                 parsed_timestamp = float(since_timestamp)

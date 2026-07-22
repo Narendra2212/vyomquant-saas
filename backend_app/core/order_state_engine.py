@@ -61,34 +61,40 @@ EXPECTED RESULT:
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any, Callable, Set
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
-from enum import Enum, auto
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
 
 # Try imports with fallbacks
 try:
-    from backend_app.backend.state_service import state_service, Order, Position, OrderStatus
     from backend_app.backend.reconciliation_worker import reconciliation_worker
+    from backend_app.backend.state_service import (Order, OrderStatus,
+                                                   Position, state_service)
+    _ = (reconciliation_worker, Order, OrderStatus, Position, state_service)
     STATE_SERVICE_AVAILABLE = True
 except ImportError:
     STATE_SERVICE_AVAILABLE = False
 
 try:
-    from backend_app.core.event_pipeline import get_event_pipeline, EventType
+    from backend_app.core.event_pipeline import EventType, get_event_pipeline
     EVENT_PIPELINE_AVAILABLE = True
 except ImportError:
     EVENT_PIPELINE_AVAILABLE = False
 
 try:
-    from backend_app.core.fill_deduplication_manager import FillDeduplicationManager
+    from backend_app.core.fill_deduplication_manager import \
+        FillDeduplicationManager
+    _ = FillDeduplicationManager
     FILL_DEDUPLICATION_AVAILABLE = True
 except ImportError:
     FILL_DEDUPLICATION_AVAILABLE = False
 
 try:
-    from backend_app.core.cancellation_idempotency_manager import CancellationIdempotencyManager
+    from backend_app.core.cancellation_idempotency_manager import \
+        CancellationIdempotencyManager
+    _ = CancellationIdempotencyManager
     CANCELLATION_IDEMPOTENCY_AVAILABLE = True
 except ImportError:
     CANCELLATION_IDEMPOTENCY_AVAILABLE = False
@@ -739,7 +745,7 @@ class OrderStateEngine:
         """Monitor orders for timeouts."""
         while self._running:
             try:
-                now = datetime.utcnow()
+                datetime.utcnow()
                 
                 for order_id, lifecycle in list(self._active_orders.items()):
                     if lifecycle.is_active() and lifecycle.has_timed_out():

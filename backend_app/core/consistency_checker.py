@@ -22,8 +22,8 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple
 from enum import Enum
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import and_
 
@@ -278,8 +278,8 @@ class PositionConsistencyChecker:
             Dict mapping symbol to position size
         """
         try:
-            from backend_app.core.position_model import PositionModel
             from backend_app.core.database import SessionLocal
+            from backend_app.core.position_model import PositionModel
             
             positions: Dict[str, Decimal] = {}
             
@@ -389,7 +389,7 @@ class PositionConsistencyChecker:
             )
             
             logger.critical(
-                f"🔴 STEP 4: Kill switch activated due to position mismatch"
+                "🔴 STEP 4: Kill switch activated due to position mismatch"
             )
         
         except Exception as e:

@@ -13,15 +13,16 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone, timedelta
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, Optional, Any, Set
+from typing import Any, Dict, List, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
-from .lease_manager import LeaseManager, LeaseRequest, LeaseType
+
 from .heartbeat_manager import HeartbeatManager
 from .immutable_journal import immutable_journal
+from .lease_manager import LeaseManager, LeaseRequest, LeaseType
 
 logger = logging.getLogger("failover_coordinator")
 
@@ -517,7 +518,7 @@ class FailoverCoordinator:
     async def _get_leader_heartbeat(self) -> Optional[Dict[str, Any]]:
         """Get leader heartbeat."""
         try:
-            heartbeat_key = f"heartbeat:coordinator:leader"
+            heartbeat_key = "heartbeat:coordinator:leader"
             heartbeat_data = await self.redis.get(heartbeat_key)
             
             if heartbeat_data:

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-import os
+
 import ccxt.pro as ccxtpro
 from aiohttp import web
 

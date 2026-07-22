@@ -16,33 +16,24 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
+import logging
 import os
 import re
 import uuid
-import logging
-import numpy as np
-import joblib
 from abc import ABC, abstractmethod
+
+import joblib
+import numpy as np
 
 logger = logging.getLogger("MLModels")
 
 # Import ML safety infrastructure for institutional-grade safety
 try:
-    from backend_app.core.ml_safety import (
-        DeterministicEnforcer,
-        InferenceTimeoutGuard,
-        DeviceManager,
-        MemoryMonitor,
-        SafeModelLoader,
-        TrainingIsolator,
-        DEFAULT_DETERMINISTIC_CONFIG,
-        DEFAULT_TIMEOUT_CONFIG,
-        DEFAULT_DEVICE_CONFIG,
-        DEFAULT_MEMORY_CONFIG,
-        DEFAULT_TRAINING_CONFIG,
-        initialize_ml_safety,
-        with_timeout
-    )
+    from backend_app.core.ml_safety import (DeterministicEnforcer,
+                                            DeviceManager,
+                                            InferenceTimeoutGuard,
+                                            MemoryMonitor, SafeModelLoader,
+                                            TrainingIsolator)
     ML_SAFETY_AVAILABLE = True
     logger.info("ML safety infrastructure loaded successfully")
 except ImportError:
@@ -725,8 +716,8 @@ class LSTMStrategyBlock(DeepLearningStrategyBlock):
         indicator_names,
         user_selected_indicators,
     ) -> str:
-        from tensorflow.keras.models import Sequential
         from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
+        from tensorflow.keras.models import Sequential
 
         X_3d, y_3d, scaler = self._prepare_data(
             master_matrix, indicator_names, user_selected_indicators
@@ -769,8 +760,8 @@ class GRUStrategyBlock(DeepLearningStrategyBlock):
         indicator_names,
         user_selected_indicators,
     ) -> str:
-        from tensorflow.keras.models import Sequential
         from tensorflow.keras.layers import GRU, Dense, Dropout, Input
+        from tensorflow.keras.models import Sequential
 
         X_3d, y_3d, scaler = self._prepare_data(
             master_matrix, indicator_names, user_selected_indicators
@@ -811,15 +802,11 @@ class TransformerStrategyBlock(DeepLearningStrategyBlock):
         indicator_names,
         user_selected_indicators,
     ) -> str:
+        from tensorflow.keras.layers import (Dense, Dropout,
+                                             GlobalAveragePooling1D, Input,
+                                             LayerNormalization,
+                                             MultiHeadAttention)
         from tensorflow.keras.models import Model
-        from tensorflow.keras.layers import (
-            Input,
-            MultiHeadAttention,
-            LayerNormalization,
-            GlobalAveragePooling1D,
-            Dense,
-            Dropout,
-        )
 
         X_3d, y_3d, scaler = self._prepare_data(
             master_matrix, indicator_names, user_selected_indicators
@@ -918,9 +905,9 @@ class AutoencoderStrategyBlock:
         user_selected_indicators,
     ) -> str:
         import tensorflow as tf
-        from tensorflow.keras.models import Model
-        from tensorflow.keras.layers import Input, Dense, Dropout
         from sklearn.preprocessing import StandardScaler
+        from tensorflow.keras.layers import Dense, Dropout, Input
+        from tensorflow.keras.models import Model
 
         safe_uid, safe_name = _safe_filename(user_id, strategy_name)
         selected_idx = [indicator_names.index(n) for n in user_selected_indicators]

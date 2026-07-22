@@ -1,3 +1,4 @@
+
 """
 Orphan Recovery Manager
 
@@ -5,28 +6,25 @@ This module implements the orphan recovery system for Phase 3 distributed orches
 The orphan recovery manager provides detection, recovery, and reassignment of orphaned
 tasks, workers, queues, and resources while preserving deterministic guarantees and replay safety.
 """
-
 import asyncio
 import json
 import logging
-import uuid
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Set, Tuple
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
-from backend_app.core.database_pool import get_db_session
-from .queue_manager import DistributedQueueManager, QueueType, ExecutionJob
-from .worker_registry import WorkerRegistry, WorkerInfo
-from .lease_manager import LeaseManager, Lease
-from .heartbeat_manager import HeartbeatManager, HealthStatus
-from .deterministic_reassignment_model import DeterministicReassignmentCoordinator
-from .orchestration_safety_guarantees import (
-    ReplaySafeReassignmentManager,
-    DeterministicAssignmentGuarantee,
-    AtomicTransactionGuarantee
-)
+
+from .heartbeat_manager import HealthStatus, HeartbeatManager
+from .lease_manager import Lease, LeaseManager
+from .orchestration_safety_guarantees import (AtomicTransactionGuarantee,
+                                              DeterministicAssignmentGuarantee,
+                                              ReplaySafeReassignmentManager)
+from .queue_manager import DistributedQueueManager
+from .worker_registry import WorkerRegistry, DeterministicReassignmentCoordinator
+
 
 logger = logging.getLogger(__name__)
 

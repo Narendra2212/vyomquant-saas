@@ -18,9 +18,8 @@
 
 import asyncio
 import logging
-from typing import Optional, AsyncIterator
+from typing import AsyncIterator, Optional
 
-import ccxt.pro as ccxt
 import ccxt as ccxt_base
 
 logger = logging.getLogger("DataEngine")
@@ -67,6 +66,7 @@ class DataEngine:
     ) -> AsyncIterator[list]:
         """Streams live forming candle updates from the centralized MDS."""
         import json
+
         from backend_app.core.cache import redis_manager
         
         exchange_id = self.exchange.id.lower()

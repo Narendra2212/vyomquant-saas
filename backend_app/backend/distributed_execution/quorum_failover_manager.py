@@ -14,19 +14,16 @@ Key Features:
 - State validation before promotion
 """
 
-import asyncio
-import logging
-import json
-from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Dict, Any
-from enum import Enum
 import hashlib
+import logging
 import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from enum import Enum
+from typing import List, Optional
 
-from .ha_redis_manager import HARedisManager, FencingToken
 from .ha_postgres_manager import HAPostgreSQLManager
-
+from .ha_redis_manager import FencingToken, HARedisManager
 
 logger = logging.getLogger(__name__)
 

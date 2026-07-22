@@ -45,13 +45,11 @@ EXPECTED RESULT:
 
 import asyncio
 import json
-import time
 import logging
-from typing import Dict, List, Optional, Any, Callable, Set
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from contextlib import asynccontextmanager
+from typing import Any, Callable, Dict, List, Optional, Set
 
 # Redis imports
 try:

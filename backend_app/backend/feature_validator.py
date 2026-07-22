@@ -8,8 +8,9 @@ Prevents silent model corruption from mismatched features.
 """
 
 import logging
-from typing import List, Optional, Dict, Any, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 

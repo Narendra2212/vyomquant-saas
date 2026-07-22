@@ -7,12 +7,14 @@ Updated to use connection pooling for better performance under load.
 See core/database_pool.py for full implementation details.
 """
 
-import os
 import logging
+import os
 
 # Import from new pooling module
 try:
-    from backend_app.core.database_pool import get_db_pool, get_db as _get_db_pool
+    from backend_app.core.database_pool import get_db as _get_db_pool
+    from backend_app.core.database_pool import get_db_pool
+
     # Re-export for backward compatibility
     get_db = _get_db_pool
     POOLING_AVAILABLE = True
@@ -22,11 +24,12 @@ except ImportError:
 
 # Fallback for compatibility (if pooling module fails)
 if not POOLING_AVAILABLE:
+    from contextlib import contextmanager
+
     from sqlalchemy import create_engine
     from sqlalchemy.ext.declarative import declarative_base
     from sqlalchemy.orm import sessionmaker
-    from contextlib import contextmanager
-    
+
     # Use SQLite as a minimal default (won't be used in production)
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./algo22.db")
     
@@ -74,7 +77,7 @@ if not POOLING_AVAILABLE:
 
 # Re-export Base for models
 if POOLING_AVAILABLE:
-    from backend_app.core.database_pool import Base
+    pass
 
 # Export engine for direct access
 if POOLING_AVAILABLE:

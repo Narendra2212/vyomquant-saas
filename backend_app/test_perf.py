@@ -1,7 +1,12 @@
-import os, asyncio, time
+import asyncio
+import time
+
 from dotenv import load_dotenv
-load_dotenv('d:/aerora_quant_backend_updated_final1/backend_app/.env')
+
 from backend_app.backend.telemetry_engine import TelemetryEngine
+
+load_dotenv('d:/aerora_quant_backend_updated_final1/backend_app/.env')
+
 
 async def test_perf():
     tel = TelemetryEngine()
@@ -25,7 +30,7 @@ async def test_perf():
         res = await tel.execute_query(query)
         print("Time:", time.time() - start)
         print("Result:", res)
-    except Exception as e:
+    except Exception:
         import traceback
         traceback.print_exc()
 

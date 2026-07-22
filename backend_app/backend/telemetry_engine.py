@@ -22,12 +22,11 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
+import asyncio
+import logging
 import os
 import re
 import time
-import asyncio
-import logging
-import socket
 from typing import Optional
 
 import aiohttp

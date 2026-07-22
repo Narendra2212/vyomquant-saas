@@ -14,12 +14,12 @@ Author: Principal Institutional Execution Consistency Engineer
 """
 
 import asyncio
-import logging
-import json
 import hashlib
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
+import json
+import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
@@ -343,7 +343,7 @@ class ReplaySafeTransactionGuard:
                 return True
         
         # Specific exception types that are retryable
-        retryable_exceptions = (
+        (
             # Add specific exception types here
             # For now, check error message patterns
         )

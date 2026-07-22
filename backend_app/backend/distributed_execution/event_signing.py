@@ -7,18 +7,17 @@ and cryptographic integrity validation for immutable journal.
 Author: Principal Distributed Execution Engineer
 """
 
-import asyncio
-import time
-import uuid
 import hashlib
 import hmac
 import json
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Tuple
-from dataclasses import dataclass, asdict
 import logging
+import time
+import uuid
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-from .immutable_journal import ExecutionEvent, EventSignature
+from .immutable_journal import ExecutionEvent
 
 logger = logging.getLogger("event_signing")
 
@@ -90,13 +89,13 @@ class EventSigner:
                         previous_event_hash: str = "0" * 64) -> SigningResult:
         """Sign event with cryptographic integrity verification."""
         try:
-            signing_start = time.time()
+            time.time()
             
             # Generate event hash
             event_hash = await self._generate_event_hash(event)
             
             # Generate HMAC signature
-            signature_input = f"{event_hash}:{previous_hash}:{datetime.now(timezone.utc).isoformat()}"
+            signature_input = f"{event_hash}:{""}:{datetime.now(timezone.utc).isoformat()}"
             signature = hmac.new(
                 self.current_key.key_data,
                 signature_input.encode('utf-8'),

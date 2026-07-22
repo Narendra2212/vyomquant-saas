@@ -1,3 +1,4 @@
+
 """
 Tracing Overhead Benchmark for HFT Observability
 
@@ -6,15 +7,14 @@ Validates that optimized tracing maintains performance under HFT conditions.
 
 Author: Principal HFT Infrastructure Engineer
 """
-
 import asyncio
-import time
-import random
 import logging
-from typing import Dict, List, Any, Optional
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
 import statistics
+import threading
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("tracing_overhead_benchmark")
 
@@ -111,7 +111,7 @@ class TracingOverheadBench:
         try:
             # Import optimized tracing
             import backend_app.backend.observability.optimized_tracing as optimized_tracing
-            
+
             # Configure for benchmark
             config = optimized_tracing.OptimizedTraceConfig(
                 service_name="tracing_benchmark",
@@ -148,7 +148,7 @@ class TracingOverheadBench:
         # Update tracing configuration
         try:
             import backend_app.backend.observability.optimized_tracing as optimized_tracing
-            
+
             # Create new config with specific sampling rate
             config = optimized_tracing.OptimizedTraceConfig(
                 service_name="tracing_benchmark",
@@ -212,7 +212,7 @@ class TracingOverheadBench:
         try:
             import backend_app.backend.observability.optimized_tracing as optimized_tracing
             optimized_tracing.shutdown_optimized_tracing()
-        except:
+        except Exception:
             pass
         
         self.workers.clear()
@@ -315,7 +315,7 @@ class TracingBenchWorker:
         try:
             # Import optimized tracing
             import backend_app.backend.observability.optimized_tracing as optimized_tracing
-            
+
             # Get trading tracer
             tracer = optimized_tracing.get_optimized_trading_tracer()
             
@@ -403,6 +403,7 @@ class SystemMonitor:
     def _monitor_system(self):
         """Monitor system resources in background thread."""
         import gc
+
         import psutil
         
         while not self.stop_event.is_set():
@@ -527,3 +528,4 @@ if __name__ == "__main__":
     
     # Run tracing benchmark
     asyncio.run(run_tracing_benchmark(config_name))
+

@@ -1,3 +1,13 @@
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, List, Optional, Set
+
+from sqlalchemy import text
+
 """
 core/database_scaling.py — DATABASE SCALING FOR 1000+ USERS
 
@@ -77,22 +87,13 @@ EXPECTED RESULT:
   ✔ Partition pruning (fast date/user queries)
 """
 
-import asyncio
-import logging
-import random
-from typing import Dict, List, Optional, Any, Callable, Set
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
-from contextlib import asynccontextmanager
 
 # SQLAlchemy imports
 try:
-    from sqlalchemy.ext.asyncio import (
-        AsyncSession, AsyncEngine, create_async_engine,
-        async_sessionmaker
-    )
-    from sqlalchemy import text, select, insert, update, delete
+# # # #     from sqlalchemy import delete, insert, select, text, update
+    from sqlalchemy.ext.asyncio import (AsyncEngine, AsyncSession,
+                                        async_sessionmaker,
+                                        create_async_engine)
     from sqlalchemy.pool import QueuePool
     SQLALCHEMY_AVAILABLE = True
 except ImportError:
@@ -487,7 +488,7 @@ class PartitionedOrderRepository:
             RETURNING order_id;
         """
         
-        result = await self.router.execute_write(query, order_data)
+        await self.router.execute_write(query, order_data)
         return order_data["order_id"]
     
     async def get_orders_by_date_range(
@@ -540,7 +541,7 @@ class PartitionedTradeRepository:
             RETURNING trade_id;
         """
         
-        result = await self.router.execute_write(query, trade_data)
+        await self.router.execute_write(query, trade_data)
         return trade_data["trade_id"]
     
     async def get_trades_by_user(self, user_id: str, limit: int = 1000) -> List[Dict[str, Any]]:

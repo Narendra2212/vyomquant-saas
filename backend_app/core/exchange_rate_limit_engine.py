@@ -51,14 +51,13 @@ EXPECTED RESULT:
 """
 
 import asyncio
+import hashlib
 import logging
 import time
-from typing import Dict, List, Optional, Any, Callable, Set, Tuple
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
-from collections import deque
-import hashlib
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("ExchangeRateLimitEngine")
 

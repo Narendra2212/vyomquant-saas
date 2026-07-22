@@ -20,7 +20,7 @@ STRICT RULES:
 - ✅ YES: redis_manager.get_client()
 """
 
-from typing import Optional, Any
+from typing import Any, Optional
 
 
 class SharedRedisManager:

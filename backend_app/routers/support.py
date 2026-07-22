@@ -11,18 +11,15 @@ Endpoints:
 
 import logging
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from supabase import Client as SupabaseClient
 
-from backend_app.core.dependencies import get_current_user, get_request_supabase, DEV_MODE
-from backend_app.core.models import (
-    CreateTicketRequest,
-    AddCommentRequest,
-    TicketStatus,
-    TicketPriority,
-)
+from backend_app.core.dependencies import (get_current_user,
+                                           get_request_supabase)
+from backend_app.core.models import (AddCommentRequest, CreateTicketRequest,
+                                     TicketStatus)
+from supabase import Client as SupabaseClient
 
 router = APIRouter()
 logger = logging.getLogger("SupportRouter")
@@ -281,7 +278,7 @@ async def update_ticket(
         else:
             raise HTTPException(400, f"Invalid status transition from {current_status} to {status}")
         
-        result = supabase.table("support_tickets").update(update_data).eq(
+        supabase.table("support_tickets").update(update_data).eq(
             "id", ticket_id
         ).execute()
         

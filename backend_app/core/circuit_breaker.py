@@ -27,11 +27,11 @@ USAGE:
 """
 
 import asyncio
-import time
 import logging
-from typing import Dict, Optional
-from enum import Enum
+import time
 from dataclasses import dataclass
+from enum import Enum
+from typing import Dict, Optional
 
 logger = logging.getLogger("CircuitBreaker")
 
@@ -219,7 +219,7 @@ class ExchangeCircuitBreaker:
                 result = await coro(*args, **kwargs)
                 await self._record_success_unlocked()
                 return result
-            except Exception as e:
+            except Exception:
                 await self._record_failure_unlocked()
                 raise
     

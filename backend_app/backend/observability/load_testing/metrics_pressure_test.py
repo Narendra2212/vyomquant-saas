@@ -8,15 +8,15 @@ Author: Principal HFT Infrastructure Engineer
 """
 
 import asyncio
-import time
-import random
-import logging
-from typing import Dict, List, Any, Optional
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
 import gc
+import logging
+import random
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import List, Optional
 
 logger = logging.getLogger("metrics_pressure_test")
 
@@ -133,7 +133,7 @@ class MetricsPressureTest:
         try:
             # Import optimized metrics
             import backend_app.backend.observability.optimized_metrics_exporter as optimized_metrics
-            
+
             # Initialize optimized metrics collector
             self.metrics_collector = optimized_metrics.optimized_metrics_collector()
             await self.metrics_collector.start(port=8082)  # Different port for testing
@@ -361,7 +361,6 @@ class SystemMonitor:
     def _monitor_system(self):
         """Monitor system resources in background thread."""
         import psutil
-        import gc
         
         cpu_samples = []
         memory_samples = []

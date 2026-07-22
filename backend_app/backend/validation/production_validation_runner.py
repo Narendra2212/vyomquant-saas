@@ -8,18 +8,17 @@ Author: Principal Institutional Validation Engineer
 """
 
 import logging
-import asyncio
-from typing import Dict, Any, List
-from datetime import datetime, timezone
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict, List
 
-from .workflow_validator import WorkflowValidator
 from .deterministic_state_validator import DeterministicStateValidator
-from .replay_consistency_validator import ReplayConsistencyValidator
-from .websocket_sequence_validator import WebSocketSequenceValidator
+from .execution_correctness_validator import ExecutionCorrectnessValidator
 from .failover_validation_runner import FailoverValidationRunner
 from .reconciliation_validator import ReconciliationValidator
-from .execution_correctness_validator import ExecutionCorrectnessValidator
+from .replay_consistency_validator import ReplayConsistencyValidator
+from .websocket_sequence_validator import WebSocketSequenceValidator
+from .workflow_validator import WorkflowValidator
 
 logger = logging.getLogger("production_validation_runner")
 
@@ -258,7 +257,7 @@ class ProductionValidationRunner:
             report: Validation report
         """
         print("\n" + "="*80)
-        print(f"PRODUCTION VALIDATION REPORT")
+        print("PRODUCTION VALIDATION REPORT")
         print(f"Validation ID: {report.validation_id}")
         print(f"Timestamp: {report.timestamp.isoformat()}")
         print(f"Status: {report.get_overall_status()}")

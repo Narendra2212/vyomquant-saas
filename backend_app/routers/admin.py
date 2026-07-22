@@ -10,19 +10,15 @@ FIXES:
 
 import asyncio
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query
-from supabase import Client as SupabaseClient
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from backend_app.core.dependencies import (get_admin_user, get_alert,
+                                           get_fleet, get_request_supabase,
+                                           get_telemetry, get_ws_manager,
+                                           invalidate_profile_cache)
 from backend_app.core.models import GlobalKillRequest, UserStatusRequest
-from backend_app.core.dependencies import (
-    get_admin_user,
-    get_fleet,
-    get_telemetry,
-    get_alert,
-    get_ws_manager,
-    get_request_supabase,
-    invalidate_profile_cache,
-)
+from supabase import Client as SupabaseClient
 
 router = APIRouter()
 logger = logging.getLogger("AdminRouter")

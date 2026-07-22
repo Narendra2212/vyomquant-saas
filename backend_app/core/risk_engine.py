@@ -3,8 +3,9 @@ Production-grade Risk Engine for Trading System
 Controls capital risk, prevents overexposure, and enforces safety rules
 """
 
-import pandas as pd
 from typing import Tuple
+
+import pandas as pd
 
 
 class RiskEngine:

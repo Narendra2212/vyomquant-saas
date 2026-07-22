@@ -13,14 +13,12 @@ Author: Backend Observability Engineer
 
 import asyncio
 import time
-from decimal import Decimal
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Callable
-from dataclasses import dataclass, field
-from enum import Enum
 from collections import deque
-import threading
-from functools import wraps
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from decimal import Decimal
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
 
 
 class BotStatus(Enum):

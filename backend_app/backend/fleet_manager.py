@@ -13,7 +13,7 @@
 
 import asyncio
 import logging
-from typing import Dict, Any, Tuple
+from typing import Any, Dict, Tuple
 
 logger = logging.getLogger("FleetManager")
 
@@ -54,9 +54,9 @@ class FleetManager:
                 logger.critical("System capacity reached. Cannot spawn new bots.")
                 return False, "System is at maximum bot capacity."
 
-            from backend_app.core.state import app_state
-            from backend_app.core.dependencies import DEPLOYMENT_LIMITS
             from backend_app.backend.master_executor import BotRunner
+            from backend_app.core.dependencies import DEPLOYMENT_LIMITS
+            from backend_app.core.state import app_state
 
             try:
                 tier_info = app_state.vault.get_user_tier(user_id)

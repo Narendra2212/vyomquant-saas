@@ -1,0 +1,543 @@
+
+=== main.py (48 errors) ===
+  Line 35: [E402] Module level import not at top of file
+  Line 36: [E402] Module level import not at top of file
+  Line 43: [E402] Module level import not at top of file
+  Line 44: [E402] Module level import not at top of file
+  Line 54: [E402] Module level import not at top of file
+  Line 55: [E402] Module level import not at top of file
+  Line 56: [E402] Module level import not at top of file
+  Line 58: [E402] Module level import not at top of file
+  Line 59: [E402] Module level import not at top of file
+  Line 60: [E402] Module level import not at top of file
+  Line 61: [E402] Module level import not at top of file
+  Line 62: [E402] Module level import not at top of file
+  Line 63: [E402] Module level import not at top of file
+  Line 69: [E402] Module level import not at top of file
+  Line 70: [E402] Module level import not at top of file
+  Line 71: [E402] Module level import not at top of file
+  Line 72: [E402] Module level import not at top of file
+  Line 73: [E402] Module level import not at top of file
+  Line 125: [E402] Module level import not at top of file
+  Line 144: [E402] Module level import not at top of file
+  Line 147: [E402] Module level import not at top of file
+  Line 150: [E402] Module level import not at top of file
+  Line 159: [E402] Module level import not at top of file
+  Line 160: [E402] Module level import not at top of file
+  Line 163: [E402] Module level import not at top of file
+  Line 166: [E402] Module level import not at top of file
+  Line 169: [E402] Module level import not at top of file
+  Line 172: [E402] Module level import not at top of file
+  Line 176: [E402] Module level import not at top of file
+  Line 178: [E402] Module level import not at top of file
+  Line 179: [E402] Module level import not at top of file
+  Line 180: [E402] Module level import not at top of file
+  Line 183: [E402] Module level import not at top of file
+  Line 184: [E402] Module level import not at top of file
+  Line 185: [E402] Module level import not at top of file
+  Line 186: [E402] Module level import not at top of file
+  Line 196: [E402] Module level import not at top of file
+  Line 197: [E402] Module level import not at top of file
+  Line 198: [E402] Module level import not at top of file
+  Line 199: [E402] Module level import not at top of file
+  Line 202: [E402] Module level import not at top of file
+  Line 203: [E402] Module level import not at top of file
+  Line 204: [E402] Module level import not at top of file
+  Line 205: [E402] Module level import not at top of file
+  Line 206: [E402] Module level import not at top of file
+  Line 210: [E402] Module level import not at top of file
+  Line 544: [E402] Module level import not at top of file
+  Line 545: [E402] Module level import not at top of file
+
+=== backend\market_data_validation.py (33 errors) ===
+  Line 282: [F821] Undefined name `DataValidationError`
+  Line 292: [F821] Undefined name `DataValidationError`
+  Line 327: [E741] Ambiguous variable name: `l`
+  Line 335: [F821] Undefined name `DataValidationError`
+  Line 341: [F821] Undefined name `DataValidationError`
+  Line 350: [F821] Undefined name `DataValidationError`
+  Line 396: [F821] Undefined name `DataValidationError`
+  Line 398: [F821] Undefined name `symbol`
+  Line 420: [F821] Undefined name `DataValidationError`
+  Line 421: [F821] Undefined name `method`
+  Line 422: [F821] Undefined name `symbol`
+  Line 450: [F821] Undefined name `DataValidationError`
+  Line 451: [F821] Undefined name `method`
+  Line 452: [F821] Undefined name `symbol`
+  Line 467: [F821] Undefined name `DataValidationError`
+  Line 468: [F821] Undefined name `col`
+  Line 468: [F821] Undefined name `i`
+  Line 469: [F821] Undefined name `symbol`
+  Line 514: [F821] Undefined name `DataValidationError`
+  Line 516: [F821] Undefined name `symbol`
+  Line 618: [F821] Undefined name `random`
+  Line 624: [F821] Undefined name `random`
+  Line 625: [E741] Ambiguous variable name: `l`
+  Line 625: [F821] Undefined name `random`
+  Line 823: [F821] Undefined name `DataValidationError`
+  Line 841: [F821] Undefined name `DataValidationError`
+  Line 970: [E402] Module level import not at top of file
+  Line 971: [E402] Module level import not at top of file
+  Line 1093: [F821] Undefined name `StrictDataValidator`
+  Line 1098: [F821] Undefined name `StrictDataValidator`
+  Line 1101: [F821] Undefined name `StrictDataValidator`
+  Line 1104: [F821] Undefined name `StrictDataValidator`
+  Line 1134: [E741] Ambiguous variable name: `l`
+
+=== routers\dag_tasks.py (16 errors) ===
+  Line 107: [F821] Undefined name `logger`
+  Line 272: [F821] Undefined name `WorkerPool`
+  Line 342: [F821] Undefined name `logger`
+  Line 405: [F841] Local variable `retry_queue_size` is assigned to but never used
+  Line 425: [F821] Undefined name `logger`
+  Line 439: [F821] Undefined name `logger`
+  Line 450: [F821] Undefined name `logger`
+  Line 463: [F821] Undefined name `logger`
+  Line 496: [F821] Undefined name `UUID`
+  Line 497: [E722] Do not use bare `except`
+  Line 529: [F821] Undefined name `logger`
+  Line 544: [F821] Undefined name `logger`
+  Line 551: [F821] Undefined name `redis_manager`
+  Line 555: [F821] Undefined name `redis_manager`
+  Line 559: [F821] Undefined name `redis_manager`
+  Line 563: [F821] Undefined name `redis_manager`
+
+=== backend\exchange_executor.py (15 errors) ===
+  Line 791: [F841] Local variable `response` is assigned to but never used
+  Line 1002: [F821] Undefined name `OrderStatus`
+  Line 1033: [F821] Undefined name `OrderStatus`
+  Line 1052: [F821] Undefined name `OrderStatus`
+  Line 1060: [F821] Undefined name `OrderStatus`
+  Line 1066: [F821] Undefined name `OrderStatus`
+  Line 1073: [F821] Undefined name `OrderStatus`
+  Line 1079: [F821] Undefined name `OrderStatus`
+  Line 1086: [F821] Undefined name `OrderStatus`
+  Line 1095: [F821] Undefined name `OrderStatus`
+  Line 1095: [F821] Undefined name `OrderStatus`
+  Line 1109: [F821] Undefined name `OrderStatus`
+  Line 1116: [F821] Undefined name `OrderStatus`
+  Line 1122: [F821] Undefined name `OrderStatus`
+  Line 1129: [F821] Undefined name `OrderStatus`
+
+=== core\models\__init__.py (11 errors) ===
+  Line 9: [F401] `.pydantic_models.BaseModel` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  Line 10: [F401] `.pydantic_models.Field` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  Line 11: [F401] `.pydantic_models.EmailStr` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  Line 12: [F401] `.pydantic_models.validator` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  Line 13: [F401] `.pydantic_models.Optional` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  Line 14: [F401] `.pydantic_models.List` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  Line 15: [F401] `.pydantic_models.Any` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  Line 16: [F401] `.pydantic_models.Dict` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  Line 17: [F401] `.pydantic_models.Literal` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  Line 18: [F401] `.pydantic_models.Enum` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  Line 19: [F401] `.pydantic_models.datetime` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+
+=== api_ws\ws_routes.py (10 errors) ===
+  Line 82: [F821] Undefined name `time`
+  Line 94: [F821] Undefined name `time`
+  Line 105: [F821] Undefined name `time`
+  Line 118: [F821] Undefined name `time`
+  Line 155: [F821] Undefined name `os`
+  Line 627: [F821] Undefined name `time`
+  Line 638: [F821] Undefined name `json`
+  Line 640: [F821] Undefined name `time`
+  Line 643: [F821] Undefined name `json`
+  Line 647: [F821] Undefined name `time`
+
+=== backend\circuit_breaker.py (8 errors) ===
+  Line 29: [E402] Module level import not at top of file
+  Line 30: [E402] Module level import not at top of file
+  Line 31: [E402] Module level import not at top of file
+  Line 32: [E402] Module level import not at top of file
+  Line 33: [E402] Module level import not at top of file
+  Line 34: [E402] Module level import not at top of file
+  Line 35: [E402] Module level import not at top of file
+  Line 36: [E402] Module level import not at top of file
+
+=== backend\ml_models.py (7 errors) ===
+  Line 38: [F401] `backend_app.core.ml_safety.DEFAULT_DETERMINISTIC_CONFIG` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 39: [F401] `backend_app.core.ml_safety.DEFAULT_TIMEOUT_CONFIG` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 40: [F401] `backend_app.core.ml_safety.DEFAULT_DEVICE_CONFIG` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 41: [F401] `backend_app.core.ml_safety.DEFAULT_MEMORY_CONFIG` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 42: [F401] `backend_app.core.ml_safety.DEFAULT_TRAINING_CONFIG` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 43: [F401] `backend_app.core.ml_safety.initialize_ml_safety` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 44: [F401] `backend_app.core.ml_safety.with_timeout` imported but unused; consider using `importlib.util.find_spec` to test for availability
+
+=== backend\reconciliation_worker.py (7 errors) ===
+  Line 87: [F401] `backend_app.backend.state_service.Order` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 87: [F401] `backend_app.backend.state_service.Position` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 87: [F401] `backend_app.backend.state_service.PositionSide` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 101: [F401] `ccxt.async_support` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 107: [F401] `backend_app.core.reconciliation_engine.ReconciliationEngine` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 429: [F841] Local variable `exchange_wrapper` is assigned to but never used
+  Line 430: [F841] Local variable `state_wrapper` is assigned to but never used
+
+=== core\order_state_engine.py (7 errors) ===
+  Line 72: [F401] `backend_app.backend.state_service.Order` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 72: [F401] `backend_app.backend.state_service.Position` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 72: [F401] `backend_app.backend.state_service.OrderStatus` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 73: [F401] `backend_app.backend.reconciliation_worker.reconciliation_worker` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 85: [F401] `backend_app.core.fill_deduplication_manager.FillDeduplicationManager` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 91: [F401] `backend_app.core.cancellation_idempotency_manager.CancellationIdempotencyManager` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 742: [F841] Local variable `now` is assigned to but never used
+
+=== core\unified_execution_engine.py (7 errors) ===
+  Line 1481: [F821] Undefined name `get_global_kill_switch`
+  Line 1627: [F841] Local variable `signal_key` is assigned to but never used
+  Line 1683: [F821] Undefined name `get_global_kill_switch`
+  Line 1775: [F821] Undefined name `OrderConfirmation`
+  Line 1841: [F821] Undefined name `OrderConfirmation`
+  Line 1943: [F821] Undefined name `ReconciliationResult`
+  Line 1989: [E722] Do not use bare `except`
+
+=== backend\dag_event_loop.py (6 errors) ===
+  Line 581: [F821] Undefined name `time`
+  Line 591: [F821] Undefined name `time`
+  Line 967: [F821] Undefined name `json`
+  Line 1082: [E402] Module level import not at top of file
+  Line 1083: [E402] Module level import not at top of file
+  Line 1084: [E402] Module level import not at top of file
+
+=== backend\execution_guard.py (6 errors) ===
+  Line 249: [F841] Local variable `all_passed` is assigned to but never used
+  Line 404: [F841] Local variable `spread_pct` is assigned to but never used
+  Line 406: [F841] Local variable `volume_24h` is assigned to but never used
+  Line 1150: [F841] Local variable `symbol` is assigned to but never used
+  Line 1409: [F841] Local variable `max_risk_score` is assigned to but never used
+  Line 1794: [F841] Local variable `should_close` is assigned to but never used
+
+=== backend\metrics.py (6 errors) ===
+  Line 67: [E741] Ambiguous variable name: `l`
+  Line 73: [E741] Ambiguous variable name: `l`
+  Line 117: [E741] Ambiguous variable name: `l`
+  Line 175: [E741] Ambiguous variable name: `l`
+  Line 181: [E741] Ambiguous variable name: `l`
+  Line 187: [E741] Ambiguous variable name: `l`
+
+=== core\database_scaling.py (6 errors) ===
+  Line 94: [F401] `sqlalchemy.select` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 94: [F401] `sqlalchemy.insert` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 94: [F401] `sqlalchemy.update` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 94: [F401] `sqlalchemy.delete` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 489: [F841] Local variable `result` is assigned to but never used
+  Line 542: [F841] Local variable `result` is assigned to but never used
+
+=== core\models\execution_record.py (6 errors) ===
+  Line 18: [E402] Module level import not at top of file
+  Line 21: [E402] Module level import not at top of file
+  Line 23: [E402] Module level import not at top of file
+  Line 24: [E402] Module level import not at top of file
+  Line 264: [E402] Module level import not at top of file
+  Line 265: [E402] Module level import not at top of file
+
+=== alembic\env.py (5 errors) ===
+  Line 12: [E402] Module level import not at top of file
+  Line 13: [E402] Module level import not at top of file
+  Line 30: [E402] Module level import not at top of file
+  Line 31: [E402] Module level import not at top of file
+  Line 33: [E402] Module level import not at top of file
+
+=== backend\dag_engine.py (5 errors) ===
+  Line 372: [F841] Local variable `threshold` is assigned to but never used
+  Line 502: [F821] Undefined name `prepared`
+  Line 513: [F821] Undefined name `prepared`
+  Line 648: [F841] Local variable `valid_signal_source` is assigned to but never used
+  Line 898: [F821] Undefined name `result`
+
+=== backend\distributed_execution\orphan_recovery_manager.py (5 errors) ===
+  Line 415: [F821] Undefined name `time`
+  Line 528: [F821] Undefined name `time`
+  Line 553: [F821] Undefined name `time`
+  Line 582: [F821] Undefined name `time`
+  Line 608: [F821] Undefined name `time`
+
+=== backend\observability\optimized_tracing.py (5 errors) ===
+  Line 24: [F401] `opentelemetry.baggage` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 24: [F401] `opentelemetry.context` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 27: [F401] `opentelemetry.sdk.trace.Span` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 33: [F401] `opentelemetry.trace.NonRecordingSpan` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 33: [F401] `opentelemetry.trace.SpanContext` imported but unused; consider using `importlib.util.find_spec` to test for availability
+
+=== routers\strategies.py (5 errors) ===
+  Line 663: [F821] Undefined name `validate_dag`
+  Line 720: [E722] Do not use bare `except`
+  Line 744: [F811] Redefinition of unused `get_strategy` from line 33: `get_strategy` redefined here
+  Line 1304: [F841] Local variable `stop_loss_pct` is assigned to but never used
+  Line 1305: [F841] Local variable `take_profit_pct` is assigned to but never used
+
+=== api\main.py (4 errors) ===
+  Line 54: [E402] Module level import not at top of file
+  Line 69: [E402] Module level import not at top of file
+  Line 70: [E402] Module level import not at top of file
+  Line 79: [E402] Module level import not at top of file
+
+=== backend\distributed_execution\sequence_manager.py (4 errors) ===
+  Line 197: [F821] Undefined name `json`
+  Line 253: [F821] Undefined name `json`
+  Line 288: [F821] Undefined name `json`
+  Line 344: [F821] Undefined name `json`
+
+=== backend\distributed_execution\worker_registry.py (4 errors) ===
+  Line 449: [F821] Undefined name `total_capacity`
+  Line 449: [F841] Local variable `total_capacity` is assigned to but never used
+  Line 451: [F821] Undefined name `active_capacity`
+  Line 451: [F841] Local variable `active_capacity` is assigned to but never used
+
+=== backend\exchange_reconciliation.py (4 errors) ===
+  Line 146: [F841] Local variable `db_orders_by_execution_id` is assigned to but never used
+  Line 339: [F841] Local variable `total_size` is assigned to but never used
+  Line 368: [F841] Local variable `transition` is assigned to but never used
+  Line 423: [F841] Local variable `transition` is assigned to but never used
+
+=== backend\observability\optimized_metrics_exporter.py (4 errors) ===
+  Line 375: [F841] Local variable `execution_rate` is assigned to but never used
+  Line 523: [F821] Undefined name `web`
+  Line 536: [F821] Undefined name `web`
+  Line 543: [F821] Undefined name `web`
+
+=== backend\portfolio_management.py (4 errors) ===
+  Line 242: [F811] Redefinition of unused `close` from line 215: `close` redefined here
+  Line 995: [F821] Undefined name `hashlib`
+  Line 2438: [E402] Module level import not at top of file
+  Line 2439: [E402] Module level import not at top of file
+
+=== backend\state_persistence.py (4 errors) ===
+  Line 88: [F401] `sqlalchemy.Float` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 986: [E402] Module level import not at top of file
+  Line 987: [E402] Module level import not at top of file
+  Line 1022: [E402] Module level import not at top of file
+
+=== core\models\dag_task.py (4 errors) ===
+  Line 275: [E402] Module level import not at top of file
+  Line 276: [E402] Module level import not at top of file
+  Line 277: [E402] Module level import not at top of file
+  Line 464: [E402] Module level import not at top of file
+
+=== routers\orders.py (4 errors) ===
+  Line 422: [F821] Undefined name `time`
+  Line 500: [F821] Undefined name `time`
+  Line 515: [F821] Undefined name `time`
+  Line 572: [F821] Undefined name `time`
+
+=== backend\dag_engine_parallel.py (3 errors) ===
+  Line 517: [F841] Local variable `sequential_result` is assigned to but never used
+  Line 641: [E402] Module level import not at top of file
+  Line 642: [E402] Module level import not at top of file
+
+=== backend\dag_worker.py (3 errors) ===
+  Line 730: [F841] Local variable `edges` is assigned to but never used
+  Line 821: [F841] Local variable `validator` is assigned to but never used
+  Line 844: [F841] Local variable `edges` is assigned to but never used
+
+=== backend\distributed_execution\checkpoint_manager.py (3 errors) ===
+  Line 976: [F821] Undefined name `gzip`
+  Line 985: [F821] Undefined name `gzip`
+  Line 998: [E722] Do not use bare `except`
+
+=== backend\distributed_execution\execution_worker.py (3 errors) ===
+  Line 23: [F401] `backend_app.core.replay_reconstruction_engine.ReplayReconstructionEngine` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 29: [F401] `backend_app.core.worker_restart_recovery_manager.WorkerRestartRecoveryManager` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 217: [F841] Local variable `tasks` is assigned to but never used
+
+=== backend\distributed_execution\heartbeat_manager.py (3 errors) ===
+  Line 631: [F601] Dictionary key literal `"processing_rate"` repeated
+  Line 785: [F841] Local variable `health_score` is assigned to but never used
+  Line 1116: [F601] Dictionary key literal `"processing_rate"` repeated
+
+=== backend\distributed_execution\lease_manager.py (3 errors) ===
+  Line 395: [F821] Undefined name `time`
+  Line 541: [F821] Undefined name `time`
+  Line 545: [F821] Undefined name `time`
+
+=== backend\event_router.py (3 errors) ===
+  Line 302: [F841] Local variable `repo` is assigned to but never used
+  Line 376: [F821] Undefined name `Callable`
+  Line 439: [F821] Undefined name `Callable`
+
+=== backend\exchange_telemetry.py (3 errors) ===
+  Line 25: [E402] Module level import not at top of file
+  Line 28: [E402] Module level import not at top of file
+  Line 552: [F841] Local variable `reason` is assigned to but never used
+
+=== backend\observability\load_testing\tracing_overhead_benchmark.py (3 errors) ===
+  Line 214: [E722] Do not use bare `except`
+  Line 374: [F821] Undefined name `threading`
+  Line 387: [F821] Undefined name `threading`
+
+=== backend\observability\migration_manager.py (3 errors) ===
+  Line 200: [E722] Do not use bare `except`
+  Line 208: [E722] Do not use bare `except`
+  Line 219: [E722] Do not use bare `except`
+
+=== backend\order_execution_engine.py (3 errors) ===
+  Line 57: [F821] Undefined name `exchange_instance`
+  Line 58: [F821] Undefined name `max_retries`
+  Line 59: [F821] Undefined name `user_id`
+
+=== backend\websocket_cluster.py (3 errors) ===
+  Line 81: [F401] `fastapi.FastAPI` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 81: [F401] `fastapi.WebSocket` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 82: [F401] `fastapi.websockets.WebSocketState` imported but unused; consider using `importlib.util.find_spec` to test for availability
+
+=== backend\ws_event_stream.py (3 errors) ===
+  Line 24: [F401] `backend_app.backend.ws_channels.assert_valid_channel` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 407: [E722] Do not use bare `except`
+  Line 460: [E722] Do not use bare `except`
+
+=== core\dag_task_queue.py (3 errors) ===
+  Line 879: [F821] Undefined name `SessionLocal`
+  Line 888: [F821] Undefined name `UUID`
+  Line 889: [F821] Undefined name `UUID`
+
+=== core\state.py (3 errors) ===
+  Line 22: [E402] Module level import not at top of file
+  Line 23: [E402] Module level import not at top of file
+  Line 64: [E731] Do not assign a `lambda` expression, use a `def`
+
+=== backend\dag_risk_integration.py (2 errors) ===
+  Line 606: [E402] Module level import not at top of file
+  Line 607: [E402] Module level import not at top of file
+
+=== backend\distributed_execution\event_signing.py (2 errors) ===
+  Line 92: [F841] Local variable `signing_start` is assigned to but never used
+  Line 98: [F821] Undefined name `previous_hash`
+
+=== backend\distributed_execution\queue_manager.py (2 errors) ===
+  Line 23: [E402] Module level import not at top of file
+  Line 205: [F841] Local variable `score` is assigned to but never used
+
+=== backend\distributed_execution\replay_engine.py (2 errors) ===
+  Line 397: [F841] Local variable `payload` is assigned to but never used
+  Line 837: [F821] Undefined name `field`
+
+=== backend\event_listener.py (2 errors) ===
+  Line 227: [F821] Undefined name `EventRouter`
+  Line 295: [F821] Undefined name `EventRouter`
+
+=== backend\observability\file_replacement_map.py (2 errors) ===
+  Line 316: [F821] Undefined name `time`
+  Line 384: [F821] Undefined name `time`
+
+=== backend\observability\opentelemetry_tracing.py (2 errors) ===
+  Line 22: [F401] `opentelemetry.context` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  Line 35: [F401] `opentelemetry.baggage.propagation.W3CBaggagePropagator` imported but unused; consider using `importlib.util.find_spec` to test for availability
+
+=== backend\websocket_manager.py (2 errors) ===
+  Line 339: [E722] Do not use bare `except`
+  Line 364: [E722] Do not use bare `except`
+
+=== certify_runtime.py (2 errors) ===
+  Line 17: [E722] Do not use bare `except`
+  Line 205: [E722] Do not use bare `except`
+
+=== core\__init__.py (2 errors) ===
+  Line 3: [F401] `.cache.redis_manager` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  Line 4: [F401] `.state.app_state` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+
+=== core\global_safety.py (2 errors) ===
+  Line 414: [E402] Module level import not at top of file
+  Line 415: [E402] Module level import not at top of file
+
+=== core\live_engine.py (2 errors) ===
+  Line 97: [F821] Undefined name `np`
+  Line 110: [F821] Undefined name `np`
+
+=== routers\auth.py (2 errors) ===
+  Line 109: [E402] Module level import not at top of file
+  Line 110: [E402] Module level import not at top of file
+
+=== backend\distributed_execution\orchestrator.py (1 errors) ===
+  Line 231: [E722] Do not use bare `except`
+
+=== backend\distributed_execution\replay_validator.py (1 errors) ===
+  Line 1065: [F841] Local variable `events` is assigned to but never used
+
+=== backend\distributed_execution\snapshot_manager.py (1 errors) ===
+  Line 763: [E722] Do not use bare `except`
+
+=== backend\distributed_execution\standby_coordinator.py (1 errors) ===
+  Line 450: [E722] Do not use bare `except`
+
+=== backend\execution_engine.py (1 errors) ===
+  Line 2215: [F821] Undefined name `order`
+
+=== backend\indicators_backend.py (1 errors) ===
+  Line 338: [E741] Ambiguous variable name: `l`
+
+=== backend\master_executor.py (1 errors) ===
+  Line 35: [E402] Module level import not at top of file
+
+=== backend\metrics_system.py (1 errors) ===
+  Line 281: [E722] Do not use bare `except`
+
+=== backend\observability\compatibility_matrix.py (1 errors) ===
+  Line 365: [F821] Undefined name `time`
+
+=== backend\observability\health_checks.py (1 errors) ===
+  Line 131: [F841] Local variable `result` is assigned to but never used
+
+=== backend\observability\optimized_health_checks.py (1 errors) ===
+  Line 194: [F841] Local variable `result` is assigned to but never used
+
+=== backend\order_watchdog.py (1 errors) ===
+  Line 545: [E722] Do not use bare `except`
+
+=== backend\pnl_engine.py (1 errors) ===
+  Line 352: [F841] Local variable `start_date` is assigned to but never used
+
+=== backend\replay_safe_transaction_guard.py (1 errors) ===
+  Line 346: [F841] Local variable `retryable_exceptions` is assigned to but never used
+
+=== backend\state_service.py (1 errors) ===
+  Line 70: [F401] `sqlalchemy.dialects.postgresql.UUID` imported but unused; consider using `importlib.util.find_spec` to test for availability
+
+=== backend\task_recovery.py (1 errors) ===
+  Line 223: [F841] Local variable `tenant_id` is assigned to but never used
+
+=== backend\transactional_execution_manager.py (1 errors) ===
+  Line 597: [E701] Multiple statements on one line (colon)
+
+=== backend\validation\failover_validation_runner.py (1 errors) ===
+  Line 131: [F841] Local variable `current_time` is assigned to but never used
+
+=== core\database_pool.py (1 errors) ===
+  Line 48: [F401] `databases.Database` imported but unused; consider using `importlib.util.find_spec` to test for availability
+
+=== core\distributed_idempotency.py (1 errors) ===
+  Line 350: [E722] Do not use bare `except`
+
+=== core\execution_engine.py (1 errors) ===
+  Line 890: [F821] Undefined name `logger`
+
+=== core\metrics_exporter.py (1 errors) ===
+  Line 32: [F401] `prometheus_client.CONTENT_TYPE_LATEST` imported but unused; consider using `importlib.util.find_spec` to test for availability
+
+=== core\ml_safety.py (1 errors) ===
+  Line 790: [F841] Local variable `ctx` is assigned to but never used
+
+=== core\position_model.py (1 errors) ===
+  Line 293: [E722] Do not use bare `except`
+
+=== core\reconciliation_scheduler.py (1 errors) ===
+  Line 206: [F841] Local variable `alert_severity` is assigned to but never used
+
+=== core\redis_cluster.py (1 errors) ===
+  Line 76: [F401] `redis.asyncio` imported but unused; consider using `importlib.util.find_spec` to test for availability
+
+=== routers\portfolio.py (1 errors) ===
+  Line 258: [F841] Local variable `safe_uid` is assigned to but never used
+
+=== routers\support.py (1 errors) ===
+  Line 283: [F841] Local variable `result` is assigned to but never used
+
+=== test_auth.py (1 errors) ===
+  Line 6: [E402] Module level import not at top of file
+
+=== test_endpoints.py (1 errors) ===
+  Line 7: [E402] Module level import not at top of file
+
+=== test_perf.py (1 errors) ===
+  Line 5: [E402] Module level import not at top of file
+
+=== validate_financials.py (1 errors) ===
+  Line 80: [F841] Local variable `res` is assigned to but never used

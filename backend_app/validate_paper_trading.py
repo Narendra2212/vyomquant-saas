@@ -8,12 +8,12 @@ Verdict logic uses EXPLICIT failure tracking — not brittle string matching.
 """
 
 import asyncio
-import httpx
-import websockets
-import json
-import time
 import os
+import time
+
+import httpx
 import requests
+import websockets
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -63,7 +63,7 @@ def get_row_counts():
                     counts[t] = len(r.json())
                 except Exception:
                     counts[t] = -1
-        except Exception as e:
+        except Exception:
             counts[t] = -1
     return counts
 

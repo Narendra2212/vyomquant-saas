@@ -26,11 +26,10 @@ USAGE:
 """
 
 import asyncio
-import time
 import logging
-from typing import Optional, Dict, Any
+import time
 from dataclasses import dataclass
-from datetime import datetime
+from typing import Dict
 
 try:
     from backend_app.core.cache import redis_manager

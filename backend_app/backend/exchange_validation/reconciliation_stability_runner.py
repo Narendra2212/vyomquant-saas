@@ -7,10 +7,9 @@ in the strict algo trading platform.
 Author: Principal Institutional Validation Engineer
 """
 
-import logging
 import asyncio
-from typing import Dict, Any, Optional, List
-from datetime import datetime, timezone
+import logging
+from typing import Any, Dict, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
 

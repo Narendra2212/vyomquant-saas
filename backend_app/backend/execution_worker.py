@@ -23,15 +23,14 @@ import asyncio
 import json
 import logging
 import os
-from typing import Optional, Dict, Any, List
 from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, Optional
 
 import redis.asyncio as aioredis
 
-from backend_app.backend.redis_manager import get_redis_manager
-from backend_app.core.execution_engine import ExecutionEngine
 from backend_app.backend.event_publisher import get_event_publisher
+from backend_app.core.execution_engine import ExecutionEngine
 
 logger = logging.getLogger("ExecutionWorker")
 

@@ -7,12 +7,11 @@ Covers all aspects of migration validation and verification.
 Author: Senior Low-Latency Trading Infrastructure Engineer
 """
 
-from typing import Dict, List, Any, Optional
-from dataclasses import dataclass
-from enum import Enum
 import logging
 import time
-import asyncio
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("validation_checklist")
 
@@ -349,7 +348,7 @@ class ObservabilityValidationChecklist:
         missing_vars = [var for var in required_vars if not os.getenv(var)]
         return {
             'success': len(missing_vars) == 0,
-            'message': f'All required variables set' if len(missing_vars) == 0 else f'Missing variables: {missing_vars}',
+            'message': 'All required variables set' if len(missing_vars) == 0 else f'Missing variables: {missing_vars}',
             'details': {'missing_vars': missing_vars, 'required_vars': required_vars}
         }
     
@@ -375,7 +374,7 @@ class ObservabilityValidationChecklist:
         
         return {
             'success': len(missing_deps) == 0,
-            'message': f'All dependencies installed' if len(missing_deps) == 0 else f'Missing dependencies: {missing_deps}',
+            'message': 'All dependencies installed' if len(missing_deps) == 0 else f'Missing dependencies: {missing_deps}',
             'details': {'missing_deps': missing_deps, 'required_deps': dependencies}
         }
     

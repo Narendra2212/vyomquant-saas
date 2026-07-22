@@ -23,18 +23,21 @@ Execution Flow:
       ↓
   [Post-Trade Risk] ──▶ Update exposure, drawdown, limits
 """
-
 import asyncio
 import logging
-from typing import Dict, List, Any, Optional, Callable
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from enum import Enum
 import threading
-import pandas as pd
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
 
-from backend_app.backend.dag_event_loop import DAGEventLoop, Signal, MarketEvent
+import pandas as pd
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
 from backend_app.backend.dag_engine import DAGEngine
+from backend_app.backend.dag_event_loop import (DAGEventLoop, MarketEvent,
+                                                Signal)
 from backend_app.core.risk_engine import RiskEngine
 
 logger = logging.getLogger("DAGRiskIntegration")
@@ -603,8 +606,6 @@ class RiskIntegratedEventLoop(DAGEventLoop):
 # FASTAPI ENDPOINTS FOR RISK-INTEGRATED DAG
 # ═══════════════════════════════════════════════════════════════════════════
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/strategies/risk", tags=["risk-integrated-dag"])
 

@@ -8,12 +8,12 @@ buffer expansion, and sequence drift with bounded memory and async safety.
 Author: Principal Institutional Operational Validation Engineer
 """
 
-import logging
 import asyncio
-from typing import Dict, Any, Optional, List
-from datetime import datetime, timezone, timedelta
-from dataclasses import dataclass
+import logging
 from collections import deque
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
 

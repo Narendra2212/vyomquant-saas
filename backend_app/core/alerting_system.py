@@ -22,13 +22,14 @@ EXPECTED RESULT:
 ✔ No silent failures
 """
 
+import asyncio
 import json
 import logging
-import asyncio
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional, Any, Callable
+from typing import Any, Callable, Dict, List, Optional
+
 import aiohttp
 
 from backend_app.backend.redis_manager import redis_manager
@@ -323,10 +324,11 @@ class AlertingSystem:
             return
         
         try:
-            import aiosmtplib
-            from email.mime.text import MIMEText
             from email.mime.multipart import MIMEMultipart
-            
+            from email.mime.text import MIMEText
+
+            import aiosmtplib
+
             # Create message
             msg = MIMEMultipart()
             msg["From"] = self.from_email or "alerts@aerora.trading"

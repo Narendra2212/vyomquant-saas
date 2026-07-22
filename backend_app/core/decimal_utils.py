@@ -15,7 +15,7 @@ DecimalContext(precision=18) provides:
 - No floating-point representation errors
 """
 
-from decimal import Decimal, Context, ROUND_HALF_UP, setcontext
+from decimal import ROUND_HALF_UP, Context, Decimal, setcontext
 from typing import Union
 
 # ═══════════════════════════════════════════════════════════════════════════════

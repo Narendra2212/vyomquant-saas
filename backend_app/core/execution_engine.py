@@ -1,25 +1,25 @@
+import logging
+import random
+from dataclasses import dataclass, field
+from datetime import datetime
+from decimal import Decimal
+from typing import Any, Dict, List, Optional, Tuple
+from uuid import UUID
+
+from backend_app.core.database import SessionLocal
+from backend_app.core.metrics import execution_metrics
+from backend_app.core.models.execution_record import (
+    ExecutionRecordRepository, ExecutionSide, ExecutionStatus)
+from backend_app.core.risk_manager import RiskManager
+
+logger = logging.getLogger(__name__)
 """
 Production-grade Execution Engine for Paper Trading
 Simulates order execution, tracks positions, and computes PnL
 With Global Risk Guardrails integration and Idempotent Execution
 """
 
-import random
-from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass, field
-from datetime import datetime
-from uuid import UUID
-from decimal import Decimal
 
-from backend_app.core.risk_manager import RiskManager
-from backend_app.core.models.execution_record import (
-    ExecutionRecordRepository,
-    ExecutionStatus,
-    ExecutionSide,
-    generate_execution_id,
-)
-from backend_app.core.metrics import execution_metrics
-from backend_app.core.database import SessionLocal
 
 
 @dataclass
@@ -412,7 +412,10 @@ class ExecutionEngine:
         # LIVE EXECUTION PATH
         if hasattr(self, 'exchange_executor') and self.exchange_executor is not None:
             try:
-                from backend_app.core.models.pydantic_models import OrderSide, OrderType as CoreOrderType
+                from backend_app.core.models.pydantic_models import OrderSide
+                from backend_app.core.models.pydantic_models import \
+                    OrderType as CoreOrderType
+
                 # Map inputs to CCXT requirements
                 c_order_type = CoreOrderType.market if price <= Decimal("0") else CoreOrderType.limit
                 c_side = OrderSide.buy if side.lower() == "buy" else OrderSide.sell
@@ -549,7 +552,7 @@ class ExecutionEngine:
             }
             self._blocked_trades.append(blocked_record)
 
-            print(f"\n[WARNING] TRADE BLOCKED BY RISK GUARDRAIL")
+            print("\n[WARNING] TRADE BLOCKED BY RISK GUARDRAIL")
             print(f"    Symbol: {symbol}")
             print(f"    Side: {side}")
             print(f"    Size: {size}")
@@ -599,7 +602,7 @@ class ExecutionEngine:
         self._position_meta = getattr(self, '_position_meta', {})
         self._position_meta[symbol] = {"entry_fee": entry_fee}
 
-        print(f"[SUCCESS] Guardrails passed - Trade executed")
+        print("[SUCCESS] Guardrails passed - Trade executed")
         return True, f"Opened {side} position: {size} {symbol} @ {execution_price} (fee: {fee})"
     
     # ----------------------------------
@@ -1109,8 +1112,9 @@ class ExecutionEngine:
             return False
             
         try:
-            from backend_app.core.database import SessionLocal
             from sqlalchemy import text
+
+            from backend_app.core.database import SessionLocal
             
             db = SessionLocal()
             try:
