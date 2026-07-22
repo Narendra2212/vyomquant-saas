@@ -1,0 +1,62 @@
+# 05-security.yml — Security & Vulnerability Scanning Pipeline
+name: 05 Security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: '0 4 * * *' # Daily at 04:00 UTC
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  sast-scan:
+    name: Bandit SAST & Dependency Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install security scanners
+        run: pip install bandit safety
+
+      - name: Run Bandit Scan
+        run: bandit -r backend_app -f json -o reports/bandit-report.json || true
+
+      - name: Run Safety Check
+        run: safety check --json --output reports/safety-report.json || true
+
+      - name: Upload Security Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-scan-reports
+          path: reports/
+
+  container-security:
+    name: Trivy Container Vulnerability Scanner
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image for scanning
+        run: docker build -t trading-platform:scan -f Dockerfile .
+
+      - name: Run Trivy Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'trading-platform:scan'
+          format: 'table'
+          exit-code: '0'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'

@@ -630,6 +630,14 @@ async def health_live():
     return {"status": "alive"}
 
 
+#  Readiness probe (Docker HEALTHCHECK / K8s readiness) 
+@app.get("/health/ready", tags=["System"])
+async def health_ready():
+    """Minimal readiness probe — returns 200 if the process is ready to serve traffic."""
+    return {"status": "ready"}
+
+
+
 #  Stats endpoint 
 @app.get("/api/stats", tags=["Stats"])
 async def get_stats():

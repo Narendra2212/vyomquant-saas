@@ -14,33 +14,36 @@ supabase==2.7.4
 cryptography==43.0.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+PyJWT==2.13.0
+sqlalchemy==2.0.35
+alembic==1.13.3
+psycopg2-binary==2.9.9
+asyncpg==0.29.0
+databases==0.9.0
 
-# ── Redis Cache (FIX N9: was missing from original) ────────────────────
+# ── Redis Cache & Queue ────────────────────────────────────────────────
 redis==5.0.8
+rq==1.16.2
 
-# ── Payment Gateways (FIX N9: both were missing from original) ─────────
+# ── Payment Gateways ────────────────────────────────────────────────────
 stripe==10.8.0
 razorpay==1.4.1
 
 # ── Exchange Connectivity ───────────────────────────────────────────────
 ccxt[async]==4.3.92
 aiohttp==3.10.5
-toolz==0.12.1  # Required by ccxt, pin version to avoid TypeError
-
-# ── DEV MODE NOTE ───────────────────────────────────────────────────────
-# To run in DEV_MODE without Supabase/QuestDB:
-#   set DEV_MODE=true (or ENV=development)
-#   pip install fastapi uvicorn websockets python-multipart redis pydantic httpx
+toolz==0.12.1
 
 # ── Numba + Numeric stack ───────────────────────────────────────────────
 numba==0.60.0
 numpy==1.26.4
 pandas==2.2.2
+scipy==1.14.0
 
 # ── Backtesting ─────────────────────────────────────────────────────────
 vectorbt==0.26.2
-plotly==5.22.0      # vectorbt dependency
-ta==0.11.0          # vectorbt dependency
+plotly==5.22.0
+ta==0.11.0
 
 # ── ML / Tree Models ────────────────────────────────────────────────────
 xgboost==2.1.1
@@ -49,26 +52,26 @@ catboost==1.2.3
 scikit-learn==1.5.1
 joblib==1.4.2
 
-# ── Deep Learning (FIX N9: tensorflow was missing) ─────────────────────
-tensorflow==2.16.1   # For LSTM, GRU, Transformer, Autoencoder blocks
+# ── Deep Learning ───────────────────────────────────────────────────────
+tensorflow==2.16.1
+torch==2.3.1
 
-# ── Utilities ───────────────────────────────────────────────────────────
+# ── Utilities & Observability ────────────────────────────────────────────
 python-dotenv==1.0.1
 pydantic[email]==2.8.2
 pydantic-settings==2.4.0
 httpx==0.27.0
 wsproto==1.2.0
-sentry-sdk[fastapi]>=2.0.0
-
-# ── Observability ───────────────────────────────────────────────────────
-prometheus-client>=0.17.0
-asgi-correlation-id>=4.3.0
-
-aiosmtplib==3.0.1
-asyncpg==0.29.0
-PyJWT==2.13.0
-rq==1.16.2
-scipy==1.14.0
+prometheus-client==0.20.0
+sentry-sdk[fastapi]==2.11.0
 slowapi==0.1.9
-sqlalchemy==2.0.35
-psycopg2-binary==2.9.9
+psutil==6.0.0
+opentelemetry-api==1.25.0
+opentelemetry-sdk==1.25.0
+opentelemetry-instrumentation-fastapi==0.46b0
+elasticsearch==8.14.0
+aiosmtplib==3.0.1
+asgi-correlation-id==4.3.1
+requests==2.32.3
+sse-starlette==2.1.3
+tiktoken==0.7.0
