@@ -9,15 +9,16 @@ FIXES APPLIED:
 
 import asyncio
 import logging
-import os
 import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from backend_app.core.models import RiskSettingsRequest, KillSwitchRequest, StrategyLimit, StrategyLimitsRequest
-from backend_app.core.dependencies import get_current_user, get_vault, get_alert, get_ws_manager, DEV_MODE, create_request_supabase
 
-from backend_app.backend.connection_engine import get_or_create_exchange
+from backend_app.core.dependencies import (create_request_supabase, get_alert,
+                                           get_current_user, get_vault,
+                                           get_ws_manager)
+from backend_app.core.models import (KillSwitchRequest, RiskSettingsRequest,
+                                     StrategyLimitsRequest)
 
 router = APIRouter()
 logger = logging.getLogger("RiskRouter")

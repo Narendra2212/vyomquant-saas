@@ -8,14 +8,14 @@ Author: Principal HFT Infrastructure Engineer
 """
 
 import asyncio
-import time
-import random
 import logging
-from typing import Dict, List, Any, Optional
-from dataclasses import dataclass, asdict
+import random
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
 import aiohttp
-import json
 
 logger = logging.getLogger("replay_storm_simulator")
 
@@ -157,7 +157,7 @@ class ReplayStormSimulator:
         """Collect system metrics during simulation."""
         try:
             import psutil
-            
+
             # CPU usage
             cpu_percent = psutil.cpu_percent(interval=0.1)
             

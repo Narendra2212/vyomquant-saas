@@ -1,3 +1,4 @@
+
 """
 Live Exchange Executor
 
@@ -22,18 +23,17 @@ STEP 6.4: NEVER assume FILLED - wait for exchange event
 STEP 6.8: Sandbox mode for testing
 STEP 6.10: Security - NEVER log API keys
 """
-
 import asyncio
 import logging
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_DOWN
-from enum import Enum
-from typing import Dict, Optional, Any, List, Tuple
 from datetime import datetime
-import time
+from decimal import ROUND_DOWN, Decimal
+from enum import Enum
+from typing import Any, Dict, Optional
 
-from sqlalchemy.orm import Session
+from backend_app.backend.state_service import OrderStatus
 
 # STEP 6.2: CCXT async support
 # Note: CCXT must be installed: pip install ccxt
@@ -171,7 +171,7 @@ class CircuitBreaker:
             result = await func(*args, **kwargs)
             await self._on_success()
             return result
-        except Exception as e:
+        except Exception:
             await self._on_failure()
             raise
     
@@ -789,7 +789,7 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             
             logger.info(f"CANCEL ORDER: {exchange_order_id} | {symbol}")
             
-            response = await self._exchange.cancel_order(exchange_order_id, ccxt_symbol)
+            await self._exchange.cancel_order(exchange_order_id, ccxt_symbol)
             
             return CancelResult(
                 success=True,
@@ -913,10 +913,8 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             MissingClientOrderIdError: If client_order_id is missing/empty
             DuplicateOrderError: If duplicate detected with processing stuck
         """
-        from backend_app.core.distributed_idempotency import (
-            get_idempotency_layer,
-            MissingClientOrderIdError
-        )
+        from backend_app.core.distributed_idempotency import \
+            get_idempotency_layer
         
         idempotency = get_idempotency_layer()
         
@@ -974,9 +972,9 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
         Returns:
             OrderResult with confirmed status from exchange
         """
-        from datetime import datetime, timedelta
         import asyncio
-        
+        from datetime import datetime
+
         # STEP 2: PLACE ORDER FIRST
         logger.info(
             f"STEP 2: Placing {order_type} order {side} {amount} {symbol} "

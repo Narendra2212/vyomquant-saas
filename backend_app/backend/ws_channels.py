@@ -6,7 +6,7 @@ Aligned with frontend wsChannels.js
 """
 
 from enum import Enum
-from typing import Set, Dict, Any
+from typing import Any, Dict, Set
 
 
 class ChannelType(str, Enum):

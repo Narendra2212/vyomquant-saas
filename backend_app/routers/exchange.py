@@ -7,14 +7,16 @@ FIXES:
 """
 
 import logging
+
 from fastapi import APIRouter, Depends, HTTPException
-from supabase import Client as SupabaseClient
 
-from backend_app.core.models import ExchangeKeysRequest, TestConnectionRequest
-from backend_app.core.dependencies import get_current_user, get_vault, get_request_supabase, DEV_MODE
-
-from backend_app.backend.connection_engine import ConnectionEngine, release_exchange
+from backend_app.backend.connection_engine import (ConnectionEngine,
+                                                   release_exchange)
 from backend_app.backend.data_seeking_engine import DataEngine
+from backend_app.core.dependencies import (get_current_user,
+                                           get_request_supabase, get_vault)
+from backend_app.core.models import ExchangeKeysRequest, TestConnectionRequest
+from supabase import Client as SupabaseClient
 
 router = APIRouter()
 logger = logging.getLogger("ExchangeRouter")

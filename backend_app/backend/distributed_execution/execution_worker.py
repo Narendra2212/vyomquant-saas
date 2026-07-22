@@ -8,26 +8,24 @@ Author: Principal Distributed Trading Systems Architect
 """
 
 import asyncio
-import json
+import logging
 import time
 import uuid
-from decimal import Decimal
 from datetime import datetime, timezone
+from decimal import Decimal
 from enum import Enum
-from typing import Dict, List, Optional, Any, Callable
-import logging
+from typing import Any, Dict, Optional
 
-from .queue_manager import ExecutionJob, JobStatus, queue_manager
 from backend_app.backend.exchange_telemetry import exchange_telemetry
 
+from .queue_manager import ExecutionJob, JobStatus, queue_manager
+
 try:
-    from backend_app.core.replay_reconstruction_engine import ReplayReconstructionEngine
     REPLAY_RECONSTRUCTION_AVAILABLE = True
 except ImportError:
     REPLAY_RECONSTRUCTION_AVAILABLE = False
 
 try:
-    from backend_app.core.worker_restart_recovery_manager import WorkerRestartRecoveryManager
     WORKER_RESTART_RECOVERY_AVAILABLE = True
 except ImportError:
     WORKER_RESTART_RECOVERY_AVAILABLE = False
@@ -215,7 +213,7 @@ class ExecutionWorker:
             self.running = True
             
             # Start worker loops
-            tasks = [
+            [
                 asyncio.create_task(self._job_processing_loop()),
                 asyncio.create_task(self._heartbeat_loop()),
                 asyncio.create_task(self._timeout_monitor_loop())

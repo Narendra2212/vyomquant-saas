@@ -15,13 +15,14 @@ Key Features:
 Author: Principal Institutional Algo Execution Validation Engineer
 """
 
+import hashlib
 import logging
 import uuid
-import hashlib
-from typing import Optional, Dict, Any
 from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
+
 from .immutable_journal import immutable_journal
 
 logger = logging.getLogger("idempotent_exchange_submission")

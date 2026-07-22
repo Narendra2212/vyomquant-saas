@@ -1,16 +1,18 @@
+
 """
 Live Trading Engine for Paper Trading
 Runs trading logic continuously in real-time
 """
-
-import time
 import threading
-from typing import Dict, List, Callable, Optional
+import time
 from datetime import datetime
+from typing import Callable, Dict, List, Optional
+
+import numpy as np
 import pandas as pd
 
-from backend_app.core.portfolio_engine import PortfolioEngine
 from backend_app.core.execution_engine import ExecutionEngine
+from backend_app.core.portfolio_engine import PortfolioEngine
 from backend_app.core.risk_engine import RiskEngine
 from backend_app.strategies.aggregator import StrategyAggregator
 
@@ -149,7 +151,7 @@ class LiveTradingEngine:
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
         
-        print(f"🚀 Live Trading Engine started")
+        print("🚀 Live Trading Engine started")
         print(f"   Symbols: {self.symbols}")
         print(f"   Interval: {interval}s")
         print(f"   Initial Equity: {self.risk.current_equity:.2f}")
@@ -412,3 +414,4 @@ class LiveTradingEngine:
             Dictionary of positions
         """
         return self.execution.get_positions()
+

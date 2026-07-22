@@ -17,25 +17,25 @@ PREVIOUS FIXES:
   N4:     Cache invalidated immediately after successful payment.
 """
 
-import os
-import json
-import hmac
 import hashlib
+import hmac
+import json
 import logging
+import os
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Header
-
-from backend_app.core.schemas import CheckoutRequest
-from backend_app.core.models import (
-    PaymentMethod, AddPaymentMethodRequest, PaymentMethodModel,
-)
-from backend_app.core.dependencies import get_current_user, invalidate_profile_cache, DEV_MODE, create_request_supabase
-
+from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
+                     HTTPException, Request)
 # F-20: get_db retained ONLY for PaymentMethodModel display endpoints.
 # Subscription tiers and invoice state are stored exclusively in Supabase.
 from sqlalchemy.orm import Session
+
 from backend_app.core.database import get_db
+from backend_app.core.dependencies import (DEV_MODE, create_request_supabase,
+                                           get_current_user,
+                                           invalidate_profile_cache)
+from backend_app.core.models import AddPaymentMethodRequest, PaymentMethodModel
+from backend_app.core.schemas import CheckoutRequest
 
 router = APIRouter()
 logger = logging.getLogger("BillingRouter")

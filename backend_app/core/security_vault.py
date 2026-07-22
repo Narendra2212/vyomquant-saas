@@ -5,8 +5,8 @@ Provides a secure interface to Supabase with safe fallback mode.
  Falls back gracefully if Supabase is not configured.
 """
 
-from supabase import create_client
 from backend_app.core.config import settings
+from supabase import create_client
 
 
 class SecurityVault:

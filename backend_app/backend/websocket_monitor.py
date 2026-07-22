@@ -36,20 +36,18 @@ Usage:
 """
 
 import asyncio
-import time
-import threading
 import logging
-from typing import Dict, Optional, Callable, Any, List
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
 
 # STEP 8.1: Import metrics for tracking
-from backend_app.backend.metrics import (
-    record_websocket_disconnect,
-    record_websocket_connect,
-    record_websocket_close,
-)
+from backend_app.backend.metrics import (record_websocket_close,
+                                         record_websocket_connect,
+                                         record_websocket_disconnect)
 
 logger = logging.getLogger("WebSocketMonitor")
 

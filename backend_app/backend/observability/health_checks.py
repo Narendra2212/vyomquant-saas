@@ -8,12 +8,12 @@ Author: Senior Institutional Systems Architect
 """
 
 import asyncio
-import time
-from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Callable
-from dataclasses import dataclass, asdict
-from enum import Enum
 import logging
+import time
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("health_checks")
 
@@ -128,7 +128,7 @@ class DatabaseHealthChecker(HealthChecker):
         try:
             # Test database connection
             async with self.connection_pool.acquire() as conn:
-                result = await conn.execute(self.check_query)
+                await conn.execute(self.check_query)
                 await conn.fetchone()
             
             duration_ms = (time.time() - start_time) * 1000
@@ -499,7 +499,7 @@ class SystemHealthChecker(HealthChecker):
         """Check system resources."""
         try:
             import psutil
-            
+
             # CPU check
             cpu_percent = psutil.cpu_percent(interval=1)
             

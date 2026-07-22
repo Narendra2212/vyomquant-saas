@@ -32,10 +32,9 @@ Features:
 """
 
 import asyncio
-import json
 import logging
-from typing import Dict, Set, Optional, Any, List
 from datetime import datetime
+from typing import Any, Dict, Optional, Set
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -337,7 +336,7 @@ class WebSocketManager:
             for client_id, connection in clients.items():
                 try:
                     await connection.websocket.close()
-                except:
+                except Exception:
                     pass
         
         self._connections.clear()
@@ -362,7 +361,7 @@ class WebSocketManager:
                                 "timestamp": datetime.utcnow().isoformat()
                             })
                             connection.last_ping = datetime.utcnow()
-                        except:
+                        except Exception:
                             self.disconnect(tenant_id, client_id)
                             
             except asyncio.CancelledError:
@@ -413,13 +412,14 @@ async def websocket_endpoint(
         ws.send(JSON.stringify({"action": "subscribe", "channel": "orders"}));
     """
     # Authenticate and get tenant_id from token
-    from backend_app.core.auth import verify_token  # Assuming auth module exists
+    from backend_app.core.auth import \
+        verify_token  # Assuming auth module exists
     
     try:
         user = verify_token(token)
         tenant_id = str(user.tenant_id)
         client_id = f"{tenant_id}_{id(websocket)}"
-    except Exception as e:
+    except Exception:
         await websocket.close(code=1008, reason="Invalid token")
         return
     

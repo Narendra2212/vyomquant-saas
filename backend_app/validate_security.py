@@ -4,12 +4,13 @@ Validates tenant isolation and authorization boundaries.
 Runtime evidence only.
 """
 import asyncio
+import json
 import os
 import time
-import json
-import jwt
+from datetime import datetime
+
 import httpx
-from datetime import datetime, timedelta
+import jwt
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -225,11 +226,11 @@ async def run_security_tests():
         
         if ws_rejected:
             passes.append("TEST_4")
-            md.append(f"- ✅ **PASS**: WebSocket rejected cross-tenant subscription")
+            md.append("- ✅ **PASS**: WebSocket rejected cross-tenant subscription")
             md.append(f"  - Detail: `{ws_error_msg}`")
         else:
             failures.append("TEST_4_WS_CROSS_TENANT")
-            md.append(f"- ❌ **FAIL**: WebSocket allowed cross-tenant subscription")
+            md.append("- ❌ **FAIL**: WebSocket allowed cross-tenant subscription")
             md.append(f"  - Detail: `{ws_error_msg}`")
         md.append("")
         
@@ -387,7 +388,7 @@ async def run_security_tests():
         
         if len(rls_strats) == 0:
             passes.append("TEST_8a")
-            md.append(f"- ✅ **PASS (8a)**: RLS blocks User A from reading User B strategies via Supabase REST")
+            md.append("- ✅ **PASS (8a)**: RLS blocks User A from reading User B strategies via Supabase REST")
             md.append(f"  - Returned {len(rls_strats)} rows")
         else:
             failures.append("TEST_8a_RLS_STRATEGIES")
@@ -402,11 +403,11 @@ async def run_security_tests():
         
         if isinstance(rls_execs, list) and len(rls_execs) == 0:
             passes.append("TEST_8b")
-            md.append(f"- ✅ **PASS (8b)**: RLS blocks User A from reading User B execution_records")
+            md.append("- ✅ **PASS (8b)**: RLS blocks User A from reading User B execution_records")
         elif isinstance(rls_execs, dict) and rls_execs.get("code"):
             # RLS might return an error
             passes.append("TEST_8b")
-            md.append(f"- ✅ **PASS (8b)**: RLS returned error for User A querying User B records")
+            md.append("- ✅ **PASS (8b)**: RLS returned error for User A querying User B records")
             md.append(f"  - Error: `{json.dumps(rls_execs)[:200]}`")
         else:
             failures.append("TEST_8b_RLS_EXECUTIONS")
@@ -428,13 +429,13 @@ async def run_security_tests():
             
             if isinstance(rls_update, list) and len(rls_update) == 0:
                 passes.append("TEST_8c")
-                md.append(f"- ✅ **PASS (8c)**: RLS blocks User A from updating User B's strategy")
+                md.append("- ✅ **PASS (8c)**: RLS blocks User A from updating User B's strategy")
             elif resp.status_code in (401, 403):
                 passes.append("TEST_8c")
                 md.append(f"- ✅ **PASS (8c)**: RLS rejected update with {resp.status_code}")
             else:
                 failures.append("TEST_8c_RLS_UPDATE")
-                md.append(f"- ❌ **FAIL (8c)**: RLS allowed User A to update User B's strategy")
+                md.append("- ❌ **FAIL (8c)**: RLS allowed User A to update User B's strategy")
                 md.append(f"  - Response: `{resp.text[:200]}`")
         
         # 8d. User A attempts to DELETE User B's strategy directly via Supabase
@@ -451,13 +452,13 @@ async def run_security_tests():
             
             if isinstance(rls_delete, list) and len(rls_delete) == 0:
                 passes.append("TEST_8d")
-                md.append(f"- ✅ **PASS (8d)**: RLS blocks User A from deleting User B's strategy")
+                md.append("- ✅ **PASS (8d)**: RLS blocks User A from deleting User B's strategy")
             elif resp.status_code in (401, 403):
                 passes.append("TEST_8d")
                 md.append(f"- ✅ **PASS (8d)**: RLS rejected delete with {resp.status_code}")
             else:
                 failures.append("TEST_8d_RLS_DELETE")
-                md.append(f"- ❌ **FAIL (8d)**: RLS allowed User A to delete User B's strategy")
+                md.append("- ❌ **FAIL (8d)**: RLS allowed User A to delete User B's strategy")
                 md.append(f"  - Response: `{resp.text[:200]}`")
         md.append("")
     

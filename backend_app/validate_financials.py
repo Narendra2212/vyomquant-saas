@@ -1,15 +1,15 @@
 import asyncio
-from decimal import Decimal, ROUND_HALF_UP
 import datetime
-from typing import Any
-import sys
 import os
+import sys
+from decimal import Decimal
+from typing import Any
+
+from backend_app.core.execution_engine import ExecutionEngine
 
 # Add path so we can import core
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from backend_app.core.execution_engine import ExecutionEngine, Position
-from backend_app.core.risk_manager import RiskManager
 
 passes = []
 failures = []
@@ -78,7 +78,7 @@ def test_3_partial_sell():
     # Sell 1 BTC at 60000 using handle_partial_fill
     # handle_partial_fill deducts fee from equity and returns PNL in closed_pnl
     fee_sell = Decimal("60000") * Decimal("1") * Decimal("0.001") # 60
-    res = engine.handle_partial_fill("BTC", Decimal("1"), Decimal("60000"), Decimal("1"), "sell", fee_sell)
+    engine.handle_partial_fill("BTC", Decimal("1"), Decimal("60000"), Decimal("1"), "sell", fee_sell)
     
     pos = engine.positions.get("BTC")
     record_result("T3_EXPECTED_QTY", 1, pos.size)

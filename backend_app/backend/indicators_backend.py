@@ -335,8 +335,8 @@ def fisher_transform(high, low, window=10):
     hl2 = (high + low) / 2.0
     for i in range(int(window) - 1, n):
         h = np.max(hl2[i - int(window) + 1 : i + 1])
-        l = np.min(hl2[i - int(window) + 1 : i + 1])
-        value = 2.0 * ((hl2[i] - l) / (h - l + EPS) - 0.5)
+        low = np.min(hl2[i - int(window) + 1 : i + 1])
+        value = 2.0 * ((hl2[i] - low) / (h - low + EPS) - 0.5)
         value = np.clip(value, -0.999, 0.999)
         out[i] = 0.5 * np.log((1 + value) / (1 - value))
     return out

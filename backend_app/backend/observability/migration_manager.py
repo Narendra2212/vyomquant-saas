@@ -8,13 +8,11 @@ Author: Senior Low-Latency Trading Infrastructure Engineer
 """
 
 import asyncio
-import os
-import time
 import logging
-from typing import Dict, Any, Optional, Callable
-from enum import Enum
+import time
 from dataclasses import dataclass
-import importlib
+from enum import Enum
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger("migration_manager")
 
@@ -83,10 +81,10 @@ class SafeMigrationManager:
         """Load original observability modules."""
         try:
             # Import original modules
-            import backend_app.backend.observability.metrics_exporter as original_metrics
-            import backend_app.backend.observability.health_checks as original_health
-            import backend_app.backend.observability.opentelemetry_tracing as original_tracing
             import backend_app.backend.logging_config as original_logging
+            import backend_app.backend.observability.health_checks as original_health
+            import backend_app.backend.observability.metrics_exporter as original_metrics
+            import backend_app.backend.observability.opentelemetry_tracing as original_tracing
             
             self.original_modules = {
                 'metrics': original_metrics,
@@ -105,10 +103,10 @@ class SafeMigrationManager:
         """Load optimized observability modules."""
         try:
             # Import optimized modules
-            import backend_app.backend.observability.optimized_metrics_exporter as optimized_metrics
             import backend_app.backend.observability.optimized_health_checks as optimized_health
-            import backend_app.backend.observability.optimized_tracing as optimized_tracing
             import backend_app.backend.observability.optimized_logging as optimized_logging
+            import backend_app.backend.observability.optimized_metrics_exporter as optimized_metrics
+            import backend_app.backend.observability.optimized_tracing as optimized_tracing
             
             self.optimized_modules = {
                 'metrics': optimized_metrics,
@@ -199,7 +197,7 @@ class SafeMigrationManager:
         try:
             import psutil
             return psutil.virtual_memory().percent
-        except:
+        except Exception:
             return 0.0
     
     def _get_cpu_usage(self) -> float:
@@ -207,7 +205,7 @@ class SafeMigrationManager:
         try:
             import psutil
             return psutil.cpu_percent(interval=None)
-        except:
+        except Exception:
             return 0.0
     
     def _test_response_time(self) -> float:
@@ -218,7 +216,7 @@ class SafeMigrationManager:
         try:
             # Test metrics endpoint if available
             pass
-        except:
+        except Exception:
             pass
         
         return (time.time() - start_time) * 1000  # Return in ms

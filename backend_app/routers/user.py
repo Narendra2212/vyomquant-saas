@@ -9,13 +9,16 @@ FIXES:
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query
-from supabase import Client as SupabaseClient
 
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+
 from backend_app.core.database import get_db
-from backend_app.core.models import NotificationSettingsRequest, SubscriptionModel, InvoiceModel
-from backend_app.core.dependencies import get_current_user, get_request_supabase
+from backend_app.core.dependencies import (get_current_user,
+                                           get_request_supabase)
+from backend_app.core.models import (InvoiceModel, NotificationSettingsRequest,
+                                     SubscriptionModel)
+from supabase import Client as SupabaseClient
 
 router = APIRouter()
 logger = logging.getLogger("UserRouter")

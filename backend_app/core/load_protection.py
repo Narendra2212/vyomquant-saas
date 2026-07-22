@@ -16,12 +16,10 @@ EXPECTED RESULT:
 ✔ No system overload
 """
 
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional, Dict
+from typing import Dict, Optional
 
 from backend_app.backend.redis_manager import redis_manager
 

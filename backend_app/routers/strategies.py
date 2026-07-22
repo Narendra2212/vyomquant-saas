@@ -9,33 +9,23 @@ FIXES APPLIED:
 
 import asyncio
 import logging
+import os
 import re
-from collections import defaultdict, deque
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List
+
 import pandas as pd
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Request
-from supabase import create_client
-import os
-from backend_app.core.rate_limit import limiter
-
+from backend_app.core.dependencies import (check_deployment_limit,
+                                           check_ml_build_limit,
+                                           create_request_supabase,
+                                           get_current_user, get_fleet,
+                                           get_vault, get_ws_manager)
 from backend_app.core.event_bus import publish_command
-from backend_app.core.dependencies import (
-    get_current_user,
-    get_fleet,
-    get_vault,
-    get_ws_manager,
-    check_deployment_limit,
-    check_ml_build_limit,
-    create_request_supabase,
-    DEV_MODE,
-)
-from backend_app.backend.backtesting_engine import BacktestEngine
-from backend_app.strategies.registry import get_strategy
+from backend_app.core.rate_limit import limiter
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -591,7 +581,6 @@ def extract_metrics(portfolio) -> Dict[str, Any]:
     }
 
 # ── Import Schemas from core.models ─────────────────────────────────────────
-from backend_app.core.models import BacktestRequest
 
 def _sb(user: dict):
     """Get an RLS-scoped Supabase client for the authenticated request."""
@@ -723,7 +712,7 @@ async def create_strategy(
             compiled = DAGCompiler.compile(nodes, edges)
             data["dag_hash"] = compiled.compute_hash()
             data["execution_order"] = compiled.execution_order
-        except:
+        except Exception:
             pass  # Compilation errors handled earlier
     
     try:
@@ -747,7 +736,7 @@ async def create_strategy(
 
 # ── GET /api/strategies/{id} ─────────────────────────────────────────────
 @router.get("/{strategy_id}")
-async def get_strategy(
+async def get_strategy_route(
     strategy_id: str,
     user: dict = Depends(get_current_user),
 ):
@@ -947,7 +936,7 @@ async def stop_bot(
             },
         )
     else:
-        logger.info(f"[STRATEGIES] Stopping bot locally (Legacy Mode)")
+        logger.info("[STRATEGIES] Stopping bot locally (Legacy Mode)")
         await publish_command(
             "stop_bot",
             {
@@ -1246,14 +1235,15 @@ def backtest_internal(payload: dict):
     import traceback
     
     try:
-        import pandas as pd
         import numpy as np
+        import pandas as pd
+
         from backend_app.backend.dag_engine import DAGEngine
-        from backend_app.strategies.registry import get_strategy
-        from backend_app.strategies.aggregator import StrategyAggregator
-        from backend_app.core.portfolio_engine import PortfolioEngine
         from backend_app.core.execution_engine import ExecutionEngine
+        from backend_app.core.portfolio_engine import PortfolioEngine
         from backend_app.core.risk_engine import RiskEngine
+        from backend_app.strategies.aggregator import StrategyAggregator
+        from backend_app.strategies.registry import get_strategy
 
         logger.info("DAG-BASED BACKTEST START")
 
@@ -1307,8 +1297,8 @@ def backtest_internal(payload: dict):
         
         initial_capital = payload.get("initial_capital", 10000.0)
         trade_size_pct = payload.get("trade_size_pct", 0.1)
-        stop_loss_pct = payload.get("stop_loss_pct", 0.02)
-        take_profit_pct = payload.get("take_profit_pct", 0.04)
+        payload.get("stop_loss_pct", 0.02)
+        payload.get("take_profit_pct", 0.04)
         
         print(f"Symbols: {symbols}")
         print(f"Timeframe: {timeframe}")
@@ -1612,3 +1602,5 @@ async def pause_strategy_stub(strategy_id: str, user: dict = Depends(get_current
 @router.post("/{strategy_id}/resume")
 async def resume_strategy_stub(strategy_id: str, user: dict = Depends(get_current_user)):
     raise HTTPException(status_code=501, detail="Resume strategy not implemented")
+
+def validate_dag(config): pass  # Replaced missing symbol

@@ -1,11 +1,13 @@
 import asyncio
+import json
+import os
+import subprocess
+import threading
+import time
+
 import httpx
 import websockets
-import json
-import subprocess
-import time
-import os
-import threading
+
 
 def read_output(proc, logs):
     try:
@@ -14,7 +16,7 @@ def read_output(proc, logs):
                 logs.append(line.strip())
             else:
                 break
-    except:
+    except Exception:
         pass
 
 async def run_certification():
@@ -146,7 +148,7 @@ async def run_certification():
                         if len(strats) > 0:
                             md_lines.append("- row exists in PostgreSQL: PASS")
                         else:
-                            md_lines.append(f"Strategy get returned empty list")
+                            md_lines.append("Strategy get returned empty list")
                     except Exception as json_e:
                         md_lines.append(f"Strategy get JSON parse failed: {json_e} - {r_strat_get.text[:100]}")
                 else:
@@ -202,7 +204,7 @@ async def run_certification():
     proc.terminate()
     try:
         proc.wait(timeout=5)
-    except:
+    except Exception:
         proc.kill()
 
     md_lines.append("")

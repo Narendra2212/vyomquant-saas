@@ -34,19 +34,19 @@ Update Flow:
 └─────────────────────────────────────────────────────────────────┘
 """
 
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Optional, Dict, Any, Tuple
-from datetime import datetime
 import logging
+from datetime import datetime
+from decimal import Decimal
+from typing import Dict, Optional
 
 from sqlalchemy.orm import Session
 
-from backend_app.core.position_model import (
-    PositionModel, PositionSide, PositionStatus,
-    PositionCalculator, PositionRepository, get_position_repository,
-    PositionUpdate, PositionCreate
-)
 from backend_app.core.models.execution_record import ExecutionRecordModel
+from backend_app.core.position_model import (PositionCalculator,
+                                             PositionCreate, PositionModel,
+                                             PositionSide, PositionStatus,
+                                             PositionUpdate,
+                                             get_position_repository)
 
 logger = logging.getLogger(__name__)
 
@@ -472,7 +472,8 @@ class PositionEngine:
         """
         try:
             # Import trade history model
-            from backend_app.core.models.trade_history import TradeHistoryModel, TradeCreate
+            from backend_app.core.models.trade_history import (
+                TradeCreate, TradeHistoryModel)
             
             trade_data = TradeCreate(
                 trade_id=f"trade_{position.position_id}_{datetime.now().timestamp()}",

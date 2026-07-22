@@ -7,33 +7,32 @@ Addresses tracing overhead, memory leaks, and async safety issues.
 Author: Senior Institutional Systems Architect
 """
 
-import asyncio
+import logging
+import threading
 import time
 import uuid
-import threading
-from typing import Dict, Any, Optional, List, Callable, Set
-from contextlib import asynccontextmanager, contextmanager
-from datetime import datetime, timezone
+from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
-from collections import deque, defaultdict
-import logging
+from typing import Any, Callable, Dict, Optional, Set
 
 logger = logging.getLogger("optimized_tracing")
 
 # Conditional imports for tracing
 try:
-    from opentelemetry import trace, baggage, context
+    from opentelemetry import trace
     from opentelemetry.exporter.jaeger.thrift import JaegerExporter
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-    from opentelemetry.sdk.trace import TracerProvider, Span
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import \
+        OTLPSpanExporter
     from opentelemetry.sdk.resources import Resource
-    from opentelemetry.semconv.trace import SpanKind, SpanAttributes
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.sdk.trace.sampling import TraceIdRatioBasedSampler
+    from opentelemetry.semconv.trace import SpanAttributes, SpanKind
+# #     from opentelemetry.trace import NonRecordingSpan, SpanContext
     from opentelemetry.trace.propagation.textmap import TextMapPropagator
     from opentelemetry.trace.status import Status, StatusCode
-    from opentelemetry.trace import NonRecordingSpan, SpanContext
-    from opentelemetry.sdk.trace.sampling import TraceIdRatioBasedSampler
     
     OPENTELEMETRY_AVAILABLE = True
 except ImportError:

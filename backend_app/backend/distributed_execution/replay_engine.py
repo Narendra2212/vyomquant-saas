@@ -8,19 +8,16 @@ reconstruction mode to ensure no live execution impact.
 Author: Principal Replay and Recovery Engineer
 """
 
-import asyncio
-import time
-import uuid
-import json
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Tuple, Callable
-from dataclasses import dataclass, asdict
-from enum import Enum
 import logging
+import time
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
-from .immutable_journal import immutable_journal, ExecutionEvent, EventType
-from .sequence_manager import sequence_manager
 from .event_signing import event_signer
+from .immutable_journal import EventType, ExecutionEvent, immutable_journal
+from .sequence_manager import sequence_manager
 
 logger = logging.getLogger("replay_engine")
 
@@ -397,7 +394,7 @@ class ReplayEngine:
             # We build the state in memory for analysis and validation
             
             event_type = event.header.event_type
-            payload = event.payload
+            event.payload
             
             # Apply event based on type
             if event_type == EventType.ORDER_SUBMITTED:
@@ -837,7 +834,7 @@ class ValidationResult:
     success: bool
     validation_results: Dict[str, Any] = None
     error: Optional[str] = None
-    is_valid: bool = field(init=False)
+    is_valid: bool = None(init=False)
     
     def __post_init__(self):
         self.is_valid = self.success

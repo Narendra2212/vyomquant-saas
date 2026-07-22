@@ -8,17 +8,15 @@ persistence for HFT trading infrastructure.
 Author: Principal Distributed Execution Engineer
 """
 
-import asyncio
-import json
-import time
-import uuid
 import hashlib
 import hmac
+import json
+import logging
+import uuid
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, Optional, Any, Union
-from dataclasses import dataclass, field, asdict
-import logging
+from typing import Any, Dict, List, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
 

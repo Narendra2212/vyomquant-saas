@@ -8,9 +8,8 @@ Author: Principal Institutional Validation Engineer
 """
 
 import logging
-import asyncio
-from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
+from typing import Any, Dict, List
 
 from backend_app.core.cache.redis_manager import redis_manager
 

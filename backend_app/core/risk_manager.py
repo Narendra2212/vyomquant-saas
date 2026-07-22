@@ -3,8 +3,8 @@ Risk Manager
 Manages trading risk limits and position sizing with global guardrails.
 """
 
-from datetime import datetime, date
-from typing import Tuple, Optional
+from datetime import date
+from typing import Tuple
 
 
 class RiskManager:

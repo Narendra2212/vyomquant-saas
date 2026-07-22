@@ -6,23 +6,21 @@ Provides fault isolation, deterministic replay, and exactly-once processing guar
 
 Author: Principal Distributed Trading Systems Architect
 """
-
-import asyncio
 import json
-import time
+import logging
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
-from typing import Dict, List, Optional, Any, Callable, Set
 from decimal import Decimal
-import logging
+from enum import Enum
+from typing import Any, Dict, Optional
+
+from backend_app.core.cache.redis_manager import redis_manager
 
 logger = logging.getLogger("distributed_execution")
 
 # Import Redis manager
-from backend_app.core.cache.redis_manager import redis_manager
 
 
 class QueueType(Enum):
@@ -204,7 +202,7 @@ class RedisQueueBackend(QueueBackend):
             stream_name = self.stream_names[queue_type]
             
             # Use priority for stream ordering (higher priority = lower score)
-            score = 1000 - (job.priority.value * 100)
+            1000 - (job.priority.value * 100)
             
             message = {
                 "job_data": json.dumps(job.to_dict()),

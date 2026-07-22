@@ -13,26 +13,24 @@ Features:
   - Capital allocation limits
 """
 
-import logging
 import asyncio
-from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
-from dataclasses import dataclass
+import logging
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any, Dict, Optional
 
-from backend_app.core.tenant import TenantContext, TenantKeyBuilder, TenantQuota
-from backend_app.core.quota_errors import (
-    QuotaViolationDetails,
-    DAGQuotaExceededError,
-    ExecutionQuotaExceededError,
-    PortfolioQuotaExceededError,
-    RateLimitExceededError,
-    CapitalQuotaExceededError,
-    ConcurrentOperationQuotaError,
-    DailyLimitExceededError,
-    StorageQuotaExceededError,
-)
 from backend_app.core.cache import redis_manager
+from backend_app.core.quota_errors import (CapitalQuotaExceededError,
+                                           ConcurrentOperationQuotaError,
+                                           DAGQuotaExceededError,
+                                           DailyLimitExceededError,
+                                           ExecutionQuotaExceededError,
+                                           PortfolioQuotaExceededError,
+                                           QuotaViolationDetails,
+                                           RateLimitExceededError,
+                                           StorageQuotaExceededError)
+from backend_app.core.tenant import TenantContext, TenantKeyBuilder
 
 logger = logging.getLogger("HardQuotaEnforcer")
 

@@ -8,19 +8,17 @@ Ensures correctness, completeness, and consistency of replay operations.
 Author: Principal Replay and Recovery Engineer
 """
 
-import asyncio
-import time
-import uuid
 import json
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Tuple, Union
-from dataclasses import dataclass, asdict
-from enum import Enum
 import logging
+import time
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
-from .immutable_journal import immutable_journal, ExecutionEvent, EventType
-from .sequence_manager import sequence_manager
 from .event_signing import event_signer
+from .immutable_journal import EventType, ExecutionEvent, immutable_journal
+from .sequence_manager import sequence_manager
 
 logger = logging.getLogger("replay_validator")
 
@@ -1064,7 +1062,7 @@ class ReplayValidator:
             
             # Get replay state and events
             replay_state = await self._get_replay_state(request)
-            events = await self._get_replay_events(request)
+            await self._get_replay_events(request)
             
             # Validate logical consistency
             business_rule_violations = []

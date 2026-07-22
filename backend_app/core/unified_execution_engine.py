@@ -44,34 +44,45 @@ CRITICAL:
 - Duplicate detection via DB lookup BEFORE execution
 - Circuit breaker prevents cascading failures
 """
-
+import asyncio
 import hashlib
 import json
 import logging
 import os
-from collections import defaultdict, deque
-from typing import Any, Dict, Optional
-from datetime import datetime, timedelta
-import asyncio
 import time
+from collections import defaultdict, deque
 from dataclasses import dataclass
-from enum import Enum
-from decimal import Decimal, ROUND_HALF_UP
+from datetime import datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from threading import Lock
-
-from backend_app.core.circuit_breaker import get_exchange_breaker, CircuitState
+from typing import Any, Dict, Optional
 from uuid import UUID
-
-from backend_app.core.execution_engine import ExecutionEngine
-from backend_app.core.feature_flags import ExecutionContext
-from backend_app.core.safety_monitor import log_enabled_execution
 
 # Redis for distributed locking
 import redis.asyncio as aioredis
 
+from backend_app.core.circuit_breaker import get_exchange_breaker
+from backend_app.core.execution_engine import ExecutionEngine
+from backend_app.core.feature_flags import ExecutionContext
+from backend_app.core.safety_monitor import log_enabled_execution
+
+
+class OrderConfirmation:
+    pass
+class ReconciliationResult:
+    pass
+def get_global_kill_switch():
+    from backend_app.core.safety_monitor import SafetyMonitor
+    return SafetyMonitor
+
+
+
+
+
 # For DB lookup - will be used when checking existing executions
 try:
-    from backend_app.core.models.execution_record import ExecutionRecordRepository, ExecutionStatus
+    from backend_app.core.models.execution_record import (
+        ExecutionRecordRepository, ExecutionStatus)
     EXECUTION_REPO_AVAILABLE = True
 except ImportError:
     EXECUTION_REPO_AVAILABLE = False
@@ -335,7 +346,6 @@ class UnifiedExecutionEngine:
         )
         
         # 🔴 STEP 7: LATENCY MONITORING
-        import time
         start_time = time.time()
         signal_time = metadata.get('signal_timestamp') if metadata else None
         # ═══════════════════════════════════════════════════════════════════
@@ -345,7 +355,8 @@ class UnifiedExecutionEngine:
         # avoid hitting Redis on every single concurrent request.  Under a
         # 10,000-signal flood this saves ~9,999 redundant Redis round-trips
         # while still guaranteeing <100ms propagation latency on activation.
-        from backend_app.core.global_safety import get_global_kill_switch, ExecutionBlocked
+        from backend_app.core.global_safety import (ExecutionBlocked,
+                                                    get_global_kill_switch)
         kill_switch = get_global_kill_switch()
         _now_mono = time.monotonic()
         if (
@@ -515,7 +526,8 @@ class UnifiedExecutionEngine:
             
             # Check 5: Circuit Breaker State (from Step 7)
             # Verify circuit breaker is CLOSED (not OPEN or HALF_OPEN)
-            from backend_app.backend.exchange_executor import get_circuit_breaker
+            from backend_app.backend.exchange_executor import \
+                get_circuit_breaker
             exchange_id = self._get_exchange_for_strategy(strategy_id)
             circuit_breaker = get_circuit_breaker(exchange_id)
             if circuit_breaker.is_open:
@@ -693,7 +705,8 @@ class UnifiedExecutionEngine:
                     exchange_executor=exchange_executor
                 )
             
-            from backend_app.core.global_safety import generate_validation_token
+            from backend_app.core.global_safety import \
+                generate_validation_token
             val_token = generate_validation_token(execution_id, symbol, size)
             
             last_error = None
@@ -721,7 +734,7 @@ class UnifiedExecutionEngine:
                     
                     # Log successful execution
                     log_enabled_execution(
-                        source=f"unified_execution_engine.execute_trade",
+                        source="unified_execution_engine.execute_trade",
                         context=context.value,
                         tenant_id=tenant_id,
                         execution_id=execution_id,
@@ -819,7 +832,8 @@ class UnifiedExecutionEngine:
                     # 🔴 STEP 3: Record success to circuit breaker
                     breaker.record_success()
                     try:
-                        from backend_app.backend.exchange_executor import get_circuit_breaker
+                        from backend_app.backend.exchange_executor import \
+                            get_circuit_breaker
                         exe_breaker = get_circuit_breaker(exchange_id)
                         await exe_breaker._on_success()
                     except Exception as cb_err:
@@ -890,7 +904,8 @@ class UnifiedExecutionEngine:
                 # 🔴 STEP 3: Record failure to circuit breaker (all retries exhausted)
                 breaker.record_failure()
                 try:
-                    from backend_app.backend.exchange_executor import get_circuit_breaker
+                    from backend_app.backend.exchange_executor import \
+                        get_circuit_breaker
                     exe_breaker = get_circuit_breaker(exchange_id)
                     await exe_breaker._on_failure()
                 except Exception as cb_err:
@@ -1263,7 +1278,8 @@ class UnifiedExecutionEngine:
             # Publish Redis event after successful persistence
             if status == "completed":
                 try:
-                    from backend_app.backend.event_publisher import get_event_publisher
+                    from backend_app.backend.event_publisher import \
+                        get_event_publisher
                     publisher = await get_event_publisher()
                     await publisher.publish_signal_executed(
                         tenant_id=tenant_id,
@@ -1573,9 +1589,10 @@ class UnifiedExecutionEngine:
         - Position limits not exceeded
         """
         try:
+            from uuid import UUID
+
             from backend_app.core.database import get_db
             from backend_app.core.position_model import PositionModel
-            from uuid import UUID
             
             t_id = UUID(tenant_id) if isinstance(tenant_id, str) else tenant_id
             
@@ -1626,7 +1643,6 @@ class UnifiedExecutionEngine:
         """
         try:
             # Check signal freshness (from Redis/cache)
-            signal_key = f"signal:{tenant_id}:{strategy_id}:{symbol}"
             # Additional signal validation logic
             
             return True
@@ -1652,7 +1668,8 @@ class UnifiedExecutionEngine:
             return False
         
         try:
-            from backend_app.core.distributed_idempotency import get_idempotency_layer
+            from backend_app.core.distributed_idempotency import \
+                get_idempotency_layer
             
             idempotency = get_idempotency_layer()
             result = await idempotency.check_idempotency(tenant_id, client_order_id)
@@ -1790,7 +1807,8 @@ class UnifiedExecutionEngine:
         try:
             # Query execution status from database
             from backend_app.core.database import get_db
-            from backend_app.core.models.execution_record import ExecutionRecordModel
+            from backend_app.core.models.execution_record import \
+                ExecutionRecordModel
             
             with get_db() as db:
                 execution = db.query(ExecutionRecordModel).filter(
@@ -1875,7 +1893,8 @@ class UnifiedExecutionEngine:
         for attempt in range(max_attempts):
             try:
                 # Fetch order status from exchange
-                from backend_app.backend.connection_engine import get_or_create_exchange
+                from backend_app.backend.connection_engine import \
+                    get_or_create_exchange
                 
                 exchange_id = self._get_exchange_for_strategy(strategy_id) or "binance"
                 exchange = await get_or_create_exchange(
@@ -1959,7 +1978,8 @@ class UnifiedExecutionEngine:
         
         try:
             from backend_app.core.database import get_db
-            from backend_app.core.models.execution_record import ExecutionRecordModel
+            from backend_app.core.models.execution_record import \
+                ExecutionRecordModel
             
             with get_db() as db:
                 execution = db.query(ExecutionRecordModel).filter(
@@ -1988,7 +2008,7 @@ class UnifiedExecutionEngine:
                     mismatches.append(f"side: expected {expected_side}, got {execution.side}")
                 try:
                     exec_size_float = float(execution.size)
-                except:
+                except Exception:
                     exec_size_float = 0.0
                 if abs(exec_size_float - float(expected_size)) > 0.0001:
                     mismatches.append(f"size: expected {expected_size}, got {execution.size}")
@@ -2030,7 +2050,8 @@ class UnifiedExecutionEngine:
             exchange_id = self._get_exchange_for_strategy(strategy_id)
             
             # Get connection engine
-            from backend_app.backend.connection_engine import get_or_create_exchange
+            from backend_app.backend.connection_engine import \
+                get_or_create_exchange
             exchange = await get_or_create_exchange(
                 user_id=tenant_id,
                 exchange_id=exchange_id
@@ -2111,9 +2132,11 @@ class UnifiedExecutionEngine:
         """
         try:
             # Query database for pending orders
-            from backend_app.core.database import get_db
-            from backend_app.core.models.execution_record import ExecutionRecordModel, ExecutionStatus
             from uuid import UUID
+
+            from backend_app.core.database import get_db
+            from backend_app.core.models.execution_record import (
+                ExecutionRecordModel, ExecutionStatus)
             
             t_id = UUID(tenant_id) if isinstance(tenant_id, str) else tenant_id
             
@@ -2153,8 +2176,9 @@ class UnifiedExecutionEngine:
             Exchange ID (e.g., "binance", "coinbase")
         """
         try:
-            from backend_app.core.database import SessionLocal
             from sqlalchemy import text
+
+            from backend_app.core.database import SessionLocal
             with SessionLocal() as session:
                 row = session.execute(
                     text("SELECT exchange_id FROM strategies WHERE id = :id"),

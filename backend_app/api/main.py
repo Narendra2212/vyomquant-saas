@@ -21,10 +21,19 @@
 ║  RUN:  uvicorn main:app --host 0.0.0.0 --port 8000 --reload             ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
-
 import logging
-import sys
 import os
+import sys
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from backend_app.api_ws.ws_routes import ws_router
+from backend_app.core.state import app_state
+from backend_app.routers import (admin, analytics, auth, billing, exchange,
+                                 market, orders, portfolio, risk, security,
+                                 strategies, support, user)
 
 # Force stdout/stderr to be UTF-8 with fallback replacement to prevent Unicode crashes on Windows
 if sys.platform.startswith('win'):
@@ -39,10 +48,7 @@ if sys.platform.startswith('win'):
         except Exception:
             pass
 
-from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends
-from fastapi.middleware.cors import CORSMiddleware
 
 # ── Ensure project root is in path for imports ────────────────────────────
 _current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -51,23 +57,6 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ── Router imports ─────────────────────────────────────────────────────────
-from backend_app.routers import (
-    auth,
-    exchange,
-    market,
-    orders,
-    strategies,
-    portfolio,
-    risk,
-    user,
-    admin,
-    billing,
-    security,
-    analytics,
-    support,
-)
-from backend_app.api_ws.ws_routes import ws_router
-from backend_app.core.state import app_state
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s — %(message)s"
@@ -76,7 +65,7 @@ logger = logging.getLogger("Algo22")
 
 
 # ── DEV MODE: Detect development mode ─────────────────────────────────────
-import os
+
 DEV_MODE = os.environ.get("DEV_MODE", "false").lower() == "true" or \
            os.environ.get("ENV", "").lower() == "development"
 
@@ -207,7 +196,6 @@ async def health():
 
 
 # ── E2E Test Auth Validation Endpoints ─────────────────────────────────────
-from backend_app.core.dependencies import get_current_user
 
 
 
@@ -228,4 +216,5 @@ async def get_stats():
         "weekly_pnl": 0.0,
         "monthly_pnl": 0.0,
     }
+
 

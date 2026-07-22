@@ -1,3 +1,18 @@
+import asyncio
+import json
+import logging
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta
+from enum import Enum
+from typing import Any, Dict, Optional
+from uuid import UUID
+
+from backend_app.core.cache import redis_manager
+from backend_app.core.database import SessionLocal
+from backend_app.core.hard_quota_enforcer import HardQuotaEnforcer
+from backend_app.core.models.dag_task import DAGTaskCreate, DAGTaskRepository
+from backend_app.core.tenant import TenantContext
+
 """
 core/dag_task_queue.py — DAG Task Queue System.
 
@@ -87,20 +102,7 @@ Architecture:
 └─────────────────────────────────────────────────────────────────────────────┘
 """
 
-import asyncio
-import logging
-import uuid
-import json
-from typing import Dict, List, Optional, Any, Callable
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
-from enum import Enum
-from contextlib import asynccontextmanager
 
-from backend_app.core.tenant import TenantContext, TenantKeyBuilder
-from backend_app.core.hard_quota_enforcer import HardQuotaEnforcer, EnforcementContext
-from backend_app.core.cache import redis_manager
-from backend_app.core.models.dag_task import DAGTaskRepository, DAGTaskCreate, DAGTaskResponse, TaskStatus as DBTaskStatus
 
 logger = logging.getLogger("DAGTaskQueue")
 
@@ -367,9 +369,10 @@ class DAGTaskQueueManager:
         Raises:
             RuntimeError: If dual-write fails (task not lost, in DB but not queued)
         """
-        from backend_app.core.database import SessionLocal
         from uuid import UUID
-        
+
+        from backend_app.core.database import SessionLocal
+
         # Create local session if not provided
         local_session = False
         if db_session is None:
@@ -880,7 +883,9 @@ class DAGTaskQueueManager:
         # ═══════════════════════════════════════════════════════════════
         db_session = SessionLocal()
         try:
-            from backend_app.core.models.dag_task import DAGTaskRepository, TaskStatus as DBTaskStatus
+            from backend_app.core.models.dag_task import DAGTaskRepository
+            from backend_app.core.models.dag_task import \
+                TaskStatus as DBTaskStatus
             
             repo = DAGTaskRepository(db_session)
             now = datetime.utcnow()
@@ -1086,3 +1091,4 @@ class DAGTaskQueueManager:
 
 # Global instance
 dag_task_queue = DAGTaskQueueManager()
+

@@ -23,10 +23,10 @@ EXPECTED RESULT:
 """
 
 import logging
-import numpy as np
-import pandas as pd
-from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
+from typing import List, Optional
+
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 

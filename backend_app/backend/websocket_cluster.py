@@ -1,3 +1,13 @@
+import asyncio
+import json
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional, Set
+
+from fastapi import WebSocketDisconnect
+
 """
 backend/websocket_cluster.py — WEBSOCKET LAYER SCALE FOR 3000+ CONNECTIONS
 
@@ -68,18 +78,11 @@ EXPECTED RESULT:
   ✔ Horizontal scaling (add more WS instances)
 """
 
-import asyncio
-import logging
-from typing import Dict, List, Optional, Set, Any, Callable
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from enum import Enum
-import json
 
 # FastAPI/WebSocket imports
 try:
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-    from fastapi.websockets import WebSocketState
+# #     from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+#     from fastapi.websockets import WebSocketState
     FASTAPI_AVAILABLE = True
 except ImportError:
     FASTAPI_AVAILABLE = False

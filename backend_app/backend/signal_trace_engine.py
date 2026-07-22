@@ -8,15 +8,13 @@ Author: Senior DAG Observability Engineer
 """
 
 import asyncio
-import time
 import uuid
-from decimal import Decimal
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Callable, Set
+from collections import defaultdict
 from dataclasses import dataclass, field
-from enum import Enum, auto
-from collections import deque, defaultdict
-import json
+from datetime import datetime, timezone
+from decimal import Decimal
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional, Set
 
 
 class TraceStatus(Enum):

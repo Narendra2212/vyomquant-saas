@@ -7,8 +7,8 @@ accidental trade execution during system fixes.
 ⚠️ WARNING: DO NOT MODIFY WITHOUT CTO APPROVAL
 """
 
-import os
 import logging
+import os
 from enum import Enum
 from typing import Optional
 

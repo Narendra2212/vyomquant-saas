@@ -43,12 +43,10 @@ import logging
 import logging.handlers
 import sys
 import threading
-from typing import Dict, Any, Optional
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from dataclasses import dataclass, asdict
-import queue
-import asyncio
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger("LoggingConfig")
 

@@ -1,3 +1,4 @@
+
 """
 Event Router
 
@@ -29,29 +30,24 @@ Event Routing:
 STEP 5.4: Execution Engine Integration
 STEP 5.9: Idempotent processing
 """
-
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Any
 from datetime import datetime
 from decimal import Decimal
+from typing import Callable, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from backend_app.backend.event_listener import ExchangeEvent, EventType
-from backend_app.core.order_state_machine import (
-    get_order_state_machine,
-    transition_to_filled,
-    transition_to_partial_fill,
-    transition_to_cancelled,
-    transition_to_failed,
-    OrderState
-)
-from backend_app.core.models.execution_record import ExecutionRecordModel, ExecutionStatus
-from backend_app.backend.position_engine import PositionEngine, get_position_engine
-from backend_app.backend.pnl_engine import PnLEngine, get_pnl_engine
-from backend_app.backend.portfolio_engine import PortfolioEngine, get_portfolio_engine
+from backend_app.backend.event_listener import EventType, ExchangeEvent
+from backend_app.backend.pnl_engine import get_pnl_engine
+from backend_app.backend.position_engine import get_position_engine
+from backend_app.core.models.execution_record import (ExecutionRecordModel,
+                                                      ExecutionStatus)
+from backend_app.core.order_state_machine import (transition_to_cancelled,
+                                                  transition_to_failed,
+                                                  transition_to_filled,
+                                                  transition_to_partial_fill)
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +159,7 @@ class OrderEventHandler(EventHandler):
             filled_size=float(filled_size),
             avg_price=float(fill_price),
             exchange_order_id=event.order_id or "unknown",
-            reason=f"Exchange confirmed: ORDER_FILLED event"
+            reason="Exchange confirmed: ORDER_FILLED event"
         )
         
         logger.info(
@@ -200,7 +196,7 @@ class OrderEventHandler(EventHandler):
             remaining_size=float(remaining_size),
             avg_price=float(fill_price),
             exchange_order_id=event.order_id or "unknown",
-            reason=f"Exchange confirmed: PARTIAL_FILL"
+            reason="Exchange confirmed: PARTIAL_FILL"
         )
         
         logger.info(
@@ -302,7 +298,7 @@ class PositionEventHandler(EventHandler):
         # Find and close position
         from backend_app.core.position_model import get_position_repository
         
-        repo = get_position_repository(self.db)
+        get_position_repository(self.db)
         # Would need to find position by symbol and close it
         # Implementation depends on position identification logic
     
@@ -540,3 +536,4 @@ class EventRouter:
 def get_event_router(db_session: Session) -> EventRouter:
     """Get event router instance."""
     return EventRouter(db_session)
+

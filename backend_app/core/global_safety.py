@@ -29,10 +29,11 @@ EXPECTED RESULT:
 ✔ Transient Redis failures do NOT permanently deadlock the platform
 ✔ Full audit trail via HISTORY_KEY list
 """
-
 import asyncio
+import hashlib
+import hmac
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger("GlobalSafety")
@@ -292,8 +293,8 @@ class GlobalKillSwitch:
                 f"    Reason: {reason}"
             )
             raise RuntimeError(
-                f"CRITICAL: Kill switch deactivated locally but Redis update FAILED. "
-                f"Other processes may remain blocked. Manual Redis fix required."
+                "CRITICAL: Kill switch deactivated locally but Redis update FAILED. "
+                "Other processes may remain blocked. Manual Redis fix required."
             )
 
         await self._redis_lpush(self.HISTORY_KEY, history_entry)
@@ -411,8 +412,6 @@ async def enforce_kill_switch():
         )
 
 
-import hmac
-import hashlib
 
 _VALIDATION_SECRET: bytes = b"aerora_quant_risk_validation_secret_key_2026"
 

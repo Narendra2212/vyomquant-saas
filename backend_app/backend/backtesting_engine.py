@@ -14,10 +14,11 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
-import os
-import logging
 import asyncio
+import logging
+import os
 import random
+
 import numpy as np
 import pandas as pd
 
@@ -284,7 +285,7 @@ class BacktestEngine:
         # Log realistic execution parameters
         print(f"💰 Equity: ${initial_equity:.2f}")
         print(f"💸 Fee applied: {self.fees:.4f} ({self.fees*100:.2f}%)")
-        print(f"📉 Slippage applied: random.uniform(0.999, 1.001)")
+        print("📉 Slippage applied: random.uniform(0.999, 1.001)")
         print(f"📊 Spread applied: {self.spread:.4f} ({self.spread*100:.2f}%)")
         
         # Convert sizes to entry/exit signals for from_signals

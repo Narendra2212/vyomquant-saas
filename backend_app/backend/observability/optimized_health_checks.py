@@ -8,14 +8,14 @@ Author: Senior Institutional Systems Architect
 """
 
 import asyncio
-import time
-import threading
-from typing import Dict, List, Any, Optional, Callable, Set
-from datetime import datetime, timezone
-from dataclasses import dataclass, asdict
-from enum import Enum
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import logging
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("optimized_health_checks")
 
@@ -191,7 +191,7 @@ class OptimizedDatabaseHealthChecker(OptimizedHealthChecker):
             # Use connection timeout and query timeout
             async def check_connection():
                 async with self.connection_pool.acquire(timeout=0.5) as conn:
-                    result = await conn.execute(self.check_query)
+                    await conn.execute(self.check_query)
                     await asyncio.wait_for(conn.fetchone(), timeout=0.5)
             
             # Run async check in event loop
@@ -404,7 +404,7 @@ class OptimizedSystemHealthChecker(OptimizedHealthChecker):
         """Check system resources with non-blocking calls."""
         try:
             import psutil
-            
+
             # Use non-blocking CPU measurement
             cpu_percent = psutil.cpu_percent(interval=None)  # Non-blocking
             

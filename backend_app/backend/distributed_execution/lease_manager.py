@@ -1,3 +1,4 @@
+
 """
 Lease Manager
 
@@ -5,24 +6,22 @@ This module implements the lease management system for Phase 3 distributed orche
 The lease manager provides distributed lease coordination, automatic renewal, conflict resolution,
 and split-brain prevention while preserving deterministic guarantees.
 """
-
 import asyncio
+import hashlib
 import json
 import logging
+import time
 import uuid
-import hashlib
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Set, Tuple
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from enum import Enum
+from typing import Any, Dict, List, Optional, Set
 
 from backend_app.core.cache.redis_manager import redis_manager
-from backend_app.core.database_pool import get_db_session
-from .orchestration_safety_guarantees import (
-    SplitBrainPreventionGuarantee,
-    AtomicTransactionGuarantee,
-    DeterministicAssignmentGuarantee
-)
+
+from .orchestration_safety_guarantees import (AtomicTransactionGuarantee,
+                                              DeterministicAssignmentGuarantee,
+                                              SplitBrainPreventionGuarantee)
 
 logger = logging.getLogger(__name__)
 

@@ -26,51 +26,80 @@
 
 """
 
-"""
-
-  ALGO22  FASTAPI MASTER SERVER                                          
-  Wires every backend engine into a production-grade async HTTP + WS API  
-
-"""
-import sys
-import os
-
-
-sys.path.append(os.path.join(os.path.dirname(__file__), "backend"))
-
-#  SYSTEM FREEZE: Import safety config FIRST to block all execution
-# This must be imported before any engine that could execute trades
-from backend_app.core.safety_config import ExecutionFlags, SafetyMonitor
-import os
-
-env_mode = os.getenv("AERORA_MODE", "safe").lower()
-if env_mode == "live":
-    ExecutionFlags.enable_live_trading()
-elif env_mode == "paper":
-    ExecutionFlags.enable_paper_trading()
-else:
-    SafetyMonitor.assert_safe_mode()  # Crash if not explicitly valid safe state
 
 import logging
+import os
+import sys
+import time
+import traceback
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi import Request
-import time
-from backend_app.core.metrics import HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION
-try:
-    from asgi_correlation_id import CorrelationIdMiddleware
-except ImportError:
-    CorrelationIdMiddleware = None
-
 import sentry_sdk
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+#  Global exception handler 
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from backend_app.api_ws.ws_routes import ws_router
+# Parallel DAG engine
+from backend_app.backend.dag_engine_parallel import \
+    router as parallel_dag_router
+# Event-driven DAG engine
+from backend_app.backend.dag_event_loop import router as event_dag_router
+# Risk-integrated DAG engine
+from backend_app.backend.dag_risk_integration import router as risk_dag_router
+# Market data validation
+from backend_app.backend.market_data_validation import \
+    router as validation_router
+from backend_app.backend.observability.sentry_config import initialize_sentry
+from backend_app.backend.order_watchdog import OrderWatchdog, WatchdogConfig
+from backend_app.backend.pnl_engine import PnLEngine
+# Portfolio management system
+from backend_app.backend.portfolio_management import \
+    router as portfolio_mgmt_router
+from backend_app.backend.startup_recovery import run_startup_recovery
+# State persistence system
+from backend_app.backend.state_persistence import router as persistence_router
+from backend_app.backend.telemetry_engine import check_questdb
+from backend_app.backend.ws_event_stream import ws_streamer
+from backend_app.core.cache import redis_manager
+#  Import config for startup validation 
+from backend_app.core.config import print_config_status, settings
+# ── Runtime Services ────────────────────────────────────────────────
+from backend_app.core.consistency_checker import (PositionConsistencyChecker,
+                                                  get_consistency_checker)
+# Database imports — ALL SQLAlchemy models must be imported here so that
+# Base.metadata.create_all() registers their tables at startup.
+from backend_app.core.database import Base, SessionLocal, engine
+# Safety feature flags
+from backend_app.core.feature_flags import ExecutionContext
+from backend_app.core.metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS_TOTAL
+from backend_app.core.models.execution_record import \
+    ExecutionRecordModel  # noqa: F401
+# Critical safety tables — must be registered before create_all()
+from backend_app.core.models.reconciliation import \
+    ReconciliationMismatchModel  # noqa: F401
+from backend_app.core.position_model import PositionModel  # noqa: F401
 from backend_app.core.rate_limit import limiter
+from backend_app.core.reconciliation_scheduler import (
+    start_reconciliation_scheduler, stop_reconciliation_scheduler)
+#  SYSTEM FREEZE: Import safety config FIRST to block all execution
+# This must be imported before any engine that could execute trades
+from backend_app.core.safety_config import ExecutionFlags, SafetyMonitor
+from backend_app.core.safety_monitor import log_blocked_execution
+from backend_app.core.security_vault import SecurityVault
+from backend_app.core.state import app_state
+#  Router imports 
+from backend_app.routers import (admin, analytics, auth, billing, exchange,
+                                 library, market, metrics, orders, portfolio,
+                                 risk, security, strategies, support, user)
+# DAG task queue
+from backend_app.routers.dag_tasks import router as dag_tasks_router
 
 # Initialize Telemetry
 sentry_dsn = os.environ.get("SENTRY_DSN")
@@ -121,33 +150,6 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
                 endpoint=request.url.path
             ).observe(duration)
 
-#  Router imports 
-from backend_app.routers import (
-    admin,
-    analytics,
-    auth,
-    billing,
-    exchange,
-    library,
-    market,
-    metrics,
-    orders,
-    portfolio,
-    risk,
-    security,
-    strategies,
-    support,
-    user,
-)
-
-# Event-driven DAG engine
-from backend_app.backend.dag_event_loop import router as event_dag_router
-
-# Parallel DAG engine
-from backend_app.backend.dag_engine_parallel import router as parallel_dag_router
-
-# Risk-integrated DAG engine
-from backend_app.backend.dag_risk_integration import router as risk_dag_router
 
 # Production execution engine
 try:
@@ -155,37 +157,6 @@ try:
 except ImportError:
     execution_router = None
 
-# Safety feature flags
-from backend_app.core.feature_flags import ExecutionFlags, ExecutionContext
-from backend_app.core.safety_monitor import log_blocked_execution
-
-# Portfolio management system
-from backend_app.backend.portfolio_management import router as portfolio_mgmt_router
-
-# Market data validation
-from backend_app.backend.market_data_validation import router as validation_router
-
-# State persistence system
-from backend_app.backend.state_persistence import router as persistence_router
-
-# DAG task queue
-from backend_app.routers.dag_tasks import router as dag_tasks_router
-
-# Database imports — ALL SQLAlchemy models must be imported here so that
-# Base.metadata.create_all() registers their tables at startup.
-from backend_app.core.database import engine, Base
-from backend_app.core.models.dag_task import DAGTaskModel
-from backend_app.core.models import SubscriptionModel, InvoiceModel, PaymentMethodModel
-# Critical safety tables — must be registered before create_all()
-from backend_app.core.models.reconciliation import ReconciliationMismatchModel  # noqa: F401
-from backend_app.core.models.execution_record import ExecutionRecordModel  # noqa: F401
-from backend_app.core.position_model import PositionModel  # noqa: F401
-
-
-from backend_app.api_ws.ws_routes import ws_router
-from backend_app.backend.ws_event_stream import ws_streamer
-from backend_app.core.state import app_state
-from backend_app.core.cache import redis_manager
 
 #  Logging setup 
 logging.basicConfig(
@@ -194,22 +165,24 @@ logging.basicConfig(
 logger = logging.getLogger("Algo22")
 
 
-#  Import config for startup validation 
-from backend_app.core.config import print_config_status, settings
-from backend_app.backend.telemetry_engine import check_questdb
-from backend_app.core.security_vault import SecurityVault
-from backend_app.backend.startup_recovery import run_startup_recovery
 
-# ── Runtime Services ────────────────────────────────────────────────
-from backend_app.core.consistency_checker import get_consistency_checker, PositionConsistencyChecker
-from backend_app.backend.order_watchdog import OrderWatchdog, WatchdogConfig
-from backend_app.backend.pnl_engine import PnLEngine
-from backend_app.core.database import SessionLocal
-from backend_app.core.reconciliation_scheduler import (
-    start_reconciliation_scheduler,
-    stop_reconciliation_scheduler,
-)
-from backend_app.backend.observability.sentry_config import initialize_sentry
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "backend"))
+
+
+
+env_mode = os.getenv("AERORA_MODE", "safe").lower()
+if env_mode == "live":
+    ExecutionFlags.enable_live_trading()
+elif env_mode == "paper":
+    ExecutionFlags.enable_paper_trading()
+else:
+    SafetyMonitor.assert_safe_mode()  # Crash if not explicitly valid safe state
+
+try:
+    from asgi_correlation_id import CorrelationIdMiddleware
+except ImportError:
+    CorrelationIdMiddleware = None
 
 # Shared runtime service status — populated during lifespan startup, read by /health/services
 _runtime_service_status: dict = {}
@@ -542,14 +515,12 @@ app.include_router(dag_tasks_router)
 app.include_router(ws_router)
 
 
-#  Global exception handler 
-from fastapi.responses import JSONResponse
-import traceback
+
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """Catch all unhandled exceptions and return structured error response"""
-    import traceback
     traceback.print_exc()
     return JSONResponse(
         status_code=500,
@@ -582,7 +553,7 @@ async def health():
     try:
         await app_state.telemetry.ping()
         service_status["questdb"] = "connected"
-    except Exception as e:
+    except Exception:
         service_status["questdb"] = "fallback/mock"
     
     # Check FleetManager
@@ -591,7 +562,7 @@ async def health():
         service_status["fleet"] = "online"
         service_status["active_bots"] = fleet_status.get("active_bots_count", 0)
         service_status["capacity"] = fleet_status.get("usage_pct", 0)
-    except Exception as e:
+    except Exception:
         service_status["fleet"] = "mock/fallback"
         service_status["active_bots"] = 0
         service_status["capacity"] = 0

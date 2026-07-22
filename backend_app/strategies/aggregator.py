@@ -3,8 +3,9 @@ Multi-Strategy Signal Aggregator
 Combines multiple strategy signals into one final decision using majority voting
 """
 
-import pandas as pd
 from typing import List
+
+import pandas as pd
 
 
 class StrategyAggregator:

@@ -7,10 +7,10 @@ institutional-grade operational validation of the strict algo trading platform.
 Author: Principal Institutional Operational Validation Engineer
 """
 
-import logging
 import json
-from typing import Dict, Any, Optional, List
-from datetime import datetime, timezone, timedelta
+import logging
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
 

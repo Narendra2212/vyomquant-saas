@@ -6,35 +6,27 @@ exchange listeners, and event routers.
 
 Author: Senior Exchange Connectivity Engineer
 """
-
 import asyncio
-import time
-from decimal import Decimal
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Callable, Awaitable, Set
-from dataclasses import dataclass, field
-from enum import Enum
-from collections import deque, defaultdict
 import logging
+import time
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from decimal import Decimal
+from enum import Enum
+from typing import Any, Dict, List, Optional, Set
+
+from backend_app.backend.bot_telemetry import BotStatus, telemetry
+from backend_app.backend.ws_event_stream import (publish_bot_health,
+                                                 publish_execution,
+                                                 publish_risk_event,
+                                                 ws_streamer)
 
 logger = logging.getLogger("exchange_telemetry")
 
 
 # Import telemetry systems — use fully-qualified paths so all modules
 # share the SAME singleton instances as the FastAPI server.
-from backend_app.backend.bot_telemetry import (
-    telemetry, BotStatus, SignalStatus, RiskEventType,
-    BotHealthMetrics
-)
-from backend_app.backend.signal_trace_engine import (
-    trace_engine, TraceStatus, NodeType, ValidationResult,
-    SignalTraceRecord, DAGNodeTrace, MLInferenceTrace,
-    RiskValidationTrace, ExecutionTrace, NodeIO
-)
-from backend_app.backend.ws_event_stream import (
-    ws_streamer, ChannelType, EventType,
-    publish_bot_health, publish_execution, publish_risk_event
-)
 
 
 class ConnectionState(Enum):
@@ -556,7 +548,7 @@ class ExchangeTelemetryHooks:
         """Handle websocket disconnect event."""
         exchange = data["exchange"]
         symbol = data["symbol"]
-        reason = data.get("reason", "unknown")
+        data.get("reason", "unknown")
         
         bot_ids = self._get_bots_for_exchange(exchange, symbol)
         for bot_id in bot_ids:

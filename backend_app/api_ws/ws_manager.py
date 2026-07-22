@@ -18,9 +18,9 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
-from typing import Dict, Set, Optional
+from typing import Dict, Optional, Set
 
-from fastapi import WebSocket, HTTPException
+from fastapi import HTTPException, WebSocket
 
 logger = logging.getLogger("WSManager")
 

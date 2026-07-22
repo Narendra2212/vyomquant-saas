@@ -8,8 +8,8 @@ Author: Principal Institutional Operational Validation Engineer
 """
 
 import logging
-from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
+from typing import Any, Dict, List
 
 from .validation_result_store import ValidationResultStore
 
@@ -156,7 +156,7 @@ class ValidationAlertManager:
         # For now, we log the action
         try:
             from backend_app.core.cache.redis_manager import redis_manager
-            
+
             # Record snapshot
             snapshot_key = f"validation_snapshot:{validator_name}"
             snapshot_data = {
@@ -185,7 +185,7 @@ class ValidationAlertManager:
         # For now, we log the action
         try:
             from backend_app.core.cache.redis_manager import redis_manager
-            
+
             # Record evidence preservation
             evidence_key = f"replay_evidence:{validator_name}"
             evidence_data = {

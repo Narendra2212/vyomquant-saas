@@ -2,9 +2,11 @@
 RSI-based trading strategy implementation with ML model integration.
 """
 
+from typing import Any, Dict, Tuple
+
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Tuple
+
 from backend_app.strategies.base import BaseStrategy
 
 

@@ -21,10 +21,11 @@ EXPECTED RESULT:
 """
 
 import logging
-from typing import Literal, Any, Dict, List, Optional
 from datetime import datetime
-import pandas as pd
+from typing import Any, Dict, Literal, Optional
+
 import numpy as np
+import pandas as pd
 
 logger = logging.getLogger("SignalValidator")
 

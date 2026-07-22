@@ -4,7 +4,8 @@ All strategies must inherit from BaseStrategy and implement generate_signals.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Tuple
+from typing import Any, Dict, Tuple
+
 import pandas as pd
 
 

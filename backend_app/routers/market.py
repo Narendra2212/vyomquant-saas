@@ -9,13 +9,14 @@ FIXES APPLIED:
 """
 
 import logging
-
-from fastapi import APIRouter, Depends, Query
 from urllib.parse import unquote
 
-from backend_app.core.dependencies import get_current_user, get_vault
-from backend_app.backend.connection_engine import get_or_create_exchange, ConnectionEngine
+from fastapi import APIRouter, Depends, Query
+
+from backend_app.backend.connection_engine import (ConnectionEngine,
+                                                   get_or_create_exchange)
 from backend_app.backend.data_seeking_engine import DataEngine
+from backend_app.core.dependencies import get_current_user, get_vault
 
 router = APIRouter()
 logger = logging.getLogger("MarketRouter")

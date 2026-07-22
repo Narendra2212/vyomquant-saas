@@ -16,12 +16,11 @@ CRITICAL: Same fill processed twice must affect position exactly once.
 
 import hashlib
 import json
+import logging
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Dict, Optional, Any, List
-from dataclasses import dataclass, asdict
-import logging
-import asyncio
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 

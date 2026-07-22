@@ -30,13 +30,13 @@ USAGE:
     print(scaling_metrics.get_prometheus_metrics())
 """
 
-import time
 import logging
 import threading
-from typing import Dict, Optional
+import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from collections import deque
+from typing import Dict, Optional
 
 logger = logging.getLogger("ScalingMetrics")
 

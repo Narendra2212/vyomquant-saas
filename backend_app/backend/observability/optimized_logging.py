@@ -10,15 +10,13 @@ Author: Senior Institutional Systems Architect
 import asyncio
 import json
 import logging
-import threading
-import queue
-import time
-from typing import Dict, Any, Optional, List
-from datetime import datetime, timezone
-from dataclasses import dataclass, asdict
-from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 import logging.handlers
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("optimized_logging")
 

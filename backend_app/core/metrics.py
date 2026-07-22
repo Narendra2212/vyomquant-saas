@@ -8,10 +8,10 @@ Provides:
 - Redis and Postgres connection tracking
 """
 
-import time
 import logging
-from typing import Dict, Any
-from prometheus_client import Counter, Histogram, Gauge
+from typing import Any, Dict
+
+from prometheus_client import Counter, Gauge, Histogram
 
 logger = logging.getLogger("Metrics")
 

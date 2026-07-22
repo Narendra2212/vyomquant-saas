@@ -7,15 +7,14 @@ deterministic replay, and audit trail capabilities.
 Author: Principal Distributed Trading Systems Architect
 """
 
-import asyncio
 import json
-import time
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
 import logging
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from backend_app.core.cache.redis_manager import redis_manager
 
 from .queue_manager import ExecutionJob, JobStatus
-from backend_app.core.cache.redis_manager import redis_manager
 
 logger = logging.getLogger("job_persistence")
 

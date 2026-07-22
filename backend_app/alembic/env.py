@@ -1,16 +1,19 @@
+import os
+import sys
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
-
 from alembic import context
+from dotenv import load_dotenv
+from sqlalchemy import engine_from_config, pool
+
+from backend_app.core.database_pool import Base
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = getattr(context, 'config', None)
 
-import os
-from dotenv import load_dotenv
+
+
 load_dotenv()
 
 DATABASE_URL=os.getenv("DATABASE_URL")
@@ -27,11 +30,9 @@ if config.config_file_name is not None:
 # add your model's MetaData object here
 # for 'autogenerate' support
 # from myapp import mymodel
-import os
-import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from backend_app.core.database_pool import Base
-from backend_app.core.models import billing, dag_task, execution_record, reconciliation, execution_tables
+
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,

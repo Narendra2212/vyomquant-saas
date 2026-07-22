@@ -35,18 +35,16 @@ Portfolio Aggregation:
 └─────────────────────────────────────────────────────────────────┘
 """
 
-from decimal import Decimal
-from typing import Dict, List, Optional, Any
+import logging
 from dataclasses import dataclass
 from datetime import datetime
-import logging
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from backend_app.core.position_model import (
-    PositionModel, PositionRepository, get_position_repository
-)
-from backend_app.backend.pnl_engine import PnLEngine, get_pnl_engine
+from backend_app.backend.pnl_engine import get_pnl_engine
+from backend_app.core.position_model import get_position_repository
 
 logger = logging.getLogger(__name__)
 

@@ -23,16 +23,15 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
-from typing import Optional, Dict, Callable, Any, Set
 from decimal import Decimal
+from enum import Enum
+from typing import Any, Callable, Dict, Optional, Set
 
-import ccxt.pro as ccxt
 from sqlalchemy import and_
 
 from backend_app.backend.connection_engine import get_or_create_exchange
+from backend_app.backend.event_listener import get_event_listener
 from backend_app.backend.redis_manager import redis_manager
-from backend_app.backend.event_listener import get_event_listener, EventType
 
 logger = logging.getLogger("ExchangeWebSocketListener")
 
@@ -305,9 +304,10 @@ class ExchangeWebSocketListener:
         Creates FillEvent and updates database with trade details using atomic manager.
         """
         try:
-            from backend_app.backend.transactional_execution_manager import TransactionalExecutionManager
+            from backend_app.backend.transactional_execution_manager import \
+                TransactionalExecutionManager
             from backend_app.core.database_pool import db_pool
-            
+
             # Extract trade information from raw data
             trades = raw_order_data.get("trades", [])
             
@@ -365,8 +365,9 @@ class ExchangeWebSocketListener:
     async def _update_order_in_db(self, event: OrderUpdateEvent):
         """Update order status in database."""
         try:
-            from backend_app.core.models.execution_record import ExecutionRecordModel
             from backend_app.core.database_pool import get_db_session
+            from backend_app.core.models.execution_record import \
+                ExecutionRecordModel
             
             async with get_db_session() as db:
                 # Find the order
@@ -414,7 +415,8 @@ class ExchangeWebSocketListener:
         """Publish order update to event bus."""
         try:
             event_bus = get_event_listener()
-            from backend_app.backend.event_listener import ExchangeEvent, EventType
+            from backend_app.backend.event_listener import (EventType,
+                                                            ExchangeEvent)
             
             evt_type = EventType.ORDER_UPDATED
             if event.event_type == OrderEventType.ORDER_FILLED:
@@ -443,7 +445,8 @@ class ExchangeWebSocketListener:
         """Publish fill event to event bus."""
         try:
             event_bus = get_event_listener()
-            from backend_app.backend.event_listener import ExchangeEvent, EventType
+            from backend_app.backend.event_listener import (EventType,
+                                                            ExchangeEvent)
             
             ex_event = ExchangeEvent(
                 event_id=f"ws_fill_{event.exchange_id}_{event.trade_id}",
@@ -499,7 +502,8 @@ class ExchangeWebSocketListener:
         Only runs if WebSocket hasn't delivered updates within timeout.
         """
         try:
-            from backend_app.backend.exchange_reconciliation import ExchangeReconciliationEngine
+            from backend_app.backend.exchange_reconciliation import \
+                ExchangeReconciliationEngine
             
             reconciler = ExchangeReconciliationEngine()
             

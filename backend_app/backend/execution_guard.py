@@ -35,11 +35,12 @@ Goal: Single centralized safety system - no trade passes without validation.
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import Dict, Any, Optional, List, Set
-from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, Dict, List, Optional
+
 import redis.asyncio as redis
 
 logger = logging.getLogger(__name__)
@@ -246,7 +247,7 @@ class ExecutionGuard:
         # Determine overall result
         has_blocks = any(r.severity == ValidationSeverity.BLOCK for r in report.results)
         has_warnings = any(r.severity == ValidationSeverity.WARNING for r in report.results)
-        all_passed = all(r.passed for r in report.results)
+        all(r.passed for r in report.results)
         
         if has_blocks:
             report.overall_passed = False
@@ -401,9 +402,9 @@ class ExecutionGuard:
         
         # Get market data
         spread_bps = Decimal(str(market_state.get("spread_bps", 0)))
-        spread_pct = Decimal(str(market_state.get("spread_pct", 0)))
+        Decimal(str(market_state.get("spread_pct", 0)))
         volatility = Decimal(str(market_state.get("volatility", 0)))
-        volume_24h = Decimal(str(market_state.get("volume_24h", 0)))
+        Decimal(str(market_state.get("volume_24h", 0)))
         liquidity_depth = Decimal(str(market_state.get("liquidity_depth", 0)))
         
         # Thresholds (can be made configurable)
@@ -1147,7 +1148,7 @@ class ExecutionGuard:
         signal: Dict[str, Any]
     ) -> ValidationResult:
         """Validate market conditions are suitable for trading."""
-        symbol = signal.get("symbol", "")
+        signal.get("symbol", "")
         spread_pct = Decimal(str(market_state.get("spread_pct", 0)))
         volatility = Decimal(str(market_state.get("volatility", 0)))
         
@@ -1406,7 +1407,7 @@ class ExecutionGuard:
         Threshold: 75 (configurable)
         """
         # Risk thresholds
-        max_risk_score = Decimal("100")
+        Decimal("100")
         risk_threshold = Decimal("75")  # Block if score > 75
         
         # Calculate 1. Exposure Risk (concentration-based)
@@ -1785,13 +1786,13 @@ async def get_audit_logs(
         List of audit log entries
     """
     import json
-    should_close = False
+    False
     
     if redis_client is None:
         # CRITICAL FIX C4: Use shared Redis pool instead of creating new connection
         from backend_app.core.cache.redis_manager import redis_manager
         redis_client = await redis_manager.get_client()
-        should_close = False  # Don't close - shared pool
+        False  # Don't close - shared pool
     
     try:
         audit_key = f"audit:execution_guard:{tenant_id}"

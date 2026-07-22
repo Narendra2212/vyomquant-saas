@@ -22,29 +22,23 @@ Parallel Architecture:
   │                                                                │
   └─────────────────────────────────────────────────────────────┘
 """
-
-import asyncio
 import logging
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Any, Optional, Set, Tuple
-from collections import defaultdict, deque
-from dataclasses import dataclass, field
-from functools import partial
 import threading
+import time
+from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Set, Tuple
 
-import pandas as pd
 import numpy as np
+import pandas as pd
+from fastapi import APIRouter, Query
+from pydantic import BaseModel
+
+from backend_app.backend.dag_engine import (ActionExecutor, IndicatorExecutor,
+                                            LogicExecutor, MLExecutor)
 
 # Import existing executors from dag_engine
-from backend_app.backend.dag_engine import (
-    NodeExecutor,
-    IndicatorExecutor,
-    MLExecutor,
-    LogicExecutor,
-    ActionExecutor,
-    logger as base_logger
-)
 
 logger = logging.getLogger("DAGEngineParallel")
 
@@ -518,7 +512,7 @@ class ParallelDAGEngine:
         # Sequential execution (single thread)
         seq_engine = SequentialDAGEngine()
         sequential_start = time.perf_counter()
-        sequential_result = seq_engine.execute_dag(nodes, edges, market_data)
+        seq_engine.execute_dag(nodes, edges, market_data)
         sequential_time = (time.perf_counter() - sequential_start) * 1000
         
         speedup = sequential_time / parallel_time if parallel_time > 0 else 1.0
@@ -642,8 +636,6 @@ class SequentialDAGEngine:
 # FASTAPI ENDPOINTS FOR PARALLEL DAG
 # ═══════════════════════════════════════════════════════════════════════════
 
-from fastapi import APIRouter, Query
-from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/strategies/dag", tags=["parallel-dag"])
 

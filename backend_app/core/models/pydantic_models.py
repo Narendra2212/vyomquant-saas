@@ -6,10 +6,11 @@ FIXES:
   MDL-2: ExecuteOrderRequest.params documented with allowed keys
 """
 
-from pydantic import BaseModel, Field, EmailStr, validator, ConfigDict
-from typing import Optional, List, Any, Dict, Literal
-from enum import Enum
 from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, validator
 
 # ── AUTH ──────────────────────────────────────────────────────────────────
 

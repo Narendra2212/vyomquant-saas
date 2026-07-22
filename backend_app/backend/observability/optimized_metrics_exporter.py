@@ -1,3 +1,4 @@
+
 """
 HFT-Optimized Prometheus Metrics Exporter
 
@@ -6,24 +7,22 @@ Addresses all critical performance and safety issues.
 
 Author: Senior Institutional Systems Architect
 """
-
-import time
 import asyncio
-import threading
-import queue
-import weakref
-from typing import Dict, Any, Optional, Set, List
-from decimal import Decimal
-from datetime import datetime, timezone
-from collections import defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor
 import logging
+import threading
+import time
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Set
+
+from aiohttp import web
 
 logger = logging.getLogger("optimized_metrics_exporter")
 
 # HFT-optimized imports
 try:
-    from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry, CONTENT_TYPE_LATEST
+    from prometheus_client import (CONTENT_TYPE_LATEST, CollectorRegistry,
+                                   Counter, Gauge, Histogram)
     from prometheus_client.exposition import generate_latest
     PROMETHEUS_AVAILABLE = True
 except ImportError:
@@ -376,7 +375,7 @@ class HFTExecutionMetrics(HFTOptimizedMetrics):
     
     async def _sample_throughput(self, exchange: str, current_time: float):
         """Sample throughput metrics."""
-        execution_rate = self._execution_count / self._sample_interval
+        self._execution_count / self._sample_interval
         success_rate = (self._success_count / self._execution_count * 100) if self._execution_count > 0 else 0
         
         await self.inc_counter(
@@ -494,7 +493,6 @@ class OptimizedMetricsCollector:
         
         # Start HTTP server
         if not self.server_started:
-            import aiohttp
             from aiohttp import web
             
             app = web.Application()
@@ -555,3 +553,4 @@ class OptimizedMetricsCollector:
 
 # Global optimized metrics collector
 optimized_metrics_collector = OptimizedMetricsCollector()
+

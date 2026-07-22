@@ -7,20 +7,17 @@ Provides job submission, monitoring, and management capabilities.
 Author: Principal Distributed Trading Systems Architect
 """
 
-import asyncio
 import logging
 from decimal import Decimal
-from typing import Dict, List, Optional, Any
-from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend_app.backend.distributed_execution import (JobPriority, JobStatus,
+                                                       execution_orchestrator,
+                                                       job_persistence)
 from backend_app.core.dependencies import get_current_user
-from backend_app.backend.distributed_execution import (
-    ExecutionOrchestrator, JobStatus, JobPriority, execution_orchestrator,
-    job_persistence
-)
 
 router = APIRouter()
 logger = logging.getLogger("distributed_execution_api")

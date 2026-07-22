@@ -1,4 +1,4 @@
-import threading
+
 """
 Circuit Breaker
 
@@ -25,15 +25,15 @@ Circuit Breaker Pattern:
 └─────────────────────────────────────────────────────────────────┘
 
 """
-
 import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional, Any, Callable
 from functools import wraps
+from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -239,7 +239,7 @@ class CircuitBreaker:
                 
                 return result
                 
-            except Exception as e:
+            except Exception:
                 latency_ms = (time.time() - start_time) * 1000
                 self.record_failure(latency_ms)
                 raise

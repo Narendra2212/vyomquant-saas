@@ -39,12 +39,12 @@ USAGE:
 """
 
 import asyncio
-import time
 import logging
-from typing import Dict, Optional, Callable, Any, List
+import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from contextlib import asynccontextmanager
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger("Backpressure")
 
@@ -243,7 +243,7 @@ class BackpressureController:
         self._record_acceptance()
         try:
             yield
-        except Exception as e:
+        except Exception:
             # Re-raise exceptions
             raise
     

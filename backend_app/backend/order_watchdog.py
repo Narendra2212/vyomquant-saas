@@ -28,19 +28,17 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
-from decimal import Decimal
+from typing import Any, Dict, List, Optional
 
-from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
+from sqlalchemy.orm import Session
 
-from backend_app.core.models.execution_record import ExecutionRecordModel, ExecutionStatus
-from backend_app.backend.exchange_executor import get_exchange_executor, OrderStatusResult
+from backend_app.backend.exchange_executor import OrderStatusResult
 from backend_app.backend.position_engine import get_position_engine
+from backend_app.core.models.execution_record import (ExecutionRecordModel,
+                                                      ExecutionStatus)
 
 # STEP 1: Connection layer imports for executor and credential management
-from backend_app.backend.security_vault import SecurityVault
-from backend_app.backend.connection_engine import ConnectionEngine
 
 logger = logging.getLogger(__name__)
 
@@ -545,7 +543,7 @@ class OrderWatchdog:
             # This would look up the correct executor based on order metadata
             # For now, return None to indicate we need proper implementation
             return None
-        except:
+        except Exception:
             return None
     
     def get_metrics(self) -> Dict[str, Any]:

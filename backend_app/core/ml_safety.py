@@ -6,18 +6,17 @@ Enforces deterministic inference, timeout guards, GPU/CPU fallback,
 memory bounds, training isolation, and safe model loading.
 """
 
-import os
 import hashlib
 import logging
-import time
-import signal
-import threading
 import multiprocessing
-from typing import Optional, Dict, Any, Callable
-from functools import wraps
+import os
+import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
+from functools import wraps
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 
@@ -656,7 +655,7 @@ class SafeModelLoader:
             ModelLoadError: If model validation fails
         """
         import joblib
-        
+
         # Check file exists
         if not os.path.exists(file_path):
             raise ModelLoadError(f"Model file not found: {file_path}")
@@ -788,7 +787,7 @@ class TrainingIsolator:
             return train_func(*args, **kwargs)
         
         # Run in separate process
-        ctx = multiprocessing.get_context('spawn')
+        multiprocessing.get_context('spawn')
         
         with multiprocessing.Pool(
             processes=1,

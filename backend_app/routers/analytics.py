@@ -6,6 +6,7 @@ import logging
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+
 from backend_app.core.dependencies import get_current_user, get_telemetry
 
 router = APIRouter()

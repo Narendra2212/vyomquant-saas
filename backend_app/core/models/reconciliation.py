@@ -37,18 +37,16 @@ SCHEMA:
 """
 
 import hashlib
-import json
 import logging
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from sqlalchemy import (
-    Boolean, Column, DateTime, Index, Integer, String, Text,
-    Enum as SQLEnum, JSON,
-)
+from sqlalchemy import JSON, Boolean, Column, DateTime
+from sqlalchemy import Enum as SQLEnum
+from sqlalchemy import Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Session
 

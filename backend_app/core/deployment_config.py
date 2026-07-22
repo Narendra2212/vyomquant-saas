@@ -16,11 +16,11 @@ Flags control behavior:
 - ALERTS_ENABLED: Send notifications
 """
 
-import os
 import logging
+import os
 from dataclasses import dataclass
-from typing import Optional
 from enum import Enum
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 

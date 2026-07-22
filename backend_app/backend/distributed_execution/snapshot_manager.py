@@ -8,18 +8,16 @@ with deterministic creation and restoration.
 Author: Principal Replay and Recovery Engineer
 """
 
-import asyncio
-import time
-import uuid
-import json
 import gzip
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Tuple, Union
-from dataclasses import dataclass, field, asdict
-from enum import Enum
+import json
 import logging
+import time
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from .immutable_journal import immutable_journal, ExecutionEvent, EventType
+from .immutable_journal import ExecutionEvent, immutable_journal
 from .sequence_manager import sequence_manager
 
 logger = logging.getLogger("snapshot_manager")
@@ -724,7 +722,7 @@ class SnapshotManager:
         """Calculate checksum for snapshot data."""
         try:
             import hashlib
-            
+
             # Create canonical representation
             canonical_data = json.dumps(snapshot_data, sort_keys=True, separators=(',', ':'))
             
@@ -762,7 +760,7 @@ class SnapshotManager:
             if isinstance(snapshot_data, bytes):
                 try:
                     snapshot_data = json.loads(snapshot_data.decode('utf-8'))
-                except:
+                except Exception:
                     snapshot_data = await self._decompress_snapshot_data(snapshot_data)
                     snapshot_data = json.loads(snapshot_data.decode('utf-8'))
             

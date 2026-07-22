@@ -39,20 +39,20 @@ Architecture:
   │                                                                       │
   └─────────────────────────────────────────────────────────────────────┘
 """
-
 import asyncio
+import hashlib
 import logging
-from typing import Dict, List, Any, Optional, Set, Tuple, Callable
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from collections import defaultdict, deque
-from enum import Enum
 from decimal import Decimal
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from backend_app.core.decimal_utils import to_decimal, calculate_pnl, calculate_notional, ZERO
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
-import pandas as pd
-import numpy as np
+from backend_app.core.decimal_utils import to_decimal
 
 logger = logging.getLogger("PortfolioManagement")
 
@@ -240,21 +240,6 @@ class Position:
         
         if self.cost_basis > 0:
             self.unrealized_pnl_pct = self.unrealized_pnl / self.cost_basis
-    
-    def close(self, price: float, time: datetime = None):
-        """Close position at given price."""
-        if time is None:
-            time = datetime.now()
-        
-        self.exit_price = price
-        self.exit_time = time
-        
-        if self.side == "long":
-            self.realized_pnl = (price - self.entry_price) * self.quantity
-        else:
-            self.realized_pnl = (self.entry_price - price) * self.quantity
-        
-        self.update_price(price)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -2437,8 +2422,6 @@ class PortfolioManager:
 # FASTAPI ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio-management"])
 

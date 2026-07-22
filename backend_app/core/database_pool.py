@@ -30,13 +30,13 @@ USAGE:
         result = await conn.fetch(query)
 """
 
-import os
 import logging
+import os
+from contextlib import asynccontextmanager, contextmanager
 from typing import Optional
-from contextlib import contextmanager, asynccontextmanager
 
-from sqlalchemy import create_engine, Engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import Engine, create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.pool import QueuePool
 
 # Base class for SQLAlchemy models
@@ -45,7 +45,7 @@ Base = declarative_base()
 # Async support
 try:
     import asyncpg
-    from databases import Database
+#     from databases import Database
     ASYNC_AVAILABLE = True
 except ImportError:
     ASYNC_AVAILABLE = False

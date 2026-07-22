@@ -45,24 +45,23 @@ import asyncio
 import json
 import logging
 import os
-import signal
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Dict, Set, Optional, Any, List
-from urllib.parse import unquote
+from typing import Any, Dict, Optional
 
 import redis.asyncio as aioredis
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Depends
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.websockets import WebSocketState
+
+from backend_app.backend.websocket_manager import (WebSocketConnection,
+                                                   WebSocketManager)
+from backend_app.backend.websocket_monitor import WebSocketHealthMonitor
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend_app.backend.websocket_manager import WebSocketManager, WebSocketConnection
-from backend_app.backend.websocket_monitor import WebSocketHealthMonitor
 
 logger = logging.getLogger("WSServer")
 

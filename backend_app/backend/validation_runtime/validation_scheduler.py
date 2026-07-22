@@ -7,15 +7,14 @@ operational validation of the strict algo trading platform.
 Author: Principal Institutional Operational Validation Engineer
 """
 
-import logging
 import asyncio
-from typing import Dict, Any, Optional, List
-from datetime import datetime, timezone, timedelta
+import logging
 from dataclasses import dataclass
+from typing import Any, Dict, List
 
+from .validation_alert_manager import ValidationAlertManager
 from .validation_executor import ValidationExecutor
 from .validation_result_store import ValidationResultStore
-from .validation_alert_manager import ValidationAlertManager
 
 logger = logging.getLogger("validation_scheduler")
 

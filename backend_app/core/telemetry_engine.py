@@ -5,13 +5,12 @@ Writes trading data to QuestDB for analytics, reporting, and monitoring.
 Uses InfluxDB Line Protocol (ILP) for high-speed writes and SQL for queries.
 """
 
-import requests
-import time
 import re
-from datetime import datetime
-from typing import Optional, Dict, Any
-from backend_app.core.config import settings
+from typing import Any, Dict, Optional
 
+import requests
+
+from backend_app.core.config import settings
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  SQL INJECTION PROTECTION

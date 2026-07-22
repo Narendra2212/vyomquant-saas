@@ -12,12 +12,12 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
-import time
 import asyncio
 import logging
+import time
+from collections import defaultdict, deque
 from enum import Enum
-from collections import deque, defaultdict
-from typing import Optional, Tuple
+from typing import Optional
 
 logger = logging.getLogger("RiskManager")
 

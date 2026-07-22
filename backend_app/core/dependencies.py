@@ -10,13 +10,13 @@ FIXES APPLIED:
   DEV: DEV_MODE support - safe startup without Supabase env vars
 """
 
-import os
 import json
 import logging
-from typing import Optional, Any, Union
+import os
+from typing import Any, Optional
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend_app.core.cache import redis_manager
 
@@ -68,7 +68,7 @@ def get_supabase():
             raise RuntimeError("Supabase request credentials required. Set SUPABASE_URL and SUPABASE_ANON_KEY.")
         
         try:
-            from supabase import create_client, Client as SupabaseClient
+            from supabase import create_client
             _supabase_client = create_client(supabase_url, supabase_key)
             logger.info("Supabase client initialized successfully")
         except Exception as e:

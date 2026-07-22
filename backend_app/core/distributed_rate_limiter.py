@@ -16,12 +16,11 @@ EXPECTED RESULT:
     ✔ No multi-pod bypass
 """
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple
 from enum import Enum
+from typing import Dict, Optional
 
 from backend_app.backend.redis_manager import redis_manager
 

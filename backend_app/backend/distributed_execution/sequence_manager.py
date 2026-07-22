@@ -1,3 +1,4 @@
+
 """
 Sequence Manager for Deterministic Event Ordering
 
@@ -6,14 +7,12 @@ gap detection, and recovery capabilities for immutable journal.
 
 Author: Principal Distributed Execution Engineer
 """
-
 import asyncio
-import time
-import uuid
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+import json
 import logging
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
 

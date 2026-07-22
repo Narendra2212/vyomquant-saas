@@ -22,16 +22,14 @@ USAGE:
 
 import asyncio
 import logging
-from typing import Optional, Dict, Any
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
+from typing import Optional
 
 # Prometheus client
 try:
-    from prometheus_client import (
-        start_http_server, Gauge, Counter, Histogram,
-        Info, CollectorRegistry, generate_latest, CONTENT_TYPE_LATEST
-    )
+    from prometheus_client import (CollectorRegistry,
+                                   Counter, Gauge, Histogram, Info,
+                                   generate_latest, start_http_server)
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
@@ -242,7 +240,8 @@ class MetricsExporter:
     async def _update_websocket_metrics(self):
         """Update WebSocket connection metrics."""
         try:
-            from backend_app.backend.websocket_cluster import get_websocket_cluster_manager
+            from backend_app.backend.websocket_cluster import \
+                get_websocket_cluster_manager
             
             cluster = await get_websocket_cluster_manager()
             stats = cluster.get_cluster_stats()
@@ -270,7 +269,8 @@ class MetricsExporter:
     async def _update_queue_metrics(self):
         """Update Redis queue metrics."""
         try:
-            from backend_app.core.redis_cluster import get_redis_cluster_manager, RedisDatabase
+            from backend_app.core.redis_cluster import \
+                get_redis_cluster_manager
             
             redis = await get_redis_cluster_manager()
             
@@ -389,7 +389,7 @@ def track_api_latency(endpoint: str):
                 result = await func(*args, **kwargs)
                 status = 200
                 return result
-            except Exception as e:
+            except Exception:
                 status = 500
                 raise
             finally:

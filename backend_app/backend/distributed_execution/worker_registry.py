@@ -9,20 +9,17 @@ and lifecycle management while preserving deterministic guarantees.
 import asyncio
 import json
 import logging
-import uuid
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Set, Tuple
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from enum import Enum
+from typing import Any, Dict, List, Optional, Set
 
 from backend_app.core.cache.redis_manager import redis_manager
-from backend_app.core.database_pool import get_db_session
-from .heartbeat_architecture import HeartbeatCollector, HeartbeatGenerator
+
 from .deterministic_reassignment_model import DeterministicCapabilityAssigner
-from .orchestration_safety_guarantees import (
-    DeterministicAssignmentGuarantee,
-    OperationIsolationGuarantee
-)
+from .heartbeat_architecture import HeartbeatCollector
+from .orchestration_safety_guarantees import (DeterministicAssignmentGuarantee,
+                                              OperationIsolationGuarantee)
 
 logger = logging.getLogger(__name__)
 
@@ -448,9 +445,9 @@ class WorkerRegistry:
                 stats["workers_by_type"][type_name] = stats["workers_by_type"].get(type_name, 0) + 1
                 
                 # Capacity calculations
-                total_capacity += worker_info.capabilities.max_concurrent_jobs
+                self.total_capacity += worker_info.capabilities.max_concurrent_jobs
                 if worker_info.state in [WorkerState.ACTIVE, WorkerState.BUSY]:
-                    active_capacity += worker_info.capabilities.max_concurrent_jobs
+                    self.total_capacity += worker_info.capabilities.max_concurrent_jobs
                 
                 # Load and health averages
                 if worker_info.state in [WorkerState.ACTIVE, WorkerState.BUSY]:
@@ -865,3 +862,8 @@ class WorkerRegistry:
 
 # Global worker registry instance
 worker_registry = WorkerRegistry()
+
+
+class DeterministicReassignmentCoordinator:
+    """Coordinates deterministic reassignment of orphaned workflows."""
+    pass

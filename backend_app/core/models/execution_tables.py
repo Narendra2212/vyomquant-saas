@@ -1,7 +1,9 @@
-import json
 from datetime import datetime
-from sqlalchemy import Column, String, Float, Integer, JSON, DateTime
+
+from sqlalchemy import JSON, Column, DateTime, Integer, String
+
 from backend_app.core.database_pool import Base
+
 
 class IdempotencyKey(Base):
     __tablename__ = "idempotency_keys"

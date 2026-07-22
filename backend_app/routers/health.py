@@ -22,11 +22,12 @@ Status Codes:
   500 - Internal Error (critical failure)
 """
 
-from fastapi import APIRouter, Response, HTTPException
-from typing import Dict, Any
-import redis.asyncio as redis
 import asyncio
 import logging
+from typing import Any, Dict
+
+import redis.asyncio as redis
+from fastapi import APIRouter, Response
 
 logger = logging.getLogger("HealthCheck")
 

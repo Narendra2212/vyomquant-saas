@@ -29,20 +29,22 @@ Reconciliation Loop:
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Set, Tuple
 from dataclasses import dataclass
-from uuid import UUID
+from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, List, Optional
+from uuid import UUID
 
-from sqlalchemy.orm import Session
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
-from backend_app.core.order_state_machine import (
-    OrderState, OrderStateMachine, get_order_state_machine,
-    transition_to_filled, transition_to_partial_fill, transition_to_cancelled
-)
-from backend_app.core.models.execution_record import ExecutionRecordModel, ExecutionStatus
+from backend_app.core.models.execution_record import (ExecutionRecordModel,
+                                                      ExecutionStatus)
+from backend_app.core.order_state_machine import (OrderStateMachine,
+                                                  get_order_state_machine,
+                                                  transition_to_cancelled,
+                                                  transition_to_filled,
+                                                  transition_to_partial_fill)
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +145,7 @@ class ExchangeReconciliationService:
             
             # Build lookup maps
             exchange_orders_by_id = {o['order_id']: o for o in exchange_orders}
-            db_orders_by_execution_id = {o.execution_id: o for o in db_orders}
+            {o.execution_id: o for o in db_orders}
             
             # 3. Compare and reconcile
             
@@ -336,11 +338,11 @@ class ExchangeReconciliationService:
         """
         # Check if partially filled → FILLED (assume completed)
         filled_size = float(db_order.filled_size or 0)
-        total_size = float(db_order.size or 0)
+        float(db_order.size or 0)
         
         if filled_size > 0:
             # Assume FILLED (conservative - better than leaving hanging)
-            transition = transition_to_filled(
+            transition_to_filled(
                 execution_id=db_order.execution_id,
                 filled_size=filled_size,
                 avg_price=float(db_order.avg_price or 0),
@@ -365,7 +367,7 @@ class ExchangeReconciliationService:
             )
         else:
             # No fill → CANCELLED
-            transition = transition_to_cancelled(
+            transition_to_cancelled(
                 execution_id=db_order.execution_id,
                 cancelled_by="reconciliation",
                 reason="Reconciled: Order not found on exchange, assumed cancelled"
@@ -409,7 +411,7 @@ class ExchangeReconciliationService:
             total_size = float(db_order.size or 0)
             if exchange_filled >= total_size * 0.999999:  # Allow for rounding
                 # Transition to FILLED
-                transition = transition_to_filled(
+                transition_to_filled(
                     execution_id=db_order.execution_id,
                     filled_size=exchange_filled,
                     avg_price=exchange_order['avg_price'],
@@ -420,7 +422,7 @@ class ExchangeReconciliationService:
                 db_order.filled_at = datetime.utcnow()
             else:
                 # Transition to PARTIALLY_FILLED
-                transition = transition_to_partial_fill(
+                transition_to_partial_fill(
                     execution_id=db_order.execution_id,
                     filled_size=exchange_filled,
                     remaining_size=exchange_order['remaining_size'],

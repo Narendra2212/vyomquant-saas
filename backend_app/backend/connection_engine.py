@@ -21,8 +21,8 @@ import json
 import logging
 from typing import Optional
 
-import ccxt.pro as ccxt
 import ccxt as ccxt_base
+import ccxt.pro as ccxt
 
 logger = logging.getLogger("ConnectionEngine")
 
@@ -201,7 +201,6 @@ class ConnectionEngine:
         if not self.exchange:
             return
             
-        import types
         import asyncio
         import time
         from datetime import datetime

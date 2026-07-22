@@ -4,13 +4,13 @@ Authentication Router - Production + Fallback
 Handles user signup and signin using Supabase when available.
 Falls back to dev tokens if Supabase not configured.
 """
-
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
-from backend_app.core.security_vault import SecurityVault
-from backend_app.core.dependencies import get_current_user
+
+from backend_app.core.dependencies import get_current_user, get_supabase
 from backend_app.core.rate_limit import limiter
-import uuid
+from backend_app.core.security_vault import SecurityVault
+from supabase import Client as SupabaseClient
 
 router = APIRouter()
 
@@ -107,8 +107,7 @@ def get_current_user_profile(user: dict = Depends(get_current_user)):
 # ----------------------------------
 # REGISTER & LOGIN (Supabase)
 # ----------------------------------
-from backend_app.core.dependencies import get_supabase
-from supabase import Client as SupabaseClient
+
 
 class UserCreate(BaseModel):
     email: EmailStr

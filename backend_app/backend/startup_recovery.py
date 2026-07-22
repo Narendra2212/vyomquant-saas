@@ -5,21 +5,16 @@ Runs on application startup to recover tasks from previous session.
 Ensures system resumes cleanly after crash/restart.
 """
 
-import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any, Optional, Set
-from uuid import UUID
+from datetime import datetime, timezone
+from typing import Any, Dict
 
 from sqlalchemy import text
-from sqlalchemy.orm import Session
 
-from backend_app.core.database import SessionLocal
-from backend_app.core.models.dag_task import DAGTaskModel, TaskStatus as DBTaskStatus
-from backend_app.core.dag_task_queue import dag_task_queue, TaskQueueKeyBuilder, TaskStatus
-from backend_app.core.cache import redis_manager
 from backend_app.backend.task_recovery import task_recovery_service
-
+from backend_app.core.cache import redis_manager
+from backend_app.core.dag_task_queue import TaskQueueKeyBuilder, TaskStatus
+from backend_app.core.database import SessionLocal
 
 logger = logging.getLogger("StartupRecovery")
 

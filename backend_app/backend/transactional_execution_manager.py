@@ -17,19 +17,18 @@ This module provides:
 Author: Principal Institutional Execution Consistency Engineer
 """
 
-import asyncio
 import logging
 import json
 import uuid
 import hashlib
-from typing import Dict, List, Optional, Any, Callable
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger("TransactionalExecutionManager")
 
@@ -313,7 +312,7 @@ class ReplaySafeTransaction:
             ).fetchone()
         
         if not result:
-            logger.error(f"[Transaction] Checkpoint not found")
+            logger.error("[Transaction] Checkpoint not found")
             return False
         
         # Verify checkpoint integrity
@@ -328,7 +327,7 @@ class ReplaySafeTransaction:
         calculated_checksum = hashlib.sha256(json.dumps(checkpoint_data, sort_keys=True).encode()).hexdigest()
         
         if calculated_checksum != result[5]:
-            logger.error(f"[Transaction] Checkpoint verification failed")
+            logger.error("[Transaction] Checkpoint verification failed")
             return False
         
         # Restore operations
@@ -351,7 +350,7 @@ class ReplaySafeTransaction:
             if operation.idempotency_key and not operation.is_idempotent:
                 raise ValueError(f"Operation not idempotent: {operation.operation_id}")
         
-        logger.info(f"[Transaction] Operations validated")
+        logger.info("[Transaction] Operations validated")
     
     def _calculate_checksum(self) -> str:
         """Calculate transaction checksum for integrity verification."""
@@ -595,7 +594,8 @@ class TransactionalExecutionManager:
             # Local cache to track positions modified during this transaction
             pos_cache: Dict[str, float] = {}
             def get_local_qty(sym: str) -> float:
-                if sym in pos_cache: return pos_cache[sym]
+                if sym in pos_cache:
+                    return pos_cache[sym]
                 row = self.db.execute(
                     text("SELECT json_extract(data, '$.quantity') FROM positions WHERE json_extract(data, '$.symbol') = :symbol AND tenant_id = :tid"),
                     {"symbol": sym, "tid": str(self.tenant_id)}

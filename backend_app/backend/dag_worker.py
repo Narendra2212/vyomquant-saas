@@ -8,26 +8,23 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import Optional, Dict, Any
 from datetime import datetime
+from typing import Any, Dict, Optional
+from uuid import UUID
 
-from backend_app.core.dag_task_queue import (
-    DAGTaskQueueManager,
-    DAGTask,
-    TaskStatus,
-    TaskQueueKeyBuilder,
-    dag_task_queue,
-)
-from backend_app.core.feature_flags import ExecutionFlags, ExecutionContext, UnsafeExecutionError
+from backend_app.backend.dag_engine import DAGEngine
+from backend_app.backend.market_data_validation import (MarketDataValidator,
+                                                        ValidationConfig)
+from backend_app.core.cache import redis_manager
+from backend_app.core.dag_task_queue import (DAGTask, TaskQueueKeyBuilder,
+                                             TaskStatus, dag_task_queue)
+from backend_app.core.database import SessionLocal
+from backend_app.core.feature_flags import (ExecutionContext, ExecutionFlags,
+                                            UnsafeExecutionError)
+from backend_app.core.models.dag_task import DAGTaskRepository
+from backend_app.core.models.dag_task import TaskStatus as DBTaskStatus
 from backend_app.core.safety_monitor import log_blocked_execution
 from backend_app.core.tenant import TenantContext, TenantQuota
-from backend_app.core.hard_quota_enforcer import EnforcementContext
-from backend_app.core.models.dag_task import DAGTaskRepository, TaskStatus as DBTaskStatus
-from backend_app.backend.dag_engine import DAGEngine
-from backend_app.backend.market_data_validation import MarketDataValidator, ValidationConfig
-from backend_app.core.cache import redis_manager
-from backend_app.core.database import SessionLocal
-from uuid import UUID
 
 logger = logging.getLogger("DAGWorker")
 
@@ -139,7 +136,6 @@ class DAGWorker:
         Returns:
             DAGTask if successfully claimed, None otherwise
         """
-        import redis
         
         # Step 1: Pop task_id from Redis queue (atomic operation)
         # Try tenant-specific queue first
@@ -730,7 +726,7 @@ class DAGWorker:
             engine = DAGEngine()
             
             nodes = task.dag_config.get("nodes", [])
-            edges = task.dag_config.get("edges", [])
+            task.dag_config.get("edges", [])
             
             total_nodes = len(nodes)
             results = {}
@@ -821,7 +817,7 @@ class DAGWorker:
         """Validate market data before DAG execution."""
         symbols = task.dag_config.get("symbols", [])
         
-        validator = MarketDataValidator(ValidationConfig())
+        MarketDataValidator(ValidationConfig())
         
         for symbol in symbols:
             await self.queue.update_task_progress(
@@ -844,7 +840,7 @@ class DAGWorker:
         engine = DAGEngine()
         
         nodes = task.dag_config.get("nodes", [])
-        edges = task.dag_config.get("edges", [])
+        task.dag_config.get("edges", [])
         
         total_nodes = len(nodes)
         results = {}
@@ -888,7 +884,6 @@ class DAGWorker:
     
     def _get_tenant_quota(self, tenant_id: str):
         """Get tenant quota from cache or DB."""
-        from backend_app.core.tenant import TenantQuota
         return TenantQuota()
 
 

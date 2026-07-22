@@ -10,20 +10,21 @@ Author: Principal Institutional Recovery and Failover Engineer
 """
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import uuid
-import hmac
-import hashlib
-from datetime import datetime, timezone, timedelta
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Dict, List, Optional, Any, Set
+from typing import Any, Dict, List, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
-from .lease_manager import LeaseManager, LeaseRequest, LeaseType
+
 from .heartbeat_manager import HeartbeatManager
 from .immutable_journal import immutable_journal
+from .lease_manager import LeaseManager, LeaseRequest, LeaseType
 
 logger = logging.getLogger("leader_election_manager")
 
@@ -434,7 +435,7 @@ class LeaderElectionManager:
         """Step down from leadership."""
         try:
             # Release leadership lease
-            await self.lease_manager.release_lease(f"execution_coordinator")
+            await self.lease_manager.release_lease("execution_coordinator")
             
             # Remove leadership claim
             await self._remove_leadership_claim(self.coordinator_id)
@@ -520,7 +521,7 @@ class LeaderElectionManager:
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
             
-            heartbeat_key = f"heartbeat:coordinator:leader"
+            heartbeat_key = "heartbeat:coordinator:leader"
             await self.redis.setex(
                 heartbeat_key,
                 10,  # 10 seconds TTL
@@ -533,7 +534,7 @@ class LeaderElectionManager:
     async def _get_last_leader_heartbeat(self) -> Optional[Dict[str, Any]]:
         """Get last leader heartbeat."""
         try:
-            heartbeat_key = f"heartbeat:coordinator:leader"
+            heartbeat_key = "heartbeat:coordinator:leader"
             heartbeat_data = await self.redis.get(heartbeat_key)
             
             if heartbeat_data:

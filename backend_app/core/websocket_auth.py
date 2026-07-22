@@ -22,21 +22,11 @@ Key Features:
 Author: Principal Institutional Platform Security Engineer
 """
 
-import os
-import base64
 import logging
-import time
-from typing import Optional, Dict, Any
-from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 import jwt
-from jwt import ExpiredSignatureError, InvalidTokenError
-
-from fastapi import WebSocket, WebSocketDisconnect, Query, status
-from fastapi.security import HTTPBearer
-
-from backend_app.core.config import settings
-from backend_app.core.dependencies import DEV_MODE
+from fastapi import WebSocket, status
 
 logger = logging.getLogger("WebSocketAuth")
 

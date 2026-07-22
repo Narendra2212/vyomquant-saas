@@ -23,13 +23,11 @@ EXPECTED RESULT:
 import json
 import logging
 import uuid
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from decimal import Decimal
 from enum import Enum
-from typing import Dict, Optional, Any, List
+from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Column, String, DateTime, Float, Text, Index
 from backend_app.backend.redis_manager import redis_manager
 
 logger = logging.getLogger("OrderAuditTrail")
@@ -520,7 +518,8 @@ class OrderAuditLogger:
         """Store audit record to database."""
         try:
             from backend_app.backend.database import get_db_session
-            from backend_app.backend.models import AuditLogModel  # Assuming this model exists
+            from backend_app.backend.models import \
+                AuditLogModel  # Assuming this model exists
             
             async with get_db_session() as db:
                 data = record.to_dict()

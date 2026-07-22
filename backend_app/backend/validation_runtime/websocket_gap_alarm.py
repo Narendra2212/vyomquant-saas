@@ -8,10 +8,11 @@ Author: Principal Institutional Operational Validation Engineer
 """
 
 import logging
-from typing import Dict, Any, Optional
 from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 from backend_app.core.cache.redis_manager import redis_manager
+
 from .validation_alert_manager import ValidationAlertManager
 
 logger = logging.getLogger("websocket_gap_alarm")

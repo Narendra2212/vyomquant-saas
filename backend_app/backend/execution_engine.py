@@ -21,22 +21,23 @@ import asyncio
 import hashlib
 import json
 import logging
-from datetime import datetime
-from typing import Dict, Any, Optional, Set, List
 from collections import deque
-from enum import Enum, auto
-import redis.asyncio as redis
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
+from enum import Enum
+from typing import Any, Dict, List, Optional, Set
 
-# STEP 7.11: Import ExecutionGuard for mandatory validation
-from backend_app.backend.execution_guard import ExecutionGuard, ValidationSeverity
-
-# STEP 8.1: Import metrics collector
-from backend_app.backend.metrics import record_trade_executed, record_failed_order, record_trade_blocked
+import redis.asyncio as redis
 
 # STEP 8.4: Import Global Circuit Breaker for capital protection
 from backend_app.backend.circuit_breaker import global_circuit_breaker
+# STEP 7.11: Import ExecutionGuard for mandatory validation
+from backend_app.backend.execution_guard import ExecutionGuard
+# STEP 8.1: Import metrics collector
+from backend_app.backend.metrics import (record_failed_order,
+                                         record_trade_blocked,
+                                         record_trade_executed)
 
 logger = logging.getLogger(__name__)
 
@@ -349,7 +350,7 @@ class ExchangeResponseValidator:
         status = response.get("status", "").lower()
         if not status:
             failures.append("missing_status")
-            logger.error(f"🚨 VALIDATION FAILED: Missing status in exchange response")
+            logger.error("🚨 VALIDATION FAILED: Missing status in exchange response")
         elif status not in self.VALID_STATUSES:
             failures.append(f"invalid_status:{status}")
             logger.error(f"🚨 VALIDATION FAILED: Invalid order status '{status}' in exchange response")
@@ -658,9 +659,9 @@ class SlippageModel:
         Returns:
             Total slippage in basis points (bps)
         """
-        import random
         import math
-        
+        import random
+
         # 1. Base slippage (fixed minimum)
         base = self.base_bps
         
@@ -2212,7 +2213,7 @@ class IdempotentExecutionEngine:
             )
             
             # STEP 8.1: Record successful trade metric
-            execution_latency_ms = (datetime.utcnow() - order.created_at).total_seconds() * 1000
+            execution_latency_ms = (datetime.utcnow() - None.created_at).total_seconds() * 1000
             record_trade_executed(
                 latency_ms=execution_latency_ms,
                 symbol=symbol,
