@@ -34,7 +34,7 @@ from typing import Dict
 try:
     from backend_app.core.cache import redis_manager
 except ImportError:
-    from aerora_quant_backend_updated_final1.core.cache import redis_manager
+    from backend_app.core.cache import redis_manager
 
 logger = logging.getLogger("RateLimiter")
 

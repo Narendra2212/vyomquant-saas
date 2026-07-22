@@ -77,7 +77,7 @@ if not POOLING_AVAILABLE:
 
 # Re-export Base for models
 if POOLING_AVAILABLE:
-    pass
+    from backend_app.core.database_pool import Base
 
 # Export engine for direct access
 if POOLING_AVAILABLE:

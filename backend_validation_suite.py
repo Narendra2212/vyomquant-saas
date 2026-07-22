@@ -120,7 +120,7 @@ class BackendValidationSuite(ValidationSuite):
             import main as main_module
             
             app = main_module.app
-            routes = [route.path for route in app.routes]
+            routes = [route.path for route in app.routes if hasattr(route, 'path')]
             
             # Critical routes
             critical_routes = [
