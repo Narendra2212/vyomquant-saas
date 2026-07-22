@@ -31,7 +31,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 try:
     from backend_app.core.rate_limiter import RateLimitExceeded, rate_limiter
 except ImportError:
-    from aerora_quant_backend_updated_final1.core.rate_limiter import (
+    from backend_app.core.rate_limiter import (
         RateLimitExceeded, rate_limiter)
 
 logger = logging.getLogger("RateLimitMiddleware")

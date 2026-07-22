@@ -24,7 +24,7 @@ try:
     from backend_app.backend.ws_channels import (ChannelType, EventType,
                                                                                                   is_valid_channel)
 except ImportError:
-    from ws_channels import ChannelType, EventType, is_valid_channel
+    from backend_app.backend.ws_channels import ChannelType, EventType, is_valid_channel
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

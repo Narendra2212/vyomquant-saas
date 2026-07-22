@@ -992,7 +992,7 @@ async def train_ml_strategy(
     async def _train():
         try:
             # Import here to avoid blocking on startup Numba compilation
-            from connection_engine import ConnectionEngine
+            from backend_app.backend.connection_engine import ConnectionEngine
             from data_seeking_engine import DataEngine
             from ml_models import XGBoostStrategyBlock
 
