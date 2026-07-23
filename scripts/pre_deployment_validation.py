@@ -41,9 +41,13 @@ def test_fastapi_startup() -> tuple:
     """Test importing backend_app.main and instantiating app."""
     try:
         sys.path.insert(0, os.getcwd())
-        os.environ["ENV"] = "test"
-        os.environ["AERORA_MODE"] = "safe"
-        os.environ["DEV_MODE"] = "true"
+        os.environ.setdefault("ENV", "test")
+        os.environ.setdefault("AERORA_MODE", "safe")
+        os.environ.setdefault("DEV_MODE", "true")
+        os.environ.setdefault("SUPABASE_URL", "https://dummy.supabase.co")
+        os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "dummy-service-role-key")
+        os.environ.setdefault("SUPABASE_ANON_KEY", "dummy-anon-key")
+        os.environ.setdefault("MASTER_ENCRYPTION_KEYS", "dummy-key-1,dummy-key-2")
         
         main_module = importlib.import_module("backend_app.main")
         app = getattr(main_module, "app", None)

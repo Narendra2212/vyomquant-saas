@@ -412,7 +412,7 @@ class OutlierDetector:
         if outlier_count > 0:
             raise DataValidationError(
                 f"Found {outlier_count} outliers in {method.value} "
-                f"for {"UNKNOWN"}. Dataset rejected - no synthetic data allowed."
+                f"for {'UNKNOWN'}. Dataset rejected - no synthetic data allowed."
             )
         
         return df, issues
@@ -535,7 +535,7 @@ class GapHandler:
             # STEP 1: HARD FAIL - No gap filling
             raise DataValidationError(
                 f"Found {gap_count} data gaps (max: {max_gap_minutes:.1f} min) "
-                f"for {"UNKNOWN"}. Dataset rejected - no synthetic data allowed."
+                f"for {'UNKNOWN'}. Dataset rejected - no synthetic data allowed."
             )
         
         return df, issues
