@@ -44,6 +44,17 @@ def parse_requirements_file(filepath: str) -> Dict[str, str]:
     return pkgs
 
 
+def normalize_version_spec(spec: str) -> str:
+    """
+    Normalize a version specification according to PEP 440.
+    Strips PEP 440 local version identifiers (e.g., '+cpu', '+cu118')
+    so that local build variants are treated as equivalent to public versions.
+    """
+    if not spec:
+        return spec
+    return re.sub(r'\+[a-zA-Z0-9\._\-]+', '', spec)
+
+
 def audit_dependencies(root_req: str = "requirements.txt", backend_req: str = "backend_app/requirements.txt") -> Dict:
     """Compare and validate dependency manifest consistency."""
     report = {
@@ -75,7 +86,7 @@ def audit_dependencies(root_req: str = "requirements.txt", backend_req: str = "b
         else:
             root_spec = root_pkgs[pkg]
             backend_spec = backend_pkgs[pkg]
-            if root_spec != backend_spec:
+            if normalize_version_spec(root_spec) != normalize_version_spec(backend_spec):
                 report["mismatches"].append({
                     "package": pkg,
                     "root_spec": root_spec,
