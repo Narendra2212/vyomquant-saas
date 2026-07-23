@@ -95,7 +95,7 @@ class EventSigner:
             event_hash = await self._generate_event_hash(event)
             
             # Generate HMAC signature
-            signature_input = f"{event_hash}:{""}:{datetime.now(timezone.utc).isoformat()}"
+            signature_input = f"{event_hash}:{''}:{datetime.now(timezone.utc).isoformat()}"
             signature = hmac.new(
                 self.current_key.key_data,
                 signature_input.encode('utf-8'),
