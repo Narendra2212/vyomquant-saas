@@ -117,9 +117,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "img-src 'self' data: https://cdn.jsdelivr.net https://fastapi.tiangolo.com; "
             "connect-src 'self' ws: wss: http: https:; "
             "frame-ancestors 'none'"
         )
@@ -410,12 +410,35 @@ async def lifespan(app: FastAPI):
     logger.info(" All engines stopped. Server offline.")
 
 
+def _get_docs_url():
+    is_prod = os.getenv("ENV", os.getenv("AERORA_MODE", "development")).lower() in ("production", "prod", "live")
+    enable_docs = os.getenv("ENABLE_DOCS")
+    if enable_docs is not None:
+        return "/docs" if enable_docs.lower() in ("true", "1", "yes") else None
+    return None if is_prod else "/docs"
+
+def _get_redoc_url():
+    is_prod = os.getenv("ENV", os.getenv("AERORA_MODE", "development")).lower() in ("production", "prod", "live")
+    enable_docs = os.getenv("ENABLE_DOCS")
+    if enable_docs is not None:
+        return "/redoc" if enable_docs.lower() in ("true", "1", "yes") else None
+    return None if is_prod else "/redoc"
+
+def _get_openapi_url():
+    enable_openapi = os.getenv("ENABLE_OPENAPI")
+    if enable_openapi is not None:
+        return "/openapi.json" if enable_openapi.lower() in ("true", "1", "yes") else None
+    return "/openapi.json"
+
 #  FastAPI app 
 app = FastAPI(
     title="ALGO22 Quantitative Trading API",
     description="Industrial-grade algorithmic trading backend  Aerora Dynamics",
     version="2.4.0",
     lifespan=lifespan,
+    docs_url=_get_docs_url(),
+    redoc_url=_get_redoc_url(),
+    openapi_url=_get_openapi_url(),
 )
 
 app.state.limiter = limiter
