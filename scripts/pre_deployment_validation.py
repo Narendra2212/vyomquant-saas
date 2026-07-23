@@ -16,8 +16,10 @@ If ANY check fails, halts deployment immediately.
 import importlib
 import json
 import os
+import pprint
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
@@ -73,54 +75,103 @@ def main():
     }
 
     # Step 1: Import AST Audit
-    print("\n[Step 1/5] Running Automated Import & AST Audit...")
-    code, stdout, stderr = run_python_script("scripts/import_audit.py", ["backend_app"])
+    print("\nENTER STEP 1")
+    print("[Step 1/5] Running Automated Import & AST Audit...")
+    try:
+        ret_step1 = run_python_script("scripts/import_audit.py", ["backend_app"])
+        code, stdout, stderr = ret_step1
+        step1_result = "PASS" if code == 0 else "FAIL"
+        print(f"STEP 1 RESULT = {step1_result}")
+        print(f"STEP 1 RETURN VALUE =\n{repr(ret_step1)}")
+    except Exception:
+        traceback.print_exc()
+        raise
     print(stdout)
     validation_results["steps"]["import_audit"] = {
-        "status": "PASS" if code == 0 else "FAIL",
+        "status": step1_result,
         "output": stdout,
         "error": stderr
     }
 
     # Step 2: Dependency Audit
-    print("\n[Step 2/5] Running Dependency Reconciliation Audit...")
-    code, stdout, stderr = run_python_script("scripts/dependency_audit.py")
+    print("\nENTER STEP 2")
+    print("[Step 2/5] Running Dependency Reconciliation Audit...")
+    try:
+        ret_step2 = run_python_script("scripts/dependency_audit.py")
+        code, stdout, stderr = ret_step2
+        step2_result = "PASS" if code == 0 else "FAIL"
+        print(f"STEP 2 RESULT = {step2_result}")
+        print(f"STEP 2 RETURN VALUE =\n{repr(ret_step2)}")
+    except Exception:
+        traceback.print_exc()
+        raise
     print(stdout)
     validation_results["steps"]["dependency_audit"] = {
-        "status": "PASS" if code == 0 else "FAIL",
+        "status": step2_result,
         "output": stdout,
         "error": stderr
     }
 
     # Step 3: FastAPI Startup Check
-    print("\n[Step 3/5] Simulating FastAPI Startup & Router Instantiation...")
-    startup_ok, startup_msg = test_fastapi_startup()
-    print(f"Startup Status: {'PASS' if startup_ok else 'FAIL'}")
+    print("\nENTER STEP 3")
+    print("[Step 3/5] Simulating FastAPI Startup & Router Instantiation...")
+    try:
+        ret_step3 = test_fastapi_startup()
+        startup_ok, startup_msg = ret_step3
+        step3_result = "PASS" if startup_ok else "FAIL"
+        print(f"STEP 3 RESULT = {step3_result}")
+        print(f"STEP 3 RETURN VALUE =\n{repr(ret_step3)}")
+    except Exception:
+        traceback.print_exc()
+        raise
+    print(f"Startup Status: {step3_result}")
     print(f"Details: {startup_msg}")
     validation_results["steps"]["fastapi_startup"] = {
-        "status": "PASS" if startup_ok else "FAIL",
+        "status": step3_result,
         "message": startup_msg
     }
 
     # Step 4: Docker Validation
-    print("\n[Step 4/5] Running Docker Container Validation...")
-    code, stdout, stderr = run_python_script("scripts/docker_validation.py")
+    print("\nENTER STEP 4")
+    print("[Step 4/5] Running Docker Container Validation...")
+    try:
+        ret_step4 = run_python_script("scripts/docker_validation.py")
+        code, stdout, stderr = ret_step4
+        step4_result = "PASS" if code == 0 else "FAIL"
+        print(f"STEP 4 RESULT = {step4_result}")
+        print(f"STEP 4 RETURN VALUE =\n{repr(ret_step4)}")
+    except Exception:
+        traceback.print_exc()
+        raise
     print(stdout)
     validation_results["steps"]["docker_validation"] = {
-        "status": "PASS" if code == 0 else "FAIL",
+        "status": step4_result,
         "output": stdout,
         "error": stderr
     }
 
     # Step 5: AWS Validation
-    print("\n[Step 5/5] Running AWS Task Definition & Infrastructure Validation...")
-    code, stdout, stderr = run_python_script("scripts/aws_validation.py")
+    print("\nENTER STEP 5")
+    print("[Step 5/5] Running AWS Task Definition & Infrastructure Validation...")
+    try:
+        ret_step5 = run_python_script("scripts/aws_validation.py")
+        code, stdout, stderr = ret_step5
+        step5_result = "PASS" if code == 0 else "FAIL"
+        print(f"STEP 5 RESULT = {step5_result}")
+        print(f"STEP 5 RETURN VALUE =\n{repr(ret_step5)}")
+    except Exception:
+        traceback.print_exc()
+        raise
     print(stdout)
     validation_results["steps"]["aws_validation"] = {
-        "status": "PASS" if code == 0 else "FAIL",
+        "status": step5_result,
         "output": stdout,
         "error": stderr
     }
+
+    # Immediately before the final PASS/FAIL calculation print: validation_results using pprint.pprint()
+    print("\nVALIDATION RESULTS BEFORE CALCULATION:")
+    pprint.pprint(validation_results)
 
     # Final Evaluation
     all_passed = all(step["status"] == "PASS" for step in validation_results["steps"].values())
@@ -134,6 +185,10 @@ def main():
         json.dump(validation_results, f, indent=2)
 
     if validation_results["status"] == "FAIL":
+        print("\nWHY EXITING")
+        print(f"all_passed={all_passed}")
+        print("validation_results=")
+        pprint.pprint(validation_results)
         print("\n[X] PRE-DEPLOYMENT VALIDATION FAILED! ABORTING DEPLOYMENT.")
         sys.exit(1)
 
