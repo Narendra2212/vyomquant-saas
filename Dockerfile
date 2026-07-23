@@ -18,11 +18,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install Python dependencies (use CPU-only index for PyTorch to reduce image size by ~2.5GB)
-COPY backend_app/requirements.txt .
+# Install core runner dependencies first to leverage Docker layer caching
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir gunicorn httpx redis && \
-    pip install --no-cache-dir --prefer-binary -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir gunicorn httpx redis
+
+# Install heavy PyTorch CPU package in isolated cached layer
+RUN pip install --no-cache-dir --prefer-binary torch==2.3.1 --extra-index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining backend requirements
+COPY backend_app/requirements.txt .
+RUN pip install --no-cache-dir --prefer-binary -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu && \
     find /opt/venv -type f -name '*.pyc' -delete && \
     find /opt/venv -type d -name '__pycache__' -delete
 
