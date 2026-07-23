@@ -77,6 +77,9 @@ async def list_users(
     if search and len(search) < 2:
         raise HTTPException(400, "Search query must be at least 2 characters.")
 
+    if not supabase:
+        return [{"id": admin["id"], "email": admin.get("email"), "subscription_tier": "admin", "is_frozen": False}]
+
     query = (
         supabase.table("profiles")
         .select(

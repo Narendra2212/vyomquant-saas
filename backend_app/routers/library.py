@@ -65,10 +65,17 @@ def _get_service_client():
         url = os.environ.get("SUPABASE_URL")
         key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
         if not url or not key:
+            if os.getenv("DEV_MODE", "false").lower() == "true":
+                return None
             raise RuntimeError(
                 "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set."
             )
-        _service_client = create_client(url, key)
+        try:
+            _service_client = create_client(url, key)
+        except Exception as e:
+            if os.getenv("DEV_MODE", "false").lower() == "true":
+                return None
+            raise
     return _service_client
 
 
@@ -296,6 +303,9 @@ async def browse_library(
             logger.warning(f"Redis cache read failed: {e}")
 
     # --- Build query ---
+    if not svc:
+        return {"items": [], "total": 0, "page": page, "limit": limit}
+
     query = (
         svc.table("library_strategies")
         .select(

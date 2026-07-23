@@ -602,9 +602,12 @@ def _safe_uid(uid: str) -> str:
 async def list_strategies(user: dict = Depends(get_current_user)):
     """Returns all strategies saved in Supabase for this user."""
     try:
+        sb = _sb(user)
+        if not sb:
+            return []
         import asyncio
         query = (
-            _sb(user)
+            sb
             .table("strategies")
             .select("*")
             .eq("user_id", user["id"])
@@ -717,12 +720,23 @@ async def create_strategy(
     
     try:
         import asyncio
-        query = _sb(user).table("strategies").insert(data)
+        sb = _sb(user)
+        if not sb:
+            import uuid
+            strat_id = f"dev-strategy-{uuid.uuid4().hex[:8]}"
+            return {
+                "id": strat_id,
+                "strategy_id": strat_id,
+                "name": data["name"],
+                "status": "created"
+            }
+        query = sb.table("strategies").insert(data)
         resp = await asyncio.to_thread(query.execute)
         if resp.data:
             strategy_id = resp.data[0].get("id")
             logger.info(f"[STRATEGIES] Strategy created successfully: {strategy_id}")
             return {
+                "id": strategy_id,
                 "strategy_id": strategy_id,
                 "status": "created"
             }
@@ -730,6 +744,8 @@ async def create_strategy(
             logger.error("[STRATEGIES] Failed to create strategy: no data returned")
             raise HTTPException(500, "Failed to create strategy")
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         logger.error(f"[STRATEGIES] Error creating strategy: {e}")
         raise HTTPException(500, f"Strategy creation failed: {str(e)}")
 
@@ -740,9 +756,12 @@ async def get_strategy_route(
     strategy_id: str,
     user: dict = Depends(get_current_user),
 ):
+    sb = _sb(user)
+    if not sb:
+        return {"id": strategy_id, "user_id": user["id"], "name": "Dev Strategy", "status": "stopped"}
     import asyncio
     query = (
-        _sb(user)
+        sb
         .table("strategies")
         .select("*")
         .eq("id", strategy_id)
@@ -775,8 +794,11 @@ async def update_strategy(
     body: Dict[str, Any],
     user: dict = Depends(get_current_user),
 ):
+    sb = _sb(user)
+    if not sb:
+        return {"id": strategy_id, "user_id": user["id"], "name": body.get("name", "Updated Dev Strategy")}
     resp = (
-        _sb(user)
+        sb
         .table("strategies")
         .update(body)
         .eq("id", strategy_id)
@@ -796,8 +818,11 @@ async def delete_strategy(
     fleet=Depends(get_fleet),
 ):
     """Stops the bot first (if running) then deletes the blueprint."""
+    sb = _sb(user)
+    if not sb:
+        return {"status": "deleted", "id": strategy_id}
     resp = (
-        _sb(user)
+        sb
         .table("strategies")
         .select("symbol, status")
         .eq("id", strategy_id)
@@ -807,10 +832,8 @@ async def delete_strategy(
     if resp.data and resp.data[0].get("status") == "running":
         await fleet.stop_bot(user["id"], resp.data[0]["symbol"])
 
-    _sb(user).table("strategies").delete().eq("id", strategy_id).eq(
-        "user_id", user["id"]
-    ).execute()
-    return {"status": "ok", "deleted": strategy_id}
+    sb.table("strategies").delete().eq("id", strategy_id).eq("user_id", user["id"]).execute()
+    return {"status": "deleted", "id": strategy_id}
 
 
 # ── POST /api/strategies/{id}/deploy ────────────────────────────────────
