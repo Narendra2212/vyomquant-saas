@@ -39,7 +39,15 @@ def _safe_uid(uid: str) -> str:
 
 @router.get("/settings")
 async def get_risk_settings(user: dict = Depends(get_current_user)):
-    resp = _sb(user).table("risk_settings").select("*").eq("user_id", user["id"]).execute()
+    sb = _sb(user)
+    if not sb:
+        return {
+            "max_daily_loss": 500,
+            "max_positions": 10,
+            "max_leverage": 3,
+            "kill_switches": [],
+        }
+    resp = sb.table("risk_settings").select("*").eq("user_id", user["id"]).execute()
     return (
         resp.data[0]
         if resp.data

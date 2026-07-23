@@ -161,13 +161,17 @@ class TelemetryEngine:
     # ══════════════════════════════════════════════════════════════════════
 
     async def execute_query(
-        self, sql_query: str, max_retries: int = 3
+        self, sql_query: str, params: Optional[list] = None, max_retries: int = 3
     ) -> Optional[dict]:
         """
         Executes a SQL query against QuestDB REST API.
         FIX TB-4: Catches asyncio.TimeoutError in addition to aiohttp.ClientError.
         Returns the parsed JSON response, or None after all retries fail.
         """
+        if isinstance(params, int):
+            max_retries = params
+            params = None
+
         session = await self._get_session()
 
         for attempt in range(max_retries):

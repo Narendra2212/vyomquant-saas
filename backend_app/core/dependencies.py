@@ -64,6 +64,9 @@ def get_supabase():
         supabase_key = os.environ.get("SUPABASE_ANON_KEY")
         
         if not supabase_url or not supabase_key:
+            if DEV_MODE:
+                logger.warning("SUPABASE_URL / SUPABASE_ANON_KEY missing in DEV_MODE, using None")
+                return None
             logger.error("SUPABASE_URL and SUPABASE_ANON_KEY not set")
             raise RuntimeError("Supabase request credentials required. Set SUPABASE_URL and SUPABASE_ANON_KEY.")
         
@@ -72,6 +75,9 @@ def get_supabase():
             _supabase_client = create_client(supabase_url, supabase_key)
             logger.info("Supabase client initialized successfully")
         except Exception as e:
+            if DEV_MODE:
+                logger.warning(f"DEV_MODE: Supabase init fallback ({e})")
+                return None
             logger.error(f"Failed to create Supabase client: {e}")
             raise RuntimeError(f"Failed to initialize Supabase: {e}")
                     
@@ -82,20 +88,14 @@ def create_request_supabase(access_token: str):
     """
     Creates a per-request Supabase client that operates under the authenticated
     user's JWT identity, so Supabase RLS policies are enforced.
-
-    F-05 FIX: Previously used SERVICE_ROLE_KEY which bypasses ALL RLS policies,
-    allowing cross-tenant data access. Now uses SUPABASE_ANON_KEY as the API key
-    and sets the Authorization header to the user's JWT Bearer token so that
-    auth.uid() and current_setting('request.jwt.claims') resolve correctly in
-    RLS policy expressions.
-
-    SERVICE_ROLE_KEY is restricted to admin background jobs only (e.g. billing
-    webhooks in _background_sb()).
     """
     supabase_url  = os.environ.get("SUPABASE_URL")
     supabase_anon = os.environ.get("SUPABASE_ANON_KEY")
 
     if not supabase_url or not supabase_anon:
+        if DEV_MODE:
+            logger.warning("SUPABASE_URL / SUPABASE_ANON_KEY missing in DEV_MODE, using None")
+            return None
         logger.error("SUPABASE_URL and SUPABASE_ANON_KEY not set")
         raise RuntimeError(
             "Supabase request credentials required. Set SUPABASE_URL and SUPABASE_ANON_KEY."
@@ -109,6 +109,9 @@ def create_request_supabase(access_token: str):
         client.postgrest.auth(access_token)
         return client
     except Exception as e:
+        if DEV_MODE:
+            logger.warning(f"DEV_MODE: request Supabase client init fallback ({e})")
+            return None
         logger.error(f"Failed to create request Supabase client: {e}")
         raise RuntimeError(f"Failed to initialize request Supabase client: {e}")
 
