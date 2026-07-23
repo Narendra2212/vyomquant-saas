@@ -3,7 +3,7 @@
   "steps": {
     "import_audit": {
       "status": "PASS",
-      "output": "=== AUTOMATED IMPORT & AST AUDIT (backend_app) ===\nTotal Python Files Scanned: 282\nSyntax Errors: 0\nMissing __init__.py Directories: 8\nUnused Import Warnings: 94\nAudit Status: PASS\n\n--- MISSING __init__.py DIRECTORIES ---\n  [!] alembic\n  [!] alembic\\versions\n  [!] backend\\exchange_validation\n  [!] backend\\observability\n  [!] backend\\observability\\load_testing\n  [!] backend\\soak_runtime\n  [!] backend\\validation\n  [!] backend\\validation_runtime\n",
+      "output": "=== AUTOMATED IMPORT & AST AUDIT (backend_app) ===\nTotal Python Files Scanned: 290\nSyntax Errors: 0\nMissing __init__.py Directories: 0\nUnused Import Warnings: 94\nAudit Status: PASS\n",
       "error": ""
     },
     "dependency_audit": {
