@@ -446,11 +446,14 @@ _production_origins = [
     "https://app.algo22.io",
 ]
 _allowed_origins = list(set(_allowed_origins + _production_origins))
+_allow_credentials = True
+if "*" in _allowed_origins:
+    _allow_credentials = False
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_credentials=True,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -576,7 +579,11 @@ async def health():
         service_status["supabase"] = f"failed: {str(e)[:50]}"
     
     # Overall status - ok if at least core functions work
-    all_ok = service_status.get("supabase") == "connected" and service_status.get("questdb") != "failed"
+    all_ok = (
+        service_status.get("supabase") in ("connected", "fallback")
+        and not str(service_status.get("supabase", "")).startswith("failed")
+        and service_status.get("questdb") != "failed"
+    )
     
     return {
         "status": "ok" if all_ok else "degraded",
