@@ -361,9 +361,10 @@ async def check_database_health() -> dict:
     }
     
     try:
+        from sqlalchemy import text
         # Test sync connection
         with db_pool.connection() as conn:
-            result = conn.execute("SELECT 1")
+            result = conn.execute(text("SELECT 1"))
             result.fetchone()
         
         health["status"] = "healthy"

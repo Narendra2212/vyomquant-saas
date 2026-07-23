@@ -98,8 +98,9 @@ async def check_db_health():
     except ImportError:
         # Fallback health check
         try:
+            from sqlalchemy import text
             with get_db() as session:
-                session.execute("SELECT 1")
+                session.execute(text("SELECT 1"))
             return {"status": "healthy", "pooling": False}
         except Exception as e:
             return {"status": "unhealthy", "error": str(e)}

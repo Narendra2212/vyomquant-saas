@@ -25,6 +25,13 @@ if [ -z "$SUPABASE_ANON_KEY" ]; then
     MISSING_VARS=1
 fi
 
+if [ -z "$SUPABASE_JWT_SECRET" ]; then
+    if [ "$DEV_MODE" != "true" ] && [ "$ENV" != "test" ]; then
+        echo "[startup] FATAL: SUPABASE_JWT_SECRET is missing."
+        MISSING_VARS=1
+    fi
+fi
+
 if [ -z "$MASTER_ENCRYPTION_KEYS" ]; then
     echo "[startup] FATAL: MASTER_ENCRYPTION_KEYS is missing."
     MISSING_VARS=1
