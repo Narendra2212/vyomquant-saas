@@ -1,16 +1,17 @@
 {
   "status": "PASS",
+  "docker_available": false,
+  "docker_message": "Docker daemon unavailable: [WinError 2] The system cannot find the file specified",
   "static_validation": {
-    "found": [
+    "audited_dockerfiles": [
       "Dockerfile",
       "Dockerfile.backend",
       "Dockerfile.tee",
       "Dockerfile.websocket"
     ],
     "issues": [],
-    "valid": true
+    "valid": true,
+    "elapsed_seconds": 0.0
   },
-  "docker_available": false,
-  "runtime": {},
   "total_execution_time_seconds": 0.0
 }

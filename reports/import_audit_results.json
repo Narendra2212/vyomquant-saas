@@ -3366,7 +3366,8 @@
       "sqlalchemy.orm",
       "backend_app.core.database_pool",
       "backend_app.core.database_pool",
-      "backend_app.core.database_pool"
+      "backend_app.core.database_pool",
+      "sqlalchemy"
     ],
     "backend_app.core.database_pool": [
       "logging",
@@ -3379,7 +3380,8 @@
       "sqlalchemy.orm",
       "sqlalchemy.orm",
       "sqlalchemy.pool",
-      "asyncpg"
+      "asyncpg",
+      "sqlalchemy"
     ],
     "backend_app.core.database_scaling": [
       "asyncio",
