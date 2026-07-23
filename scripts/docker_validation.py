@@ -120,9 +120,11 @@ def run_docker_runtime_validation(image_tag: str = "trading-platform:test") -> D
         "-p", "8000:8000",
         "-e", "ENV=test",
         "-e", "AERORA_MODE=safe",
+        "-e", "DEV_MODE=true",
         "-e", "SUPABASE_URL=https://dummy.supabase.co",
         "-e", "SUPABASE_SERVICE_ROLE_KEY=dummy-key",
         "-e", "SUPABASE_ANON_KEY=dummy-key",
+        "-e", "SUPABASE_JWT_SECRET=dummy-supabase-jwt-secret-dev",
         "-e", "MASTER_ENCRYPTION_KEYS=dummy-encryption-key-32-bytes-ok!",
         "-e", "DATABASE_URL=sqlite:///./test.db",
         image_tag
@@ -186,7 +188,13 @@ def main():
         print(f"GET /health/ready: {'PASS' if res['runtime']['health_ready_endpoint'] else 'FAIL'}")
         print(f"GET /health: {'PASS' if res['runtime']['health_endpoint'] else 'FAIL'}")
 
-        if not (res['runtime']['build_status'] == 'PASS' and res['runtime']['container_status'] == 'PASS'):
+        if not (
+            res['runtime']['build_status'] == 'PASS'
+            and res['runtime']['container_status'] == 'PASS'
+            and res['runtime']['health_live_endpoint']
+            and res['runtime']['health_ready_endpoint']
+            and res['runtime']['health_endpoint']
+        ):
             res["status"] = "FAIL"
     else:
         print("Docker Daemon: NOT AVAILABLE locally. Static validation complete.")

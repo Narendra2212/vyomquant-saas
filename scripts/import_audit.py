@@ -143,7 +143,7 @@ def audit_python_files(target_dir: str) -> Dict:
                         "name": imported_name
                     })
 
-    if results["syntax_errors"]:
+    if results["syntax_errors"] or results["missing_init_dirs"]:
         results["status"] = "FAIL"
 
     return results

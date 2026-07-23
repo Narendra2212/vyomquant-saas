@@ -47,7 +47,9 @@ def test_fastapi_startup() -> tuple:
         os.environ.setdefault("SUPABASE_URL", "https://dummy.supabase.co")
         os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "dummy-service-role-key")
         os.environ.setdefault("SUPABASE_ANON_KEY", "dummy-anon-key")
+        os.environ.setdefault("SUPABASE_JWT_SECRET", "dummy-supabase-jwt-secret-dev")
         os.environ.setdefault("MASTER_ENCRYPTION_KEYS", "dummy-key-1,dummy-key-2")
+        os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
         
         main_module = importlib.import_module("backend_app.main")
         app = getattr(main_module, "app", None)
