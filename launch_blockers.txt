@@ -1,4 +1,0 @@
-LAUNCH BLOCKERS & FAILED TESTS
-==============================
-- API keys for Binance, Bybit, and OKX testnets are currently missing or 'dummy_api_key', causing CCXT testnet execution to fail authentication.
-- 'websockets.asyncio' import error in 'security_vault.py', which causes fatal failures in some async flows.

@@ -17,7 +17,7 @@
     },
     "docker_validation": {
       "status": "PASS",
-      "output": "=== AUTOMATED DOCKER VALIDATION ===\nStatic Dockerfile check: PASS\nDocker Daemon: NOT AVAILABLE locally. Static validation complete.\n",
+      "output": "=== AUTOMATED DOCKER VALIDATION ===\nStatic Dockerfile check: PASS\nDocker Daemon: NOT AVAILABLE locally. Static validation complete.\nTotal Docker Validation Elapsed Time: 0.0s\n",
       "error": ""
     },
     "aws_validation": {

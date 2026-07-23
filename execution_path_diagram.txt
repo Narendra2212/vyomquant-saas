@@ -1,9 +1,0 @@
-EXECUTION PATH DIAGRAM
-======================
-Strategy Signal -> BotRunner
-BotRunner -> ExecutionEngine.execute_with_idempotency
-ExecutionEngine (Idempotency Check) -> ExecutionRecordRepository
-ExecutionEngine -> ExecutionEngine._execute_trade_internal
-ExecutionEngine -> CCXTExchangeExecutor.place_order
-CCXTExchangeExecutor -> CCXT (ccxt.create_order)
-CCXT -> Exchange API
