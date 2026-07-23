@@ -33,7 +33,7 @@ def run_python_script(script_path: str, args: list = None) -> tuple:
     """Helper to execute external script and capture output."""
     cmd = [sys.executable, script_path] + (args or [])
     try:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=240)
         return proc.returncode, proc.stdout, proc.stderr
     except Exception as e:
         return 1, "", str(e)

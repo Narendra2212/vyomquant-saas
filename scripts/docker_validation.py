@@ -28,6 +28,11 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
         pass
 
 
+def log_ts(msg: str):
+    """Helper to log message with ISO/H:M:S timestamp."""
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
 def run_cmd(cmd: List[str], timeout: int = 300, env: dict = None) -> Tuple[int, str, str]:
     """Execute shell command with timeout and return returncode, stdout, stderr."""
     full_env = os.environ.copy()
@@ -49,6 +54,8 @@ def run_cmd(cmd: List[str], timeout: int = 300, env: dict = None) -> Tuple[int, 
 
 def validate_dockerfiles() -> Dict:
     """Perform static inspection of Dockerfiles."""
+    t0 = time.time()
+    log_ts("[docker_val] ENTER: Dockerfile Validation")
     issues = []
     dockerfiles = ["Dockerfile", "Dockerfile.backend", "Dockerfile.tee", "Dockerfile.websocket"]
     found = []
@@ -68,16 +75,24 @@ def validate_dockerfiles() -> Dict:
         if "USER" not in content or "USER root" in content:
             issues.append(f"{df}: Container running as root or missing USER instruction")
 
+    elapsed = round(time.time() - t0, 3)
+    log_ts(f"[docker_val] EXIT: Dockerfile Validation completed in {elapsed}s (valid={len(issues)==0})")
+
     return {
         "found": found,
         "issues": issues,
-        "valid": len(issues) == 0
+        "valid": len(issues) == 0,
+        "elapsed_seconds": elapsed
     }
 
 
 def is_docker_available() -> bool:
     """Check if docker CLI and daemon are responsive."""
+    t0 = time.time()
+    log_ts("[docker_val] ENTER: Docker Daemon Connectivity Check")
     code, stdout, stderr = run_cmd(["docker", "info"], timeout=10)
+    elapsed = round(time.time() - t0, 3)
+    log_ts(f"[docker_val] EXIT: Docker Daemon Check completed in {elapsed}s (available={code==0})")
     return code == 0
 
 
@@ -95,7 +110,7 @@ def probe_endpoint(url: str, timeout: int = 5) -> Tuple[bool, int, str]:
 
 
 def run_docker_runtime_validation(image_tag: str = "trading-platform:test") -> Dict:
-    """Build, run, and probe Docker container with detailed timing and cleanup."""
+    """Build, run, and probe Docker container with detailed timing and diagnostics."""
     runtime_res = {
         "build_status": "SKIPPED",
         "container_status": "SKIPPED",
@@ -104,6 +119,8 @@ def run_docker_runtime_validation(image_tag: str = "trading-platform:test") -> D
         "health_ready_endpoint": False,
         "logs": "",
         "error": "",
+        "exit_code": None,
+        "inspect_health": "",
         "timings": {}
     }
 
@@ -111,20 +128,18 @@ def run_docker_runtime_validation(image_tag: str = "trading-platform:test") -> D
     t_start_total = time.time()
 
     try:
-        # 1. Docker Build
+        # Stage 1: Docker Build
         t0 = time.time()
-        timestamp = time.strftime('%H:%M:%S')
-        print(f"[{timestamp}] [docker_val] Starting Docker build for image {image_tag}...")
+        log_ts(f"[docker_val] ENTER: Stage 1 - Docker Build for image {image_tag}")
         build_env = {"DOCKER_BUILDKIT": "1"}
         code, stdout, stderr = run_cmd(
             ["docker", "build", "-t", image_tag, "-f", "Dockerfile", "."],
             timeout=180,
             env=build_env
         )
-        t_build = time.time() - t0
-        runtime_res["timings"]["docker_build"] = round(t_build, 2)
-        timestamp = time.strftime('%H:%M:%S')
-        print(f"[{timestamp}] [docker_val] Docker build finished in {t_build:.2f}s (exit_code={code})")
+        t_build = round(time.time() - t0, 2)
+        runtime_res["timings"]["docker_build"] = t_build
+        log_ts(f"[docker_val] EXIT: Stage 1 - Docker Build completed in {t_build}s (exit_code={code})")
 
         if code != 0:
             runtime_res["build_status"] = "FAIL"
@@ -135,10 +150,9 @@ def run_docker_runtime_validation(image_tag: str = "trading-platform:test") -> D
         # Cleanup existing container instance if present
         run_cmd(["docker", "rm", "-f", container_name], timeout=15)
 
-        # 2. Docker Run
+        # Stage 2: Docker Run
         t0 = time.time()
-        timestamp = time.strftime('%H:%M:%S')
-        print(f"[{timestamp}] [docker_val] Starting container {container_name} on port 8000...")
+        log_ts(f"[docker_val] ENTER: Stage 2 - Docker Run container {container_name} on port 8000")
         code, stdout, stderr = run_cmd([
             "docker", "run", "-d",
             "--name", container_name,
@@ -154,10 +168,9 @@ def run_docker_runtime_validation(image_tag: str = "trading-platform:test") -> D
             "-e", "DATABASE_URL=sqlite:///./test.db",
             image_tag
         ], timeout=30)
-        t_run = time.time() - t0
-        runtime_res["timings"]["docker_run"] = round(t_run, 2)
-        timestamp = time.strftime('%H:%M:%S')
-        print(f"[{timestamp}] [docker_val] Container start finished in {t_run:.2f}s (exit_code={code})")
+        t_run = round(time.time() - t0, 2)
+        runtime_res["timings"]["docker_run"] = t_run
+        log_ts(f"[docker_val] EXIT: Stage 2 - Docker Run completed in {t_run}s (exit_code={code})")
 
         if code != 0:
             runtime_res["container_status"] = "FAIL"
@@ -166,81 +179,104 @@ def run_docker_runtime_validation(image_tag: str = "trading-platform:test") -> D
 
         runtime_res["container_status"] = "PASS"
 
-        # 3. Health Probe Polling Loop
+        # Stage 3: Health & Readiness Probe Polling Loops
         t0 = time.time()
-        timestamp = time.strftime('%H:%M:%S')
-        print(f"[{timestamp}] [docker_val] Waiting up to 20s for container health endpoints...")
+        log_ts(f"[docker_val] ENTER: Stage 3 - Health & Readiness probe polling loop (max 20s)")
         health_ok, live_ok, ready_ok = False, False, False
 
         while time.time() - t0 < 20:
             if not live_ok:
-                live_ok, _, _ = probe_endpoint("http://localhost:8000/health/live")
+                live_ok, status_live, _ = probe_endpoint("http://localhost:8000/health/live")
+                log_ts(f"  [probe] GET /health/live -> ok={live_ok} (status={status_live})")
             if not ready_ok:
-                ready_ok, _, _ = probe_endpoint("http://localhost:8000/health/ready")
+                ready_ok, status_ready, _ = probe_endpoint("http://localhost:8000/health/ready")
+                log_ts(f"  [probe] GET /health/ready -> ok={ready_ok} (status={status_ready})")
             if not health_ok:
-                health_ok, _, _ = probe_endpoint("http://localhost:8000/health")
+                health_ok, status_h, _ = probe_endpoint("http://localhost:8000/health")
+                log_ts(f"  [probe] GET /health -> ok={health_ok} (status={status_h})")
 
             if live_ok and ready_ok and health_ok:
+                log_ts(f"  [probe] All endpoints responding HTTP 200 OK after {round(time.time() - t0, 2)}s")
                 break
             time.sleep(1)
 
-        t_health = time.time() - t0
-        runtime_res["timings"]["health_polling"] = round(t_health, 2)
-        timestamp = time.strftime('%H:%M:%S')
-        print(f"[{timestamp}] [docker_val] Health polling finished in {t_health:.2f}s (live={live_ok}, ready={ready_ok}, health={health_ok})")
+        t_health = round(time.time() - t0, 2)
+        runtime_res["timings"]["health_polling"] = t_health
+        log_ts(f"[docker_val] EXIT: Stage 3 - Health polling completed in {t_health}s (live={live_ok}, ready={ready_ok}, health={health_ok})")
 
         runtime_res["health_live_endpoint"] = live_ok
         runtime_res["health_ready_endpoint"] = ready_ok
         runtime_res["health_endpoint"] = health_ok
 
-        # 4. Capture Container Logs
-        _, logs_stdout, logs_stderr = run_cmd(["docker", "logs", "--tail", "100", container_name], timeout=15)
+        # Stage 4: Collect Docker Logs & Container Exit Code & Inspect Health
+        t0 = time.time()
+        log_ts(f"[docker_val] ENTER: Stage 4 - Collecting Container Diagnostics & Logs (last 200 lines)")
+        
+        _, exit_code_out, _ = run_cmd(["docker", "inspect", "--format", "{{.State.ExitCode}}", container_name], timeout=10)
+        exit_code_str = exit_code_out.strip()
+        runtime_res["exit_code"] = exit_code_str
+        log_ts(f"  [inspect] Container Exit Code: {exit_code_str}")
+
+        _, inspect_health_out, _ = run_cmd(["docker", "inspect", "--format", "{{json .State.Health}}", container_name], timeout=10)
+        inspect_health_str = inspect_health_out.strip()
+        runtime_res["inspect_health"] = inspect_health_str
+        log_ts(f"  [inspect] Docker Health Status: {inspect_health_str}")
+
+        _, logs_stdout, logs_stderr = run_cmd(["docker", "logs", "--tail", "200", container_name], timeout=15)
+        t_logs = round(time.time() - t0, 2)
+        runtime_res["timings"]["docker_logs"] = t_logs
         container_logs = (logs_stdout + "\n" + logs_stderr).strip()
         runtime_res["logs"] = container_logs
+        log_ts(f"[docker_val] EXIT: Stage 4 - Diagnostics & Logs collected in {t_logs}s")
 
         if not (live_ok and ready_ok and health_ok):
-            timestamp = time.strftime('%H:%M:%S')
-            print(f"\n[{timestamp}] [docker_val] ❌ Health probes failed. Printing container logs:")
-            print("==================== CONTAINER LOGS ====================")
+            log_ts("❌ Health probes failed! Container diagnostics summary:")
+            print(f"Container Exit Code: {exit_code_str}")
+            print(f"Docker Inspect Health: {inspect_health_str}")
+            print("==================== CONTAINER LOGS (LAST 200 LINES) ====================")
             print(container_logs)
-            print("========================================================")
+            print("=========================================================================")
 
     finally:
-        # 5. Guaranteed Container Cleanup
+        # Stage 5: Container Cleanup
         t0 = time.time()
-        timestamp = time.strftime('%H:%M:%S')
-        print(f"[{timestamp}] [docker_val] Starting container cleanup ({container_name})...")
+        log_ts(f"[docker_val] ENTER: Stage 5 - Container Cleanup ({container_name})")
         run_cmd(["docker", "rm", "-f", container_name], timeout=15)
-        t_clean = time.time() - t0
-        runtime_res["timings"]["cleanup"] = round(t_clean, 2)
-        timestamp = time.strftime('%H:%M:%S')
-        print(f"[{timestamp}] [docker_val] Container cleanup finished in {t_clean:.2f}s")
+        t_clean = round(time.time() - t0, 2)
+        runtime_res["timings"]["cleanup"] = t_clean
+        log_ts(f"[docker_val] EXIT: Stage 5 - Container Cleanup completed in {t_clean}s")
 
-    t_total = time.time() - t_start_total
-    runtime_res["timings"]["total_runtime"] = round(t_total, 2)
-    timestamp = time.strftime('%H:%M:%S')
-    print(f"[{timestamp}] [docker_val] Total runtime_res validation time: {t_total:.2f}s")
+    t_total = round(time.time() - t_start_total, 2)
+    runtime_res["timings"]["total_runtime"] = t_total
+    log_ts(f"[docker_val] TOTAL Runtime Validation Time: {t_total}s")
 
     return runtime_res
 
 
 def main():
     t_main_start = time.time()
-    print("=== AUTOMATED DOCKER VALIDATION ===")
+    log_ts("=== AUTOMATED DOCKER VALIDATION ===")
+    
+    # 1. Static Dockerfile Inspection
+    static_res = validate_dockerfiles()
+    
+    # 2. Docker Availability Check
+    docker_avail = is_docker_available()
+    
     res = {
         "status": "PASS",
-        "static_validation": validate_dockerfiles(),
-        "docker_available": is_docker_available(),
+        "static_validation": static_res,
+        "docker_available": docker_avail,
         "runtime": {}
     }
 
-    print(f"Static Dockerfile check: {'PASS' if res['static_validation']['valid'] else 'FAIL'}")
-    if res['static_validation']['issues']:
-        for issue in res['static_validation']['issues']:
+    print(f"Static Dockerfile check: {'PASS' if static_res['valid'] else 'FAIL'}")
+    if static_res['issues']:
+        for issue in static_res['issues']:
             print(f"  [!] {issue}")
 
-    if res["docker_available"]:
-        print("Docker Daemon: CONNECTED. Running container build & probe validation...")
+    if docker_avail:
+        log_ts("Docker Daemon: CONNECTED. Proceeding to container build & probe validation...")
         res["runtime"] = run_docker_runtime_validation()
         print(f"Docker Build: {res['runtime']['build_status']}")
         print(f"Container Start: {res['runtime']['container_status']}")
@@ -257,13 +293,13 @@ def main():
         ):
             res["status"] = "FAIL"
     else:
-        print("Docker Daemon: NOT AVAILABLE locally. Static validation complete.")
-        if not res['static_validation']['valid']:
+        log_ts("Docker Daemon: NOT AVAILABLE locally. Static validation complete.")
+        if not static_res['valid']:
             res["status"] = "FAIL"
 
     total_elapsed = round(time.time() - t_main_start, 2)
     res["total_execution_time_seconds"] = total_elapsed
-    print(f"Total Docker Validation Elapsed Time: {total_elapsed}s")
+    log_ts(f"=== TOTAL DOCKER VALIDATION ELAPSED TIME: {total_elapsed}s ===")
 
     os.makedirs("reports", exist_ok=True)
     with open("reports/docker_validation_results.json", "w", encoding="utf-8") as f:
