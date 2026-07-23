@@ -351,11 +351,8 @@ async def browse_library(
     try:
         all_result = query.execute()
     except Exception as exc:
-        logger.error(f"Library browse DB error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch library. Please try again.",
-        )
+        logger.warning(f"Library browse DB error (returning empty fallback): {exc}")
+        return {"items": [], "total": 0, "page": page, "limit": limit}
 
     all_items = all_result.data or []
     count = len(all_items)

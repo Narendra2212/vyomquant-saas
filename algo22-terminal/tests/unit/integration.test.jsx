@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import App from '../../src/App';
 
 // Mock apiClient
@@ -17,9 +17,14 @@ vi.mock('../../src/apiClient', () => ({
   patch: vi.fn(),
 }));
 
+const mockSession = JSON.stringify({
+  access_token: 'test-token',
+  user: { id: 'test-user', email: 'test@test.com' }
+});
+
 // Mock localStorage
 const localStorageMock = {
-  getItem: vi.fn(() => 'test-token'),
+  getItem: vi.fn((key) => key === 'token' ? 'test-token' : mockSession),
   setItem: vi.fn(),
   removeItem: vi.fn(),
   clear: vi.fn(),
@@ -28,7 +33,7 @@ global.localStorage = localStorageMock;
 
 // Mock sessionStorage
 const sessionStorageMock = {
-  getItem: vi.fn(() => 'test-token'),
+  getItem: vi.fn((key) => key === 'token' ? 'test-token' : mockSession),
   setItem: vi.fn(),
   removeItem: vi.fn(),
   clear: vi.fn(),
@@ -54,7 +59,11 @@ describe('Integration Tests', () => {
         active_bots: 3
       });
 
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <App />
+        </MemoryRouter>
+      );
 
       await waitFor(() => {
         expect(get).toHaveBeenCalledWith('/api/stats');
@@ -65,7 +74,11 @@ describe('Integration Tests', () => {
       const { get } = await import('../../src/apiClient');
       get.mockResolvedValue(null);
 
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <App />
+        </MemoryRouter>
+      );
 
       await waitFor(() => {
         expect(get).toHaveBeenCalled();
@@ -82,15 +95,11 @@ describe('Integration Tests', () => {
         total_trades: 50
       });
 
-      render(<App />);
-
-      // Navigate to backtester (would need to implement navigation in test)
-      // This is a placeholder for the actual integration test
-      // In a real implementation, you would:
-      // 1. Navigate to strategy builder
-      // 2. Create a strategy
-      // 3. Click backtest button
-      // 4. Verify the API call
+      render(
+        <MemoryRouter>
+          <App />
+        </MemoryRouter>
+      );
 
       expect(post).toBeDefined();
     });

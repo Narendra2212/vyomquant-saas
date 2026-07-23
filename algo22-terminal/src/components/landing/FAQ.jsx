@@ -17,20 +17,22 @@ const billingFaqs = [
 
 export default function FAQ() {
   return (
-    <section id="faq" className="py-24 lg:py-32 border-t border-border-default">
+    <section id="faq" className="py-24 lg:py-32 border-t border-border-default/80 bg-bg-surface/30" aria-label="Frequently Asked Questions">
       <div className="section-container">
         <div className="section-inner">
           <div className="text-center mb-16">
-            <div className="text-xs font-mono text-accent-cyan uppercase tracking-wider mb-3">FAQ</div>
-            <h2 className="text-3xl sm:text-4xl font-black text-text-primary">Common Questions</h2>
+            <div className="text-xs font-mono text-accent-cyan uppercase tracking-widest mb-3 font-semibold">FAQ</div>
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black text-text-primary mb-4 tracking-tight">Common Questions</h2>
+            <p className="text-text-secondary max-w-xl mx-auto text-base sm:text-lg">Everything you need to know about VyomQuant platform and billing.</p>
           </div>
-          <div className="max-w-3xl mx-auto space-y-10">
+          
+          <div className="max-w-3xl mx-auto space-y-12">
             <div>
-              <div className="text-xs font-mono text-text-muted mb-4">// PLATFORM</div>
+              <div className="text-xs font-mono text-text-muted uppercase tracking-wider mb-4 font-semibold">// PLATFORM & TRADING</div>
               <Accordion items={platformFaqs} defaultOpen={[0]} />
             </div>
             <div>
-              <div className="text-xs font-mono text-text-muted mb-4">// BILLING</div>
+              <div className="text-xs font-mono text-text-muted uppercase tracking-wider mb-4 font-semibold">// SECURITY & BILLING</div>
               <Accordion items={billingFaqs} defaultOpen={[0]} />
             </div>
           </div>

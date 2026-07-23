@@ -18,10 +18,10 @@ import { describe, it, expect } from 'vitest';
  * @returns {Object} - Transformed data for UI consumption
  */
 function mapBackendToUIPortfolio(backendData) {
-  // Defensive null-check to prevent runtime crashes
-  if (!backendData || typeof backendData !== 'object') {
+  // Defensive null & non-object check to prevent runtime crashes
+  if (backendData === null || backendData === undefined || typeof backendData !== 'object' || Array.isArray(backendData)) {
     const escalationError = new Error(
-      `[PortfolioAPI] Invalid backend response: expected object, received ${typeof backendData}`
+      `[PortfolioAPI] Invalid backend response: expected object, received ${backendData === null ? 'null' : Array.isArray(backendData) ? 'array' : typeof backendData}`
     );
     escalationError.code = 'PORTFOLIO_ADAPTER_NULL_DATA';
     throw escalationError;
@@ -39,14 +39,22 @@ function mapBackendToUIPortfolio(backendData) {
   // Type validation to catch schema drift early
   const requiredNumericFields = ['total_value', 'unrealized_pnl', 'realized_pnl', 'roi_percentage'];
   for (const field of requiredNumericFields) {
-    if (typeof transformedData[field] !== 'number' || isNaN(transformedData[field])) {
+    const val = transformedData[field];
+    if (typeof val !== 'number' || isNaN(val) || !isFinite(val)) {
       const escalationError = new Error(
-        `[PortfolioAPI] Type mismatch in field '${field}': expected number, received ${typeof transformedData[field]}`
+        `[PortfolioAPI] Type mismatch in field '${field}': expected number, received ${typeof val}`
       );
       escalationError.code = 'PORTFOLIO_ADAPTER_TYPE_MISMATCH';
       escalationError.field = field;
-      escalationError.receivedValue = transformedData[field];
+      escalationError.receivedValue = val;
       throw escalationError;
+    }
+  }
+
+  // Normalize negative zero to zero
+  for (const field of requiredNumericFields) {
+    if (Object.is(transformedData[field], -0)) {
+      transformedData[field] = 0;
     }
   }
 
@@ -58,10 +66,6 @@ function mapBackendToUIPortfolio(backendData) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('mapBackendToUIPortfolio', () => {
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // HAPPY PATH TESTS
-  // ─────────────────────────────────────────────────────────────────────────
 
   describe('Happy Path - Valid Backend Responses', () => {
 
@@ -161,10 +165,6 @@ describe('mapBackendToUIPortfolio', () => {
     });
   });
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // ALTERNATIVE FIELD NAME TESTS (Schema Evolution Support)
-  // ─────────────────────────────────────────────────────────────────────────
-
   describe('Alternative Field Names - Schema Evolution', () => {
 
     it('should fallback to portfolio_equity if total_value is missing', () => {
@@ -254,10 +254,6 @@ describe('mapBackendToUIPortfolio', () => {
     });
   });
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // NULL & UNDEFINED HANDLING TESTS
-  // ─────────────────────────────────────────────────────────────────────────
-
   describe('Null and Undefined Handling', () => {
 
     it('should throw PORTFOLIO_ADAPTER_NULL_DATA for null input', () => {
@@ -315,7 +311,6 @@ describe('mapBackendToUIPortfolio', () => {
     it('should handle missing fields (partial response)', () => {
       const backendResponse = {
         total_value: 100000
-        // Missing: unrealized_pnl, realized_pnl, roi_percentage
       };
 
       const result = mapBackendToUIPortfolio(backendResponse);
@@ -337,10 +332,6 @@ describe('mapBackendToUIPortfolio', () => {
       });
     });
   });
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // TYPE VALIDATION & COERCION TESTS
-  // ─────────────────────────────────────────────────────────────────────────
 
   describe('Type Validation and Coercion Edge Cases', () => {
 
@@ -420,10 +411,6 @@ describe('mapBackendToUIPortfolio', () => {
     });
   });
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // EXTRA FIELDS PRESERVATION TESTS
-  // ─────────────────────────────────────────────────────────────────────────
-
   describe('Extra Fields Handling', () => {
 
     it('should ignore extra fields not in UI schema', () => {
@@ -451,10 +438,6 @@ describe('mapBackendToUIPortfolio', () => {
     });
   });
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // NEGATIVE ZERO & EDGE CASES
-  // ─────────────────────────────────────────────────────────────────────────
-
   describe('Edge Cases and Special Numeric Values', () => {
 
     it('should handle negative zero (-0)', () => {
@@ -467,7 +450,6 @@ describe('mapBackendToUIPortfolio', () => {
 
       const result = mapBackendToUIPortfolio(backendResponse);
 
-      // -0 === 0 in JavaScript, but Object.is would show difference
       expect(result.total_value).toBe(0);
       expect(result.unrealized_pnl).toBe(0);
       expect(result.realized_pnl).toBe(0);
@@ -495,7 +477,7 @@ describe('mapBackendToUIPortfolio', () => {
         total_value: Number.MAX_SAFE_INTEGER,
         unrealized_pnl: Number.MAX_SAFE_INTEGER,
         realized_pnl: Number.MAX_SAFE_INTEGER,
-        roi_percentage: 9007199254740991  // Same value
+        roi_percentage: 9007199254740991
       };
 
       const result = mapBackendToUIPortfolio(backendResponse);
@@ -521,10 +503,6 @@ describe('mapBackendToUIPortfolio', () => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// STATIC ANALYSIS: Memory Leak & Async Pattern Verification
-// ═══════════════════════════════════════════════════════════════════════════
-
 describe('Static Analysis - Service Layer Patterns', () => {
 
   it('adapter function should be pure (no side effects)', () => {
@@ -543,7 +521,6 @@ describe('Static Analysis - Service Layer Patterns', () => {
   });
 
   it('adapter function should not use global state', () => {
-    // Verify no global variable references in function source
     const functionSource = mapBackendToUIPortfolio.toString();
 
     expect(functionSource).not.toMatch(/window\./);
@@ -573,27 +550,3 @@ describe('Static Analysis - Service Layer Patterns', () => {
     });
   });
 });
-
-// ═══════════════════════════════════════════════════════════════════════════
-// TEST SUMMARY OUTPUT
-// ═══════════════════════════════════════════════════════════════════════════
-
-console.log(`
-╔════════════════════════════════════════════════════════════════════════════╗
-║                    PORTFOLIO ADAPTER TEST SUITE                            ║
-╠════════════════════════════════════════════════════════════════════════════╣
-║ Total Test Categories: 6                                                   ║
-║ - Happy Path Tests                                                        ║
-║ - Alternative Field Names (Schema Evolution)                              ║
-║ - Null & Undefined Handling                                               ║
-║ - Type Validation & Coercion                                              ║
-║ - Extra Fields Handling                                                   ║
-║ - Edge Cases & Special Values                                             ║
-╠════════════════════════════════════════════════════════════════════════════╣
-║ Static Analysis Checks: 4                                                  ║
-║ - Pure function verification                                               ║
-║ - No global state dependencies                                             ║
-║ - No blocking operations                                                   ║
-║ - Error code convention compliance                                         ║
-╚════════════════════════════════════════════════════════════════════════════╝
-`);

@@ -34,56 +34,90 @@ const tiers = [
 
 export default function Pricing() {
   const [isAnnual, setIsAnnual] = useState(false)
+  
   return (
-    <section id="pricing" className="py-24 lg:py-32 border-t border-border-default">
+    <section id="pricing" className="py-24 lg:py-32 border-t border-border-default/80" aria-label="Pricing Tiers">
       <div className="section-container">
         <div className="section-inner">
           <div className="text-center mb-16">
-            <div className="text-xs font-mono text-accent-cyan uppercase tracking-wider mb-3">Pricing</div>
-            <h2 className="text-3xl sm:text-4xl font-black text-text-primary mb-4">Infrastructure Tiers</h2>
-            <p className="text-text-secondary max-w-xl mx-auto mb-8">Billed monthly. Annual plans available with 20% reduction.</p>
-            <div className="inline-flex items-center gap-4 p-1.5 rounded-xl bg-bg-elevated border border-border-default">
-              <button onClick={() => setIsAnnual(false)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${!isAnnual ? 'bg-accent-cyan text-text-inverse' : 'text-text-secondary hover:text-text-primary'}`}>Monthly</button>
-              <button onClick={() => setIsAnnual(true)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${isAnnual ? 'bg-accent-cyan text-text-inverse' : 'text-text-secondary hover:text-text-primary'}`}>
+            <div className="text-xs font-mono text-accent-cyan uppercase tracking-widest mb-3 font-semibold">Pricing</div>
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black text-text-primary mb-4 tracking-tight">Infrastructure Tiers</h2>
+            <p className="text-text-secondary max-w-xl mx-auto mb-8 text-base sm:text-lg">Billed monthly. Annual plans available with 20% reduction.</p>
+            
+            {/* Monthly / Annual Toggle */}
+            <div className="inline-flex items-center gap-3 p-1.5 rounded-2xl bg-bg-surface border border-border-default/80 shadow-md">
+              <button 
+                onClick={() => setIsAnnual(false)} 
+                className={`px-5 py-2.5 rounded-xl text-sm font-bold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan ${!isAnnual ? 'bg-accent-cyan text-text-inverse shadow-md' : 'text-text-secondary hover:text-text-primary'}`}
+              >
+                Monthly
+              </button>
+              <button 
+                onClick={() => setIsAnnual(true)} 
+                className={`px-5 py-2.5 rounded-xl text-sm font-bold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan ${isAnnual ? 'bg-accent-cyan text-text-inverse shadow-md' : 'text-text-secondary hover:text-text-primary'}`}
+              >
                 Annual
-                <span className="ml-1.5 text-xs bg-accent-profit-dim text-accent-profit px-1.5 py-0.5 rounded">Save 20%</span>
+                <span className="ml-2 text-xs bg-accent-profit-dim text-accent-profit font-semibold px-2 py-0.5 rounded-md border border-accent-profit/20">Save 20%</span>
               </button>
             </div>
           </div>
-          <div className="grid md:grid-cols-3 gap-6 max-w-5xl mx-auto">
+
+          <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto items-stretch">
             {tiers.map((tier) => (
-              <div key={tier.name} className={`relative card-surface p-6 flex flex-col ${tier.highlighted ? 'border-accent-cyan/30 shadow-xl shadow-accent-cyan/5 lg:scale-105 z-10' : ''}`}>
+              <div 
+                key={tier.name} 
+                className={`relative card-surface p-8 flex flex-col h-full rounded-2xl transition-all duration-300 ${
+                  tier.highlighted 
+                    ? 'border-2 border-accent-cyan bg-bg-surface shadow-[0_0_50px_rgba(0,212,255,0.15)] lg:-translate-y-2 z-10' 
+                    : 'border border-border-default/80 bg-bg-surface/70 hover:border-border-default hover:bg-bg-elevated/50'
+                }`}
+              >
                 {tier.badge && (
-                  <div className={`absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-xs font-bold ${tier.name === 'Elite' ? 'bg-accent-gold-dim text-accent-gold border border-accent-gold/20' : 'bg-accent-cyan-dim text-accent-cyan border border-accent-cyan/20'}`}>
+                  <div className={`absolute -top-3.5 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full text-xs font-extrabold tracking-wider uppercase shadow-md ${
+                    tier.name === 'Elite' 
+                      ? 'bg-accent-gold text-text-inverse border border-accent-gold/40' 
+                      : 'bg-accent-cyan text-text-inverse shadow-[0_0_15px_rgba(0,212,255,0.4)]'
+                  }`}>
                     {tier.badge}
                   </div>
                 )}
+                
                 <div className="mb-6">
-                  <h3 className="text-lg font-bold text-text-primary mb-1">{tier.name}</h3>
+                  <h3 className="text-xl font-bold text-text-primary mb-1.5">{tier.name}</h3>
                   <p className="text-sm text-text-secondary">{tier.description}</p>
                 </div>
-                <div className="mb-6">
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-4xl font-black text-text-primary">${isAnnual ? (tier.price.annual / 12).toFixed(0) : tier.price.monthly}</span>
-                    <span className="text-text-muted text-sm">/month</span>
+
+                <div className="mb-6 pb-6 border-b border-border-default/60">
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-4xl sm:text-5xl font-black text-text-primary tracking-tight">
+                      ${isAnnual ? (tier.price.annual / 12).toFixed(0) : tier.price.monthly}
+                    </span>
+                    <span className="text-text-muted text-sm font-medium">/month</span>
                   </div>
                   {isAnnual && tier.price.annual > 0 && (
-                    <p className="text-xs text-text-muted mt-1 font-mono">Billed at ${tier.price.annual}/yr — save 20%</p>
+                    <p className="text-xs text-accent-profit mt-1.5 font-mono font-medium">Billed at ${tier.price.annual}/yr — save 20%</p>
                   )}
                 </div>
-                <ul className="space-y-3 mb-8 flex-1">
+
+                <ul className="space-y-3.5 mb-8 flex-1">
                   {tier.features.map((feature, fi) => (
-                    <li key={fi} className="flex items-start gap-3 text-sm text-text-secondary">
-                      <Check className="w-4 h-4 text-accent-profit flex-shrink-0 mt-0.5" />
+                    <li key={fi} className="flex items-start gap-3 text-sm text-text-secondary font-medium">
+                      <Check className="w-4.5 h-4.5 text-accent-profit flex-shrink-0 mt-0.5" />
                       {feature}
                     </li>
                   ))}
                 </ul>
-                <Link to="/signup" className={`w-full text-center py-3 rounded-xl font-semibold text-sm transition-all ${
-                  tier.highlighted ? 'bg-accent-cyan text-text-inverse hover:shadow-lg hover:shadow-accent-cyan/30' :
-                  tier.name === 'Elite' ? 'bg-accent-gold-dim text-accent-gold border border-accent-gold/20 hover:bg-accent-gold/20' :
-                  'border border-border-default text-text-primary hover:bg-bg-elevated'
-                }`}>
+
+                <Link 
+                  to="/signup" 
+                  className={`w-full text-center py-3.5 rounded-xl font-bold text-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan ${
+                    tier.highlighted 
+                      ? 'bg-accent-cyan text-text-inverse hover:bg-accent-cyan/90 shadow-[0_0_25px_rgba(0,212,255,0.3)] hover:shadow-[0_0_35px_rgba(0,212,255,0.45)]' 
+                      : tier.name === 'Elite' 
+                      ? 'bg-accent-gold-dim text-accent-gold border border-accent-gold/30 hover:bg-accent-gold/20' 
+                      : 'border border-border-default text-text-primary hover:bg-bg-elevated hover:border-accent-cyan/40'
+                  }`}
+                >
                   {tier.cta}
                 </Link>
               </div>

@@ -1,11 +1,50 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
 
 <head>
   <meta charset="UTF-8" />
   <link rel="icon" type="image/svg+xml" href="/vite.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ALGO22 Quant Terminal</title>
+  
+  <!-- Primary SEO Meta Tags -->
+  <title>VyomQuant — Institutional Quantitative Trading Terminal & Algorithmic SaaS</title>
+  <meta name="title" content="VyomQuant — Institutional Quantitative Trading Terminal & Algorithmic SaaS" />
+  <meta name="description" content="Institutional-grade algorithmic trading infrastructure featuring visual strategy design (DAG), VectorBT backtesting, paper trading, XGBoost ML integration, and automated exchange execution." />
+  <meta name="keywords" content="quantitative trading, algorithmic trading, backtesting, vectorbt, strategy builder, crypto trading bot, python trading, xgboost trading, automated trading SaaS" />
+  <meta name="author" content="VyomQuant Technologies" />
+  <meta name="theme-color" content="#0a0e17" />
+  
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://vyomquant.in/" />
+  <meta property="og:title" content="VyomQuant — Institutional Quantitative Trading Terminal" />
+  <meta property="og:description" content="Build, backtest, and deploy quantitative trading strategies with visual DAG builder, vectorized backtesting, and institutional risk management." />
+  <meta property="og:image" content="https://vyomquant.in/og-image.png" />
+
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image" />
+  <meta property="twitter:url" content="https://vyomquant.in/" />
+  <meta property="twitter:title" content="VyomQuant — Institutional Quantitative Trading Terminal" />
+  <meta property="twitter:description" content="Build, backtest, and deploy quantitative trading strategies with visual DAG builder, vectorized backtesting, and institutional risk management." />
+  <meta property="twitter:image" content="https://vyomquant.in/og-image.png" />
+
+  <!-- JSON-LD Structured Metadata -->
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "VyomQuant",
+      "operatingSystem": "Web, Windows, macOS",
+      "applicationCategory": "FinanceApplication",
+      "offers": {
+        "@type": "Offer",
+        "price": "0.00",
+        "priceCurrency": "USD"
+      },
+      "description": "Institutional-grade algorithmic trading platform featuring visual strategy DAG design, backtesting, and live execution."
+    }
+  </script>
+
   <script>
     // Safe global fallbacks for E2E testing
     window.TEST_USER = window.TEST_USER || {
@@ -13,7 +52,8 @@
       email: 'test@test.com'
     };
   </script>
-  <!-- Native Lightweight Telemetry for Beta (avoids vendor lock-in build deps) -->
+  
+  <!-- Native Lightweight Telemetry for Beta -->
   <script type="text/javascript">
     (function () {
       var sentryDsn = "%VITE_SENTRY_DSN%";
@@ -44,7 +84,8 @@
       }
     })();
   </script>
-  <!-- Dynamic Google Analytics and Microsoft Clarity Loader -->
+  
+  <!-- Dynamic Analytics Loader -->
   <script type="text/javascript">
     (function () {
       var gaId = "%VITE_GA_TRACKING_ID%";
@@ -66,7 +107,6 @@
         window.gtag = function () { window.dataLayer.push(arguments); };
         window.gtag('js', new Date());
         window.gtag('config', gaId);
-        console.log("GA4 initialized with ID:", gaId);
       } else {
         window.gtag = function () {
           console.log("[DEV/TEST] Google Analytics Event:", arguments);
@@ -79,7 +119,6 @@
           t = l.createElement(r); t.async = 1; t.src = "https://www.clarity.ms/tag/" + i;
           y = l.getElementsByTagName(r)[0]; y.parentNode.insertBefore(t, y);
         })(window, document, "clarity", "script", clarityId);
-        console.log("Microsoft Clarity initialized with ID:", clarityId);
       } else {
         window.clarity = function () {
           console.log("[DEV/TEST] Microsoft Clarity Event:", arguments);
@@ -89,7 +128,7 @@
   </script>
 </head>
 
-<body>
+<body class="bg-[#0a0e17] text-[#f1f5f9] antialiased selection:bg-[#00d4ff]/20 selection:text-[#00d4ff]">
   <div id="root"></div>
   <script type="module" src="/src/main.jsx"></script>
 </body>
