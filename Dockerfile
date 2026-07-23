@@ -22,7 +22,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY backend_app/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir gunicorn httpx redis && \
-    pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir --prefer-binary -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu && \
     find /opt/venv -type f -name '*.pyc' -delete && \
     find /opt/venv -type d -name '__pycache__' -delete
 
