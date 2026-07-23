@@ -40,7 +40,10 @@ class Settings:
     SUPABASE_URL: Optional[str] = os.getenv("SUPABASE_URL")
     SUPABASE_ANON_KEY: Optional[str] = os.getenv("SUPABASE_ANON_KEY")
     SUPABASE_SERVICE_ROLE_KEY: Optional[str] = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    SUPABASE_JWT_SECRET: Optional[str] = os.getenv("SUPABASE_JWT_SECRET")
+    SUPABASE_JWT_SECRET: Optional[str] = os.getenv(
+        "SUPABASE_JWT_SECRET",
+        "dummy-supabase-jwt-secret-dev" if os.getenv("DEV_MODE", "false").lower() in ("true", "1", "yes") or os.getenv("ENV", "").lower() in ("test", "testing") else None
+    )
     
     # ==========================================
     # QUESTDB CONFIGURATION
