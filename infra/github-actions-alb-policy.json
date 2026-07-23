@@ -1,0 +1,123 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadOnlyDescribeAndListPermissions",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeVpcs",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeSecurityGroups",
+        "ec2:GetSecurityGroupsForVpc",
+        "ec2:DescribeRouteTables",
+        "ec2:DescribeInternetGateways",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeLoadBalancerAttributes",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetGroupAttributes",
+        "elasticloadbalancing:DescribeTargetHealth",
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:DescribeRules",
+        "acm:ListCertificates"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "EC2SecurityGroupManagement",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateSecurityGroup",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:CreateTags",
+        "ec2:DeleteSecurityGroup"
+      ],
+      "Resource": [
+        "arn:aws:ec2:ap-southeast-1:273709947018:security-group/*",
+        "arn:aws:ec2:ap-southeast-1:273709947018:vpc/vpc-0f3e7b3f243fbc133"
+      ]
+    },
+    {
+      "Sid": "ELBv2TargetGroupAndLoadBalancerCreation",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:CreateLoadBalancer",
+        "elasticloadbalancing:CreateTargetGroup"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-southeast-1"
+        }
+      }
+    },
+    {
+      "Sid": "ELBv2ResourceManagement",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:ModifyLoadBalancerAttributes",
+        "elasticloadbalancing:DeleteLoadBalancer",
+        "elasticloadbalancing:ModifyTargetGroup",
+        "elasticloadbalancing:ModifyTargetGroupAttributes",
+        "elasticloadbalancing:DeleteTargetGroup",
+        "elasticloadbalancing:RegisterTargets",
+        "elasticloadbalancing:DeregisterTargets",
+        "elasticloadbalancing:DescribeTargetHealth",
+        "elasticloadbalancing:CreateListener",
+        "elasticloadbalancing:ModifyListener",
+        "elasticloadbalancing:DeleteListener",
+        "elasticloadbalancing:CreateRule",
+        "elasticloadbalancing:ModifyRule",
+        "elasticloadbalancing:DeleteRule",
+        "elasticloadbalancing:AddTags",
+        "elasticloadbalancing:RemoveTags"
+      ],
+      "Resource": [
+        "arn:aws:elasticloadbalancing:ap-southeast-1:273709947018:loadbalancer/app/vyomquant-alb/*",
+        "arn:aws:elasticloadbalancing:ap-southeast-1:273709947018:targetgroup/vyomquant-api-tg/*",
+        "arn:aws:elasticloadbalancing:ap-southeast-1:273709947018:targetgroup/vyomquant-web-tg/*",
+        "arn:aws:elasticloadbalancing:ap-southeast-1:273709947018:listener/app/vyomquant-alb/*",
+        "arn:aws:elasticloadbalancing:ap-southeast-1:273709947018:listener-rule/app/vyomquant-alb/*"
+      ]
+    },
+    {
+      "Sid": "ACMSSLManagerPermissions",
+      "Effect": "Allow",
+      "Action": [
+        "acm:RequestCertificate",
+        "acm:DescribeCertificate",
+        "acm:GetCertificate",
+        "acm:DeleteCertificate",
+        "acm:AddTagsToCertificate"
+      ],
+      "Resource": [
+        "arn:aws:acm:ap-southeast-1:273709947018:certificate/*"
+      ]
+    },
+    {
+      "Sid": "ECSServiceTargetGroupUpdate",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeClusters",
+        "ecs:DescribeServices",
+        "ecs:UpdateService"
+      ],
+      "Resource": [
+        "arn:aws:ecs:ap-southeast-1:273709947018:cluster/vyomquant-cluster",
+        "arn:aws:ecs:ap-southeast-1:273709947018:service/vyomquant-cluster/vyomquant-api-service-cjema2sl",
+        "arn:aws:ecs:ap-southeast-1:273709947018:service/vyomquant-cluster/vyomquant-frontend-service"
+      ]
+    },
+    {
+      "Sid": "ELBv2ServiceLinkedRoleCreation",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "arn:aws:iam::273709947018:role/aws-service-role/elasticloadbalancing.amazonaws.com/AWSServiceRoleForElasticLoadBalancing",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
