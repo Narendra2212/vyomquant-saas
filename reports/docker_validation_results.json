@@ -11,5 +11,6 @@
     "valid": true
   },
   "docker_available": false,
-  "runtime": {}
+  "runtime": {},
+  "total_execution_time_seconds": 0.0
 }

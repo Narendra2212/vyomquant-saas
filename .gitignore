@@ -298,3 +298,26 @@ dwd.pdf
 
 # ── RAILWAY DEPLOYMENT SECRETS ───────────────────────────────────────────────
 railway_vars.txt
+
+# ── GENERATED REPORTS & VALIDATION ARTIFACTS ──────────────────────────────────
+reports/
+!reports/README.md
+!reports/LICENSE
+certification/
+validation/
+audit/
+generated/
+artifacts/
+benchmarks/
+profile/
+debug/
+coverage/
+htmlcov/
+*.log
+*.tmp
+*.cache
+*.coverage
+ruff_*.json
+ruff_*.txt
+deleted_files*.md
+
