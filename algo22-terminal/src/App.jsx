@@ -51,6 +51,7 @@ import {
   Brain, GitBranch, Server, WifiOff, Loader2
 } from "lucide-react";
 import SupportPage from "./SupportPage";
+import StrategyMarketplace from './pages/StrategyMarketplace';
 import NotificationsPage from './components/NotificationsPage';
 import DrawdownMonitor, { DRAWDOWN_LEVELS } from './components/DrawdownMonitor';
 import KillSwitchBanner from './components/KillSwitchBanner';
@@ -1492,9 +1493,7 @@ const NAV = [
   { id: "dashboard", lbl: "Dashboard", Icon: LayoutDashboard, g: "core" },
   { id: "bot-monitor", lbl: "Bot Monitor", Icon: Bot, g: "core" },
   { id: "signal-trace", lbl: "Signal Trace", Icon: Activity, g: "core" },
-  // Infrastructure Ops removed from client navigation - admin only
-  // Terminal removed - not applicable for algo-only platform
-  // Live Trading disabled - {id:"trading", lbl:"Live Trading", Icon:TrendingUp, g:"core"},
+  { id: "marketplace", lbl: "Marketplace", Icon: Hexagon, g: "core" },
   { id: "builder", lbl: "Strategy Builder", Icon: Cpu, g: "core" },
   { id: "strategies", lbl: "Strategies", Icon: Layers, g: "core" },
   // portfolio removed - manual trading feature not applicable
@@ -8073,6 +8072,7 @@ function App() {
     // Live Trading disabled - trading: <LiveTrading />,
     builder: <StrategyBuilder onBack={() => go("strategies")} onBacktest={(payload) => { setActiveBacktestStrategy(payload); go("backtest"); }} />,
     strategies: <Strategies go={go} resumeBuilderStrategy={resumeBuilderStrategy} onResumeBuilderConsumed={() => setResumeBuilderStrategy(null)} />,
+    marketplace: <StrategyMarketplace go={go} setResumeBuilderStrategy={setResumeBuilderStrategy} />,
     backtest: <Backtester strategy={activeBacktestStrategy} onBack={() => { setResumeBuilderStrategy(activeBacktestStrategy); go("strategies"); }} />,
     // portfolio removed - manual trading feature not applicable
     // history removed - manual trading feature not applicable
@@ -8137,6 +8137,14 @@ export default function AppWrapper() {
             element={
               <Suspense fallback={<div style={{ background: '#080A0E', minHeight: '100vh' }} />}>
                 <DownloadPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/marketplace"
+            element={
+              <Suspense fallback={<div style={{ background: '#080A0E', minHeight: '100vh' }} />}>
+                <StrategyMarketplace go={() => {}} />
               </Suspense>
             }
           />

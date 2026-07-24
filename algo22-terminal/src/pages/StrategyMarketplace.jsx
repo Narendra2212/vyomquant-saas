@@ -79,7 +79,7 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await client.get('/api/library/admin/pending');
+      const res = await client.get('/api/admin/library/pending');
       setPendingStrategies(res.data.items || []);
     } catch (err) {
       console.error(err);
@@ -173,7 +173,7 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
   // Admin Actions
   const handleModerate = async (id, status, isFeatured = false) => {
     try {
-      await client.patch(`/api/library/admin/${id}`, {
+      await client.patch(`/api/admin/library/${id}`, {
         moderation_status: status,
         is_featured: isFeatured
       });

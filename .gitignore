@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════════════════════════
-#  AERORA QUANT PLATFORM — Comprehensive .gitignore
-#  Git Release Engineer — Audited 2026-07-20
+#  VYOMQUANT SAAS PLATFORM — Comprehensive .gitignore
+#  Git Release Engineer — Audited 2026-07-24
 #  NEVER commit: secrets, keys, databases, caches, compiled files, large binaries
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -39,7 +39,7 @@ railway_vars.txt
 
 # ── PYTHON ───────────────────────────────────────────────────────────────────
 __pycache__/
-**/__pycache__/
+/**/__pycache__/
 *.py[cod]
 *$py.class
 *.pyc
@@ -74,7 +74,7 @@ python_portable/
 **/venv/
 **/.venv/
 
-# ── NODE / FRONTEND ──────────────────────────────────────────────────────────
+# ── NODE / FRONTEND & ELECTRON RELEASES ─────────────────────────────────────
 node_modules/
 **/node_modules/
 npm-debug.log*
@@ -90,15 +90,40 @@ lerna-debug.log*
 .yarn/install-state.gz
 .pnp.*
 
-# Build outputs
+# Portable Node binaries & caches
+node-v20.18.0-win-x64/
+node-v22.14.0-win-x64/
+
+# Build outputs & Electron/Tauri release artifacts
 dist/
+**/dist/
 build/
+**/build/
 .next/
 .nuxt/
 out/
 .output/
 .cache/
 .parcel-cache/
+
+# Release installers & bundler directories
+releases/
+**/releases/
+releases_dist/
+**/releases_dist/
+public/releases/
+**/public/releases/
+win-unpacked/
+**/win-unpacked/
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.deb
+*.blockmap
+*.asar
+builder-debug.yml
+builder-effective-config.yaml
 
 # ── DATABASES ────────────────────────────────────────────────────────────────
 *.db
@@ -151,7 +176,7 @@ coverage.xml
 *.bak
 *.orig
 .windsurf/
-*.DS_Store
+.DS_Store
 Thumbs.db
 ehthumbs.db
 Desktop.ini
@@ -179,7 +204,6 @@ Thumbs.db:encryptable
 *.bz2
 *.xz
 *.pkg
-*.dmg
 *.iso
 questdb*.tar.gz
 questdb-*/
@@ -210,14 +234,9 @@ audit_package/
 audit_package*/
 
 # ── DUPLICATE / LEGACY BACKEND DIRECTORIES ───────────────────────────────────
-# aerora_quant_platform/ — monorepo scaffold with duplicated code, not deployed
 aerora_quant_platform/
-# aerora_quant_backend_updated_final1/ — nested full-repo copy (older, flat-import version)
 aerora_quant_backend_updated_final1/
-# connection_layer/ — confirmed duplicate of backend_app/ (older flat-import style)
-# backend_app/ is the canonical backend; connection_layer/ is excluded
 connection_layer/
-# NOTE: algo22-terminal/ is the CANONICAL frontend — it is NOT ignored here
 
 # ── TEST ARTIFACTS ───────────────────────────────────────────────────────────
 test_db_cert_*.db
@@ -296,9 +315,6 @@ safe_delete_candidates.md
 *.pdf
 dwd.pdf
 
-# ── RAILWAY DEPLOYMENT SECRETS ───────────────────────────────────────────────
-railway_vars.txt
-
 # ── GENERATED REPORTS & VALIDATION ARTIFACTS ──────────────────────────────────
 reports/
 !reports/README.md
@@ -320,4 +336,3 @@ htmlcov/
 ruff_*.json
 ruff_*.txt
 deleted_files*.md
-

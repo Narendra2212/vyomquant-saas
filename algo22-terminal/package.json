@@ -1,15 +1,56 @@
 {
   "name": "algo22-terminal",
+  "productName": "VyomQuant",
   "private": true,
   "version": "0.1.0",
+  "description": "VyomQuant — Algorithmic Trading Terminal by Aerora Dynamics",
+  "author": "Aerora Dynamics Private Limited",
+  "homepage": "https://vyomquant.in",
   "type": "module",
+  "main": "electron-main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest",
-    "test:ui": "vitest --ui"
+    "test:ui": "vitest --ui",
+    "electron:build": "vite build && electron-builder",
+    "electron:build:win": "vite build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.aerora.vyomquant",
+    "productName": "VyomQuant",
+    "copyright": "Copyright © 2026 Aerora Dynamics Private Limited",
+    "directories": {
+      "output": "releases_dist"
+    },
+    "files": [
+      "dist/**/*",
+      "electron-main.js",
+      "package.json"
+    ],
+    "win": {
+      "target": ["nsis"],
+      "icon": "public/vite.svg"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "VyomQuant"
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.finance",
+      "icon": "public/vite.svg"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Finance",
+      "icon": "public/vite.svg"
+    }
   },
   "dependencies": {
     "@sentry/react": "^10.56.0",
@@ -39,6 +80,8 @@
     "@types/node": "^25.6.0",
     "@vitejs/plugin-react": "^4.6.0",
     "autoprefixer": "^10.5.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
     "eslint": "^10.4.1",
     "jsdom": "^23.2.0",
     "postcss": "^8.5.12",
