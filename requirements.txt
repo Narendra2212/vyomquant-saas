@@ -8,7 +8,7 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 websockets==12.0
 python-multipart==0.0.9
-
+rq==1.16.2
 # --- Auth + Database -----------------------------------------------------
 supabase==2.7.4
 cryptography==43.0.0
