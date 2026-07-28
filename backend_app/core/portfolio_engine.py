@@ -259,3 +259,76 @@ class PortfolioEngine:
         """Reset all allocations and positions"""
         self.current_allocations = {}
         self.active_positions = {}
+
+    # ----------------------------------
+    # METRICS & AGGREGATION HELPERS
+    # ----------------------------------
+    def get_portfolio_metrics(self, current_prices: Optional[Dict[str, float]] = None) -> dict:
+        """
+        Calculates aggregated portfolio metrics including valuation, exposure, and unrealized PnL.
+        """
+        prices = current_prices or {}
+        total_positions_val = 0.0
+        total_unrealized_pnl = 0.0
+
+        for symbol, pos in self.active_positions.items():
+            price = prices.get(symbol, pos.get("entry_price", 0.0))
+            size = pos.get("size", 0.0)
+            entry_price = pos.get("entry_price", 0.0)
+            val = size * price
+            pnl = (price - entry_price) * size
+            total_positions_val += val
+            total_unrealized_pnl += pnl
+
+        available_cash = self.total_capital - self.get_total_exposed()
+        total_equity = available_cash + total_positions_val
+
+        return {
+            "total_capital": self.total_capital,
+            "total_equity": total_equity,
+            "cash_balance": available_cash,
+            "positions_value": total_positions_val,
+            "unrealized_pnl": total_unrealized_pnl,
+            "exposure_pct": (total_positions_val / self.total_capital * 100) if self.total_capital > 0 else 0.0,
+            "open_positions_count": len(self.active_positions),
+        }
+
+    def get_exposure_by_symbol(self, current_prices: Optional[Dict[str, float]] = None) -> Dict[str, dict]:
+        """
+        Calculates symbol-level exposure breakdown.
+        """
+        prices = current_prices or {}
+        exposures = {}
+        for symbol, pos in self.active_positions.items():
+            price = prices.get(symbol, pos.get("entry_price", 0.0))
+            size = pos.get("size", 0.0)
+            notional = size * price
+            exposures[symbol] = {
+                "symbol": symbol,
+                "size": size,
+                "entry_price": pos.get("entry_price", 0.0),
+                "current_price": price,
+                "notional_value": notional,
+                "unrealized_pnl": (price - pos.get("entry_price", 0.0)) * size,
+            }
+        return exposures
+
+    def get_health_status(self) -> dict:
+        """
+        Evaluates portfolio health and constraint compliance.
+        """
+        exposed_pct = self.get_total_exposed() / self.total_capital if self.total_capital > 0 else 0.0
+        status = "healthy"
+        issues = []
+        if exposed_pct > 0.90:
+            status = "warning"
+            issues.append("Portfolio leverage/exposure > 90%")
+        if len(self.active_positions) >= self.max_positions:
+            issues.append(f"Max positions limit reached ({self.max_positions})")
+
+        return {
+            "status": status,
+            "issues": issues,
+            "position_count": len(self.active_positions),
+            "max_positions": self.max_positions,
+        }

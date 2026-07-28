@@ -64,6 +64,8 @@ export class ApiError extends Error {
 
   /**
    * Get user-friendly error message
+   * Probes the normalized APIErrorResponse fields in priority order:
+   *   message (primary) → detail (backward-compat) → error (code fallback)
    */
   getUserMessage() {
     switch (this.category) {
@@ -74,7 +76,12 @@ export class ApiError extends Error {
       case 'SERVER_ERROR':
         return 'Server error occurred. Please try again later.';
       case 'CLIENT_ERROR':
-        return this.data?.message || this.data?.detail || 'Request failed. Please check your input.';
+        return (
+          this.data?.message ||
+          (typeof this.data?.detail === 'string' ? this.data.detail : null) ||
+          this.data?.error ||
+          'Request failed. Please check your input.'
+        );
       default:
         return 'An unexpected error occurred. Please try again.';
     }
@@ -619,7 +626,9 @@ client.interceptors.request.use(
     // Always attach token if present (including dev_bypass for E2E tests)
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
-      console.log("🔐 TOKEN USED:", token.substring(0, 20) + "...");
+      if (import.meta.env.DEV && import.meta.env.VITE_DEBUG_AUTH === "true") {
+        console.log("🔐 TOKEN ATTACHED");
+      }
     }
     console.log("📡 REQUEST:", config.url);
     // Add request ID for observability
@@ -691,9 +700,11 @@ client.interceptors.response.use(
     };
 
     // Create structured error
+    // Priority: message (new normalized field) → detail (legacy string) → axios message
     const apiError = new ApiError(
       error.response?.data?.message ||
-      error.response?.data?.detail ||
+      (typeof error.response?.data?.detail === 'string' ? error.response.data.detail : null) ||
+      error.response?.data?.error ||
       error.message ||
       'Request failed',
       errorConfig

@@ -10,7 +10,7 @@ import asyncio
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from backend.websocket_cluster import (
+from backend_app.backend.websocket_cluster import (
     ConnectionState,
     ConnectionInfo,
     ShardAssignment,

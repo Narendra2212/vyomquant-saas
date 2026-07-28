@@ -150,6 +150,10 @@
           "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/MASTER_ENCRYPTION_KEYS-Xxj5iE"
         },
         {
+          "name": "CREDENTIAL_VAULT_SALT",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/CREDENTIAL_VAULT_SALT-Abc123"
+        },
+        {
           "name": "JWT_SECRET",
           "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/JWT_SECRET-45DcjW"
         }

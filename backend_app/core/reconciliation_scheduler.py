@@ -120,11 +120,11 @@ class ReconciliationScheduler:
           2. Escalate each one according to severity.
           3. Re-escalate long-standing ESCALATED mismatches.
         """
-        from backend_app.core.database import get_db
+        from backend_app.core.database import get_db_context
         from backend_app.core.models.reconciliation import \
             ReconciliationMismatchRepository
 
-        with get_db() as db:
+        with get_db_context() as db:
             repo = ReconciliationMismatchRepository(db)
 
             # ── Step A: Handle NEW mismatches ──────────────────────────────

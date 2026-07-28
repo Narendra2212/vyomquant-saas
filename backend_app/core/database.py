@@ -13,10 +13,12 @@ import os
 # Import from new pooling module
 try:
     from backend_app.core.database_pool import get_db as _get_db_pool
+    from backend_app.core.database_pool import get_db_context as _get_db_context
     from backend_app.core.database_pool import get_db_pool
 
     # Re-export for backward compatibility
     get_db = _get_db_pool
+    get_db_context = _get_db_context
     POOLING_AVAILABLE = True
 except ImportError:
     POOLING_AVAILABLE = False
@@ -41,9 +43,9 @@ if not POOLING_AVAILABLE:
             connect_args={"check_same_thread": False}
         )
     else:
-        # PostgreSQL with connection pooling
-        POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
-        MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+        # PostgreSQL with connection pooling (calibrated against Supabase 200 pooler limit)
+        POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
+        MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "3"))
         POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))
         POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))
         
@@ -65,9 +67,17 @@ if not POOLING_AVAILABLE:
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base = declarative_base()
     
-    @contextmanager
     def get_db():
-        """Dependency for getting DB sessions."""
+        """FastAPI yield dependency for getting DB sessions."""
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    @contextmanager
+    def get_db_context():
+        """Context manager for direct 'with' statement usage."""
         db = SessionLocal()
         try:
             yield db
@@ -99,7 +109,7 @@ async def check_db_health():
         # Fallback health check
         try:
             from sqlalchemy import text
-            with get_db() as session:
+            with get_db_context() as session:
                 session.execute(text("SELECT 1"))
             return {"status": "healthy", "pooling": False}
         except Exception as e:

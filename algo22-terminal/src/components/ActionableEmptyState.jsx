@@ -7,7 +7,7 @@ const ActionableEmptyState = ({
   description, 
   timeEstimate, 
   actions = [], // Array of { label, onClick, variant: 'primary' | 'secondary' | 'outline' }
-  color = '#2962FF'
+  color = '#00D4FF'
 }) => {
   return (
     <div className="flex flex-col items-center justify-center py-12 px-6 bg-[#080A0D] border border-[#202938] rounded max-w-2xl mx-auto w-full text-center">
@@ -27,7 +27,7 @@ const ActionableEmptyState = ({
             className={`flex items-center gap-2 px-4 py-2 rounded font-mono font-bold text-sm transition-colors ${
               act.variant === 'primary' ? 'text-white' : 
               act.variant === 'secondary' ? 'bg-[#1A222C] text-[#E6EDF3] border border-[#202938] hover:bg-[#202938]' : 
-              'bg-transparent border border-[#2962FF] text-[#2962FF] hover:bg-[#2962FF]20'
+              'bg-transparent border border-[#00D4FF] text-[#00D4FF] hover:bg-[#00D4FF]20'
             }`}
             style={act.variant === 'primary' ? { backgroundColor: color } : {}}
           >

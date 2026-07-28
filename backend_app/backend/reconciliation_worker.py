@@ -201,7 +201,9 @@ class ReconciliationResult:
 # RECONCILIATION WORKER
 # ═══════════════════════════════════════════════════════════════════════════
 
-class ReconciliationWorker:
+from backend_app.core.worker_base import WorkerBase
+
+class ReconciliationWorker(WorkerBase):
     """
     STEP 4: Reconciliation worker that syncs local state with exchange.
     
@@ -227,14 +229,12 @@ class ReconciliationWorker:
         fill_deduplication_manager: Optional[Any] = None,
         enable_fill_reconciliation: bool = True
     ):
+        name = "reconciliation_worker"
+        super().__init__(worker_name=name, poll_interval=interval_seconds)
         self.interval_seconds = interval_seconds
         self.auto_correct = auto_correct
         self.alert_threshold = alert_threshold
         self.exchanges = exchanges or ["binance", "bybit", "okx", "bitget", "kucoin", "coinbase", "kraken"]
-        
-        # State
-        self._running = False
-        self._task: Optional[asyncio.Task] = None
         
         # Exchange clients (user_id -> exchange -> client)
         self._exchange_clients: Dict[str, Dict[str, Any]] = {}
@@ -282,66 +282,43 @@ class ReconciliationWorker:
     
     async def start(self):
         """Start the reconciliation loop."""
-        self._running = True
-        self._task = asyncio.create_task(self._reconciliation_loop())
-        logger.info("[ReconciliationWorker] Started")
+        await super().start()
     
-    async def stop(self):
-        """Stop the reconciliation loop."""
-        self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        logger.info("[ReconciliationWorker] Stopped")
-    
-    async def _reconciliation_loop(self):
-        """Main reconciliation loop."""
-        while self._running:
-            try:
-                start_time = asyncio.get_event_loop().time()
-                
-                # Run reconciliation for all users and exchanges
-                for user_id, exchanges in self._exchange_clients.items():
-                    for exchange_name, client in exchanges.items():
-                        try:
-                            result = await self._reconcile_user_exchange(
-                                user_id, exchange_name, client
-                            )
-                            
-                            # Update metrics
-                            self._update_metrics(result)
-                            
-                            # Notify callbacks
-                            for callback in self._reconciliation_callbacks:
-                                try:
-                                    if asyncio.iscoroutinefunction(callback):
-                                        asyncio.create_task(callback(result))
-                                    else:
-                                        callback(result)
-                                except Exception as e:
-                                    logger.error(f"Reconciliation callback error: {e}")
-                            
-                        except Exception as e:
-                            logger.error(
-                                f"[ReconciliationWorker] Error reconciling "
-                                f"{user_id}@{exchange_name}: {e}"
-                            )
-                
-                # Calculate sleep time to maintain interval
-                elapsed = asyncio.get_event_loop().time() - start_time
-                sleep_time = max(0, self.interval_seconds - elapsed)
-                
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
+    async def process_iteration(self):
+        """Run one reconciliation pass across all registered users/exchanges."""
+        start_time = asyncio.get_event_loop().time()
+        
+        for user_id, exchanges in self._exchange_clients.items():
+            for exchange_name, client in exchanges.items():
+                try:
+                    result = await self._reconcile_user_exchange(
+                        user_id, exchange_name, client
+                    )
                     
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"[ReconciliationWorker] Loop error: {e}")
-                await asyncio.sleep(self.interval_seconds)
+                    # Update metrics
+                    self._update_metrics(result)
+                    
+                    # Notify callbacks
+                    for callback in self._reconciliation_callbacks:
+                        try:
+                            if asyncio.iscoroutinefunction(callback):
+                                asyncio.create_task(callback(result))
+                            else:
+                                callback(result)
+                        except Exception as e:
+                            logger.error(f"Reconciliation callback error: {e}")
+                    
+                except Exception as e:
+                    logger.error(
+                        f"[ReconciliationWorker] Error reconciling "
+                        f"{user_id}@{exchange_name}: {e}"
+                    )
+        
+        # Adjust sleep to maintain interval accounting for reconciliation time
+        elapsed = asyncio.get_event_loop().time() - start_time
+        extra_sleep = self.interval_seconds - elapsed
+        if extra_sleep > 0:
+            await asyncio.sleep(extra_sleep)
     
     async def _reconcile_user_exchange(
         self,

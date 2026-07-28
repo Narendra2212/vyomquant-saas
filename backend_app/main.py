@@ -29,6 +29,7 @@
 
 import logging
 import os
+import secrets
 import sys
 import time
 import traceback
@@ -36,7 +37,8 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 import sentry_sdk
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 #  Global exception handler 
 from fastapi.responses import JSONResponse
@@ -46,13 +48,6 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend_app.api_ws.ws_routes import ws_router
-# Parallel DAG engine
-from backend_app.backend.dag_engine_parallel import \
-    router as parallel_dag_router
-# Event-driven DAG engine
-from backend_app.backend.dag_event_loop import router as event_dag_router
-# Risk-integrated DAG engine
-from backend_app.backend.dag_risk_integration import router as risk_dag_router
 # Market data validation
 from backend_app.backend.market_data_validation import \
     router as validation_router
@@ -92,7 +87,7 @@ from backend_app.core.reconciliation_scheduler import (
 # This must be imported before any engine that could execute trades
 from backend_app.core.safety_config import ExecutionFlags, SafetyMonitor
 from backend_app.core.safety_monitor import log_blocked_execution
-from backend_app.core.security_vault import SecurityVault
+from backend_app.core.supabase_connection import SupabaseConnection
 from backend_app.core.state import app_state
 #  Router imports 
 from backend_app.routers import (admin, analytics, auth, billing, exchange,
@@ -114,14 +109,66 @@ if sentry_dsn:
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        nonce = secrets.token_urlsafe(16)
+        request.state.csp_nonce = nonce
         response = await call_next(request)
+        
+        script_src = (
+            f"'self' 'nonce-{nonce}' "
+            "'sha256-XqyX1qV9pOwHROFtpBLVNTgel4/9fVj08368kkmPLlo=' "
+            "'sha256-oh88oVc5GQIwejvapxT0pN+WATWNhr9pwQMCHNEmvPM=' "
+            "'sha256-0rFfImQBL15VBsxmb0YzGJk4vU4uKemgRXR9f+EHKrM=' "
+            "'sha256-DEymb3mo5Ws6yDucrq927MY8ojwp1g8WEp2otYEec/A=' "
+            "https://cdn.jsdelivr.net "
+            "https://js.sentry-cdn.com "
+            "https://www.googletagmanager.com "
+            "https://www.clarity.ms "
+            "https://checkout.razorpay.com "
+            "https://js.stripe.com"
+        )
+        
+        connect_src = (
+            "'self' "
+            "ws: wss: "
+            "https://*.vyomquant.com wss://*.vyomquant.com "
+            "https://*.vyomquant.in "
+            "https://*.supabase.co wss://*.supabase.co "
+            "https://*.sentry.io "
+            "https://*.clarity.ms "
+            "https://www.google-analytics.com "
+            "https://api.stripe.com "
+            "https://api.razorpay.com"
+        )
+        
+        style_src = (
+            "'self' 'unsafe-inline' "
+            "https://cdn.jsdelivr.net "
+            "https://fonts.googleapis.com"
+        )
+        
+        img_src = (
+            "'self' data: blob: "
+            "https://cdn.jsdelivr.net "
+            "https://fastapi.tiangolo.com "
+            "https://vyomquant.in "
+            "https://*.clarity.ms "
+            "https://www.googletagmanager.com"
+        )
+        
+        font_src = (
+            "'self' data: "
+            "https://fonts.gstatic.com "
+            "https://cdn.jsdelivr.net"
+        )
+        
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
-            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-            "img-src 'self' data: https://cdn.jsdelivr.net https://fastapi.tiangolo.com; "
-            "connect-src 'self' ws: wss: http: https:; "
-            "frame-ancestors 'none'"
+            f"default-src 'self'; "
+            f"script-src {script_src}; "
+            f"style-src {style_src}; "
+            f"img-src {img_src}; "
+            f"font-src {font_src}; "
+            f"connect-src {connect_src}; "
+            f"frame-ancestors 'none'"
         )
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -152,10 +199,12 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
 
 
 # Production execution engine
+_execution_router_import_error: Optional[Exception] = None
 try:
     from backend_app.backend.execution_router import router as execution_router
-except ImportError:
+except Exception as e:
     execution_router = None
+    _execution_router_import_error = e
 
 
 #  Logging setup 
@@ -249,6 +298,12 @@ async def lifespan(app: FastAPI):
         await redis_manager.connect()
         service_status["redis"] = "connected" if redis_manager.pool else "fallback"
         logger.info(f" Redis Cache: {service_status['redis']}")
+        
+        # Start WebSocket Redis Pub/Sub Bridge
+        if redis_manager.pool:
+            app_state.ws.start_bridge()
+            logger.info(" WebSocket Redis Pub/Sub Bridge started")
+            
     except Exception as e:
         service_status["redis"] = "failed"
         logger.warning(f" Redis Cache connection failed: {e}")
@@ -457,20 +512,15 @@ except Exception as e:
     logger.warning(f"Database not available at startup: {e}")
     logger.warning("Backend will start without database connection")
 
-#  CORS — origins are env-var driven; localhost is NOT hardcoded to prevent leakage.
+#  CORS — origins are strictly env-var driven; no hardcoded fallbacks to prevent domain-hijack vulnerability.
 _cors_origins = os.environ.get("CORS_ORIGINS", "")
 _allowed_origins = [
     origin.strip()
     for origin in _cors_origins.split(",")
     if origin.strip()
 ]
-_production_origins = [
-    "https://algo22.io",
-    "https://app.algo22.io",
-]
-_allowed_origins = list(set(_allowed_origins + _production_origins))
 _allow_credentials = True
-if "*" in _allowed_origins:
+if "*" in _allowed_origins or not _allowed_origins:
     _allow_credentials = False
 
 app.add_middleware(
@@ -497,12 +547,7 @@ app.include_router(security.router, prefix="/api/security", tags=["Security"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
 app.include_router(support.router, prefix="/api/support", tags=["Support"])
 app.include_router(metrics.router, tags=["Metrics"])
-#  Mount Event-Driven DAG router 
-app.include_router(event_dag_router)
-#  Mount Parallel DAG router 
-app.include_router(parallel_dag_router)
-#  Mount Risk-Integrated DAG router 
-app.include_router(risk_dag_router)
+
 #  Mount Production Execution router 
 # 
 # HARD STOP SAFETY CHECK (STEP 1)
@@ -512,7 +557,14 @@ if ExecutionFlags.PRODUCTION_ROUTER_ENABLED:
         app.include_router(execution_router, prefix="/api/execution", tags=["Execution"])
         logger.info(" Production execution router ENABLED (verify safety before production)")
     else:
-        logger.info(" PRODUCTION_ROUTER_ENABLED is True, but execution_router module does not exist. Skipping.")
+        error_msg = (
+            "FATAL: PRODUCTION_ROUTER_ENABLED is True, but execution_router "
+            "('backend_app.backend.execution_router') failed to import or does not exist. "
+            f"Import error details: {_execution_router_import_error}. "
+            "Application startup halted to prevent fail-open un-routed order execution."
+        )
+        logger.critical(error_msg)
+        raise RuntimeError(error_msg)
 else:
     logger.warning(" PRODUCTION EXECUTION ROUTER DISABLED (STEP 1 safety lockdown)")
     logger.warning("   Routes under /api/execution are BLOCKED pending safety review")
@@ -544,14 +596,49 @@ app.include_router(ws_router)
 
 
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    """Catch all unhandled exceptions and return structured error response"""
-    traceback.print_exc()
-    return JSONResponse(
-        status_code=500,
-        content={"error": str(exc), "detail": "Internal server error"}
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """
+    Global HTTPException handler — normalizes every raise HTTPException(...) across all
+    routers into the canonical APIErrorResponse shape regardless of whether the original
+    detail is a plain string, a rich dict, or a list.
+    """
+    from backend_app.core.schemas import create_api_error_response
+    body = create_api_error_response(
+        status_code=exc.status_code,
+        detail_or_msg=exc.detail,
+        path=str(request.url.path),
     )
+    return JSONResponse(status_code=exc.status_code, content=body)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """
+    Global RequestValidationError handler — normalizes Pydantic body/query validation
+    failures (422) into the canonical APIErrorResponse shape.
+    The validation error details list is preserved in the ``details`` field.
+    """
+    from backend_app.core.schemas import create_api_error_response
+    body = create_api_error_response(
+        status_code=422,
+        detail_or_msg=exc.errors(),  # list of {loc, msg, type} dicts
+        path=str(request.url.path),
+    )
+    return JSONResponse(status_code=422, content=body)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch all unhandled exceptions and return a normalized 500 error response."""
+    traceback.print_exc()
+    from backend_app.core.schemas import create_api_error_response
+    body = create_api_error_response(
+        status_code=500,
+        detail_or_msg="Internal server error",
+        path=str(request.url.path),
+    )
+    return JSONResponse(status_code=500, content=body)
 
 
 #  Health probe (Kubernetes / load balancer) 

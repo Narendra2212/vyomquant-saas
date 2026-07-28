@@ -320,6 +320,13 @@ class KillSwitchRequest(BaseModel):
 
 class GlobalKillRequest(BaseModel):
     confirm_code: str
+    reason: str = Field(..., min_length=3, description="Logged justification for global kill switch activation")
+
+    @validator("reason", pre=True, always=True)
+    def validate_reason_non_empty(cls, v):
+        if not v or not isinstance(v, str) or not v.strip():
+            raise ValueError("Reason must be a non-empty string.")
+        return v.strip()
 
 
 # ── STRATEGY LIMITS ───────────────────────────────────────────────────────
@@ -452,3 +459,10 @@ class NotificationSettingsRequest(BaseModel):
 class UserStatusRequest(BaseModel):
     # MDL-1: Literal prevents accepting invalid states like 'deleted' or 'banned'
     status: Literal["active", "frozen"]
+    reason: str = Field(..., min_length=3, description="Logged justification for user status change")
+
+    @validator("reason", pre=True, always=True)
+    def validate_reason_non_empty(cls, v):
+        if not v or not isinstance(v, str) or not v.strip():
+            raise ValueError("Reason must be a non-empty string.")
+        return v.strip()

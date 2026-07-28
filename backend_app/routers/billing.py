@@ -78,7 +78,7 @@ def _background_sb():
 
 VALID_ITEM_KEYS = {"free", "pro_999", "elite_1999", "ml_addon"}
 
-async def _apply_billing_entitlement(user_id: str, item_key: str) -> None:
+async def _apply_billing_entitlement(user_id: str, item_key: str, discount_applied: bool = False) -> None:
     """
     F-20: Writes billing state ONLY to Supabase profiles table.
     SQLite SubscriptionModel / InvoiceModel storage has been retired.
@@ -100,6 +100,32 @@ async def _apply_billing_entitlement(user_id: str, item_key: str) -> None:
                 {"subscription_tier": item_key}
             ).eq("id", user_id).execute()
             logger.info(f"Subscription tier updated for user {user_id}: tier={item_key}")
+            
+        # P0-8 Referral conversion logic
+        if discount_applied:
+            # 1. Decrement user's available_discounts
+            profile_res = sb.table("profiles").select("available_discounts").eq("id", user_id).execute()
+            if profile_res.data:
+                current_discounts = profile_res.data[0].get("available_discounts", 0)
+                if current_discounts > 0:
+                    sb.table("profiles").update({"available_discounts": current_discounts - 1}).eq("id", user_id).execute()
+
+        # Check if they were referred and pending conversion
+        referral_res = sb.table("referrals").select("id, referrer_id").eq("referred_id", user_id).eq("status", "pending").limit(1).execute()
+        if referral_res.data:
+            ref_row = referral_res.data[0]
+            # Convert referral
+            sb.table("referrals").update({
+                "status": "converted",
+                "commission_usd": float(PRICES.get(item_key, {}).get("USD", 0) / 100 * 0.1) if item_key in PRICES else 0
+            }).eq("id", ref_row["id"]).execute()
+            # Grant referrer their discount
+            ref_prof_res = sb.table("profiles").select("available_discounts").eq("id", ref_row["referrer_id"]).execute()
+            if ref_prof_res.data:
+                ref_current_discounts = ref_prof_res.data[0].get("available_discounts", 0)
+                sb.table("profiles").update({"available_discounts": ref_current_discounts + 1}).eq("id", ref_row["referrer_id"]).execute()
+            logger.info(f"Referral converted for user {user_id}, referrer {ref_row['referrer_id']} granted discount.")
+
     except Exception as e:
         logger.error(f"Failed to update Supabase profile for user {user_id}: {e}")
         raise
@@ -109,14 +135,14 @@ async def _apply_billing_entitlement(user_id: str, item_key: str) -> None:
 
 
 
-async def _process_stripe_entitlement(user_id: str, item_key: str) -> None:
-    await _apply_billing_entitlement(user_id, item_key)
-    logger.info(f"Stripe: Processed '{item_key}' for user {user_id}")
+async def _process_stripe_entitlement(user_id: str, item_key: str, discount_applied: bool = False) -> None:
+    await _apply_billing_entitlement(user_id, item_key, discount_applied)
+    logger.info(f"Stripe: Processed '{item_key}' for user {user_id} (Discount: {discount_applied})")
 
 
-async def _process_razorpay_entitlement(user_id: str, item_key: str) -> None:
-    await _apply_billing_entitlement(user_id, item_key)
-    logger.info(f"Razorpay: Processed '{item_key}' for user {user_id}")
+async def _process_razorpay_entitlement(user_id: str, item_key: str, discount_applied: bool = False) -> None:
+    await _apply_billing_entitlement(user_id, item_key, discount_applied)
+    logger.info(f"Razorpay: Processed '{item_key}' for user {user_id} (Discount: {discount_applied})")
 
 
 # ── Pricing table ────────────────────────────────────────────────────────
@@ -140,6 +166,16 @@ async def create_checkout_session(
 
     if not amount:
         raise HTTPException(400, "Invalid tier or currency combination.")
+
+    discount_applied = False
+    try:
+        sb = _sb(user)
+        profile_res = sb.table("profiles").select("available_discounts").eq("id", user["id"]).execute()
+        if profile_res.data and profile_res.data[0].get("available_discounts", 0) > 0:
+            discount_applied = True
+            amount = int(amount * 0.9)
+    except Exception as e:
+        logger.warning(f"Could not fetch available discounts for {user['id']}: {e}")
 
     try:
         if body.currency == "USD":
@@ -170,7 +206,11 @@ async def create_checkout_session(
                     f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/pricing"
                 ),
                 client_reference_id=user["id"],
-                metadata={"user_id": user["id"], "item_key": item_key},
+                metadata={
+                    "user_id": user["id"], 
+                    "item_key": item_key,
+                    "discount_applied": "true" if discount_applied else "false"
+                },
             )
             return {"checkoutUrl": session.url, "checkout_url": session.url, "provider": "stripe"}
 
@@ -188,7 +228,11 @@ async def create_checkout_session(
                     "amount": amount,
                     "currency": "INR",
                     "receipt": f"receipt_{user['id'][:8]}",
-                    "notes": {"user_id": user["id"], "item": item_key},
+                    "notes": {
+                        "user_id": user["id"], 
+                        "item": item_key,
+                        "discount_applied": "true" if discount_applied else "false"
+                    },
                 }
             )
             try:
@@ -200,7 +244,11 @@ async def create_checkout_session(
                     "customer": {
                         "email": user.get("email", "beta_user@aerora.io")
                     },
-                    "notes": {"user_id": user["id"], "item": item_key},
+                    "notes": {
+                        "user_id": user["id"], 
+                        "item": item_key,
+                        "discount_applied": "true" if discount_applied else "false"
+                    },
                     "callback_url": f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/dashboard?payment=success",
                     "callback_method": "get"
                 })
@@ -265,8 +313,9 @@ async def stripe_webhook(
             logger.error("Stripe webhook: missing client_reference_id")
             return {"status": "ignored"}
 
+        discount_applied = metadata.get("discount_applied") == "true"
         try:
-            await _process_stripe_entitlement(user_id, item_key)
+            await _process_stripe_entitlement(user_id, item_key, discount_applied)
         except Exception as e:
             logger.error(f"Stripe entitlement processing failed: {e}")
             raise HTTPException(
@@ -379,8 +428,9 @@ async def razorpay_webhook(
             logger.error("Razorpay webhook: missing user_id or item in notes")
             return {"status": "ignored"}
 
+        discount_applied = notes.get("discount_applied") == "true"
         try:
-            await _process_razorpay_entitlement(user_id, item_key)
+            await _process_razorpay_entitlement(user_id, item_key, discount_applied)
         except Exception as e:
             logger.error(f"Razorpay entitlement processing failed: {e}")
             raise HTTPException(

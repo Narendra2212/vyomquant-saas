@@ -13,5 +13,15 @@ resource "aws_secretsmanager_secret" "jwt_secret" {
   description = "JWT Secret for Authentication"
 }
 
+resource "aws_secretsmanager_secret" "master_encryption_keys" {
+  name        = "vyomquant/${var.environment}/master_encryption_keys"
+  description = "Master Encryption Keys for Credential Vault"
+}
+
+resource "aws_secretsmanager_secret" "credential_vault_salt" {
+  name        = "vyomquant/${var.environment}/credential_vault_salt"
+  description = "PBKDF2 Key Derivation Salt for Credential Vault"
+}
+
 # The actual secret values should be populated outside of Terraform or via secure variables.
 # e.g., using `aws secretsmanager put-secret-value` in the deployment scripts.

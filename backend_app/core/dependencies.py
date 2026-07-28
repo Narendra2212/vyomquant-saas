@@ -13,7 +13,28 @@ FIXES APPLIED:
 import json
 import logging
 import os
+import threading
 from typing import Any, Optional
+
+# ══════════════════════════════════════════════════════════════════════════
+#  PROFILE CACHE CONFIGURATION
+#  TTL is deliberately shorter than the old 300 s to limit the window in
+#  which a newly-frozen account can still authenticate.  Override via env
+#  without a redeploy: PROFILE_CACHE_TTL=<seconds>
+# ══════════════════════════════════════════════════════════════════════════
+
+#: Freeze-effect window = at most PROFILE_CACHE_TTL seconds after freeze.
+#: 60 s is a deliberate security tradeoff: tighter than the previous 300 s
+#: while still keeping Supabase calls to ≤ 1/user/minute on a warm cache.
+PROFILE_CACHE_TTL: int = int(os.getenv("PROFILE_CACHE_TTL", "60"))
+
+# ---------------------------------------------------------------------------
+# Hit-rate counters — lightweight in-process atomics, no external dependency.
+# Read via get_profile_cache_stats(); logged at DEBUG level per request.
+# ---------------------------------------------------------------------------
+_profile_cache_hits: int = 0    # Redis hit — no Supabase call needed
+_profile_cache_misses: int = 0  # Redis miss — fell through to Supabase
+_profile_cache_errors: int = 0  # Redis error — treated as miss
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -49,6 +70,10 @@ bearer_scheme = HTTPBearer(auto_error=False)
 # ══════════════════════════════════════════════════════════════════════════
 
 _supabase_client: Optional = None
+# threading.Lock matches the pattern in core/auth_middleware.py::_get_jwks_client().
+# get_supabase() is a plain sync function (not async), so asyncio.Lock cannot
+# be awaited here — threading.Lock is the correct choice.
+_supabase_lock = threading.Lock()
 
 
 # SECURITY: MockSupabaseClient removed - require Supabase in all modes
@@ -57,30 +82,36 @@ def get_supabase():
     """
     Returns the module-level anon Supabase singleton for request paths.
     Table access that needs RLS must use get_request_supabase().
+
+    Lazily initialised with double-checked locking: the outer check avoids
+    lock contention in the steady-state case; the inner check prevents
+    duplicate construction by concurrent cold-start callers.
     """
     global _supabase_client
     if _supabase_client is None:
-        supabase_url = os.environ.get("SUPABASE_URL")
-        supabase_key = os.environ.get("SUPABASE_ANON_KEY")
-        
-        if not supabase_url or not supabase_key:
-            if DEV_MODE:
-                logger.warning("SUPABASE_URL / SUPABASE_ANON_KEY missing in DEV_MODE, using None")
-                return None
-            logger.error("SUPABASE_URL and SUPABASE_ANON_KEY not set")
-            raise RuntimeError("Supabase request credentials required. Set SUPABASE_URL and SUPABASE_ANON_KEY.")
-        
-        try:
-            from supabase import create_client
-            _supabase_client = create_client(supabase_url, supabase_key)
-            logger.info("Supabase client initialized successfully")
-        except Exception as e:
-            if DEV_MODE:
-                logger.warning(f"DEV_MODE: Supabase init fallback ({e})")
-                return None
-            logger.error(f"Failed to create Supabase client: {e}")
-            raise RuntimeError(f"Failed to initialize Supabase: {e}")
-                    
+        with _supabase_lock:
+            if _supabase_client is None:
+                supabase_url = os.environ.get("SUPABASE_URL")
+                supabase_key = os.environ.get("SUPABASE_ANON_KEY")
+
+                if not supabase_url or not supabase_key:
+                    if DEV_MODE:
+                        logger.warning("SUPABASE_URL / SUPABASE_ANON_KEY missing in DEV_MODE, using None")
+                        return None
+                    logger.error("SUPABASE_URL and SUPABASE_ANON_KEY not set")
+                    raise RuntimeError("Supabase request credentials required. Set SUPABASE_URL and SUPABASE_ANON_KEY.")
+
+                try:
+                    from supabase import create_client
+                    _supabase_client = create_client(supabase_url, supabase_key)
+                    logger.info("Supabase client initialized successfully")
+                except Exception as e:
+                    if DEV_MODE:
+                        logger.warning(f"DEV_MODE: Supabase init fallback ({e})")
+                        return None
+                    logger.error(f"Failed to create Supabase client: {e}")
+                    raise RuntimeError(f"Failed to initialize Supabase: {e}")
+
     return _supabase_client
 
 
@@ -165,9 +196,12 @@ async def get_current_user(
             "app_metadata": payload.get("app_metadata", {})
         }
 
-        # Verify frozen status
+        # Verify frozen status.
+        # Pass the raw token — _get_cached_profile creates the Supabase client
+        # lazily, only on a Redis miss, so the expensive create_request_supabase
+        # call is skipped on every cache hit.
         try:
-            profile = await _get_cached_profile(tenant_id, create_request_supabase(token))
+            profile = await _get_cached_profile(tenant_id, token)
             if profile.get("is_frozen", False):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -176,9 +210,21 @@ async def get_current_user(
         except HTTPException:
             raise
         except Exception as e:
-            logger.warning(f"Failed to check is_frozen for user {tenant_id}: {e}")
+            error_msg = f"CRITICAL: Failed to verify account freeze status for user {tenant_id}: {e}"
+            logger.error(error_msg)
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_message(error_msg, level="error")
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Unable to verify account security status. Please retry in a few moments.",
+            )
 
         return user_data
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"Auth failure: {e}")
         raise HTTPException(
@@ -189,16 +235,45 @@ async def get_current_user(
 
 async def get_admin_user(user: dict = Depends(get_current_user)) -> dict:
     """
-    F-21 FIX: Only users with app_metadata.role == "admin" may access admin
-    endpoints. "service_role" is removed — it is a Supabase internal credential
-    for server-side background jobs, not a human admin role. Accepting it here
-    would allow any SERVICE_ROLE_KEY bearer to call all admin endpoints.
+    F-21 FIX: Users with app_metadata.role in ("admin", "support", "operator")
+    may access standard admin endpoints (health, metrics, user listing, etc.).
     """
-    role = user.get("role") or user.get("app_metadata", {}).get("role", "")
-    if role != "admin":
+    app_metadata = user.get("app_metadata") or {}
+    user_metadata = user.get("user_metadata") or {}
+
+    role = app_metadata.get("role") or user_metadata.get("role")
+    if not role:
+        top_role = user.get("role", "")
+        if top_role != "authenticated":
+            role = top_role
+
+    if role not in ("admin", "support", "operator"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="GOD MODE ACCESS DENIED. Admin role required.",
+        )
+    return user
+
+
+async def get_operator_user(user: dict = Depends(get_current_user)) -> dict:
+    """
+    OPERATOR ROLE GATING: Only users with role == "operator" (in app_metadata or user_metadata)
+    may execute high-blast-radius destructive admin actions (set_user_status, global_kill_switch).
+    Standard 'admin' or 'support' roles without operator permission are rejected with 403.
+    """
+    app_metadata = user.get("app_metadata") or {}
+    user_metadata = user.get("user_metadata") or {}
+
+    role = app_metadata.get("role") or user_metadata.get("role")
+    if not role:
+        top_role = user.get("role", "")
+        if top_role != "authenticated":
+            role = top_role
+
+    if role != "operator":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="OPERATOR PERMISSION REQUIRED. High-blast-radius action requires operator role.",
         )
     return user
 
@@ -208,21 +283,59 @@ async def get_admin_user(user: dict = Depends(get_current_user)) -> dict:
 # ══════════════════════════════════════════════════════════════════════════
 
 
-async def _get_cached_profile(user_id: str, supabase: Any) -> dict:
+async def _get_cached_profile(user_id: str, supabase_or_token: Any) -> dict:
     """
     Tries Redis first (fast). Falls back to Supabase on cache miss.
-    TTL: 5 minutes (300 seconds).
+
+    Args:
+        user_id: the tenant/user UUID used as the cache key.
+        supabase_or_token: either a pre-built Supabase client (legacy call
+            sites such as check_deployment_limit) or a raw JWT string
+            (get_current_user hot path). A string value triggers lazy client
+            construction only on a Redis miss, avoiding the overhead of
+            create_request_supabase() on every cache hit.
+
+    TTL: PROFILE_CACHE_TTL seconds (default 60 s, env-overridable).
+    Security note: a frozen account can remain active for at most
+    PROFILE_CACHE_TTL seconds after being frozen — this is an explicit,
+    documented tradeoff between security propagation latency and
+    per-request latency.  The previous value was 300 s; 60 s is the new
+    default.  Set PROFILE_CACHE_TTL=0 to always hit Supabase (strictest).
     """
+    global _profile_cache_hits, _profile_cache_misses, _profile_cache_errors
+
     cache_key = f"profile_limits:{user_id}"
 
-    cached = await redis_manager.get(cache_key)
-    if cached:
+    # ── Fast path: Redis hit ─────────────────────────────────────────────
+    if PROFILE_CACHE_TTL > 0:
         try:
-            return json.loads(cached)
-        except Exception:
-            pass
+            cached = await redis_manager.get(cache_key)
+            if cached:
+                _profile_cache_hits += 1
+                logger.debug("[ProfileCache] HIT user=%s hits=%d misses=%d",
+                             user_id, _profile_cache_hits, _profile_cache_misses)
+                return json.loads(cached)
+            # Explicit miss (key absent)
+            _profile_cache_misses += 1
+            logger.debug("[ProfileCache] MISS user=%s hits=%d misses=%d",
+                         user_id, _profile_cache_hits, _profile_cache_misses)
+        except Exception as e:
+            _profile_cache_errors += 1
+            logger.warning(
+                "[ProfileCache] Redis error (falling through to Supabase) "
+                "user=%s error=%s errors=%d", user_id, e, _profile_cache_errors
+            )
+    else:
+        # TTL=0: bypass cache entirely, always authoritative
+        _profile_cache_misses += 1
 
-    # Cache miss: query Supabase
+    # ── Slow path: Supabase fetch ────────────────────────────────────────
+    # Build the Supabase client lazily — only here, not on every request.
+    if isinstance(supabase_or_token, str):
+        supabase = create_request_supabase(supabase_or_token)
+    else:
+        supabase = supabase_or_token
+
     try:
         resp = (
             supabase.table("profiles")
@@ -233,8 +346,8 @@ async def _get_cached_profile(user_id: str, supabase: Any) -> dict:
             .execute()
         )
     except Exception as e:
-        # Fallback: is_frozen column may not exist yet
-        logger.warning(f"Failed to check is_frozen for user {user_id}: {e}")
+        # Fallback: is_frozen column may not exist yet in legacy DB schemas
+        logger.warning(f"Querying is_frozen column failed for user {user_id}: {e}")
         try:
             resp = (
                 supabase.table("profiles")
@@ -244,9 +357,10 @@ async def _get_cached_profile(user_id: str, supabase: Any) -> dict:
                 .eq("id", user_id)
                 .execute()
             )
-        except Exception:
-            # Return safe defaults if profiles table is inaccessible
-            return {"subscription_tier": "free", "is_frozen": False}
+        except Exception as db_err:
+            error_msg = f"Database query failed during profile retrieval for user {user_id}: {db_err}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from db_err
 
     if not resp.data:
         raise HTTPException(
@@ -255,8 +369,22 @@ async def _get_cached_profile(user_id: str, supabase: Any) -> dict:
         )
 
     profile = resp.data[0]
-    await redis_manager.setex(cache_key, 300, json.dumps(profile))
+    if PROFILE_CACHE_TTL > 0:
+        await redis_manager.setex(cache_key, PROFILE_CACHE_TTL, json.dumps(profile))
     return profile
+
+
+def get_profile_cache_stats() -> dict:
+    """Return current hit-rate counters. Safe to call from health/metrics endpoints."""
+    total = _profile_cache_hits + _profile_cache_misses
+    return {
+        "hits": _profile_cache_hits,
+        "misses": _profile_cache_misses,
+        "errors": _profile_cache_errors,
+        "total": total,
+        "hit_rate_pct": round(100.0 * _profile_cache_hits / total, 1) if total else None,
+        "ttl_seconds": PROFILE_CACHE_TTL,
+    }
 
 
 async def invalidate_profile_cache(user_id: str):

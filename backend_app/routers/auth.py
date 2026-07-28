@@ -9,8 +9,11 @@ from pydantic import BaseModel, EmailStr
 
 from backend_app.core.dependencies import get_current_user, get_supabase
 from backend_app.core.rate_limit import limiter
-from backend_app.core.security_vault import SecurityVault
+from backend_app.core.supabase_connection import SupabaseConnection
 from supabase import Client as SupabaseClient
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -128,8 +131,8 @@ async def register(
     supabase: SupabaseClient = Depends(get_supabase)
 ):
     try:
-        from backend_app.core.security_vault import SecurityVault
-        vault = SecurityVault()
+        from backend_app.core.supabase_connection import SupabaseConnection
+        vault = SupabaseConnection()
         admin_client = vault.get_client()
         
         if admin_client:
@@ -150,9 +153,41 @@ async def register(
                 "password": user_data.password
             })
             if login_res.session:
-                return {"access_token": login_res.session.access_token, "token_type": "bearer"}
+                user_id = login_res.user.id
+                access_token = login_res.session.access_token
             else:
-                return {"access_token": "email_verification_pending", "message": "Failed to auto-login"}
+                user_id = res.user.id
+                access_token = "email_verification_pending"
+
+            # Apply referral logic using admin_client
+            if getattr(user_data, "referral_code", None):
+                ref_code = user_data.referral_code.lower()
+                # Find referrer by ID prefix (since referral code is ID[:8])
+                try:
+                    referrer_res = admin_client.table("profiles").select("id").ilike("id", f"{ref_code}%").limit(1).execute()
+                    if referrer_res.data:
+                        referrer_id = referrer_res.data[0]["id"]
+                        if referrer_id != user_id:
+                            # 1. Create pending referral
+                            admin_client.table("referrals").insert({
+                                "referrer_id": referrer_id,
+                                "referred_id": user_id,
+                                "status": "pending",
+                                "commission_usd": 0
+                            }).execute()
+                            
+                            # 2. Grant referred user their initial 10% discount
+                            admin_client.table("profiles").update({
+                                "available_discounts": 1
+                            }).eq("id", user_id).execute()
+                            logger.info(f"Referral applied: {referrer_id} referred {user_id}")
+                except Exception as ref_err:
+                    logger.error(f"Failed to process referral code {ref_code}: {ref_err}")
+
+            if login_res.session:
+                return {"access_token": access_token, "token_type": "bearer"}
+            else:
+                return {"access_token": access_token, "message": "Failed to auto-login"}
         else:
             # Fallback to standard anon signup
             res = supabase.auth.sign_up(
@@ -167,6 +202,13 @@ async def register(
                     },
                 }
             )
+            
+            user_id = res.user.id if res.user else None
+
+            # Apply referral logic if possible (requires admin_client which might not be available here, 
+            # but we can try using the standard client if RLS permits, else we skip or log)
+            if user_id and getattr(user_data, "referral_code", None):
+                logger.warning(f"Referral code {user_data.referral_code} ignored during anon signup due to missing admin_client")
 
             if res.session:
                 return {"access_token": res.session.access_token, "token_type": "bearer"}

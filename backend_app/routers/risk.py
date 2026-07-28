@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from backend_app.core.dependencies import (create_request_supabase, get_alert,
                                            get_current_user, get_vault,
                                            get_ws_manager)
+from backend_app.core.background_tasks import fire_and_forget_task
 from backend_app.core.models import (KillSwitchRequest, RiskSettingsRequest,
                                      StrategyLimitsRequest)
 
@@ -110,10 +111,11 @@ async def user_kill_switch(
         # Direct instantiation of ExecutionEngine for cancel_all() is FORBIDDEN.
         logger.critical(f"[KILL SWITCH] Activated for user {user['id']}. Order cleanup via BotRunner.")
 
-        asyncio.create_task(
-            alert.send_risk_warning(user["id"], "ALL", "Kill switch activated")
+        fire_and_forget_task(
+            alert.send_risk_warning(user["id"], "ALL", "Kill switch activated"),
+            name=f"risk_alert_kill_switch_{user['id']}"
         )
-        asyncio.create_task(
+        fire_and_forget_task(
             ws_mgr.broadcast_user(
                 user["id"],
                 {
@@ -121,7 +123,8 @@ async def user_kill_switch(
                     "scope": "user",
                     "message": "All bots stopped. Order cleanup via execution pipeline.",
                 },
-            )
+            ),
+            name=f"risk_ws_kill_switch_{user['id']}"
         )
         return {"status": "halted", "message": "All bots stopped. Orders cancelled via execution pipeline."}
     except Exception as e:

@@ -73,7 +73,7 @@ class DeploymentConfig:
     
     # Database
     DATABASE_URL: Optional[str] = None
-    DATABASE_POOL_SIZE: int = 10
+    DATABASE_POOL_SIZE: int = 5
     
     # Redis
     REDIS_URL: Optional[str] = None

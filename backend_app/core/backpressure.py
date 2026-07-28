@@ -1,5 +1,13 @@
 """
-core/backpressure.py — BACKPRESSURE SYSTEM
+core/backpressure.py — BACKPRESSURE SYSTEM (DEPRECATED)
+
+.. deprecated::
+    This module is superseded by ``core/backpressure_v2.py``, which provides
+    multi-queue monitoring, priority-tier load-shedding, and DAG/Signal/
+    Analytics/Execution specific integrations.  All new code—including
+    WorkerBase and every background worker—uses backpressure_v2.  This file
+    is retained only for historical reference; it has no active callers.
+
 
 STEP 9: PREVENT SYSTEM OVERLOAD
 

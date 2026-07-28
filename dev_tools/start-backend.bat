@@ -17,6 +17,6 @@ echo PYTHONPATH: %PYTHONPATH%
 echo.
 
 :: Start uvicorn
-uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn backend_app.main:app --host 0.0.0.0 --port 8000 --reload
 
 pause

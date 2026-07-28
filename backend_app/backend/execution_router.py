@@ -6,8 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend_app.core.dependencies import get_current_user
+from backend_app.core.execution_engine import \
+    ExecutionEngine as UnifiedExecutionEngine
 from backend_app.core.feature_flags import ExecutionContext
-from backend_app.core.unified_execution_engine import UnifiedExecutionEngine
 
 logger = logging.getLogger(__name__)
 

@@ -12,7 +12,7 @@ from backend_app.backend.dag_worker import WorkerPool, worker_pool
 from backend_app.backend.redis_manager import redis_manager
 from backend_app.backend.task_recovery import task_recovery_service
 from backend_app.core.dag_task_queue import TaskQueueKeyBuilder, dag_task_queue
-from backend_app.core.dependencies import get_current_user
+from backend_app.core.dependencies import get_admin_user, get_current_user
 
 logger = logging.getLogger(__name__)
 """
@@ -254,13 +254,9 @@ async def get_queue_stats(
 
 @router.get("/workers", response_model=WorkerStatsResponse)
 async def get_worker_stats(
-    tenant: dict = Depends(get_current_user)  # Any authenticated user
+    admin: dict = Depends(get_admin_user)
 ):
     """Get worker pool statistics."""
-    # Only admins can see worker stats
-    if tenant.get("role") != "admin":
-        raise HTTPException(403, "Admin privileges required")
-    
     stats = worker_pool.get_stats()
     return WorkerStatsResponse(**stats)
 
@@ -268,12 +264,9 @@ async def get_worker_stats(
 @router.post("/workers/start")
 async def start_workers(
     count: int = 4,
-    tenant: dict = Depends(get_current_user)
+    admin: dict = Depends(get_admin_user)
 ):
     """Start worker pool (admin only)."""
-    if tenant.get("role") != "admin":
-        raise HTTPException(403, "Admin privileges required")
-    
     global worker_pool
     if worker_pool._started:
         return {"message": "Worker pool already running", "stats": worker_pool.get_stats()}
@@ -289,12 +282,9 @@ async def start_workers(
 
 @router.post("/workers/stop")
 async def stop_workers(
-    tenant: dict = Depends(get_current_user)
+    admin: dict = Depends(get_admin_user)
 ):
     """Stop worker pool (admin only)."""
-    if tenant.get("role") != "admin":
-        raise HTTPException(403, "Admin privileges required")
-    
     await worker_pool.stop()
     
     return {"message": "Worker pool stopped"}

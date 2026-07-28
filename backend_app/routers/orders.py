@@ -90,6 +90,7 @@ from backend_app.core.cache.redis_manager import redis_manager
 from backend_app.core.dependencies import (get_current_user, get_telemetry,
                                            get_vault, get_ws_manager)
 from backend_app.core.execution_engine import ExecutionEngine
+from backend_app.core.background_tasks import fire_and_forget_task
 from backend_app.core.models import (CancelAllRequest, CancelOrderRequest,
                                      ExecuteOrderRequest)
 from backend_app.core.safety_config import SafetyMonitor
@@ -973,7 +974,7 @@ async def cancel_all(
     result = await execution_engine.cancel_all(symbol, execution_id=execution_id)
     
     # Broadcast cancellation event
-    asyncio.create_task(
+    fire_and_forget_task(
         ws_mgr.broadcast_user(
             user["id"],
             {
@@ -981,7 +982,8 @@ async def cancel_all(
                 "symbol": body.symbol,
                 "count": result.get("cancelled_count", 0),
             },
-        )
+        ),
+        name=f"orders_ws_cancel_all_{user['id']}"
     )
     return {"status": "ok", "cancelled": result}
 

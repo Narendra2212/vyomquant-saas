@@ -56,9 +56,13 @@ logger = logging.getLogger("DatabasePool")
 # CONFIGURATION
 # =============================================================================
 
-# Pool settings (optimized for 150 active users)
-POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
-MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+# Pool settings (calibrated against Supabase Pooler ceiling = 200 connections)
+# At max capacity (10 API replicas x 2 workers = 20 processes):
+# 20 API processes x (5 pool + 3 overflow = 8) = 160 connections
+# 6 background workers x (2 pool + 1 overflow = 3) = 18 connections
+# Total Worst-Case Peak = 178 connections (< 200 limit, leaving 11% safety margin)
+POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
+MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "3"))
 POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))
 POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))  # 1 hour
 POOL_PRE_PING = os.getenv("DB_POOL_PRE_PING", "true").lower() == "true"
@@ -207,6 +211,61 @@ def get_db_pool() -> DatabasePool:
     return db_pool
 
 
+def validate_pool_capacity(
+    max_api_replicas: int = 10,
+    workers_per_replica: int = 2,
+    pool_size: int = POOL_SIZE,
+    max_overflow: int = MAX_OVERFLOW,
+    background_worker_processes: int = 6,
+    worker_pool_size: int = 2,
+    worker_max_overflow: int = 1,
+    supabase_pooler_limit: int = 200,
+) -> dict:
+    """
+    Explicitly validates total database connection pool capacity against Supabase pooler ceiling.
+    
+    Formula:
+      API_Processes = max_api_replicas * workers_per_replica
+      API_Max_Conn = API_Processes * (pool_size + max_overflow)
+      Worker_Max_Conn = background_worker_processes * (worker_pool_size + worker_max_overflow)
+      Total_Max_Conn = API_Max_Conn + Worker_Max_Conn
+    """
+    api_processes = max_api_replicas * workers_per_replica
+    api_max_conn = api_processes * (pool_size + max_overflow)
+    worker_max_conn = background_worker_processes * (worker_pool_size + worker_max_overflow)
+    total_max_conn = api_max_conn + worker_max_conn
+    headroom = supabase_pooler_limit - total_max_conn
+    safety_margin_pct = (headroom / supabase_pooler_limit) * 100
+    is_safe = total_max_conn <= supabase_pooler_limit
+
+    status = {
+        "max_api_replicas": max_api_replicas,
+        "workers_per_replica": workers_per_replica,
+        "api_processes": api_processes,
+        "api_max_conn_per_proc": pool_size + max_overflow,
+        "total_api_conn": api_max_conn,
+        "background_worker_count": background_worker_processes,
+        "total_worker_conn": worker_max_conn,
+        "total_max_connections": total_max_conn,
+        "supabase_pooler_limit": supabase_pooler_limit,
+        "headroom": headroom,
+        "safety_margin_pct": round(safety_margin_pct, 2),
+        "is_safe": is_safe,
+    }
+    if not is_safe:
+        logger.warning(
+            f"CRITICAL: Database connection capacity ({total_max_conn}) "
+            f"exceeds Supabase pooler ceiling ({supabase_pooler_limit})!"
+        )
+    else:
+        logger.info(
+            f"[DB Pool Audit] Total max connections: {total_max_conn}/{supabase_pooler_limit} "
+            f"(Headroom: {headroom}, Margin: {round(safety_margin_pct, 1)}%)"
+        )
+    return status
+
+
+
 # =============================================================================
 # ASYNC CONNECTION POOL (asyncpg)
 # =============================================================================
@@ -334,12 +393,24 @@ def get_db_session():
     return db_pool.get_session()
 
 
-@contextmanager
 def get_db():
     """
-    Legacy compatibility: Context manager for database sessions.
+    FastAPI dependency for database sessions.
     
-    Replaces the old get_db() dependency.
+    Plain generator function so inspect.isgeneratorfunction(get_db) returns True.
+    FastAPI manages context entry/exit automatically per request.
+    """
+    session = db_pool.get_session()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@contextmanager
+def get_db_context():
+    """
+    Context manager for direct 'with' statement usage outside FastAPI Depends().
     """
     session = db_pool.get_session()
     try:

@@ -38,6 +38,33 @@ jobs:
       - name: Run Docker Validation
         run: python scripts/docker_validation.py
 
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit (Python Backend Dependencies)
+        run: pip-audit -r requirements.txt --desc
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run npm audit (Frontend Dependencies)
+        run: |
+          cd algo22-terminal
+          npm audit --audit-level=high
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit (Tauri Desktop Rust Dependencies)
+        run: |
+          cd algo22-terminal/src-tauri
+          cargo audit
+
       - name: Generate Reports
         if: always()
         run: python scripts/generate_reports.py

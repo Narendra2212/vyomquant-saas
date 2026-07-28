@@ -23,6 +23,14 @@ STRICT RULES:
 from typing import Any, Optional
 
 
+class PublishError(RuntimeError):
+    """Raised when publishing a message to a durable or trading-critical Redis Stream fails."""
+    pass
+
+
+TRADING_CRITICAL_STREAMS = {"command_queue", "risk_signal", "execution_signal", "strategy_signal"}
+
+
 class SharedRedisManager:
     """
     Wrapper around backend RedisManager providing unified interface.
@@ -45,10 +53,12 @@ class SharedRedisManager:
         self._initialized = True
     
     async def _ensure_manager(self):
-        """Ensure the backend manager is initialized."""
-        if self._redis_manager is None:
-            from backend_app.backend.redis_manager import get_redis_manager
-            self._redis_manager = await get_redis_manager()
+        """Ensure the backend manager is initialized. Delegates reconnection debouncing to get_redis_manager."""
+        from backend_app.backend.redis_manager import get_redis_manager
+        # Always call get_redis_manager; it is debounce-safe and handles reconnects internally
+        mgr = await get_redis_manager()
+        if mgr is not None:
+            self._redis_manager = mgr
     
     async def get_client(self) -> Optional[object]:
         """
@@ -138,38 +148,93 @@ class SharedRedisManager:
         """Proxy to cache get method."""
         await self._ensure_manager()
         if self._redis_manager and self._redis_manager.cache:
-            return await self._redis_manager.cache.get(key)
+            try:
+                return await self._redis_manager.cache.get(key)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Cache GET failed for '{key}': {e}")
+                return None
         return None
 
     async def set(self, key: str, value: Any, **kwargs):
         """Proxy to cache set method."""
         await self._ensure_manager()
         if self._redis_manager and self._redis_manager.cache:
-            return await self._redis_manager.cache.set(key, value, **kwargs)
-        return None
+            try:
+                return await self._redis_manager.cache.set(key, value, **kwargs)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Cache SET failed for '{key}': {e}")
+                return False
+        return False
 
     async def delete(self, *keys: str):
         """Proxy to cache delete method."""
         await self._ensure_manager()
         if self._redis_manager and self._redis_manager.cache:
-            return await self._redis_manager.cache.delete(*keys)
+            try:
+                return await self._redis_manager.cache.delete(*keys)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Cache DELETE failed for '{keys}': {e}")
+                return 0
         return 0
 
-    async def xadd(self, stream: str, payload: dict):
-        """Proxy to events xadd method."""
+    async def xadd(
+        self,
+        stream: str,
+        payload: dict,
+        max_retries: int = 3,
+        raise_on_error: Optional[bool] = None,
+    ):
+        """Proxy to events xadd method with retries and durable PublishError raising for critical streams."""
         await self._ensure_manager()
+        is_critical = (raise_on_error is True) or (stream in TRADING_CRITICAL_STREAMS)
+        attempts = max_retries if is_critical else 1
+        last_exception = None
+
         if self._redis_manager and self._redis_manager.events:
+            import asyncio
             import json
             body = {
                 k: json.dumps(v) if not isinstance(v, str) else v
                 for k, v in payload.items()
             }
-            try:
-                return await self._redis_manager.events.xadd(stream, body)
-            except Exception as e:
+            for attempt in range(1, attempts + 1):
+                try:
+                    entry_id = await self._redis_manager.events.xadd(stream, body)
+                    if entry_id:
+                        return entry_id
+                except Exception as e:
+                    last_exception = e
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"XADD attempt {attempt}/{attempts} failed for '{stream}': {e}"
+                    )
+                
+                if attempt < attempts:
+                    await asyncio.sleep(0.1 * (2 ** (attempt - 1)))
+
+            if is_critical:
+                error_msg = (
+                    f"CRITICAL: Failed to publish message to stream '{stream}' "
+                    f"after {attempts} attempts. Last error: {last_exception}"
+                )
                 import logging
-                logging.getLogger(__name__).error(f"XADD failed: {e}")
-                return None
+                logging.getLogger(__name__).error(error_msg)
+                try:
+                    import sentry_sdk
+                    sentry_sdk.capture_message(error_msg, level="error")
+                except Exception:
+                    pass
+                raise PublishError(error_msg) from last_exception
+
+        elif is_critical:
+            error_msg = f"CRITICAL: Redis manager unavailable for trading stream '{stream}'"
+            import logging
+            logging.getLogger(__name__).error(error_msg)
+            raise PublishError(error_msg)
+
         return None
 
     async def setex(self, key: str, ttl: int, value: Any):

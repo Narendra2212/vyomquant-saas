@@ -216,16 +216,9 @@ async def get_tenant_jobs(
 
 
 @router.get("/system/status", response_model=SystemStatusResponse)
-async def get_system_status(user: dict = Depends(get_current_user)):
+async def get_system_status(admin: dict = Depends(get_admin_user)):
     """Get distributed execution system status (admin only)."""
     try:
-        # Check admin permissions
-        if user.get("role") != "admin":
-            raise HTTPException(
-                status_code=403,
-                detail="Admin access required"
-            )
-        
         status = await execution_orchestrator.get_system_status()
         return SystemStatusResponse(**status)
         
@@ -301,13 +294,18 @@ async def get_job_statistics(
     try:
         # Verify tenant access
         target_tenant_id = user["tenant_id"]
-        if tenant_id and user.get("role") != "admin":
+        is_admin = (
+            user.get("app_metadata", {}).get("role") == "admin"
+            or user.get("user_metadata", {}).get("role") == "admin"
+            or (user.get("role") == "admin")
+        )
+        if tenant_id and not is_admin:
             raise HTTPException(
                 status_code=403,
                 detail="Admin access required for tenant filtering"
             )
         
-        if tenant_id and user.get("role") == "admin":
+        if tenant_id and is_admin:
             target_tenant_id = tenant_id
         
         stats = await job_persistence.get_job_statistics(target_tenant_id)

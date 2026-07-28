@@ -19,11 +19,15 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 import redis.asyncio as aioredis
 
 logger = logging.getLogger(__name__)
+
+# Reconnect cooldown (seconds). Env override: REDIS_RECONNECT_COOLDOWN
+_RECONNECT_COOLDOWN: float = float(os.getenv("REDIS_RECONNECT_COOLDOWN", "3.0"))
 
 # =============================================================================
 # REDIS DATABASE CONFIGURATION
@@ -57,63 +61,120 @@ class RedisManager:
     """
     
     _instance: Optional['RedisManager'] = None
-    _lock = asyncio.Lock()
-    
+    _instance_lock: Optional[asyncio.Lock] = None
+
+    @classmethod
+    def _get_instance_lock(cls) -> asyncio.Lock:
+        """Lazily initialize instance lock — must be created inside a running event loop."""
+        if cls._instance_lock is None:
+            cls._instance_lock = asyncio.Lock()
+        return cls._instance_lock
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self):
         if self._initialized:
             return
-        
+
         self._cache: Optional[aioredis.Redis] = None
         self._queue: Optional[aioredis.Redis] = None
         self._events: Optional[aioredis.Redis] = None
+        self._connected: bool = False
+        self._last_failed_at: float = 0.0   # monotonic timestamp of last failed connect()
+        self._reconnect_lock: Optional[asyncio.Lock] = None  # per-instance debounce lock
         self._initialized = True
+
+    def _get_reconnect_lock(self) -> asyncio.Lock:
+        """Return the per-instance reconnect lock, lazily created inside the event loop."""
+        if self._reconnect_lock is None:
+            self._reconnect_lock = asyncio.Lock()
+        return self._reconnect_lock
     
-    async def initialize(self):
-        """Initialize all Redis connections."""
+    async def initialize(self) -> bool:
+        """
+        Initialize all Redis connections.
+        Returns True on success, False on failure (does not raise).
+        """
         try:
             # Cache (DB 0) - short-lived, LRU eviction
-            self._cache = await aioredis.from_url(
+            cache = await aioredis.from_url(
                 get_redis_url(REDIS_DB_CACHE),
                 encoding="utf-8",
                 decode_responses=True,
                 max_connections=50
             )
-            
+
             # Queue (DB 1) - persistent, AOF
-            self._queue = await aioredis.from_url(
+            queue = await aioredis.from_url(
                 get_redis_url(REDIS_DB_QUEUE),
                 encoding="utf-8",
                 decode_responses=True,
                 max_connections=50
             )
-            
+
             # Events (DB 2) - time-series, streams
-            self._events = await aioredis.from_url(
+            events = await aioredis.from_url(
                 get_redis_url(REDIS_DB_EVENTS),
                 encoding="utf-8",
                 decode_responses=True,
                 max_connections=50
             )
-            
-            # Test connections
-            await self._cache.ping()
-            await self._queue.ping()
-            await self._events.ping()
-            
+
+            # Verify connectivity before committing to self.*
+            await cache.ping()
+            await queue.ping()
+            await events.ping()
+
+            self._cache = cache
+            self._queue = queue
+            self._events = events
+            self._connected = True
             logger.info(
                 f"[RedisManager] Connected to 3 databases: "
                 f"cache(DB{REDIS_DB_CACHE}), queue(DB{REDIS_DB_QUEUE}), events(DB{REDIS_DB_EVENTS})"
             )
-            
+            return True
+
         except Exception as e:
             logger.error(f"[RedisManager] Failed to connect: {e}")
-            raise
+            self._connected = False
+            self._last_failed_at = time.monotonic()
+            return False
+
+    async def try_reconnect(self) -> bool:
+        """
+        Debounced reconnection. At most one reconnection attempt runs at a time;
+        other concurrent callers skip the attempt if already in-flight or
+        if within the cooldown window following the most recent failure.
+
+        Returns True if the manager is now connected, False otherwise.
+        """
+        if self._connected:
+            return True
+
+        now = time.monotonic()
+        if now - self._last_failed_at < _RECONNECT_COOLDOWN:
+            return False  # Still in cooldown — skip attempt
+
+        lock = self._get_reconnect_lock()
+        if lock.locked():
+            # Another coroutine is already in a reconnection attempt — skip
+            return self._connected
+
+        async with lock:
+            # Double-check inside lock in case a prior winner already succeeded
+            if self._connected:
+                return True
+
+            now = time.monotonic()
+            if now - self._last_failed_at < _RECONNECT_COOLDOWN:
+                return False
+
+            return await self.initialize()
     
     async def close(self):
         """Close all Redis connections."""
@@ -126,24 +187,18 @@ class RedisManager:
         logger.info("[RedisManager] All connections closed")
     
     @property
-    def cache(self) -> aioredis.Redis:
-        """Get cache database client (DB 0)."""
-        if self._cache is None:
-            raise RuntimeError("RedisManager not initialized")
+    def cache(self) -> Optional[aioredis.Redis]:
+        """Get cache database client (DB 0). Returns None if not connected."""
         return self._cache
-    
+
     @property
-    def queue(self) -> aioredis.Redis:
-        """Get queue database client (DB 1)."""
-        if self._queue is None:
-            raise RuntimeError("RedisManager not initialized")
+    def queue(self) -> Optional[aioredis.Redis]:
+        """Get queue database client (DB 1). Returns None if not connected."""
         return self._queue
-    
+
     @property
-    def events(self) -> aioredis.Redis:
-        """Get events database client (DB 2)."""
-        if self._events is None:
-            raise RuntimeError("RedisManager not initialized")
+    def events(self) -> Optional[aioredis.Redis]:
+        """Get events database client (DB 2). Returns None if not connected."""
         return self._events
     
     # =============================================================================
@@ -416,14 +471,58 @@ class RedisManager:
 # =============================================================================
 
 _redis_manager: Optional[RedisManager] = None
+# Module-level debounce lock — lazily initialised inside an active event loop
+_get_manager_lock: Optional[asyncio.Lock] = None
+_get_manager_last_failed: float = 0.0
 
 
-async def get_redis_manager() -> RedisManager:
-    """Get or create RedisManager instance."""
-    global _redis_manager
-    if _redis_manager is None:
-        _redis_manager = RedisManager()
-        await _redis_manager.initialize()
+def _ensure_get_manager_lock() -> asyncio.Lock:
+    global _get_manager_lock
+    if _get_manager_lock is None:
+        _get_manager_lock = asyncio.Lock()
+    return _get_manager_lock
+
+
+async def get_redis_manager() -> Optional[RedisManager]:
+    """
+    Get or create the global RedisManager instance.
+
+    Debounce-safe: if initialization previously failed, concurrent callers
+    share a single retry attempt instead of each spawning their own.
+    Returns None (and logs a warning) if Redis is unavailable, so callers
+    can fail-soft without exceptions propagating.
+    """
+    global _redis_manager, _get_manager_last_failed
+
+    # Fast path — already initialised and connected
+    if _redis_manager is not None and _redis_manager._connected:
+        return _redis_manager
+
+    now = time.monotonic()
+    if now - _get_manager_last_failed < _RECONNECT_COOLDOWN:
+        return _redis_manager  # Still in cooldown; return whatever we have (may be None)
+
+    lock = _ensure_get_manager_lock()
+    if lock.locked():
+        return _redis_manager  # Another coroutine is already attempting — skip
+
+    async with lock:
+        # Double-check after acquiring
+        if _redis_manager is not None and _redis_manager._connected:
+            return _redis_manager
+
+        now = time.monotonic()
+        if now - _get_manager_last_failed < _RECONNECT_COOLDOWN:
+            return _redis_manager
+
+        if _redis_manager is None:
+            _redis_manager = RedisManager()
+
+        success = await _redis_manager.initialize()
+        if not success:
+            _get_manager_last_failed = time.monotonic()
+            logger.warning("[RedisManager] Initialization failed; will retry after cooldown")
+
     return _redis_manager
 
 

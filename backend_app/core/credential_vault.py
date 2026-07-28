@@ -24,7 +24,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
@@ -116,25 +116,41 @@ class CredentialVault:
     - Secure key management
     """
     
-    def __init__(self, encryption_key: Optional[str] = None):
+    def __init__(self, encryption_key: Optional[str] = None, salt: Optional[Union[str, bytes]] = None):
         """
         Initialize credential vault.
         
         Args:
-            encryption_key: Master encryption key (defaults to environment variable)
+            encryption_key: Master encryption key (defaults to MASTER_ENCRYPTION_KEYS environment variable)
+            salt: PBKDF2 salt for key derivation (defaults to CREDENTIAL_VAULT_SALT environment variable)
         """
-        self.encryption_key = encryption_key or os.getenv("CREDENTIAL_VAULT_KEY")
+        raw_key = encryption_key or os.getenv("MASTER_ENCRYPTION_KEYS")
         
-        if not self.encryption_key:
-            # Generate a key for development (NOT FOR PRODUCTION)
-            logger.warning("CREDENTIAL_VAULT_KEY not set, using development key (NOT FOR PRODUCTION)")
-            self.encryption_key = base64.urlsafe_b64encode(os.urandom(32)).decode()
+        if not raw_key:
+            logger.critical("FATAL: MASTER_ENCRYPTION_KEYS environment variable is not set.")
+            raise RuntimeError(
+                "MASTER_ENCRYPTION_KEYS environment variable is missing. "
+                "Refusing to start with a non-persistent random key."
+            )
         
-        # Derive encryption key from master key
+        raw_salt = salt or os.getenv("CREDENTIAL_VAULT_SALT")
+        
+        if not raw_salt:
+            logger.critical("FATAL: CREDENTIAL_VAULT_SALT environment variable is not set.")
+            raise RuntimeError(
+                "CREDENTIAL_VAULT_SALT environment variable is missing. "
+                "Refusing to start without a deployment-unique salt."
+            )
+        
+        # Take the primary (first) key if comma-separated
+        self.encryption_key = [k.strip() for k in raw_key.split(",") if k.strip()][0]
+        self.salt = raw_salt.encode("utf-8") if isinstance(raw_salt, str) else raw_salt
+        
+        # Derive encryption key from master key using per-deployment salt
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
-            salt=b'credential_vault_salt',
+            salt=self.salt,
             iterations=100000,
         )
         key = base64.urlsafe_b64encode(kdf.derive(self.encryption_key.encode()))

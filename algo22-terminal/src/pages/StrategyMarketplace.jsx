@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from "react-router-dom";
 import { 
   Search, Filter, TrendingUp, Users, Star, ArrowRight, Zap, 
   Shield, Activity, Cpu, Hexagon, X, Check, AlertTriangle, ArrowLeft
@@ -6,7 +7,8 @@ import {
 import { useAppState } from '../AppState';
 import client, { publicGet } from '../apiClient';
 
-const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
+const StrategyMarketplace = () => {
+  const navigate = useNavigate();
   const { uiMode } = useAppState();
   const [view, setView] = useState('browse'); // 'browse', 'detail', 'my_strategies', 'admin_pending'
   
@@ -91,9 +93,11 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
 
   // Initial load
   useEffect(() => {
+    let isMounted = true;
     if (view === 'browse') fetchStrategies();
     else if (view === 'my_strategies') fetchMyStrategies();
     else if (view === 'admin_pending') fetchPending();
+    return () => { isMounted = false; };
   }, [view, fetchStrategies]);
 
   // Fetch Detail
@@ -129,7 +133,7 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
       
       // In a real flow, we might fetch the newly cloned strategy from /api/strategies
       // For now, redirect to builder.
-      go('builder');
+      navigate("/app/builder");
     } catch (err) {
       console.error(err);
       alert(err.message || 'Failed to clone strategy.');
@@ -187,7 +191,7 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
 
   // Renders
   const renderCard = (strat) => (
-    <div key={strat.id} className="bg-[#131722] border border-[#202938] rounded-xl p-5 shadow-lg flex flex-col gap-4 group hover:border-[#2962FF]50 transition-all cursor-default relative overflow-hidden">
+    <div key={strat.id} className="bg-[#131722] border border-[#202938] rounded-xl p-5 shadow-lg flex flex-col gap-4 group hover:border-[#00D4FF]50 transition-all cursor-default relative overflow-hidden">
       {strat.is_featured && (
         <div className="absolute top-0 right-0 bg-[#FFB74D] text-[#080A0D] text-[9px] font-bold px-2 py-0.5 rounded-bl font-mono uppercase">
           Featured
@@ -195,8 +199,8 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
       )}
       <div className="flex justify-between items-start">
         <div>
-          <h3 className="font-bold text-lg text-[#E6EDF3] leading-tight cursor-pointer hover:text-[#2962FF] transition-colors" onClick={() => loadDetail(strat.id)}>{strat.name}</h3>
-          <div className="text-[#8B949E] text-xs font-mono mt-1">by <span className="text-[#2962FF] font-bold">{strat.author_alias || 'Unknown'}</span></div>
+          <h3 className="font-bold text-lg text-[#E6EDF3] leading-tight cursor-pointer hover:text-[#00D4FF] transition-colors" onClick={() => loadDetail(strat.id)}>{strat.name}</h3>
+          <div className="text-[#8B949E] text-xs font-mono mt-1">by <span className="text-[#00D4FF] font-bold">{strat.author_alias || 'Unknown'}</span></div>
         </div>
         <span className="bg-[#080A0D] border border-[#202938] px-2 py-1 rounded text-[10px] font-mono text-[#8B949E] uppercase tracking-widest shrink-0">
           {strat.category}
@@ -237,7 +241,7 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
           onClick={(e) => { e.stopPropagation(); handleClone(strat); }}
           disabled={cloneLoading || strat.user_has_cloned}
           className={`px-4 py-2 rounded text-xs font-bold font-mono flex items-center gap-2 transition-colors ${
-            strat.user_has_cloned ? 'bg-[#131722] border border-[#202938] text-[#8B949E] cursor-not-allowed' : 'bg-[#2962FF] hover:bg-[#2962FF]90 text-white'
+            strat.user_has_cloned ? 'bg-[#131722] border border-[#202938] text-[#8B949E] cursor-not-allowed' : 'bg-[#00D4FF] hover:bg-[#00D4FF]90 text-white'
           }`}
         >
           {strat.user_has_cloned ? 'Cloned' : 'Clone'} <ArrowRight size={14} />
@@ -260,7 +264,7 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
           <div className="flex justify-between items-start">
             <div>
               <h1 className="text-3xl font-black tracking-tight text-[#E6EDF3]">{strat.name}</h1>
-              <div className="text-[#8B949E] font-mono mt-2">Created by <span className="text-[#2962FF] font-bold">{strat.author_alias || 'Unknown'}</span></div>
+              <div className="text-[#8B949E] font-mono mt-2">Created by <span className="text-[#00D4FF] font-bold">{strat.author_alias || 'Unknown'}</span></div>
             </div>
             <div className="flex flex-col items-end gap-2">
               <span className="bg-[#080A0D] border border-[#202938] px-3 py-1.5 rounded text-xs font-mono text-[#8B949E] uppercase tracking-widest">
@@ -312,7 +316,7 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
                    <svg width="100%" height="100%" preserveAspectRatio="none">
                      <polyline 
                        fill="none" 
-                       stroke="#2962FF" 
+                       stroke="#00D4FF" 
                        strokeWidth="2" 
                        points={
                          strat.equity_curve_snapshot.map((p, i, arr) => {
@@ -359,7 +363,7 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
                 <button 
                   onClick={submitRating}
                   disabled={ratingLoading || !ratingInput}
-                  className="bg-[#2962FF] hover:bg-[#2962FF]90 disabled:opacity-50 text-white px-4 py-2 rounded text-xs font-bold font-mono w-max"
+                  className="bg-[#00D4FF] hover:bg-[#00D4FF]90 disabled:opacity-50 text-white px-4 py-2 rounded text-xs font-bold font-mono w-max"
                 >
                   {ratingLoading ? 'Submitting...' : 'Submit Rating'}
                 </button>
@@ -434,7 +438,7 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
                   </span>
                 </td>
                 <td className="p-4">{s.clone_count}</td>
-                <td className="p-4 text-[#FFB74D]">{s.avg_rating?.toFixed(1) || '—'}</td>
+                <td className="p-4 text-[#FFB74D]">{s.avg_rating?.toFixed(1) || 'â€”'}</td>
                 <td className="p-4">
                   {s.is_active && (
                     <button onClick={() => handleUnpublish(s.id)} className="text-[#EF5350] text-xs font-bold hover:underline">Unpublish</button>
@@ -466,7 +470,7 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
               <tr><td colSpan="4" className="p-8 text-center text-[#8B949E]">No pending strategies in queue.</td></tr>
             ) : pendingStrategies.map(s => (
               <tr key={s.id} className="border-b border-[#202938] hover:bg-[#1A222C]">
-                <td className="p-4 font-bold text-[#E6EDF3] cursor-pointer hover:text-[#2962FF]" onClick={() => loadDetail(s.id)}>
+                <td className="p-4 font-bold text-[#E6EDF3] cursor-pointer hover:text-[#00D4FF]" onClick={() => loadDetail(s.id)}>
                   {s.name} <span className="text-xs font-normal text-[#8B949E]">({s.category})</span>
                 </td>
                 <td className="p-4">{s.author_alias}</td>
@@ -491,7 +495,7 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
         <div className="flex justify-between items-end">
           <div className="flex flex-col gap-2">
             <h1 className="text-3xl font-black tracking-tight flex items-center gap-3">
-              <Hexagon className="text-[#2962FF]" size={32} /> Strategy Marketplace
+              <Hexagon className="text-[#00D4FF]" size={32} /> Strategy Marketplace
             </h1>
             <p className="text-[#8B949E] font-mono text-sm max-w-2xl">
               {uiMode === 'beginner' 
@@ -503,14 +507,14 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
           <div className="flex bg-[#131722] border border-[#202938] rounded-lg overflow-hidden font-mono text-xs">
             <button 
               onClick={() => { setView('browse'); fetchStrategies(); }}
-              className={`px-4 py-2 transition-colors ${view === 'browse' ? 'bg-[#2962FF] text-white font-bold' : 'text-[#8B949E] hover:text-[#E6EDF3]'}`}
+              className={`px-4 py-2 transition-colors ${view === 'browse' ? 'bg-[#00D4FF] text-white font-bold' : 'text-[#8B949E] hover:text-[#E6EDF3]'}`}
             >
               Browse
             </button>
             {sessionStorage.getItem('token') && (
               <button 
                 onClick={() => { setView('my_strategies'); fetchMyStrategies(); }}
-                className={`px-4 py-2 transition-colors border-l border-[#202938] ${view === 'my_strategies' ? 'bg-[#2962FF] text-white font-bold' : 'text-[#8B949E] hover:text-[#E6EDF3]'}`}
+                className={`px-4 py-2 transition-colors border-l border-[#202938] ${view === 'my_strategies' ? 'bg-[#00D4FF] text-white font-bold' : 'text-[#8B949E] hover:text-[#E6EDF3]'}`}
               >
                 My Publications
               </button>
@@ -565,7 +569,7 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
                   <option value="newest">Newest</option>
                   <option value="featured">Featured First</option>
                 </select>
-                <button onClick={() => fetchStrategies()} className="bg-[#2962FF] hover:bg-[#2962FF]90 text-white px-4 py-2 rounded-lg text-xs font-bold font-mono">
+                <button onClick={() => fetchStrategies()} className="bg-[#00D4FF] hover:bg-[#00D4FF]90 text-white px-4 py-2 rounded-lg text-xs font-bold font-mono">
                   Apply
                 </button>
               </div>
@@ -618,3 +622,4 @@ const StrategyMarketplace = ({ go, setResumeBuilderStrategy }) => {
 };
 
 export default StrategyMarketplace;
+

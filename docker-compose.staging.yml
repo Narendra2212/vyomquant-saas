@@ -111,7 +111,6 @@ services:
       - POSTGRES_DB=aerora
     volumes:
       - staging_postgres_data:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d
     ports:
       - "5432:5432"
     networks:

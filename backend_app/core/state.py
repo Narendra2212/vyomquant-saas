@@ -3,7 +3,7 @@ core/state.py — Singleton holders for every engine instance.
 
 FIXES APPLIED:
   C1: 'engine_b_telemetry' → 'telemetry_engine'  (correct filename)
-  C2: 'engine_a_vault'     → 'security_vault'     (correct filename)
+  C2: 'engine_a_vault'     → 'api_key_vault'      (correct filename)
   C4: Removed stale empty stub references — import directly from backend/
   DEV: Safe imports - engines fail gracefully, app always starts
 """
@@ -49,9 +49,14 @@ def safe_import(class_name, module_name):
         return lambda *args, **kwargs: MockEngine(f"Mock{class_name}")
 
 # Import engines safely
-SecurityVault = safe_import("SecurityVault", "security_vault")
+APIKeyVault = safe_import("APIKeyVault", "api_key_vault")
 TelemetryEngine = safe_import("TelemetryEngine", "telemetry_engine")
-InstitutionalRiskManager = safe_import("InstitutionalRiskManager", "risk_manager")
+try:
+    from backend_app.core.risk_manager import InstitutionalRiskManager
+except Exception as e:
+    logger.warning(f"Failed to import InstitutionalRiskManager from core.risk_manager: {e}")
+    InstitutionalRiskManager = lambda *args, **kwargs: MockEngine("MockInstitutionalRiskManager")
+
 AlertEngine = safe_import("AlertEngine", "alert_engine")
 FleetManager = safe_import("FleetManager", "fleet_manager")
 
@@ -72,7 +77,7 @@ class AppState:
     Engines that fail to load are replaced with MockEngine placeholders.
     """
 
-    vault: Any = field(default_factory=lambda: _safe_init(SecurityVault, "SecurityVault"))
+    vault: Any = field(default_factory=lambda: _safe_init(APIKeyVault, "APIKeyVault"))
     telemetry: Any = field(default_factory=lambda: _safe_init(TelemetryEngine, "TelemetryEngine"))
     risk: Any = field(default_factory=lambda: _safe_init(InstitutionalRiskManager, "RiskManager"))
     alert: Any = field(default_factory=lambda: _safe_init_alert())

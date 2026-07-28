@@ -99,7 +99,7 @@ class OrderAuditRecord:
     fee: Optional[float]
     error_message: Optional[str]
     metadata: Optional[Dict[str, Any]]
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage."""
         data = asdict(self)
@@ -115,7 +115,7 @@ class OrderAuditRecord:
         if self.metadata:
             data['metadata'] = json.dumps(self.metadata)
         return data
-    
+
     def to_log_entry(self) -> str:
         """Convert to structured log entry."""
         return json.dumps({
@@ -144,6 +144,80 @@ class OrderAuditRecord:
             "error_message": self.error_message,
             "metadata": self.metadata
         }, default=str)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# EVENT DATACLASS HIERARCHY FOR ORDER LIFECYCLE AUDITING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class BaseOrderLifecycleEvent:
+    """Base class for all order lifecycle audit events."""
+    user_id: str
+    strategy_id: str
+    symbol: str
+    side: str
+    size: float = 0.0
+    audit_id: Optional[str] = None
+    timestamp: Optional[datetime] = None
+    execution_id: Optional[str] = None
+    signal: Optional[Dict[str, Any]] = None
+    decision_reason: Optional[str] = None
+    price: Optional[float] = None
+    order_type: str = "unknown"
+    exchange_id: str = "unknown"
+    metadata: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class SignalReceivedEvent(BaseOrderLifecycleEvent):
+    """Event representing initial signal reception."""
+    pass
+
+
+@dataclass
+class DecisionEvent(BaseOrderLifecycleEvent):
+    """Event representing decision to execute an order."""
+    pass
+
+
+@dataclass
+class OrderSubmittedEvent(BaseOrderLifecycleEvent):
+    """Event representing order submission to exchange."""
+    client_order_id: Optional[str] = None
+    exchange_response: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class OrderConfirmedEvent(BaseOrderLifecycleEvent):
+    """Event representing order confirmation from exchange."""
+    client_order_id: Optional[str] = None
+    exchange_order_id: Optional[str] = None
+    exchange_response: Optional[Dict[str, Any]] = None
+    status: str = "confirmed"
+    filled_amount: float = 0.0
+    remaining_amount: float = 0.0
+    average_price: Optional[float] = None
+    fee: Optional[float] = None
+
+
+@dataclass
+class OrderFailedEvent(BaseOrderLifecycleEvent):
+    """Event representing order execution failure."""
+    client_order_id: Optional[str] = None
+    error_message: str = "Unknown error"
+    exchange_response: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class FillEvent(BaseOrderLifecycleEvent):
+    """Event representing individual trade fill execution."""
+    exchange_order_id: str = ""
+    trade_id: str = ""
+    fill_amount: float = 0.0
+    fill_price: float = 0.0
+    fee: float = 0.0
+    exchange_response: Optional[Dict[str, Any]] = None
 
 
 class OrderAuditLogger:
@@ -180,36 +254,30 @@ class OrderAuditLogger:
     
     async def log_signal_received(
         self,
-        user_id: str,
-        strategy_id: str,
-        signal: Dict[str, Any],
-        symbol: str,
-        side: str,
-        size: float,
-        metadata: Optional[Dict[str, Any]] = None
+        event: SignalReceivedEvent,
     ) -> str:
         """
         Log signal received event.
-        
         This is the FIRST event in the audit trail.
         """
-        audit_id = self._generate_audit_id()
-        
+        audit_id = event.audit_id or self._generate_audit_id()
+        timestamp = event.timestamp or datetime.utcnow()
+
         record = OrderAuditRecord(
             audit_id=audit_id,
-            timestamp=datetime.utcnow(),
+            timestamp=timestamp,
             event_type=AuditEventType.SIGNAL_RECEIVED,
-            user_id=user_id,
-            strategy_id=strategy_id,
-            execution_id=None,
-            signal=signal,
-            decision_reason=None,
-            symbol=symbol,
-            side=side,
-            size=size,
-            price=None,
-            order_type="unknown",
-            exchange_id="unknown",
+            user_id=event.user_id,
+            strategy_id=event.strategy_id,
+            execution_id=event.execution_id,
+            signal=event.signal,
+            decision_reason=event.decision_reason,
+            symbol=event.symbol,
+            side=event.side,
+            size=event.size,
+            price=event.price,
+            order_type=event.order_type,
+            exchange_id=event.exchange_id,
             exchange_response=None,
             client_order_id=None,
             exchange_order_id=None,
@@ -219,48 +287,38 @@ class OrderAuditLogger:
             average_price=None,
             fee=None,
             error_message=None,
-            metadata=metadata
+            metadata=event.metadata,
         )
-        
+
         await self._store_record(record)
         return audit_id
-    
+
     async def log_decision(
         self,
-        audit_id: str,
-        user_id: str,
-        strategy_id: str,
-        execution_id: str,
-        signal: Dict[str, Any],
-        decision_reason: str,
-        symbol: str,
-        side: str,
-        size: float,
-        price: Optional[float],
-        order_type: str,
-        exchange_id: str,
-        metadata: Optional[Dict[str, Any]] = None
+        event: DecisionEvent,
     ):
         """
         Log decision made event.
-        
         Records the decision to execute an order.
         """
+        audit_id = event.audit_id or self._generate_audit_id()
+        timestamp = event.timestamp or datetime.utcnow()
+
         record = OrderAuditRecord(
             audit_id=audit_id,
-            timestamp=datetime.utcnow(),
+            timestamp=timestamp,
             event_type=AuditEventType.DECISION_MADE,
-            user_id=user_id,
-            strategy_id=strategy_id,
-            execution_id=execution_id,
-            signal=signal,
-            decision_reason=decision_reason,
-            symbol=symbol,
-            side=side,
-            size=size,
-            price=price,
-            order_type=order_type,
-            exchange_id=exchange_id,
+            user_id=event.user_id,
+            strategy_id=event.strategy_id,
+            execution_id=event.execution_id,
+            signal=event.signal,
+            decision_reason=event.decision_reason,
+            symbol=event.symbol,
+            side=event.side,
+            size=event.size,
+            price=event.price,
+            order_type=event.order_type,
+            exchange_id=event.exchange_id,
             exchange_response=None,
             client_order_id=None,
             exchange_order_id=None,
@@ -270,225 +328,173 @@ class OrderAuditLogger:
             average_price=None,
             fee=None,
             error_message=None,
-            metadata=metadata
+            metadata=event.metadata,
         )
-        
+
         await self._store_record(record)
-    
+
     async def log_order_submitted(
         self,
-        audit_id: str,
-        user_id: str,
-        strategy_id: str,
-        execution_id: str,
-        signal: Dict[str, Any],
-        decision_reason: str,
-        symbol: str,
-        side: str,
-        size: float,
-        price: Optional[float],
-        order_type: str,
-        exchange_id: str,
-        client_order_id: str,
-        exchange_response: Dict[str, Any],
-        metadata: Optional[Dict[str, Any]] = None
+        event: OrderSubmittedEvent,
     ):
         """
         Log order submitted to exchange.
-        
         Captures the exchange response immediately.
         """
+        audit_id = event.audit_id or self._generate_audit_id()
+        timestamp = event.timestamp or datetime.utcnow()
+
+        exchange_order_id = None
+        if event.exchange_response and isinstance(event.exchange_response, dict):
+            exchange_order_id = event.exchange_response.get("id")
+
         record = OrderAuditRecord(
             audit_id=audit_id,
-            timestamp=datetime.utcnow(),
+            timestamp=timestamp,
             event_type=AuditEventType.ORDER_SUBMITTED,
-            user_id=user_id,
-            strategy_id=strategy_id,
-            execution_id=execution_id,
-            signal=signal,
-            decision_reason=decision_reason,
-            symbol=symbol,
-            side=side,
-            size=size,
-            price=price,
-            order_type=order_type,
-            exchange_id=exchange_id,
-            exchange_response=exchange_response,
-            client_order_id=client_order_id,
-            exchange_order_id=exchange_response.get("id"),
+            user_id=event.user_id,
+            strategy_id=event.strategy_id,
+            execution_id=event.execution_id,
+            signal=event.signal,
+            decision_reason=event.decision_reason,
+            symbol=event.symbol,
+            side=event.side,
+            size=event.size,
+            price=event.price,
+            order_type=event.order_type,
+            exchange_id=event.exchange_id,
+            exchange_response=event.exchange_response,
+            client_order_id=event.client_order_id,
+            exchange_order_id=exchange_order_id,
             status="submitted",
             filled_amount=None,
             remaining_amount=None,
             average_price=None,
             fee=None,
             error_message=None,
-            metadata=metadata
+            metadata=event.metadata,
         )
-        
+
         await self._store_record(record)
-    
+
     async def log_order_confirmed(
         self,
-        audit_id: str,
-        user_id: str,
-        strategy_id: str,
-        execution_id: str,
-        signal: Dict[str, Any],
-        decision_reason: str,
-        symbol: str,
-        side: str,
-        size: float,
-        price: Optional[float],
-        order_type: str,
-        exchange_id: str,
-        client_order_id: str,
-        exchange_order_id: str,
-        exchange_response: Dict[str, Any],
-        status: str,
-        filled_amount: float,
-        remaining_amount: float,
-        average_price: Optional[float],
-        fee: Optional[float],
-        metadata: Optional[Dict[str, Any]] = None
+        event: OrderConfirmedEvent,
     ):
         """
         Log order confirmed by exchange.
-        
         Records the final state after confirmation.
         """
+        audit_id = event.audit_id or self._generate_audit_id()
+        timestamp = event.timestamp or datetime.utcnow()
+
         record = OrderAuditRecord(
             audit_id=audit_id,
-            timestamp=datetime.utcnow(),
+            timestamp=timestamp,
             event_type=AuditEventType.ORDER_CONFIRMED,
-            user_id=user_id,
-            strategy_id=strategy_id,
-            execution_id=execution_id,
-            signal=signal,
-            decision_reason=decision_reason,
-            symbol=symbol,
-            side=side,
-            size=size,
-            price=price,
-            order_type=order_type,
-            exchange_id=exchange_id,
-            exchange_response=exchange_response,
-            client_order_id=client_order_id,
-            exchange_order_id=exchange_order_id,
-            status=status,
-            filled_amount=filled_amount,
-            remaining_amount=remaining_amount,
-            average_price=average_price,
-            fee=fee,
+            user_id=event.user_id,
+            strategy_id=event.strategy_id,
+            execution_id=event.execution_id,
+            signal=event.signal,
+            decision_reason=event.decision_reason,
+            symbol=event.symbol,
+            side=event.side,
+            size=event.size,
+            price=event.price,
+            order_type=event.order_type,
+            exchange_id=event.exchange_id,
+            exchange_response=event.exchange_response,
+            client_order_id=event.client_order_id,
+            exchange_order_id=event.exchange_order_id,
+            status=event.status,
+            filled_amount=event.filled_amount,
+            remaining_amount=event.remaining_amount,
+            average_price=event.average_price,
+            fee=event.fee,
             error_message=None,
-            metadata=metadata
+            metadata=event.metadata,
         )
-        
+
         await self._store_record(record)
-    
+
     async def log_order_failed(
         self,
-        audit_id: str,
-        user_id: str,
-        strategy_id: str,
-        execution_id: str,
-        signal: Dict[str, Any],
-        decision_reason: str,
-        symbol: str,
-        side: str,
-        size: float,
-        price: Optional[float],
-        order_type: str,
-        exchange_id: str,
-        client_order_id: str,
-        error_message: str,
-        exchange_response: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        event: OrderFailedEvent,
     ):
         """
         Log order failed.
-        
         Records failure with full context.
         """
+        audit_id = event.audit_id or self._generate_audit_id()
+        timestamp = event.timestamp or datetime.utcnow()
+
         record = OrderAuditRecord(
             audit_id=audit_id,
-            timestamp=datetime.utcnow(),
+            timestamp=timestamp,
             event_type=AuditEventType.ORDER_FAILED,
-            user_id=user_id,
-            strategy_id=strategy_id,
-            execution_id=execution_id,
-            signal=signal,
-            decision_reason=decision_reason,
-            symbol=symbol,
-            side=side,
-            size=size,
-            price=price,
-            order_type=order_type,
-            exchange_id=exchange_id,
-            exchange_response=exchange_response,
-            client_order_id=client_order_id,
+            user_id=event.user_id,
+            strategy_id=event.strategy_id,
+            execution_id=event.execution_id,
+            signal=event.signal,
+            decision_reason=event.decision_reason,
+            symbol=event.symbol,
+            side=event.side,
+            size=event.size,
+            price=event.price,
+            order_type=event.order_type,
+            exchange_id=event.exchange_id,
+            exchange_response=event.exchange_response,
+            client_order_id=event.client_order_id,
             exchange_order_id=None,
             status="failed",
             filled_amount=None,
             remaining_amount=None,
             average_price=None,
             fee=None,
-            error_message=error_message,
-            metadata=metadata
+            error_message=event.error_message,
+            metadata=event.metadata,
         )
-        
+
         await self._store_record(record)
-    
+
     async def log_fill(
         self,
-        audit_id: str,
-        user_id: str,
-        strategy_id: str,
-        execution_id: str,
-        signal: Dict[str, Any],
-        decision_reason: str,
-        symbol: str,
-        side: str,
-        exchange_id: str,
-        exchange_order_id: str,
-        trade_id: str,
-        fill_amount: float,
-        fill_price: float,
-        fee: float,
-        exchange_response: Dict[str, Any],
-        metadata: Optional[Dict[str, Any]] = None
+        event: FillEvent,
     ):
         """
         Log fill received.
-        
         Records each individual fill/trade.
         """
+        audit_id = event.audit_id or self._generate_audit_id()
+        timestamp = event.timestamp or datetime.utcnow()
+
         record = OrderAuditRecord(
             audit_id=audit_id,
-            timestamp=datetime.utcnow(),
+            timestamp=timestamp,
             event_type=AuditEventType.FILL_RECEIVED,
-            user_id=user_id,
-            strategy_id=strategy_id,
-            execution_id=execution_id,
-            signal=signal,
-            decision_reason=decision_reason,
-            symbol=symbol,
-            side=side,
-            size=fill_amount,
-            price=fill_price,
+            user_id=event.user_id,
+            strategy_id=event.strategy_id,
+            execution_id=event.execution_id,
+            signal=event.signal,
+            decision_reason=event.decision_reason,
+            symbol=event.symbol,
+            side=event.side,
+            size=event.fill_amount or event.size,
+            price=event.fill_price or event.price,
             order_type="fill",
-            exchange_id=exchange_id,
-            exchange_response=exchange_response,
+            exchange_id=event.exchange_id,
+            exchange_response=event.exchange_response,
             client_order_id=None,
-            exchange_order_id=exchange_order_id,
+            exchange_order_id=event.exchange_order_id,
             status="filled",
-            filled_amount=fill_amount,
+            filled_amount=event.fill_amount,
             remaining_amount=None,
-            average_price=fill_price,
-            fee=fee,
+            average_price=event.fill_price,
+            fee=event.fee,
             error_message=None,
-            metadata={**(metadata or {}), "trade_id": trade_id}
+            metadata={**(event.metadata or {}), "trade_id": event.trade_id},
         )
-        
+
         await self._store_record(record)
     
     async def _store_record(self, record: OrderAuditRecord):
@@ -632,5 +638,12 @@ __all__ = [
     "OrderAuditLogger",
     "OrderAuditRecord",
     "AuditEventType",
+    "BaseOrderLifecycleEvent",
+    "SignalReceivedEvent",
+    "DecisionEvent",
+    "OrderSubmittedEvent",
+    "OrderConfirmedEvent",
+    "OrderFailedEvent",
+    "FillEvent",
     "get_order_audit_logger",
 ]

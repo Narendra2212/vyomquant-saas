@@ -8,9 +8,10 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.database_pool import (
+from backend_app.core.database_pool import (
     get_db_pool,
     get_db,
+    get_db_context,
     DatabasePool,
     check_database_health,
 )
@@ -48,15 +49,21 @@ def test_connection():
 
 
 def test_session():
-    """Test session creation."""
+    """Test session creation with get_db_context."""
     try:
-        with get_db() as session:
+        with get_db_context() as session:
             result = session.execute(text("SELECT 1"))
             row = result.fetchone()
             assert row[0] == 1, "Should return 1"
         print("[PASS] Session test successful")
     except Exception as e:
         print(f"[WARN] Session test: {e}")
+
+
+def test_get_db_generator_is_generator_function():
+    """Verify get_db is a plain generator function for FastAPI Depends()."""
+    import inspect
+    assert inspect.isgeneratorfunction(get_db), "get_db must be a generator function for FastAPI yield-dependency"
 
 
 def test_multiple_connections():
@@ -81,15 +88,19 @@ def test_pool_configuration():
     import os
     
     # Check environment variables have defaults
-    pool_size = int(os.getenv("DB_POOL_SIZE", "20"))
-    max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+    pool_size = int(os.getenv("DB_POOL_SIZE", "5"))
+    max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "3"))
     
-    assert pool_size >= 10, "Pool size should be reasonable"
-    assert max_overflow >= 5, "Max overflow should be reasonable"
+    assert pool_size >= 2, "Pool size should be reasonable"
+    assert max_overflow >= 1, "Max overflow should be reasonable"
     
     print(f"[PASS] Pool config: size={pool_size}, overflow={max_overflow}")
 
 
+
+import pytest
+
+@pytest.mark.anyio
 async def test_async_health():
     """Test async health check."""
     try:

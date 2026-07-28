@@ -86,6 +86,12 @@ phases:
       - docker push $ACCOUNT_URI/$WORKER_REPOSITORY:latest
 
       - echo "====================================="
+      - echo "Deploying Static Frontend to S3 & Invalidating CloudFront CDN Cache..."
+      - echo "====================================="
+      - if [ -n "$FRONTEND_S3_BUCKET" ]; then aws s3 sync algo22-terminal/dist s3://$FRONTEND_S3_BUCKET --delete; fi
+      - if [ -n "$CLOUDFRONT_DISTRIBUTION_ID" ]; then aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION_ID --paths "/*"; fi
+
+      - echo "====================================="
       - echo "BUILD COMPLETED SUCCESSFULLY"
       - echo "====================================="
 

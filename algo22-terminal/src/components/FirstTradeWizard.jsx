@@ -5,19 +5,8 @@ import {
 } from 'lucide-react';
 import { useAppState } from '../AppState';
 
-const C = {
-  bg: "#0B0F14",
-  bg2: "#12181F",
-  bg3: "#161D26",
-  border: "#1E2733",
-  borderLight: "#2A3441",
-  accent: "#2962FF",
-  accentHover: "#448AFF",
-  t1: "#E6EDF3",
-  t2: "#8B949E",
-  t3: "#64748B",
-  success: "#00C853",
-};
+import { C } from './ui-legacy/primitives';
+
 
 const STEPS = [
   { id: 1, title: 'Connect Exchange', icon: Server, desc: 'Link Binance or Bybit' },

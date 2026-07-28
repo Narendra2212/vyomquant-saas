@@ -42,7 +42,7 @@ from backend_app.backend.indicators_backend import (adx, atr,
                                                     trix, vortex_indicator,
                                                     williams_r, wma)
 from backend_app.backend.ml_models import create_ml_block
-from backend_app.backend.risk_manager import RiskVerdict
+from backend_app.core.risk_manager import RiskVerdict, TradeRequest
 from backend_app.backend.strategy_builder import StrategyEngine
 
 logger = logging.getLogger("BotRunner")
@@ -379,16 +379,18 @@ class BotRunner:
                 daily_pnl_pct = account_health.get("daily_pnl_pct", 0.0)
                 
                 verdict, reason = await self.risk_manager.validate_trade_request(
-                    user_id=self.user_id,
-                    user_tier=self.blueprint.get("user_tier", "free"),
-                    symbol=self.symbol,
-                    side=order_payload["side"],
-                    amount=order_payload["qty"],
-                    current_price=price,
-                    current_exposure=self.recovered_exposure_coins * price,
-                    current_drawdown_pct=current_drawdown_pct,
-                    daily_pnl_pct=daily_pnl_pct,
-                    is_reduce_only=is_reduce,
+                    TradeRequest(
+                        user_id=self.user_id,
+                        user_tier=self.blueprint.get("user_tier", "free"),
+                        symbol=self.symbol,
+                        side=order_payload["side"],
+                        amount=order_payload["qty"],
+                        current_price=price,
+                        current_exposure=self.recovered_exposure_coins * price,
+                        current_drawdown_pct=current_drawdown_pct,
+                        daily_pnl_pct=daily_pnl_pct,
+                        is_reduce_only=is_reduce,
+                    )
                 )
 
                 if verdict != RiskVerdict.APPROVED:

@@ -253,13 +253,30 @@ test_*.db-journal
 docker-compose.override.yml
 docker-compose.local.yml
 
-# ── TERRAFORM STATE ──────────────────────────────────────────────────────────
+# ── TERRAFORM STATE & PLAN FILES ─────────────────────────────────────────────
 **/.terraform/
 *.tfstate
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
 .terraform.lock.hcl
+# Terraform plan files — can embed account IDs, ARNs, and sensitive resource values
+tfplan
+*.tfplan
+*.tfplan.out
+# Terraform-generated backup files
+*.tf.backup
+*.backup
+# Terraform binary bundles (portable/embedded Terraform distributions)
+terraform.zip
+terraform-*.zip
+
+# ── PORTABLE GIT / TOOL BINARY DISTRIBUTIONS ─────────────────────────────────
+# Prevent accidentally committing a portable Git-for-Windows installation
+# or any other embedded binary tool distribution rooted at the repo root.
+Git/
+git-portable/
+PortableGit/
 
 # ── KUBERNETES SECRETS ───────────────────────────────────────────────────────
 *secret*.yaml

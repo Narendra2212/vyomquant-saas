@@ -1,29 +1,29 @@
-/* ═══════════════════════════════════════════════════════════════════════
-   VyomQuant — Unified Stylesheet (Tailwind CSS v4)
+﻿/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   VyomQuant â€” Unified Stylesheet (Tailwind CSS v4)
    Merged from: existing App.css + ZIP index.css design tokens
-   ═══════════════════════════════════════════════════════════════════════ */
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 @import "tailwindcss";
 
-/* ── Theme tokens (Tailwind v4 CSS-first configuration) ── */
+/* â”€â”€ Theme tokens (Tailwind v4 CSS-first configuration) â”€â”€ */
 @theme {
-  /* ── Existing app palette ── */
-  --color-bg-0: #010608;
-  --color-bg-1: #0a0f14;
-  --color-bg-2: #0f151a;
-  --color-bg-3: #141a20;
-  --color-text-1: #e8e8e8;
-  --color-text-2: #a0a0a0;
-  --color-text-3: #606060;
-  --color-border: #1e293b;
-  --color-cyan: #00d4ff;
-  --color-green: #22c55e;
-  --color-red: #ef4444;
+  /* â”€â”€ Existing app palette â”€â”€ */
+  --color-bg-0: #080A0E;
+  --color-bg-1: #0F1117;
+  --color-bg-2: #151821;
+  --color-bg-3: #1A202C;
+  --color-text-1: #F0F2F5;
+  --color-text-2: #8B95A5;
+  --color-text-3: #5A6578;
+  --color-border: #1E2530;
+  --color-cyan: #00D4FF;
+  --color-green: #26A69A;
+  --color-red: #EF5350;
   --color-purple: #a855f7;
   --color-orange: #f97316;
-  --color-gold: #fbbf24;
+  --color-gold: #F59E0B;
 
-  /* ── Landing page design system tokens (from ZIP) ── */
+  /* â”€â”€ Landing page design system tokens (from ZIP) â”€â”€ */
   --color-void: #050608;
   --color-bg-primary: #080A0E;
   --color-bg-surface: #0F1117;
@@ -45,16 +45,16 @@
   --color-accent-loss: #EF4444;
   --color-accent-loss-dim: rgba(239, 68, 68, 0.12);
 
-  /* ── Typography ── */
+  /* â”€â”€ Typography â”€â”€ */
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', 'SF Mono', Menlo, Consolas, monospace;
 
-  /* ── Spacing extensions ── */
+  /* â”€â”€ Spacing extensions â”€â”€ */
   --spacing-18: 4.5rem;
   --spacing-22: 5.5rem;
   --spacing-88: 22rem;
 
-  /* ── Animations ── */
+  /* â”€â”€ Animations â”€â”€ */
   --animate-pulse-glow: pulse-glow 3s ease-in-out infinite;
   --animate-gradient-sweep: gradient-sweep 2s linear infinite;
   --animate-shimmer: shimmer 1.5s infinite;
@@ -75,7 +75,7 @@
   }
 }
 
-/* ── Base resets ── */
+/* â”€â”€ Base resets â”€â”€ */
 html {
   scroll-behavior: smooth;
   -webkit-font-smoothing: auto;
@@ -96,7 +96,7 @@ html {
   }
 }
 
-/* ── Layout utilities ── */
+/* â”€â”€ Layout utilities â”€â”€ */
 @utility section-container {
   width: 100%;
   padding-left: 1rem;
@@ -117,7 +117,7 @@ html {
   margin-right: auto;
 }
 
-/* ── Navigation ── */
+/* â”€â”€ Navigation â”€â”€ */
 @utility glass-nav {
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
@@ -125,7 +125,7 @@ html {
   border-bottom: 1px solid rgba(30, 37, 48, 0.5);
 }
 
-/* ── Buttons ── */
+/* â”€â”€ Buttons â”€â”€ */
 @utility btn-primary {
   display: inline-flex;
   align-items: center;
@@ -178,7 +178,7 @@ html {
   }
 }
 
-/* ── Cards ── */
+/* â”€â”€ Cards â”€â”€ */
 @utility card-surface {
   background-color: #0F1117;
   border: 1px solid #1E2530;
@@ -197,7 +197,7 @@ html {
   }
 }
 
-/* ── Typography ── */
+/* â”€â”€ Typography â”€â”€ */
 @utility text-gradient-cyan {
   background: linear-gradient(to right, #00D4FF, #67e8f9);
   -webkit-background-clip: text;
@@ -206,7 +206,7 @@ html {
   color: transparent;
 }
 
-/* ── Terminal chrome frame ── */
+/* â”€â”€ Terminal chrome frame â”€â”€ */
 @utility terminal-frame {
   position: relative;
   border-radius: 0.75rem;
@@ -215,9 +215,10 @@ html {
   overflow: hidden;
 }
 
-/* ── Scrollbar ── */
+/* â”€â”€ Scrollbar â”€â”€ */
 @utility scrollbar-hide {
   -ms-overflow-style: none;
   scrollbar-width: none;
   &::-webkit-scrollbar { display: none; }
 }
+

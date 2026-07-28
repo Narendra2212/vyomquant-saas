@@ -25,12 +25,14 @@ STEP 6.10: Security - NEVER log API keys
 """
 import asyncio
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import ROUND_DOWN, Decimal
 from enum import Enum
+from collections import defaultdict
 from typing import Any, Dict, Optional
 
 from backend_app.backend.state_service import OrderStatus
@@ -245,16 +247,29 @@ class CircuitBreakerOpenError(Exception):
 
 # Global circuit breakers per exchange
 _exchange_circuit_breakers: Dict[str, CircuitBreaker] = {}
+# Per-exchange-id creation lock for double-checked initialisation.
+# threading.Lock is used (not asyncio.Lock) because get_circuit_breaker is a
+# plain sync function — it cannot await — matching the pattern in
+# core/auth_middleware.py::_get_jwks_client().
+_circuit_breaker_lock = threading.Lock()
 
 
 def get_circuit_breaker(exchange_id: str) -> CircuitBreaker:
-    """Get or create circuit breaker for an exchange."""
+    """Get or create the circuit breaker for *exchange_id*.
+
+    Uses double-checked locking so that:
+    - Steady-state calls (breaker already exists) take no lock overhead.
+    - Concurrent cold-start calls produce exactly one CircuitBreaker instance
+      per exchange, preventing split failure-state across two objects.
+    """
     if exchange_id not in _exchange_circuit_breakers:
-        _exchange_circuit_breakers[exchange_id] = CircuitBreaker(
-            failure_threshold=5,
-            recovery_timeout=30.0,
-            half_open_max_calls=3
-        )
+        with _circuit_breaker_lock:
+            if exchange_id not in _exchange_circuit_breakers:
+                _exchange_circuit_breakers[exchange_id] = CircuitBreaker(
+                    failure_threshold=5,
+                    recovery_timeout=30.0,
+                    half_open_max_calls=3
+                )
     return _exchange_circuit_breakers[exchange_id]
 
 
@@ -295,29 +310,52 @@ class AuthenticationError(ExchangeError):
 
 class RateLimiter:
     """
-    Per-exchange rate limiter.
-    
-    Prevents hitting exchange rate limits.
+    Per-exchange, per-endpoint rate limiter.
+
+    Prevents hitting exchange rate limits while allowing fully concurrent
+    token acquisition across *different* endpoints on the same exchange.
+
+    Design:
+        Each endpoint key ("place_order", "cancel_order", …) owns an
+        independent asyncio.Lock stored in ``_endpoint_locks``.  Sleeping
+        to respect the rate limit for one endpoint therefore never blocks
+        a coroutine that is trying to acquire a token for a different
+        endpoint — they hold independent locks and share no critical
+        section during the sleep phase.
+
+        The sleep itself still occurs **inside** the per-endpoint lock so
+        there is no TOCTOU race: only one coroutine per endpoint can be
+        computing or sleeping at a time, guaranteeing ``last_request_time``
+        is always updated atomically relative to the next waiter.
     """
-    
+
     def __init__(self, requests_per_second: float = 10.0):
         self.requests_per_second = requests_per_second
         self.min_interval = 1.0 / requests_per_second
         self.last_request_time: Dict[str, float] = {}
-        self._lock = asyncio.Lock()
-    
+        # Per-endpoint locks: sleeping on endpoint A never blocks endpoint B.
+        # defaultdict is safe here because asyncio is single-threaded —
+        # __getitem__ is synchronous and non-interruptible within the event loop.
+        self._endpoint_locks: defaultdict = defaultdict(asyncio.Lock)
+
     async def acquire(self, endpoint: str = "default"):
-        """Acquire rate limit token."""
-        async with self._lock:
+        """
+        Acquire a rate-limit token for *endpoint*.
+
+        Waits the minimum required interval since the last call on this
+        specific endpoint.  Calls to *different* endpoints proceed
+        concurrently and are never blocked by each other's wait.
+        """
+        async with self._endpoint_locks[endpoint]:
             now = time.time()
-            last_request = self.last_request_time.get(endpoint, 0)
+            last_request = self.last_request_time.get(endpoint, 0.0)
             elapsed = now - last_request
-            
+
             if elapsed < self.min_interval:
                 wait_time = self.min_interval - elapsed
-                logger.debug(f"Rate limit waiting: {wait_time:.3f}s")
+                logger.debug(f"Rate limit waiting [{endpoint}]: {wait_time:.3f}s")
                 await asyncio.sleep(wait_time)
-            
+
             self.last_request_time[endpoint] = time.time()
 
 

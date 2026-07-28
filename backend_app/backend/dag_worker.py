@@ -25,11 +25,12 @@ from backend_app.core.models.dag_task import DAGTaskRepository
 from backend_app.core.models.dag_task import TaskStatus as DBTaskStatus
 from backend_app.core.safety_monitor import log_blocked_execution
 from backend_app.core.tenant import TenantContext, TenantQuota
+from backend_app.core.worker_base import WorkerBase
 
 logger = logging.getLogger("DAGWorker")
 
 
-class DAGWorker:
+class DAGWorker(WorkerBase):
     """
     Worker that processes DAG tasks from the queue.
     
@@ -47,17 +48,15 @@ class DAGWorker:
         max_idle_seconds: float = 60.0,
         heartbeat_interval_seconds: float = 5.0
     ):
-        self.worker_id = worker_id or str(uuid.uuid4())[:8]
-        self.poll_interval = poll_interval_seconds
+        name = worker_id or str(uuid.uuid4())[:8]
+        super().__init__(worker_name=name, poll_interval=poll_interval_seconds, heartbeat_interval=heartbeat_interval_seconds)
+        self.worker_id = name
         self.max_idle_seconds = max_idle_seconds
-        self.heartbeat_interval = heartbeat_interval_seconds
         self.queue = dag_task_queue
-        self.running = False
-        self._task: Optional[asyncio.Task] = None
         self._current_task: Optional[DAGTask] = None
         
-        # Heartbeat tracking
-        self._heartbeat_task: Optional[asyncio.Task] = None
+        # Task heartbeat tracking
+        self._task_heartbeat_task: Optional[asyncio.Task] = None
         self._heartbeat_stop_event = asyncio.Event()
         
         # Register worker
@@ -70,57 +69,28 @@ class DAGWorker:
     
     async def start(self):
         """Start worker loop."""
-        self.running = True
-        self._task = asyncio.create_task(self._worker_loop())
-        logger.info(f"Worker {self.worker_id} started")
+        await super().start()
     
-    async def stop(self):
-        """Stop worker gracefully."""
-        self.running = False
-        
+    async def cleanup(self):
+        """Cleanup worker gracefully."""
         if self._current_task:
             # Signal current task to cancel
             logger.info(f"Cancelling current task: {self._current_task.task_id}")
         
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        
         # Cleanup registration
         redis_manager.srem(TaskQueueKeyBuilder.worker_registry(), self.worker_id)
-        logger.info(f"Worker {self.worker_id} stopped")
     
-    async def _worker_loop(self):
-        """Main worker loop with atomic task claiming."""
-        idle_count = 0
+    async def process_iteration(self):
+        """Main worker loop iteration with atomic task claiming."""
+        # Note: WorkerBase handles the while self.running loop and asyncio.sleep
+        # Try to claim a task with atomic PostgreSQL-Redis coordination
+        task = await self._atomic_claim_task()
         
-        while self.running:
-            try:
-                # Try to claim a task with atomic PostgreSQL-Redis coordination
-                task = await self._atomic_claim_task()
-                
-                if task:
-                    idle_count = 0
-                    await self._execute_task(task)
-                else:
-                    # No tasks available
-                    idle_count += 1
-                    if idle_count * self.poll_interval >= self.max_idle_seconds:
-                        logger.info(f"Worker {self.worker_id} idle timeout")
-                        break
-                    
-                    await asyncio.sleep(self.poll_interval)
-                    
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Worker error: {e}")
-                await asyncio.sleep(self.poll_interval)
-        
-        self.running = False
+        if task:
+            await self._execute_task(task)
+        else:
+            # No tasks available
+            await asyncio.sleep(self.poll_interval)
     
     async def _atomic_claim_task(self) -> Optional[DAGTask]:
         """
@@ -483,13 +453,13 @@ class DAGWorker:
         Args:
             task_id: Task identifier to heartbeat
         """
-        if self._heartbeat_task and not self._heartbeat_task.done():
+        if self._task_heartbeat_task and not self._task_heartbeat_task.done():
             logger.warning(f"Heartbeat already running for task {task_id}, stopping old one")
             await self._stop_heartbeat()
         
         self._heartbeat_stop_event.clear()
-        self._heartbeat_task = asyncio.create_task(
-            self._heartbeat_loop(task_id)
+        self._task_heartbeat_task = asyncio.create_task(
+            self._task_heartbeat_loop(task_id)
         )
         
         logger.info(
@@ -502,7 +472,7 @@ class DAGWorker:
             }
         )
     
-    async def _heartbeat_loop(self, task_id: str):
+    async def _task_heartbeat_loop(self, task_id: str):
         """
         Heartbeat loop - updates last_heartbeat every 5 seconds.
         
@@ -619,20 +589,19 @@ class DAGWorker:
     
     async def _stop_heartbeat(self):
         """Stop the heartbeat loop."""
-        if self._heartbeat_task and not self._heartbeat_task.done():
+        if self._task_heartbeat_task:
             self._heartbeat_stop_event.set()
             try:
-                await asyncio.wait_for(self._heartbeat_task, timeout=1.0)
+                await asyncio.wait_for(self._task_heartbeat_task, timeout=1.0)
             except asyncio.TimeoutError:
-                self._heartbeat_task.cancel()
+                self._task_heartbeat_task.cancel()
                 try:
-                    await self._heartbeat_task
+                    await self._task_heartbeat_task
                 except asyncio.CancelledError:
                     pass
             except Exception as e:
                 logger.warning(f"Error stopping heartbeat: {e}")
-        
-        self._heartbeat_task = None
+            self._task_heartbeat_task = None
     
     async def _check_cancellation(self, task_id: str) -> bool:
         """

@@ -19,58 +19,14 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine
 } from "recharts";
+import { C } from './ui-legacy/primitives';
+
 
 // ═══════════════════════════════════════════════════════════════════
-// COLOR THEME - PROFESSIONAL TRADING
+// COLOR THEME — uses canonical C from ui-legacy/primitives
+// (imported above — do not redefine locally)
 // ═══════════════════════════════════════════════════════════════════
-const C = {
-  // Background hierarchy
-  bg: "#0B0F14",
-  bg0: "#0B0F14",
-  bg1: "#0E1319",
-  bg2: "#12181F",
-  bg3: "#161D26",
-  bg4: "#1A222C",
-  card: "#12181F",
 
-  // Border system
-  border: "#1E2733",
-  borderLight: "#2A3441",
-  borderHover: "#3D4D5C",
-
-  // Shadows
-  shadow: "0 2px 4px rgba(0,0,0,0.2)",
-  shadowMd: "0 4px 8px rgba(0,0,0,0.3)",
-
-  // Accent colors - minimal, professional
-  accent: "#2962FF",
-  accentHover: "#448AFF",
-  accentMuted: "#1E40AF",
-
-  // Profit/Loss - standard trading colors
-  profit: "#00C853",
-  profitDark: "#00B248",
-  profitBg: "rgba(0, 200, 83, 0.1)",
-  loss: "#FF3D00",
-  lossDark: "#DD2C00",
-  lossBg: "rgba(255, 61, 0, 0.1)",
-
-  // Text hierarchy
-  t1: "#E6EDF3",
-  t2: "#8B949E",
-  t3: "#64748B",
-  t4: "#475569",
-
-  // Utility colors
-  warning: "#FFAB00",
-  gold: "#FFD600",
-  purple: "#7C4DFF",
-
-  // Legacy aliases
-  success: "#00C853",
-  danger: "#FF3D00",
-  cyan: "#2962FF",
-};
 
 // ═══════════════════════════════════════════════════════════════════
 // RISK ALERT BANNER

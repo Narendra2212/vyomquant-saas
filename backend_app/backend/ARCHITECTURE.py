@@ -28,7 +28,7 @@
 ║    connection_engine.py       CCXT.pro exchange connector                ║
 ║    data_seeking_engine.py     WebSocket + REST market data               ║
 ║    order_execution_engine.py  CCXT order placement                       ║
-║    security_vault.py          AES-256 key encryption (Supabase)          ║
+║    api_key_vault.py           AES-256 key encryption (Supabase)          ║
 ║    telemetry_engine.py        QuestDB time-series R/W                    ║
 ║    main.py                    FastAPI app + routers + WS endpoints       ║
 ║    routers/                   REST route handlers                        ║

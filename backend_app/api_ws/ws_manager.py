@@ -22,6 +22,8 @@ from typing import Dict, Optional, Set
 
 from fastapi import HTTPException, WebSocket
 
+from backend_app.core.cache import redis_manager
+
 logger = logging.getLogger("WSManager")
 
 # STEP 8: Rate limiting constants to prevent IP bans
@@ -54,6 +56,44 @@ class ConnectionManager:
         self._user_connections: Dict[str, Set[WebSocket]] = defaultdict(set)
         # Track all connections globally
         self._all_connections: Set[WebSocket] = set()
+        
+        self._listener_task: Optional[asyncio.Task] = None
+
+    # ── Redis Bridge ───────────────────────────────────────────────────────
+
+    def start_bridge(self):
+        """Start the Redis Pub/Sub listener for cross-instance broadcasts."""
+        if not self._listener_task:
+            self._listener_task = asyncio.create_task(self._redis_listener_loop())
+
+    async def _redis_listener_loop(self):
+        """Listen for messages on the Redis ws_bridge channel and route them locally."""
+        while True:
+            if not redis_manager.pool:
+                await asyncio.sleep(1)
+                continue
+            
+            try:
+                pubsub = redis_manager.pool.pubsub()
+                await pubsub.subscribe("ws_bridge")
+                logger.info("[WS] Subscribed to Redis ws_bridge for cross-instance broadcasts")
+                
+                async for message in pubsub.listen():
+                    if message["type"] == "message":
+                        try:
+                            payload = json.loads(message["data"])
+                            channel = payload.get("channel")
+                            key = payload.get("key")
+                            data = payload.get("data")
+                            
+                            if channel and key and data is not None:
+                                store = self._get_store(channel)
+                                await self._broadcast(store, key, data)
+                        except Exception as e:
+                            logger.error(f"[WS] Error processing cross-instance message: {e}")
+            except Exception as e:
+                logger.warning(f"[WS] Redis Pub/Sub listener disconnected: {e}. Reconnecting in 5s...")
+                await asyncio.sleep(5)
 
     # ── Register / unregister ──────────────────────────────────────────────
 
@@ -143,21 +183,39 @@ class ConnectionManager:
 
     # ── Broadcast helpers ──────────────────────────────────────────────────
 
+    async def _publish_to_bridge(self, channel: str, key: str, data: dict):
+        """Publish a message to Redis if available, else fallback to local broadcast."""
+        if redis_manager.pool:
+            try:
+                payload = json.dumps({
+                    "channel": channel,
+                    "key": key,
+                    "data": data
+                })
+                await redis_manager.pool.publish("ws_bridge", payload)
+                return
+            except Exception as e:
+                logger.warning(f"[WS] Failed to publish to Redis ws_bridge, falling back to local: {e}")
+        
+        # Fallback to local
+        store = self._get_store(channel)
+        await self._broadcast(store, key, data)
+
     async def broadcast_ticker(self, symbol: str, data: dict):
-        await self._broadcast(self._ticker, symbol, data)
+        await self._publish_to_bridge("ticker", symbol, data)
 
     async def broadcast_orderbook(self, symbol: str, data: dict):
-        await self._broadcast(self._orderbook, symbol, data)
+        await self._publish_to_bridge("orderbook", symbol, data)
 
     async def broadcast_candles(self, symbol: str, data: dict):
-        await self._broadcast(self._candles, symbol, data)
+        await self._publish_to_bridge("candles", symbol, data)
 
     async def broadcast_user(self, user_id: str, data: dict):
         """Push to a specific user's private channel (fills, bot status, alerts)."""
-        await self._broadcast(self._user, user_id, data)
+        await self._publish_to_bridge("user", user_id, data)
 
     async def broadcast_pnl(self, user_id: str, data: dict):
-        await self._broadcast(self._pnl, user_id, data)
+        await self._publish_to_bridge("pnl", user_id, data)
 
     # ── Core send ──────────────────────────────────────────────────────────
 

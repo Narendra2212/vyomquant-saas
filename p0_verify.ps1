@@ -26,11 +26,8 @@ Check "backend/ copied in image"         ($df -match "COPY.*backend/")
 # ─────────────────────────────────────────────────────────
 Write-Host "`n[3] CORS LOCALHOST LEAKAGE" -ForegroundColor Cyan
 $main1 = Get-Content "aerora_quant_backend_updated_final1\main.py" -Raw
-$main2 = Get-Content "aerora_quant_backend_updated_final1\api\main.py" -Raw
 Check "main.py: no hardcoded localhost"  ($main1 -notmatch '"http://localhost')
-Check "api/main.py: no hardcoded localhost" ($main2 -notmatch '"http://localhost')
 Check "main.py: reads from CORS_ORIGINS env" ($main1 -match "CORS_ORIGINS")
-Check "api/main.py: reads from CORS_ORIGINS env" ($main2 -match "CORS_ORIGINS")
 
 # ─────────────────────────────────────────────────────────
 Write-Host "`n[4] BILLING FAKE CARD METADATA" -ForegroundColor Cyan

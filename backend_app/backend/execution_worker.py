@@ -52,7 +52,9 @@ class ExecutionTaskType(str, Enum):
     EMERGENCY_LIQUIDATE = "EMERGENCY_LIQUIDATE"
 
 
-class ExecutionWorker:
+from backend_app.core.worker_base import WorkerBase
+
+class ExecutionWorker(WorkerBase):
     """
     Dedicated worker for order execution.
     
@@ -71,18 +73,20 @@ class ExecutionWorker:
         poll_interval_seconds: float = 0.5,
         max_idle_seconds: float = 30.0,
     ):
-        self.worker_id = worker_id or f"execution-{os.getpid()}"
+        name = worker_id or f"execution-{os.getpid()}"
+        super().__init__(worker_name=name, poll_interval=60.0) # Stats interval
+        self.worker_id = name
         self.concurrency = concurrency
-        self.poll_interval = poll_interval_seconds
+        self.consumer_poll_interval = poll_interval_seconds
         self.max_idle_seconds = max_idle_seconds
         
         self._redis: Optional[aioredis.Redis] = None
         self._execution_engine: Optional[ExecutionEngine] = None
         self._event_publisher = None
         
-        self._running = False
         self._shutdown_event = asyncio.Event()
         self._semaphore = asyncio.Semaphore(concurrency)
+        self.consumer_tasks = []
         
         self._stats = {
             "tasks_processed": 0,
@@ -116,12 +120,21 @@ class ExecutionWorker:
             f"(concurrency={self.concurrency}, poll={self.poll_interval}s)"
         )
     
-    async def close(self):
+    async def cleanup(self):
         """Clean shutdown."""
-        logger.info(f"[ExecutionWorker {self.worker_id}] Shutting down...")
-        self._running = False
+        logger.info(f"[ExecutionWorker {self.worker_id}] Shutting down consumers...")
         self._shutdown_event.set()
         
+        # Cancel consumers
+        for task in self.consumer_tasks:
+            task.cancel()
+            
+        try:
+            if self.consumer_tasks:
+                await asyncio.gather(*self.consumer_tasks, return_exceptions=True)
+        except asyncio.CancelledError:
+            pass
+            
         # Wait for active tasks to complete
         if self._active_tasks:
             logger.info(f"Waiting for {len(self._active_tasks)} active tasks...")
@@ -136,35 +149,28 @@ class ExecutionWorker:
         """Start the worker loop."""
         if not self._redis:
             await self.initialize()
-        
-        self._running = True
-        logger.info(f"[ExecutionWorker {self.worker_id}] Started")
+            
+        await super().start()
         
         # Start multiple consumer tasks for concurrency
-        consumer_tasks = [
+        self.consumer_tasks = [
             asyncio.create_task(self._consumer_loop(), name=f"consumer-{i}")
             for i in range(self.concurrency)
         ]
-        
-        # Start stats reporter
-        stats_task = asyncio.create_task(self._stats_reporter())
-        
-        # Wait for shutdown
-        await self._shutdown_event.wait()
-        
-        # Cancel all consumers
-        for task in consumer_tasks:
-            task.cancel()
-        stats_task.cancel()
-        
-        try:
-            await asyncio.gather(*consumer_tasks, stats_task, return_exceptions=True)
-        except asyncio.CancelledError:
-            pass
+    
+    async def process_iteration(self):
+        """Report worker stats periodically."""
+        logger.info(
+            f"[ExecutionWorker {self.worker_id}] Stats: "
+            f"processed={self._stats['tasks_processed']}, "
+            f"success={self._stats['tasks_succeeded']}, "
+            f"failed={self._stats['tasks_failed']}, "
+            f"avg_time={self._stats['avg_execution_time_ms']:.1f}ms"
+        )
     
     async def _consumer_loop(self):
         """Main consumer loop - claims and executes tasks."""
-        while self._running and not self._shutdown_event.is_set():
+        while self.running and not self._shutdown_event.is_set():
             try:
                 # Try priority queue first, then normal queue
                 task_data = await self._claim_task()
@@ -187,7 +193,7 @@ class ExecutionWorker:
                     # No task available, wait before retry
                     await asyncio.wait_for(
                         self._shutdown_event.wait(),
-                        timeout=self.poll_interval
+                        timeout=self.consumer_poll_interval
                     )
                     
             except asyncio.TimeoutError:
@@ -392,22 +398,7 @@ class ExecutionWorker:
         old_avg = self._stats["avg_execution_time_ms"]
         self._stats["avg_execution_time_ms"] = (old_avg * (n - 1) + execution_time_ms) / n
     
-    async def _stats_reporter(self):
-        """Periodically report worker stats."""
-        while self._running:
-            try:
-                await asyncio.wait_for(
-                    self._shutdown_event.wait(),
-                    timeout=60  # Report every minute
-                )
-            except asyncio.TimeoutError:
-                logger.info(
-                    f"[ExecutionWorker {self.worker_id}] Stats: "
-                    f"processed={self._stats['tasks_processed']}, "
-                    f"success={self._stats['tasks_succeeded']}, "
-                    f"failed={self._stats['tasks_failed']}, "
-                    f"avg_time={self._stats['avg_execution_time_ms']:.1f}ms"
-                )
+    # process_iteration now handles stats reporting.
     
     def get_stats(self) -> Dict[str, Any]:
         """Get current worker statistics."""
@@ -417,7 +408,7 @@ class ExecutionWorker:
             "concurrency": self.concurrency,
             **self._stats,
             "active_tasks": len(self._active_tasks),
-            "is_running": self._running,
+            "is_running": self.running,
         }
 
 
@@ -436,9 +427,15 @@ async def main():
     
     try:
         await worker.start()
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
     except Exception as e:
         logger.error(f"Execution worker error: {e}")
         raise
+    finally:
+        await worker.stop()
 
 
 if __name__ == "__main__":

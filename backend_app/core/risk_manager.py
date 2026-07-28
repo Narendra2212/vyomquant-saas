@@ -1,47 +1,271 @@
 """
-Risk Manager
-Manages trading risk limits and position sizing with global guardrails.
+backend_app/core/risk_manager.py
+
+Consolidated Institutional Risk Manager.
+Combines institutional circuit-breaker checks, multi-tenant rate limits,
+capital allocations, correlation cluster controls, and paper-trading risk status helpers.
 """
 
+import asyncio
+from dataclasses import dataclass, field
 from datetime import date
-from typing import Tuple
+import logging
+import time
+from collections import defaultdict, deque
+from enum import Enum
+from typing import Any, Dict, Optional, Tuple
+
+logger = logging.getLogger("RiskManager")
 
 
-class RiskManager:
+@dataclass
+class TradeRequest:
     """
-    Global risk guardrails for trading system.
-    
-    Enforces BEFORE execution:
-    - max_position_size = 10% equity per trade
-    - max_daily_loss = 5% equity per day
-    - max_open_trades = 5 concurrent positions
+    Structured input payload for trade risk validation, replacing 18 individual parameters.
+    """
+    user_id: str
+    user_tier: str
+    symbol: str
+    side: str
+    amount: float
+    current_price: float
+    current_exposure: float
+    current_drawdown_pct: float
+    daily_pnl_pct: float
+    is_reduce_only: bool = False
+    strategy_id: Optional[str] = None
+    strategy_exposure: float = 0.0
+    weekly_pnl_pct: float = 0.0
+    monthly_pnl_pct: float = 0.0
+    leverage: float = 1.0
+    cluster_exposures: Optional[dict] = None
+    recent_prices: Optional[list] = None
+    open_trades_count: int = 0
+
+
+@dataclass
+class RiskThresholds:
+    """
+    Structured configuration object containing all risk limits and policy thresholds
+    for InstitutionalRiskManager.
+    """
+    global_max_notional_per_trade: float = 100_000.0
+    max_global_orders_per_second: int = 45
+    max_user_orders_per_second: int = 5
+    duplicate_order_cooldown: float = 2.0
+    max_drawdown: float = 0.15
+    max_daily_loss_pct: float = 0.05
+    weekly_loss_limit: float = 0.10
+    monthly_loss_limit: float = 0.20
+    max_position_size_pct: float = 0.10
+    max_open_trades: int = 5
+    max_risk_per_trade: float = 0.02
+    cluster_limit: float = 50_000.0
+
+    # Extracted from inline magic numbers in validate_trade_request:
+    flash_crash_price_deviation_pct: float = 0.10
+    drawdown_tier_1_pct: float = 0.15
+    drawdown_tier_1_max_leverage: float = 1.0
+    drawdown_tier_2_pct: float = 0.10
+    drawdown_tier_2_max_leverage: float = 2.0
+    drawdown_tier_3_pct: float = 0.05
+    drawdown_tier_3_max_leverage: float = 5.0
+    base_max_leverage: float = 10.0
+    max_strategy_exposure_pct: float = 0.30
+
+
+class RiskVerdict(Enum):
+    PASS = "PASS"
+    APPROVED = "PASS"  # alias for master_executor compatibility
+    REJECT_GLOBAL_RATE_LIMIT = "REJECT_GLOBAL_RATE_LIMIT"
+    REJECT_USER_RATE_LIMIT = "REJECT_USER_RATE_LIMIT"
+    REJECT_MAX_NOTIONAL = "REJECT_MAX_NOTIONAL"
+    REJECT_TIER_LIMIT = "REJECT_TIER_LIMIT"
+    REJECT_DRAWDOWN = "REJECT_DRAWDOWN"
+    REJECT_DAILY_LOSS = "REJECT_DAILY_LOSS"
+    REJECT_WEEKLY_LOSS = "REJECT_WEEKLY_LOSS"
+    REJECT_MONTHLY_LOSS = "REJECT_MONTHLY_LOSS"
+    REJECT_OVER_EXPOSURE = "REJECT_OVER_EXPOSURE"
+    REJECT_DUPLICATE_SPAM = "REJECT_DUPLICATE_SPAM"
+    REJECT_MAX_POSITION_SIZE = "REJECT_MAX_POSITION_SIZE"
+    REJECT_MAX_STRATEGY_EXPOSURE = "REJECT_MAX_STRATEGY_EXPOSURE"
+    REJECT_CORRELATION_CLUSTER = "REJECT_CORRELATION_CLUSTER"
+    REJECT_CAPITAL_ALLOCATOR_LIMIT = "REJECT_CAPITAL_ALLOCATOR_LIMIT"
+    REJECT_LEVERAGE_SCALING = "REJECT_LEVERAGE_SCALING"
+    REJECT_FLASH_CRASH = "REJECT_FLASH_CRASH"
+    REJECT_MAX_OPEN_TRADES = "REJECT_MAX_OPEN_TRADES"
+
+
+class InstitutionalRiskManager:
+    """
+    Consolidated, thread-safe, async-safe risk engine for live and paper trading.
     """
 
-    def __init__(self, initial_equity: float = 10000.0):
-        # Per-trade risk
-        self.max_risk_per_trade = 0.02
-        self.max_drawdown = 0.1
-        
+    def __init__(
+        self,
+        initial_equity: float = 100000.0,
+        thresholds: Optional[RiskThresholds] = None,
+    ):
+        self.thresholds = thresholds or RiskThresholds()
+
+        # State (protected by asyncio.Lock)
+        self._global_timestamps = deque()
+        self._user_timestamps = defaultdict(deque)
+        self._last_trade_sig = defaultdict(float)
+        self._lock = asyncio.Lock()
+
+        # Subscription tier limits
+        self.tier_limits = {
+            "free": {"max_trade": 1_000, "max_exposure": 5_000},
+            "starter": {"max_trade": 5_000, "max_exposure": 25_000},
+            "pro": {"max_trade": 25_000, "max_exposure": 100_000},
+            "whale": {"max_trade": 250_000, "max_exposure": 1_000_000},
+            "institutional": {"max_trade": float("inf"), "max_exposure": float("inf")},
+        }
+
+        # Centralized Capital Allocator
+        self.total_capital = float(initial_equity)
+        self.strategy_allocations: Dict[str, float] = {}
+
+        # Correlation Clusters
+        self.correlation_clusters = {
+            "BTC": "crypto_major",
+            "ETH": "crypto_major",
+            "SOL": "crypto_alt",
+        }
+
         # Equity tracking
-        self.initial_equity = initial_equity
-        self.current_equity = initial_equity
-        self.peak_equity = initial_equity
-        
-        # 🛡️ GLOBAL RISK GUARDRAILS
-        self.max_position_size_pct = 0.10      # 10% of equity max per position
-        self.max_daily_loss_pct = 0.05          # 5% max loss per day
-        self.max_open_trades = 5                # Max 5 concurrent positions
-        
+        self.initial_equity = float(initial_equity)
+        self.current_equity = float(initial_equity)
+        self.peak_equity = float(initial_equity)
+
         # Daily tracking
         self._current_date = date.today()
-        self._daily_pnl = 0.0                   # Today's realized PnL
-        self._daily_starting_equity = initial_equity
-        
+        self._daily_pnl = 0.0
+        self._daily_starting_equity = float(initial_equity)
+
         # Open trade tracking
         self._open_trades_count = 0
-        
+
+    @property
+    def global_max_notional_per_trade(self) -> float:
+        return self.thresholds.global_max_notional_per_trade
+
+    @global_max_notional_per_trade.setter
+    def global_max_notional_per_trade(self, val: float):
+        self.thresholds.global_max_notional_per_trade = val
+
+    @property
+    def max_global_orders_per_second(self) -> int:
+        return self.thresholds.max_global_orders_per_second
+
+    @max_global_orders_per_second.setter
+    def max_global_orders_per_second(self, val: int):
+        self.thresholds.max_global_orders_per_second = val
+
+    @property
+    def max_user_orders_per_second(self) -> int:
+        return self.thresholds.max_user_orders_per_second
+
+    @max_user_orders_per_second.setter
+    def max_user_orders_per_second(self, val: int):
+        self.thresholds.max_user_orders_per_second = val
+
+    @property
+    def duplicate_order_cooldown(self) -> float:
+        return self.thresholds.duplicate_order_cooldown
+
+    @duplicate_order_cooldown.setter
+    def duplicate_order_cooldown(self, val: float):
+        self.thresholds.duplicate_order_cooldown = val
+
+    @property
+    def max_drawdown(self) -> float:
+        return self.thresholds.max_drawdown
+
+    @max_drawdown.setter
+    def max_drawdown(self, val: float):
+        self.thresholds.max_drawdown = val
+
+    @property
+    def max_daily_loss_pct(self) -> float:
+        return self.thresholds.max_daily_loss_pct
+
+    @max_daily_loss_pct.setter
+    def max_daily_loss_pct(self, val: float):
+        self.thresholds.max_daily_loss_pct = val
+
+    @property
+    def weekly_loss_limit(self) -> float:
+        return self.thresholds.weekly_loss_limit
+
+    @weekly_loss_limit.setter
+    def weekly_loss_limit(self, val: float):
+        self.thresholds.weekly_loss_limit = val
+
+    @property
+    def monthly_loss_limit(self) -> float:
+        return self.thresholds.monthly_loss_limit
+
+    @monthly_loss_limit.setter
+    def monthly_loss_limit(self, val: float):
+        self.thresholds.monthly_loss_limit = val
+
+    @property
+    def max_position_size_pct(self) -> float:
+        return self.thresholds.max_position_size_pct
+
+    @max_position_size_pct.setter
+    def max_position_size_pct(self, val: float):
+        self.thresholds.max_position_size_pct = val
+
+    @property
+    def max_open_trades(self) -> int:
+        return self.thresholds.max_open_trades
+
+    @max_open_trades.setter
+    def max_open_trades(self, val: int):
+        self.thresholds.max_open_trades = val
+
+    @property
+    def max_risk_per_trade(self) -> float:
+        return self.thresholds.max_risk_per_trade
+
+    @max_risk_per_trade.setter
+    def max_risk_per_trade(self, val: float):
+        self.thresholds.max_risk_per_trade = val
+
+    @property
+    def cluster_limit(self) -> float:
+        return self.thresholds.cluster_limit
+
+    @cluster_limit.setter
+    def cluster_limit(self, val: float):
+        self.thresholds.cluster_limit = val
+
+    def set_total_capital(self, amount: float):
+        """Set total available account capital."""
+        self.total_capital = float(amount)
+        self.current_equity = float(amount)
+
+    def allocate_capital(self, strategy_id: str, amount: float) -> bool:
+        """Allocate capital to a strategy."""
+        current_total_allocated = sum(self.strategy_allocations.values())
+        existing = self.strategy_allocations.get(strategy_id, 0.0)
+        new_total = current_total_allocated - existing + amount
+        if new_total > self.total_capital:
+            return False
+        self.strategy_allocations[strategy_id] = amount
+        return True
+
+    def deallocate_capital(self, strategy_id: str):
+        """Deallocate capital from a strategy."""
+        self.strategy_allocations.pop(strategy_id, None)
+
     def position_size(self, price: float) -> float:
-        """Calculate position size based on risk per trade."""
+        """Calculate position size based on 2% risk per trade."""
+        if price <= 0:
+            return 0.0
         return (self.current_equity * self.max_risk_per_trade) / price
 
     def update_equity(self, pnl: float):
@@ -51,7 +275,7 @@ class RiskManager:
         self.peak_equity = max(self.peak_equity, self.current_equity)
 
     def drawdown(self) -> float:
-        """Calculate current drawdown from peak."""
+        """Calculate current drawdown from peak equity."""
         if self.peak_equity <= 0:
             return 0.0
         return (self.peak_equity - self.current_equity) / self.peak_equity
@@ -65,87 +289,60 @@ class RiskManager:
             self._daily_starting_equity = self.current_equity
 
     def daily_loss_pct(self) -> float:
-        """Calculate today's loss as percentage of starting equity."""
+        """Calculate today's loss percentage against starting equity."""
         self._reset_daily_if_needed()
         if self._daily_starting_equity <= 0:
             return 0.0
-        daily_loss = -min(0, self._daily_pnl)  # Only count losses
+        daily_loss = -min(0.0, self._daily_pnl)
         return daily_loss / self._daily_starting_equity
 
     def can_trade(self) -> Tuple[bool, str]:
-        """
-        Check if trading is allowed based on all risk limits.
-        
-        Returns:
-            Tuple of (allowed: bool, reason: str)
-        """
+        """Check if trading is allowed based on drawdown and daily loss limits."""
         self._reset_daily_if_needed()
-        
-        # Check 1: Max drawdown
         if self.drawdown() > self.max_drawdown:
             return False, "🛑 MAX DRAWDOWN HIT - Trading blocked"
-        
-        # Check 2: Max daily loss
         if self.daily_loss_pct() > self.max_daily_loss_pct:
             return False, f"🛑 MAX DAILY LOSS HIT ({self.daily_loss_pct()*100:.2f}%) - Trading blocked"
-        
         return True, "✅ Risk checks passed"
 
     def can_open_position(
-        self, 
-        position_value: float, 
-        open_trades_count: int = 0
+        self,
+        position_value: float,
+        open_trades_count: int = 0,
     ) -> Tuple[bool, str]:
-        """
-        🛡️ GLOBAL GUARDRAIL: Check if position can be opened.
-        
-        Args:
-            position_value: Dollar value of proposed position
-            open_trades_count: Current number of open trades
-            
-        Returns:
-            Tuple of (allowed: bool, reason: str)
-        """
+        """Check if proposed position can be opened."""
         self._reset_daily_if_needed()
-        
-        # Guardrail 1: Max position size (10% equity)
         max_position_value = self.current_equity * self.max_position_size_pct
         if position_value > max_position_value:
             return False, (
-                f"🛡️ MAX POSITION SIZE EXCEEDED | "
-                f"Position: ${position_value:.2f} | "
+                f"🛡️ MAX POSITION SIZE EXCEEDED | Position: ${position_value:.2f} | "
                 f"Max allowed: ${max_position_value:.2f} (10% of ${self.current_equity:.2f})"
             )
-        
-        # Guardrail 2: Max daily loss (5%)
         allowed, msg = self.can_trade()
         if not allowed:
             return False, msg
-        
-        # Guardrail 3: Max open trades (5)
-        if open_trades_count >= self.max_open_trades:
+        effective_open = open_trades_count or self._open_trades_count
+        if effective_open >= self.max_open_trades:
             return False, (
-                f"🛡️ MAX OPEN TRADES EXCEEDED | "
-                f"Current: {open_trades_count} | "
+                f"🛡️ MAX OPEN TRADES EXCEEDED | Current: {effective_open} | "
                 f"Max allowed: {self.max_open_trades}"
             )
-        
         return True, "✅ All guardrails passed - Trade allowed"
 
     def record_trade_open(self):
-        """Record that a trade was opened."""
+        """Record trade open."""
         self._open_trades_count += 1
 
     def record_trade_close(self):
-        """Record that a trade was closed."""
+        """Record trade close."""
         self._open_trades_count = max(0, self._open_trades_count - 1)
 
     def update_open_trades_count(self, count: int):
-        """Update the count of open trades (sync with execution engine)."""
+        """Update open trade count."""
         self._open_trades_count = count
 
     def get_risk_status(self) -> dict:
-        """Get current risk status for monitoring."""
+        """Get current risk status summary."""
         self._reset_daily_if_needed()
         return {
             "current_equity": self.current_equity,
@@ -158,3 +355,179 @@ class RiskManager:
             "max_open_trades": self.max_open_trades,
             "position_limit_pct": self.max_position_size_pct * 100,
         }
+
+    async def validate_trade_request(
+        self,
+        request: TradeRequest,
+    ) -> Tuple[RiskVerdict, str]:
+        """Master circuit breaker for trade validation using structured TradeRequest and RiskThresholds."""
+        notional = request.amount * request.current_price
+        signature = f"{request.user_id}_{request.symbol}_{request.side}"
+        now = time.time()
+
+        async with self._lock:
+            # 1. Duplicate spam guard
+            last_time = self._last_trade_sig.get(signature, 0.0)
+            if now - last_time < self.thresholds.duplicate_order_cooldown:
+                return (
+                    RiskVerdict.REJECT_DUPLICATE_SPAM,
+                    f"Duplicate {request.side} signal for {request.symbol} suppressed (cooldown).",
+                )
+
+            # 2. Rate limits
+            cutoff = now - 1.0
+            while self._global_timestamps and self._global_timestamps[0] < cutoff:
+                self._global_timestamps.popleft()
+            while (
+                self._user_timestamps[request.user_id]
+                and self._user_timestamps[request.user_id][0] < cutoff
+            ):
+                self._user_timestamps[request.user_id].popleft()
+
+            if len(self._global_timestamps) >= self.thresholds.max_global_orders_per_second:
+                return (
+                    RiskVerdict.REJECT_GLOBAL_RATE_LIMIT,
+                    "Global order rate limit reached.",
+                )
+            if len(self._user_timestamps[request.user_id]) >= self.thresholds.max_user_orders_per_second:
+                return (
+                    RiskVerdict.REJECT_USER_RATE_LIMIT,
+                    f"User {request.user_id} rate limit reached.",
+                )
+
+            # 3. Flash crash anomaly
+            if request.recent_prices:
+                sma_val = sum(request.recent_prices) / len(request.recent_prices)
+                if sma_val > 0 and abs(request.current_price - sma_val) / sma_val > self.thresholds.flash_crash_price_deviation_pct:
+                    return (
+                        RiskVerdict.REJECT_FLASH_CRASH,
+                        f"Flash crash anomaly detected: price {request.current_price} deviates >{self.thresholds.flash_crash_price_deviation_pct*100:.0f}% from SMA {sma_val:.2f}.",
+                    )
+
+            # 4. Account health & drawdown/loss limits
+            if not request.is_reduce_only:
+                if request.current_drawdown_pct > self.thresholds.max_drawdown:
+                    return (
+                        RiskVerdict.REJECT_DRAWDOWN,
+                        f"Account drawdown >{self.thresholds.max_drawdown*100:.0f}%. All new position opens are locked.",
+                    )
+                if request.daily_pnl_pct < -self.thresholds.max_daily_loss_pct:
+                    return (
+                        RiskVerdict.REJECT_DAILY_LOSS,
+                        f"Daily loss limit ({self.thresholds.max_daily_loss_pct*100:.0f}%) triggered. New positions halted for today.",
+                    )
+                if request.weekly_pnl_pct < -self.thresholds.weekly_loss_limit:
+                    return (
+                        RiskVerdict.REJECT_WEEKLY_LOSS,
+                        f"Weekly loss limit ({self.thresholds.weekly_loss_limit*100:.0f}%) triggered. New positions halted.",
+                    )
+                if request.monthly_pnl_pct < -self.thresholds.monthly_loss_limit:
+                    return (
+                        RiskVerdict.REJECT_MONTHLY_LOSS,
+                        f"Monthly loss limit ({self.thresholds.monthly_loss_limit*100:.0f}%) triggered. New positions halted.",
+                    )
+                effective_open = request.open_trades_count or self._open_trades_count
+                if effective_open >= self.thresholds.max_open_trades:
+                    return (
+                        RiskVerdict.REJECT_MAX_OPEN_TRADES,
+                        f"Max concurrent open trades limit ({self.thresholds.max_open_trades}) reached.",
+                    )
+
+            # 5. Leverage scaling
+            if not request.is_reduce_only:
+                if request.current_drawdown_pct >= self.thresholds.drawdown_tier_1_pct:
+                    max_allowed_lev = self.thresholds.drawdown_tier_1_max_leverage
+                elif request.current_drawdown_pct >= self.thresholds.drawdown_tier_2_pct:
+                    max_allowed_lev = self.thresholds.drawdown_tier_2_max_leverage
+                elif request.current_drawdown_pct >= self.thresholds.drawdown_tier_3_pct:
+                    max_allowed_lev = self.thresholds.drawdown_tier_3_max_leverage
+                else:
+                    max_allowed_lev = self.thresholds.base_max_leverage
+
+                if request.leverage > max_allowed_lev:
+                    return (
+                        RiskVerdict.REJECT_LEVERAGE_SCALING,
+                        f"Leverage {request.leverage}x exceeds scaled limit of {max_allowed_lev}x based on drawdown {request.current_drawdown_pct:.2%}.",
+                    )
+
+            # 6. Notional cap & Max Position Size check
+            if notional > self.thresholds.max_position_size_pct * self.total_capital:
+                return (
+                    RiskVerdict.REJECT_MAX_POSITION_SIZE,
+                    f"Position size ${notional:,.2f} exceeds {self.thresholds.max_position_size_pct*100:.0f}% of total capital limit (${self.thresholds.max_position_size_pct * self.total_capital:,.2f}).",
+                )
+
+            if notional > self.thresholds.global_max_notional_per_trade:
+                return (
+                    RiskVerdict.REJECT_MAX_NOTIONAL,
+                    f"Trade value ${notional:,.2f} exceeds global hard cap of ${self.thresholds.global_max_notional_per_trade:,}.",
+                )
+
+            # 7. Tier limits
+            tier = self.tier_limits.get(request.user_tier, self.tier_limits["free"])
+            if notional > tier["max_trade"]:
+                return (
+                    RiskVerdict.REJECT_TIER_LIMIT,
+                    f"Trade value ${notional:,.2f} exceeds {request.user_tier} tier limit of ${tier['max_trade']:,}.",
+                )
+
+            if not request.is_reduce_only:
+                if (request.current_exposure + notional) > tier["max_exposure"]:
+                    return (
+                        RiskVerdict.REJECT_OVER_EXPOSURE,
+                        f"Opening this position would exceed {request.user_tier} tier max exposure of ${tier['max_exposure']:,}.",
+                    )
+
+            # 8. Capital Allocator
+            if not request.is_reduce_only and request.strategy_id is not None:
+                if request.strategy_id not in self.strategy_allocations:
+                    return (
+                        RiskVerdict.REJECT_CAPITAL_ALLOCATOR_LIMIT,
+                        f"Strategy {request.strategy_id} is not allocated capital in the centralized allocator.",
+                    )
+                allocated = self.strategy_allocations[request.strategy_id]
+                if (request.strategy_exposure + notional) > allocated:
+                    return (
+                        RiskVerdict.REJECT_CAPITAL_ALLOCATOR_LIMIT,
+                        f"Strategy {request.strategy_id} exposure (${request.strategy_exposure + notional:,.2f}) would exceed allocated capital of ${allocated:,.2f}.",
+                    )
+
+            # 9. Correlation Cluster
+            if not request.is_reduce_only and request.symbol:
+                base_asset = request.symbol.split("/")[0].split("-")[0].upper()
+                cluster = self.correlation_clusters.get(base_asset)
+                if cluster and request.cluster_exposures:
+                    curr_cluster_exp = request.cluster_exposures.get(cluster, 0.0)
+                    if (curr_cluster_exp + notional) > self.thresholds.cluster_limit:
+                        return (
+                            RiskVerdict.REJECT_CORRELATION_CLUSTER,
+                            f"Correlation cluster {cluster} exposure limit reached (Limit: ${self.thresholds.cluster_limit:,.2f}).",
+                        )
+
+            # 10. Strategy Exposure limit
+            if not request.is_reduce_only:
+                max_strat_limit = self.thresholds.max_strategy_exposure_pct * self.total_capital
+                if (request.strategy_exposure + notional) > max_strat_limit:
+                    return (
+                        RiskVerdict.REJECT_MAX_STRATEGY_EXPOSURE,
+                        f"Strategy exposure (${request.strategy_exposure + notional:,.2f}) exceeds {self.thresholds.max_strategy_exposure_pct * 100:.0f}% total capital limit (${max_strat_limit:,.2f}).",
+                    )
+
+            # 11. PASS
+            self._last_trade_sig[signature] = now
+            self._global_timestamps.append(now)
+            self._user_timestamps[request.user_id].append(now)
+
+        return RiskVerdict.PASS, "Trade approved by Institutional Risk Engine."
+
+    def get_diagnostics(self) -> dict:
+        """Admin endpoint - returns current rate-limit state."""
+        return {
+            "global_orders_last_second": len(self._global_timestamps),
+            "global_capacity": self.max_global_orders_per_second,
+            "active_user_queues": len(self._user_timestamps),
+        }
+
+
+# Class aliases for zero-breakage consolidation
+RiskManager = InstitutionalRiskManager

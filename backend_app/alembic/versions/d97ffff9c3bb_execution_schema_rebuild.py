@@ -223,7 +223,7 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_transaction_rollbacks_tenant_id'), 'transaction_rollbacks', ['tenant_id'], unique=False)
     op.create_index(op.f('ix_transaction_rollbacks_transaction_id'), 'transaction_rollbacks', ['transaction_id'], unique=False)
-    op.drop_index(op.f('idx_strategies_user_id'), table_name='strategies')
+    op.drop_index(op.f('idx_strategies_user_id'), table_name='strategies', if_exists=True)
     # ### end Alembic commands ###
 
 

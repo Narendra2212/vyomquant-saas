@@ -174,16 +174,18 @@ const StrategyDashboard = ({
     };
 
     // Subscribe using custom wsClient interface
-    let unsubscribe = null;
+    let unsubUpdate = null;
+    let unsubStatus = null;
     if (typeof wsClient.subscribe === 'function') {
-      unsubscribe = wsClient.subscribe('strategy_update', handleMessage);
-      wsClient.subscribe('strategy_status', handleMessage);
+      unsubUpdate = wsClient.subscribe('strategy_update', handleMessage);
+      unsubStatus = wsClient.subscribe('strategy_status', handleMessage);
     } else {
       console.warn('[STEP 1] wsClient.subscribe is not available');
     }
     
     return () => {
-      if (unsubscribe) unsubscribe();
+      if (unsubUpdate) unsubUpdate();
+      if (unsubStatus) unsubStatus();
     };
   }, [wsClient, showCritical]);
 

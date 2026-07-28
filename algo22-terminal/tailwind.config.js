@@ -1,4 +1,4 @@
-/** @type {import('tailwindcss').Config} */
+﻿/** @type {import('tailwindcss').Config} */
 export default {
   content: [
     "./index.html",
@@ -8,21 +8,21 @@ export default {
   theme: {
     extend: {
       colors: {
-        // ── Existing app palette (preserves internal C object compatibility) ──
+        // â”€â”€ Existing app palette (preserves internal C object compatibility) â”€â”€
         bg: {
-          0: '#010608',
-          1: '#0a0f14',
-          2: '#0f151a',
-          3: '#141a20',
+          0: '#080A0E',
+          1: '#0F1117',
+          2: '#151821',
+          3: '#1A202C',
         },
         text: {
-          1: '#e8e8e8',
-          2: '#a0a0a0',
-          3: '#606060',
+          1: '#F0F2F5',
+          2: '#8B95A5',
+          3: '#5A6578',
         },
-        border: '#1e293b',
+        border: '#1E2530',
 
-        // ── Landing page design system tokens (from ZIP) ──
+        // â”€â”€ Landing page design system tokens (from ZIP) â”€â”€
         void: '#050608',
         'bg-primary': '#080A0E',
         'bg-surface': '#0F1117',
@@ -44,13 +44,13 @@ export default {
         'accent-loss': '#EF4444',
         'accent-loss-dim': 'rgba(239, 68, 68, 0.12)',
 
-        // ── Keep existing named aliases ──
+        // â”€â”€ Keep existing named aliases â”€â”€
         cyan: '#00d4ff',
-        green: '#22c55e',
-        red: '#ef4444',
+        green: '#26A69A',
+        red: '#EF5350',
         purple: '#a855f7',
         orange: '#f97316',
-        gold: '#fbbf24',
+        gold: '#F59E0B',
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
@@ -89,3 +89,4 @@ export default {
   },
   plugins: [],
 }
+

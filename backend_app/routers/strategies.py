@@ -24,7 +24,7 @@ from backend_app.core.dependencies import (check_deployment_limit,
                                            create_request_supabase,
                                            get_current_user, get_fleet,
                                            get_vault, get_ws_manager)
-from backend_app.core.event_bus import publish_command
+from backend_app.core.event_bus import publish_command, PublishError
 from backend_app.core.rate_limit import limiter
 
 router = APIRouter()
@@ -888,19 +888,23 @@ async def deploy_bot(
 
     use_tee = os.environ.get("USE_TEE", "false").lower() == "true"
     
-    if use_tee:
-        logger.info(f"[STRATEGIES] Delegating deployment of {strategy_id} to TEE")
-        await publish_command(
-            "start_bot", 
-            {"user_id": user["id"], "symbol": symbol, "blueprint": blueprint}
-        )
-    else:
-        logger.info(f"[STRATEGIES] Executing deployment of {strategy_id} locally (Legacy Mode)")
-        success, message = await fleet.start_bot(user["id"], symbol, blueprint)
+    try:
+        if use_tee:
+            logger.info(f"[STRATEGIES] Delegating deployment of {strategy_id} to TEE")
+            await publish_command(
+                "start_bot", 
+                {"user_id": user["id"], "symbol": symbol, "blueprint": blueprint}
+            )
+        else:
+            logger.info(f"[STRATEGIES] Executing deployment of {strategy_id} locally (Legacy Mode)")
+            success, message = await fleet.start_bot(user["id"], symbol, blueprint)
 
-        if not success:
-            logger.error(f"[STRATEGIES] Deploy failed for strategy {strategy_id}: {message}")
-            raise HTTPException(400, f"Deploy failed: {message}")
+            if not success:
+                logger.error(f"[STRATEGIES] Deploy failed for strategy {strategy_id}: {message}")
+                raise HTTPException(400, f"Deploy failed: {message}")
+    except PublishError as e:
+        logger.error(f"[STRATEGIES] PublishError deploying strategy {strategy_id}: {e}")
+        raise HTTPException(500, f"Failed to dispatch deployment command: {e}")
 
     _sb(user).table("strategies").update({"status": "running"}).eq(
         "id", strategy_id
@@ -949,25 +953,29 @@ async def stop_bot(
     
     use_tee = os.environ.get("USE_TEE", "false").lower() == "true"
     
-    if use_tee:
-        logger.info(f"[STRATEGIES] Delegating stop of {strategy_id} to TEE")
-        await publish_command(
-            "stop_bot",
-            {
-                "user_id": user["id"],
-                "symbol": symbol,
-            },
-        )
-    else:
-        logger.info("[STRATEGIES] Stopping bot locally (Legacy Mode)")
-        await publish_command(
-            "stop_bot",
-            {
-                "user_id": user["id"],
-                "symbol": symbol,
-            },
-        )
-        await fleet.stop_bot(user["id"], symbol)
+    try:
+        if use_tee:
+            logger.info(f"[STRATEGIES] Delegating stop of {strategy_id} to TEE")
+            await publish_command(
+                "stop_bot",
+                {
+                    "user_id": user["id"],
+                    "symbol": symbol,
+                },
+            )
+        else:
+            logger.info("[STRATEGIES] Stopping bot locally (Legacy Mode)")
+            await publish_command(
+                "stop_bot",
+                {
+                    "user_id": user["id"],
+                    "symbol": symbol,
+                },
+            )
+            await fleet.stop_bot(user["id"], symbol)
+    except PublishError as e:
+        logger.error(f"[STRATEGIES] PublishError stopping strategy {strategy_id}: {e}")
+        raise HTTPException(500, f"Failed to dispatch stop command: {e}")
 
     # ═══════════════════════════════════════════════════════════════════
     # CANCEL ALL ORDERS - REMOVED: ALGO-ONLY EXECUTION ENFORCED
@@ -1212,28 +1220,63 @@ async def validate_strategy(
 # ── POST /api/strategies/backtest ────────────────────────────────────────
 @router.post("/backtest")
 @limiter.limit("30/minute")
-def backtest(request: Request, payload: dict):
-    """Enqueue backtest to background worker."""
-    from backend_app.worker import task_queue
-    job = task_queue.enqueue("backend_app.routers.strategies.backtest_internal", payload, job_timeout=3600)
-    return {"job_id": job.id, "status": "queued"}
+async def backtest(request: Request, payload: dict):
+    """Enqueue backtest to background worker via Redis Streams."""
+    import uuid
+    from datetime import datetime, timezone
+    from backend_app.core.event_bus import publish_backtest_job
+    from backend_app.core.cache import redis_manager
+    from backend_app.worker import _write_status
+
+    job_id = str(uuid.uuid4())
+    
+    # Write initial queued status hash
+    await _write_status(
+        redis_manager,
+        job_id,
+        status="queued",
+        submitted_at=datetime.now(timezone.utc).isoformat()
+    )
+
+    entry_id = await publish_backtest_job(job_id, payload)
+    if not entry_id:
+        await _write_status(redis_manager, job_id, status="failed", error="Failed to publish to stream")
+        raise HTTPException(status_code=503, detail="Failed to publish backtest job to queue")
+
+    return {"job_id": job_id, "status": "queued"}
 
 
 @router.get("/backtest/{job_id}")
-def get_backtest_status(job_id: str):
-    """Poll backtest status."""
-    from backend_app.worker import task_queue
-    job = task_queue.fetch_job(job_id)
-    if not job:
+async def get_backtest_status(job_id: str):
+    """Poll backtest status from Redis status hash."""
+    import json
+    from backend_app.core.cache import redis_manager
+    from backend_app.worker import _status_key
+
+    key = _status_key(job_id)
+    raw_status_data = await redis_manager.hgetall(key)
+    if not raw_status_data:
         raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.is_finished:
-        return {"job_id": job.id, "status": "completed", "result": job.result}
-    elif job.is_failed:
-        # Avoid sending raw stack trace in production if possible, but for beta it's okay
-        return {"job_id": job.id, "status": "failed", "error": "Internal backtest execution failed."}
-    
-    return {"job_id": job.id, "status": "running" if job.is_started else "queued"}
+
+    # Decode bytes if needed
+    status_data = {
+        (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
+        for k, v in raw_status_data.items()
+    }
+
+    status = status_data.get("status", "queued")
+    response = {"job_id": job_id, "status": status}
+
+    if status == "completed":
+        result_raw = status_data.get("result", "{}")
+        try:
+            response["result"] = json.loads(result_raw)
+        except json.JSONDecodeError:
+            response["result"] = result_raw
+    elif status == "failed":
+        response["error"] = status_data.get("error", "Internal backtest execution failed.")
+
+    return response
 
 
 def backtest_internal(payload: dict):

@@ -27,14 +27,15 @@ const PremiumDashboard = ({ go }) => {
   const [onboardingComplete, setOnboardingComplete] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
     const loadData = async () => {
       try {
-        setLoading(true);
+        if (isMounted) setLoading(true);
         // Load performance metrics
         try {
           const perfData = await endpoints.user.getPerformance(30);
-          setPerformanceMetrics(perfData);
-          if (perfData) {
+          if (isMounted && perfData) {
+            setPerformanceMetrics(perfData);
             setStats({
               totalEquity: perfData.total_pnl,
               totalPnl: perfData.total_pnl,
@@ -47,70 +48,77 @@ const PremiumDashboard = ({ go }) => {
             });
           }
         } catch (e) {
-          console.error("Failed to load performance metrics", e);
+          if (isMounted) console.error("Failed to load performance metrics", e);
         }
 
         // Load equity curve
         try {
           const curve = await endpoints.user.getEquityCurve(90);
-          if (curve && curve.length > 0) {
-            setEquityCurve(curve.map((d, i) => ({ d: i, v: d.value || d.equity || 0 })));
-          } else {
-            setEquityCurve([]);
+          if (isMounted) {
+            if (curve && curve.length > 0) {
+              setEquityCurve(curve.map((d, i) => ({ d: i, v: d.value || d.equity || 0 })));
+            } else {
+              setEquityCurve([]);
+            }
           }
         } catch (e) {
-          console.error("Failed to load equity curve", e);
+          if (isMounted) console.error("Failed to load equity curve", e);
         }
 
         // Load recent transactions
         try {
           const txs = await endpoints.user.getRecentTransactions(50, 30);
-          if (txs && txs.transactions) {
+          if (isMounted && txs && txs.transactions) {
             setRecentTransactions(txs.transactions);
           }
         } catch (e) {
-          console.error("Failed to load transactions", e);
+          if (isMounted) console.error("Failed to load transactions", e);
         }
 
         // Load heatmap
         try {
           const heatData = await endpoints.user.getHeatmap(3);
-          if (heatData) {
+          if (isMounted && heatData) {
             setHeatmapData(heatData);
           }
         } catch (e) {
-          console.error("Failed to load heatmap", e);
+          if (isMounted) console.error("Failed to load heatmap", e);
         }
 
         // Load active bots
-        if (demoMode) {
-          setActiveBots([
-            { name: "HFT Market Maker", pair: "BTC/USDT", status: "running", pnl: 14.5 },
-            { name: "ETH Scalper Pro", pair: "ETH/USDT", status: "running", pnl: 8.2 },
-            { name: "SOL Grid Array", pair: "SOL/USDT", status: "running", pnl: 22.1 },
-            { name: "Arbitrage Triangle", pair: "XRP/USDT", status: "running", pnl: 4.5 },
-            { name: "Mean Reversion Alpha", pair: "ADA/USDT", status: "paused", pnl: -1.2 },
-          ]);
-        } else {
-          const botsPayload = await endpoints.strategies.list();
-          const bots = Array.isArray(botsPayload) ? botsPayload : botsPayload?.data || [];
-          setActiveBots(bots.slice(0, 5));
+        if (isMounted) {
+          if (demoMode) {
+            setActiveBots([
+              { name: "HFT Market Maker", pair: "BTC/USDT", status: "running", pnl: 14.5 },
+              { name: "ETH Scalper Pro", pair: "ETH/USDT", status: "running", pnl: 8.2 },
+              { name: "SOL Grid Array", pair: "SOL/USDT", status: "running", pnl: 22.1 },
+              { name: "Arbitrage Triangle", pair: "XRP/USDT", status: "running", pnl: 4.5 },
+              { name: "Mean Reversion Alpha", pair: "ADA/USDT", status: "paused", pnl: -1.2 },
+            ]);
+          } else {
+            const botsPayload = await endpoints.strategies.list();
+            if (isMounted) {
+              const bots = Array.isArray(botsPayload) ? botsPayload : botsPayload?.data || [];
+              setActiveBots(bots.slice(0, 5));
+            }
+          }
         }
 
       } catch (err) {
-        console.error("Failed to load dashboard data", err);
+        if (isMounted) console.error("Failed to load dashboard data", err);
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     };
     loadData();
+    return () => { isMounted = false; };
   }, [demoMode]);
 
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center h-full bg-[#080A0D]">
         <div className="flex flex-col items-center gap-4">
-          <Activity className="animate-pulse text-[#2962FF]" size={48} />
+          <Activity className="animate-pulse text-[#00D4FF]" size={48} />
           <div className="text-[#8B949E] font-mono text-sm tracking-widest uppercase">Initializing Command Center...</div>
         </div>
       </div>
@@ -170,11 +178,11 @@ const PremiumDashboard = ({ go }) => {
               <div className="flex justify-between items-center mb-4">
                 <div className="flex items-center gap-3">
                   <h3 className="font-bold text-lg">Portfolio Performance</h3>
-                  <span className="px-2 py-0.5 rounded bg-[#2962FF]20 text-[#2962FF] text-xs font-mono font-bold">LIVE</span>
+                  <span className="px-2 py-0.5 rounded bg-[#00D4FF]20 text-[#00D4FF] text-xs font-mono font-bold">LIVE</span>
                 </div>
                 <div className="flex bg-[#080A0D] rounded-lg p-1 border border-[#202938]">
                   {['1D', '1W', '1M', '3M', 'ALL'].map(tf => (
-                    <button key={tf} className={`px-3 py-1 text-xs font-mono rounded ${tf === '1M' ? 'bg-[#2962FF] text-white' : 'text-[#8B949E] hover:text-[#E6EDF3]'}`}>
+                    <button key={tf} className={`px-3 py-1 text-xs font-mono rounded ${tf === '1M' ? 'bg-[#00D4FF] text-white' : 'text-[#8B949E] hover:text-[#E6EDF3]'}`}>
                       {tf}
                     </button>
                   ))}
@@ -185,15 +193,15 @@ const PremiumDashboard = ({ go }) => {
                   <AreaChart data={equityCurve}>
                     <defs>
                       <linearGradient id="colorEquity" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#2962FF" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="#2962FF" stopOpacity={0}/>
+                        <stop offset="5%" stopColor="#00D4FF" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#00D4FF" stopOpacity={0}/>
                       </linearGradient>
                     </defs>
                     <Tooltip 
                       contentStyle={{ backgroundColor: '#131722', borderColor: '#202938', borderRadius: '8px', color: '#E6EDF3', fontFamily: 'monospace' }}
-                      itemStyle={{ color: '#2962FF' }}
+                      itemStyle={{ color: '#00D4FF' }}
                     />
-                    <Area type="monotone" dataKey="v" stroke="#2962FF" strokeWidth={3} fillOpacity={1} fill="url(#colorEquity)" />
+                    <Area type="monotone" dataKey="v" stroke="#00D4FF" strokeWidth={3} fillOpacity={1} fill="url(#colorEquity)" />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -223,12 +231,12 @@ const PremiumDashboard = ({ go }) => {
 
 const MetricCard = ({ title, value, trend, icon, positive }) => (
   <div className="bg-[#131722] border border-[#202938] rounded-xl p-3 flex flex-col gap-2 shadow-lg relative overflow-hidden transition-colors">
-    <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-[#2962FF]20 to-transparent opacity-30 transition-opacity"></div>
+    <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-[#00D4FF]20 to-transparent opacity-30 transition-opacity"></div>
     <div className="flex justify-between items-center z-10">
       <span className="text-[#8B949E] text-[10px] font-mono uppercase tracking-widest flex items-center gap-1.5">
         {title}
       </span>
-      {icon && <div className="text-[#2962FF]">{icon}</div>}
+      {icon && <div className="text-[#00D4FF]">{icon}</div>}
     </div>
     <div className="flex items-baseline gap-2 z-10 mt-1">
       <span className="text-xl lg:text-2xl font-black font-mono text-[#E6EDF3] tracking-tight">{value}</span>
@@ -257,7 +265,7 @@ const PnlHeatmap = ({ data }) => {
     <div className="bg-[#131722] border border-[#202938] rounded-xl p-5 shadow-lg group flex flex-col h-full">
       <div className="flex justify-between items-center mb-4">
         <h3 className="font-bold text-sm text-[#8B949E] uppercase tracking-wider flex items-center gap-2">
-          <Activity size={16} className="text-[#2962FF]" /> PnL Heatmap
+          <Activity size={16} className="text-[#00D4FF]" /> PnL Heatmap
         </h3>
       </div>
       <div className="flex-1 flex flex-col justify-center">
@@ -292,7 +300,7 @@ const MarketRegime = ({ uiMode, demoMode }) => {
     <div className="bg-[#131722] border border-[#202938] rounded-xl p-5 shadow-lg group">
       <div className="flex justify-between items-center mb-4">
         <h3 className="font-bold text-sm text-[#8B949E] uppercase tracking-wider flex items-center gap-2">
-          <Gauge size={16} className="text-[#2962FF]" /> AI Briefing
+          <Gauge size={16} className="text-[#00D4FF]" /> AI Briefing
         </h3>
       </div>
       
@@ -331,7 +339,7 @@ const ExchangeHealth = ({ demoMode }) => {
   return (
   <div className="bg-[#131722] border border-[#202938] rounded-xl p-5 shadow-lg">
     <h3 className="font-bold text-sm text-[#8B949E] uppercase tracking-wider mb-4 flex items-center gap-2">
-      <Server size={16} className="text-[#2962FF]" /> API Connectivity
+      <Server size={16} className="text-[#00D4FF]" /> API Connectivity
     </h3>
     <div className="flex flex-col gap-2 font-mono text-xs">
       <div className="flex justify-between items-center p-3 bg-[#080A0D] rounded-lg border border-[#202938] hover:border-[#26A69A]40 transition-colors">

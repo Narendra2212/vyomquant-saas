@@ -9,6 +9,7 @@ FIXES:
 """
 
 import logging
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -139,20 +140,33 @@ async def get_referral_stats(
     user: dict = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_request_supabase),
 ):
+    app_url = os.getenv("APP_URL", os.getenv("FRONTEND_URL", "https://vyomquant.com")).rstrip("/")
+    
+    # Get available discounts from profiles
+    prof_resp = supabase.table("profiles").select("available_discounts").eq("id", user["id"]).execute()
+    available_discounts = 0
+    if prof_resp.data:
+        available_discounts = prof_resp.data[0].get("available_discounts", 0)
+
+    # Get referrals
     resp = (
         supabase.table("referrals").select("*").eq("referrer_id", user["id"]).execute()
     )
     rows = resp.data or []
-    total_earned = sum(r.get("commission_usd", 0) for r in rows)
-    pending = sum(
-        r.get("commission_usd", 0) for r in rows if r.get("status") == "pending"
-    )
+    
+    # Calculate stats based on 10% discount value nominals (commission_usd)
+    total_earned = sum(r.get("commission_usd", 0) for r in rows if r.get("status") == "converted")
+    pending = sum(r.get("commission_usd", 0) for r in rows if r.get("status") == "pending")
+
     return {
+        "status": "active",
+        "message": "Referral program is active.",
         "total_referrals": len(rows),
-        "active_subs": sum(1 for r in rows if r.get("active")),
+        "active_subs": sum(1 for r in rows if r.get("status") == "converted"),
         "total_earned": round(total_earned, 2),
         "pending_payout": round(pending, 2),
-        "referral_link": f"https://algo22.io/ref/{user['id'][:8].upper()}",
+        "available_discounts": available_discounts,
+        "referral_link": f"{app_url}/ref/{user['id'][:8].upper()}",
     }
 
 

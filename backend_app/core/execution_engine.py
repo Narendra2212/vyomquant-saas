@@ -23,6 +23,16 @@ With Global Risk Guardrails integration and Idempotent Execution
 
 
 @dataclass
+class ExecutionResult:
+    """Standardized execution result."""
+    success: bool
+    execution_id: Optional[str]
+    status: str
+    message: str
+    details: Optional[Dict[str, Any]] = None
+
+
+@dataclass
 class Position:
     """Represents an open trading position"""
     symbol: str
@@ -1132,6 +1142,39 @@ class ExecutionEngine:
             print(f"[WARNING] Strategy validation error: {e}")
             return False
 
-    # ----------------------------------
-    # IDEMPOTENT EXECUTION WRAPPER
-    # ----------------------------------
+    async def execute_trade(
+        self,
+        tenant_id: Any,
+        strategy_id: str,
+        symbol: str,
+        side: str,
+        size: Decimal,
+        price: Decimal,
+        context: Any = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ExecutionResult:
+        """
+        Unified trade execution interface. Delegates to execute_with_idempotency.
+        """
+        parsed_tenant = UUID(str(tenant_id)) if isinstance(tenant_id, (str, UUID)) else tenant_id
+        res = await self.execute_with_idempotency(
+            tenant_id=parsed_tenant,
+            strategy_id=strategy_id,
+            symbol=symbol,
+            side=side,
+            size=size,
+            price=price,
+            source="bot_runner",
+        )
+        is_success = res.get("status") in ("completed", "skipped_completed")
+        return ExecutionResult(
+            success=is_success,
+            execution_id=res.get("execution_id"),
+            status=res.get("status", "failed"),
+            message=res.get("message", ""),
+            details=res.get("result"),
+        )
+
+# Retain UnifiedExecutionEngine alias for zero-breakage consolidation
+UnifiedExecutionEngine = ExecutionEngine
+

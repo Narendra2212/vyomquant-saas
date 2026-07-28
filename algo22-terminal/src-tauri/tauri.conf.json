@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' tauri: ipc:; script-src 'self' tauri: ipc: https://cdn.jsdelivr.net https://js.sentry-cdn.com https://www.googletagmanager.com https://www.clarity.ms https://checkout.razorpay.com https://js.stripe.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; img-src 'self' data: blob: asset: tauri: https://cdn.jsdelivr.net https://fastapi.tiangolo.com https://vyomquant.in https://*.clarity.ms https://www.googletagmanager.com; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; connect-src 'self' ipc: tauri: ws: wss: http://localhost:* http://127.0.0.1:* https://*.vyomquant.com wss://*.vyomquant.com https://*.vyomquant.in https://*.supabase.co wss://*.supabase.co https://*.sentry.io https://*.clarity.ms https://www.google-analytics.com https://api.stripe.com https://api.razorpay.com; frame-ancestors 'none'"
     }
   },
   "bundle": {

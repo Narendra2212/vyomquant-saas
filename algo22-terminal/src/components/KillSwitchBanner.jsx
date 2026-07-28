@@ -250,11 +250,13 @@ export const useKillSwitch = (apiClient) => {
   const [reason, setReason] = useState('');
 
   useEffect(() => {
+    let isMounted = true;
     const checkStatus = async () => {
       if (!apiClient) return;
       
       try {
         const response = await apiClient.get(KILL_SWITCH_ENDPOINT);
+        if (!isMounted) return;
         const data = response.data || response;
         
         const active = data.kill_switch_active === true || 
@@ -264,14 +266,17 @@ export const useKillSwitch = (apiClient) => {
         setIsActive(active);
         setReason(data.reason || 'System safety triggered');
       } catch (err) {
-        console.error('[useKillSwitch] Failed to check status:', err);
+        if (isMounted) console.error('[useKillSwitch] Failed to check status:', err);
       }
     };
 
     checkStatus();
     const interval = setInterval(checkStatus, 5000);
     
-    return () => clearInterval(interval);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, [apiClient]);
 
   return { isActive, reason };
