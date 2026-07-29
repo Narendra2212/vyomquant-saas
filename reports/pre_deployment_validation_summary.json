@@ -3,12 +3,12 @@
   "steps": {
     "import_audit": {
       "status": "PASS",
-      "output": "=== AUTOMATED IMPORT & AST AUDIT (backend_app) ===\nTotal Python Files Scanned: 290\nSyntax Errors: 0\nMissing __init__.py Directories: 0\nUnused Import Warnings: 94\nAudit Status: PASS\n",
+      "output": "=== AUTOMATED IMPORT & AST AUDIT (backend_app) ===\nTotal Python Files Scanned: 287\nSyntax Errors: 0\nMissing __init__.py Directories: 0\nUnused Import Warnings: 107\nAudit Status: PASS\n",
       "error": ""
     },
     "dependency_audit": {
       "status": "PASS",
-      "output": "=== AUTOMATED DEPENDENCY AUDIT ===\nRoot requirements count: 53\nBackend requirements count: 53\nVersion Mismatches: 0\nMissing in backend/requirements.txt: 0\nMissing in root requirements.txt: 0\nAudit Status: PASS\n",
+      "output": "=== AUTOMATED DEPENDENCY AUDIT ===\nRoot requirements count: 1\nBackend requirements count: 1\nVersion Mismatches: 0\nMissing in backend/requirements.txt: 0\nMissing in root requirements.txt: 0\nAudit Status: PASS\n",
       "error": ""
     },
     "fastapi_startup": {
@@ -17,7 +17,7 @@
     },
     "docker_validation": {
       "status": "PASS",
-      "output": "[16:01:40] === AUTOMATED FAST DOCKER VALIDATION (CI/CD PRE-FLIGHT) ===\n[16:01:40] [docker_val] ENTER: Static Dockerfile Structure & Directive Audit\n[16:01:40] [docker_val] EXIT: Static Dockerfile Audit completed in 0.0s (valid=True)\n[16:01:40] [docker_val] Checking Docker CLI & Daemon connectivity...\n[16:01:40] [docker_val] Docker Daemon NOT AVAILABLE (0.0s)\n\n--- DOCKER VALIDATION SUMMARY ---\nStatic Dockerfile Inspection: PASS\nDocker Daemon Connectivity: WARN (Daemon unavailable)\n[16:01:40] === TOTAL FAST DOCKER VALIDATION TIME: 0.0s ===\n",
+      "output": "[12:19:52] === AUTOMATED FAST DOCKER VALIDATION (CI/CD PRE-FLIGHT) ===\n[12:19:52] [docker_val] ENTER: Static Dockerfile Structure & Directive Audit\n[12:19:52] [docker_val] EXIT: Static Dockerfile Audit completed in 0.01s (valid=True)\n[12:19:52] [docker_val] Checking Docker CLI & Daemon connectivity...\n[12:19:52] [docker_val] Docker Daemon NOT AVAILABLE (0.003s)\n\n--- DOCKER VALIDATION SUMMARY ---\nStatic Dockerfile Inspection: PASS\nDocker Daemon Connectivity: WARN (Daemon unavailable)\n[12:19:52] === TOTAL FAST DOCKER VALIDATION TIME: 0.014s ===\n",
       "error": ""
     },
     "aws_validation": {
