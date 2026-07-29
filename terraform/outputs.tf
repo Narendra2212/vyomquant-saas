@@ -28,3 +28,12 @@ output "s3_frontend_bucket_name" {
   value       = aws_s3_bucket.frontend_static.bucket
 }
 
+output "api_endpoint" {
+  description = "The endpoint for the API"
+  value       = var.enable_custom_domain ? "https://${var.domain_name}/api" : "http://${aws_lb.main.dns_name}/api"
+}
+
+output "websocket_endpoint" {
+  description = "The endpoint for WebSockets"
+  value       = var.enable_custom_domain ? "wss://${var.domain_name}/ws" : "ws://${aws_lb.main.dns_name}/ws"
+}

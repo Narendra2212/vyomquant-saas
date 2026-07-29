@@ -22,6 +22,12 @@ variable "domain_name" {
   default     = "example.com"
 }
 
+variable "enable_custom_domain" {
+  description = "Enable Route53 and ACM custom domain configuration"
+  type        = bool
+  default     = false
+}
+
 variable "ecs_task_execution_role_name" {
   description = "Name of the ECS task execution role"
   type        = string

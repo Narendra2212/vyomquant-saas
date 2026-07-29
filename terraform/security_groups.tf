@@ -39,7 +39,7 @@ resource "aws_security_group" "ecs_tasks" {
     to_port         = 8080
     security_groups = [aws_security_group.alb.id]
   }
-  
+
   # Allow TEE, MDS, Workers to communicate internally
   ingress {
     description = "Allow internal ECS communication"

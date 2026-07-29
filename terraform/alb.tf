@@ -51,22 +51,35 @@ resource "aws_lb_listener" "http" {
   port              = "80"
   protocol          = "HTTP"
 
-  default_action {
-    type = "redirect"
-    redirect {
-      port        = "443"
-      protocol    = "HTTPS"
-      status_code = "HTTP_301"
+  dynamic "default_action" {
+    for_each = var.enable_custom_domain ? [1] : []
+    content {
+      type = "redirect"
+      redirect {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+  }
+
+  dynamic "default_action" {
+    for_each = var.enable_custom_domain ? [] : [1]
+    content {
+      type             = "forward"
+      target_group_arn = aws_lb_target_group.frontend.arn
     }
   }
 }
 
 data "aws_route53_zone" "main" {
+  count        = var.enable_custom_domain ? 1 : 0
   name         = var.domain_name
   private_zone = false
 }
 
 resource "aws_acm_certificate" "main" {
+  count             = var.enable_custom_domain ? 1 : 0
   domain_name       = var.domain_name
   validation_method = "DNS"
 
@@ -80,33 +93,35 @@ resource "aws_acm_certificate" "main" {
 }
 
 resource "aws_route53_record" "cert_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.main.domain_validation_options : dvo.domain_name => {
+  for_each = var.enable_custom_domain ? {
+    for dvo in aws_acm_certificate.main[0].domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
       type   = dvo.resource_record_type
     }
-  }
+  } : {}
 
   allow_overwrite = true
   name            = each.value.name
   records         = [each.value.record]
   ttl             = 60
   type            = each.value.type
-  zone_id         = data.aws_route53_zone.main.zone_id
+  zone_id         = data.aws_route53_zone.main[0].zone_id
 }
 
 resource "aws_acm_certificate_validation" "main" {
-  certificate_arn         = aws_acm_certificate.main.arn
+  count                   = var.enable_custom_domain ? 1 : 0
+  certificate_arn         = aws_acm_certificate.main[0].arn
   validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
 }
 
 resource "aws_lb_listener" "https" {
+  count             = var.enable_custom_domain ? 1 : 0
   load_balancer_arn = aws_lb.main.arn
   port              = "443"
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-2016-08"
-  certificate_arn   = aws_acm_certificate_validation.main.certificate_arn
+  certificate_arn   = aws_acm_certificate_validation.main[0].certificate_arn
 
   default_action {
     type             = "forward"
@@ -114,9 +129,9 @@ resource "aws_lb_listener" "https" {
   }
 }
 
-# API traffic strictly over HTTPS
+# API traffic
 resource "aws_lb_listener_rule" "api_rule" {
-  listener_arn = aws_lb_listener.https.arn
+  listener_arn = var.enable_custom_domain ? aws_lb_listener.https[0].arn : aws_lb_listener.http.arn
   priority     = 100
 
   action {
@@ -149,7 +164,7 @@ resource "aws_lb_target_group" "websocket" {
 }
 
 resource "aws_lb_listener_rule" "websocket_rule" {
-  listener_arn = aws_lb_listener.https.arn
+  listener_arn = var.enable_custom_domain ? aws_lb_listener.https[0].arn : aws_lb_listener.http.arn
   priority     = 90
 
   action {

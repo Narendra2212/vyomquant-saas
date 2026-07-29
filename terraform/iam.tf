@@ -23,8 +23,8 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
 }
 
 resource "aws_iam_role_policy" "ecs_task_execution_secrets_policy" {
-  name   = "ecs-task-execution-secrets"
-  role   = aws_iam_role.ecs_task_execution_role.name
+  name = "ecs-task-execution-secrets"
+  role = aws_iam_role.ecs_task_execution_role.name
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -69,8 +69,8 @@ resource "aws_iam_role" "ecs_task_role" {
 
 # Add minimal permissions for ECS tasks if they need to access S3, DynamoDB, etc.
 resource "aws_iam_role_policy" "ecs_task_policy" {
-  name   = "ecs-task-policy"
-  role   = aws_iam_role.ecs_task_role.name
+  name = "ecs-task-policy"
+  role = aws_iam_role.ecs_task_role.name
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
