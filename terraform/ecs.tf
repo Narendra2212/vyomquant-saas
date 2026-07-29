@@ -111,6 +111,30 @@ resource "aws_ecs_task_definition" "api" {
         {
           name      = "DATABASE_URL"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/database_url"
+        },
+        {
+          name      = "SUPABASE_SERVICE_ROLE_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_service_role_key"
+        },
+        {
+          name      = "SUPABASE_ANON_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_anon_key"
+        },
+        {
+          name      = "SUPABASE_JWT_SECRET"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_jwt_secret"
+        },
+        {
+          name      = "MASTER_ENCRYPTION_KEYS"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/master_encryption_keys"
+        },
+        {
+          name      = "CREDENTIAL_VAULT_SALT"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/credential_vault_salt"
+        },
+        {
+          name      = "JWT_SECRET"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/jwt_secret"
         }
       ]
       logConfiguration = {
@@ -257,6 +281,30 @@ resource "aws_ecs_task_definition" "mds" {
         {
           name      = "DATABASE_URL"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/database_url"
+        },
+        {
+          name      = "SUPABASE_SERVICE_ROLE_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_service_role_key"
+        },
+        {
+          name      = "SUPABASE_ANON_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_anon_key"
+        },
+        {
+          name      = "SUPABASE_JWT_SECRET"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_jwt_secret"
+        },
+        {
+          name      = "MASTER_ENCRYPTION_KEYS"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/master_encryption_keys"
+        },
+        {
+          name      = "CREDENTIAL_VAULT_SALT"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/credential_vault_salt"
+        },
+        {
+          name      = "JWT_SECRET"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/jwt_secret"
         }
       ]
       logConfiguration = {
@@ -319,6 +367,30 @@ resource "aws_ecs_task_definition" "websocket" {
         {
           name      = "DATABASE_URL"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/database_url"
+        },
+        {
+          name      = "SUPABASE_SERVICE_ROLE_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_service_role_key"
+        },
+        {
+          name      = "SUPABASE_ANON_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_anon_key"
+        },
+        {
+          name      = "SUPABASE_JWT_SECRET"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_jwt_secret"
+        },
+        {
+          name      = "MASTER_ENCRYPTION_KEYS"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/master_encryption_keys"
+        },
+        {
+          name      = "CREDENTIAL_VAULT_SALT"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/credential_vault_salt"
+        },
+        {
+          name      = "JWT_SECRET"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/jwt_secret"
         }
       ]
       logConfiguration = {
@@ -389,6 +461,30 @@ resource "aws_ecs_task_definition" "simulator" {
         {
           name      = "DATABASE_URL"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/database_url"
+        },
+        {
+          name      = "SUPABASE_SERVICE_ROLE_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_service_role_key"
+        },
+        {
+          name      = "SUPABASE_ANON_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_anon_key"
+        },
+        {
+          name      = "SUPABASE_JWT_SECRET"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_jwt_secret"
+        },
+        {
+          name      = "MASTER_ENCRYPTION_KEYS"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/master_encryption_keys"
+        },
+        {
+          name      = "CREDENTIAL_VAULT_SALT"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/credential_vault_salt"
+        },
+        {
+          name      = "JWT_SECRET"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/jwt_secret"
         }
       ]
       logConfiguration = {
@@ -459,6 +555,30 @@ resource "aws_ecs_task_definition" "workers" {
         {
           name      = "DATABASE_URL"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/database_url"
+        },
+        {
+          name      = "SUPABASE_SERVICE_ROLE_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_service_role_key"
+        },
+        {
+          name      = "SUPABASE_ANON_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_anon_key"
+        },
+        {
+          name      = "SUPABASE_JWT_SECRET"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_jwt_secret"
+        },
+        {
+          name      = "MASTER_ENCRYPTION_KEYS"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/master_encryption_keys"
+        },
+        {
+          name      = "CREDENTIAL_VAULT_SALT"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/credential_vault_salt"
+        },
+        {
+          name      = "JWT_SECRET"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/jwt_secret"
         }
       ]
       logConfiguration = {

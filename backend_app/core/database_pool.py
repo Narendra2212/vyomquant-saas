@@ -32,6 +32,9 @@ USAGE:
 
 import logging
 import os
+import time
+import random
+import asyncio
 from contextlib import asynccontextmanager, contextmanager
 from typing import Optional
 from backend_app.core.safety_config import get_vyomquant_mode
@@ -134,6 +137,12 @@ class DatabasePool:
             logger.info("[DB Pool] SQLite engine created (no pooling needed)")
         else:
             # PostgreSQL/MySQL with connection pooling
+            
+            # Apply small random jitter to avoid thundering herd on container startup tripping DB circuit breaker
+            jitter = random.uniform(0.1, 1.5)
+            logger.info(f"[DB Pool] Adding {jitter:.2f}s jitter before engine creation to prevent thundering herd")
+            time.sleep(jitter)
+            
             self._engine = create_engine(
                 url,
                 poolclass=QueuePool,
@@ -300,6 +309,11 @@ class AsyncDatabasePool:
             return
         
         try:
+            # Apply small random jitter to avoid thundering herd on container startup tripping DB circuit breaker
+            jitter = random.uniform(0.1, 1.5)
+            logger.info(f"[Async DB Pool] Adding {jitter:.2f}s jitter before engine creation to prevent thundering herd")
+            await asyncio.sleep(jitter)
+            
             # Parse connection string
             # postgresql://user:pass@host:port/db
             self._pool = await asyncpg.create_pool(

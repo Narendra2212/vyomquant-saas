@@ -7,7 +7,7 @@
 set -e
 
 AWS_REGION="${AWS_REGION:-ap-southeast-1}"       # VyomQuant production region
-SECRET_PREFIX="/vyomquant/production"
+SECRET_PREFIX="vyomquant/production"
 
 
 echo "Creating VyomQuant secrets in AWS Secrets Manager (region: $AWS_REGION)..."
@@ -43,15 +43,15 @@ upsert_secret() {
 #  Find these at: Supabase Dashboard -> Settings -> API
 # =============================================================================
 echo "--- Supabase Credentials ---"
-upsert_secret "SUPABASE_SERVICE_ROLE_KEY" \
+upsert_secret "supabase_service_role_key" \
     "Supabase service role key (bypasses RLS — server-side only)" \
     "${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY env var must be set}"
 
-upsert_secret "SUPABASE_ANON_KEY" \
+upsert_secret "supabase_anon_key" \
     "Supabase anonymous key (safe for RLS-enforced client operations)" \
     "${SUPABASE_ANON_KEY:?SUPABASE_ANON_KEY env var must be set}"
 
-upsert_secret "SUPABASE_JWT_SECRET" \
+upsert_secret "supabase_jwt_secret" \
     "Supabase JWT secret for HS256 token verification" \
     "${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET env var must be set}"
 
@@ -60,7 +60,7 @@ upsert_secret "SUPABASE_JWT_SECRET" \
 # =============================================================================
 echo ""
 echo "--- Database ---"
-upsert_secret "DATABASE_URL" \
+upsert_secret "database_url" \
     "PostgreSQL connection string (Supabase or RDS)" \
     "${DATABASE_URL:?DATABASE_URL env var must be set}"
 
@@ -71,7 +71,7 @@ upsert_secret "DATABASE_URL" \
 # =============================================================================
 echo ""
 echo "--- Encryption Keys ---"
-upsert_secret "MASTER_ENCRYPTION_KEYS" \
+upsert_secret "master_encryption_keys" \
     "AES-256 Fernet master encryption keys (comma-separated, newest first)" \
     "${MASTER_ENCRYPTION_KEYS:?MASTER_ENCRYPTION_KEYS env var must be set}"
 
@@ -80,7 +80,7 @@ upsert_secret "MASTER_ENCRYPTION_KEYS" \
 # =============================================================================
 echo ""
 echo "--- JWT ---"
-upsert_secret "JWT_SECRET" \
+upsert_secret "jwt_secret" \
     "JWT signing secret (minimum 64 characters)" \
     "${JWT_SECRET:?JWT_SECRET env var must be set}"
 

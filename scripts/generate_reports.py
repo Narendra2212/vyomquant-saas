@@ -185,8 +185,9 @@ def generate_validation_report(import_data: Dict[str, Any], pre_data: Dict[str, 
 def generate_deployment_report(pre_data: Dict[str, Any], post_data: Dict[str, Any], fail_data: Dict[str, Any]) -> str:
     pre_pass = pre_data.get("status") == "PASS"
     post_pass = post_data.get("status") == "PASS" or not post_data
+    ecs_failed = bool(fail_data)
 
-    status = "PASS" if pre_pass and post_pass else "FAIL"
+    status = "PASS" if pre_pass and post_pass and not ecs_failed else "FAIL"
     reason = "Deployment completed successfully, service stable and health checks passed." if status == "PASS" else "Deployment aborted or failed during validation / ECS rollout."
 
     rec_fix = "Deployment healthy. Zero action needed." if status == "PASS" else "Review failure_analysis.json and CloudWatch logs artifact."

@@ -1,7 +1,9 @@
 {
   "family": "vyomquant-api",
   "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
   "cpu": "1024",
   "memory": "2048",
   "executionRoleArn": "arn:aws:iam::273709947018:role/ecsTaskExecutionRole",
@@ -135,31 +137,31 @@
       "secrets": [
         {
           "name": "SUPABASE_SERVICE_ROLE_KEY",
-          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/SUPABASE_SERVICE_ROLE_KEY-Bsr0Hi"
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/supabase_service_role_key"
         },
         {
           "name": "SUPABASE_ANON_KEY",
-          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/SUPABASE_ANON_KEY-JKLTP9"
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/supabase_anon_key"
         },
         {
           "name": "SUPABASE_JWT_SECRET",
-          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/SUPABASE_JWT_SECRET-Ey9p57"
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/supabase_jwt_secret"
         },
         {
           "name": "DATABASE_URL",
-          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/DATABASE_URL-b4Vr3B"
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/database_url"
         },
         {
           "name": "MASTER_ENCRYPTION_KEYS",
-          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/MASTER_ENCRYPTION_KEYS-Xxj5iE"
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/master_encryption_keys"
         },
         {
           "name": "CREDENTIAL_VAULT_SALT",
-          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/CREDENTIAL_VAULT_SALT-Abc123"
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/credential_vault_salt"
         },
         {
           "name": "JWT_SECRET",
-          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:/vyomquant/production/JWT_SECRET-45DcjW"
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/jwt_secret"
         }
       ],
       "logConfiguration": {

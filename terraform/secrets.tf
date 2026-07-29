@@ -25,3 +25,18 @@ resource "aws_secretsmanager_secret" "credential_vault_salt" {
 
 # The actual secret values should be populated outside of Terraform or via secure variables.
 # e.g., using `aws secretsmanager put-secret-value` in the deployment scripts.
+
+resource "aws_secretsmanager_secret" "supabase_service_role_key" {
+  name        = "vyomquant/${var.environment}/supabase_service_role_key"
+  description = "Supabase Service Role Key"
+}
+
+resource "aws_secretsmanager_secret" "supabase_anon_key" {
+  name        = "vyomquant/${var.environment}/supabase_anon_key"
+  description = "Supabase Anonymous Key"
+}
+
+resource "aws_secretsmanager_secret" "supabase_jwt_secret" {
+  name        = "vyomquant/${var.environment}/supabase_jwt_secret"
+  description = "Supabase JWT Secret"
+}
