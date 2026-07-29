@@ -1,3 +1,6 @@
+# [STATUS: EXECUTED / ARCHIVED]
+> The dead code identified in this document was verified and the cleanup was executed during the P8 architecture consolidation phase. Missing files were confirmed deleted, and remaining files (like Dockerfiles) were flagged as 'now in use' by Terraform. This file is retained for historical context only.
+
 # Itemized Dead-Code Candidates Catalog
 
 This document lists candidate files evaluated during the repository-wide static analysis audit. Each file is classified into one of four categories:
@@ -90,15 +93,11 @@ This document lists candidate files evaluated during the repository-wide static 
 
 ---
 
-## 2. Category: LIKELY SAFE
+## 2. Category: NO LONGER DEAD (NOW IN USE)
 
 #### `Dockerfile.simulator`
-- **Classification**: `LIKELY SAFE`
-- **Reason**: Container definition for mock market simulator. Not used in production ECS cluster `vyomquant-cluster`.
-- **Dependencies**: `python:3.11-slim`.
-- **Imported By**: None.
-- **Runtime References**: None in AWS ECS task definitions.
-- **Confidence Score**: **85%**
+- **Classification**: `NO LONGER DEAD`
+- **Reason**: Formally managed and deployed via Terraform ECS (`vyomquant-simulator` ECR repo).
 
 #### `simulate_startup.py`
 - **Classification**: `LIKELY SAFE`
@@ -110,31 +109,19 @@ This document lists candidate files evaluated during the repository-wide static 
 
 ---
 
-## 3. Category: REQUIRES MANUAL REVIEW
+## 3. Category: NO LONGER DEAD (NOW IN USE)
 
 #### `Dockerfile.tee`
-- **Classification**: `REQUIRES MANUAL REVIEW`
-- **Reason**: Container definition for Trusted Execution Environment (TEE) enclave worker (`vyomquant-tee` ECR repo). Review if TEE feature is active.
-- **Dependencies**: `python:3.11-slim`, TEE runtime.
-- **Imported By**: ECR `vyomquant-tee` repository reference.
-- **Runtime References**: `vyomquant-tee` ECR repo.
-- **Confidence Score**: **75%**
+- **Classification**: `NO LONGER DEAD`
+- **Reason**: Formally managed and deployed via Terraform ECS (`vyomquant-tee` ECR repo).
 
 #### `Dockerfile.websocket`
-- **Classification**: `REQUIRES MANUAL REVIEW`
-- **Reason**: Standalone container definition for dedicated WebSocket server. Currently, WebSocket endpoints are mounted directly in `backend_app/main.py`.
-- **Dependencies**: `python:3.11-slim`.
-- **Imported By**: None.
-- **Runtime References**: Standalone WS deployment option.
-- **Confidence Score**: **80%**
+- **Classification**: `NO LONGER DEAD`
+- **Reason**: Formally managed and deployed via Terraform ECS as a standalone service.
 
 #### `Dockerfile.mds`
-- **Classification**: `REQUIRES MANUAL REVIEW`
-- **Reason**: Container definition for Market Data Service (`vyomquant-mds` ECR repo). Review if standalone MDS service is deployed separately from main API.
-- **Dependencies**: `python:3.11-slim`.
-- **Imported By**: ECR `vyomquant-mds` repository reference.
-- **Runtime References**: `vyomquant-mds` ECR repo.
-- **Confidence Score**: **75%**
+- **Classification**: `NO LONGER DEAD`
+- **Reason**: Formally managed and deployed via Terraform ECS (`vyomquant-mds` ECR repo).
 
 #### `buildspec.yml`
 - **Classification**: `REQUIRES MANUAL REVIEW`
@@ -179,3 +166,4 @@ This document lists candidate files evaluated during the repository-wide static 
 - **Imported By**: `.github/workflows/03-deploy.yml`.
 - **Runtime References**: Production deployment step.
 - **Confidence Score**: **100%**
+

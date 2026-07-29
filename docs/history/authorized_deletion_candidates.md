@@ -1,3 +1,6 @@
+# [STATUS: EXECUTED / ARCHIVED]
+> The dead code identified in this document was verified and the cleanup was executed during the P8 architecture consolidation phase. Missing files were confirmed deleted, and remaining files (like Dockerfiles) were flagged as 'now in use' by Terraform. This file is retained for historical context only.
+
 # Authorized Deletion Candidates
 
 Generated: 2026-06-17 23:43
@@ -136,3 +139,4 @@ Remove-Item d:\aerora_quant_backend_updated_final1\aerora_quant_backend_updated_
 Remove-Item d:\aerora_quant_backend_updated_final1\*.zip -WhatIf
 ```
 > Remove -WhatIf to execute for real.
+

@@ -15,8 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Copy requirements first for better caching
-COPY requirements.txt .
-RUN pip install --no-cache-dir --user -r requirements.txt
+COPY requirements-base.txt requirements-cpu.txt ./
+RUN pip install --no-cache-dir --user -r requirements-cpu.txt
 
 # Production stage
 FROM python:3.11-slim
@@ -63,3 +63,4 @@ CMD ["python", "-m", "uvicorn", "backend_app.backend.ws_server:app", \
      "--loop", "uvloop", \
      "--http", "httptools", \
      "--log-level", "info"]
+

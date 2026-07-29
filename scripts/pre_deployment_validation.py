@@ -44,7 +44,7 @@ def test_fastapi_startup() -> tuple:
     try:
         sys.path.insert(0, os.getcwd())
         os.environ.setdefault("ENV", "test")
-        os.environ.setdefault("AERORA_MODE", "safe")
+        os.environ.setdefault("VYOMQUANT_MODE", "safe")
         os.environ.setdefault("DEV_MODE", "true")
         os.environ.setdefault("SUPABASE_URL", "https://dummy.supabase.co")
         os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "dummy-service-role-key")

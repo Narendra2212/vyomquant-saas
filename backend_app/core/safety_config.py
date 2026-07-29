@@ -15,6 +15,46 @@ from typing import Optional
 logger = logging.getLogger("SafetyConfig")
 
 
+def get_vyomquant_mode(default: str = "safe") -> str:
+    """
+    Retrieves the operating mode of the application.
+    Prefer 'VYOMQUANT_MODE'. Fallback to 'AERORA_MODE' with a deprecation warning.
+    """
+    mode = os.getenv("VYOMQUANT_MODE")
+    if mode is not None:
+        return mode
+        
+    legacy_mode = os.getenv("AERORA_MODE")
+    if legacy_mode is not None:
+        logger.warning(
+            "DEPRECATION WARNING: 'AERORA_MODE' environment variable is deprecated. "
+            "Please update your deployment configuration to use 'VYOMQUANT_MODE' instead."
+        )
+        return legacy_mode
+        
+    return default
+
+
+def get_live_trading_confirmation(default: str = "false") -> str:
+    """
+    Retrieves the live trading confirmation flag.
+    Prefer 'VYOMQUANT_ENABLE_LIVE_TRADING'. Fallback to 'AERORA_ENABLE_LIVE_TRADING'.
+    """
+    val = os.getenv("VYOMQUANT_ENABLE_LIVE_TRADING")
+    if val is not None:
+        return val
+        
+    legacy_val = os.getenv("AERORA_ENABLE_LIVE_TRADING")
+    if legacy_val is not None:
+        logger.warning(
+            "DEPRECATION WARNING: 'AERORA_ENABLE_LIVE_TRADING' environment variable is deprecated. "
+            "Please update your deployment configuration to use 'VYOMQUANT_ENABLE_LIVE_TRADING' instead."
+        )
+        return legacy_val
+        
+    return default
+
+
 class SystemMode(Enum):
     """System operating modes."""
     SAFE_MODE = "safe_mode"          # No execution, read-only
@@ -66,10 +106,10 @@ class ExecutionFlags:
     @classmethod
     def enable_paper_trading(cls) -> None:
         """Enable paper trading mode only."""
-        env_mode = os.getenv("AERORA_MODE", "safe").lower()
+        env_mode = get_vyomquant_mode("safe").lower()
         if env_mode != "paper":
             raise RuntimeError(
-                "Paper trading requires AERORA_MODE=paper environment variable"
+                "Paper trading requires VYOMQUANT_MODE=paper environment variable"
             )
         cls.LIVE_TRADING_ENABLED = False
         cls.PAPER_TRADING_ENABLED = True
@@ -87,15 +127,15 @@ class ExecutionFlags:
         Only call after ALL safety checks pass.
         """
         # Require explicit environment confirmation
-        env_mode = os.getenv("AERORA_MODE", "safe").lower()
+        env_mode = get_vyomquant_mode("safe").lower()
         if env_mode != "live":
             raise RuntimeError(
-                "Live trading requires AERORA_MODE=live environment variable"
+                "Live trading requires VYOMQUANT_MODE=live environment variable"
             )
-        env_confirm = os.getenv("AERORA_ENABLE_LIVE_TRADING", "false").lower()
+        env_confirm = get_live_trading_confirmation("false").lower()
         if env_confirm != "true":
             raise RuntimeError(
-                "Live trading requires AERORA_ENABLE_LIVE_TRADING=true environment variable"
+                "Live trading requires VYOMQUANT_ENABLE_LIVE_TRADING=true environment variable"
             )
         
         cls.PAPER_TRADING_ENABLED = False
@@ -122,12 +162,12 @@ class SafetyMonitor:
             None if allowed, error message if blocked
         """
         # Environment check
-        env_mode = os.getenv("AERORA_MODE", "safe").lower()
+        env_mode = get_vyomquant_mode("safe").lower()
         if env_mode == "safe":
-            return f"🚫 EXECUTION BLOCKED: AERORA_MODE=safe (operation: {operation})"
+            return f"🚫 EXECUTION BLOCKED: VYOMQUANT_MODE=safe (operation: {operation})"
         
         if env_mode not in ["paper", "live"]:
-            return f"🚫 EXECUTION BLOCKED: Invalid AERORA_MODE={env_mode} (operation: {operation})"
+            return f"🚫 EXECUTION BLOCKED: Invalid VYOMQUANT_MODE={env_mode} (operation: {operation})"
 
         if env_mode == "paper":
             if ExecutionFlags.LIVE_TRADING_ENABLED:
@@ -138,8 +178,8 @@ class SafetyMonitor:
                 return f"🚫 EXECUTION BLOCKED: Live execution is not allowed in paper mode (operation: {operation})"
 
         if env_mode == "live":
-            if os.getenv("AERORA_ENABLE_LIVE_TRADING", "false").lower() != "true":
-                return f"🚫 EXECUTION BLOCKED: AERORA_ENABLE_LIVE_TRADING is not true (operation: {operation})"
+            if get_live_trading_confirmation("false").lower() != "true":
+                return f"🚫 EXECUTION BLOCKED: VYOMQUANT_ENABLE_LIVE_TRADING is not true (operation: {operation})"
             if not ExecutionFlags.LIVE_TRADING_ENABLED:
                 return f"🚫 EXECUTION BLOCKED: Live trading flag disabled (operation: {operation})"
         
@@ -167,10 +207,10 @@ class SafetyMonitor:
                 "System is NOT in safe mode - PAPER_TRADING_ENABLED is True"
             )
         
-        env_mode = os.getenv("AERORA_MODE", "safe")
+        env_mode = get_vyomquant_mode("safe")
         if env_mode != "safe":
             raise RuntimeError(
-                f"System is NOT in safe mode - AERORA_MODE={env_mode}"
+                f"System is NOT in safe mode - VYOMQUANT_MODE={env_mode}"
             )
 
 
@@ -182,5 +222,5 @@ logger.critical("🔒 AERORA SYSTEM FREEZE PROTOCOL ACTIVATED")
 logger.critical("=" * 60)
 logger.critical("All order execution is BLOCKED until safety fixes complete")
 logger.critical("To check status: ExecutionFlags.LIVE_TRADING_ENABLED = False")
-logger.critical("To enable: Set AERORA_MODE=paper or AERORA_MODE=live")
+logger.critical("To enable: Set VYOMQUANT_MODE=paper or VYOMQUANT_MODE=live")
 logger.critical("=" * 60)

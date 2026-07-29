@@ -1,14 +1,48 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Check, Shield, Zap, Rocket, ChevronRight, Layers, ArrowRight, ShieldCheck, Mail, Bell, CheckCircle, Key, Lock, Wifi, Database, Activity } from "lucide-react";
+import { Check, Shield, Zap, Rocket, ChevronRight, Layers, ArrowRight, ShieldCheck, Mail, Bell, CheckCircle, Key, Lock, Wifi, Database, Activity, Loader2 } from "lucide-react";
 import { C, Btn, Inp, Card } from "../components/ui-legacy/primitives";
 import endpoints from "../utils/endpoints";
+import { supabase } from "../supabase";
 
 export default function Wizard() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [isCheckoutLoading, setIsCheckoutLoading] = useState("");
   const [backtestStatus, setBacktestStatus] = useState("idle");
+  const [securityStatus, setSecurityStatus] = useState({
+    emailVerified: false,
+    mfaEnabled: false,
+    emailAddress: "",
+    loading: true
+  });
+  
+  useEffect(() => {
+    async function fetchSecurityStatus() {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const emailVerified = !!user.email_confirmed_at;
+          const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+          const mfaEnabled = data?.currentLevel === 'aal2' || data?.nextLevel === 'aal2';
+
+          setSecurityStatus({ 
+            emailVerified, 
+            mfaEnabled, 
+            emailAddress: user.email || "",
+            loading: false 
+          });
+        } else {
+           setSecurityStatus(s => ({ ...s, loading: false }));
+        }
+      } catch (err) {
+        console.error("Failed to fetch security status:", err);
+        setSecurityStatus(s => ({ ...s, loading: false }));
+      }
+    }
+    fetchSecurityStatus();
+  }, []);
+
   const steps = ["Secure Account", "Demo Backtest", "Connect Exchange", "Choose Plan"];
   const plans = [
     { id: "free", n: "Free", tier: "free", inr: 0, usd: 0, f: ["1 Deployed Bot", "Algorithm Builder", "3 Backtests/mo", "No ML Training"] },
@@ -64,17 +98,30 @@ export default function Wizard() {
           <div>
             <h2 style={{ color: C.t1, fontWeight: 900, fontSize: 18, marginBottom: 4 }}>Secure Your Account</h2>
             <p style={{ color: C.t2, fontSize: 11, fontFamily: "monospace", marginBottom: 20 }}>These settings protect your funds. Please complete all steps.</p>
-            {[{ I: ShieldCheck, t: "2FA Enabled", d: "TOTP via Google Authenticator", ok: true }, { I: Mail, t: "Email Verified", d: "Confirmation sent to admin@algo22.io", ok: true }, { I: Bell, t: "Security Alerts", d: "Notify on new device logins", ok: false }].map(r => (
-              <div key={r.t} style={{ background: C.bg3, border: `1px solid ${r.ok ? "rgba(0,255,136,0.15)" : C.border}`, borderRadius: 10, padding: 14, display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                <r.I size={15} style={{ color: r.ok ? C.green : C.t3 }} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ color: C.t1, fontSize: 12, fontWeight: 700 }}>{r.t}</div>
-                  <div style={{ color: C.t2, fontSize: 10, fontFamily: "monospace" }}>{r.d}</div>
-                </div>
-                {r.ok ? <CheckCircle size={15} style={{ color: C.green }} /> : <Btn v="outline" sz="xs">Enable</Btn>}
+            {securityStatus.loading ? (
+              <div style={{ display: "flex", justifyContent: "center", alignItems: "center", padding: 40, color: C.cyan }}>
+                <Loader2 size={32} className="animate-spin" style={{ animation: "spin 1s linear infinite" }} />
+                <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
               </div>
-            ))}
-            <Btn v="primary" cls="w-full justify-center mt-4" onClick={() => setStep(1)}>Continue →</Btn>
+            ) : (
+              <>
+                {[
+                  { I: ShieldCheck, t: "2FA Enabled", d: "TOTP via Google Authenticator", ok: securityStatus.mfaEnabled, action: "Enable" }, 
+                  { I: Mail, t: "Email Verified", d: securityStatus.emailAddress ? `Confirmation sent to ${securityStatus.emailAddress}` : "Confirm your email address", ok: securityStatus.emailVerified, action: "Verify" }, 
+                  { I: Bell, t: "Security Alerts", d: "Notify on new device logins", ok: false, action: "Enable" }
+                ].map(r => (
+                  <div key={r.t} style={{ background: C.bg3, border: `1px solid ${r.ok ? "rgba(0,255,136,0.15)" : C.border}`, borderRadius: 10, padding: 14, display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                    <r.I size={15} style={{ color: r.ok ? C.green : C.t3 }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ color: C.t1, fontSize: 12, fontWeight: 700 }}>{r.t}</div>
+                      <div style={{ color: C.t2, fontSize: 10, fontFamily: "monospace" }}>{r.d}</div>
+                    </div>
+                    {r.ok ? <CheckCircle size={15} style={{ color: C.green }} /> : <Btn v="outline" sz="xs" onClick={() => {}}>{r.action}</Btn>}
+                  </div>
+                ))}
+                <Btn v="primary" cls="w-full justify-center mt-4" onClick={() => setStep(1)}>Continue →</Btn>
+              </>
+            )}
           </div>
         )}
         {step === 1 && (

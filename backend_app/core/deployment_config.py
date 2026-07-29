@@ -97,14 +97,16 @@ class DeploymentConfig:
         - REDIS_URL: redis://...
         
         🚨 SAFETY ENVIRONMENT VARIABLES (SYSTEM FREEZE):
-        - AERORA_MODE: safe | paper | live (default: safe)
+        - VYOMQUANT_MODE: safe | paper | live (default: safe)
             - safe: All execution blocked
             - paper: Simulated execution only
-            - live: Real execution (requires AERORA_ENABLE_LIVE_TRADING=true)
+            - live: Real execution (requires VYOMQUANT_ENABLE_LIVE_TRADING=true)
+            - DEPRECATED ALIAS: AERORA_MODE (logs a deprecation warning if used)
         - AERORA_ENABLE_TRADING: true | false (default: false)
             - Must be true to enable paper trading
-        - AERORA_ENABLE_LIVE_TRADING: true | false (default: false)
-            - Must be true AND AERORA_MODE=live to enable live trading
+        - VYOMQUANT_ENABLE_LIVE_TRADING: true | false (default: false)
+            - Must be true AND VYOMQUANT_MODE=live to enable live trading
+            - DEPRECATED ALIAS: AERORA_ENABLE_LIVE_TRADING
         """
         # Get environment
         env_str = os.getenv("ENV", "development").lower()

@@ -23,12 +23,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
+          cache-dependency-path: 'requirements-cpu.txt'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          sed -i 's/^torch==.*/torch==2.3.1+cpu/' requirements.txt
-          pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-cpu.txt
           pip install flake8 black isort mypy bandit pytest pytest-asyncio
 
       - name: Automated Import & AST Audit
@@ -71,12 +71,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
+          cache-dependency-path: 'requirements-cpu.txt'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          sed -i 's/^torch==.*/torch==2.3.1+cpu/' requirements.txt
-          pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-cpu.txt
           pip install pytest pytest-asyncio pytest-cov
 
       - name: Run Unit Tests

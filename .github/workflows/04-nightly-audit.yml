@@ -22,18 +22,29 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: 'requirements-cpu.txt'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          sed -i 's/^torch==.*/torch==2.3.1+cpu/' requirements.txt
-          pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-cpu.txt
 
       - name: Run Import Audit
         run: python scripts/import_audit.py backend_app
+        continue-on-error: true
 
       - name: Run Dependency Audit
         run: python scripts/dependency_audit.py
+        continue-on-error: true
+        
+      - name: Run Size Audit
+        run: python scripts/size_audit.py
+        continue-on-error: true
+        
+      - name: Run Reachability Audit
+        run: python scripts/reachability_audit.py
+        continue-on-error: true
 
       - name: Run Docker Validation
         run: python scripts/docker_validation.py
@@ -42,17 +53,21 @@ jobs:
         run: pip install pip-audit
 
       - name: Run pip-audit (Python Backend Dependencies)
-        run: pip-audit -r requirements.txt --desc
+        run: pip-audit -r requirements-cpu.txt -f json -o reports/pip_audit.json
+        continue-on-error: true
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'algo22-terminal/package-lock.json'
 
       - name: Run npm audit (Frontend Dependencies)
         run: |
           cd algo22-terminal
-          npm audit --audit-level=high
+          npm audit --audit-level=high --json > ../reports/npm_audit.json
+        continue-on-error: true
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -63,7 +78,8 @@ jobs:
       - name: Run cargo audit (Tauri Desktop Rust Dependencies)
         run: |
           cd algo22-terminal/src-tauri
-          cargo audit
+          cargo audit -q --json > ../../reports/cargo_audit.json
+        continue-on-error: true
 
       - name: Generate Reports
         if: always()

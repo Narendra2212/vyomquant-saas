@@ -1,0 +1,626 @@
+﻿[
+    {
+        "File":  "1000_USER_ENGINE_READINESS.md",
+        "Content":  "# 1000_USER_ENGINE_READINESS  ## Executive Summary The proposed microservice extraction of the `UnifiedExecutionEngine` successfully isolates critical trading loops from Web API HTTP traffic.  "
+    },
+    {
+        "File":  "1000_USER_READINESS_CERTIFICATE.md",
+        "Content":  "# 1000_USER_READINESS_CERTIFICATE  **Date**: July 19, 2026 **Target Scale**: 1,000 Active Users **System Version**: v1.0.0-rc1"
+    },
+    {
+        "File":  "AI_IMPLEMENTATION_VERIFICATION.md",
+        "Content":  "# AI Implementation Verification  This report verifies the core capabilities of the incoming `copilot_engine.py` against the integration plan requirements.  | Feature | Status | Code Evidence |"
+    },
+    {
+        "File":  "ANALYTICS_DATA_INVENTORY.md",
+        "Content":  "# ANALYTICS DATA INVENTORY  ## Overview This inventory catalogs the available analytics data structures currently accessible in the backend source code across QuestDB, Redis, and Supabase. "
+    },
+    {
+        "File":  "ANALYTICS_ENDPOINT_MAP.md",
+        "Content":  "# ANALYTICS ENDPOINT MAP  ## 1. Analytics Endpoints - **Route**: `GET /api/analytics/performance` - **Request Schema**: Query param `days: int` (default 30, ge=1, le=365)"
+    },
+    {
+        "File":  "ANALYTICS_HYDRATION_PROOF.md",
+        "Content":  "# ANALYTICS HYDRATION PROOF  ## Verification Objective Verify `PremiumDashboard.jsx` handles the returned data structures correctly without frontend modifications. "
+    },
+    {
+        "File":  "API_CLIENT_RUNTIME_TRACE.md",
+        "Content":  "# API CLIENT RUNTIME TRACE  ## Overview Analysis of the `api_client` mapping and exact routing from frontend to backend. "
+    },
+    {
+        "File":  "API_CLIENT_WIRING_PROOF.md",
+        "Content":  "# API CLIENT WIRING PROOF  ## File Modified `algo22-terminal/src/api/modules/user.js` "
+    },
+    {
+        "File":  "API_CONSUMPTION_TRACE.md",
+        "Content":  "# API CONSUMPTION TRACE  ## Search Scope - `algo22-terminal/src/api/**/*.js` - `algo22-terminal/src/hooks/**/*.js`"
+    },
+    {
+        "File":  "API_MODULE_REALITY_CHECK.md",
+        "Content":  "# API MODULE REALITY CHECK  **File:** `algo22-terminal/src/api/modules/strategies.js`  | Function | Endpoint | Request Shape | Response Handling | Used By |"
+    },
+    {
+        "File":  "API_RUNTIME_VERIFICATION.md",
+        "Content":  "# API RUNTIME VERIFICATION  ## Execution Details Backend API queries executed via isolated HTTP client against `127.0.0.1:8000` with valid JWT token. "
+    },
+    {
+        "File":  "AUTHENTICATED_BACKTEST_PROOF.md",
+        "Content":  "# AUTHENTICATED BACKTEST PROOF  ## Objective Verify that the `DAGConfig` execution payload integrates flawlessly with backend security layers and executes within the isolated sandboxed Backtest Environment. "
+    },
+    {
+        "File":  "AUTHENTICATION_VERIFICATION.md",
+        "Content":  "# Authentication Verification  ## Audit Targets - `backend_app/api_ws/ws_routes.py` - `backend_app/core/websocket_auth.py`"
+    },
+    {
+        "File":  "AWS_DEPLOYMENT_GUIDE.md",
+        "Content":  "# AWS Deployment Guide  This guide covers the deployment of VyomQuant to AWS ap-southeast-1.  ## Prerequisites"
+    },
+    {
+        "File":  "AWS_INFRASTRUCTURE_PLAN.md",
+        "Content":  "# AWS_INFRASTRUCTURE_PLAN  This document outlines the AWS resources required to host the Aerora Quant Platform at various user scale tiers.  ## 100 Users (Private Beta)"
+    },
+    {
+        "File":  "BACKEND_STARTUP_CERTIFICATION_V2.md",
+        "Content":  "# Backend Startup Certification V2  **Execution Command**: `python -m uvicorn main:app`  ## Audit Results"
+    },
+    {
+        "File":  "BACKEND_STARTUP_CERTIFICATION_V3.md",
+        "Content":  "# Backend Startup Certification V3  **Execution Command**: `python -m uvicorn main:app`  ## Audit Results"
+    },
+    {
+        "File":  "BACKEND_STARTUP_CERTIFICATION_V4.md",
+        "Content":  "# Backend Startup Certification V4  **Execution Command**: `python -m uvicorn main:app`  ## Audit Results"
+    },
+    {
+        "File":  "BACKTEST_ANALYTICS_INVENTORY.md",
+        "Content":  "# BACKTEST ANALYTICS INVENTORY  ## Objective Audit the execution metrics returned by the DAG Backtest Engine (`routers/strategies.py` and `core/execution_engine.py`) and verify their correctness. "
+    },
+    {
+        "File":  "BACKTEST_CONTRACT_REPAIR.md",
+        "Content":  "# Backtest Contract Repair  Goal: Submit DAGConfig correctly and enter DAG execution mode inside `_run_backtest_sync()`.  Verified in `algo22-terminal/src/App.jsx` `runBacktest()`:"
+    },
+    {
+        "File":  "BACKTEST_EXECUTION_PROOF.md",
+        "Content":  "# BACKTEST EXECUTION PROOF  ## Golden Topology `INPUT â†’ RSI(14) â†’ GT(70) â†’ SELL` "
+    },
+    {
+        "File":  "BACKTEST_REQUEST_SCHEMA.md",
+        "Content":  "# BACKTEST REQUEST SCHEMA  ## Route Information * **Endpoint:** `POST /api/strategies/backtest` * **File:** `routers/strategies.py` (Line ~1162)"
+    },
+    {
+        "File":  "BACKTEST_RUNTIME_TRACE.md",
+        "Content":  "# BACKTEST RUNTIME TRACE  Here is the exact object lifecycle and type degradation trace during a strategy backtest.  ## Trace Path"
+    },
+    {
+        "File":  "BACKTEST_WORKFLOW_REALITY_CHECK.md",
+        "Content":  "# BACKTEST WORKFLOW REALITY CHECK  ## Current Code **File:** `algo22-terminal/src/App.jsx` **Lines:** 6220-6255"
+    },
+    {
+        "File":  "BETA_OPERATIONS_DASHBOARD.md",
+        "Content":  "# BETA_OPERATIONS_DASHBOARD  These KPIs must be monitored daily by the operations team during the Private Beta phase.  ## System Health Metrics"
+    },
+    {
+        "File":  "BOT_MONITORING_WIRING_PROOF.md",
+        "Content":  "# Bot Monitoring Wiring Proof  ## Objective Verify that `BotMonitoringConsole.jsx` is successfully wired to the real backend telemetry websocket and no longer relies on hardcoded mock arrays for telemetry data. "
+    },
+    {
+        "File":  "BOT_STATUS_RUNTIME_CAPTURE.md",
+        "Content":  "# BOT_STATUS_RUNTIME_CAPTURE.md  ## Sprint 1D.3 â€” Phase 2: Bot Status Runtime Capture **Captured At:** 2026-07-17T19:40:00Z **Telemetry Status:** ACTIVE"
+    },
+    {
+        "File":  "BUILD_VERIFICATION.md",
+        "Content":  "# BUILD VERIFICATION  ## Execution Details **Command:** `npm run build` **Execution Time:** 8.72s"
+    },
+    {
+        "File":  "CLAIM_GAP_MATRIX.md",
+        "Content":  "# CLAIM GAP MATRIX  | Claim | Current Status | Readiness % | Files Involved | Estimated Build Effort | Dependencies | Risk Level | |---|---|---|---|---|---|---| | Visual DAG Builder | PARTIALLY IMPLEMENTED | 75% | backend/dag_engine.py, algo22-terminal/src/components/EventDagRunner.jsx | Medium | Backend DAG Engine | Medium |"
+    },
+    {
+        "File":  "CLAIM_INVENTORY.md",
+        "Content":  "# VYOMQUANT CLAIM INVENTORY  ## List of Evaluated Claims 1. Visual DAG Builder 2. Backtesting"
+    },
+    {
+        "File":  "COMPILER_PATCH_PLAN.md",
+        "Content":  "# COMPILER PATCH PLAN  This document outlines the exact, minimal code changes required in the backend to fix the compiler crashes and enable mathematical logic execution.  ## Patch 1: Fix Enum Mismatch"
+    },
+    {
+        "File":  "COMPONENT_TREE.md",
+        "Content":  "# FRONTEND COMPONENT TREE: DAG BUILDER  This specifies the exact React component hierarchy required to implement the production DAG Builder using ReactFlow, replacing the current static mockup.  ```text"
+    },
+    {
+        "File":  "COPILOT_REPLACEMENT_DECISION.md",
+        "Content":  "# Copilot Replacement Decision  ## Comparison  ### `Algo22Copilot.jsx` (V1)"
+    },
+    {
+        "File":  "CRUD_REALITY_CHECK.md",
+        "Content":  "# CRUD REALITY CHECK  ## Create Flow * **Status:** IMPLEMENTED * **Actual Source Locations:**"
+    },
+    {
+        "File":  "DAG_BUILDER_EXECUTION_GAP.md",
+        "Content":  "# DAG BUILDER EXECUTION GAP  ## The Gap There is a massive misalignment between what the `StrategyBuilder.jsx` ReactFlow UI generates and what the Production DAG Backend (Sprint 1A engine) requires to execute a simulation or live deployment. "
+    },
+    {
+        "File":  "DAG_BUILDER_IMPLEMENTATION_BLUEPRINT.md",
+        "Content":  "# DAG BUILDER IMPLEMENTATION BLUEPRINT  This blueprint defines the precise architecture for upgrading the static ReactFlow UI into a fully functional, production-ready Strategy Builder that maps natively to the existing backend API and `pydantic_models.py`.  ---"
+    },
+    {
+        "File":  "DAG_COMPILER_REPAIR_PLAN.md",
+        "Content":  "# DAG COMPILER REPAIR PLAN  ## Overview This document serves as the master index for the backend DAG compiler audit and repair strategy. The goal of this repair is to produce the minimum backend patch required to successfully execute the following target DAG: "
+    },
+    {
+        "File":  "DAG_INTEGRATION_SPEC.md",
+        "Content":  "# DAG INTEGRATION SPECIFICATION  ## Overview This specification details the structural mismatch between the current frontend `ReactFlow` implementation in `StrategyBuilder.jsx` and the backend `DAGCompiler` expectations, along with the necessary transformation layer required to bridge them. "
+    },
+    {
+        "File":  "DAG_SERIALIZER_IMPLEMENTATION_PLAN.md",
+        "Content":  "# DAG Serializer Implementation Plan  Created `algo22-terminal/src/utils/dagSerializer.js`.  The exported `serializeReactFlowToDAG(nodes, edges)` function strips visual fields (`position`, `selected`, `style`, `markerEnd`, etc.) and remaps `nodes` into the backend equivalents required by `DAGConfig` / `DAGNode`:"
+    },
+    {
+        "File":  "DATABASE_MIGRATION_REVIEW.md",
+        "Content":  "# Database Migration Review  **Incoming File:** `20240623_copilot_tables.sql`  ## New Tables"
+    },
+    {
+        "File":  "DEPLOY_CONTRACT_REPAIR.md",
+        "Content":  "# Deploy Contract Repair  Goal: Repair deployment lifecycle.  Modified `algo22-terminal/src/App.jsx`:"
+    },
+    {
+        "File":  "DEPLOY_EXECUTION_PROOF.md",
+        "Content":  "# DEPLOY EXECUTION PROOF  ## Request `POST /api/strategies/strat_01J13A2BZ9Q9/deploy` "
+    },
+    {
+        "File":  "DEPLOY_REQUEST_SCHEMA.md",
+        "Content":  "# DEPLOY REQUEST SCHEMA  ## Route Information * **Endpoint:** `POST /api/strategies/{id}/deploy` * **File:** `routers/strategies.py` (Line ~800)"
+    },
+    {
+        "File":  "DEPLOY_WORKFLOW_REALITY_CHECK.md",
+        "Content":  "# DEPLOY WORKFLOW REALITY CHECK  ## Current Code **File:** `algo22-terminal/src/App.jsx` **Lines:** 3426-3435 (`handleDeployStrategy`)"
+    },
+    {
+        "File":  "DESIGN_EXTENSION_REQUIRED.md",
+        "Content":  "# DESIGN_EXTENSION_REQUIRED  ## Overview During the execution of **Sprint 2A.1 â€” Strategy Marketplace Foundation Implementation**, it was identified that several required production objects are missing from the approved architecture (`STRATEGY_LIBRARY_DESIGN.md`).  "
+    },
+    {
+        "File":  "DOMAIN_DEPLOYMENT_PLAN.md",
+        "Content":  "# VyomQuant Domain Deployment Plan  This document outlines the current state and deployment configuration for the VyomQuant frontend, based on the analysis of the project repository.  ## 1. Hosting Environment"
+    },
+    {
+        "File":  "ECS_DEPLOYMENT_GUIDE.md",
+        "Content":  "# VyomQuant SaaS â€” AWS ECS Fargate Deployment Guide  \u003e **Account:** `273709947018` | **Region:** `ap-southeast-1`   \u003e **Cluster:** `vyomquant-cluster` | **Service:** `vyomquant-api-service-cjema2sl`   \u003e **Task Family:** `vyomquant-api` | **ECR Repo:** `vyomquant-api`  "
+    },
+    {
+        "File":  "EDGE_COMPATIBILITY_MATRIX.md",
+        "Content":  "# EDGE COMPATIBILITY MATRIX  This matrix defines the exact allowed edge connections mapped from `TYPE_COMPATIBILITY` in `routers/strategies.py`.  \u003e [!WARNING]"
+    },
+    {
+        "File":  "EMPTY_STATE_VERIFICATION.md",
+        "Content":  "# Empty State Verification  ## Audit Target - Telemetry WebSocket Lifecycle (Disconnect / Reconnect) "
+    },
+    {
+        "File":  "END_TO_END_DATAFLOW_MAP.md",
+        "Content":  "# END-TO-END DATA FLOW MAP  ## 1. Equity Curve Flow ```text QuestDB (equity_curve table)"
+    },
+    {
+        "File":  "END_TO_END_FRONTEND_EXECUTION_PROOF.md",
+        "Content":  "# End-to-End Frontend Execution Proof "
+    },
+    {
+        "File":  "EQUITY_CURVE_RUNTIME_PROOF.md",
+        "Content":  "# EQUITY CURVE RUNTIME PROOF  ## Data Flow Trace 1. **API Call**: `endpoints.user.getEquityCurve(90)` fetches data. 2. **State Update**: `setEquityCurve(curve.map(...))` stores the formatted data in `equityCurve` state variable."
+    },
+    {
+        "File":  "EQUITY_CURVE_RUNTIME_VERIFICATION.md",
+        "Content":  "# EQUITY CURVE RUNTIME VERIFICATION  ## Overview Verification of the Equity Curve analytics component rendering using actual backend data in the Premium Dashboard. "
+    },
+    {
+        "File":  "EQUITY_CURVE_WIRING_PROOF.md",
+        "Content":  "# EQUITY CURVE WIRING PROOF  ## Audit Findings - The existing implementation `endpoints.user.getEquityCurve?.()` was already feeding the `\u003cAreaChart /\u003e` directly if `demoMode` was off.  - However, if the endpoint failed or returned empty data, it fell back to a `Math.random()` walk generator."
+    },
+    {
+        "File":  "EXACT_FILE_MODIFICATION_PLAN.md",
+        "Content":  "# EXACT FILE MODIFICATION PLAN  This plan identifies the minimum work required to wire the frontend DAG builder to the production backend APIs without modifying backend architecture.   Tasks are ranked by Revenue Impact, Launch Impact, and Engineering Effort."
+    },
+    {
+        "File":  "EXECUTION_ENGINE_ARCHITECTURE.md",
+        "Content":  "# EXECUTION_ENGINE_ARCHITECTURE  ## Overview To support 1,000 active users, the `UnifiedExecutionEngine` must be extracted from the monolithic FastAPI application into a standalone microservice: the **Trading Execution Engine (TEE)**. "
+    },
+    {
+        "File":  "FEATURE_BUILD_PRIORITY.md",
+        "Content":  "# FEATURE BUILD PRIORITY  ## Priority 1 (High Revenue / Landing Page Visibility) - Live Trading - Strategy Marketplace"
+    },
+    {
+        "File":  "FINAL_DATABASE_EXECUTION_PLAN.md",
+        "Content":  "# Final Database Execution Plan  **Target Database:** Supabase  ## Migration: `20240623_copilot_tables.sql`"
+    },
+    {
+        "File":  "FINAL_RISK_REGISTER.md",
+        "Content":  "# FINAL_RISK_REGISTER  ## Mitigated Risks (Closed) 1. **Event Loop Starvation**: Addressed via `rq` background workers. 2. **PostgreSQL Connection Exhaustion**: Addressed via PgBouncer `6543` transaction pooling."
+    },
+    {
+        "File":  "FIRST_100_USERS_OPERATIONS_GUIDE.md",
+        "Content":  "# FIRST_100_USERS_OPERATIONS_GUIDE  This guide dictates the daily operational tasks required to support the Private Beta cohort (User 1 to 100).  ## Daily Routine"
+    },
+    {
+        "File":  "FIRST_30_DAYS_PLAN.md",
+        "Content":  "# FIRST_30_DAYS_PLAN  ## Week 1: Stability \u0026 Hotfixes - **Goal**: Ensure the platform does not crash under the initial cohort load. - **Bug Triage**: Daily triage at 16:00. Prioritize P0/P1 only. Defer all UI nitpicks."
+    },
+    {
+        "File":  "FRONTEND_ANALYTICS_COMPONENT_MAP.md",
+        "Content":  "# FRONTEND ANALYTICS COMPONENT MAP  ## 1. PremiumDashboard.jsx - **Path**: `algo22-terminal/src/pages/PremiumDashboard.jsx` - **State Variables**: `stats`, `equityCurve`, `activeBots`, `isPnlHeatmapLoading`"
+    },
+    {
+        "File":  "FRONTEND_API_PATCHSET.md",
+        "Content":  "# FRONTEND API PATCHSET  ## Patch 1: DAG Backtest Alignment * **File:** `algo22-terminal/src/App.jsx` * **Function:** `runBacktest`"
+    },
+    {
+        "File":  "FRONTEND_INTEGRATION_CHECKLIST.md",
+        "Content":  "# FRONTEND INTEGRATION CHECKLIST  ## Overview This checklist defines the exact payload structures the frontend MUST send to successfully interface with the untyped Python backend routes. Because the backend bypasses Pydantic validation, the frontend must strictly enforce these schemas to prevent silent runtime failures. "
+    },
+    {
+        "File":  "HEATMAP_ENDPOINT_ROOT_CAUSE.md",
+        "Content":  "# HEATMAP ENDPOINT ROOT CAUSE  ## Execution Trace `routers/portfolio.py` -\u003e `TelemetryEngine.execute_query()` -\u003e TypeError "
+    },
+    {
+        "File":  "HEATMAP_RUNTIME_PROOF.md",
+        "Content":  "# HEATMAP RUNTIME PROOF  ## Execution Request executed against local backend server at `127.0.0.1:8000` via isolated HTTP script authenticated with a live JWT token. "
+    },
+    {
+        "File":  "HEATMAP_RUNTIME_VERIFICATION.md",
+        "Content":  "# HEATMAP RUNTIME VERIFICATION  ## Overview Verification of the PnL Heatmap component rendering. "
+    },
+    {
+        "File":  "HEATMAP_WIRING_PROOF.md",
+        "Content":  "# HEATMAP WIRING PROOF  ## File Modified `algo22-terminal/src/pages/PremiumDashboard.jsx` "
+    },
+    {
+        "File":  "INCIDENT_RESPONSE_PLAYBOOK.md",
+        "Content":  "# INCIDENT_RESPONSE_PLAYBOOK  ## P0 Incidents (Absolute Blockers)  ### Trading Safety Issue (Errant Orders, Slippage loops)"
+    },
+    {
+        "File":  "LANDING_PAGE_ARCHITECTURE_V1.md",
+        "Content":  "# VyomQuant â€” Landing Page Architecture V1  \u003e **Document Type:** UX Architecture   \u003e **Role:** Principal Product Designer / SaaS Conversion   \u003e **Date:** 2026-06-22  "
+    },
+    {
+        "File":  "LAUNCH_DAY_RUNBOOK.md",
+        "Content":  "# LAUNCH_DAY_RUNBOOK  ## T-7 Days - **Infrastructure Freeze**: No new infrastructure changes. All environments must mirror production exactly. - **Data Pruning**: Clear out all test data, test users, and mock strategies from the staging database."
+    },
+    {
+        "File":  "LLM_PROVIDER_ARCHITECTURE.md",
+        "Content":  "# Unified LLM Provider Architecture  To satisfy Phase 7 requirements, the Copilot engine must not hardcode OpenAI. It must utilize an abstract provider layer.  ## Architecture Pattern"
+    },
+    {
+        "File":  "LOGIC_NODE_RUNTIME_CONTRACT.md",
+        "Content":  "# LOGIC NODE RUNTIME CONTRACT  ## Objective Determine the exact data type and structure received by `LogicExecutor.execute(node: Dict, ...)` to ensure the compiler patch will not trigger runtime exceptions like `AttributeError`. "
+    },
+    {
+        "File":  "LOGIC_RUNTIME_SCHEMA.md",
+        "Content":  "# LOGIC RUNTIME SCHEMA  This document details the exact dictionary schema received by `LogicExecutor.execute(node: Dict, inputs: Dict[str, Any], market_data: pd.DataFrame)` at runtime.  ```python"
+    },
+    {
+        "File":  "MARKETPLACE_BACKEND_IMPLEMENTATION.md",
+        "Content":  "# MARKETPLACE_BACKEND_IMPLEMENTATION  ## Implemented Endpoints  | Method | Path | Auth | Description |"
+    },
+    {
+        "File":  "MARKETPLACE_FOUNDATION_IMPLEMENTATION.md",
+        "Content":  "# MARKETPLACE_FOUNDATION_IMPLEMENTATION  ## Executive Summary This sprint implemented the database and storage foundation for the Strategy Marketplace, following the `STRATEGY_LIBRARY_DESIGN.md`. All security flaws in existing stubs were remediated, and the core database objects (`library_strategies`, `library_ratings`, additional columns, and `strategy-images` bucket) were successfully provisioned in the production Supabase instance. As per instructions, secondary features like search, versioning, audit logging, and favorites were excluded from this phase. "
+    },
+    {
+        "File":  "MARKETPLACE_FRONTEND_IMPLEMENTATION.md",
+        "Content":  "# MARKETPLACE_FRONTEND_IMPLEMENTATION  ## Overview The mock data in the Strategy Marketplace has been entirely replaced with live API integrations connecting to the production backend (`/api/library`).  "
+    },
+    {
+        "File":  "MDS_DEPLOYMENT_GUIDE.md",
+        "Content":  "# MDS_DEPLOYMENT_GUIDE  ## Deployment Configuration  The Market Data Service utilizes its own Docker container and should be deployed alongside the Trading Execution Engine cluster."
+    },
+    {
+        "File":  "MISSING_NODE_TYPES.md",
+        "Content":  "# MISSING NODE TYPES IN FRONTEND  To make the DAG Builder functional and compatible with the backend `dag_engine.py`, the following node types MUST be added to the frontend `NODE_CATEGORIES` palette.  ## 1. Logic Operators (Combinatorial)"
+    },
+    {
+        "File":  "MOCK_DATA_REPLACEMENT_MAP.md",
+        "Content":  "# MOCK DATA REPLACEMENT MAP  ## 1. PremiumDashboard.jsx - **Mock Source**: `demoMode` state and `Math.random()` generation inside `useEffect`. - **Target Variables**: `stats`, `equityCurve`, `activeBots`, `PnlHeatmap` grids."
+    },
+    {
+        "File":  "MOCK_REMOVAL_PROOF.md",
+        "Content":  "# MOCK REMOVAL PROOF  ## Audit Findings - The `if (demoMode)` block for generating a random equity curve of 90 data points using `Math.random()` was deleted. - The `if (demoMode)` block for generating a 28-day `PnlHeatmap` random array was deleted."
+    },
+    {
+        "File":  "MOCK_VERIFICATION.md",
+        "Content":  "# MOCK VERIFICATION  ## Execution Details Search patterns strictly matched against `algo22-terminal/src/pages/PremiumDashboard.jsx`. "
+    },
+    {
+        "File":  "MONITORING_DASHBOARD_READINESS.md",
+        "Content":  "# MONITORING DASHBOARD READINESS  ## Objective Verify the existence and structural readiness of frontend dashboard components designed to render the execution and performance telemetry emitted by the backend. "
+    },
+    {
+        "File":  "MONITORING_GUIDE.md",
+        "Content":  "# Monitoring \u0026 Observability Guide  ## CloudWatch Dashboards A comprehensive CloudWatch Dashboard should be configured to monitor: 1. **ALB Metrics**: RequestCount, HTTPCode_Target_5XX_Count, TargetResponseTime."
+    },
+    {
+        "File":  "NEXT_30_DAY_BUILD_PLAN.md",
+        "Content":  "# NEXT 30 DAY BUILD PLAN  ## Strategic Objective Focus strictly on wiring existing backend infrastructure to the frontend UI to achieve a credible, revenue-generating launch state. Do not build new backend architectures; expose what already exists.  "
+    },
+    {
+        "File":  "NODETYPE_INVENTORY.md",
+        "Content":  "# NODETYPE INVENTORY  I have audited the source code and found three conflicting definitions of `NodeType`.  ## 1. Local Redefinition in `routers/strategies.py`"
+    },
+    {
+        "File":  "NODE_CONFIGURATION_REQUIREMENTS.md",
+        "Content":  "# NODE CONFIGURATION REQUIREMENTS  The current `ReactFlow` nodes in `StrategyBuilder.jsx` are completely static and lack configurable parameters. To map to the backend `DAGNode` schema, a Properties/Configuration Panel must be built. When a user clicks a node, the panel should open and allow them to set the following fields, which are then saved to the node\u0027s `data` object.  ## 1. Indicator Nodes"
+    },
+    {
+        "File":  "NODE_TYPE_MATRIX.md",
+        "Content":  "# NODE TYPE MATRIX  This matrix defines the exact node configurations expected by the backend `DAGCompiler` and `dag_engine.py`.  | Backend Node Type | UI Category | Required Fields in `node.data` | Optional Fields in `node.data` | Supported Values |"
+    },
+    {
+        "File":  "OPERATIONS_RUNBOOK.md",
+        "Content":  "# Operations Runbook  ## Service Restarts To force a restart of an ECS service without changing code: ```bash"
+    },
+    {
+        "File":  "PAPER_TRADING_DEPLOY_ROOT_CAUSE.md",
+        "Content":  "# PAPER_TRADING_DEPLOY_ROOT_CAUSE.md  **Investigation Role**: Principal Trading Systems Engineer   **Failure**: `POST /api/strategies/{id}/deploy` → `502 Bad Gateway`   **Status**: ROOT CAUSE CONFIRMED — 2 failure vectors identified  "
+    },
+    {
+        "File":  "PERFORMANCE_ENDPOINT_ROOT_CAUSE.md",
+        "Content":  "# PERFORMANCE ENDPOINT ROOT CAUSE  ## Execution Trace `routers/analytics.py` -\u003e `TelemetryEngine.execute_query()` -\u003e QuestDB (Port 9000) "
+    },
+    {
+        "File":  "PERFORMANCE_METRICS_RUNTIME_VERIFICATION.md",
+        "Content":  "# PERFORMANCE METRICS RUNTIME VERIFICATION  ## Overview Verification of the Performance Metrics component using real backend data. "
+    },
+    {
+        "File":  "PERFORMANCE_METRICS_WIRING_PROOF.md",
+        "Content":  "# PERFORMANCE METRICS WIRING PROOF  ## File Modified `algo22-terminal/src/pages/PremiumDashboard.jsx` "
+    },
+    {
+        "File":  "PERFORMANCE_RUNTIME_PROOF.md",
+        "Content":  "# PERFORMANCE RUNTIME PROOF  ## Execution Request executed against local backend server at `127.0.0.1:8000` via isolated HTTP script authenticated with a live JWT token. "
+    },
+    {
+        "File":  "PLATFORM_BUG_REGISTER.md",
+        "Content":  "# PLATFORM_BUG_REGISTER  The following bugs and gaps were identified during Sprint 3.0 Runtime Certification.  ### BUG-301: Missing Strategy Cover Images Storage Pipeline"
+    },
+    {
+        "File":  "PLATFORM_READINESS_SCORE.md",
+        "Content":  "# PLATFORM_READINESS_SCORE  **Total Score: 91 / 100**  ## Component Scores"
+    },
+    {
+        "File":  "PREMIUM_DASHBOARD_STATE_VERIFICATION.md",
+        "Content":  "# PREMIUM DASHBOARD STATE VERIFICATION  ## Overview Inspection of actual state transitions within `PremiumDashboard.jsx`. "
+    },
+    {
+        "File":  "PRE_HARDENING_BASELINE.md",
+        "Content":  "# PRE-HARDENING BASELINE  ## Objective Capture the exact state of the system before Sprint 0 safety hardening begins to ensure a rollback point and a basis for comparison. "
+    },
+    {
+        "File":  "PRE_MERGE_CHANGESET.md",
+        "Content":  "# Pre-Merge Changeset  This document outlines the exact file modifications that will occur during the Phase 7 \u0026 Phase 8 merge. No existing files will be replaced or deleted during this pass.  ## 1. Files to be Modified"
+    },
+    {
+        "File":  "PRIVATE_BETA_CHECKLIST.md",
+        "Content":  "# PRIVATE_BETA_CHECKLIST  ## 1. USER ONBOARDING - [x] Registration - [x] Login"
+    },
+    {
+        "File":  "PRIVATE_BETA_LAUNCH_PLAN.md",
+        "Content":  "# PRIVATE_BETA_LAUNCH_PLAN  ## Launch Prerequisites 1. **Infrastructure**: Provision production PostgreSQL (Supabase), FastAPI clusters (e.g., AWS ECS / Render), and static UI hosting (Vercel). 2. **Environment Variables**: Configure all strict production secrets (disable `DEV_MODE`)."
+    },
+    {
+        "File":  "PRIVATE_BETA_RISK_REGISTER.md",
+        "Content":  "# PRIVATE_BETA_RISK_REGISTER  ## RISK-01: Lack of API Rate Limiting - **Classification**: HIGH - **Impact**: Malicious users could execute DoS attacks by spamming the `/api/library/\u003cid\u003e/clone` or backtest engine endpoints, starving system resources."
+    },
+    {
+        "File":  "PRODUCTION_BASELINE.md",
+        "Content":  "# Production Baseline Snapshot  **Timestamp**: 2026-06-23T13:25:24+05:30  ## 1. Current Infrastructure (Verified Operational)"
+    },
+    {
+        "File":  "PRODUCTION_CHECKLIST.md",
+        "Content":  "# Production Readiness Checklist  Before signing off on the AWS deployment for 1000 concurrent users, ensure every item here is validated.  ## Infrastructure"
+    },
+    {
+        "File":  "PRODUCTION_LAUNCH_CHECKLIST.md",
+        "Content":  "# PRODUCTION_LAUNCH_CHECKLIST  ## Phase 1: Environment \u0026 Secrets Provisioning - [ ] Provision Production Supabase Project (Enable PITR). - [ ] Rotate all Supabase JWT secrets."
+    },
+    {
+        "File":  "PRODUCTION_ROLLBACK_GUIDE.md",
+        "Content":  "# PRODUCTION_ROLLBACK_GUIDE  In the event of a catastrophic system failure (e.g., execution engine loops, database corruption, massive latency spikes), follow these steps:  ## Level 1: Trading Halt (The Kill Switch)"
+    },
+    {
+        "File":  "PROJECT_ARCHITECTURE.md",
+        "Content":  "# ALGO22 / Aerora Quant Platform â€” Project Architecture  \u003e **Version:** 2.4.0   \u003e **Branch:** `feature/strategy-marketplace-v1`   \u003e **Generated:** 2026-06-22  "
+    },
+    {
+        "File":  "RATE_LIMITER_CONTRACT.md",
+        "Content":  "# RATE LIMITER CONTRACT AUDIT  ## Objective Identify the exact contracts of the available rate limiting systems to ensure Sprint 0 hardening uses correct method signatures and architecture. "
+    },
+    {
+        "File":  "REAL_EVENT_CAPTURE.md",
+        "Content":  "# Real Event Capture Verification  ## Audit Target - `backend_app/backend/ws_event_stream.py` "
+    },
+    {
+        "File":  "REPLAY_BUFFER_VERIFICATION.md",
+        "Content":  "# Replay Buffer Verification  ## Audit Target - `backend_app/backend/ws_event_stream.py` (specifically `EventReplayBuffer` and `_handle_replay_request`) "
+    },
+    {
+        "File":  "RISK_EVENTS_WIRING_PROOF.md",
+        "Content":  "# Risk Events Wiring Proof  ## Objective Verify that `LiveRiskAlerts.jsx` successfully interprets real risk payload structures through the adapter. "
+    },
+    {
+        "File":  "ROLLBACK_GUIDE.md",
+        "Content":  "# Rollback Guide  In the event of a catastrophic failure during or after a deployment, follow these procedures to rollback.  ## 1. Rolling back ECS Deployments via AWS Console"
+    },
+    {
+        "File":  "ROOT_CAUSE_VERIFICATION.md",
+        "Content":  "# AERORA QUANT PLATFORM â€” PRODUCTION ROOT CAUSE VERIFICATION  **Target Environment:** - Frontend: https://frontendapp-navy.vercel.app - Backend: https://backend-production-d57af.up.railway.app"
+    },
+    {
+        "File":  "SANDBOX_FAILURE_INJECTION.md",
+        "Content":  "# SANDBOX FAILURE INJECTION ## Sprint 1F â€” Phase 6 Certification **Aerora Quant Platform** **Validation Date:** 2026-07-18T14:41:38Z â†’ 14:41:44Z UTC **Validator:** Sprint 1F Automated Sandbox Validation Suite"
+    },
+    {
+        "File":  "SAVE_CONTRACT_REPAIR.md",
+        "Content":  "# Save Contract Repair  Goal: Make strategy creation pass StrategyBlueprint validation.  Verified that `algo22-terminal/src/App.jsx` `handleSaveStrategy` already performs the required steps:"
+    },
+    {
+        "File":  "SAVE_EXECUTION_PROOF.md",
+        "Content":  "# SAVE EXECUTION PROOF  ## Request `POST /api/strategies` "
+    },
+    {
+        "File":  "SAVE_WORKFLOW_REALITY_CHECK.md",
+        "Content":  "# SAVE WORKFLOW REALITY CHECK  ## Current Code **File:** `algo22-terminal/src/App.jsx` **Lines:** 5519-5540"
+    },
+    {
+        "File":  "SCALABILITY_ASSESSMENT_1000_USERS.md",
+        "Content":  "# SCALABILITY_ASSESSMENT_1000_USERS  ## Executive Summary The Aerora Quant Platform architecture, as currently implemented, is capable of supporting the initial Private Beta of ~100 users, but it is **not structurally capable** of supporting 1,000 concurrent active users. "
+    },
+    {
+        "File":  "SCALING_ROADMAP.md",
+        "Content":  "# SCALING_ROADMAP  This roadmap defines the architectural evolution required to support user milestones safely.  ## Phase 1: Current State (0 to 100 Users)"
+    },
+    {
+        "File":  "SCHEMA_ADAPTER_PROOF.md",
+        "Content":  "# Phase 3: Schema Adapter Proof  ## Objective Verify that the frontend `websocketClient.js` can successfully adapt the strict nested JSON payloads from the backend into the flat, legacy-compatible shapes required by the frontend telemetry components without modifying the backend schemas. "
+    },
+    {
+        "File":  "SECURITY_VAULT_MERGE_REVIEW.md",
+        "Content":  "# Security Vault Merge Review  **CRITICAL COMPONENT:** `security_vault.py`  ## Existing Implementation (`aerora_quant_backend_updated_final1/core/security_vault.py`)"
+    },
+    {
+        "File":  "SERIALIZATION_GOLDEN_SCHEMA.md",
+        "Content":  "# SERIALIZATION GOLDEN SCHEMA  This defines the exact JSON payload expected by `POST /api/strategies/backtest` and `POST /api/strategies/validate` according to the Pydantic schemas. The frontend must serialize the ReactFlow graph exactly into this format.  ```json"
+    },
+    {
+        "File":  "SERIALIZATION_SPEC.md",
+        "Content":  "# SERIALIZATION SPECIFICATION  This document outlines how the ReactFlow state is mapped directly to the backend Pydantic models.  ## The Serializer Function"
+    },
+    {
+        "File":  "SIGNAL_TRACE_RUNTIME_CAPTURE.md",
+        "Content":  "# SIGNAL_TRACE_RUNTIME_CAPTURE.md  ## Sprint 1D.3 â€” Phase 1: Signal Trace Live Capture **Captured At:** 2026-07-17T19:35:00Z **Telemetry Status:** ACTIVE"
+    },
+    {
+        "File":  "SIGNAL_TRACE_WIRING_PROOF.md",
+        "Content":  "# Signal Trace Wiring Proof  ## Objective Verify that `SignalTracePanel.jsx` and `SignalTraceVisualization.jsx` are bound to real backend telemetry via the custom websocket adapter. "
+    },
+    {
+        "File":  "SMOKE_TEST_PROCEDURE.md",
+        "Content":  "# SMOKE_TEST_PROCEDURE  Perform these steps chronologically in the production environment.  ## 1. Registration"
+    },
+    {
+        "File":  "SPRINT1A_PATCHSET.md",
+        "Content":  "# SPRINT 1A PATCHSET  ## Patch 1: Remove Conflicting Enum  *   **File:** `routers/strategies.py`"
+    },
+    {
+        "File":  "SPRINT1A_TEST_VECTORS.md",
+        "Content":  "# SPRINT 1A TEST VECTORS  ## Vector 1: Standard Pipeline (Golden Path)  *   **Structure:** `INPUT â†’ RSI â†’ GT(70) â†’ SELL`"
+    },
+    {
+        "File":  "SPRINT1B_INVENTORY.md",
+        "Content":  "# SPRINT 1B INVENTORY  ## 1. Current ReactFlow Node Structure - The frontend uses several custom node components: `SourceNode`, `IndicatorNode`, `MlModelNode`, `OperatorNode`, `LogicNode`, `ActionNode`, `OrderbookImbalanceNode`, `LiveTickerNode`. - The node `type` property in ReactFlow does not directly map to the backend\u0027s canonical `NodeType` enum (`input`, `indicator`, `logic`, `ml`, `action`). For instance, it uses `source` instead of `input`, and `operator` / `logic` instead of just `logic`."
+    },
+    {
+        "File":  "SPRINT1C41_FINAL_VERIFICATION.md",
+        "Content":  "# SPRINT 1C.4.1 FINAL VERIFICATION  ## Outcome **PARTIAL** "
+    },
+    {
+        "File":  "SPRINT1_REALISTIC_BUILD_ESTIMATE.md",
+        "Content":  "# SPRINT 1 REALISTIC BUILD ESTIMATE  ## Overview Achieving a **truly functional** DAG Builder requires significantly more engineering than simply wiring up the API buttons. The frontend is currently a static visual mockup and lacks the configuration engine, logic nodes, and schema translation required to drive the backend. "
+    },
+    {
+        "File":  "STATE_MANAGEMENT_PLAN.md",
+        "Content":  "# STATE MANAGEMENT PLAN  The DAG Builder requires careful synchronization between the ReactFlow canvas (which controls rendering, positions, and connections) and the node configuration data.  ## 1. Core State Hooks"
+    },
+    {
+        "File":  "STATE_WIRING_PROOF.md",
+        "Content":  "# STATE WIRING PROOF  ## File Modified `algo22-terminal/src/pages/PremiumDashboard.jsx` "
+    },
+    {
+        "File":  "STRATEGY_BLUEPRINT_SCHEMA.md",
+        "Content":  "# STRATEGY BLUEPRINT SCHEMA  ## Route Information * **Endpoint:** `POST /api/strategies` * **File:** `routers/strategies.py` (Line ~655)"
+    },
+    {
+        "File":  "STRATEGY_COMPARISON_READINESS.md",
+        "Content":  "# STRATEGY COMPARISON READINESS  ## Objective Audit the capability of the platform to natively compare two differing quantitative strategies side-by-side. "
+    },
+    {
+        "File":  "STRATEGY_DASHBOARD_WIRING_PROOF.md",
+        "Content":  "# Strategy Dashboard Wiring Proof  ## Objective Verify that `StrategyDashboard.jsx` handles real updates for status, PnL, and Signals through the new WebSocket Adapter. "
+    },
+    {
+        "File":  "STRATEGY_HARDENING_PLAN.md",
+        "Content":  "# STRATEGY HARDENING PLAN  ## 1. Existing Pydantic Models The `core/models/pydantic_models.py` file already contains robust, well-defined schemas for strategy management: - `StrategyBlueprint`: Models the full strategy configuration including `buy_logic`, `sell_logic`, `risk`, and `indicators`."
+    },
+    {
+        "File":  "STRATEGY_ID_LIFECYCLE_PROOF.md",
+        "Content":  "# STRATEGY ID LIFECYCLE PROOF  ## Track  ### 1. Create (Unsaved state)"
+    },
+    {
+        "File":  "STRATEGY_LIBRARY_DESIGN.md",
+        "Content":  "# Strategy Library â€” Version 1 Design Document  \u003e **Branch target:** `feature/strategy-marketplace-v1`   \u003e **Status:** Design only â€” no code modified   \u003e **Author:** Architecture Review  "
+    },
+    {
+        "File":  "STRATEGY_RELOAD_FIX_VERIFICATION.md",
+        "Content":  "# STRATEGY RELOAD FIX VERIFICATION  ## Objective Verify the application of the code patch fixing the `405 Method Not Allowed` error on the `GET /api/strategies/{id}` endpoint. "
+    },
+    {
+        "File":  "STRATEGY_RELOAD_ROOT_CAUSE.md",
+        "Content":  "# STRATEGY RELOAD ROOT CAUSE ANALYSIS  ## Objective Investigate the `405 Method Not Allowed` error when calling `GET /api/strategies/{id}`. "
+    },
+    {
+        "File":  "TEE_CLUSTER_IMPLEMENTATION.md",
+        "Content":  "# TEE_CLUSTER_IMPLEMENTATION  ## Architecture The Trading Execution Engine (TEE) has been refactored from a standalone worker into a horizontally scalable Cluster. Multiple instances of `backend_app/tee/main.py` can now run concurrently without risking duplicate trades for the same strategy. "
+    },
+    {
+        "File":  "TEE_DEPLOYMENT_GUIDE.md",
+        "Content":  "# TEE_DEPLOYMENT_GUIDE  ## Docker Configuration A new Dockerfile has been provisioned specifically for the Trading Execution Engine. "
+    },
+    {
+        "File":  "TELEMETRY_EVENT_SOURCE_MAP.md",
+        "Content":  "# Telemetry Event Source Map  ## Objective Trace every call into the `BotTelemetryService` components (`SignalEventStore`, `ExecutionEventStore`, `RiskEventStore`) and identify the exact files, functions, and triggers responsible for telemetry generation. "
+    },
+    {
+        "File":  "TELEMETRY_LOAD_TEST.md",
+        "Content":  "# TELEMETRY_LOAD_TEST.md ## Sprint 1D.2 — Phase 8: Telemetry Stress Test **Generated:** 2026-06-24T18:49:00Z **Status: PASSED** "
+    },
+    {
+        "File":  "TELEMETRY_MOCK_REMOVAL_PROOF.md",
+        "Content":  "# Telemetry Mock Removal Proof  ## Objective Verify that hardcoded telemetry mock data generation was entirely stripped from the React components. "
+    },
+    {
+        "File":  "TELEMETRY_ROUTE_PATCH_PROOF.md",
+        "Content":  "# Phase 1: Telemetry Route Mount \u0026 Tenant Policy Proof  ## Objective Verify the `/ws/telemetry` route mounts correctly, authenticates via token, respects the tenant policy, and accurately subscribes to channels without string indexing runtime crashes. "
+    },
+    {
+        "File":  "TELEMETRY_ROUTE_REALITY_CHECK.md",
+        "Content":  "# Telemetry Route Reality Check  ## Audit Targets - `backend_app/api_ws/ws_routes.py` - `backend_app/backend/ws_event_stream.py`"
+    },
+    {
+        "File":  "TERRAFORM_GUIDE.md",
+        "Content":  "# Terraform Guide  ## Directory Structure ``` terraform/"
+    },
+    {
+        "File":  "THRESHOLD_NODE_DESIGN_REVIEW.md",
+        "Content":  "# THRESHOLD NODE DESIGN REVIEW  ## Problem Statement The backend DAG engine requires a mechanism to compare continuous values (like RSI or MACD) against static thresholds (like `70` or `0`).  "
+    },
+    {
+        "File":  "TRADE_HISTORY_RUNTIME_PROOF.md",
+        "Content":  "# TRADE HISTORY RUNTIME PROOF  ## Data Flow Trace 1. **API Call**: `endpoints.user.getRecentTransactions(50, 30)` fetches data. 2. **State Update**: `setRecentTransactions(txs.transactions)` stores the raw data array in `recentTransactions`."
+    },
+    {
+        "File":  "TRADE_HISTORY_RUNTIME_VERIFICATION.md",
+        "Content":  "# TRADE HISTORY RUNTIME VERIFICATION  ## Overview Verification of the recent trade history (Live Positions) component using real backend datasets. "
+    },
+    {
+        "File":  "TRADE_HISTORY_WIRING_PROOF.md",
+        "Content":  "# TRADE HISTORY WIRING PROOF  ## File Modified `algo22-terminal/src/pages/PremiumDashboard.jsx` "
+    },
+    {
+        "File":  "UPDATE_CONTRACT_REPAIR.md",
+        "Content":  "# Update Contract Repair  Goal: Prevent duplicate strategy creation.  Verified in `algo22-terminal/src/App.jsx` `handleSaveStrategy`:"
+    },
+    {
+        "File":  "UPDATE_EXECUTION_PROOF.md",
+        "Content":  "# UPDATE EXECUTION PROOF  ## Request `PUT /api/strategies/strat_01J13A2BZ9Q9` "
+    },
+    {
+        "File":  "VALIDATION_EXECUTION_PROOF.md",
+        "Content":  "# VALIDATION EXECUTION PROOF  ## Request `POST /api/strategies/validate` "
+    }
+]

@@ -212,6 +212,101 @@ def generate_deployment_report(pre_data: Dict[str, Any], post_data: Dict[str, An
     return md
 
 
+def generate_executive_summary(reports_data: Dict[str, Any]) -> str:
+    """Generates a single, consolidated quality and security gate report."""
+    
+    # Extract data
+    i_data = reports_data.get("import_data", {})
+    d_data = reports_data.get("dep_data", {})
+    c_data = reports_data.get("docker_data", {})
+    s_data = reports_data.get("size_data", {})
+    r_data = reports_data.get("reach_data", {})
+    
+    # Vulnerability data
+    pip_data = reports_data.get("pip_audit", [])
+    npm_data = reports_data.get("npm_audit", {})
+    cargo_data = reports_data.get("cargo_audit", {})
+    
+    # 1. Evaluate Status
+    failed_gates = []
+    if i_data.get("status") == "FAIL": failed_gates.append("Imports (Syntax Errors)")
+    if d_data.get("status") == "FAIL": failed_gates.append("Dependencies (Mismatches)")
+    if c_data.get("status") == "FAIL": failed_gates.append("Docker (Validation Failed)")
+    if s_data.get("status") == "FAIL": failed_gates.append("Code Size (Limits Exceeded)")
+    if r_data.get("status") == "FAIL": failed_gates.append("Reachability (Critical Dead Code)")
+    
+    # Parse Vulnerabilities
+    vulns = []
+    if isinstance(pip_data, list):
+        for pkg in pip_data:
+            for v in pkg.get("vulns", []):
+                vulns.append(f"Python: {pkg.get('name')} ({v.get('id', 'Unknown')})")
+    
+    if "vulnerabilities" in npm_data and isinstance(npm_data["vulnerabilities"], dict):
+        for name, info in npm_data["vulnerabilities"].items():
+            # npm audit format varies, we do a safe string parse
+            if isinstance(info, dict) and info.get("severity") in ("high", "critical"):
+                vulns.append(f"Node.js: {name} ({info.get('severity')})")
+
+    if "vulnerabilities" in cargo_data and isinstance(cargo_data["vulnerabilities"], dict):
+        for issue in cargo_data["vulnerabilities"].get("list", []):
+            adv = issue.get("advisory", {})
+            pkg = issue.get("package", {})
+            vulns.append(f"Rust: {pkg.get('name')} ({adv.get('id', 'Unknown')})")
+            
+    if vulns:
+        failed_gates.append(f"Security Vulnerabilities ({len(vulns)})")
+
+    overall_status = "FAIL" if failed_gates else "PASS"
+    reason = "All checks passed. System is healthy." if not failed_gates else f"Failed checks: {', '.join(failed_gates)}"
+    
+    md = f"""# Nightly Consolidated Quality & Security Audit
+    
+**Overall Status**: `{overall_status}`  
+**Reason**: {reason}
+
+---
+
+## 1. Security Vulnerabilities
+"""
+    if vulns:
+        md += f"**⚠️ {len(vulns)} Vulnerabilities Detected!**\n"
+        for v in vulns:
+            md += f"- ❌ {v}\n"
+    else:
+        md += "✅ No high/critical vulnerabilities found across Python, Node.js, and Rust.\n"
+
+    md += "\n## 2. Dependency Coherence\n"
+    if d_data.get("status") == "PASS":
+        md += "✅ Root and backend dependencies are perfectly synchronized.\n"
+    else:
+        md += f"❌ Mismatches found ({len(d_data.get('mismatches', []))} version mismatches, {len(d_data.get('missing_in_backend', []))} missing in backend)\n"
+
+    md += "\n## 3. Code Architecture & Size\n"
+    if s_data and r_data:
+        os_files = len(s_data.get("oversized_files", []))
+        os_funcs = len(s_data.get("oversized_functions", []))
+        dead_files = r_data.get("unreachable_filtered", 0)
+        
+        md += f"- **Oversized Files**: {os_files}\n"
+        md += f"- **Oversized Functions**: {os_funcs}\n"
+        md += f"- **Dead/Unreachable Files**: {dead_files}\n"
+        if os_files > 0 or os_funcs > 0 or dead_files > 0:
+            md += "⚠️ **Warning**: Architectural debt detected. Review full size and reachability reports.\n"
+        else:
+            md += "✅ Size and reachability within acceptable thresholds.\n"
+    else:
+        md += "⚠️ Size/Reachability audit data not available.\n"
+
+    md += "\n## 4. Docker & Infrastructure Validation\n"
+    if c_data.get("status") == "PASS":
+        md += "✅ Dockerfiles valid. Multi-stage builds and non-root users correctly configured.\n"
+    else:
+        md += "❌ Docker validation failed. Syntax errors or missing health endpoints detected.\n"
+
+    return md
+
+
 def main():
     print("=== GENERATING AUTOMATED MARKDOWN REPORTS ===")
     os.makedirs("reports", exist_ok=True)
@@ -223,8 +318,27 @@ def main():
     pre_data = load_json("reports/pre_deployment_validation_summary.json")
     post_data = load_json("reports/post_deployment_validation_summary.json")
     fail_data = load_json("reports/failure_analysis.json")
+    
+    # New JSON files
+    size_data = load_json("reports/size_audit_results.json")
+    reach_data = load_json("reports/reachability_audit_results.json")
+    pip_data = load_json("reports/pip_audit.json")
+    npm_data = load_json("reports/npm_audit.json")
+    cargo_data = load_json("reports/cargo_audit.json")
+
+    reports_data = {
+        "import_data": import_data,
+        "dep_data": dep_data,
+        "docker_data": docker_data,
+        "size_data": size_data,
+        "reach_data": reach_data,
+        "pip_audit": pip_data,
+        "npm_audit": npm_data,
+        "cargo_audit": cargo_data
+    }
 
     reports = {
+        "00_nightly_executive_summary.md": generate_executive_summary(reports_data),
         "dependency_report.md": generate_dependency_report(dep_data),
         "docker_report.md": generate_docker_report(docker_data),
         "aws_report.md": generate_aws_report(aws_data),

@@ -90,7 +90,12 @@ except Exception as e:
 echo "[startup] Starting Gunicorn with Uvicorn workers..."
 echo "[startup] Entry point: backend_app.main:app"
 echo "[startup] Port: ${PORT:-8000}"
-echo "[startup] Mode: ${AERORA_MODE:-paper}"
+# Resolve operating mode — prefer VYOMQUANT_MODE, fall back to AERORA_MODE (deprecated)
+_RESOLVED_MODE="${VYOMQUANT_MODE:-${AERORA_MODE:-paper}}"
+if [ -z "${VYOMQUANT_MODE}" ] && [ -n "${AERORA_MODE}" ]; then
+    echo "[startup] DEPRECATION WARNING: 'AERORA_MODE' is deprecated. Please set 'VYOMQUANT_MODE' instead."
+fi
+echo "[startup] Mode: ${_RESOLVED_MODE}"
 
 # PYTHONPATH=/app is set in the Dockerfile so backend_app is importable as a package.
 exec gunicorn backend_app.main:app \

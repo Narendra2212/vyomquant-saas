@@ -12,6 +12,7 @@ import SignalTraceVisualization from './components/SignalTraceVisualization';
 import SupportPage from "./SupportPage";
 import NotificationsPage from './components/NotificationsPage';
 import CopilotChat from './components/CopilotChat';
+import DesktopOnlyOverlay from './components/DesktopOnlyOverlay';
 import {
   C, Btn, Inp, ToastContainer,
   LoadingProvider,
@@ -192,21 +193,23 @@ function AppShell() {
   }, [navigate]);
 
   return (
-    <div style={{ background: C.bg0, minHeight: "100vh", display: "flex", fontFamily: "'IBM Plex Mono', 'Fira Code', monospace" }}>
-      <ToastContainer toasts={toasts} onRemove={removeToast} />
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
-        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-      `}</style>
-      <Sidebar />
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
-        <TopBar />
-        <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
-          <Outlet />
+    <DesktopOnlyOverlay>
+      <div style={{ background: C.bg0, minHeight: "100vh", width: "100%", display: "flex", flex: 1, fontFamily: "'IBM Plex Mono', 'Fira Code', monospace" }}>
+        <ToastContainer toasts={toasts} onRemove={removeToast} />
+        <style>{`
+          @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+          * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+        `}</style>
+        <Sidebar />
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
+          <TopBar />
+          <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+            <Outlet />
+          </div>
+          <CopilotChat />
         </div>
-        <CopilotChat />
       </div>
-    </div>
+    </DesktopOnlyOverlay>
   );
 }
 

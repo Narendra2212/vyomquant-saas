@@ -3,10 +3,12 @@ import logging
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from backend_app.core.safety_config import get_vyomquant_mode
+
 logger = logging.getLogger("RateLimit")
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
-env_raw = os.getenv("ENV") or os.getenv("AERORA_MODE")
+env_raw = os.getenv("ENV") or get_vyomquant_mode(default=None)
 
 # Explicit list of local/test environments allowed to use in-memory rate limiting
 DEV_TEST_ENVS = {"testing", "test", "development", "dev", "local"}
@@ -14,7 +16,7 @@ DEV_TEST_ENVS = {"testing", "test", "development", "dev", "local"}
 if env_raw:
     env = env_raw.lower()
 else:
-    # Ambiguous environment: neither ENV nor AERORA_MODE is set
+    # Ambiguous environment: neither ENV nor VYOMQUANT_MODE is set
     env = "ambiguous"
 
 if env in DEV_TEST_ENVS and not REDIS_URL:

@@ -36,6 +36,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: 'requirements-cpu.txt'
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -47,8 +49,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          sed -i 's/^torch==.*/torch==2.3.1+cpu/' requirements.txt
-          pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-cpu.txt
 
       - name: Execute Pre-Deployment Validation Engine
         run: python scripts/pre_deployment_validation.py
@@ -74,6 +75,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: 'requirements-cpu.txt'
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4

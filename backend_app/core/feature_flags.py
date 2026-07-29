@@ -8,6 +8,7 @@ Used for gradual rollout and emergency kill switches.
 import os
 from enum import Enum
 from typing import Any, Dict
+from backend_app.core.safety_config import get_vyomquant_mode
 
 
 class ExecutionContext(Enum):
@@ -37,11 +38,11 @@ class ExecutionFlags:
     # ---------------------------------------------------------
     PRODUCTION_ROUTER_ENABLED: bool = os.getenv("PRODUCTION_ROUTER_ENABLED", "True").lower() == "true"
     TEST_MODE_ENABLED: bool = True
-    LIVE_TRADING_ENABLED: bool = os.getenv("AERORA_MODE", "") == "live"
+    LIVE_TRADING_ENABLED: bool = get_vyomquant_mode("") == "live"
     
     # Execution path controls
-    DAG_TRADING_ENABLED: bool = os.getenv("DAG_TRADING_ENABLED", "False").lower() == "true" or os.getenv("AERORA_MODE", "") == "paper"
-    EVENT_LOOP_TRADING_ENABLED: bool = os.getenv("EVENT_LOOP_TRADING_ENABLED", "False").lower() == "true" or os.getenv("AERORA_MODE", "") == "paper"
+    DAG_TRADING_ENABLED: bool = os.getenv("DAG_TRADING_ENABLED", "False").lower() == "true" or get_vyomquant_mode("") == "paper"
+    EVENT_LOOP_TRADING_ENABLED: bool = os.getenv("EVENT_LOOP_TRADING_ENABLED", "False").lower() == "true" or get_vyomquant_mode("") == "paper"
     API_ORDERS_ENABLED: bool = True
     
     @classmethod

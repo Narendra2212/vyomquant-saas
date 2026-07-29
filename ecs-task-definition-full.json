@@ -24,8 +24,12 @@
       ],
       "environment": [
         {
-          "name": "AERORA_MODE",
+          "name": "VYOMQUANT_MODE",
           "value": "paper"
+        },
+        {
+          "name": "_DEPRECATED_AERORA_MODE_REMOVED",
+          "value": "true"
         },
         {
           "name": "ENV",

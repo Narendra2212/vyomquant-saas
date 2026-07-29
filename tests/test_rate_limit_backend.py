@@ -8,7 +8,7 @@ WHAT IS TESTED
 1. Local/dev/test mode without REDIS_URL uses in-memory storage without error.
 2. Production mode with valid REDIS_URL arms Redis-backed limiter.
 3. Production mode without REDIS_URL raises RuntimeError (fails hard).
-4. Ambiguous environment (neither ENV nor AERORA_MODE set) without REDIS_URL raises RuntimeError.
+4. Ambiguous environment (neither ENV nor VYOMQUANT_MODE set) without REDIS_URL raises RuntimeError.
 5. Production mode with invalid/failing REDIS_URL raises RuntimeError.
 """
 
@@ -45,6 +45,7 @@ class TestRateLimitBackendSelection:
 
     def test_ambiguous_environment_without_redis_raises_runtime_error(self, monkeypatch):
         monkeypatch.delenv("ENV", raising=False)
+        monkeypatch.delenv("VYOMQUANT_MODE", raising=False)
         monkeypatch.delenv("AERORA_MODE", raising=False)
         monkeypatch.delenv("REDIS_URL", raising=False)
         

@@ -34,6 +34,7 @@ import logging
 import os
 from contextlib import asynccontextmanager, contextmanager
 from typing import Optional
+from backend_app.core.safety_config import get_vyomquant_mode
 
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -68,7 +69,7 @@ POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))  # 1 hour
 POOL_PRE_PING = os.getenv("DB_POOL_PRE_PING", "true").lower() == "true"
 
 # Database URL - default to SQLite for development
-_env_mode = os.environ.get("AERORA_MODE", "safe").lower()
+_env_mode = get_vyomquant_mode("safe").lower()
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     if _env_mode in ["paper", "live"]:

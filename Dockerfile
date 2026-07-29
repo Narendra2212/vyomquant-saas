@@ -23,11 +23,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir gunicorn httpx redis
 
 # Install heavy PyTorch CPU package in isolated cached layer
-RUN pip install --no-cache-dir --prefer-binary torch==2.3.1 --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir --prefer-binary torch==2.3.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Install remaining backend requirements
-COPY backend_app/requirements.txt .
-RUN pip install --no-cache-dir --prefer-binary -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu && \
+COPY requirements-base.txt requirements-cpu.txt ./
+RUN pip install --no-cache-dir --prefer-binary -r requirements-cpu.txt && \
     find /opt/venv -type f -name '*.pyc' -delete && \
     find /opt/venv -type d -name '__pycache__' -delete
 

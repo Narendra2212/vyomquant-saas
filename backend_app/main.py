@@ -220,7 +220,9 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "backend"))
 
 
 
-env_mode = os.getenv("AERORA_MODE", "safe").lower()
+from backend_app.core.safety_config import get_vyomquant_mode
+
+env_mode = get_vyomquant_mode("safe").lower()
 if env_mode == "live":
     ExecutionFlags.enable_live_trading()
 elif env_mode == "paper":
@@ -243,7 +245,7 @@ async def lifespan(app: FastAPI):
     # Initialize Sentry early
     initialize_sentry(
         dsn=os.getenv("SENTRY_DSN"),
-        environment=os.getenv("AERORA_MODE", "production"),
+        environment=get_vyomquant_mode("production"),
         release="2.4.0"
     )
     # Print configuration status at startup
@@ -466,14 +468,14 @@ async def lifespan(app: FastAPI):
 
 
 def _get_docs_url():
-    is_prod = os.getenv("ENV", os.getenv("AERORA_MODE", "development")).lower() in ("production", "prod", "live")
+    is_prod = os.getenv("ENV", get_vyomquant_mode("development")).lower() in ("production", "prod", "live")
     enable_docs = os.getenv("ENABLE_DOCS")
     if enable_docs is not None:
         return "/docs" if enable_docs.lower() in ("true", "1", "yes") else None
     return None if is_prod else "/docs"
 
 def _get_redoc_url():
-    is_prod = os.getenv("ENV", os.getenv("AERORA_MODE", "development")).lower() in ("production", "prod", "live")
+    is_prod = os.getenv("ENV", get_vyomquant_mode("development")).lower() in ("production", "prod", "live")
     enable_docs = os.getenv("ENABLE_DOCS")
     if enable_docs is not None:
         return "/redoc" if enable_docs.lower() in ("true", "1", "yes") else None
