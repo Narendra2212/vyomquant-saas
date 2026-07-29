@@ -6,8 +6,8 @@
   ],
   "cpu": "1024",
   "memory": "2048",
-  "executionRoleArn": "arn:aws:iam::273709947018:role/ecsTaskExecutionRole",
-  "taskRoleArn": "arn:aws:iam::273709947018:role/ecsTaskExecutionRole",
+  "executionRoleArn": "arn:aws:iam::273709947018:role/VyomQuantEcsTaskExecutionRole-production",
+  "taskRoleArn": "arn:aws:iam::273709947018:role/VyomQuantEcsTaskRole-production",
   "runtimePlatform": {
     "cpuArchitecture": "X86_64",
     "operatingSystemFamily": "LINUX"

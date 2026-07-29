@@ -80,6 +80,7 @@ if not DATABASE_URL:
     DATABASE_URL = "sqlite:///./algo22.db"
 
 # Convert Supabase URL to PostgreSQL if needed
+# Convert Supabase URL to PostgreSQL if needed
 if DATABASE_URL.startswith("https://"):
     # Supabase URL format: https://project.ref.supabase.co
     # Convert to PostgreSQL: postgresql://user:pass@host:port/db
@@ -89,17 +90,30 @@ if DATABASE_URL.startswith("https://"):
         "SUPABASE_DB_URL",
         "postgresql://postgres:postgres@localhost:5432/postgres"
     )
+
+# Priority 3: Database Connection Pooling
+# Enforce connection pooler port (6543) instead of direct connection (5432)
+# for Supabase-hosted Postgres instances to prevent connection limits.
+if "supabase.com:5432" in DATABASE_URL or "supabase.co:5432" in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace(":5432", ":6543")
     
-    # Priority 3: Database Connection Pooling
-    # Enforce connection pooler port (6543) instead of direct connection (5432)
-    # for Supabase-hosted Postgres instances to prevent connection limits.
-    if "supabase.com:5432" in DATABASE_URL or "supabase.co:5432" in DATABASE_URL:
-        DATABASE_URL = DATABASE_URL.replace(":5432", ":6543")
-        # Ensure pool_mode is set if not already present
-        if "?" not in DATABASE_URL:
-            DATABASE_URL += "?pgbouncer=true&pool_mode=transaction"
-        elif "pgbouncer" not in DATABASE_URL:
-            DATABASE_URL += "&pgbouncer=true&pool_mode=transaction"
+    import re
+    # Extract project ref from the host to append to username for Supavisor
+    match = re.search(r"@db\.([a-z0-9\-]+)\.supabase\.co", DATABASE_URL)
+    if match:
+        ref = match.group(1)
+        # Inject project ref into username (required by Supabase Pooler on IPv4)
+        DATABASE_URL = re.sub(
+            r"^postgresql://([^:]+):",
+            lambda m: f"postgresql://{m.group(1)}.{ref}:" if not m.group(1).endswith(f".{ref}") else m.group(0),
+            DATABASE_URL
+        )
+
+    # Ensure pool_mode is set if not already present
+    if "?" not in DATABASE_URL:
+        DATABASE_URL += "?pgbouncer=true&pool_mode=transaction"
+    elif "pgbouncer" not in DATABASE_URL:
+        DATABASE_URL += "&pgbouncer=true&pool_mode=transaction"
 
 # =============================================================================
 # SYNC CONNECTION POOL (SQLAlchemy)

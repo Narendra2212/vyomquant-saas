@@ -31,11 +31,19 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets_policy" {
       {
         Effect = "Allow"
         Action = [
-          "secretsmanager:GetSecretValue",
-          "kms:Decrypt"
+          "secretsmanager:GetSecretValue"
         ]
         Resource = [
           "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt"
+        ]
+        Resource = [
+          "arn:aws:kms:${var.aws_region}:${data.aws_caller_identity.current.account_id}:key/*"
         ]
       }
     ]
