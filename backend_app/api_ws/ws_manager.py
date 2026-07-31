@@ -344,3 +344,8 @@ class ConnectionManager:
         """Return the active connections list."""
         return list(self._all_connections)
 
+
+# ── Backward-compatible singleton export ────────────────────────────────────
+# This maintains compatibility with code that imports 'manager' directly
+manager = ConnectionManager()
+

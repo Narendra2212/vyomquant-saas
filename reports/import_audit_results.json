@@ -1,5 +1,5 @@
 {
-  "total_files": 287,
+  "total_files": 288,
   "syntax_errors": [],
   "missing_init_dirs": [],
   "import_issues": [],
@@ -88,6 +88,31 @@
       "file": "backend_app\\routers\\risk.py",
       "line": 10,
       "name": "asyncio"
+    },
+    {
+      "file": "backend_app\\routers\\signals.py",
+      "line": 11,
+      "name": "Any"
+    },
+    {
+      "file": "backend_app\\routers\\signals.py",
+      "line": 11,
+      "name": "Dict"
+    },
+    {
+      "file": "backend_app\\routers\\signals.py",
+      "line": 11,
+      "name": "List"
+    },
+    {
+      "file": "backend_app\\routers\\signals.py",
+      "line": 12,
+      "name": "UUID"
+    },
+    {
+      "file": "backend_app\\routers\\signals.py",
+      "line": 17,
+      "name": "limiter"
     },
     {
       "file": "backend_app\\strategies\\__init__.py",
@@ -624,6 +649,7 @@
       "backend_app.core.safety_config",
       "asgi_correlation_id",
       "decimal",
+      "backend_app.routers",
       "backend_app.core.schemas",
       "backend_app.core.schemas",
       "backend_app.core.schemas",
@@ -981,6 +1007,7 @@
       "backend_app.core.feature_flags",
       "backend_app.core.feature_flags",
       "backend_app.core.safety_monitor",
+      "backend_app.core.state",
       "backend_app.core.redis_client",
       "hashlib",
       "backend_app.core.redis_client",
@@ -1546,7 +1573,8 @@
       "backend_app.backend.position_engine",
       "backend_app.core.models.execution_record",
       "backend_app.core.models.execution_record",
-      "backend_app.backend.alert_system"
+      "backend_app.backend.alert_system",
+      "backend_app.core.state"
     ],
     "backend_app.backend.pnl_engine": [
       "logging",
@@ -2493,6 +2521,7 @@
       "typing",
       "typing",
       "typing",
+      "backend_app.core.background_tasks",
       "backend_app.backend.reconciliation_worker",
       "backend_app.backend.state_service",
       "backend_app.backend.state_service",
@@ -2947,6 +2976,7 @@
       "backend_app.core.dependencies",
       "backend_app.core.dependencies",
       "fastapi",
+      "backend_app.core.websocket_auth",
       "backend_app.core.cache",
       "sqlalchemy",
       "backend_app.core.cache",
@@ -3007,6 +3037,7 @@
       "json",
       "logging",
       "os",
+      "uuid",
       "datetime",
       "datetime",
       "typing",
@@ -3019,18 +3050,20 @@
       "fastapi",
       "fastapi",
       "fastapi",
+      "fastapi",
       "fastapi.security",
       "pydantic",
       "pydantic",
       "pydantic",
+      "backend_app.core.auth_middleware",
       "backend_app.core.dependencies",
       "backend_app.core.dependencies",
       "backend_app.core.dependencies",
       "backend_app.core.rate_limit",
       "supabase",
-      "backend_app.core.auth_middleware",
-      "backend_app.core.auth_middleware",
-      "backend_app.core.auth_middleware"
+      "backend_app.api_ws.ws_manager",
+      "stripe",
+      "razorpay"
     ],
     "backend_app.routers.market": [
       "logging",
@@ -3045,6 +3078,8 @@
       "backend_app.core.dependencies"
     ],
     "backend_app.routers.metrics": [
+      "logging",
+      "fastapi",
       "fastapi",
       "fastapi",
       "prometheus_client",
@@ -3137,6 +3172,26 @@
     "backend_app.routers.securit": [
       "fastapi"
     ],
+    "backend_app.routers.signals": [
+      "json",
+      "logging",
+      "datetime",
+      "datetime",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "uuid",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "backend_app.core.rate_limit"
+    ],
     "backend_app.routers.strategies": [
       "asyncio",
       "logging",
@@ -3149,6 +3204,7 @@
       "typing",
       "typing",
       "pandas",
+      "fastapi",
       "fastapi",
       "fastapi",
       "fastapi",
@@ -3170,7 +3226,6 @@
       "traceback",
       "datetime",
       "asyncio",
-      "uuid",
       "asyncio",
       "backend_app.backend.connection_engine",
       "data_seeking_engine",
@@ -3194,7 +3249,8 @@
       "backend_app.core.risk_engine",
       "backend_app.strategies.aggregator",
       "backend_app.strategies.registry",
-      "ccxt"
+      "ccxt",
+      "numpy"
     ],
     "backend_app.routers.support": [
       "logging",

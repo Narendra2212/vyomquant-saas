@@ -87,6 +87,31 @@ export const userApi = {
     get('/api/security/logs', { params: { limit } }),
 
   /**
+   * Get notification settings
+   * @returns {Promise<any>}
+   */
+  getNotificationSettings: () => get('/api/notifications/settings'),
+
+  /**
+   * Update notification settings
+   * @param {Object} data
+   * @returns {Promise<{status: string}>}
+   */
+  updateNotificationSettings: (data) => put('/api/notifications/settings', data),
+
+  /**
+   * Get billing plan
+   * @returns {Promise<any>}
+   */
+  getBillingPlan: () => get('/api/billing/plan'),
+
+  /**
+   * Get billing invoices
+   * @returns {Promise<any[]>}
+   */
+  getBillingInvoices: () => get('/api/billing/invoices'),
+
+  /**
    * Get performance metrics
    * @param {number} days
    */

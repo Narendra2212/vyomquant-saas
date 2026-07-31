@@ -3,7 +3,7 @@
   "steps": {
     "import_audit": {
       "status": "PASS",
-      "output": "=== AUTOMATED IMPORT & AST AUDIT (backend_app) ===\nTotal Python Files Scanned: 287\nSyntax Errors: 0\nMissing __init__.py Directories: 0\nUnused Import Warnings: 107\nAudit Status: PASS\n",
+      "output": "=== AUTOMATED IMPORT & AST AUDIT (backend_app) ===\nTotal Python Files Scanned: 288\nSyntax Errors: 0\nMissing __init__.py Directories: 0\nUnused Import Warnings: 112\nAudit Status: PASS\n",
       "error": ""
     },
     "dependency_audit": {
@@ -17,7 +17,7 @@
     },
     "docker_validation": {
       "status": "PASS",
-      "output": "[12:19:52] === AUTOMATED FAST DOCKER VALIDATION (CI/CD PRE-FLIGHT) ===\n[12:19:52] [docker_val] ENTER: Static Dockerfile Structure & Directive Audit\n[12:19:52] [docker_val] EXIT: Static Dockerfile Audit completed in 0.01s (valid=True)\n[12:19:52] [docker_val] Checking Docker CLI & Daemon connectivity...\n[12:19:52] [docker_val] Docker Daemon NOT AVAILABLE (0.003s)\n\n--- DOCKER VALIDATION SUMMARY ---\nStatic Dockerfile Inspection: PASS\nDocker Daemon Connectivity: WARN (Daemon unavailable)\n[12:19:52] === TOTAL FAST DOCKER VALIDATION TIME: 0.014s ===\n",
+      "output": "[02:39:36] === AUTOMATED FAST DOCKER VALIDATION (CI/CD PRE-FLIGHT) ===\n[02:39:36] [docker_val] ENTER: Static Dockerfile Structure & Directive Audit\n[02:39:36] [docker_val] EXIT: Static Dockerfile Audit completed in 0.011s (valid=True)\n[02:39:36] [docker_val] Checking Docker CLI & Daemon connectivity...\n[02:39:36] [docker_val] Docker Daemon NOT AVAILABLE (0.016s)\n\n--- DOCKER VALIDATION SUMMARY ---\nStatic Dockerfile Inspection: PASS\nDocker Daemon Connectivity: WARN (Daemon unavailable)\n[02:39:36] === TOTAL FAST DOCKER VALIDATION TIME: 0.027s ===\n",
       "error": ""
     },
     "aws_validation": {

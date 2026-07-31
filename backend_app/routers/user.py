@@ -40,9 +40,13 @@ async def get_profile(
     supabase: SupabaseClient = Depends(get_request_supabase),
 ):
     if not supabase:
-        return {"id": user["id"], "email": user.get("email"), "first_name": "Test", "last_name": "User"}
+        return {"id": user["id"], "email": user.get("email"), "role": user.get("role", "user")}
     resp = supabase.table("profiles").select("*").eq("id", user["id"]).execute()
-    return resp.data[0] if resp.data else {}
+    profile = resp.data[0] if resp.data else {}
+    # Ensure role is always present from auth token if not in profiles table
+    if profile and "role" not in profile:
+        profile["role"] = user.get("role", "user")
+    return profile
 
 
 @router.put("/user/profile")

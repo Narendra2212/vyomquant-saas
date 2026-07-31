@@ -1760,7 +1760,7 @@ async def admin_pending_strategies(
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MarketplaceCheckoutRequest(BaseModel):
-    currency: str = Field("USD", regex="^(USD|INR)$")
+    currency: str = Field("USD", pattern="^(USD|INR)$")
 
 @router.post("/{library_id}/checkout")
 async def create_marketplace_checkout(

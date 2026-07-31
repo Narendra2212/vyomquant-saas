@@ -196,7 +196,7 @@ async def replay_signal_trace(
 
 @router.get("/export", status_code=status.HTTP_200_OK)
 async def export_signal_traces(
-    format: str = Query("json", regex="^(json|csv)$"),
+    format: str = Query("json", pattern="^(json|csv)$"),
     user: dict = Depends(get_current_user),
 ):
     """
