@@ -573,6 +573,8 @@ class ReplayEngine:
                     'closed_at': event.header.timestamp.isoformat(),
                     'exit_price': payload.get('exit_price'),
                     'realized_pnl': payload.get('realized_pnl'),
+                    # CRITICAL FIX: unrealized_pnl must be 0 for closed positions
+                    'unrealized_pnl': '0',
                     'sequence_id': event.header.sequence_id
                 })
             

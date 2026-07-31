@@ -92,9 +92,14 @@ async def list_signal_traces(
             })
             
         return {"items": enriched, "total": len(enriched)}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching signal traces for user {user['id']}: {e}")
-        return {"items": [], "total": 0}
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "SIGNAL_FETCH_FAILED", "message": str(e)},
+        )
 
 
 @router.get("/{signal_id}", status_code=status.HTTP_200_OK)
@@ -156,7 +161,14 @@ async def replay_signal_trace(
     user: dict = Depends(get_current_user),
 ):
     """
-    Replay signal execution DAG using historical event buffer state with strict DB verification.
+    Retrieve the stored signal trace record for audit/review purposes.
+
+    NOTE: This endpoint is labelled 'replay' in the URL but does NOT
+    perform an independent re-execution of the signal DAG against
+    historical inputs. It returns the stored execution record fields.
+    A true replay would re-run the DAG with the stored indicator/ML inputs
+    and compare the output to the stored decision \u2014 that is not yet implemented.
+    The 'replay_implemented' field below makes this explicit.
     """
     sb = _sb(user)
     if sb is None:
@@ -167,16 +179,19 @@ async def replay_signal_trace(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Signal trace '{signal_id}' not found.")
     
     rec = res.data[0]
-    decision = (rec.get("side") or "BUY").upper()
+    stored_decision = (rec.get("side") or "BUY").upper()
     return {
-        "status": "replayed",
+        "status": "retrieved",
         "signal_id": signal_id,
-        "reconstructed_decision": decision,
-        "original_decision": decision,
-        "match": True,
-        "replay_timestamp": datetime.now(timezone.utc).isoformat(),
-        "reconstruction_drift": 0.0
+        "stored_decision": stored_decision,
+        "replay_implemented": False,
+        "replay_note": (
+            "Independent DAG re-execution against stored inputs is not yet implemented. "
+            "This response reflects the stored execution record, not an independent replay."
+        ),
+        "retrieval_timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
 
 
 @router.get("/export", status_code=status.HTTP_200_OK)

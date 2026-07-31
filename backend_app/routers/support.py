@@ -67,9 +67,14 @@ async def get_tickets(
             "offset": offset,
             "limit": limit,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching tickets for {user['id']}: {e}")
-        return {"tickets": [], "count": 0, "total": 0, "offset": offset, "limit": limit}
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "TICKETS_FETCH_FAILED", "message": str(e)},
+        )
 
 
 # ── POST /api/support/tickets ──────────────────────────────────────────────
@@ -137,7 +142,7 @@ async def get_ticket(
         if not ticket_resp.data:
             raise HTTPException(404, "Ticket not found")
         
-        ticket = ticket_resp.data
+        ticket = ticket_resp.data[0]
         
         # Mark as read
         supabase.table("support_tickets").update({

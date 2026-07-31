@@ -67,6 +67,8 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
+from backend_app.core.background_tasks import fire_and_forget_task
+
 # Try imports with fallbacks
 try:
     from backend_app.backend.reconciliation_worker import reconciliation_worker
@@ -551,7 +553,7 @@ class OrderStateEngine:
         for callback in self._fill_callbacks:
             try:
                 if asyncio.iscoroutinefunction(callback):
-                    asyncio.create_task(callback(order_id, fill))
+                    fire_and_forget_task(callback(order_id, fill), name=f"order-state-fill-callback:{order_id}")
                 else:
                     callback(order_id, fill)
             except Exception as e:
@@ -559,7 +561,7 @@ class OrderStateEngine:
         
         # Update position incrementally
         if self.auto_update_positions:
-            asyncio.create_task(self._update_position_incrementally(lifecycle, fill))
+            fire_and_forget_task(self._update_position_incrementally(lifecycle, fill), name=f"order-state-position-update:{order_id}")
         
         logger.info(
             f"[OrderStateEngine] Fill added to {order_id}: {filled_quantity} @ {fill_price} "
@@ -727,7 +729,7 @@ class OrderStateEngine:
         self._notify_state_change(order_id, old_state, OrderState.TIMED_OUT)
         
         # Auto-cancel on timeout
-        asyncio.create_task(self._auto_cancel_on_timeout(lifecycle))
+        fire_and_forget_task(self._auto_cancel_on_timeout(lifecycle), name=f"order-state-timeout-cancel:{order_id}")
         
         return lifecycle
     
@@ -797,7 +799,7 @@ class OrderStateEngine:
         for callback in self._state_change_callbacks:
             try:
                 if asyncio.iscoroutinefunction(callback):
-                    asyncio.create_task(callback(order_id, old_state, new_state))
+                    fire_and_forget_task(callback(order_id, old_state, new_state), name=f"order-state-change-callback:{order_id}")
                 else:
                     callback(order_id, old_state, new_state)
             except Exception as e:

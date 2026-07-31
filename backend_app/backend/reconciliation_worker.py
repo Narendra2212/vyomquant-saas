@@ -508,55 +508,37 @@ class ReconciliationWorker(WorkerBase):
     async def _fetch_exchange_orders(self, client: Any) -> List[Dict[str, Any]]:
         """Fetch open orders from exchange."""
         try:
-            if CCXT_AVAILABLE and hasattr(client, 'fetch_open_orders'):
-                orders = await client.fetch_open_orders()
-                return orders
-            else:
-                # Mock for testing
-                return []
+            if not CCXT_AVAILABLE or not hasattr(client, "fetch_open_orders"):
+                raise RuntimeError("Exchange order reconciliation is unavailable without a supported exchange client")
+            return await client.fetch_open_orders()
         except Exception as e:
             logger.error(f"Failed to fetch exchange orders: {e}")
-            return []
-    
+            raise
     async def _fetch_exchange_positions(self, client: Any) -> List[Dict[str, Any]]:
         """Fetch positions from exchange."""
         try:
-            if CCXT_AVAILABLE and hasattr(client, 'fetch_positions'):
-                positions = await client.fetch_positions()
-                return positions
-            else:
-                # Mock for testing
-                return []
+            if not CCXT_AVAILABLE or not hasattr(client, "fetch_positions"):
+                raise RuntimeError("Exchange position reconciliation is unavailable without a supported exchange client")
+            return await client.fetch_positions()
         except Exception as e:
             logger.error(f"Failed to fetch exchange positions: {e}")
-            return []
-    
+            raise
     async def _fetch_local_orders(self, user_id: str) -> Dict[str, Any]:
         """Fetch local orders from StateService."""
         if not STATE_SERVICE_AVAILABLE:
-            return {}
-        
+            raise RuntimeError("Local reconciliation state service is unavailable")
+
         try:
-            # Get all orders for user
             orders = await state_service.get_user_orders(user_id)
             return {order.order_id: order for order in orders}
         except Exception as e:
             logger.error(f"Failed to fetch local orders: {e}")
-            return {}
-    
+            raise
     async def _fetch_local_positions(self, user_id: str) -> Dict[str, Any]:
         """Fetch local positions from StateService."""
-        if not STATE_SERVICE_AVAILABLE:
-            return {}
-        
-        try:
-            # This would need to be implemented in StateService
-            # For now, return empty dict
-            return {}
-        except Exception as e:
-            logger.error(f"Failed to fetch local positions: {e}")
-            return {}
-    
+        raise RuntimeError(
+            "Local position reconciliation is unavailable: StateService has no position-listing method"
+        )
     def _compare_orders(
         self,
         user_id: str,
@@ -787,3 +769,5 @@ reconciliation_worker = ReconciliationWorker()
 def get_reconciliation_worker() -> ReconciliationWorker:
     """Get global reconciliation worker instance."""
     return reconciliation_worker
+
+

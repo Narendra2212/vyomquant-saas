@@ -12,6 +12,7 @@ Channels:
   candles   — per-symbol OHLCV        (DataEngine.stream_live_ohlcv)
   user      — per-user private events (orders, fills, bot status, alerts)
   pnl       — per-user P&L push       (TelemetryEngine.get_live_pnl every 2s)
+  marketplace — marketplace events (new strategies, ratings, subscriptions)
 """
 
 import asyncio
@@ -49,6 +50,7 @@ class ConnectionManager:
         self._candles: Dict[str, Set[WebSocket]] = defaultdict(set)
         self._user: Dict[str, Set[WebSocket]] = defaultdict(set)
         self._pnl: Dict[str, Set[WebSocket]] = defaultdict(set)
+        self._marketplace: Dict[str, Set[WebSocket]] = defaultdict(set)
         self._lock = asyncio.Lock()
         
         # STEP 8: Connection tracking for rate limiting
@@ -217,6 +219,10 @@ class ConnectionManager:
     async def broadcast_pnl(self, user_id: str, data: dict):
         await self._publish_to_bridge("pnl", user_id, data)
 
+    async def broadcast_marketplace(self, event_type: str, data: dict):
+        """Broadcast marketplace events (new strategies, ratings, subscriptions)."""
+        await self._publish_to_bridge("marketplace", event_type, data)
+
     # ── Core send ──────────────────────────────────────────────────────────
 
     async def _broadcast(self, store: Dict, key: str, data: dict):
@@ -264,6 +270,7 @@ class ConnectionManager:
             "candles": self._candles,
             "user": self._user,
             "pnl": self._pnl,
+            "marketplace": self._marketplace,
         }
         if channel not in mapping:
             raise ValueError(f"Unknown channel: {channel}")
@@ -276,6 +283,7 @@ class ConnectionManager:
             "candle_symbols": len(self._candles),
             "user_connections": sum(len(v) for v in self._user.values()),
             "pnl_connections": sum(len(v) for v in self._pnl.values()),
+            "marketplace_connections": sum(len(v) for v in self._marketplace.values()),
         }
 
     # ── Validation Suite Compatibility ────────────────────────────────────
@@ -296,7 +304,7 @@ class ConnectionManager:
                 if not self._user_connections[user_id]:
                     del self._user_connections[user_id]
             # Remove from all other channels
-            for store in [self._ticker, self._orderbook, self._candles, self._user, self._pnl]:
+            for store in [self._ticker, self._orderbook, self._candles, self._user, self._pnl, self._marketplace]:
                 for key in list(store.keys()):
                     store[key].discard(ws)
                     if not store[key]:
@@ -318,7 +326,7 @@ class ConnectionManager:
                     self._user_connections[user_id] -= dead
                     if not self._user_connections[user_id]:
                         del self._user_connections[user_id]
-                for store in [self._ticker, self._orderbook, self._candles, self._user, self._pnl]:
+                for store in [self._ticker, self._orderbook, self._candles, self._user, self._pnl, self._marketplace]:
                     for key in list(store.keys()):
                         store[key] -= dead
                         if not store[key]:

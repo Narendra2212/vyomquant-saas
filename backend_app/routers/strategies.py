@@ -797,14 +797,13 @@ async def create_strategy(
         import asyncio
         sb = _sb(user)
         if not sb:
-            import uuid
-            strat_id = f"dev-strategy-{uuid.uuid4().hex[:8]}"
-            return {
-                "id": strat_id,
-                "strategy_id": strat_id,
-                "name": data["name"],
-                "status": "created"
-            }
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Strategy creation requires a configured Supabase connection. "
+                    "SUPABASE_URL and SUPABASE_ANON_KEY must be set."
+                ),
+            )
         query = sb.table("strategies").insert(data)
         resp = await asyncio.to_thread(query.execute)
         if resp.data:
@@ -1844,12 +1843,22 @@ async def walk_forward_optimization(payload: dict, user: dict = Depends(get_curr
         }
     
     sharpe = bt_res.get("sharpe_ratio", 0.0)
+    # NOTE: out_of_sample_sharpe_estimate is a heuristic (in-sample Sharpe * 0.85),
+    # NOT the result of rolling out-of-sample window evaluation. A real walk-forward
+    # analysis requires repeated backtest_internal calls across sequential date windows.
+    # This is labelled as an estimate to avoid misrepresenting the computation.
+    oos_estimate = round(sharpe * 0.85, 2) if sharpe > 0 else 0.0
     return {
         "status": "completed",
+        "computation_method": "heuristic_oos_discount",
+        "computation_note": (
+            "out_of_sample_sharpe_estimate is computed as in_sample_sharpe * 0.85 "
+            "(15% heuristic discount). Rolling window walk-forward is not yet implemented."
+        ),
         "in_sample_sharpe": sharpe,
-        "out_of_sample_sharpe": round(sharpe * 0.85, 2) if sharpe > 0 else 0.0,
+        "out_of_sample_sharpe_estimate": oos_estimate,
         "total_trades_analyzed": bt_res.get("total_trades", 0),
-        "total_return_pct": bt_res.get("total_return_pct", 0.0)
+        "total_return_pct": bt_res.get("total_return_pct", 0.0),
     }
 
 @router.post("/{strategy_id}/pause")

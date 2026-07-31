@@ -303,17 +303,27 @@ async def task_websocket(websocket: WebSocket, task_id: str):
             await websocket.close(code=4004, reason="Task not found")
             return
         
-        # Verify WebSocket auth matches task tenant
+        # Verify WebSocket auth — FAIL CLOSED
+        # No token → deny. Verification error → deny. Tenant mismatch → deny.
         token = websocket.query_params.get("token") or websocket.headers.get("x-auth-token")
-        if token:
-            try:
-                from backend_app.core.websocket_auth import verify_websocket_token
-                auth_user = await verify_websocket_token(token)
-                if auth_user and str(auth_user.get("id")) != str(getattr(task, "tenant_id", auth_user.get("id"))):
-                    await websocket.close(code=4003, reason="Unauthorized tenant task access")
-                    return
-            except Exception as e:
-                logger.warning(f"WebSocket auth check skipped due to error: {e}")
+        if not token:
+            await websocket.close(code=4001, reason="Authentication required: provide ?token= or x-auth-token header")
+            return
+
+        try:
+            from backend_app.core.websocket_auth import verify_websocket_token
+            auth_user = await verify_websocket_token(token)
+            if not auth_user:
+                await websocket.close(code=4003, reason="Invalid or expired authentication token")
+                return
+            if str(auth_user.get("id")) != str(getattr(task, "tenant_id", auth_user.get("id"))):
+                await websocket.close(code=4003, reason="Unauthorized tenant task access")
+                return
+        except Exception as e:
+            logger.warning(f"WebSocket auth failed for task {task_id}: {e}")
+            await websocket.close(code=4003, reason="Authentication verification failed")
+            return
+
         
         # Send initial status
         status = await dag_task_queue.get_task_status(task_id)

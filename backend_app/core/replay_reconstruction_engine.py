@@ -495,6 +495,8 @@ class ReplayReconstructionEngine:
         if position_id in positions:
             positions[position_id].status = "closed"
             positions[position_id].realized_pnl = Decimal(str(payload.get("realized_pnl", positions[position_id].realized_pnl)))
+            # CRITICAL FIX: unrealized_pnl must be 0 for closed positions
+            positions[position_id].unrealized_pnl = Decimal('0')
             positions[position_id].last_updated = datetime.now(timezone.utc)
     
     async def _apply_execution_submitted(

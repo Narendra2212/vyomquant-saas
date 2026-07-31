@@ -26,19 +26,22 @@ Security:
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
 import redis
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, validator
 
+from backend_app.core.auth_middleware import decode_token_local
 from backend_app.core.dependencies import (bearer_scheme, get_admin_user,
                                            get_current_user)
 from backend_app.core.rate_limit import limiter
 from supabase import create_client
+from backend_app.api_ws.ws_manager import manager as ws_manager
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 try:
@@ -94,6 +97,10 @@ class PublishStrategyRequest(BaseModel):
         ..., description="One of: beginner, intermediate, advanced, pro"
     )
     tags: List[str] = Field(default_factory=list)
+    price: Optional[float] = Field(None, ge=0, description="Monthly subscription price in USD. Null for free strategies.")
+    currency: str = Field("USD", description="Currency for pricing: USD or INR")
+    subscription_tier: str = Field("free", description="Subscription tier: free, pro, elite")
+    cover_image: Optional[str] = Field(None, max_length=500, description="URL to strategy cover image")
 
     @validator("category")
     def validate_category(cls, v):
@@ -119,6 +126,20 @@ class PublishStrategyRequest(BaseModel):
             raise ValueError(
                 f"Invalid tag: '{v}'. Use alphanumeric, hyphens, underscores only."
             )
+        return v
+
+    @validator("currency")
+    def validate_currency(cls, v):
+        valid = {"USD", "INR"}
+        if v not in valid:
+            raise ValueError(f"Invalid currency. Must be one of: {sorted(valid)}")
+        return v
+
+    @validator("subscription_tier")
+    def validate_subscription_tier(cls, v):
+        valid = {"free", "pro", "elite"}
+        if v not in valid:
+            raise ValueError(f"Invalid subscription tier. Must be one of: {sorted(valid)}")
         return v
 
 
@@ -226,6 +247,412 @@ def _get_author_alias(user_id: str) -> str:
     return "Anonymous"
 
 
+def check_deployment_permission(user_id: str, library_id: str) -> dict:
+    """
+    Check if user has permission to deploy a marketplace strategy.
+    
+    Returns:
+        dict: {
+            "has_permission": bool,
+            "granted_via": str,  # "ownership" or "subscription"
+            "subscription_id": Optional[str],
+            "expires_at": Optional[str]
+        }
+    """
+    svc = _get_service_client()
+    if not svc:
+        return {"has_permission": False, "reason": "Service unavailable"}
+    
+    user_uid = _safe_uuid(user_id, "user_id")
+    lib_uid = _safe_uuid(library_id, "library_id")
+    
+    # Check 1: User owns the strategy (author)
+    try:
+        lib_resp = (
+            svc.table("library_strategies")
+            .select("author_id")
+            .eq("id", lib_uid)
+            .single()
+            .execute()
+        )
+        if lib_resp.data and lib_resp.data["author_id"] == user_uid:
+            return {
+                "has_permission": True,
+                "granted_via": "ownership",
+                "subscription_id": None,
+                "expires_at": None
+            }
+    except Exception as exc:
+        logger.warning(f"Deployment permission check (ownership) failed: {exc}")
+    
+    # Check 2: User has active subscription
+    try:
+        sub_resp = (
+            svc.table("library_subscriptions")
+            .select("id, status, expires_at")
+            .eq("library_id", lib_uid)
+            .eq("user_id", user_uid)
+            .eq("status", "active")
+            .single()
+            .execute()
+        )
+        if sub_resp.data:
+            # Check if subscription is not expired
+            expires_at = sub_resp.data.get("expires_at")
+            if expires_at:
+                expiry = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                if expiry > datetime.now(timezone.utc):
+                    return {
+                        "has_permission": True,
+                        "granted_via": "subscription",
+                        "subscription_id": sub_resp.data["id"],
+                        "expires_at": expires_at
+                    }
+            else:
+                # No expiry date means perpetual subscription
+                return {
+                    "has_permission": True,
+                    "granted_via": "subscription",
+                    "subscription_id": sub_resp.data["id"],
+                    "expires_at": None
+                }
+    except Exception as exc:
+        logger.warning(f"Deployment permission check (subscription) failed: {exc}")
+    
+    return {"has_permission": False, "reason": "No valid subscription or ownership"}
+
+
+def grant_deployment_permission(user_id: str, library_id: str, granted_via: str, subscription_id: str = None) -> str:
+    """
+    Grant deployment permission to a user for a marketplace strategy.
+    
+    Returns:
+        str: deployment_permission_id
+    """
+    svc = _get_service_client()
+    if not svc:
+        raise HTTPException(503, "Service unavailable")
+    
+    user_uid = _safe_uuid(user_id, "user_id")
+    lib_uid = _safe_uuid(library_id, "library_id")
+    
+    now_ts = datetime.now(timezone.utc).isoformat()
+    
+    permission_payload = {
+        "user_id": user_uid,
+        "library_id": lib_uid,
+        "granted_via": granted_via,
+        "subscription_id": subscription_id,
+        "is_active": True,
+        "granted_at": now_ts,
+        "expires_at": None,
+    }
+    
+    try:
+        resp = svc.table("deployment_permissions").insert(permission_payload).execute()
+        if resp.data:
+            return resp.data[0]["id"]
+    except Exception as exc:
+        logger.error(f"Failed to grant deployment permission: {exc}")
+        raise HTTPException(500, "Failed to grant deployment permission")
+    
+    raise HTTPException(500, "Failed to grant deployment permission")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/library/featured — Featured strategies
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/featured")
+async def get_featured_strategies(
+    limit: int = Query(3, ge=1, le=10),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+):
+    """Returns featured strategies (is_featured=True)."""
+    svc = _build_service_client()
+    
+    # Check cache (10 minute TTL for featured)
+    cache_key = f"library:featured:{limit}"
+    if redis_client:
+        try:
+            cached_data = redis_client.get(cache_key)
+            if cached_data:
+                response_data = json.loads(cached_data)
+                
+                # Enrichment if authenticated
+                user_id = None
+                if credentials:
+                    try:
+                        payload = decode_token_local(credentials.credentials)
+                        user_id = payload.get("sub")
+                    except Exception:
+                        pass
+                
+                if user_id:
+                    items = response_data.get("items", [])
+                    library_ids = [item["id"] for item in items]
+                    if library_ids:
+                        try:
+                            clones_resp = (
+                                svc.table("library_strategies")
+                                .select("id, source_library_id")
+                                .eq("author_id", user_id)
+                                .in_("source_library_id", library_ids)
+                                .execute()
+                            )
+                            cloned_map = {r["source_library_id"]: r["id"] for r in (clones_resp.data or [])}
+                            
+                            rating_resp = (
+                                svc.table("library_ratings")
+                                .select("library_id, rating")
+                                .eq("user_id", user_id)
+                                .in_("library_id", library_ids)
+                                .execute()
+                            )
+                            rating_map = {r["library_id"]: r["rating"] for r in (rating_resp.data or [])}
+                            
+                            for item in items:
+                                item["user_has_cloned"] = item["id"] in cloned_map
+                                item["user_rating"] = rating_map.get(item["id"])
+                                if item["user_has_cloned"]:
+                                    item["cloned_strategy_id"] = cloned_map[item["id"]]
+                        except Exception as exc:
+                            logger.warning(f"Failed to enrich featured with user context: {exc}")
+                
+                return response_data
+        except Exception as e:
+            logger.warning(f"Redis cache read failed for featured: {e}")
+    
+    if not svc:
+        return {"items": []}
+    
+    try:
+        resp = (
+            svc.table("library_strategies")
+            .select(
+                "id, name, author_id, category, difficulty, tags, symbol, timeframe, "
+                "node_count, has_ml_model, backtest_sharpe_ratio, backtest_total_return_pct, "
+                "backtest_max_drawdown_pct, backtest_win_rate_pct, backtest_total_trades, "
+                "clone_count, avg_rating, rating_count, is_featured, published_at, "
+                "price, currency, subscription_tier, subscriber_count"
+            )
+            .eq("is_active", True)
+            .eq("is_featured", True)
+            .in_("moderation_status", ["approved", "featured"])
+            .order("published_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning(f"Featured strategies DB error: {exc}")
+        return {"items": []}
+    
+    items = resp.data or []
+    
+    # Add author aliases
+    for item in items:
+        item["author_alias"] = _get_author_alias(item.get("author_id", ""))
+        item.pop("author_id", None)
+    
+    response_data = {"items": items}
+    
+    # Save to cache
+    if redis_client:
+        try:
+            cache_payload = {
+                "items": items
+            }
+            redis_client.setex(cache_key, 600, json.dumps(cache_payload))
+        except Exception as e:
+            logger.warning(f"Redis cache write failed for featured: {e}")
+    
+    # Enrich with user context if authenticated (after cache save)
+    user_id = None
+    if credentials:
+        try:
+            payload = decode_token_local(credentials.credentials)
+            user_id = payload.get("sub")
+        except Exception:
+            pass
+    
+    if user_id:
+        try:
+            library_ids = [item["id"] for item in items]
+            if library_ids:
+                clones_resp = (
+                    svc.table("library_strategies")
+                    .select("id, source_library_id")
+                    .eq("author_id", user_id)
+                    .in_("source_library_id", library_ids)
+                    .execute()
+                )
+                cloned_map = {r["source_library_id"]: r["id"] for r in (clones_resp.data or [])}
+                
+                rating_resp = (
+                    svc.table("library_ratings")
+                    .select("library_id, rating")
+                    .eq("user_id", user_id)
+                    .in_("library_id", library_ids)
+                    .execute()
+                )
+                rating_map = {r["library_id"]: r["rating"] for r in (rating_resp.data or [])}
+                
+                for item in items:
+                    item["user_has_cloned"] = item["id"] in cloned_map
+                    item["user_rating"] = rating_map.get(item["id"])
+                    if item["user_has_cloned"]:
+                        item["cloned_strategy_id"] = cloned_map[item["id"]]
+        except Exception as exc:
+            logger.warning(f"Failed to enrich featured with user context: {exc}")
+    
+    return response_data
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/library/trending — Trending strategies
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/trending")
+async def get_trending_strategies(
+    limit: int = Query(10, ge=1, le=20),
+):
+    """Returns trending strategies (sorted by clone_count + rating)."""
+    svc = _build_service_client()
+    
+    if not svc:
+        return {"items": [], "total": 0}
+    
+    try:
+        resp = (
+            svc.table("library_strategies")
+            .select(
+                "id, name, author_id, category, difficulty, tags, symbol, timeframe, "
+                "node_count, has_ml_model, backtest_sharpe_ratio, backtest_total_return_pct, "
+                "backtest_max_drawdown_pct, backtest_win_rate_pct, backtest_total_trades, "
+                "clone_count, avg_rating, rating_count, is_featured, price, currency, "
+                "subscription_tier, cover_image, evaluation_score, subscriber_count, published_at"
+            )
+            .eq("is_active", True)
+            .in_("moderation_status", ["approved", "featured"])
+            .order("clone_count", desc=True)
+            .order("avg_rating", desc=True)
+            .limit(limit)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning(f"Trending strategies DB error: {exc}")
+        return {"items": [], "total": 0}
+    
+    items = resp.data or []
+    author_alias_cache = {}
+    
+    def _get_alias(author_id: str) -> str:
+        if author_id not in author_alias_cache:
+            author_alias_cache[author_id] = _get_author_alias(author_id)
+        return author_alias_cache[author_id]
+    
+    for item in items:
+        item["author_alias"] = _get_alias(item.get("author_id", ""))
+        item.pop("author_id", None)
+    
+    return {"items": items, "total": len(items)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/library/categories — Available categories
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/categories")
+async def get_categories():
+    """Returns available strategy categories with counts."""
+    svc = _build_service_client()
+    
+    if not svc:
+        return {"categories": []}
+    
+    try:
+        resp = (
+            svc.table("library_strategies")
+            .select("category")
+            .eq("is_active", True)
+            .in_("moderation_status", ["approved", "featured"])
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning(f"Categories DB error: {exc}")
+        return {"categories": []}
+    
+    items = resp.data or []
+    category_counts = {}
+    for item in items:
+        cat = item.get("category")
+        if cat:
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+    
+    categories = [
+        {"name": cat, "count": count}
+        for cat, count in sorted(category_counts.items(), key=lambda x: x[1], reverse=True)
+    ]
+    
+    return {"categories": categories}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/library/creator/{creator_id} — Creator profile
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/creator/{creator_id}")
+async def get_creator_profile(creator_id: str):
+    """Returns creator profile with published strategies and stats."""
+    creator_uid = _safe_uuid(creator_id, "creator_id")
+    svc = _build_service_client()
+    
+    if not svc:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    
+    # Fetch creator's strategies
+    try:
+        strat_resp = (
+            svc.table("library_strategies")
+            .select(
+                "id, name, category, difficulty, clone_count, avg_rating, rating_count, "
+                "is_featured, price, subscription_tier, evaluation_score, subscriber_count, published_at"
+            )
+            .eq("author_id", creator_uid)
+            .eq("is_active", True)
+            .in_("moderation_status", ["approved", "featured"])
+            .order("published_at", desc=True)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"Creator profile DB error: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to fetch creator profile")
+    
+    strategies = strat_resp.data or []
+    
+    # Calculate creator stats
+    total_subscribers = sum(s.get("subscriber_count", 0) for s in strategies)
+    total_clones = sum(s.get("clone_count", 0) for s in strategies)
+    avg_rating = 0.0
+    if strategies:
+        ratings = [s.get("avg_rating") for s in strategies if s.get("avg_rating") is not None]
+        if ratings:
+            avg_rating = round(sum(ratings) / len(ratings), 2)
+    
+    # Get creator alias
+    alias = _get_author_alias(creator_uid)
+    
+    return {
+        "creator_id": creator_uid,
+        "author_alias": alias,
+        "total_strategies": len(strategies),
+        "total_subscribers": total_subscribers,
+        "total_clones": total_clones,
+        "avg_rating": avg_rating,
+        "strategies": strategies,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/library — Browse catalogue
 # ─────────────────────────────────────────────────────────────────────────────
@@ -250,7 +677,7 @@ async def browse_library(
     """
     svc = _build_service_client()
     
-    # Check cache
+    # Check cache - Use shorter TTL for browse queries (5 minutes) to keep data fresh
     cache_key = f"library:browse:{page}:{limit}:{sort}:{category}:{difficulty}:{has_ml}:{min_sharpe}:{min_return}:{tags}:{q}"
     if redis_client:
         try:
@@ -262,8 +689,6 @@ async def browse_library(
                 user_id = None
                 if credentials:
                     try:
-                        from backend_app.core.auth_middleware import \
-                            decode_token_local
                         payload = decode_token_local(credentials.credentials)
                         user_id = payload.get("sub")
                     except Exception:
@@ -312,7 +737,8 @@ async def browse_library(
             "id, name, author_id, category, difficulty, tags, symbol, timeframe, "
             "node_count, has_ml_model, backtest_sharpe_ratio, backtest_total_return_pct, "
             "backtest_max_drawdown_pct, backtest_win_rate_pct, backtest_total_trades, "
-            "clone_count, avg_rating, rating_count, is_featured, published_at"
+            "clone_count, avg_rating, rating_count, is_featured, published_at, "
+            "price, currency, subscription_tier, subscriber_count"
         )
         .eq("is_active", True)
         .in_("moderation_status", ["approved", "featured"])
@@ -363,7 +789,6 @@ async def browse_library(
     user_id = None
     if credentials:
         try:
-            from backend_app.core.auth_middleware import decode_token_local
             payload = decode_token_local(credentials.credentials)
             user_id = payload.get("sub")
         except Exception:
@@ -543,7 +968,6 @@ async def get_library_detail(
     user_id = None
     if credentials:
         try:
-            from backend_app.core.auth_middleware import decode_token_local
             payload = decode_token_local(credentials.credentials)
             user_id = payload.get("sub")
         except Exception:
@@ -687,6 +1111,56 @@ async def publish_strategy(
 
     # 6. Build library_strategies row
     now_ts = datetime.now(timezone.utc).isoformat()
+    
+    # Evaluator: Compute evaluation score based on backtest metrics
+    sharpe = float(br.get("sharpe_ratio") or 0)
+    return_pct = float(br.get("total_return_pct") or br.get("total_return") or 0)
+    max_dd = float(br.get("max_drawdown_pct") or br.get("max_drawdown") or 100)
+    win_rate = float(br.get("win_rate_pct") or br.get("win_rate") or 0)
+    profit_factor = float(br.get("profit_factor") or 0)
+    
+    # Evaluation score calculation (0-100)
+    # Weighted: Sharpe (40%), Return (25%), Win Rate (20%), Profit Factor (15%)
+    eval_score = 0.0
+    if sharpe > 0:
+        eval_score += min(sharpe * 10, 40)  # Max 40 points for Sharpe >= 4
+    if return_pct > 0:
+        eval_score += min(return_pct / 5, 25)  # Max 25 points for Return >= 125%
+    eval_score += min(win_rate * 0.2, 20)  # Max 20 points for Win Rate >= 100%
+    if profit_factor > 0:
+        eval_score += min(profit_factor * 3, 15)  # Max 15 points for Profit Factor >= 5
+    eval_score = round(eval_score, 2)
+    
+    # Pricing validation: Free strategies must have evaluation_score >= 50
+    # Paid strategies must have evaluation_score >= 70
+    min_score_for_free = 50
+    min_score_for_paid = 70
+    
+    if payload.subscription_tier == "free" and eval_score < min_score_for_free:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Strategy evaluation score ({eval_score}) below minimum ({min_score_for_free}) for free publication. Improve backtest performance."
+        )
+    
+    if payload.subscription_tier in ("pro", "elite") and eval_score < min_score_for_paid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Strategy evaluation score ({eval_score}) below minimum ({min_score_for_paid}) for paid publication. Improve backtest performance."
+        )
+    
+    # Price suggestion based on evaluation score
+    suggested_price = None
+    if payload.price is None and payload.subscription_tier != "free":
+        # Auto-suggest price based on score
+        if eval_score >= 85:
+            suggested_price = 199.99  # Elite tier
+        elif eval_score >= 75:
+            suggested_price = 99.99   # High pro
+        elif eval_score >= 70:
+            suggested_price = 49.99   # Standard pro
+        else:
+            suggested_price = 29.99   # Entry pro
+    
     insert_payload = {
         "author_id": user_id,
         "source_strategy_id": strategy_id,
@@ -716,6 +1190,14 @@ async def publish_strategy(
         "risk_take_profit_pct": (strategy.get("risk") or {}).get("take_profit_pct"),
         "risk_max_position_size": (strategy.get("risk") or {}).get("max_position_size"),
         "risk_max_drawdown_pct": (strategy.get("risk") or {}).get("max_drawdown_pct"),
+        # Marketplace pricing
+        "price": payload.price if payload.price is not None else suggested_price,
+        "currency": payload.currency,
+        "subscription_tier": payload.subscription_tier,
+        "cover_image": payload.cover_image,
+        "evaluation_score": eval_score,
+        "verification_status": "unverified",
+        "subscriber_count": 0,
         # Defaults
         "clone_count": 0,
         "rating_count": 0,
@@ -752,9 +1234,23 @@ async def publish_strategy(
     library_id = insert_resp.data[0]["id"]
     logger.info(f"Strategy published: library_id={library_id} by user={user_id}")
 
+    # Broadcast marketplace event
+    try:
+        await ws_manager.broadcast_marketplace("strategy_published", {
+            "library_id": library_id,
+            "author_id": user_id,
+            "name": payload.name,
+            "category": payload.category,
+            "published_at": now_ts,
+        })
+    except Exception as e:
+        logger.warning(f"Failed to broadcast marketplace event: {e}")
+
     return {
         "library_id": library_id,
         "moderation_status": "pending",
+        "evaluation_score": eval_score,
+        "suggested_price": suggested_price,
         "message": "Strategy submitted for review. It will appear publicly once approved.",
     }
 
@@ -1116,6 +1612,17 @@ async def rate_strategy(
 
     logger.info(f"Rating submitted: library_id={lib_id} rating={payload.rating} by user={user_id}")
 
+    # Broadcast marketplace event
+    try:
+        await ws_manager.broadcast_marketplace("rating_submitted", {
+            "library_id": lib_id,
+            "user_id": user_id,
+            "rating": payload.rating,
+            "updated_at": now_ts,
+        })
+    except Exception as e:
+        logger.warning(f"Failed to broadcast marketplace event: {e}")
+
     # Invalidate cache
     if redis_client:
         try:
@@ -1249,7 +1756,177 @@ async def admin_pending_strategies(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MARKETPLACE SUBSCRIPTIONS & 90/10 REVENUE SHARE
+# POST /api/library/{library_id}/checkout — Create checkout session for subscription
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MarketplaceCheckoutRequest(BaseModel):
+    currency: str = Field("USD", regex="^(USD|INR)$")
+
+@router.post("/{library_id}/checkout")
+async def create_marketplace_checkout(
+    library_id: str,
+    body: MarketplaceCheckoutRequest,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
+    """Creates a payment checkout session for marketplace strategy subscription."""
+    lib_id = _safe_uuid(library_id, "library_id")
+    user_id = _safe_uuid(user["id"], "user_id")
+    svc = _build_service_client()
+    
+    if not svc:
+        raise HTTPException(503, "Service unavailable")
+    
+    # Fetch strategy details
+    try:
+        resp = (
+            svc.table("library_strategies")
+            .select("*")
+            .eq("id", lib_id)
+            .eq("is_active", True)
+            .in_("moderation_status", ["approved", "featured"])
+            .single()
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"Checkout strategy lookup error: {exc}")
+        raise HTTPException(500, "Failed to fetch strategy details")
+    
+    if not resp.data:
+        raise HTTPException(404, "Strategy not found or not available for subscription")
+    
+    strat = resp.data[0]
+    
+    # Check if strategy has a price
+    if not strat.get("price"):
+        raise HTTPException(400, "This strategy is free. Use the clone endpoint instead.")
+    
+    # Check if already subscribed
+    try:
+        existing = (
+            svc.table("library_subscriptions")
+            .select("*")
+            .eq("library_id", lib_id)
+            .eq("user_id", user_id)
+            .eq("status", "active")
+            .execute()
+        )
+        if existing.data:
+            raise HTTPException(400, "You are already subscribed to this strategy")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning(f"Subscription check error: {exc}")
+    
+    # Create pending subscription record
+    now_ts = datetime.now(timezone.utc).isoformat()
+    sub_id = str(uuid.uuid4())
+    
+    try:
+        sub_resp = (
+            svc.table("library_subscriptions")
+            .insert({
+                "id": sub_id,
+                "library_id": lib_id,
+                "user_id": user_id,
+                "subscription_tier": strat.get("subscription_tier", "standard"),
+                "price_paid": strat.get("price"),
+                "currency": strat.get("currency", "USD"),
+                "status": "pending",
+                "started_at": now_ts,
+                "expires_at": None,
+            })
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"Pending subscription creation error: {exc}")
+        raise HTTPException(500, "Failed to create pending subscription")
+    
+    # Create checkout session using billing system
+    try:
+        if body.currency == "USD":
+            import stripe
+            stripe_key = os.environ.get("STRIPE_SECRET_KEY", "sk_test_dummy")
+            stripe.api_key = stripe_key
+            
+            amount_cents = int(float(strat.get("price", 0)) * 100)
+            
+            session = stripe.checkout.Session.create(
+                payment_method_types=["card"],
+                line_items=[
+                    {
+                        "price_data": {
+                            "currency": "usd",
+                            "product_data": {
+                                "name": f"Strategy Subscription: {strat.get('name', 'Unknown')}",
+                                "description": f"Monthly subscription to marketplace strategy",
+                            },
+                            "unit_amount": amount_cents,
+                        },
+                        "quantity": 1,
+                    }
+                ],
+                mode="payment",
+                success_url=f"{os.environ.get('FRONTEND_URL', 'http://localhost:3000')}/marketplace?session_id={{CHECKOUT_SESSION_ID}}&sub_id={sub_id}",
+                cancel_url=f"{os.environ.get('FRONTEND_URL', 'http://localhost:3000')}/marketplace",
+                metadata={
+                    "user_id": user_id,
+                    "subscription_id": sub_id,
+                    "library_id": lib_id,
+                    "item_key": f"marketplace_{lib_id}",
+                },
+            )
+            
+            return {
+                "checkout_url": session.url,
+                "subscription_id": sub_id,
+                "provider": "stripe"
+            }
+            
+        elif body.currency == "INR":
+            import razorpay
+            razorpay_key = os.environ.get("RAZORPAY_KEY_ID", "rzp_test_dummy")
+            razorpay_secret = os.environ.get("RAZORPAY_KEY_SECRET")
+            
+            client = razorpay.Client(auth=(razorpay_key, razorpay_secret))
+            
+            amount_paise = int(float(strat.get("price", 0)) * 100)
+            
+            order = client.order.create({
+                "amount": amount_paise,
+                "currency": "INR",
+                "receipt": f"marketplace_sub_{sub_id}",
+                "notes": {
+                    "user_id": user_id,
+                    "subscription_id": sub_id,
+                    "library_id": str(lib_id),
+                    "item_key": f"marketplace_{lib_id}",
+                },
+            })
+            
+            return {
+                "order_id": order["id"],
+                "razorpay_key": razorpay_key,
+                "amount": amount_paise,
+                "currency": "INR",
+                "subscription_id": sub_id,
+                "provider": "razorpay"
+            }
+        else:
+            raise HTTPException(400, "Invalid currency")
+            
+    except Exception as exc:
+        logger.error(f"Checkout session creation error: {exc}")
+        # Clean up pending subscription
+        try:
+            svc.table("library_subscriptions").delete().eq("id", sub_id).execute()
+        except:
+            pass
+        raise HTTPException(500, "Failed to create checkout session")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/library/{library_id}/subscribe — Subscribe to strategy
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post("/{library_id}/subscribe", status_code=status.HTTP_200_OK)
@@ -1259,81 +1936,386 @@ async def subscribe_to_strategy(
 ):
     """
     Subscribe to a paid marketplace strategy.
-    Processes automatic 90/10 revenue split (90% creator, 10% platform).
+
+    Creates a real subscription record in library_subscriptions.
+    Payment collection must be completed via billing.py Stripe/Razorpay
+    checkout flows before this endpoint is called — this endpoint records
+    the entitlement once payment is confirmed, it does not itself charge.
+
+    Revenue split (90/10) is computed for informational purposes; the
+    actual payout is handled by billing webhook → creator credit flow.
     """
+    lib_id = _safe_uuid(library_id, "library_id")
+    user_id = _safe_uuid(user["id"], "user_id")
     svc = _build_service_client()
-    strat_resp = svc.table("library_strategies").select("*").eq("id", library_id).execute()
+    
+    # Fetch strategy details
+    strat_resp = svc.table("library_strategies").select("*").eq("id", lib_id).execute()
     if not strat_resp.data:
         raise HTTPException(status_code=404, detail="Marketplace strategy not found")
-    
+
     strat = strat_resp.data[0]
     author_id = strat.get("author_id")
-    price = float(strat.get("monthly_price", 49.0))
-    
+    price = float(strat.get("price") or 0)
+    currency = strat.get("currency", "USD")
+    subscription_tier = strat.get("subscription_tier", "free")
+
+    # Block subscription to free strategies
+    if subscription_tier == "free":
+        raise HTTPException(
+            status_code=400,
+            detail="This strategy is free. Clone it instead of subscribing."
+        )
+
+    # Block self-subscription
+    if author_id == user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot subscribe to your own strategy."
+        )
+
     # 90/10 Revenue Split Calculation
     creator_earnings = round(price * 0.90, 2)
     platform_fee = round(price * 0.10, 2)
+
+    # Generate subscription ID
+    sub_id = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Persist subscription record in library_subscriptions
+    subscription_row = {
+        "library_id": lib_id,
+        "user_id": user_id,
+        "subscription_tier": subscription_tier,
+        "price_paid": price,
+        "currency": currency,
+        "status": "active",
+        "started_at": now_iso,
+        "expires_at": None,
+    }
     
-    sub_id = f"sub_{user['id'][:8]}_{library_id[:8]}"
-    invoice_id = f"inv_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    
+    try:
+        insert_resp = svc.table("library_subscriptions").insert(subscription_row).execute()
+        if not insert_resp.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to persist subscription record. Please retry.",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"subscribe_to_strategy DB write failed: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Subscription service temporarily unavailable.",
+        )
+
+    # Grant deployment permission
+    try:
+        grant_deployment_permission(user_id, lib_id, "subscription", sub_id)
+    except Exception as exc:
+        logger.warning(f"Failed to grant deployment permission after subscription: {exc}")
+        # Non-critical - subscription succeeded, permission can be granted later
+
+    # Increment subscriber_count on library_strategies
+    try:
+        current_subs = strat.get("subscriber_count", 0)
+        svc.table("library_strategies").update(
+            {"subscriber_count": current_subs + 1, "updated_at": now_iso}
+        ).eq("id", lib_id).execute()
+    except Exception as exc:
+        logger.warning(f"Failed to increment subscriber_count: {exc}")
+
+    logger.info(f"Subscription created: library_id={lib_id} user={user_id}")
+
+    # Broadcast marketplace event
+    try:
+        await ws_manager.broadcast_marketplace("subscription_created", {
+            "library_id": lib_id,
+            "user_id": user_id,
+            "subscription_id": sub_id,
+            "subscription_tier": subscription_tier,
+            "started_at": now_iso,
+        })
+    except Exception as e:
+        logger.warning(f"Failed to broadcast marketplace event: {e}")
+
     return {
         "status": "subscribed",
         "subscription_id": sub_id,
-        "strategy_id": library_id,
+        "library_id": lib_id,
         "strategy_name": strat.get("name"),
-        "subscriber_id": user["id"],
-        "monthly_price": price,
+        "subscriber_id": user_id,
+        "price": price,
+        "currency": currency,
+        "subscription_tier": subscription_tier,
         "revenue_split": {
             "creator_share_90pct": creator_earnings,
             "platform_share_10pct": platform_fee,
-            "creator_id": author_id
+            "creator_id": author_id,
         },
-        "invoice": {
-            "invoice_id": invoice_id,
-            "amount_paid": price,
-            "status": "paid",
-            "issued_at": datetime.now(timezone.utc).isoformat()
-        }
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/library/{library_id}/deploy/check — Check deployment permission
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/{library_id}/deploy/check")
+async def check_deployment_permission_endpoint(
+    library_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Check if the authenticated user has permission to deploy this marketplace strategy.
+    Returns permission status and details.
+    """
+    lib_id = _safe_uuid(library_id, "library_id")
+    user_id = _safe_uuid(user["id"], "user_id")
+    
+    permission = check_deployment_permission(user_id, lib_id)
+    
+    return {
+        "library_id": lib_id,
+        "user_id": user_id,
+        **permission
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/library/{library_id}/deploy — Deploy marketplace strategy
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/{library_id}/deploy")
+async def deploy_marketplace_strategy(
+    library_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Deploy a marketplace strategy after verifying subscription or ownership.
+    This endpoint clones the strategy and starts deployment.
+    """
+    lib_id = _safe_uuid(library_id, "library_id")
+    user_id = _safe_uuid(user["id"], "user_id")
+    svc = _build_service_client()
+    
+    # Check deployment permission
+    permission = check_deployment_permission(user_id, lib_id)
+    if not permission.get("has_permission"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Deployment not authorized: {permission.get('reason', 'Unknown reason')}"
+        )
+    
+    # Clone the strategy (reuse clone logic)
+    try:
+        lib_resp = (
+            svc.table("library_strategies")
+            .select("id, author_id, source_strategy_id, name, is_active, moderation_status")
+            .eq("id", lib_id)
+            .single()
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"deploy_strategy library lookup error: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to look up library entry.",
+        )
+
+    if not lib_resp.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Library strategy not found.",
+        )
+
+    lib_entry = lib_resp.data
+    source_id = lib_entry["source_strategy_id"]
+    
+    # Fetch source strategy
+    try:
+        src_resp = (
+            svc.table("strategies")
+            .select("name, symbol, timeframe, exchange_id, buy_logic, sell_logic, risk, indicators, ml_model_path")
+            .eq("id", source_id)
+            .single()
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"deploy_strategy source fetch error: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch source strategy data.",
+        )
+
+    if not src_resp.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Source strategy no longer exists.",
+        )
+
+    source = src_resp.data
+    now_ts = datetime.now(timezone.utc).isoformat()
+
+    # Insert clone into strategies table
+    clone_payload = {
+        "user_id": user_id,
+        "name": f"[Deployed] {lib_entry['name']}",
+        "symbol": source.get("symbol", ""),
+        "timeframe": source.get("timeframe", ""),
+        "exchange_id": source.get("exchange_id", ""),
+        "buy_logic": source.get("buy_logic"),
+        "sell_logic": source.get("sell_logic"),
+        "risk": source.get("risk"),
+        "indicators": source.get("indicators"),
+        "ml_model_path": source.get("ml_model_path"),
+        "source_library_id": lib_id,
+        "status": "stopped",
+        "created_at": now_ts,
+        "updated_at": now_ts,
+    }
+
+    try:
+        clone_resp = svc.table("strategies").insert(clone_payload).execute()
+    except Exception as exc:
+        logger.error(f"deploy_strategy insert error: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create strategy clone for deployment.",
+        )
+
+    if not clone_resp.data:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Deploy operation returned no data.",
+        )
+
+    new_strategy_id = clone_resp.data[0]["id"]
+
+    return {
+        "strategy_id": new_strategy_id,
+        "library_id": lib_id,
+        "granted_via": permission.get("granted_via"),
+        "message": "Strategy cloned and ready for deployment. Use the deployment API to start live trading.",
     }
 
 @router.post("/subscriptions/{sub_id}/cancel")
 async def cancel_subscription(sub_id: str, user: dict = Depends(get_current_user)):
-    """Cancel marketplace strategy subscription with strict database verification."""
-    svc = _get_service_client()
-    if svc is not None:
-        res = svc.table("user_subscriptions").select("*").eq("id", sub_id).eq("user_id", user["id"]).execute()
+    """Cancel marketplace strategy subscription."""
+    sub_uid = _safe_uuid(sub_id, "subscription_id")
+    user_id = _safe_uuid(user["id"], "user_id")
+    svc = _build_service_client()
+    
+    if not svc:
+        raise HTTPException(503, "Service unavailable")
+    
+    # Verify subscription exists and belongs to user
+    try:
+        res = svc.table("library_subscriptions").select("*").eq("id", sub_uid).eq("user_id", user_id).execute()
         if not res.data:
-            res_strat = svc.table("user_strategies").select("id").eq("id", sub_id).eq("user_id", user["id"]).execute()
-            if not res_strat.data:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Subscription '{sub_id}' not found.")
-    else:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Subscription '{sub_id}' not found.")
-            
+            raise HTTPException(404, f"Subscription '{sub_id}' not found.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Cancel subscription lookup error: {exc}")
+        raise HTTPException(500, "Failed to lookup subscription")
+    
     until = datetime.now(timezone.utc).isoformat()
-    if svc is not None:
-        svc.table("user_subscriptions").update({"status": "cancelled", "active_until": until}).eq("id", sub_id).execute()
-        
-    return {"status": "cancelled", "subscription_id": sub_id, "active_until": until}
+    
+    try:
+        svc.table("library_subscriptions").update({
+            "status": "cancelled",
+            "cancelled_at": until
+        }).eq("id", sub_uid).execute()
+    except Exception as exc:
+        logger.error(f"Cancel subscription update error: {exc}")
+        raise HTTPException(500, "Failed to cancel subscription")
+    
+    # Revoke deployment permission
+    try:
+        svc.table("deployment_permissions").update({
+            "is_active": False,
+            "revoked_at": until
+        }).eq("subscription_id", sub_uid).execute()
+    except Exception as exc:
+        logger.warning(f"Failed to revoke deployment permission on cancel: {exc}")
+    
+    # Decrement subscriber_count on library_strategies
+    try:
+        sub = res.data[0]
+        lib_id = sub.get("library_id")
+        if lib_id:
+            lib_resp = svc.table("library_strategies").select("subscriber_count").eq("id", lib_id).execute()
+            if lib_resp.data:
+                current = lib_resp.data[0].get("subscriber_count", 0)
+                svc.table("library_strategies").update({
+                    "subscriber_count": max(0, current - 1),
+                    "updated_at": until
+                }).eq("id", lib_id).execute()
+    except Exception as exc:
+        logger.warning(f"Failed to decrement subscriber_count: {exc}")
+    
+    return {"status": "cancelled", "subscription_id": sub_id, "cancelled_at": until}
+
 
 @router.post("/subscriptions/{sub_id}/renew")
 async def renew_subscription(sub_id: str, user: dict = Depends(get_current_user)):
-    """Renew marketplace strategy subscription with strict database verification."""
-    svc = _get_service_client()
-    if svc is not None:
-        res = svc.table("user_subscriptions").select("*").eq("id", sub_id).eq("user_id", user["id"]).execute()
+    """Renew marketplace strategy subscription."""
+    sub_uid = _safe_uuid(sub_id, "subscription_id")
+    user_id = _safe_uuid(user["id"], "user_id")
+    svc = _build_service_client()
+    
+    if not svc:
+        raise HTTPException(503, "Service unavailable")
+    
+    # Verify subscription exists and belongs to user
+    try:
+        res = svc.table("library_subscriptions").select("*").eq("id", sub_uid).eq("user_id", user_id).execute()
         if not res.data:
-            res_strat = svc.table("user_strategies").select("id").eq("id", sub_id).eq("user_id", user["id"]).execute()
-            if not res_strat.data:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Subscription '{sub_id}' not found.")
-    else:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Subscription '{sub_id}' not found.")
-            
-    next_date = datetime.now(timezone.utc).isoformat()
-    if svc is not None:
-        svc.table("user_subscriptions").update({"status": "active", "next_billing_date": next_date}).eq("id", sub_id).execute()
-        
-    return {"status": "renewed", "subscription_id": sub_id, "next_billing_date": next_date}
+            raise HTTPException(404, f"Subscription '{sub_id}' not found.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Renew subscription lookup error: {exc}")
+        raise HTTPException(500, "Failed to lookup subscription")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    
+    try:
+        svc.table("library_subscriptions").update({
+            "status": "active",
+            "cancelled_at": None,
+            "expires_at": None
+        }).eq("id", sub_uid).execute()
+    except Exception as exc:
+        logger.error(f"Renew subscription update error: {exc}")
+        raise HTTPException(500, "Failed to renew subscription")
+    
+    # Re-grant deployment permission
+    try:
+        sub = res.data[0]
+        lib_id = sub.get("library_id")
+        if lib_id:
+            grant_deployment_permission(user_id, lib_id, "subscription", sub_uid)
+    except Exception as exc:
+        logger.warning(f"Failed to re-grant deployment permission on renew: {exc}")
+    
+    # Increment subscriber_count on library_strategies
+    try:
+        sub = res.data[0]
+        lib_id = sub.get("library_id")
+        if lib_id:
+            lib_resp = svc.table("library_strategies").select("subscriber_count").eq("id", lib_id).execute()
+            if lib_resp.data:
+                current = lib_resp.data[0].get("subscriber_count", 0)
+                svc.table("library_strategies").update({
+                    "subscriber_count": current + 1,
+                    "updated_at": now
+                }).eq("id", lib_id).execute()
+    except Exception as exc:
+        logger.warning(f"Failed to increment subscriber_count: {exc}")
+    
+    return {"status": "renewed", "subscription_id": sub_id, "renewed_at": now}
 
 @router.get("/leaderboard")
 async def marketplace_leaderboard(limit: int = 10):
@@ -1424,28 +2406,343 @@ async def creator_analytics(user: dict = Depends(get_current_user)):
 
 @router.get("/subscriber/analytics")
 async def subscriber_analytics(user: dict = Depends(get_current_user)):
-    """Subscriber analytics dashboard derived from user's active strategy deployments."""
-    svc = _get_service_client()
+    """
+    Subscriber analytics: what strategies has this user subscribed to?
+    Queries library_subscriptions (the table populated by subscribe_to_strategy).
+    """
+    user_id = _safe_uuid(user["id"], "user_id")
+    svc = _build_service_client()
+    
+    if not svc:
+        raise HTTPException(503, "Service unavailable")
+    
     try:
-        user_strats = []
-        if svc is not None:
-            res = svc.table("user_strategies").select("id, name, is_validated, dag_config").eq("user_id", user["id"]).execute()
-            user_strats = res.data or []
-        active_count = sum(1 for s in user_strats if s.get("is_validated"))
-        
+        # Query the user's marketplace subscriptions
+        res = svc.table("library_subscriptions").select(
+            "id, library_id, subscription_tier, price_paid, currency, status, started_at, expires_at"
+        ).eq("user_id", user_id).execute()
+        subscriptions = res.data or []
+
+        active_subs = [s for s in subscriptions if s.get("status") == "active"]
+        monthly_spend = round(sum(float(s.get("price_paid") or 0.0) for s in active_subs), 2)
+
         return {
-            "subscriber_id": user["id"],
-            "active_subscriptions_count": len(user_strats),
-            "monthly_spend_usd": 0.0,
-            "combined_pnl_pct": 0.0,
-            "active_deployed_bots": active_count
+            "subscriber_id": user_id,
+            "active_subscriptions_count": len(active_subs),
+            "total_subscriptions_count": len(subscriptions),
+            "monthly_spend_usd": monthly_spend,
+            "subscriptions": subscriptions,
         }
     except Exception as exc:
-        logger.error(f"Error fetching subscriber analytics for user {user['id']}: {exc}")
-        return {
-            "subscriber_id": user["id"],
-            "active_subscriptions_count": 0,
-            "monthly_spend_usd": 0.0,
-            "combined_pnl_pct": 0.0,
-            "active_deployed_bots": 0
-        }
+        logger.error(f"Error fetching subscriber analytics for user {user_id}: {exc}")
+        raise HTTPException(500, "Failed to fetch subscriber analytics")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/library/{library_id}/reviews — Get strategy reviews
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/{library_id}/reviews")
+async def get_strategy_reviews(
+    library_id: str,
+    limit: int = Query(10, ge=1, le=50),
+):
+    """Returns reviews for a specific strategy."""
+    lib_id = _safe_uuid(library_id, "library_id")
+    svc = _build_service_client()
+    
+    if not svc:
+        return {"reviews": [], "total": 0}
+    
+    try:
+        resp = (
+            svc.table("library_ratings")
+            .select("rating, review_text, created_at, user_id")
+            .eq("library_id", lib_id)
+            .not_.is_("review_text", None)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning(f"Reviews DB error: {exc}")
+        return {"reviews": [], "total": 0}
+    
+    reviews = resp.data or []
+    
+    # Anonymize user IDs
+    for review in reviews:
+        review["user_alias"] = _get_author_alias(review.get("user_id", ""))
+        review.pop("user_id", None)
+    
+    return {"reviews": reviews, "total": len(reviews)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/library/recommendations — Get personalized recommendations
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/recommendations")
+async def get_recommendations(
+    user: dict = Depends(get_current_user),
+    limit: int = Query(10, ge=1, le=20),
+):
+    """
+    Returns personalized strategy recommendations based on:
+    - User's subscribed categories
+    - Trending strategies
+    - High-rated strategies
+    """
+    user_id = _safe_uuid(user["id"], "user_id")
+    svc = _build_service_client()
+    
+    if not svc:
+        return {"recommendations": [], "total": 0}
+    
+    try:
+        # Get user's subscription history to infer preferences
+        sub_resp = (
+            svc.table("library_subscriptions")
+            .select("library_id")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        
+        subscribed_ids = [s["library_id"] for s in (sub_resp.data or [])]
+        
+        # Get categories of subscribed strategies
+        preferred_categories = set()
+        if subscribed_ids:
+            cat_resp = (
+                svc.table("library_strategies")
+                .select("category")
+                .in_("id", subscribed_ids)
+                .execute()
+            )
+            for s in (cat_resp.data or []):
+                preferred_categories.add(s.get("category"))
+        
+        # Query strategies matching preferred categories or trending
+        if preferred_categories:
+            resp = (
+                svc.table("library_strategies")
+                .select(
+                    "id, name, author_id, category, difficulty, tags, "
+                    "backtest_sharpe_ratio, backtest_total_return_pct, clone_count, "
+                    "avg_rating, rating_count, price, subscription_tier, cover_image, "
+                    "evaluation_score, subscriber_count"
+                )
+                .eq("is_active", True)
+                .in_("moderation_status", ["approved", "featured"])
+                .in_("category", list(preferred_categories))
+                .order("avg_rating", desc=True)
+                .limit(limit)
+                .execute()
+            )
+        else:
+            # No history, return trending
+            resp = (
+                svc.table("library_strategies")
+                .select(
+                    "id, name, author_id, category, difficulty, tags, "
+                    "backtest_sharpe_ratio, backtest_total_return_pct, clone_count, "
+                    "avg_rating, rating_count, price, subscription_tier, cover_image, "
+                    "evaluation_score, subscriber_count"
+                )
+                .eq("is_active", True)
+                .in_("moderation_status", ["approved", "featured"])
+                .order("clone_count", desc=True)
+                .limit(limit)
+                .execute()
+            )
+    except Exception as exc:
+        logger.warning(f"Recommendations DB error: {exc}")
+        return {"recommendations": [], "total": 0}
+    
+    items = resp.data or []
+    
+    # Filter out already subscribed strategies
+    recommendations = [s for s in items if s["id"] not in subscribed_ids]
+    
+    for item in recommendations:
+        item["author_alias"] = _get_author_alias(item.get("author_id", ""))
+        item.pop("author_id", None)
+    
+    return {"recommendations": recommendations[:limit], "total": len(recommendations)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/library/compare — Compare multiple strategies
+# ─────────────────────────────────────────────────────────────────────────────
+
+class CompareRequest(BaseModel):
+    library_ids: List[str] = Field(..., min_items=2, max_items=5)
+
+@router.post("/compare")
+async def compare_strategies(
+    payload: CompareRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Compare multiple marketplace strategies side by side."""
+    lib_ids = [_safe_uuid(lid, f"library_id_{i}") for i, lid in enumerate(payload.library_ids)]
+    svc = _build_service_client()
+    
+    if not svc:
+        raise HTTPException(503, "Service unavailable")
+    
+    try:
+        resp = (
+            svc.table("library_strategies")
+            .select(
+                "id, name, author_id, category, difficulty, tags, symbol, timeframe, "
+                "node_count, has_ml_model, backtest_sharpe_ratio, backtest_total_return_pct, "
+                "backtest_max_drawdown_pct, backtest_win_rate_pct, backtest_total_trades, "
+                "backtest_profit_factor, clone_count, avg_rating, rating_count, "
+                "price, subscription_tier, evaluation_score, subscriber_count, published_at"
+            )
+            .in_("id", lib_ids)
+            .eq("is_active", True)
+            .in_("moderation_status", ["approved", "featured"])
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"Compare strategies DB error: {exc}")
+        raise HTTPException(500, "Failed to fetch strategies for comparison")
+    
+    strategies = resp.data or []
+    
+    for s in strategies:
+        s["author_alias"] = _get_author_alias(s.get("author_id", ""))
+        s.pop("author_id", None)
+    
+    return {"strategies": strategies, "total": len(strategies)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/library/{library_id}/favorite — Favorite a strategy
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/{library_id}/favorite")
+async def favorite_strategy(
+    library_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Mark a strategy as favorite.
+    Uses library_ratings table with rating=null to track favorites.
+    """
+    lib_id = _safe_uuid(library_id, "library_id")
+    user_id = _safe_uuid(user["id"], "user_id")
+    svc = _build_service_client()
+    
+    if not svc:
+        raise HTTPException(503, "Service unavailable")
+    
+    now_ts = datetime.now(timezone.utc).isoformat()
+    
+    try:
+        # Upsert favorite marker
+        svc.table("library_ratings").upsert(
+            {
+                "library_id": lib_id,
+                "user_id": user_id,
+                "rating": None,  # Null means favorite without rating
+                "review_text": None,
+                "is_verified_clone": False,
+                "created_at": now_ts,
+                "updated_at": now_ts,
+            },
+            on_conflict="library_id,user_id",
+        ).execute()
+    except Exception as exc:
+        logger.error(f"Favorite strategy error: {exc}")
+        raise HTTPException(500, "Failed to favorite strategy")
+    
+    return {"status": "favorited", "library_id": lib_id}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DELETE /api/library/{library_id}/favorite — Unfavorite a strategy
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.delete("/{library_id}/favorite")
+async def unfavorite_strategy(
+    library_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Remove a strategy from favorites."""
+    lib_id = _safe_uuid(library_id, "library_id")
+    user_id = _safe_uuid(user["id"], "user_id")
+    svc = _build_service_client()
+    
+    if not svc:
+        raise HTTPException(503, "Service unavailable")
+    
+    try:
+        # Delete favorite marker (only if rating is null - pure favorite)
+        svc.table("library_ratings").delete().eq("library_id", lib_id).eq("user_id", user_id).is_("rating", None).execute()
+    except Exception as exc:
+        logger.error(f"Unfavorite strategy error: {exc}")
+        raise HTTPException(500, "Failed to unfavorite strategy")
+    
+    return {"status": "unfavorited", "library_id": lib_id}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/library/favorites — Get user's favorites
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/favorites")
+async def get_user_favorites(
+    user: dict = Depends(get_current_user),
+    limit: int = Query(20, ge=1, le=50),
+):
+    """Returns the user's favorited strategies."""
+    user_id = _safe_uuid(user["id"], "user_id")
+    svc = _build_service_client()
+    
+    if not svc:
+        return {"favorites": [], "total": 0}
+    
+    try:
+        # Get favorite library_ids
+        fav_resp = (
+            svc.table("library_ratings")
+            .select("library_id")
+            .eq("user_id", user_id)
+            .is_("rating", None)
+            .execute()
+        )
+        
+        fav_ids = [f["library_id"] for f in (fav_resp.data or [])]
+        
+        if not fav_ids:
+            return {"favorites": [], "total": 0}
+        
+        # Fetch strategy details
+        resp = (
+            svc.table("library_strategies")
+            .select(
+                "id, name, author_id, category, difficulty, tags, "
+                "backtest_sharpe_ratio, backtest_total_return_pct, clone_count, "
+                "avg_rating, rating_count, price, subscription_tier, cover_image, "
+                "evaluation_score, subscriber_count, published_at"
+            )
+            .in_("id", fav_ids)
+            .eq("is_active", True)
+            .in_("moderation_status", ["approved", "featured"])
+            .order("published_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning(f"Favorites DB error: {exc}")
+        return {"favorites": [], "total": 0}
+    
+    items = resp.data or []
+    
+    for item in items:
+        item["author_alias"] = _get_author_alias(item.get("author_id", ""))
+        item.pop("author_id", None)
+    
+    return {"favorites": items, "total": len(items)}

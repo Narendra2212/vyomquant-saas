@@ -300,7 +300,7 @@ class ReconciliationEngine:
             return orders
         except Exception as e:
             logger.error(f"[ReconciliationEngine] Error fetching exchange orders: {e}")
-            return []
+            raise
     
     async def _fetch_exchange_positions(
         self,
@@ -313,7 +313,7 @@ class ReconciliationEngine:
             return positions
         except Exception as e:
             logger.error(f"[ReconciliationEngine] Error fetching exchange positions: {e}")
-            return []
+            raise
     
     async def _fetch_exchange_fills(
         self,
@@ -326,7 +326,7 @@ class ReconciliationEngine:
             return fills
         except Exception as e:
             logger.error(f"[ReconciliationEngine] Error fetching exchange fills: {e}")
-            return []
+            raise
     
     async def _fetch_local_orders(
         self,
@@ -339,7 +339,7 @@ class ReconciliationEngine:
             return orders
         except Exception as e:
             logger.error(f"[ReconciliationEngine] Error fetching local orders: {e}")
-            return []
+            raise
     
     async def _fetch_local_positions(
         self,
@@ -352,7 +352,7 @@ class ReconciliationEngine:
             return positions
         except Exception as e:
             logger.error(f"[ReconciliationEngine] Error fetching local positions: {e}")
-            return []
+            raise
     
     async def _fetch_local_fills(
         self,
@@ -365,7 +365,7 @@ class ReconciliationEngine:
             return fills
         except Exception as e:
             logger.error(f"[ReconciliationEngine] Error fetching local fills: {e}")
-            return []
+            raise
     
     async def _reconcile_fills(
         self,

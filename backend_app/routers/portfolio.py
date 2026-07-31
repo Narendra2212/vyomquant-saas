@@ -139,9 +139,14 @@ async def equity_curve(
             cols = [c["name"] for c in result["columns"]]
             return [dict(zip(cols, row)) for row in result["dataset"]]
         return []
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching equity curve: {e}")
-        return []
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "EQUITY_CURVE_FETCH_FAILED", "message": str(e)},
+        )
 
 
 @router.get("/allocation")
@@ -222,14 +227,14 @@ async def get_recent_transactions(
             "period_days": days,
             "generated_at": datetime.utcnow().isoformat()
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching recent transactions for {user['id']}: {e}")
-        return {
-            "transactions": [],
-            "count": 0,
-            "period_days": days,
-            "generated_at": datetime.utcnow().isoformat()
-        }
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "TRANSACTIONS_FETCH_FAILED", "message": str(e)},
+        )
 
 
 # ── POST /api/portfolio/close-all ────────────────────────────────────────

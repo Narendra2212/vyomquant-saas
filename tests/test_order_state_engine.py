@@ -8,6 +8,9 @@ import sys
 import os
 import asyncio
 from decimal import Decimal
+from unittest.mock import Mock
+
+import backend_app.core.order_state_engine as order_state_module
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -298,3 +301,40 @@ def run_all_tests():
 
 if __name__ == "__main__":
     run_all_tests()
+
+
+def test_order_state_followup_tasks_are_tracked(monkeypatch):
+    """Async callbacks and follow-up work must use the failure-observing task helper."""
+    captured = []
+
+    def capture_task(coro, name=None):
+        captured.append(name)
+        coro.close()
+        return Mock()
+
+    monkeypatch.setattr(order_state_module, "fire_and_forget_task", capture_task)
+
+    async def state_callback(*_args):
+        return None
+
+    async def fill_callback(*_args):
+        return None
+
+    engine = OrderStateEngine(auto_update_positions=True, enable_timeouts=False)
+    engine.register_state_change_callback(state_callback)
+    engine.register_fill_callback(fill_callback)
+    lifecycle = engine.create_order(
+        "order-task-tracking", "user-1", "BTC-USD", "buy", "limit", Decimal("1")
+    )
+    lifecycle.current_state = OrderState.OPEN
+
+    asyncio.run(engine.add_fill("order-task-tracking", Decimal("0.5"), Decimal("100")))
+    engine.timeout_order("order-task-tracking")
+
+    assert captured == [
+        "order-state-change-callback:order-task-tracking",
+        "order-state-fill-callback:order-task-tracking",
+        "order-state-position-update:order-task-tracking",
+        "order-state-change-callback:order-task-tracking",
+        "order-state-timeout-cancel:order-task-tracking",
+    ]

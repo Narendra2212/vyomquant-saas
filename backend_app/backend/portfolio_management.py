@@ -233,13 +233,10 @@ class Position:
         else:  # short
             self.realized_pnl = (self.entry_price - self.exit_price) * self.quantity
         
-        if self.side == "long":
-            self.unrealized_pnl = (price - self.entry_price) * self.quantity
-        else:  # short
-            self.unrealized_pnl = (self.entry_price - price) * self.quantity
-        
-        if self.cost_basis > 0:
-            self.unrealized_pnl_pct = self.unrealized_pnl / self.cost_basis
+        # CRITICAL FIX: unrealized_pnl must be 0 for closed positions
+        # A closed position has no unrealized gains/losses
+        self.unrealized_pnl = Decimal('0')
+        self.unrealized_pnl_pct = Decimal('0')
     
     def to_dict(self) -> Dict[str, Any]:
         return {

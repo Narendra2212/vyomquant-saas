@@ -65,7 +65,6 @@ async def update_profile(
 
     if not supabase:
         return {"status": "success", "updated_fields": list(clean.keys())}
-        raise HTTPException(400, "No valid fields provided.")
     supabase.table("profiles").update(clean).eq("id", user["id"]).execute()
     return {"status": "ok"}
 
@@ -141,6 +140,17 @@ async def get_referral_stats(
     supabase: SupabaseClient = Depends(get_request_supabase),
 ):
     app_url = os.getenv("APP_URL", os.getenv("FRONTEND_URL", "https://vyomquant.com")).rstrip("/")
+    if not supabase:
+        return {
+            "status": "active",
+            "message": "Referral program is active.",
+            "total_referrals": 0,
+            "active_subs": 0,
+            "total_earned": 0.0,
+            "pending_payout": 0.0,
+            "available_discounts": 0,
+            "referral_link": f"{app_url}/ref/{user['id'][:8].upper()}",
+        }
     
     # Get available discounts from profiles
     prof_resp = supabase.table("profiles").select("available_discounts").eq("id", user["id"]).execute()
@@ -175,6 +185,8 @@ async def get_notif_settings(
     user: dict = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_request_supabase),
 ):
+    if not supabase:
+        return {}
     resp = (
         supabase.table("notification_settings")
         .select("*")
@@ -190,6 +202,8 @@ async def update_notif_settings(
     user: dict = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_request_supabase),
 ):
+    if not supabase:
+        return {"status": "ok"}
     data = {
         "user_id": user["id"],
         "channels": body.channels.model_dump(),
@@ -205,6 +219,8 @@ async def get_security_logs(
     user: dict = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_request_supabase),
 ):
+    if not supabase:
+        return []
     resp = (
         supabase.table("security_logs")
         .select("*")
@@ -214,6 +230,7 @@ async def get_security_logs(
         .execute()
     )
     return resp.data
+
 
 
 @router.get("/leaderboard")

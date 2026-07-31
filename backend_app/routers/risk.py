@@ -174,9 +174,14 @@ async def get_strategy_limits(user: dict = Depends(get_current_user)):
             "count": len(limits),
             "user_id": user["id"]
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching strategy limits for {user['id']}: {e}")
-        return {"limits": [], "count": 0, "user_id": user["id"]}
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "STRATEGY_LIMITS_FETCH_FAILED", "message": str(e)},
+        )
 
 
 # ── PUT /api/risk/strategy-limits ──────────────────────────────────────────
