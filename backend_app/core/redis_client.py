@@ -60,6 +60,27 @@ class MockRedisClient:
                 added += 1
         return added
 
+    async def hset(self, key: str, name: str = None, value: str = None, mapping: dict = None) -> int:
+        if key not in self._store or not isinstance(self._store[key], dict):
+            self._store[key] = {}
+        count = 0
+        if mapping:
+            for k, v in mapping.items():
+                self._store[key][k] = str(v)
+                count += 1
+        elif name is not None:
+            self._store[key][name] = str(value)
+            count = 1
+        return count
+
+    async def hget(self, key: str, field: str) -> Optional[str]:
+        d = self._store.get(key, {})
+        return d.get(field) if isinstance(d, dict) else None
+
+    async def hgetall(self, key: str) -> dict:
+        d = self._store.get(key, {})
+        return dict(d) if isinstance(d, dict) else {}
+
     async def expire(self, key: str, seconds: int) -> bool:
         return True
     

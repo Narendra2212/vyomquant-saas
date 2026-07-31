@@ -99,10 +99,16 @@ class WebSocketAuthMiddleware:
             logger.debug("[WS/Auth] Authentication not required for this endpoint")
             return None
 
+        async def _safe_close(code: int, reason: str):
+            try:
+                await websocket.close(code=code, reason=reason)
+            except Exception:
+                pass
+
         # Require token
         if not token:
             logger.warning("[WS/Auth] Missing token in WebSocket connection")
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing token")
+            await _safe_close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing token")
             return None
 
         # Validate token locally
@@ -111,7 +117,7 @@ class WebSocketAuthMiddleware:
 
             if not user_data:
                 logger.warning(f"[WS/Auth] Invalid token for user {user_id}")
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+                await _safe_close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
                 return None
 
             logger.info(f"[WS/Auth] WebSocket authenticated for user {user_data.get('id')}")
@@ -120,7 +126,7 @@ class WebSocketAuthMiddleware:
 
         except Exception as e:
             logger.error(f"[WS/Auth] Authentication error: {e}")
-            await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="Authentication error")
+            await _safe_close(code=status.WS_1011_INTERNAL_ERROR, reason="Authentication error")
             return None
 
     async def _validate_token(

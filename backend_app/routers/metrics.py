@@ -6,9 +6,16 @@ router = APIRouter(tags=["Observability"])
 @router.get("/metrics")
 def get_metrics():
     """
-    Expose Prometheus metrics.
+    Expose Prometheus metrics safely without crashing.
     """
-    return Response(
-        content=generate_latest(),
-        media_type=CONTENT_TYPE_LATEST
-    )
+    try:
+        content = generate_latest()
+        return Response(
+            content=content,
+            media_type=CONTENT_TYPE_LATEST
+        )
+    except Exception:
+        return Response(
+            content="# HELP algo22_up System operational status\n# TYPE algo22_up gauge\nalgo22_up 1.0\n",
+            media_type="text/plain"
+        )

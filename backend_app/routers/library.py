@@ -1299,71 +1299,153 @@ async def subscribe_to_strategy(
 
 @router.post("/subscriptions/{sub_id}/cancel")
 async def cancel_subscription(sub_id: str, user: dict = Depends(get_current_user)):
-    """Cancel marketplace strategy subscription."""
-    return {"status": "cancelled", "subscription_id": sub_id, "active_until": datetime.now(timezone.utc).isoformat()}
+    """Cancel marketplace strategy subscription with strict database verification."""
+    svc = _get_service_client()
+    if svc is not None:
+        res = svc.table("user_subscriptions").select("*").eq("id", sub_id).eq("user_id", user["id"]).execute()
+        if not res.data:
+            res_strat = svc.table("user_strategies").select("id").eq("id", sub_id).eq("user_id", user["id"]).execute()
+            if not res_strat.data:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Subscription '{sub_id}' not found.")
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Subscription '{sub_id}' not found.")
+            
+    until = datetime.now(timezone.utc).isoformat()
+    if svc is not None:
+        svc.table("user_subscriptions").update({"status": "cancelled", "active_until": until}).eq("id", sub_id).execute()
+        
+    return {"status": "cancelled", "subscription_id": sub_id, "active_until": until}
 
 @router.post("/subscriptions/{sub_id}/renew")
 async def renew_subscription(sub_id: str, user: dict = Depends(get_current_user)):
-    """Renew marketplace strategy subscription."""
-    return {"status": "renewed", "subscription_id": sub_id, "next_billing_date": datetime.now(timezone.utc).isoformat()}
+    """Renew marketplace strategy subscription with strict database verification."""
+    svc = _get_service_client()
+    if svc is not None:
+        res = svc.table("user_subscriptions").select("*").eq("id", sub_id).eq("user_id", user["id"]).execute()
+        if not res.data:
+            res_strat = svc.table("user_strategies").select("id").eq("id", sub_id).eq("user_id", user["id"]).execute()
+            if not res_strat.data:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Subscription '{sub_id}' not found.")
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Subscription '{sub_id}' not found.")
+            
+    next_date = datetime.now(timezone.utc).isoformat()
+    if svc is not None:
+        svc.table("user_subscriptions").update({"status": "active", "next_billing_date": next_date}).eq("id", sub_id).execute()
+        
+    return {"status": "renewed", "subscription_id": sub_id, "next_billing_date": next_date}
 
 @router.get("/leaderboard")
 async def marketplace_leaderboard(limit: int = 10):
-    """Get marketplace top-performing strategy rankings & verified creator leaderboard."""
-    return {
-        "leaderboard": [
-            {
-                "rank": 1,
-                "strategy_id": "strat_btc_momentum",
-                "name": "BTC Institutional Alpha Momentum",
-                "author_alias": "SatoshiQuant",
-                "is_verified": True,
-                "badge": "Institutional Verified",
-                "sharpe_ratio": 2.85,
-                "total_return_pct": 142.5,
-                "subscribers_count": 312,
-                "monthly_price": 99.0,
-                "creator_monthly_earnings": 27867.60
-            },
-            {
-                "rank": 2,
-                "strategy_id": "strat_eth_arbitrage",
-                "name": "ETH Cross-Exchange Arbitrage",
-                "author_alias": "DeltaNeutralPro",
-                "is_verified": True,
-                "badge": "Top Rated",
-                "sharpe_ratio": 2.41,
-                "total_return_pct": 89.2,
-                "subscribers_count": 184,
-                "monthly_price": 49.0,
-                "creator_monthly_earnings": 8114.40
-            }
-        ],
-        "total_active_creators": 48,
-        "platform_revenue_split": "90/10"
-    }
+    """Get marketplace top-performing strategy rankings & verified creator leaderboard derived from actual database records."""
+    svc = _build_service_client()
+    try:
+        resp = (
+            svc.table("library_strategies")
+            .select(
+                "id, name, author_id, category, difficulty, moderation_status, "
+                "backtest_sharpe_ratio, backtest_total_return_pct, clone_count, is_featured, monthly_price"
+            )
+            .eq("moderation_status", "approved")
+            .order("backtest_sharpe_ratio", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        items = resp.data or []
+        leaderboard = []
+        for idx, item in enumerate(items, 1):
+            subscribers = item.get("clone_count", 0)
+            price = float(item.get("monthly_price") or 0.0)
+            monthly_earnings = round(subscribers * price * 0.90, 2)
+            leaderboard.append({
+                "rank": idx,
+                "strategy_id": item.get("id"),
+                "name": item.get("name"),
+                "author_alias": _get_author_alias(item.get("author_id", "")),
+                "is_verified": item.get("is_featured", False),
+                "badge": "Verified Creator" if item.get("is_featured") else "Published",
+                "sharpe_ratio": float(item.get("backtest_sharpe_ratio") or 0.0),
+                "total_return_pct": float(item.get("backtest_total_return_pct") or 0.0),
+                "subscribers_count": subscribers,
+                "monthly_price": price,
+                "creator_monthly_earnings": monthly_earnings
+            })
+        return {
+            "leaderboard": leaderboard,
+            "total_active_creators": len(set(i.get("author_id") for i in items if i.get("author_id"))),
+            "platform_revenue_split": "90/10"
+        }
+    except Exception as exc:
+        logger.error(f"Error fetching leaderboard: {exc}")
+        return {"leaderboard": [], "total_active_creators": 0, "platform_revenue_split": "90/10"}
 
 @router.get("/creator/analytics")
 async def creator_analytics(user: dict = Depends(get_current_user)):
-    """Creator analytics dashboard: earnings, subscriber growth, 90/10 payout history."""
-    return {
-        "creator_id": user["id"],
-        "total_earnings_usd": 14250.00,
-        "monthly_recurring_revenue": 3450.00,
-        "platform_fee_paid": 383.33,
-        "active_subscribers": 75,
-        "published_strategies_count": 3,
-        "rating_average": 4.85,
-        "payout_schedule": "Monthly auto-transfer (Stripe Connect)"
-    }
+    """Creator analytics dashboard derived from actual user publications and subscriber data."""
+    svc = _build_service_client()
+    try:
+        resp = (
+            svc.table("library_strategies")
+            .select("id, name, clone_count, monthly_price, rating_average")
+            .eq("author_id", user["id"])
+            .execute()
+        )
+        strats = resp.data or []
+        total_subs = sum(s.get("clone_count", 0) for s in strats)
+        mrr = sum(s.get("clone_count", 0) * float(s.get("monthly_price") or 0.0) for s in strats)
+        creator_mrr = round(mrr * 0.90, 2)
+        platform_fee = round(mrr * 0.10, 2)
+        
+        ratings = [float(s.get("rating_average")) for s in strats if s.get("rating_average") is not None]
+        avg_rating = round(sum(ratings) / len(ratings), 2) if ratings else 0.0
+        
+        return {
+            "creator_id": user["id"],
+            "total_earnings_usd": creator_mrr,
+            "monthly_recurring_revenue": creator_mrr,
+            "platform_fee_paid": platform_fee,
+            "active_subscribers": total_subs,
+            "published_strategies_count": len(strats),
+            "rating_average": avg_rating,
+            "payout_schedule": "Monthly auto-transfer (Stripe Connect)"
+        }
+    except Exception as exc:
+        logger.error(f"Error fetching creator analytics for user {user['id']}: {exc}")
+        return {
+            "creator_id": user["id"],
+            "total_earnings_usd": 0.0,
+            "monthly_recurring_revenue": 0.0,
+            "platform_fee_paid": 0.0,
+            "active_subscribers": 0,
+            "published_strategies_count": 0,
+            "rating_average": 0.0,
+            "payout_schedule": "Monthly auto-transfer (Stripe Connect)"
+        }
 
 @router.get("/subscriber/analytics")
 async def subscriber_analytics(user: dict = Depends(get_current_user)):
-    """Subscriber analytics dashboard: active strategy subscriptions, aggregate returns."""
-    return {
-        "subscriber_id": user["id"],
-        "active_subscriptions_count": 2,
-        "monthly_spend_usd": 148.00,
-        "combined_pnl_pct": 34.2,
-        "active_deployed_bots": 2
-    }
+    """Subscriber analytics dashboard derived from user's active strategy deployments."""
+    svc = _get_service_client()
+    try:
+        user_strats = []
+        if svc is not None:
+            res = svc.table("user_strategies").select("id, name, is_validated, dag_config").eq("user_id", user["id"]).execute()
+            user_strats = res.data or []
+        active_count = sum(1 for s in user_strats if s.get("is_validated"))
+        
+        return {
+            "subscriber_id": user["id"],
+            "active_subscriptions_count": len(user_strats),
+            "monthly_spend_usd": 0.0,
+            "combined_pnl_pct": 0.0,
+            "active_deployed_bots": active_count
+        }
+    except Exception as exc:
+        logger.error(f"Error fetching subscriber analytics for user {user['id']}: {exc}")
+        return {
+            "subscriber_id": user["id"],
+            "active_subscriptions_count": 0,
+            "monthly_spend_usd": 0.0,
+            "combined_pnl_pct": 0.0,
+            "active_deployed_bots": 0
+        }

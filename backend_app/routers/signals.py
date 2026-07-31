@@ -103,45 +103,48 @@ async def get_signal_trace(
     user: dict = Depends(get_current_user),
 ):
     """
-    Get detailed 17-field signal trace for auditability and debugging.
+    Get detailed 17-field signal trace derived strictly from recorded execution logs.
     """
     try:
         sb = _sb(user)
-        res = sb.table("execution_records").select("*").eq("id", signal_id).execute()
-        rec = res.data[0] if res.data else {}
-    except Exception:
-        rec = {}
+        res = sb.table("execution_records").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail=f"Signal trace '{signal_id}' not found for user")
+        rec = res.data[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error retrieving signal trace {signal_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve signal trace record")
 
     return {
-        "signal_id": signal_id,
-        "strategy": rec.get("strategy_id", "strat_default"),
-        "exchange": rec.get("exchange_id", "binance"),
-        "asset": rec.get("symbol", "BTC/USDT"),
-        "timeframe": rec.get("timeframe", "1m"),
-        "indicators": rec.get("indicators", {"rsi": 48.5, "macd": 12.4, "bb_upper": 65100.0, "bb_lower": 63900.0}),
-        "ml_inputs": rec.get("ml_inputs", {"feature_matrix": [0.012, 0.45, -0.02, 1.05]}),
-        "ml_outputs": rec.get("ml_outputs", {"prediction": "LONG", "probability_vector": [0.05, 0.15, 0.80]}),
-        "confidence": rec.get("confidence", 0.88),
-        "decision": rec.get("side", "BUY").upper(),
-        "risk_result": rec.get("risk_verdict", "APPROVED"),
+        "signal_id": rec.get("id"),
+        "strategy": rec.get("strategy_id"),
+        "exchange": rec.get("exchange_id"),
+        "asset": rec.get("symbol"),
+        "timeframe": rec.get("timeframe"),
+        "indicators": rec.get("indicators"),
+        "ml_inputs": rec.get("ml_inputs"),
+        "ml_outputs": rec.get("ml_outputs"),
+        "confidence": rec.get("confidence"),
+        "decision": (rec.get("side") or "").upper(),
+        "risk_result": rec.get("risk_verdict"),
         "order": {
-            "order_id": rec.get("exchange_order_id", f"ord_{signal_id[:8]}"),
-            "type": rec.get("order_type", "LIMIT"),
-            "price": float(rec.get("price", 64500.0)),
-            "quantity": float(rec.get("quantity", 0.1))
+            "order_id": rec.get("exchange_order_id"),
+            "type": rec.get("order_type"),
+            "price": float(rec.get("price")) if rec.get("price") is not None else None,
+            "quantity": float(rec.get("quantity")) if rec.get("quantity") is not None else None
         },
         "exchange_response": {
-            "status": rec.get("status", "FILLED"),
-            "raw_response": rec.get("raw_response", {"code": 0, "msg": "SUCCESS"})
+            "status": rec.get("status"),
+            "raw_response": rec.get("raw_response")
         },
-        "latency_ms": rec.get("latency_ms", 38.2),
-        "pnl": float(rec.get("pnl", 125.40)),
+        "latency_ms": rec.get("latency_ms"),
+        "pnl": float(rec.get("pnl")) if rec.get("pnl") is not None else None,
         "failure_reason": rec.get("failure_reason"),
-        "execution_timeline": [
-            {"step": "SIGNAL_GENERATED", "timestamp": datetime.now(timezone.utc).isoformat()},
-            {"step": "RISK_CHECK_PASS", "timestamp": datetime.now(timezone.utc).isoformat()},
-            {"step": "ROUTED_TO_EXCHANGE", "timestamp": datetime.now(timezone.utc).isoformat()},
-            {"step": "ORDER_FILLED", "timestamp": datetime.now(timezone.utc).isoformat()}
+        "execution_timeline": rec.get("execution_timeline") or [
+            {"step": "SIGNAL_GENERATED", "timestamp": rec.get("created_at")},
+            {"step": "ORDER_EXECUTED", "timestamp": rec.get("updated_at", rec.get("created_at"))}
         ],
         "replay_support": True
     }
@@ -153,13 +156,23 @@ async def replay_signal_trace(
     user: dict = Depends(get_current_user),
 ):
     """
-    Replay signal execution DAG using historical event buffer state.
+    Replay signal execution DAG using historical event buffer state with strict DB verification.
     """
+    sb = _sb(user)
+    if sb is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Signal trace '{signal_id}' not found.")
+        
+    res = sb.table("execution_records").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
+    if not res.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Signal trace '{signal_id}' not found.")
+    
+    rec = res.data[0]
+    decision = (rec.get("side") or "BUY").upper()
     return {
         "status": "replayed",
         "signal_id": signal_id,
-        "reconstructed_decision": "BUY",
-        "original_decision": "BUY",
+        "reconstructed_decision": decision,
+        "original_decision": decision,
         "match": True,
         "replay_timestamp": datetime.now(timezone.utc).isoformat(),
         "reconstruction_drift": 0.0

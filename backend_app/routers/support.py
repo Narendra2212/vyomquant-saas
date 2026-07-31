@@ -132,7 +132,7 @@ async def get_ticket(
         # Get ticket
         ticket_resp = supabase.table("support_tickets").select("*").eq(
             "id", ticket_id
-        ).eq("user_id", user["id"]).single().execute()
+        ).eq("user_id", user["id"]).execute()
         
         if not ticket_resp.data:
             raise HTTPException(404, "Ticket not found")
@@ -200,12 +200,12 @@ async def add_comment(
         # Verify ticket ownership
         ticket_check = supabase.table("support_tickets").select("id, status").eq(
             "id", ticket_id
-        ).eq("user_id", user["id"]).single().execute()
+        ).eq("user_id", user["id"]).execute()
         
         if not ticket_check.data:
             raise HTTPException(404, "Ticket not found")
         
-        if ticket_check.data["status"] == TicketStatus.CLOSED.value:
+        if ticket_check.data[0]["status"] == TicketStatus.CLOSED.value:
             raise HTTPException(400, "Cannot comment on closed ticket")
         
         # Add comment

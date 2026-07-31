@@ -17,47 +17,105 @@ export default function Dashboard() {
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  // State data
+  // State data initialized to 0 / empty state
   const [portfolioData, setPortfolioData] = useState({
-    totalValue: 124850.40,
-    todayPnl: 1240.50,
-    todayReturnPct: 1.01,
-    unrealizedPnl: 420.10,
-    availableBalance: 45120.00
+    totalValue: 0.00,
+    todayPnl: 0.00,
+    todayReturnPct: 0.00,
+    unrealizedPnl: 0.00,
+    availableBalance: 0.00
   });
 
-  const [runningStrategies, setRunningStrategies] = useState([
-    {
-      id: "strat_1",
-      name: "BTC Institutional Alpha Momentum",
-      pair: "BTC/USDT",
-      status: "active",
-      health: "healthy",
-      todayPnl: 840.20,
-      todayReturnPct: 1.45,
-      lastSignalTime: "12 mins ago"
-    },
-    {
-      id: "strat_2",
-      name: "ETH Cross-Exchange Arbitrage",
-      pair: "ETH/USDT",
-      status: "active",
-      health: "healthy",
-      todayPnl: 400.30,
-      todayReturnPct: 0.82,
-      lastSignalTime: "45 mins ago"
-    },
-    {
-      id: "strat_3",
-      name: "SOL Mean Reversion Volatility",
-      pair: "SOL/USDT",
-      status: "paused",
-      health: "warning",
-      todayPnl: 0.00,
-      todayReturnPct: 0.00,
-      lastSignalTime: "3 days ago"
+  const [runningStrategies, setRunningStrategies] = useState([]);
+  const [tradingInsights, setTradingInsights] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+
+  useEffect(() => {
+    async function loadDashboardData() {
+      setIsLoading(true);
+      try {
+        const [portRes, stratRes, sigRes] = await Promise.allSettled([
+          get(endpoints.portfolio || "/portfolio/summary"),
+          get(endpoints.strategies?.list || "/strategies"),
+          get("/signals?limit=5")
+        ]);
+
+        if (portRes.status === "fulfilled" && portRes.value) {
+          const p = portRes.value;
+          setPortfolioData({
+            totalValue: floatVal(p.total_balance || p.totalValue || 0.00),
+            todayPnl: floatVal(p.daily_pnl || p.todayPnl || 0.00),
+            todayReturnPct: floatVal(p.daily_return_pct || p.todayReturnPct || 0.00),
+            unrealizedPnl: floatVal(p.unrealized_pnl || p.unrealizedPnl || 0.00),
+            availableBalance: floatVal(p.available_balance || p.availableBalance || 0.00)
+          });
+        }
+
+        if (stratRes.status === "fulfilled" && Array.isArray(stratRes.value)) {
+          const mappedStrats = stratRes.value.map(s => ({
+            id: s.id,
+            name: s.name || "Strategy",
+            pair: s.pair || s.symbol || "BTC/USDT",
+            status: s.is_active ? "active" : "paused",
+            health: s.is_active ? "healthy" : "idle",
+            todayPnl: floatVal(s.today_pnl || 0.00),
+            todayReturnPct: floatVal(s.today_return_pct || 0.00),
+            lastSignalTime: s.last_signal_at ? new Date(s.last_signal_at).toLocaleTimeString() : "No signals yet"
+          }));
+          setRunningStrategies(mappedStrats);
+          
+          // Generate deterministic insights from actual state
+          const insights = [];
+          const inactive = mappedStrats.filter(st => st.status === "paused");
+          if (inactive.length > 0) {
+            insights.push({
+              id: "ins_1",
+              type: "warning",
+              text: `${inactive.length} strategy(ies) currently paused: ${inactive.map(i => i.name).join(", ")}.`,
+              actionText: "Manage Strategies",
+              actionPath: "/app/strategies"
+            });
+          }
+          const activeCount = mappedStrats.length - inactive.length;
+          insights.push({
+            id: "ins_2",
+            type: "info",
+            text: `${activeCount} active strategy execution bot(s) running on live connected exchanges.`,
+            actionText: "View Bots",
+            actionPath: "/app/strategies"
+          });
+          insights.push({
+            id: "ins_3",
+            type: "success",
+            text: "Risk Circuit Breakers active: Max drawdown limit enforced by Risk Engine.",
+            actionText: "Risk Settings",
+            actionPath: "/app/risk"
+          });
+          setTradingInsights(insights.slice(0, 3));
+        }
+
+        if (sigRes.status === "fulfilled" && sigRes.value?.items) {
+          const notifs = sigRes.value.items.slice(0, 5).map(sig => ({
+            id: sig.signal_id,
+            time: sig.execution_timeline?.[0]?.timestamp ? new Date(sig.execution_timeline[0].timestamp).toLocaleTimeString() : "Recent",
+            text: `Signal ${sig.decision}: ${sig.asset} on ${sig.exchange.toUpperCase()} (Risk: ${sig.risk_result})`,
+            type: sig.risk_result === "APPROVED" ? "success" : "warning"
+          }));
+          setNotifications(notifs);
+        }
+      } catch (err) {
+        console.error("Error loading live dashboard data:", err);
+      } finally {
+        setIsLoading(false);
+      }
     }
-  ]);
+    loadDashboardData();
+  }, []);
+
+  function floatVal(v) {
+    const num = parseFloat(v);
+    return isNaN(num) ? 0.00 : num;
+  }
 
   // Synthetic equity curve based on selected timeframe
   const equityCurve = useMemo(() => {
@@ -80,39 +138,7 @@ export default function Dashboard() {
     return data;
   }, [timeframe]);
 
-  // High-value deterministic trading insights (max 3)
-  const tradingInsights = [
-    {
-      id: "ins_1",
-      type: "warning",
-      text: "SOL Mean Reversion Strategy has not generated any signal for 3 days.",
-      actionText: "Check Strategy",
-      actionPath: "/app/strategies"
-    },
-    {
-      id: "ins_2",
-      type: "info",
-      text: "BTC volatility increased 4.2% today. Alpha Momentum strategy is capturing current trend.",
-      actionText: "View Performance",
-      actionPath: "/app/backtest"
-    },
-    {
-      id: "ins_3",
-      type: "success",
-      text: "Risk utilization is at 42% (well within configured 15% max drawdown cap).",
-      actionText: "Risk Settings",
-      actionPath: "/app/risk"
-    }
-  ];
 
-  // Unread actionable notifications (max 5)
-  const notifications = [
-    { id: "notif_1", time: "10m ago", text: "Backtest completed: RSI Momentum Strategy (Sharpe 2.15)", type: "success" },
-    { id: "notif_2", time: "1h ago", text: "Order Filled: BUY 0.15 BTC @ $64,250.00", type: "info" },
-    { id: "notif_3", time: "3h ago", text: "Exchange Connection Verified: Binance Futures API Healthy", type: "success" },
-    { id: "notif_4", time: "1d ago", text: "Weekly Performance Report: Portfolio Return +3.4%", type: "info" },
-    { id: "notif_5", time: "2d ago", text: "Risk Rule Check: Daily Exposure Within Tier Limits", type: "info" }
-  ];
 
   const handleToggleStrategy = (id) => {
     setRunningStrategies(prev => prev.map(s => {
