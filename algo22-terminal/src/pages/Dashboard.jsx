@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   TrendingUp, TrendingDown, Bot, Play, Pause, ArrowRight,
@@ -117,26 +117,41 @@ export default function Dashboard() {
     return isNaN(num) ? 0.00 : num;
   }
 
-  // Synthetic equity curve based on selected timeframe
-  const equityCurve = useMemo(() => {
-    const pointsMap = { "1D": 24, "1W": 7, "1M": 30, "3M": 90, "ALL": 180 };
-    const points = pointsMap[timeframe] || 30;
-    const baseValue = 100000;
-    let current = baseValue;
-    const data = [];
-    const now = new Date();
-    
-    for (let i = points; i >= 0; i--) {
-      const date = new Date(now.getTime() - i * (86400000 * 30 / points));
-      const change = (Math.sin(i / 3) * 0.015 + (Math.random() - 0.48) * 0.02);
-      current = current * (1 + change);
-      data.push({
-        d: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-        v: Math.round(current * 100) / 100
-      });
+  // Real equity curve data — fetched from /api/portfolio/equity-curve
+  const [equityCurve, setEquityCurve] = useState([]);
+  const [equityLoading, setEquityLoading] = useState(false);
+
+  useEffect(() => {
+    async function loadEquityCurve() {
+      setEquityLoading(true);
+      const dayMap = { "1D": 1, "1W": 7, "1M": 30, "3M": 90, "ALL": 365 };
+      const days = dayMap[timeframe] || 30;
+      try {
+        const data = await get(`/api/portfolio/equity-curve?days=${days}`);
+        if (Array.isArray(data) && data.length > 0) {
+          setEquityCurve(
+            data.map(row => ({
+              d: row.timestamp
+                ? new Date(row.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                : "",
+              v: parseFloat(row.equity ?? row.value ?? 0)
+            }))
+          );
+        } else {
+          // No data yet — render flat empty state; never fabricate performance
+          setEquityCurve([]);
+        }
+      } catch (err) {
+        console.error("Failed to load equity curve:", err);
+        setEquityCurve([]);
+      } finally {
+        setEquityLoading(false);
+      }
     }
-    return data;
+    loadEquityCurve();
   }, [timeframe]);
+
+
 
 
 
@@ -375,25 +390,37 @@ export default function Dashboard() {
             </div>
 
             {/* Interactive Equity Curve */}
-            <div style={{ height: 220 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={equityCurve}>
-                  <defs>
-                    <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.25} />
-                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0.0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="d" stroke="#334155" fontSize={10} tickLine={false} axisLine={false} />
-                  <YAxis domain={["auto", "auto"]} hide />
-                  <Tooltip
-                    contentStyle={{ background: "#090d16", border: "1px solid #1e293b", borderRadius: 8, fontSize: 12 }}
-                    formatter={(val) => [`$${val.toLocaleString()}`, "Portfolio Equity"]}
-                  />
-                  <Area type="monotone" dataKey="v" stroke="#6366f1" strokeWidth={2} fill="url(#equityGrad)" />
-                </AreaChart>
-              </ResponsiveContainer>
+            <div style={{ height: 220, position: "relative" }}>
+              {equityLoading ? (
+                <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#475569", fontSize: 13 }}>
+                  Loading equity data...
+                </div>
+              ) : equityCurve.length === 0 ? (
+                <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, color: "#475569" }}>
+                  <BarChart2 size={28} style={{ opacity: 0.4 }} />
+                  <span style={{ fontSize: 13 }}>No equity data yet — connect an exchange and deploy a strategy to begin tracking.</span>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={equityCurve}>
+                    <defs>
+                      <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#6366f1" stopOpacity={0.25} />
+                        <stop offset="95%" stopColor="#6366f1" stopOpacity={0.0} />
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="d" stroke="#334155" fontSize={10} tickLine={false} axisLine={false} />
+                    <YAxis domain={["auto", "auto"]} hide />
+                    <Tooltip
+                      contentStyle={{ background: "#090d16", border: "1px solid #1e293b", borderRadius: 8, fontSize: 12 }}
+                      formatter={(val) => [`$${val.toLocaleString()}`, "Portfolio Equity"]}
+                    />
+                    <Area type="monotone" dataKey="v" stroke="#6366f1" strokeWidth={2} fill="url(#equityGrad)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </div>
+
           </div>
 
           {/* ── SECTION 3: RUNNING STRATEGIES ─────────────────────────────── */}
