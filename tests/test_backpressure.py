@@ -9,7 +9,7 @@ import os
 import time
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.backpressure import (
+from backend_app.core.backpressure import (
     BackpressureController,
     BackpressureConfig,
     CircuitBreaker,

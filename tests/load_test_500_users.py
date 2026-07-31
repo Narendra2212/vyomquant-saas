@@ -298,8 +298,8 @@ class LoadTestRunner:
     async def monitor_system(self):
         """Monitor system metrics during test."""
         try:
-            from core.scaling_metrics import scaling_metrics
-            from core.backpressure import backpressure
+            from backend_app.core.scaling_metrics import scaling_metrics
+            from backend_app.core.backpressure import backpressure
             
             while not self.stop_event.is_set():
                 try:

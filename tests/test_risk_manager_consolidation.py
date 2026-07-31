@@ -98,7 +98,7 @@ def test_validate_trade_request_checks():
         v, msg = await rm.validate_trade_request(
             TradeRequest(
                 user_id="user1",
-                user_tier="pro",
+                user_tier="pro_999",
                 symbol="BTC/USDT",
                 side="buy",
                 amount=0.1,
@@ -114,7 +114,7 @@ def test_validate_trade_request_checks():
         v_size, _ = await rm.validate_trade_request(
             TradeRequest(
                 user_id="user2",
-                user_tier="pro",
+                user_tier="pro_999",
                 symbol="ETH/USDT",
                 side="buy",
                 amount=0.3,
@@ -130,7 +130,7 @@ def test_validate_trade_request_checks():
         v_dd, _ = await rm.validate_trade_request(
             TradeRequest(
                 user_id="user3",
-                user_tier="pro",
+                user_tier="pro_999",
                 symbol="BTC/USDT",
                 side="buy",
                 amount=0.05,
@@ -146,7 +146,7 @@ def test_validate_trade_request_checks():
         v_loss, _ = await rm.validate_trade_request(
             TradeRequest(
                 user_id="user4",
-                user_tier="pro",
+                user_tier="pro_999",
                 symbol="BTC/USDT",
                 side="buy",
                 amount=0.05,
@@ -178,7 +178,7 @@ def test_validate_trade_request_checks():
         v_open, _ = await rm.validate_trade_request(
             TradeRequest(
                 user_id="user6",
-                user_tier="pro",
+                user_tier="pro_999",
                 symbol="BTC/USDT",
                 side="buy",
                 amount=0.05,
@@ -195,7 +195,7 @@ def test_validate_trade_request_checks():
         v_lev, _ = await rm.validate_trade_request(
             TradeRequest(
                 user_id="user7",
-                user_tier="pro",
+                user_tier="pro_999",
                 symbol="BTC/USDT",
                 side="buy",
                 amount=0.01,
@@ -212,7 +212,7 @@ def test_validate_trade_request_checks():
         v_fc, _ = await rm.validate_trade_request(
             TradeRequest(
                 user_id="user8",
-                user_tier="pro",
+                user_tier="pro_999",
                 symbol="BTC/USDT",
                 side="buy",
                 amount=0.01,

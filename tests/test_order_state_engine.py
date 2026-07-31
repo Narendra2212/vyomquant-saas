@@ -11,7 +11,7 @@ from decimal import Decimal
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.order_state_engine import (
+from backend_app.core.order_state_engine import (
     OrderStateEngine,
     OrderState,
     OrderLifecycle,

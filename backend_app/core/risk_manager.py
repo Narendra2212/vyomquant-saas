@@ -117,10 +117,8 @@ class InstitutionalRiskManager:
         # Subscription tier limits
         self.tier_limits = {
             "free": {"max_trade": 1_000, "max_exposure": 5_000},
-            "starter": {"max_trade": 5_000, "max_exposure": 25_000},
-            "pro": {"max_trade": 25_000, "max_exposure": 100_000},
-            "whale": {"max_trade": 250_000, "max_exposure": 1_000_000},
-            "institutional": {"max_trade": float("inf"), "max_exposure": float("inf")},
+            "pro_999": {"max_trade": 25_000, "max_exposure": 100_000},
+            "elite_1999": {"max_trade": 250_000, "max_exposure": 1_000_000},
         }
 
         # Centralized Capital Allocator

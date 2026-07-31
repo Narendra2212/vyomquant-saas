@@ -10,7 +10,7 @@ import asyncio
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.slo_monitor import (
+from backend_app.core.slo_monitor import (
     SLOType,
     SLOThreshold,
     SLOCompliance,

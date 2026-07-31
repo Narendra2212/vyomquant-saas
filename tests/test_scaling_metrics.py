@@ -9,7 +9,7 @@ import os
 import time
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.scaling_metrics import (
+from backend_app.core.scaling_metrics import (
     ScalingMetricsCollector,
     scaling_metrics,
     get_scaling_metrics,

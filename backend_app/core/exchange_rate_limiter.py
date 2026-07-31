@@ -559,12 +559,11 @@ class ExchangeRateLimiter:
             # Single request, no batching needed
             return [await self.execute(exchange, requests[0]["coro"])]
         
-        # For now, execute sequentially with rate limiting
-        # TODO: Implement actual batching for supported exchanges
-        results = []
-        for req in requests:
-            result = await self.execute(exchange, req["coro"])
-            results.append(result)
+        # Execute requests concurrently through rate-limited executor
+        results = await asyncio.gather(
+            *[self.execute(exchange, req["coro"]) for req in requests],
+            return_exceptions=True
+        )
         
         self._stats[exchange]["requests_batched"] += len(requests)
         return results

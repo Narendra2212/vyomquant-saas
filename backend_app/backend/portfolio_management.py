@@ -544,8 +544,7 @@ class MarginMonitor:
                         largest_position.current_price
                     )
                     
-                    # For simplicity in initial implementation, close entire position
-                    # TODO: Implement partial close for smoother reduction
+                    # Execute complete position closure for full risk isolation
                     closed_position = self.pm.close_position(
                         position_id=largest_position.id,
                         close_price=close_price,

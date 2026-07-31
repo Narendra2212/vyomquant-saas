@@ -10,7 +10,7 @@ import asyncio
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.exchange_rate_limit_engine import (
+from backend_app.core.exchange_rate_limit_engine import (
     RequestPriority,
     TokenBucketConfig,
     TokenBucket,

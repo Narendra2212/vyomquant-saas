@@ -472,7 +472,12 @@ class DAGEventLoop:
                 f"🚫 TRADING DISABLED (SAFETY): {reason}. "
                 f"All signals will be blocked until system health is restored."
             )
-            # TODO: Send alert to monitoring/alerting system
+            try:
+                from backend_app.core.state import app_state
+                if hasattr(app_state, "telemetry") and app_state.telemetry:
+                    await app_state.telemetry.emit_alert("TRADING_DISABLED", {"reason": reason})
+            except Exception as e:
+                logger.warning(f"Could not publish safety alert: {e}")
     
     async def _enable_trading(self, reason: str):
         """Re-enable trading after system health restored."""

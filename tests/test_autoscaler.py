@@ -10,7 +10,7 @@ import asyncio
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.metrics_exporter import (
+from backend_app.core.metrics_exporter import (
     MetricsExporter,
     MetricsExporterConfig,
     get_metrics_exporter,

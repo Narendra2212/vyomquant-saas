@@ -1006,24 +1006,42 @@ class ExecutionGuard:
     
     async def _validate_symbol_allowed(self, tenant_id: str, symbol: str) -> ValidationResult:
         """Check if symbol is allowed for trading."""
-        # TODO: Check against allowed symbols list from config/DB
-        # For now, assume all symbols allowed
-        
-        if not symbol or symbol == "unknown":
+        if not symbol or not isinstance(symbol, str) or symbol.strip() == "" or symbol == "unknown":
             return ValidationResult(
                 check_name="symbol_allowed",
                 passed=False,
                 severity=ValidationSeverity.BLOCK,
                 message="Invalid or missing symbol",
-                details={"symbol": symbol},
+                details={"symbol": str(symbol)},
             )
-        
+
+        clean_symbol = symbol.strip().upper()
+
+        # Check tenant-specific or global allowed symbols from Redis if present
+        try:
+            allowed_symbols = await self.redis.smembers(f"allowed_symbols:{tenant_id}")
+            if not allowed_symbols:
+                allowed_symbols = await self.redis.smembers("allowed_symbols:global")
+            
+            if allowed_symbols:
+                decoded = {s.decode("utf-8") if isinstance(s, bytes) else str(s) for s in allowed_symbols}
+                if clean_symbol not in decoded:
+                    return ValidationResult(
+                        check_name="symbol_allowed",
+                        passed=False,
+                        severity=ValidationSeverity.BLOCK,
+                        message=f"Symbol {clean_symbol} is not in the allowed symbols list",
+                        details={"symbol": clean_symbol, "allowed_count": len(decoded)},
+                    )
+        except Exception as e:
+            logger.warning(f"Error checking symbol allow-list in Redis for tenant {tenant_id}: {e}")
+
         return ValidationResult(
             check_name="symbol_allowed",
             passed=True,
             severity=ValidationSeverity.PASS,
-            message=f"Symbol {symbol} is allowed for trading",
-            details={"symbol": symbol},
+            message=f"Symbol {clean_symbol} is allowed for trading",
+            details={"symbol": clean_symbol},
         )
     
     async def _validate_portfolio_concentration(

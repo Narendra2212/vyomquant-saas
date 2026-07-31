@@ -534,16 +534,23 @@ class OrderWatchdog:
         self,
         order: ExecutionRecordModel
     ) -> Optional[Any]:
-        """Get exchange executor for this order."""
-        # In production, orders would store their exchange_id
-        # For now, return a default executor
-        # TODO: Implement proper exchange routing
-        
+        """Get exchange executor for this order based on exchange_id and tenant_id."""
         try:
-            # This would look up the correct executor based on order metadata
-            # For now, return None to indicate we need proper implementation
+            exchange_id = getattr(order, "exchange_id", None) or "binance"
+            from backend_app.core.state import app_state
+            if hasattr(app_state, "exchange_router") and app_state.exchange_router:
+                return app_state.exchange_router.get_executor(
+                    tenant_id=str(order.tenant_id),
+                    exchange_id=exchange_id
+                )
+            elif hasattr(app_state, "vault") and app_state.vault:
+                return app_state.vault.get_exchange_client(
+                    user_id=str(order.tenant_id),
+                    exchange=exchange_id
+                )
             return None
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Could not route executor for order {getattr(order, 'execution_id', 'unknown')}: {e}")
             return None
     
     def get_metrics(self) -> Dict[str, Any]:

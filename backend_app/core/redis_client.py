@@ -73,6 +73,9 @@ class MockRedisClient:
     async def ping(self):
         return True
 
+    async def close(self):
+        pass
+
 
 class MockRedisPubSub:
     """Mock pub/sub client"""

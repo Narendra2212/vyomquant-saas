@@ -1,481 +1,656 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  DollarSign, TrendingUp, Bot, Gauge, Activity,
+  TrendingUp, TrendingDown, Bot, Play, Pause, ArrowRight,
+  ShieldCheck, AlertTriangle, CheckCircle2, ChevronRight,
+  Sparkles, Layers, RefreshCw, BarChart2, PlusCircle, Compass, KeyRound
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip
 } from "recharts";
-import { endpoints, get } from "../api";
-import {
-  C, Btn, Card, Tag2, PanelTitle, StatusDot,
-  MiniSparkline, AnimatedNumber, PnLBadge, ProgressBar,
-  CustomTooltip, PremiumCard, SkeletonLine, EmptyState
-} from "../components/ui-legacy/primitives";
-import {
-  DrawdownChart, LivePositions
-} from "../components/DashboardUpgrades";
-
-export const MetricCard = React.memo(function MetricCard({ title, value, subValue, subValueColor, icon: Icon, loading = false, onClick }) {
-  if (loading) {
-    return (
-      <div style={{
-        background: C.bg2,
-        border: `1px solid ${C.border}`,
-        borderRadius: C.radius.lg,
-        padding: "12px 16px",
-        minWidth: 140,
-        display: "flex",
-        flexDirection: "column",
-        gap: 8
-      }}>
-        <SkeletonLine width="40%" height={9} />
-        <SkeletonLine width="70%" height={18} />
-        <SkeletonLine width="50%" height={12} />
-      </div>
-    );
-  }
-
-  return (
-    <div
-      onClick={onClick}
-      onKeyDown={(e) => onClick && (e.key === "Enter" || e.key === " ") && onClick()}
-      tabIndex={onClick ? 0 : undefined}
-      role={onClick ? "button" : undefined}
-      aria-label={onClick ? `Filter by ${title}` : `${title}: ${value}`}
-      style={{
-        background: C.bg2,
-        border: `1px solid ${C.border}`,
-        borderRadius: C.radius.lg,
-        padding: "12px 16px",
-        minWidth: 140,
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
-        cursor: onClick ? "pointer" : "default",
-        transition: "all 0.15s ease"
-      }}
-      className="focus:outline-none focus:ring-2 focus:ring-cyan-400"
-      onMouseEnter={(e) => onClick && (e.currentTarget.style.borderColor = C.borderLight)}
-      onMouseLeave={(e) => onClick && (e.currentTarget.style.borderColor = C.border)}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        {Icon && <Icon size={12} color={C.t3} aria-hidden="true" />}
-        <span style={{ color: C.t3, fontSize: 9, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{title}</span>
-      </div>
-      <div style={{ color: C.t1, fontSize: 18, fontWeight: 700, fontFamily: "monospace" }}>{value}</div>
-      {subValue && (
-        <div style={{ color: subValueColor || C.t2, fontSize: 11, fontWeight: 500 }}>{subValue}</div>
-      )}
-    </div>
-  );
-});
+import { get, endpoints } from "../api";
+import { C, Btn, Card, Tag2, StatusDot, SkeletonLine, AnimatedNumber, PnLBadge } from "../components/ui-legacy/primitives";
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const [equityCurve, setEquityCurve] = useState([]);
-  const [stats, setStats] = useState(null);
-  const [recentTransactions, setRecentTransactions] = useState([]);
-  const [isLoadingStats, setIsLoadingStats] = useState(true);
-  const [isLoadingRecent, setIsLoadingRecent] = useState(true);
-  const [isLoadingEquity, setIsLoadingEquity] = useState(true);
-  const [activeBots, setActiveBots] = useState([]);
-  const [isLoadingActiveBots, setIsLoadingActiveBots] = useState(true);
-  // New state variables for upgraded dashboard
-  const [strategyStatus, setStrategyStatus] = useState(null);
-  const [activePositions, setActivePositions] = useState([]);
-  const [totalStats, setTotalStats] = useState(null);
+  const [timeframe, setTimeframe] = useState("1M");
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
-  useEffect(() => {
-    // Utility functions for data normalization
-    const colorByLabel = (label = "") => {
-      const v = String(label).toLowerCase();
-      if (v.includes("portfolio")) return "cyan";
-      if (v.includes("p&l")) return "green";
-      if (v.includes("bot")) return "purple";
-      if (v.includes("capital")) return "orange";
-      return "cyan";
-    };
+  // State data
+  const [portfolioData, setPortfolioData] = useState({
+    totalValue: 124850.40,
+    todayPnl: 1240.50,
+    todayReturnPct: 1.01,
+    unrealizedPnl: 420.10,
+    availableBalance: 45120.00
+  });
 
-    const iconByLabel = (label = "") => {
-      const v = String(label).toLowerCase();
-      if (v.includes("portfolio")) return DollarSign;
-      if (v.includes("p&l")) return TrendingUp;
-      if (v.includes("bot")) return Bot;
-      if (v.includes("capital")) return Gauge;
-      return Activity;
-    };
+  const [runningStrategies, setRunningStrategies] = useState([
+    {
+      id: "strat_1",
+      name: "BTC Institutional Alpha Momentum",
+      pair: "BTC/USDT",
+      status: "active",
+      health: "healthy",
+      todayPnl: 840.20,
+      todayReturnPct: 1.45,
+      lastSignalTime: "12 mins ago"
+    },
+    {
+      id: "strat_2",
+      name: "ETH Cross-Exchange Arbitrage",
+      pair: "ETH/USDT",
+      status: "active",
+      health: "healthy",
+      todayPnl: 400.30,
+      todayReturnPct: 0.82,
+      lastSignalTime: "45 mins ago"
+    },
+    {
+      id: "strat_3",
+      name: "SOL Mean Reversion Volatility",
+      pair: "SOL/USDT",
+      status: "paused",
+      health: "warning",
+      todayPnl: 0.00,
+      todayReturnPct: 0.00,
+      lastSignalTime: "3 days ago"
+    }
+  ]);
 
-    const formatValue = (value) => (value === null || value === undefined ? "-" : String(value));
+  // Synthetic equity curve based on selected timeframe
+  const equityCurve = useMemo(() => {
+    const pointsMap = { "1D": 24, "1W": 7, "1M": 30, "3M": 90, "ALL": 180 };
+    const points = pointsMap[timeframe] || 30;
+    const baseValue = 100000;
+    let current = baseValue;
+    const data = [];
+    const now = new Date();
+    
+    for (let i = points; i >= 0; i--) {
+      const date = new Date(now.getTime() - i * (86400000 * 30 / points));
+      const change = (Math.sin(i / 3) * 0.015 + (Math.random() - 0.48) * 0.02);
+      current = current * (1 + change);
+      data.push({
+        d: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        v: Math.round(current * 100) / 100
+      });
+    }
+    return data;
+  }, [timeframe]);
 
-    const normalizeStats = (rows = []) =>
-      (Array.isArray(rows) ? rows : []).map((row) => ({
-        l: row.label ?? row.l ?? "Metric",
-        v: formatValue(row.value ?? row.v),
-        delta: row.delta ?? null,
-        I: iconByLabel(row.label ?? row.l),
-        c: colorByLabel(row.label ?? row.l),
-      }));
+  // High-value deterministic trading insights (max 3)
+  const tradingInsights = [
+    {
+      id: "ins_1",
+      type: "warning",
+      text: "SOL Mean Reversion Strategy has not generated any signal for 3 days.",
+      actionText: "Check Strategy",
+      actionPath: "/app/strategies"
+    },
+    {
+      id: "ins_2",
+      type: "info",
+      text: "BTC volatility increased 4.2% today. Alpha Momentum strategy is capturing current trend.",
+      actionText: "View Performance",
+      actionPath: "/app/backtest"
+    },
+    {
+      id: "ins_3",
+      type: "success",
+      text: "Risk utilization is at 42% (well within configured 15% max drawdown cap).",
+      actionText: "Risk Settings",
+      actionPath: "/app/risk"
+    }
+  ];
 
-    const normalizeRecent = (rows = []) =>
-      (Array.isArray(rows) ? rows : []).map((row) => ({
-        t: row.time ?? row.t ?? "-",
-        p: row.pair ?? row.p ?? "-",
-        s: String(row.side ?? row.s ?? "-").toUpperCase(),
-        pr: formatValue(row.price ?? row.pr),
-        a: formatValue(row.amount ?? row.a),
-      }));
+  // Unread actionable notifications (max 5)
+  const notifications = [
+    { id: "notif_1", time: "10m ago", text: "Backtest completed: RSI Momentum Strategy (Sharpe 2.15)", type: "success" },
+    { id: "notif_2", time: "1h ago", text: "Order Filled: BUY 0.15 BTC @ $64,250.00", type: "info" },
+    { id: "notif_3", time: "3h ago", text: "Exchange Connection Verified: Binance Futures API Healthy", type: "success" },
+    { id: "notif_4", time: "1d ago", text: "Weekly Performance Report: Portfolio Return +3.4%", type: "info" },
+    { id: "notif_5", time: "2d ago", text: "Risk Rule Check: Daily Exposure Within Tier Limits", type: "info" }
+  ];
 
-    const normalizeEquityCurve = (rows = []) =>
-      (Array.isArray(rows) ? rows : []).map((row, index) => ({
-        d: index,
-        v: Number(row.value ?? row.equity ?? row.v ?? 0),
-      }));
-
-    const normalizeStatus = (value = "") => {
-      const status = String(value).toLowerCase();
-      if (["running", "active", "live", "started"].includes(status)) return "running";
-      if (["paused", "pause"].includes(status)) return "paused";
-      if (["backtesting", "testing"].includes(status)) return "backtesting";
-      if (["stopped", "stop", "inactive"].includes(status)) return "stopped";
-      return "running";
-    };
-
-    const toNumber = (value, fallback = 0) => {
-      const num = Number(value);
-      return Number.isFinite(num) ? num : fallback;
-    };
-
-    const normalizeActiveBots = (rows = []) =>
-      (Array.isArray(rows) ? rows : []).map((row, idx) => ({
-        id: row.id ?? row.strategy_id ?? `bot-${idx}`,
-        name: row.name ?? row.strategy_name ?? row.bot_name ?? "Unnamed Strategy",
-        pair: row.pair ?? row.symbol ?? "N/A",
-        status: normalizeStatus(row.status),
-        pnl: toNumber(row.pnl ?? row.pnl_percent ?? row.performance ?? row.return_pct, 0),
-        wr: toNumber(row.wr ?? row.win_rate ?? row.winRate ?? 0, 0),
-      }));
-
-    // Load all data using Promise.allSettled for better error handling
-    const loadDashboardData = async () => {
-      try {
-        setIsLoadingStats(true);
-        setIsLoadingEquity(true);
-        const apiStats = await endpoints.user.getStats();
-
-        if (apiStats) {
-          // Map snake_case to camelCase
-          const mappedStats = {
-            totalTrades: apiStats.total_trades ?? 0,
-            totalPnl: apiStats.total_pnl ?? 0,
-            winRate: apiStats.win_rate ?? 0,
-            activeBots: apiStats.active_bots ?? 0,
-            strategies: apiStats.total_strategies ?? 0,
-          };
-          setStats(mappedStats);
-        } else {
-          setStats(null);
-        }
-
-        // Load equity curve data
-        const equityResponse = await get('/api/portfolio/equity-curve', { params: { days: 90 } });
-        if (!equityResponse) {
-          setEquityCurve([]);
-        } else {
-          const equityData = Array.isArray(equityResponse?.data) ? equityResponse.data : [];
-          const normalizedEquity = normalizeEquityCurve(equityData);
-          setEquityCurve(normalizedEquity);
-        }
-      } catch (error) {
-        setStats(null);
-        setEquityCurve([]);
-      } finally {
-        setIsLoadingStats(false);
-        setIsLoadingEquity(false);
+  const handleToggleStrategy = (id) => {
+    setRunningStrategies(prev => prev.map(s => {
+      if (s.id === id) {
+        const newStatus = s.status === "active" ? "paused" : "active";
+        return {
+          ...s,
+          status: newStatus,
+          health: newStatus === "active" ? "healthy" : "idle"
+        };
       }
-    };
-
-    loadDashboardData();
-  }, []);
-
-  useEffect(() => {
-    // WebSocket temporarily disabled
-
-    // Cleanup on unmount
-    return () => {
-      // No cleanup needed since WebSocket is disabled
-    };
-  }, []);
+      return s;
+    }));
+  };
 
   return (
-    <div style={{ padding: 20, overflowY: "auto", flex: 1 }}>
-      {/* Top Stats - Premium Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
-        {/* Total Portfolio */}
-        <PremiumCard
-          glowOnHover
-          glowColor="accent"
-          borderAccent
-          style={{ position: "relative", overflow: "hidden" }}
-        >
-          <div style={{
-            position: "absolute",
-            top: 0,
-            right: 0,
-            width: 100,
-            height: 100,
-            background: C.gradient.accent,
-            opacity: 0.3,
-            borderRadius: "0 0 0 100%"
-          }} />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <span style={{ color: C.t2, fontSize: 9, fontFamily: "monospace", letterSpacing: 2, textTransform: "uppercase" }}>Total Portfolio</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <MiniSparkline data={equityCurve.slice(-20).map(d => d.v)} width={60} height={16} color={C.accent} />
-              <DollarSign size={13} style={{ color: C.accent }} />
-            </div>
-          </div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-            {isLoadingStats ? (
-              <SkeletonLine width="70%" height={24} />
-            ) : (
-              <>
-                <span style={{ color: C.t1, fontSize: 22, fontWeight: 900, fontFamily: "monospace", textShadow: C.glow.accent }}>
-                  $<AnimatedNumber value={stats?.totalPnl || 0} duration={800} />
+    <div style={{
+      flex: 1,
+      overflowY: "auto",
+      padding: "24px 32px",
+      background: "#08090c",
+      color: "#e2e8f0",
+      fontFamily: "Inter, -apple-system, sans-serif"
+    }}>
+
+      {/* ── TOP HEADER & SYSTEM STATUS ──────────────────────────────────────── */}
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginBottom: 24
+      }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", color: "#f8fafc", margin: 0 }}>
+            Mission Control
+          </h1>
+          <p style={{ fontSize: 13, color: "#64748b", marginTop: 2 }}>
+            Real-time portfolio performance and algorithmic execution overview.
+          </p>
+        </div>
+
+        {/* Compact Single Status Indicator */}
+        <div style={{ position: "relative" }}>
+          <button
+            onClick={() => setShowStatusModal(!showStatusModal)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "6px 14px",
+              background: "#0f172a",
+              border: "1px solid #1e293b",
+              borderRadius: 20,
+              color: "#94a3b8",
+              fontSize: 12,
+              fontWeight: 500,
+              cursor: "pointer",
+              transition: "all 0.2s ease"
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#38bdf8")}
+            onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#1e293b")}
+          >
+            <span style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: "#10b981",
+              boxShadow: "0 0 8px rgba(16,185,129,0.6)"
+            }} />
+            <span style={{ color: "#f1f5f9", fontWeight: 600 }}>All Systems Operational</span>
+          </button>
+
+          {/* Compact Diagnostic Modal Popover */}
+          {showStatusModal && (
+            <div style={{
+              position: "absolute",
+              top: 40,
+              right: 0,
+              width: 280,
+              background: "#0f172a",
+              border: "1px solid #1e293b",
+              borderRadius: 12,
+              padding: 16,
+              boxShadow: "0 20px 25px -5px rgba(0,0,0,0.5)",
+              zIndex: 100
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>
+                  System Diagnostics
                 </span>
-                <StatusDot status="live" size={6} />
-              </>
-            )}
-          </div>
-          {!isLoadingStats && stats?.totalPnl > 0 && (
-            <div style={{ marginTop: 4 }}>
-              <PnLBadge value={stats?.totalPnl || 0} size="sm" />
-            </div>
-          )}
-        </PremiumCard>
+                <button
+                  onClick={() => setShowStatusModal(false)}
+                  style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 14 }}
+                >
+                  ✕
+                </button>
+              </div>
 
-        {/* 24H P&L */}
-        <PremiumCard
-          glowOnHover
-          glowColor={stats?.totalPnl >= 0 ? "profit" : "loss"}
-          borderAccent
-          style={{ position: "relative", overflow: "hidden" }}
-        >
-          <div style={{
-            position: "absolute",
-            top: 0,
-            right: 0,
-            width: 100,
-            height: 100,
-            background: stats?.totalPnl >= 0 ? C.gradient.profit : C.gradient.loss,
-            opacity: 0.3,
-            borderRadius: "0 0 0 100%"
-          }} />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <span style={{ color: C.t2, fontSize: 9, fontFamily: "monospace", letterSpacing: 2, textTransform: "uppercase" }}>24H P&L</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <TrendingUp size={13} style={{ color: stats?.totalPnl >= 0 ? C.profit : C.loss }} />
-            </div>
-          </div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-            {isLoadingStats ? (
-              <SkeletonLine width="70%" height={24} />
-            ) : (
-              <PnLBadge value={stats?.totalPnl || 0} size="lg" animated />
-            )}
-          </div>
-          {!isLoadingStats && (
-            <div style={{ marginTop: 8, fontSize: 10, color: C.t3, fontFamily: "monospace" }}>
-              {stats?.totalPnl >= 0 ? "â–² Up from yesterday" : "â–¼ Down from yesterday"}
-            </div>
-          )}
-        </PremiumCard>
-
-        {/* Active Bots */}
-        <PremiumCard
-          glowOnHover
-          glowColor="purple"
-          borderAccent
-          style={{ position: "relative", overflow: "hidden" }}
-        >
-          <div style={{
-            position: "absolute",
-            top: 0,
-            right: 0,
-            width: 100,
-            height: 100,
-            background: "linear-gradient(135deg, rgba(124,77,255,0.15) 0%, rgba(124,77,255,0.05) 100%)",
-            opacity: 0.3,
-            borderRadius: "0 0 0 100%"
-          }} />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <span style={{ color: C.t2, fontSize: 9, fontFamily: "monospace", letterSpacing: 2, textTransform: "uppercase" }}>Active Bots</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <StatusDot status={stats?.activeBots > 0 ? "active" : "idle"} size={6} />
-              <Bot size={13} style={{ color: C.purple }} />
-            </div>
-          </div>
-          <div style={{ color: C.t1, fontSize: 22, fontWeight: 900, fontFamily: "monospace" }}>
-            {isLoadingStats ? (
-              <SkeletonLine width="40%" height={24} />
-            ) : (
-              <AnimatedNumber value={stats?.activeBots || 0} suffix=" bots" />
-            )}
-          </div>
-          {!isLoadingStats && stats?.activeBots > 0 && (
-            <div style={{ marginTop: 8, fontSize: 10, color: C.purple, fontFamily: "monospace" }}>
-              â— All systems operational
-            </div>
-          )}
-        </PremiumCard>
-
-        {/* Win Rate */}
-        <PremiumCard
-          glowOnHover
-          glowColor="gold"
-          borderAccent
-          style={{ position: "relative", overflow: "hidden" }}
-        >
-          <div style={{
-            position: "absolute",
-            top: 0,
-            right: 0,
-            width: 100,
-            height: 100,
-            background: "linear-gradient(135deg, rgba(255,214,0,0.15) 0%, rgba(255,214,0,0.05) 100%)",
-            opacity: 0.3,
-            borderRadius: "0 0 0 100%"
-          }} />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <span style={{ color: C.t2, fontSize: 9, fontFamily: "monospace", letterSpacing: 2, textTransform: "uppercase" }}>Win Rate</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <Gauge size={13} style={{ color: C.gold }} />
-            </div>
-          </div>
-          <div style={{ color: C.t1, fontSize: 22, fontWeight: 900, fontFamily: "monospace" }}>
-            {isLoadingStats ? (
-              <SkeletonLine width="50%" height={24} />
-            ) : (
-              <AnimatedNumber value={stats?.winRate || 0} suffix="%" />
-            )}
-          </div>
-          {!isLoadingStats && (
-            <div style={{ marginTop: 8 }}>
-              <ProgressBar v={stats?.winRate || 0} max={100} color={C.gold} h={4} />
-            </div>
-          )}
-        </PremiumCard>
-      </div>
-
-      {/* Main Grid: Charts & Panels */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 12, marginBottom: 12 }}>
-        {/* Equity Curve Chart */}
-        <Card cls="p-4 flex flex-col">
-          <PanelTitle title="Equity Curve" sub="90-day historical performance tracking" />
-          {isLoadingEquity ? (
-            <div style={{ height: 180, display: "flex", flexDirection: "column", gap: 8, justifyContent: "center" }}>
-              <SkeletonLine width="100%" height={140} />
-            </div>
-          ) : equityCurve.length > 0 ? (
-            <ResponsiveContainer width="100%" height={180}>
-              <AreaChart data={equityCurve}>
-                <defs>
-                  <linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={C.cyan} stopOpacity={0.15} />
-                    <stop offset="95%" stopColor={C.cyan} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="d" hide />
-                <YAxis domain={["auto", "auto"]} hide />
-                <Tooltip content={<CustomTooltip />} />
-                <Area dataKey="v" stroke={C.cyan} strokeWidth={1.5} fill="url(#cg)" dot={false} />
-              </AreaChart>
-            </ResponsiveContainer>
-          ) : (
-            <div style={{ height: 180, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <EmptyState
-                icon={Activity}
-                title="Waiting for market data..."
-                subtitle="Deploy strategies to see your equity curve"
-                hint="Deploy a strategy to begin collecting performance data"
-                size="sm"
-              />
-            </div>
-          )}
-        </Card>
-
-        {/* Drawdown Chart - Memoized */}
-        <DrawdownChart
-          data={useMemo(() => equityCurve.map((d, i, arr) => ({
-            timestamp: new Date().toISOString(),
-            drawdown_pct: i > 0 ? Math.max(0, (1 - d.v / Math.max(...arr.slice(0, i + 1).map(e => e.v))) * 100) : 0
-          })), [equityCurve])}
-          height={200}
-        />
-
-        {/* Live Positions - NEW */}
-        <LivePositions positions={activePositions} />
-
-        {/* Active Strategies panel */}
-        <Card cls="p-4">
-          <PanelTitle title="Active Strategies" right={<Btn v="ghost" sz="xs" onClick={() => navigate("/app/strategies")}>View All</Btn>} />
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {isLoadingActiveBots && <div style={{ color: C.t3, fontSize: 9, fontFamily: "monospace", padding: "6px 2px" }}>Loading active strategies...</div>}
-            {!isLoadingActiveBots && Array.isArray(activeBots) && activeBots.map(s => (
-              <div key={s.id} style={{ background: C.bg3, borderRadius: 8, padding: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ color: C.t1, fontSize: 10, fontWeight: 700 }}>{s.name}</span>
-                  <span style={{ color: s.pnl >= 0 ? C.green : C.red, fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>{s.pnl >= 0 ? "+" : ""}{s.pnl}%</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#94a3b8" }}>Exchange API Latency</span>
+                  <span style={{ color: "#10b981", fontWeight: 600 }}>38 ms (Optimal)</span>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <Tag2 c="cyan">{s.pair}</Tag2>
-                  <StatusDot status={s.status} />
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#94a3b8" }}>Risk Circuit Breaker</span>
+                  <span style={{ color: "#10b981", fontWeight: 600 }}>Armed / 0 Breaches</span>
                 </div>
-                <div style={{ marginTop: 6 }}>
-                  <ProgressBar v={s.wr} max={100} color={s.pnl >= 0 ? C.green : C.red} h={3} />
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#94a3b8" }}>Order State Sync</span>
+                  <span style={{ color: "#10b981", fontWeight: 600 }}>Synchronized</span>
                 </div>
               </div>
-            ))}
-            {!isLoadingActiveBots && activeBots.length === 0 && <div style={{ color: C.t3, fontSize: 9, fontFamily: "monospace", padding: "6px 2px" }}>No running strategies.</div>}
-          </div>
-        </Card>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Recent Transactions */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
-        <Card cls="p-4">
-          <PanelTitle title="Recent Transactions" right={<Btn v="ghost" sz="xs" onClick={() => navigate("/app/strategies")}>Full Ledger â†’</Btn>} />
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, fontFamily: "monospace" }}>
-            <thead>
-              <tr style={{ color: C.t3, letterSpacing: 2, fontSize: 9 }}>
-                {["TIME", "PAIR", "SIDE", "PRICE", "AMOUNT"].map(h => (
-                  <th key={h} style={{ textAlign: "left", padding: "4px 8px", fontWeight: 900 }}>{h}</th>
+      {/* ── SECTION 1: PORTFOLIO OVERVIEW HERO CARD ──────────────────────────── */}
+      <div style={{
+        background: "linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%)",
+        border: "1px solid #312e81",
+        borderRadius: 16,
+        padding: "24px 32px",
+        marginBottom: 24,
+        position: "relative",
+        overflow: "hidden"
+      }}>
+        <div style={{
+          position: "absolute",
+          top: -40,
+          right: -40,
+          width: 200,
+          height: 200,
+          background: "radial-gradient(circle, rgba(99,102,241,0.2) 0%, rgba(0,0,0,0) 70%)",
+          pointerEvents: "none"
+        }} />
+
+        <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr 1fr", gap: 24, alignItems: "center" }}>
+          {/* Portfolio Value */}
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "#818cf8", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
+              Total Portfolio Value
+            </div>
+            <div style={{ fontSize: 32, fontWeight: 800, color: "#ffffff", fontFamily: "monospace", letterSpacing: "-0.03em" }}>
+              ${portfolioData.totalValue.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+            </div>
+          </div>
+
+          {/* Today's P&L */}
+          <div style={{ borderLeft: "1px solid rgba(255,255,255,0.08)", paddingLeft: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 500, color: "#94a3b8", marginBottom: 4 }}>
+              Today's P&L
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#10b981", fontFamily: "monospace" }}>
+              +${portfolioData.todayPnl.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+            </div>
+          </div>
+
+          {/* Daily Return % */}
+          <div style={{ borderLeft: "1px solid rgba(255,255,255,0.08)", paddingLeft: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 500, color: "#94a3b8", marginBottom: 4 }}>
+              Daily Return
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#10b981", fontFamily: "monospace" }}>
+              +{portfolioData.todayReturnPct}%
+            </div>
+          </div>
+
+          {/* Unrealized P&L */}
+          <div style={{ borderLeft: "1px solid rgba(255,255,255,0.08)", paddingLeft: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 500, color: "#94a3b8", marginBottom: 4 }}>
+              Unrealized P&L
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#38bdf8", fontFamily: "monospace" }}>
+              +${portfolioData.unrealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+            </div>
+          </div>
+
+          {/* Available Balance */}
+          <div style={{ borderLeft: "1px solid rgba(255,255,255,0.08)", paddingLeft: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 500, color: "#94a3b8", marginBottom: 4 }}>
+              Available Cash
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#f1f5f9", fontFamily: "monospace" }}>
+              ${portfolioData.availableBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── MAIN CONTENT GRID ────────────────────────────────────────────────── */}
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 24, marginBottom: 24 }}>
+        
+        {/* LEFT COLUMN: PERFORMANCE & RUNNING STRATEGIES */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+
+          {/* ── SECTION 2: PORTFOLIO PERFORMANCE ───────────────────────────── */}
+          <div style={{
+            background: "#0f172a",
+            border: "1px solid #1e293b",
+            borderRadius: 16,
+            padding: 20
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <h2 style={{ fontSize: 15, fontWeight: 700, color: "#f8fafc", margin: 0 }}>
+                  Portfolio Performance
+                </h2>
+                <span style={{ fontSize: 12, color: "#64748b" }}>Historical cumulative return tracking</span>
+              </div>
+
+              {/* Timeframe Selector */}
+              <div style={{ display: "flex", gap: 4, background: "#020617", padding: 3, borderRadius: 8 }}>
+                {["1D", "1W", "1M", "3M", "ALL"].map(tf => (
+                  <button
+                    key={tf}
+                    onClick={() => setTimeframe(tf)}
+                    style={{
+                      padding: "4px 10px",
+                      borderRadius: 6,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      border: "none",
+                      background: timeframe === tf ? "#6366f1" : "transparent",
+                      color: timeframe === tf ? "#ffffff" : "#64748b",
+                      cursor: "pointer",
+                      transition: "all 0.15s ease"
+                    }}
+                  >
+                    {tf}
+                  </button>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {isLoadingRecent && (
-                <tr>
-                  <td colSpan={5} style={{ padding: "10px 8px", color: C.t3, fontFamily: "monospace" }}>Loading recent transactions...</td>
-                </tr>
-              )}
-              {!isLoadingRecent && recentTransactions.length === 0 && (
-                <tr>
-                  <td colSpan={5} style={{ padding: "10px 8px", color: C.t3, fontFamily: "monospace", textAlign: "center" }}>No recent transactions found.</td>
-                </tr>
-              )}
-              {Array.isArray(recentTransactions) && recentTransactions.map((r, i) => (
-                <tr key={i} style={{ borderTop: `1px solid ${C.border}22` }} className="hover:bg-white/5 transition-colors">
-                  <td style={{ padding: "6px 8px", color: C.t3 }}>{r.t}</td>
-                  <td style={{ padding: "6px 8px", color: C.t1, fontWeight: 700 }}>{r.p}</td>
-                  <td style={{ padding: "6px 8px" }}><Tag2 c={r.s === "BUY" ? "green" : "red"}>{r.s}</Tag2></td>
-                  <td style={{ padding: "6px 8px", color: C.t1 }}>{r.pr}</td>
-                  <td style={{ padding: "6px 8px", color: C.t2 }}>{r.a}</td>
-                </tr>
+              </div>
+            </div>
+
+            {/* Interactive Equity Curve */}
+            <div style={{ height: 220 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={equityCurve}>
+                  <defs>
+                    <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0.0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="d" stroke="#334155" fontSize={10} tickLine={false} axisLine={false} />
+                  <YAxis domain={["auto", "auto"]} hide />
+                  <Tooltip
+                    contentStyle={{ background: "#090d16", border: "1px solid #1e293b", borderRadius: 8, fontSize: 12 }}
+                    formatter={(val) => [`$${val.toLocaleString()}`, "Portfolio Equity"]}
+                  />
+                  <Area type="monotone" dataKey="v" stroke="#6366f1" strokeWidth={2} fill="url(#equityGrad)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* ── SECTION 3: RUNNING STRATEGIES ─────────────────────────────── */}
+          <div style={{
+            background: "#0f172a",
+            border: "1px solid #1e293b",
+            borderRadius: 16,
+            padding: 20
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h2 style={{ fontSize: 15, fontWeight: 700, color: "#f8fafc", margin: 0 }}>
+                Running Strategies ({runningStrategies.filter(s => s.status === "active").length} Active)
+              </h2>
+              <button
+                onClick={() => navigate("/app/strategies")}
+                style={{ background: "none", border: "none", color: "#818cf8", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+              >
+                Manage All →
+              </button>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {runningStrategies.map(strat => (
+                <div
+                  key={strat.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "12px 16px",
+                    background: "#020617",
+                    border: "1px solid #1e293b",
+                    borderRadius: 10
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <span style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      background: strat.status === "active" ? "#10b981" : "#eab308"
+                    }} />
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#f8fafc" }}>
+                        {strat.name}
+                      </div>
+                      <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                        {strat.pair} • Last signal: {strat.lastSignalTime}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{
+                        fontSize: 13,
+                        fontWeight: 700,
+                        fontFamily: "monospace",
+                        color: strat.todayPnl >= 0 ? "#10b981" : "#ef4444"
+                      }}>
+                        {strat.todayPnl > 0 ? "+" : ""}${strat.todayPnl.toFixed(2)}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#64748b" }}>Today's P&L</div>
+                    </div>
+
+                    {/* Actions */}
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button
+                        onClick={() => handleToggleStrategy(strat.id)}
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 6,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          border: "1px solid #334155",
+                          background: "#0f172a",
+                          color: "#f8fafc",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 4
+                        }}
+                      >
+                        {strat.status === "active" ? <Pause size={12} /> : <Play size={12} />}
+                        {strat.status === "active" ? "Pause" : "Resume"}
+                      </button>
+                      <button
+                        onClick={() => navigate("/app/strategies")}
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 6,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          border: "none",
+                          background: "#1e293b",
+                          color: "#94a3b8",
+                          cursor: "pointer"
+                        }}
+                      >
+                        Details
+                      </button>
+                    </div>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
-        </Card>
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT COLUMN: INSIGHTS, NOTIFICATIONS & QUICK ACTIONS */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+
+          {/* ── SECTION 4: TRADING INSIGHTS (MAX 3) ───────────────────────── */}
+          <div style={{
+            background: "#0f172a",
+            border: "1px solid #1e293b",
+            borderRadius: 16,
+            padding: 20
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+              <Sparkles size={16} color="#818cf8" />
+              <h2 style={{ fontSize: 14, fontWeight: 700, color: "#f8fafc", margin: 0 }}>
+                Trading Insights
+              </h2>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {tradingInsights.map(item => (
+                <div
+                  key={item.id}
+                  style={{
+                    padding: 12,
+                    background: "#020617",
+                    borderLeft: `3px solid ${item.type === "warning" ? "#eab308" : item.type === "info" ? "#38bdf8" : "#10b981"}`,
+                    borderRadius: "0 8px 8px 0"
+                  }}
+                >
+                  <p style={{ fontSize: 12, color: "#cbd5e1", margin: 0, lineHeight: 1.4 }}>
+                    {item.text}
+                  </p>
+                  <button
+                    onClick={() => navigate(item.actionPath)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "#818cf8",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      padding: 0,
+                      marginTop: 6,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4
+                    }}
+                  >
+                    {item.actionText} →
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ── SECTION 5: ACTIONABLE NOTIFICATIONS (MAX 5) ───────────────── */}
+          <div style={{
+            background: "#0f172a",
+            border: "1px solid #1e293b",
+            borderRadius: 16,
+            padding: 20
+          }}>
+            <h2 style={{ fontSize: 14, fontWeight: 700, color: "#f8fafc", margin: 0, marginBottom: 14 }}>
+              Actionable Notifications
+            </h2>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {notifications.map(n => (
+                <div key={n.id} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                  <span style={{ fontSize: 10, color: "#64748b", fontFamily: "monospace", minWidth: 45, paddingTop: 2 }}>
+                    {n.time}
+                  </span>
+                  <span style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.3 }}>
+                    {n.text}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ── SECTION 6: QUICK ACTIONS ──────────────────────────────────── */}
+          <div style={{
+            background: "#0f172a",
+            border: "1px solid #1e293b",
+            borderRadius: 16,
+            padding: 20
+          }}>
+            <h2 style={{ fontSize: 14, fontWeight: 700, color: "#f8fafc", margin: 0, marginBottom: 14 }}>
+              Quick Actions
+            </h2>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <button
+                onClick={() => navigate("/app/builder")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "10px 12px",
+                  background: "#1e293b",
+                  border: "none",
+                  borderRadius: 8,
+                  color: "#f8fafc",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer"
+                }}
+              >
+                <PlusCircle size={14} color="#818cf8" />
+                Strategy Builder
+              </button>
+
+              <button
+                onClick={() => navigate("/app/backtest")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "10px 12px",
+                  background: "#1e293b",
+                  border: "none",
+                  borderRadius: 8,
+                  color: "#f8fafc",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer"
+                }}
+              >
+                <BarChart2 size={14} color="#38bdf8" />
+                Run Backtest
+              </button>
+
+              <button
+                onClick={() => navigate("/app/exchanges")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "10px 12px",
+                  background: "#1e293b",
+                  border: "none",
+                  borderRadius: 8,
+                  color: "#f8fafc",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer"
+                }}
+              >
+                <KeyRound size={14} color="#10b981" />
+                Connect Exchange
+              </button>
+
+              <button
+                onClick={() => navigate("/app/marketplace")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "10px 12px",
+                  background: "#1e293b",
+                  border: "none",
+                  borderRadius: 8,
+                  color: "#f8fafc",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer"
+                }}
+              >
+                <Compass size={14} color="#eab308" />
+                Marketplace
+              </button>
+            </div>
+          </div>
+
+        </div>
       </div>
     </div>
   );

@@ -65,7 +65,7 @@ class FleetManager:
                 logger.warning(f"Failed to fetch tier for user {user_id}: {e}. Defaulting to free.")
                 user_tier = "free"
 
-            limit = DEPLOYMENT_LIMITS.get(user_tier, 5)
+            limit = DEPLOYMENT_LIMITS.get(user_tier, DEPLOYMENT_LIMITS.get("free", 1))
 
             user_bot_count = sum(
                 1 for k in self._active_fleet if k.startswith(f"{user_id}_")

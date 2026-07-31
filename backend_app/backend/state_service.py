@@ -408,19 +408,20 @@ class StateService:
         self,
         redis_url: str = "redis://localhost:6379/0",
         database_url: str = "postgresql+asyncpg://user:pass@localhost/trading",
-        enable_async_db: bool = True
+        enable_async_db: bool = True,
+        redis_client: Optional[Any] = None,
     ):
         self.redis_url = redis_url
         self.database_url = database_url
         self.enable_async_db = enable_async_db and SQLALCHEMY_AVAILABLE
         
         # Connections
-        self._redis: Optional[Any] = None
+        self._redis: Optional[Any] = redis_client
         self._engine: Optional[Any] = None
         self._session_factory: Optional[Any] = None
         
         # Idempotency
-        self._idempotency: Optional[IdempotencyChecker] = None
+        self._idempotency: Optional[IdempotencyChecker] = IdempotencyChecker(redis_client) if redis_client else None
         
         # Event callbacks
         self._event_callbacks: List[Callable[[StateChangeEvent], Any]] = []
@@ -430,7 +431,10 @@ class StateService:
     async def connect(self):
         """Establish connections to Redis and database."""
         # Redis connection
-        if REDIS_AVAILABLE:
+        if self._redis is not None:
+            self._idempotency = IdempotencyChecker(self._redis)
+            logger.info("[StateService] Using injected Redis client")
+        elif REDIS_AVAILABLE:
             try:
                 self._redis = await redis.from_url(
                     self.redis_url,
