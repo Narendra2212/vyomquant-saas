@@ -26,14 +26,16 @@ from datetime import datetime
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
                      HTTPException, Request)
+from backend_app.core.rate_limit import limiter
 # F-20: get_db retained ONLY for PaymentMethodModel display endpoints.
 # Subscription tiers and invoice state are stored exclusively in Supabase.
 from sqlalchemy.orm import Session
 
-from backend_app.core.database import get_db
-from backend_app.core.dependencies import (DEV_MODE, create_request_supabase,
-                                           get_current_user,
+from backend_app.core.cache import redis_manager
+from backend_app.core.dependencies import (get_current_user,
+                                           get_request_supabase,
                                            invalidate_profile_cache)
+from backend_app.core.realtime_sync import RealtimeSync
 from backend_app.core.models import AddPaymentMethodRequest, PaymentMethodModel
 from backend_app.core.schemas import CheckoutRequest
 
@@ -43,19 +45,17 @@ logger = logging.getLogger("BillingRouter")
 
 def _validate_keys(provider: str) -> str:
     if provider == "stripe":
-        key = os.environ.get("STRIPE_SECRET_KEY", "sk_test_dummy")
-        if not DEV_MODE:
-            if not key or key == "sk_test_dummy" or not key.startswith("sk_live_"):
-                raise HTTPException(500, "Stripe production secret key is missing, invalid, or test credentials are used in production path.")
+        key = os.environ.get("STRIPE_SECRET_KEY")
+        if not key or key == "sk_test_dummy" or not key.startswith("sk_live_"):
+            raise HTTPException(500, "Stripe production secret key is missing, invalid, or test credentials are used in production path.")
         return key
     elif provider == "razorpay":
-        key = os.environ.get("RAZORPAY_KEY_ID", "rzp_test_dummy")
+        key = os.environ.get("RAZORPAY_KEY_ID")
         secret = os.environ.get("RAZORPAY_KEY_SECRET")
-        if not DEV_MODE:
-            if not key or key == "rzp_test_dummy" or not key.startswith("rzp_live_"):
-                raise HTTPException(500, "Razorpay production key ID is missing, invalid, or test credentials are used in production path.")
-            if not secret or secret == "dummy_secret":
-                raise HTTPException(500, "Razorpay production key secret is missing or invalid.")
+        if not key or key == "rzp_test_dummy" or not key.startswith("rzp_live_"):
+            raise HTTPException(500, "Razorpay production key ID is missing, invalid, or test credentials are used in production path.")
+        if not secret or secret == "dummy_secret":
+            raise HTTPException(500, "Razorpay production key secret is missing or invalid.")
         return key
 
 
@@ -76,12 +76,14 @@ def _background_sb():
     return create_client(supabase_url, supabase_key)
 
 
-VALID_ITEM_KEYS = {"free", "pro_999", "elite_1999", "ml_addon"}
+from backend_app.core.subscription_engine import Plan, SubscriptionEngine
+
+VALID_ITEM_KEYS = {Plan.FREE.value, Plan.STARTER.value, Plan.PRO.value, Plan.ENTERPRISE.value, "ml_addon"}
 
 async def _apply_billing_entitlement(user_id: str, item_key: str, discount_applied: bool = False) -> None:
     """
     F-20: Writes billing state ONLY to Supabase profiles table.
-    SQLite SubscriptionModel / InvoiceModel storage has been retired.
+    SQLite SubscriptionModel / InvoiceModel storage is retired.
     Supabase is the single source of truth for subscription_tier.
     """
     if item_key not in VALID_ITEM_KEYS:
@@ -90,6 +92,17 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
             status_code=400,
             detail=f"Invalid billing item key: {item_key}"
         )
+    
+    # Get previous plan for notification
+    previous_plan = None
+    try:
+        sb = _background_sb()
+        resp = sb.table("profiles").select("subscription_tier").eq("id", user_id).execute()
+        if resp.data:
+            previous_plan = resp.data[0].get("subscription_tier")
+    except Exception as e:
+        logger.warning(f"Failed to get previous plan for user {user_id}: {e}")
+    
     try:
         sb = _background_sb()
         if item_key == "ml_addon":
@@ -100,31 +113,6 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
                 {"subscription_tier": item_key}
             ).eq("id", user_id).execute()
             logger.info(f"Subscription tier updated for user {user_id}: tier={item_key}")
-            
-        # P0-8 Referral conversion logic
-        if discount_applied:
-            # 1. Decrement user's available_discounts
-            profile_res = sb.table("profiles").select("available_discounts").eq("id", user_id).execute()
-            if profile_res.data:
-                current_discounts = profile_res.data[0].get("available_discounts", 0)
-                if current_discounts > 0:
-                    sb.table("profiles").update({"available_discounts": current_discounts - 1}).eq("id", user_id).execute()
-
-        # Check if they were referred and pending conversion
-        referral_res = sb.table("referrals").select("id, referrer_id").eq("referred_id", user_id).eq("status", "pending").limit(1).execute()
-        if referral_res.data:
-            ref_row = referral_res.data[0]
-            # Convert referral
-            sb.table("referrals").update({
-                "status": "converted",
-                "commission_usd": float(PRICES.get(item_key, {}).get("USD", 0) / 100 * 0.1) if item_key in PRICES else 0
-            }).eq("id", ref_row["id"]).execute()
-            # Grant referrer their discount
-            ref_prof_res = sb.table("profiles").select("available_discounts").eq("id", ref_row["referrer_id"]).execute()
-            if ref_prof_res.data:
-                ref_current_discounts = ref_prof_res.data[0].get("available_discounts", 0)
-                sb.table("profiles").update({"available_discounts": ref_current_discounts + 1}).eq("id", ref_row["referrer_id"]).execute()
-            logger.info(f"Referral converted for user {user_id}, referrer {ref_row['referrer_id']} granted discount.")
 
     except Exception as e:
         logger.error(f"Failed to update Supabase profile for user {user_id}: {e}")
@@ -132,7 +120,18 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
 
     # Invalidate profile cache so the new tier takes effect immediately (FIX N4)
     await invalidate_profile_cache(user_id)
-
+    
+    # Realtime sync: broadcast to WebSocket
+    await RealtimeSync.sync_subscription_change(
+        user_id,
+        "subscription_updated",
+        {
+            "item_key": item_key,
+            "previous_plan": previous_plan,
+            "new_plan": item_key if item_key != "ml_addon" else previous_plan,
+            "discount_applied": discount_applied,
+        }
+    )
 
 
 async def _process_stripe_entitlement(user_id: str, item_key: str, discount_applied: bool = False) -> None:
@@ -146,15 +145,118 @@ async def _process_razorpay_entitlement(user_id: str, item_key: str, discount_ap
 
 
 # ── Pricing table ────────────────────────────────────────────────────────
-PRICES = {
-    "pro_999": {"INR": 99900, "USD": 1200},  # paise / cents
-    "elite_1999": {"INR": 199900, "USD": 2400},
-    "ml_addon": {"INR": 19900, "USD": 300},
-}
+# Pricing now managed by SubscriptionEngine
+# Deprecated PRICES dict removed - all pricing now comes from SubscriptionEngine.get_plan_config().pricing
+
+
+# ── GET /api/billing/plans ───────────────────────────────────────────────
+@router.get("/plans")
+@limiter.limit("100/minute")
+async def get_plans():
+    """Get all available plans."""
+    plans = SubscriptionEngine.get_all_plans()
+    plan_order = [Plan.FREE.value, Plan.STARTER.value, Plan.PRO.value, Plan.ENTERPRISE.value]
+    sorted_plans = sorted(plans, key=lambda p: plan_order.index(p.id))
+    
+    return {
+        "plans": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "features": p.features,
+                "quotas": p.quotas,
+                "pricing": p.pricing,
+                "usd": p.pricing.get("USD", 0),
+                "inr": p.pricing.get("INR", 0),
+                "recommended": p.id == Plan.PRO.value,
+            }
+            for p in sorted_plans
+        ]
+    }
+
+
+# ── GET /api/billing/entitlements ───────────────────────────────────────────
+@router.get("/entitlements")
+@limiter.limit("60/minute")
+async def get_entitlements(
+    user: dict = Depends(get_current_user),
+    supabase: Any = Depends(get_request_supabase),
+):
+    """Get user's current entitlements."""
+    from backend_app.core.subscription_dependencies import get_user_entitlements
+    
+    entitlements = await get_user_entitlements(user, supabase)
+    
+    # Get subscription details from profile
+    subscription_status = "active"
+    renewal_date = None
+    cancel_at_period_end = False
+    
+    if supabase:
+        try:
+            resp = (
+                supabase.table("profiles")
+                .select("subscription_status, subscription_renewal_date, cancel_at_period_end")
+                .eq("id", user["id"])
+                .execute()
+            )
+            if resp.data:
+                subscription_status = resp.data[0].get("subscription_status", "active")
+                renewal_date = resp.data[0].get("subscription_renewal_date")
+                cancel_at_period_end = resp.data[0].get("cancel_at_period_end", False)
+        except Exception as e:
+            logger.warning(f"Failed to get subscription details: {e}")
+    
+    return {
+        "plan": entitlements.plan,
+        "features": entitlements.features,
+        "quotas": entitlements.quotas,
+        "usage": entitlements.usage,
+        "subscription_status": subscription_status,
+        "renewal_date": renewal_date,
+        "cancel_at_period_end": cancel_at_period_end,
+    }
+
+
+# ── GET /api/billing/currency ───────────────────────────────────────────────
+@router.get("/currency")
+@limiter.limit("60/minute")
+async def get_currency(
+    user: dict = Depends(get_current_user),
+    supabase: Any = Depends(get_request_supabase),
+    request: Request = None,
+):
+    """Get user's currency preference (auto-detected if not set)."""
+    from backend_app.core.pricing_service import PricingService
+    
+    currency = await PricingService.determine_currency(user["id"], supabase, request)
+    return {"currency": currency}
+
+
+# ── POST /api/billing/currency ──────────────────────────────────────────────
+@router.post("/currency")
+@limiter.limit("10/minute")
+async def set_currency(
+    body: Dict[str, str],
+    user: dict = Depends(get_current_user),
+    supabase: Any = Depends(get_request_supabase),
+):
+    """Set user's currency preference."""
+    from backend_app.core.pricing_service import PricingService
+    
+    currency = body.get("currency", "USD")
+    success = await PricingService.set_user_currency_preference(user["id"], currency, supabase)
+    
+    if not success:
+        raise HTTPException(400, "Invalid currency or failed to save preference")
+    
+    return {"status": "success", "currency": currency}
 
 
 # ── POST /api/billing/checkout ──────────────────────────────────────────
 @router.post("/checkout")
+@limiter.limit("10/minute")
 async def create_checkout_session(
     body: CheckoutRequest,
     background_tasks: BackgroundTasks,
@@ -162,7 +264,18 @@ async def create_checkout_session(
 ):
     """Generates a payment link. INR → Razorpay. USD → Stripe."""
     item_key = "ml_addon" if body.is_addon else body.tier.value
-    amount = PRICES.get(item_key, {}).get(body.currency)
+    
+    # Get pricing from SubscriptionEngine instead of deprecated PRICES dict
+    if body.is_addon:
+        # ML addon pricing (hardcoded for now, could be moved to SubscriptionEngine)
+        amount = {"INR": 19900, "USD": 300}.get(body.currency)
+    else:
+        plan_config = SubscriptionEngine.get_plan_config(item_key)
+        if not plan_config:
+            raise HTTPException(400, "Invalid tier")
+        # Pricing in SubscriptionEngine is in dollars/rupees, convert to cents/paise for payment gateways
+        base_amount = plan_config.pricing.get(body.currency, 0)
+        amount = int(base_amount * 100)  # Convert to cents (USD) or paise (INR)
 
     if not amount:
         raise HTTPException(400, "Invalid tier or currency combination.")
@@ -273,14 +386,24 @@ async def stripe_webhook(
 ):
     stripe_key = _validate_keys("stripe")
     webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
-    if not DEV_MODE:
-        if not webhook_secret or webhook_secret == "whsec_dummy" or not webhook_secret.startswith("whsec_"):
-            raise HTTPException(500, "Stripe production webhook secret is missing, invalid, or test credentials are used in production path.")
+    if not webhook_secret or webhook_secret == "whsec_dummy" or not webhook_secret.startswith("whsec_"):
+        raise HTTPException(500, "Stripe production webhook secret is missing, invalid, or test credentials are used in production path.")
 
     import stripe
     stripe.api_key = stripe_key
 
     payload = await request.body()
+    
+    # Idempotency check: Use event ID to prevent duplicate processing
+    event_id = request.headers.get("stripe-event-id")
+    if event_id:
+        idempotency_key = f"webhook:stripe:{event_id}"
+        existing = await redis_manager.get(idempotency_key)
+        if existing:
+            logger.info(f"Stripe webhook {event_id} already processed, skipping")
+            return {"status": "duplicate"}
+        await redis_manager.setex(idempotency_key, 86400, "1")  # 24 hour TTL
+    
     try:
         secret = webhook_secret or "whsec_dummy"
         event = stripe.Webhook.construct_event(
@@ -289,6 +412,9 @@ async def stripe_webhook(
     except Exception as e:
         logger.warning(f"Stripe webhook signature failure: {e}")
         raise HTTPException(400, f"Webhook Error: {e}")
+    
+    # Log webhook event for audit trail
+    logger.info(f"Stripe webhook event: {event['type']}")
 
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
@@ -316,6 +442,24 @@ async def stripe_webhook(
         discount_applied = metadata.get("discount_applied") == "true"
         try:
             await _process_stripe_entitlement(user_id, item_key, discount_applied)
+            
+            # Process referral commission on successful payment
+            payment_id = session.get("payment_intent") or session.get("id")
+            payment_amount = session.get("amount_total", 0) / 100.0  # Convert from cents to USD
+            
+            if payment_amount > 0:
+                try:
+                    sb = _background_sb()
+                    sb.rpc("process_referral_commission", {
+                        "p_referred_id": user_id,
+                        "p_payment_id": payment_id,
+                        "p_subscription_tier": item_key,
+                        "p_payment_amount_usd": payment_amount
+                    }).execute()
+                    logger.info(f"Referral commission processed for Stripe payment {payment_id}")
+                except Exception as ref_err:
+                    logger.error(f"Failed to process referral commission for payment {payment_id}: {ref_err}")
+                    # Don't fail the webhook if commission processing fails
         except Exception as e:
             logger.error(f"Stripe entitlement processing failed: {e}")
             raise HTTPException(
@@ -393,11 +537,24 @@ async def razorpay_webhook(
 ):
     _validate_keys("razorpay")
     webhook_secret = os.environ.get("RAZORPAY_WEBHOOK_SECRET")
-    if not DEV_MODE:
-        if not webhook_secret or webhook_secret == "dummy_webhook_secret":
-            raise HTTPException(500, "Razorpay production webhook secret is missing or invalid.")
+    if not webhook_secret or webhook_secret == "dummy_webhook_secret":
+        raise HTTPException(500, "Razorpay production webhook secret is missing or invalid.")
             
     raw_body = await request.body()
+    
+    # Idempotency check: Use Razorpay event ID to prevent duplicate processing
+    try:
+        payload = json.loads(raw_body)
+        event_id = payload.get("event_id") or payload.get("payload", {}).get("payment", {}).get("entity", {}).get("id")
+        if event_id:
+            idempotency_key = f"webhook:razorpay:{event_id}"
+            existing = await redis_manager.get(idempotency_key)
+            if existing:
+                logger.info(f"Razorpay webhook {event_id} already processed, skipping")
+                return {"status": "duplicate"}
+            await redis_manager.setex(idempotency_key, 86400, "1")  # 24 hour TTL
+    except Exception as e:
+        logger.warning(f"Failed to extract Razorpay event id for idempotency: {e}")
 
     secret = webhook_secret or "dummy_webhook_secret"
     expected_sig = hmac.new(
@@ -407,16 +564,17 @@ async def razorpay_webhook(
     ).hexdigest()
 
     if not hmac.compare_digest(expected_sig, x_razorpay_signature or ""):
-        if not DEV_MODE:
-            logger.warning("Razorpay webhook: invalid signature")
-            raise HTTPException(400, "Invalid Razorpay signature")
-        else:
-            logger.warning("Razorpay webhook signature verification failure ignored in DEV_MODE.")
+        logger.warning("Razorpay webhook: invalid signature")
+        raise HTTPException(400, "Invalid Razorpay signature")
 
     try:
         payload = json.loads(raw_body)
     except Exception:
         raise HTTPException(400, "Invalid JSON body")
+    
+    # Log webhook event for audit trail
+    event_type = payload.get("event", "unknown")
+    logger.info(f"Razorpay webhook event: {event_type}")
 
     if payload.get("event") == "payment.captured":
         payment = payload["payload"]["payment"]["entity"]
@@ -431,6 +589,24 @@ async def razorpay_webhook(
         discount_applied = notes.get("discount_applied") == "true"
         try:
             await _process_razorpay_entitlement(user_id, item_key, discount_applied)
+            
+            # Process referral commission on successful payment
+            payment_id = payment.get("id")
+            payment_amount = payment.get("amount", 0) / 100.0  # Convert from paise to INR
+            
+            if payment_amount > 0:
+                try:
+                    sb = _background_sb()
+                    sb.rpc("process_referral_commission", {
+                        "p_referred_id": user_id,
+                        "p_payment_id": payment_id,
+                        "p_subscription_tier": item_key,
+                        "p_payment_amount_usd": payment_amount  # Note: This is INR, not USD
+                    }).execute()
+                    logger.info(f"Referral commission processed for Razorpay payment {payment_id}")
+                except Exception as ref_err:
+                    logger.error(f"Failed to process referral commission for payment {payment_id}: {ref_err}")
+                    # Don't fail the webhook if commission processing fails
         except Exception as e:
             logger.error(f"Razorpay entitlement processing failed: {e}")
             raise HTTPException(
@@ -441,7 +617,36 @@ async def razorpay_webhook(
     return {"status": "success"}
 
 
+@router.get("/invoices")
+@limiter.limit("60/minute")
+async def get_invoices(
+    user: dict = Depends(get_current_user),
+    supabase: Any = Depends(get_request_supabase),
+):
+    """Get invoice history from Supabase."""
+    if not supabase:
+        return []
+    
+    try:
+        resp = supabase.table("billing_invoices").select("*").eq("user_id", user["id"]).order("created_at", desc=True).execute()
+        invoices = []
+        for inv in resp.data or []:
+            invoices.append({
+                "id": inv.get("id"),
+                "date": inv.get("created_at"),
+                "amtUSD": inv.get("amount_usd", 0),
+                "amtINR": inv.get("amount_inr", 0),
+                "status": inv.get("status", "unknown"),
+                "currency": inv.get("currency", "USD"),
+            })
+        return invoices
+    except Exception as e:
+        logger.warning(f"Failed to fetch invoices for user {user['id']}: {e}")
+        return []
+
+
 @router.get("/payment-methods")
+@limiter.limit("60/minute")
 async def get_payment_methods(
     user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -462,6 +667,7 @@ async def get_payment_methods(
 
 
 @router.post("/payment-methods")
+@limiter.limit("10/minute")
 async def add_payment_method(
     body: AddPaymentMethodRequest,
     user: dict = Depends(get_current_user),

@@ -477,28 +477,3 @@ class TelemetryEngine:
 
         cols = [c["name"] for c in result["columns"]]
         return [dict(zip(cols, row)) for row in result["dataset"]]
-
-    async def get_leaderboard(
-        self, period_days: int = 30, top_n: int = 50
-    ) -> list[dict]:
-        """Returns top traders ranked by P&L % for the leaderboard page."""
-        period_days = max(1, min(int(period_days), 365))
-        top_n = max(1, min(int(top_n), 200))
-        query = (
-            "SELECT user_id, username, pnl_pct, win_rate, subscription_tier "
-            "FROM leaderboard_view "
-            "WHERE period_days = "
-            + str(period_days)
-            + " ORDER BY pnl_pct DESC LIMIT "
-            + str(top_n)
-            + ";"
-        )
-        result = await self.execute_query(query)
-        if not result or not result.get("dataset"):
-            return []
-
-        cols = [c["name"] for c in result["columns"]]
-        return [
-            {"rank": i + 1, **dict(zip(cols, row))}
-            for i, row in enumerate(result["dataset"])
-        ]

@@ -1,39 +1,59 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Check } from 'lucide-react'
-
-const tiers = [
-  {
-    name: 'Free',
-    price: { monthly: 0, annual: 0 },
-    description: 'Exploration and validation.',
-    features: ['1 Paper Bot', '3 Backtests / Month', 'Basic Indicators', 'Browse Marketplace', 'Community Support', 'No Live Execution'],
-    cta: 'Start Free',
-    highlighted: false,
-    badge: null,
-  },
-  {
-    name: 'Pro',
-    price: { monthly: 12, annual: 115.20 },
-    description: 'Professional systematic execution.',
-    features: ['5 Live Bots', 'Unlimited Backtests', 'Full Indicator Library', 'Clone Marketplace Strategies', 'Advanced Analytics', 'Email Support (48h SLA)'],
-    cta: 'Select Pro',
-    highlighted: true,
-    badge: 'Most Popular',
-  },
-  {
-    name: 'Elite',
-    price: { monthly: 24, annual: 230.40 },
-    description: 'Machine learning and research.',
-    features: ['Unlimited Live Bots', '3 ML Training Slots', 'Custom Indicators', 'Publish to Marketplace', 'Signal Trace Visualization', 'Priority Support (SLA)'],
-    cta: 'Select Elite',
-    highlighted: false,
-    badge: 'Quant Tier',
-  },
-]
+import { Check, Loader2 } from 'lucide-react'
+import { api } from '../api'
 
 export default function Pricing() {
   const [isAnnual, setIsAnnual] = useState(false)
+  const [currency, setCurrency] = useState('USD')
+  const [plans, setPlans] = useState([])
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    const loadPlans = async () => {
+      try {
+        const data = await api.billing.getPlans()
+        setPlans(data.plans || [])
+      } catch (err) {
+        console.error('Failed to load plans:', err)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    loadPlans()
+  }, [])
+
+  const getDisplayPrice = (plan) => {
+    const basePrice = currency === 'INR' ? plan.inr : plan.usd
+    if (isAnnual && basePrice > 0) {
+      return (basePrice * 12 * 0.8) / 12 // 20% discount on annual
+    }
+    return basePrice
+  }
+
+  const getAnnualPrice = (plan) => {
+    const basePrice = currency === 'INR' ? plan.inr : plan.usd
+    if (basePrice > 0) {
+      return basePrice * 12 * 0.8
+    }
+    return 0
+  }
+
+  const currencySymbol = currency === 'INR' ? '₹' : '$'
+
+  if (isLoading) {
+    return (
+      <section id="pricing" className="py-24 lg:py-32 border-t border-border-default/80">
+        <div className="section-container">
+          <div className="section-inner">
+            <div className="flex justify-center items-center py-20">
+              <Loader2 className="animate-spin text-accent-cyan" size={32} />
+            </div>
+          </div>
+        </div>
+      </section>
+    )
+  }
   
   return (
     <section id="pricing" className="py-24 lg:py-32 border-t border-border-default/80" aria-label="Pricing Tiers">
@@ -60,68 +80,86 @@ export default function Pricing() {
                 <span className="ml-2 text-xs bg-accent-profit-dim text-accent-profit font-semibold px-2 py-0.5 rounded-md border border-accent-profit/20">Save 20%</span>
               </button>
             </div>
+            {/* Currency Toggle */}
+            <div className="inline-flex items-center gap-3 p-1.5 rounded-2xl bg-bg-surface border border-border-default/80 shadow-md mt-4">
+              <button 
+                onClick={() => setCurrency('USD')} 
+                className={`px-5 py-2.5 rounded-xl text-sm font-bold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan ${currency === 'USD' ? 'bg-accent-cyan text-text-inverse shadow-md' : 'text-text-secondary hover:text-text-primary'}`}
+              >
+                USD ($)
+              </button>
+              <button 
+                onClick={() => setCurrency('INR')} 
+                className={`px-5 py-2.5 rounded-xl text-sm font-bold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan ${currency === 'INR' ? 'bg-accent-cyan text-text-inverse shadow-md' : 'text-text-secondary hover:text-text-primary'}`}
+              >
+                INR (₹)
+              </button>
+            </div>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto items-stretch">
-            {tiers.map((tier) => (
-              <div 
-                key={tier.name} 
-                className={`relative card-surface p-8 flex flex-col h-full rounded-2xl transition-all duration-300 ${
-                  tier.highlighted 
-                    ? 'border-2 border-accent-cyan bg-bg-surface shadow-[0_0_50px_rgba(0,212,255,0.15)] lg:-translate-y-2 z-10' 
-                    : 'border border-border-default/80 bg-bg-surface/70 hover:border-border-default hover:bg-bg-elevated/50'
-                }`}
-              >
-                {tier.badge && (
-                  <div className={`absolute -top-3.5 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full text-xs font-extrabold tracking-wider uppercase shadow-md ${
-                    tier.name === 'Elite' 
-                      ? 'bg-accent-gold text-text-inverse border border-accent-gold/40' 
-                      : 'bg-accent-cyan text-text-inverse shadow-[0_0_15px_rgba(0,212,255,0.4)]'
-                  }`}>
-                    {tier.badge}
-                  </div>
-                )}
-                
-                <div className="mb-6">
-                  <h3 className="text-xl font-bold text-text-primary mb-1.5">{tier.name}</h3>
-                  <p className="text-sm text-text-secondary">{tier.description}</p>
-                </div>
-
-                <div className="mb-6 pb-6 border-b border-border-default/60">
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="text-4xl sm:text-5xl font-black text-text-primary tracking-tight">
-                      ${isAnnual ? (tier.price.annual / 12).toFixed(0) : tier.price.monthly}
-                    </span>
-                    <span className="text-text-muted text-sm font-medium">/month</span>
-                  </div>
-                  {isAnnual && tier.price.annual > 0 && (
-                    <p className="text-xs text-accent-profit mt-1.5 font-mono font-medium">Billed at ${tier.price.annual}/yr — save 20%</p>
-                  )}
-                </div>
-
-                <ul className="space-y-3.5 mb-8 flex-1">
-                  {tier.features.map((feature, fi) => (
-                    <li key={fi} className="flex items-start gap-3 text-sm text-text-secondary font-medium">
-                      <Check className="w-4.5 h-4.5 text-accent-profit flex-shrink-0 mt-0.5" />
-                      {feature}
-                    </li>
-                  ))}
-                </ul>
-
-                <Link 
-                  to="/signup" 
-                  className={`w-full text-center py-3.5 rounded-xl font-bold text-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan ${
-                    tier.highlighted 
-                      ? 'bg-accent-cyan text-text-inverse hover:bg-accent-cyan/90 shadow-[0_0_25px_rgba(0,212,255,0.3)] hover:shadow-[0_0_35px_rgba(0,212,255,0.45)]' 
-                      : tier.name === 'Elite' 
-                      ? 'bg-accent-gold-dim text-accent-gold border border-accent-gold/30 hover:bg-accent-gold/20' 
-                      : 'border border-border-default text-text-primary hover:bg-bg-elevated hover:border-accent-cyan/40'
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8 max-w-6xl mx-auto items-stretch">
+            {plans.map((plan) => {
+              const displayPrice = getDisplayPrice(plan)
+              const annualPrice = getAnnualPrice(plan)
+              const isRecommended = plan.recommended
+              const isFree = plan.id === 'free'
+              
+              return (
+                <div 
+                  key={plan.id} 
+                  className={`relative card-surface p-8 flex flex-col h-full rounded-2xl transition-all duration-300 ${
+                    isRecommended 
+                      ? 'border-2 border-accent-cyan bg-bg-surface shadow-[0_0_50px_rgba(0,212,255,0.15)] lg:-translate-y-2 z-10' 
+                      : 'border border-border-default/80 bg-bg-surface/70 hover:border-border-default hover:bg-bg-elevated/50'
                   }`}
                 >
-                  {tier.cta}
-                </Link>
-              </div>
-            ))}
+                  {isRecommended && (
+                    <div className={`absolute -top-3.5 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full text-xs font-extrabold tracking-wider uppercase shadow-md bg-accent-cyan text-text-inverse shadow-[0_0_15px_rgba(0,212,255,0.4)]`}>
+                      Recommended
+                    </div>
+                  )}
+                  
+                  <div className="mb-6">
+                    <h3 className="text-xl font-bold text-text-primary mb-1.5">{plan.name}</h3>
+                    <p className="text-sm text-text-secondary">{plan.description}</p>
+                  </div>
+
+                  <div className="mb-6 pb-6 border-b border-border-default/60">
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="text-4xl sm:text-5xl font-black text-text-primary tracking-tight">
+                        {currencySymbol}{displayPrice.toLocaleString()}
+                      </span>
+                      <span className="text-text-muted text-sm font-medium">/month</span>
+                    </div>
+                    {isAnnual && !isFree && annualPrice > 0 && (
+                      <p className="text-xs text-accent-profit mt-1.5 font-mono font-medium">Billed at {currencySymbol}{annualPrice.toLocaleString()}/yr — save 20%</p>
+                    )}
+                  </div>
+
+                  <ul className="space-y-3.5 mb-8 flex-1">
+                    {plan.features.map((feature, fi) => (
+                      <li key={fi} className="flex items-start gap-3 text-sm text-text-secondary font-medium">
+                        <Check className="w-4.5 h-4.5 text-accent-profit flex-shrink-0 mt-0.5" />
+                        {feature}
+                      </li>
+                    ))}
+                  </ul>
+
+                  <Link 
+                    to="/signup" 
+                    className={`w-full text-center py-3.5 rounded-xl font-bold text-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan ${
+                      isRecommended 
+                        ? 'bg-accent-cyan text-text-inverse hover:bg-accent-cyan/90 shadow-[0_0_25px_rgba(0,212,255,0.3)] hover:shadow-[0_0_35px_rgba(0,212,255,0.45)]' 
+                        : isFree
+                        ? 'border border-border-default text-text-primary hover:bg-bg-elevated hover:border-accent-cyan/40'
+                        : 'bg-accent-gold-dim text-accent-gold border border-accent-gold/30 hover:bg-accent-gold/20'
+                    }`}
+                  >
+                    {isFree ? 'Start Free' : 'Get Started'}
+                  </Link>
+                </div>
+              )
+            })}
           </div>
         </div>
       </div>

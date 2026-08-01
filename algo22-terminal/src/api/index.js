@@ -28,9 +28,7 @@ export { portfolioApi } from './modules/portfolio';
 export { riskApi } from './modules/risk';
 export { billingApi } from './modules/billing';
 export { userApi } from './modules/user';
-export { supportApi } from './modules/support';
-export { leaderboardApi } from './modules/leaderboard';
-export { notificationsApi } from './modules/notifications';
+export { referralApi } from './modules/referral';
 
 // Import all modules for consolidated export
 import { authApi } from './modules/auth';
@@ -42,9 +40,7 @@ import { portfolioApi } from './modules/portfolio';
 import { riskApi } from './modules/risk';
 import { billingApi } from './modules/billing';
 import { userApi } from './modules/user';
-import { supportApi } from './modules/support';
-import { leaderboardApi } from './modules/leaderboard';
-import { notificationsApi } from './modules/notifications';
+import { referralApi } from './modules/referral';
 
 /**
  * Consolidated API object - single entry point for all API calls
@@ -59,9 +55,7 @@ export const api = {
   risk: riskApi,
   billing: billingApi,
   user: userApi,
-  support: supportApi,
-  leaderboard: leaderboardApi,
-  notifications: notificationsApi,
+  referral: referralApi,
 };
 
 /**

@@ -91,8 +91,8 @@ from backend_app.core.supabase_connection import SupabaseConnection
 from backend_app.core.state import app_state
 #  Router imports 
 from backend_app.routers import (admin, analytics, auth, billing, exchange,
-                                 library, market, metrics, orders, portfolio,
-                                 risk, security, strategies, support, user)
+                                 library, market, metrics, notifications, orders,
+                                 portfolio, referral, risk, security, strategies, support, user)
 # DAG task queue
 from backend_app.routers.dag_tasks import router as dag_tasks_router
 
@@ -542,6 +542,8 @@ app.include_router(orders.router, prefix="/api/orders", tags=["Order Execution"]
 app.include_router(strategies.router, prefix="/api/strategies", tags=["Strategies"])
 app.include_router(portfolio.router, prefix="/api/portfolio", tags=["Portfolio"])
 app.include_router(user.router, prefix="/api", tags=["User"])
+app.include_router(referral.router, prefix="/api", tags=["Referral"])
+app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin / God Mode"])
 app.include_router(risk.router, prefix="/api/risk", tags=["Risk Management"])
 app.include_router(billing.router, prefix="/api/billing", tags=["Billing"])

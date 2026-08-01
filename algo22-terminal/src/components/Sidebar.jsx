@@ -2,7 +2,7 @@ import React from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Bot, Activity, Hexagon, Cpu, Layers, Link2,
-  Shield, CreditCard, Award, Gift, BookOpen, HelpCircle, Bell,
+  Shield, CreditCard, BookOpen, HelpCircle, Bell,
   Zap, ExternalLink, LogOut
 } from "lucide-react";
 import { C } from "./ui-legacy/primitives";
@@ -17,8 +17,6 @@ export const NAV = [
   { id: "exchange",      lbl: "Exchanges",        Icon: Link2,           g: "vault" },
   { id: "risk",          lbl: "Risk Settings",    Icon: Shield,          g: "vault" },
   { id: "billing",       lbl: "Billing",          Icon: CreditCard,      g: "vault" },
-  { id: "leaderboard",   lbl: "Leaderboard",      Icon: Award,           g: "platform" },
-  { id: "referral",      lbl: "Referral",         Icon: Gift,            g: "platform" },
   { id: "docs",          lbl: "Docs",             Icon: BookOpen,        g: "platform" },
   { id: "support",       lbl: "Support",          Icon: HelpCircle,      g: "platform" },
   { id: "notifications", lbl: "Notifications",    Icon: Bell,            g: "platform" },

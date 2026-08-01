@@ -19,11 +19,19 @@ from typing import Any, Dict, List
 import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 
-from backend_app.core.dependencies import (check_deployment_limit,
-                                           check_ml_build_limit,
-                                           create_request_supabase,
+from backend_app.core.dependencies import (create_request_supabase,
                                            get_current_user, get_fleet,
                                            get_vault, get_ws_manager)
+from backend_app.core.subscription_dependencies import (
+    check_bot_quota,
+    check_ml_quota,
+    check_strategy_quota,
+    decrement_usage,
+    increment_usage,
+    require_live_trading,
+    require_ml_training,
+)
+from backend_app.core.subscription_engine import Resource
 from backend_app.core.event_bus import publish_command, PublishError
 from backend_app.core.rate_limit import limiter
 
@@ -717,6 +725,7 @@ async def create_strategy(
     request: Request,
     body: Dict[str, Any],
     user: dict = Depends(get_current_user),
+    _quota=Depends(check_strategy_quota),
 ):
     """
     Saves a strategy blueprint to Supabase.
@@ -907,6 +916,10 @@ async def delete_strategy(
         await fleet.stop_bot(user["id"], resp.data[0]["symbol"])
 
     sb.table("strategies").delete().eq("id", strategy_id).eq("user_id", user["id"]).execute()
+    
+    # Decrement strategy usage
+    await decrement_usage(Resource.STRATEGIES.value, user)
+    
     return {"status": "deleted", "id": strategy_id}
 
 
@@ -918,7 +931,8 @@ async def deploy_bot(
     user: dict = Depends(get_current_user),
     fleet=Depends(get_fleet),
     ws_mgr=Depends(get_ws_manager),
-    _limit=Depends(check_deployment_limit),  # ← blocks over-deployment
+    _feature=Depends(require_live_trading),
+    _limit=Depends(check_bot_quota),  # ← blocks over-deployment
 ):
     """
     FIX N12: Calls fleet.start_bot(user_id, symbol, blueprint) — the correct
@@ -984,6 +998,9 @@ async def deploy_bot(
         "id", strategy_id
     ).execute()
 
+    # Increment bot usage
+    await increment_usage(Resource.BOTS.value, user)
+
     asyncio.create_task(
         ws_mgr.broadcast_user(
             user["id"],
@@ -1006,8 +1023,8 @@ async def stop_bot(
     strategy_id: str,
     user: dict = Depends(get_current_user),
     fleet=Depends(get_fleet),
-    vault=Depends(get_vault),
     ws_mgr=Depends(get_ws_manager),
+    _feature=Depends(require_live_trading),
 ):
     """Stops the bot loop and cancels all open orders for that symbol."""
     # SECURITY: Verify strategy belongs to authenticated user
@@ -1068,6 +1085,9 @@ async def stop_bot(
         "id", strategy_id
     ).execute()
 
+    # Decrement bot usage
+    await decrement_usage(Resource.BOTS.value, user)
+
     asyncio.create_task(
         ws_mgr.broadcast_user(
             user["id"],
@@ -1087,7 +1107,8 @@ async def train_ml_strategy(
     user: dict = Depends(get_current_user),
     vault=Depends(get_vault),
     ws_mgr=Depends(get_ws_manager),
-    _ml_check=Depends(check_ml_build_limit),  # ← blocks unpaid ML compute
+    _feature=Depends(require_ml_training),  # ← blocks users without ML feature
+    _ml_check=Depends(check_ml_quota),  # ← blocks unpaid ML compute
 ):
     """
     Triggers XGBoost/DL training as a background task.
@@ -1126,18 +1147,8 @@ async def train_ml_strategy(
                 body.get("indicators", ["Close"]),
             )
 
-            # Increment ml_strategies_built counter
-            sb = _sb(user)
-            r = (
-                sb.table("profiles")
-                .select("ml_strategies_built")
-                .eq("id", user["id"])
-                .execute()
-            )
-            current = r.data[0].get("ml_strategies_built", 0) if r.data else 0
-            sb.table("profiles").update({"ml_strategies_built": current + 1}).eq(
-                "id", user["id"]
-            ).execute()
+            # Increment ML training usage
+            await increment_usage(Resource.ML_TRAININGS.value, user)
 
             await ws_mgr.broadcast_user(
                 user["id"],

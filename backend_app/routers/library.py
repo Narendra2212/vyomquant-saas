@@ -39,6 +39,12 @@ from pydantic import BaseModel, Field, validator
 from backend_app.core.auth_middleware import decode_token_local
 from backend_app.core.dependencies import (bearer_scheme, get_admin_user,
                                            get_current_user)
+from backend_app.core.subscription_dependencies import (
+    check_feature_optional,
+    check_marketplace_publish_quota,
+    require_marketplace_access,
+    require_marketplace_publish,
+)
 from backend_app.core.rate_limit import limiter
 from supabase import create_client
 from backend_app.api_ws.ws_manager import manager as ws_manager
@@ -137,7 +143,7 @@ class PublishStrategyRequest(BaseModel):
 
     @validator("subscription_tier")
     def validate_subscription_tier(cls, v):
-        valid = {"free", "pro", "elite"}
+        valid = {"free", "starter", "pro", "enterprise"}
         if v not in valid:
             raise ValueError(f"Invalid subscription tier. Must be one of: {sorted(valid)}")
         return v
@@ -1005,6 +1011,8 @@ async def publish_strategy(
     request: Request,
     payload: PublishStrategyRequest,
     user: dict = Depends(get_current_user),
+    _feature=Depends(require_marketplace_publish),
+    _quota=Depends(check_marketplace_publish_quota),
 ):
     """
     Publish a strategy to the Library. The strategy must:
@@ -1330,6 +1338,7 @@ async def clone_strategy(
     request: Request,
     library_id: str,
     user: dict = Depends(get_current_user),
+    _feature=Depends(require_marketplace_access),
 ):
     """
     Clones a published library strategy into the authenticated user's
@@ -1766,8 +1775,8 @@ class MarketplaceCheckoutRequest(BaseModel):
 async def create_marketplace_checkout(
     library_id: str,
     body: MarketplaceCheckoutRequest,
-    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
+    _feature=Depends(require_marketplace_access),
 ):
     """Creates a payment checkout session for marketplace strategy subscription."""
     lib_id = _safe_uuid(library_id, "library_id")
@@ -1933,6 +1942,7 @@ async def create_marketplace_checkout(
 async def subscribe_to_strategy(
     library_id: str,
     user: dict = Depends(get_current_user),
+    _feature=Depends(require_marketplace_access),
 ):
     """
     Subscribe to a paid marketplace strategy.
@@ -2316,50 +2326,6 @@ async def renew_subscription(sub_id: str, user: dict = Depends(get_current_user)
         logger.warning(f"Failed to increment subscriber_count: {exc}")
     
     return {"status": "renewed", "subscription_id": sub_id, "renewed_at": now}
-
-@router.get("/leaderboard")
-async def marketplace_leaderboard(limit: int = 10):
-    """Get marketplace top-performing strategy rankings & verified creator leaderboard derived from actual database records."""
-    svc = _build_service_client()
-    try:
-        resp = (
-            svc.table("library_strategies")
-            .select(
-                "id, name, author_id, category, difficulty, moderation_status, "
-                "backtest_sharpe_ratio, backtest_total_return_pct, clone_count, is_featured, monthly_price"
-            )
-            .eq("moderation_status", "approved")
-            .order("backtest_sharpe_ratio", desc=True)
-            .limit(limit)
-            .execute()
-        )
-        items = resp.data or []
-        leaderboard = []
-        for idx, item in enumerate(items, 1):
-            subscribers = item.get("clone_count", 0)
-            price = float(item.get("monthly_price") or 0.0)
-            monthly_earnings = round(subscribers * price * 0.90, 2)
-            leaderboard.append({
-                "rank": idx,
-                "strategy_id": item.get("id"),
-                "name": item.get("name"),
-                "author_alias": _get_author_alias(item.get("author_id", "")),
-                "is_verified": item.get("is_featured", False),
-                "badge": "Verified Creator" if item.get("is_featured") else "Published",
-                "sharpe_ratio": float(item.get("backtest_sharpe_ratio") or 0.0),
-                "total_return_pct": float(item.get("backtest_total_return_pct") or 0.0),
-                "subscribers_count": subscribers,
-                "monthly_price": price,
-                "creator_monthly_earnings": monthly_earnings
-            })
-        return {
-            "leaderboard": leaderboard,
-            "total_active_creators": len(set(i.get("author_id") for i in items if i.get("author_id"))),
-            "platform_revenue_split": "90/10"
-        }
-    except Exception as exc:
-        logger.error(f"Error fetching leaderboard: {exc}")
-        return {"leaderboard": [], "total_active_creators": 0, "platform_revenue_split": "90/10"}
 
 @router.get("/creator/analytics")
 async def creator_analytics(user: dict = Depends(get_current_user)):

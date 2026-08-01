@@ -159,28 +159,45 @@ async def register(
                 user_id = res.user.id
                 access_token = "email_verification_pending"
 
-            # Apply referral logic using admin_client
+            # Apply referral logic using new referral system
             if getattr(user_data, "referral_code", None):
-                ref_code = user_data.referral_code.lower()
-                # Find referrer by ID prefix (since referral code is ID[:8])
+                ref_code = user_data.referral_code.upper().strip()
                 try:
-                    referrer_res = admin_client.table("profiles").select("id").ilike("id", f"{ref_code}%").limit(1).execute()
-                    if referrer_res.data:
-                        referrer_id = referrer_res.data[0]["id"]
-                        if referrer_id != user_id:
-                            # 1. Create pending referral
-                            admin_client.table("referrals").insert({
-                                "referrer_id": referrer_id,
-                                "referred_id": user_id,
-                                "status": "pending",
-                                "commission_usd": 0
-                            }).execute()
+                    # Validate referral code using new referral_codes table
+                    referral_code_res = admin_client.table("referral_codes").select("user_id", "id").eq("code", ref_code).execute()
+                    
+                    if referral_code_res.data and len(referral_code_res.data) > 0:
+                        referrer_data = referral_code_res.data[0]
+                        referrer_id = referrer_data["user_id"]
+                        referral_code_id = referrer_data["id"]
+                        
+                        # Prevent self-referral
+                        if referrer_id == user_id:
+                            logger.warning(f"Self-referral attempt blocked for user {user_id}")
+                        else:
+                            # Check if user already has a referrer
+                            existing_referral = admin_client.table("referral_relationships").select("id").eq("referred_id", user_id).execute()
                             
-                            # 2. Grant referred user their initial 10% discount
-                            admin_client.table("profiles").update({
-                                "available_discounts": 1
-                            }).eq("id", user_id).execute()
-                            logger.info(f"Referral applied: {referrer_id} referred {user_id}")
+                            if not existing_referral.data or len(existing_referral.data) == 0:
+                                # Create referral relationship using new schema
+                                admin_client.table("referral_relationships").insert({
+                                    "referrer_id": referrer_id,
+                                    "referred_id": user_id,
+                                    "referral_code_id": referral_code_id,
+                                    "status": "pending"
+                                }).execute()
+                                
+                                # Update profiles table for backward compatibility
+                                admin_client.table("profiles").update({
+                                    "referred_by_user_id": referrer_id
+                                }).eq("id", user_id).execute()
+                                
+                                logger.info(f"Referral relationship created: {referrer_id} referred {user_id} using code {ref_code}")
+                            else:
+                                logger.warning(f"User {user_id} already has a referrer, ignoring duplicate referral")
+                    else:
+                        logger.warning(f"Invalid referral code: {ref_code}")
+                        
                 except Exception as ref_err:
                     logger.error(f"Failed to process referral code {ref_code}: {ref_err}")
 

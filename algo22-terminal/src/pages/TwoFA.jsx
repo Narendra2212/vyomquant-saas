@@ -1,6 +1,6 @@
 ﻿import React, { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { ShieldCheck, Lock } from "lucide-react";
+import { ShieldCheck, Lock, Copy } from "lucide-react";
 import { C, Btn, Inp } from "../components/ui-legacy/primitives";
 
 export default function TwoFA() {

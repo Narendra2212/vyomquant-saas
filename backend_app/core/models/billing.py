@@ -3,60 +3,14 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Integer, String
 
 from backend_app.core.database import Base
 
 
-class SubscriptionModel(Base):
-    """SQLAlchemy model for local fallback subscriptions table."""
-    __tablename__ = "subscriptions"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(36), nullable=False, unique=True, index=True)
-    plan_id = Column(String(32), nullable=False, default="free")  # free, starter, pro, enterprise
-    name = Column(String(64), nullable=False, default="Free")
-    priceUSD = Column(Float, nullable=False, default=0.0)
-    priceINR = Column(Float, nullable=False, default=0.0)
-    features = Column(JSON, nullable=True)
-    nextBillingDate = Column(String(64), nullable=True)
-    autoRenew = Column(Boolean, nullable=False, default=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    def to_dict(self):
-        return {
-            "id": self.plan_id,  # Map plan_id to id for frontend compatibility
-            "name": self.name,
-            "priceUSD": self.priceUSD,
-            "priceINR": self.priceINR,
-            "features": self.features or [],
-            "nextBillingDate": self.nextBillingDate,
-            "autoRenew": self.autoRenew,
-        }
-
-
-class InvoiceModel(Base):
-    """SQLAlchemy model for local fallback invoices table."""
-    __tablename__ = "invoices"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(36), nullable=False, index=True)
-    date = Column(String(64), nullable=False)
-    amtUSD = Column(Float, nullable=False, default=0.0)
-    amtINR = Column(Float, nullable=False, default=0.0)
-    status = Column(String(32), nullable=False, default="pending")  # paid, pending, failed
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "date": self.date,
-            "amtUSD": self.amtUSD,
-            "amtINR": self.amtINR,
-            "status": self.status,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
+# DEPRECATED: SubscriptionModel and InvoiceModel removed
+# Supabase profiles table is the single source of truth for billing state
+# PaymentMethodModel retained temporarily for payment method display endpoints
 
 
 class PaymentMethodModel(Base):

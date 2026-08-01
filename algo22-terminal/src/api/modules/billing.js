@@ -50,23 +50,26 @@ import { get, post } from '../../apiClient';
 
 export const billingApi = {
   /**
-   * Get current billing plan
-   * @returns {Promise<BillingPlan>}
+   * Get all available plans
+   * @returns {Promise<{plans: Array}>}
    */
-  getPlan: () => get('/api/billing/plan'),
+  getPlans: () => get('/api/billing/plans'),
 
   /**
-   * Get invoice history
-   * @returns {Promise<Invoice[]>}
+   * Get user's current entitlements (plan, features, quotas, usage)
+   * @returns {Promise<{plan: string, features: string[], quotas: object, usage: object}>}
+   */
+  getEntitlements: () => get('/api/billing/entitlements'),
+
+  /**
+   * Get current billing plan (legacy)
+   * @returns {Promise<BillingPlan>}
+   * @deprecated Use getEntitlements instead
    */
   getInvoices: () => get('/api/billing/invoices'),
-
-  /**
-   * Get saved payment methods
-   * @returns {Promise<PaymentMethod[]>}
-   */
   getPaymentMethods: () => get('/api/billing/payment-methods'),
-
+  getCurrency: () => get('/api/billing/currency'),
+  setCurrency: (currency) => post('/api/billing/currency', { currency }),
   /**
    * Create checkout session
    * @param {CheckoutRequest} request

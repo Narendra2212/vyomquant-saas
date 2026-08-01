@@ -4,7 +4,7 @@ core/models/ — Pydantic models package
 All Pydantic request/response models for the application.
 """
 
-from .billing import InvoiceModel, PaymentMethodModel, SubscriptionModel
+from .billing import PaymentMethodModel
 # Re-export execution_record models for backward compatibility
 from .execution_record import (ExecutionRecordModel, ExecutionRecordRepository,
                                ExecutionSide, ExecutionStatus)
@@ -76,8 +76,6 @@ __all__ = [
     # Billing
     "PaymentMethod",
     "AddPaymentMethodRequest",
-    "SubscriptionModel",
-    "InvoiceModel",
     "PaymentMethodModel",
     # Support
     "TicketPriority",

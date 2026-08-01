@@ -33,17 +33,6 @@ import { get, put, publicGet } from '../../apiClient';
  * @property {number} total_strategies
  */
 
-/**
- * @typedef {Object} LeaderboardEntry
- * @property {number} rank
- * @property {string} name
- * @property {string} strat
- * @property {number} pnl
- * @property {number} dd
- * @property {number} trades
- * @property {string} sub
- */
-
 export const userApi = {
   /**
    * Get user profile
@@ -69,14 +58,6 @@ export const userApi = {
    * @returns {Promise<ReferralStats>}
    */
   getReferralStats: () => get('/api/referral/stats'),
-
-  /**
-   * Get leaderboard (public)
-   * @param {string} [timeframe="30d"] - "all", "30d", "7d", "today"
-   * @returns {Promise<LeaderboardEntry[]>}
-   */
-  getLeaderboard: (timeframe = "30d") =>
-    publicGet('/api/leaderboard', { timeframe }),
 
   /**
    * Get security logs

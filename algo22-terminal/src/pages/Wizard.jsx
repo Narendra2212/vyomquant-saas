@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Check, Shield, Zap, Rocket, ChevronRight, Layers, ArrowRight, ShieldCheck, Mail, Bell, CheckCircle, Key, Lock, Wifi, Database, Activity, Loader2 } from "lucide-react";
 import { C, Btn, Inp, Card } from "../components/ui-legacy/primitives";
-import endpoints from "../utils/endpoints";
+import { api } from "../api";
 import { supabase } from "../supabase";
 
 export default function Wizard() {
@@ -44,20 +44,28 @@ export default function Wizard() {
   }, []);
 
   const steps = ["Secure Account", "Demo Backtest", "Connect Exchange", "Choose Plan"];
-  const plans = [
-    { id: "free", n: "Free", tier: "free", inr: 0, usd: 0, f: ["1 Deployed Bot", "Algorithm Builder", "3 Backtests/mo", "No ML Training"] },
-    { id: "pro", n: "Pro Tier", tier: "pro_999", inr: 999, usd: 12, f: ["5 Deployed Algos", "Unlimited Backtesting", "Telegram+Email Alerts", "Algorithm Indicators"], best: true },
-    { id: "elite", n: "Enterprise Tier", tier: "elite_1999", inr: 1999, usd: 24, f: ["8 Deployed Algos", "2 ML/DL Models Training", "Priority Support", "Full API Access"] },
-  ];
+  const [plans, setPlans] = useState([]);
+
+  useEffect(() => {
+    const loadPlans = async () => {
+      try {
+        const data = await api.billing.getPlans();
+        setPlans(data.plans || []);
+      } catch (err) {
+        console.error("Failed to load plans:", err);
+      }
+    };
+    loadPlans();
+  }, []);
 
   const handleSelectPlan = async (p) => {
-    if (p.tier === "free") {
+    if (p.id === "free") {
       navigate("/app/dashboard");
       return;
     }
-    setIsCheckoutLoading(p.tier);
+    setIsCheckoutLoading(p.id);
     try {
-      const data = await endpoints.billing.createCheckout({ tier: p.tier, currency: "INR" });
+      const data = await api.billing.createCheckout({ tier: p.id, currency: "INR" });
       if (data && data.checkoutUrl) {
         window.location.href = data.checkoutUrl;
       } else {
@@ -192,24 +200,30 @@ export default function Wizard() {
         {step === 3 && (
           <div>
             <h2 style={{ color: C.t1, fontWeight: 900, fontSize: 18, marginBottom: 4, textAlign: "center" }}>Choose Your Plan</h2>
-            <p style={{ color: C.t2, fontSize: 11, fontFamily: "monospace", marginBottom: 24, textAlign: "center" }}>Canonical pricing matching backend SubscriptionTier limits.</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
-              {plans.map(p => (
-                <div key={p.n} style={{ background: p.best ? "rgba(0,212,255,0.05)" : C.bg3, border: `1px solid ${p.best ? C.cyan : C.border}`, borderRadius: 12, padding: 20, position: "relative", display: "flex", flexDirection: "column" }}>
-                  {p.best && <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: C.cyan, color: "#000", fontSize: 8, fontWeight: 900, letterSpacing: 2, padding: "2px 10px", borderRadius: 20 }}>BEST VALUE</div>}
-                  <div style={{ color: C.t1, fontWeight: 900, fontSize: 14 }}>{p.n}</div>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 3, margin: "10px 0" }}>
-                    <span style={{ color: p.best ? C.cyan : C.t1, fontSize: 24, fontWeight: 900 }}>{p.inr === 0 ? "Free" : `₹${p.inr}`}</span>
-                    {p.inr > 0 && <span style={{ color: C.t3, fontSize: 10, fontFamily: "monospace" }}>/mo ({p.usd})</span>}
+            <p style={{ color: C.t2, fontSize: 11, fontFamily: "monospace", marginBottom: 24, textAlign: "center" }}>Select a plan to unlock powerful features.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
+              {plans.map(p => {
+                const isActive = currentPlan?.id === p.id;
+                const isRecommended = p.recommended;
+                const priceINR = p.inr || 0;
+                const priceUSD = p.usd || 0;
+                return (
+                  <div key={p.id} style={{ background: isRecommended ? "rgba(0,212,255,0.05)" : C.bg3, border: `1px solid ${isRecommended ? C.cyan : C.border}`, borderRadius: 12, padding: 20, position: "relative", display: "flex", flexDirection: "column" }}>
+                    {isRecommended && <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: C.cyan, color: "#000", fontSize: 8, fontWeight: 900, letterSpacing: 2, padding: "2px 10px", borderRadius: 20 }}>RECOMMENDED</div>}
+                    <div style={{ color: C.t1, fontWeight: 900, fontSize: 14 }}>{p.name}</div>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 3, margin: "10px 0" }}>
+                      <span style={{ color: isRecommended ? C.cyan : C.t1, fontSize: 24, fontWeight: 900 }}>{priceINR === 0 ? "Free" : `₹${priceINR}`}</span>
+                      {priceINR > 0 && <span style={{ color: C.t3, fontSize: 10, fontFamily: "monospace" }}>/mo ($${priceUSD})</span>}
+                    </div>
+                    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 5, marginBottom: 14 }}>
+                      {p.features.slice(0, 4).map(f => <div key={f} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, fontFamily: "monospace", color: C.t2 }}><CheckCircle size={9} style={{ color: isRecommended ? C.cyan : C.green, flexShrink: 0 }} />{f}</div>)}
+                    </div>
+                    <Btn v={priceINR === 0 ? "outline" : "primary"} sz="sm" cls="w-full justify-center" disabled={isCheckoutLoading === p.id} onClick={() => handleSelectPlan(p)}>
+                      {isCheckoutLoading === p.id ? "Loading..." : priceINR === 0 ? "Start Free" : "Select →"}
+                    </Btn>
                   </div>
-                  <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 5, marginBottom: 14 }}>
-                    {p.f.map(f => <div key={f} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, fontFamily: "monospace", color: C.t2 }}><CheckCircle size={9} style={{ color: p.best ? C.cyan : C.green, flexShrink: 0 }} />{f}</div>)}
-                  </div>
-                  <Btn v={p.best ? "primary" : "outline"} sz="sm" cls="w-full justify-center" disabled={isCheckoutLoading === p.tier} onClick={() => handleSelectPlan(p)}>
-                    {isCheckoutLoading === p.tier ? "Loading..." : "Select →"}
-                  </Btn>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}

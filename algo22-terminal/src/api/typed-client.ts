@@ -48,6 +48,10 @@ import type {
   BacktestRequest,
   BacktestResponse,
   Strategy,
+  // Notifications
+  NotificationSettings,
+  Notification,
+  NotificationListResponse,
   StrategyListResponse,
   DeployRequest,
   DeployResponse,
@@ -82,10 +86,6 @@ import type {
   Ticket,
   TicketsResponse,
   AddCommentRequest,
-  // Leaderboard
-  LeaderboardResponse,
-  // Notifications
-  NotificationSettings,
 } from '../types/api.types';
 
 import {
@@ -386,9 +386,6 @@ export const user = {
   getReferralStats: (): Promise<{ code: string; referrals: number; earnings: number }> =>
     apiCall<void, { code: string; referrals: number; earnings: number }>('get', '/api/user/referrals'),
   
-  getLeaderboard: (): Promise<LeaderboardResponse> =>
-    apiCall<void, LeaderboardResponse>('get', '/api/leaderboard'),
-  
   getSecurityLogs: (): Promise<{ logins: any[]; api_calls: number; failed_attempts: number }> =>
     apiCall<void, { logins: any[]; api_calls: number; failed_attempts: number }>('get', '/api/user/security-logs'),
 };
@@ -420,11 +417,35 @@ export const support = {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const notifications = {
+  // Settings (legacy - moved to user profile)
   getSettings: (): Promise<NotificationSettings> =>
     apiCall<void, NotificationSettings>('get', '/api/notifications/settings'),
   
   updateSettings: (data: Partial<NotificationSettings>): Promise<NotificationSettings> =>
     apiCall<Partial<NotificationSettings>, NotificationSettings>('put', '/api/notifications/settings', data),
+  
+  // Notification CRUD
+  list: (params?: { limit?: number; offset?: number; unread_only?: boolean; category?: string }): Promise<NotificationListResponse> => {
+    const queryParams = new URLSearchParams();
+    if (params?.limit) queryParams.append('limit', params.limit.toString());
+    if (params?.offset) queryParams.append('offset', params.offset.toString());
+    if (params?.unread_only !== undefined) queryParams.append('unread_only', params.unread_only.toString());
+    if (params?.category) queryParams.append('category', params.category);
+    const url = `/api/notifications${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
+    return apiCall<void, NotificationListResponse>('get', url);
+  },
+  
+  markRead: (id: string): Promise<{ status: string }> =>
+    apiCall<void, { status: string }>('put', `/api/notifications/${id}/read`),
+  
+  markAllRead: (): Promise<{ status: string }> =>
+    apiCall<void, { status: string }>('put', '/api/notifications/read-all'),
+  
+  delete: (id: string): Promise<{ status: string }> =>
+    apiCall<void, { status: string }>('delete', `/api/notifications/${id}`),
+  
+  deleteAll: (): Promise<{ status: string }> =>
+    apiCall<void, { status: string }>('delete', '/api/notifications'),
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -570,26 +570,6 @@ export interface AddCommentRequest {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LEADERBOARD / ANALYTICS
-// ═══════════════════════════════════════════════════════════════════════════
-
-export interface LeaderboardEntry {
-  rank: number;
-  user_id: string;
-  username?: string;
-  total_return_pct: number;
-  win_rate_pct: number;
-  total_trades: number;
-  sharpe_ratio: number;
-}
-
-export interface LeaderboardResponse {
-  entries: LeaderboardEntry[];
-  period: 'daily' | 'weekly' | 'monthly' | 'all_time';
-  generated_at: string;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // NOTIFICATIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -600,6 +580,29 @@ export interface NotificationSettings {
   price_alerts: boolean;
   security_alerts: boolean;
   marketing_emails: boolean;
+}
+
+export interface Notification {
+  id: string;
+  user_id: string;
+  type: string;
+  category: string;
+  severity: string;
+  title: string;
+  message: string;
+  strategy_id?: string;
+  exchange?: string;
+  metadata?: Record<string, unknown>;
+  read: boolean;
+  created_at: string;
+}
+
+export interface NotificationListResponse {
+  items: Notification[];
+  total: number;
+  unread_count: number;
+  limit: number;
+  offset: number;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

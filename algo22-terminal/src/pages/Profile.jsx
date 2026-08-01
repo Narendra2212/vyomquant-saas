@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { UserCheck, Mail, Shield, Edit2, Check, AlertCircle, CreditCard, TrendingUp, Lock, Bell, Settings, Copy, ExternalLink, RefreshCw, Loader2 } from "lucide-react";
+import { UserCheck, Mail, Shield, Edit2, Check, AlertCircle, CreditCard, TrendingUp, Lock, Bell, Settings, Copy, ExternalLink, RefreshCw, Loader2, Link2 } from "lucide-react";
 import { api } from "../api";
 import { C, Card, SectionH, PanelTitle, Btn, Inp } from "../components/ui-legacy/primitives";
 import wsClient from "../websocketClient";
@@ -31,7 +31,7 @@ export default function Profile() {
         const [profileData, billingData, referralData, statsData, securityData, notifData] = await Promise.allSettle([
           api.user.getProfile(),
           api.user.getBillingPlan(),
-          api.user.getReferralStats(),
+          api.referral.getStats(),
           api.user.getStats(),
           api.user.getSecurityLogs(20),
           api.user.getNotificationSettings()
@@ -150,7 +150,7 @@ export default function Profile() {
         const [profileData, billingData, referralData, statsData, securityData, notifData] = await Promise.allSettle([
           api.user.getProfile(),
           api.user.getBillingPlan(),
-          api.user.getReferralStats(),
+          api.referral.getStats(),
           api.user.getStats(),
           api.user.getSecurityLogs(20),
           api.user.getNotificationSettings()
@@ -187,9 +187,95 @@ export default function Profile() {
     fetchAllData();
   };
 
+  const handleNotificationSettingChange = async (key, value) => {
+    try {
+      const updatedSettings = {
+        ...notificationSettings,
+        channels: {
+          ...notificationSettings?.channels,
+          [key]: { ...notificationSettings?.channels?.[key], active: value }
+        },
+        events: {
+          ...notificationSettings?.events,
+          [key]: value
+        }
+      };
+      
+      setNotificationSettings(updatedSettings);
+      await api.user.updateNotificationSettings(updatedSettings);
+    } catch (err) {
+      console.error('Failed to update notification settings:', err);
+      // Revert on error
+      setNotificationSettings(notificationSettings);
+    }
+  };
+
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
   };
+
+  // ── Notification Toggle Row Component ───────────────────────────────────────
+  function NotificationToggleRow({ label, description, checked, onChange }) {
+    return (
+      <div 
+        onClick={() => onChange(!checked)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: 12,
+          background: C.bg3,
+          border: `1px solid ${checked ? `${C.accent}40` : C.border}`,
+          borderRadius: 8,
+          cursor: "pointer",
+          transition: "all 0.15s"
+        }}
+      >
+        <div style={{ 
+          color: checked ? C.accent : C.t3,
+          transition: "color 0.15s"
+        }}>
+          <Bell size={18} />
+        </div>
+        
+        <div style={{ flex: 1 }}>
+          <div style={{ 
+            fontSize: 13, 
+            fontWeight: 600, 
+            color: C.t1,
+            marginBottom: 2
+          }}>
+            {label}
+          </div>
+          <div style={{ fontSize: 11, color: C.t3 }}>
+            {description}
+          </div>
+        </div>
+
+        <div style={{
+          width: 44,
+          height: 24,
+          background: checked ? C.accent : C.border,
+          borderRadius: 12,
+          position: "relative",
+          transition: "background 0.2s",
+          flexShrink: 0
+        }}>
+          <div style={{
+            width: 20,
+            height: 20,
+            background: "#fff",
+            borderRadius: "50%",
+            position: "absolute",
+            top: 2,
+            left: checked ? 22 : 2,
+            transition: "left 0.2s",
+            boxShadow: "0 2px 4px rgba(0,0,0,0.2)"
+          }} />
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -421,50 +507,136 @@ export default function Profile() {
         </div>
       </Card>
 
-      {/* Referral */}
+      {/* Notification Settings */}
+      <Card cls="p-6 mb-4">
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+          <Bell size={20} style={{ color: C.accent }} />
+          <h3 style={{ fontSize: 14, fontWeight: 600, color: C.t1 }}>Notification Preferences</h3>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <NotificationToggleRow
+            label="Email Notifications"
+            description="Receive critical alerts via email"
+            checked={notificationSettings?.channels?.email?.active ?? true}
+            onChange={(checked) => handleNotificationSettingChange('email', checked)}
+          />
+          <NotificationToggleRow
+            label="Trade Alerts"
+            description="Order executions and position updates"
+            checked={notificationSettings?.events?.trade ?? true}
+            onChange={(checked) => handleNotificationSettingChange('trade', checked)}
+          />
+          <NotificationToggleRow
+            label="Risk Alerts"
+            description="Margin breaches and kill switches"
+            checked={notificationSettings?.events?.margin ?? true}
+            onChange={(checked) => handleNotificationSettingChange('margin', checked)}
+          />
+          <NotificationToggleRow
+            label="Security Alerts"
+            description="Login attempts and API key changes"
+            checked={notificationSettings?.events?.login ?? true}
+            onChange={(checked) => handleNotificationSettingChange('login', checked)}
+          />
+          <NotificationToggleRow
+            label="Bot Status"
+            description="Strategy start/stop events"
+            checked={notificationSettings?.events?.bot ?? true}
+            onChange={(checked) => handleNotificationSettingChange('bot', checked)}
+          />
+        </div>
+        <div style={{ marginTop: 16, fontSize: 11, color: C.t3 }}>
+          <Lock size={12} style={{ marginRight: 4 }} />
+          Critical alerts (system failures, kill switches) cannot be disabled
+        </div>
+      </Card>
+
+      {/* Referral Program */}
       {referral && (
         <Card cls="p-6 mb-4">
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-            <ExternalLink size={20} style={{ color: C.accent }} />
-            <h3 style={{ fontSize: 14, fontWeight: 600, color: C.t1 }}>Referral Program</h3>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <ExternalLink size={20} style={{ color: C.accent }} />
+              <h3 style={{ fontSize: 14, fontWeight: 600, color: C.t1 }}>Referral Program</h3>
+            </div>
+            <span style={{ background: `${C.green}15`, border: `1px solid ${C.green}33`, color: C.green, fontSize: 9, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>
+              ACTIVE
+            </span>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 16 }}>
-            <div>
-              <div style={{ color: C.t2, fontSize: 10, marginBottom: 4 }}>Total Referrals</div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: C.t1 }}>{referral.total_referrals || 0}</div>
+
+          {/* Referral Code and Link */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ color: C.t2, fontSize: 10, marginBottom: 8, fontFamily: "monospace", letterSpacing: 1, textTransform: "uppercase" }}>
+              Your Referral Code
             </div>
-            <div>
-              <div style={{ color: C.t2, fontSize: 10, marginBottom: 4 }}>Active Subscriptions</div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: C.t1 }}>{referral.active_subs || 0}</div>
-            </div>
-            <div>
-              <div style={{ color: C.t2, fontSize: 10, marginBottom: 4 }}>Total Earned</div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: C.green }}>${referral.total_earned || 0}</div>
-            </div>
-            <div>
-              <div style={{ color: C.t2, fontSize: 10, marginBottom: 4 }}>Pending Payout</div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: C.t1 }}>${referral.pending_payout || 0}</div>
-            </div>
-          </div>
-          {referral.referral_link && (
-            <div style={{ marginTop: 16, padding: 12, background: C.bg3, borderRadius: 6, display: "flex", alignItems: "center", gap: 8 }}>
-              <input
-                value={referral.referral_link}
-                readOnly
-                style={{
-                  flex: 1,
-                  background: "transparent",
-                  border: "none",
-                  color: C.t1,
-                  fontSize: 12,
-                  outline: "none"
-                }}
-              />
-              <Btn onClick={() => copyToClipboard(referral.referral_link)} size="sm">
+            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              <div style={{
+                flex: 1,
+                background: C.bg3,
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+                padding: "12px 16px",
+                display: "flex",
+                alignItems: "center",
+                gap: 10
+              }}>
+                <code style={{ color: C.cyan, fontSize: 14, fontWeight: 700, fontFamily: "monospace" }}>
+                  {referral.referral_code || profile?.id?.substring(0, 8).toUpperCase() || "Loading..."}
+                </code>
+              </div>
+              <Btn onClick={() => copyToClipboard(referral.referral_code || profile?.id?.substring(0, 8).toUpperCase())} size="sm">
                 <Copy size={14} />
               </Btn>
             </div>
-          )}
+
+            <div style={{ color: C.t2, fontSize: 10, marginBottom: 8, fontFamily: "monospace", letterSpacing: 1, textTransform: "uppercase" }}>
+              Your Referral Link
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{
+                flex: 1,
+                background: C.bg3,
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+                padding: "12px 16px",
+                display: "flex",
+                alignItems: "center",
+                gap: 10
+              }}>
+                <Link2 size={14} style={{ color: C.cyan, flexShrink: 0 }} />
+                <code style={{ color: C.t1, fontSize: 11, fontFamily: "monospace", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {referral.referral_link || "Loading..."}
+                </code>
+              </div>
+              <Btn onClick={() => copyToClipboard(referral.referral_link)} size="sm" disabled={!referral.referral_link}>
+                <Copy size={14} />
+              </Btn>
+            </div>
+          </div>
+
+          {/* Statistics Grid */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(140px,1fr))", gap: 16, marginBottom: 20 }}>
+            <div style={{ background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16 }}>
+              <div style={{ color: C.t2, fontSize: 10, marginBottom: 4, fontFamily: "monospace", letterSpacing: 1 }}>TOTAL REFERRALS</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: C.cyan }}>{referral.total_referrals || 0}</div>
+            </div>
+            <div style={{ background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16 }}>
+              <div style={{ color: C.t2, fontSize: 10, marginBottom: 4, fontFamily: "monospace", letterSpacing: 1 }}>ACTIVE REFERRALS</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: C.green }}>{referral.active_referrals || 0}</div>
+            </div>
+            <div style={{ background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16 }}>
+              <div style={{ color: C.t2, fontSize: 10, marginBottom: 4, fontFamily: "monospace", letterSpacing: 1 }}>PENDING EARNINGS</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: C.orange }}>${(referral.pending_earnings || 0).toFixed(2)}</div>
+            </div>
+            <div style={{ background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16 }}>
+              <div style={{ color: C.t2, fontSize: 10, marginBottom: 4, fontFamily: "monospace", letterSpacing: 1 }}>LIFETIME EARNINGS</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: C.gold }}>${(referral.lifetime_earnings || 0).toFixed(2)}</div>
+            </div>
+          </div>
+
+          <div style={{ fontSize: 10, color: C.t3, fontFamily: "monospace", lineHeight: 1.5 }}>
+            Earn 20% commission on every successful subscription payment from your referrals. Commissions are calculated automatically and credited to your pending wallet.
+          </div>
         </Card>
       )}
 

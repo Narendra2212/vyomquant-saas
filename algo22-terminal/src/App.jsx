@@ -10,8 +10,8 @@ import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import BotMonitoringConsole from './components/BotMonitoringConsole';
 import SignalTraceVisualization from './components/SignalTraceVisualization';
-import SupportPage from "./SupportPage";
-import NotificationsPage from './components/NotificationsPage';
+import SupportCenter from './components/SupportCenter';
+import NotificationCenter from './components/NotificationCenter';
 import CopilotChat from './components/CopilotChat';
 import DesktopOnlyOverlay from './components/DesktopOnlyOverlay';
 import {
@@ -40,8 +40,6 @@ const StrategyMarketplace = lazy(() => import('./pages/StrategyMarketplace'));
 const ExchangeManager     = lazy(() => import('./pages/ExchangeManager'));
 const RiskSettings        = lazy(() => import('./pages/RiskSettings'));
 const Billing             = lazy(() => import('./pages/Billing'));
-const Leaderboard         = lazy(() => import('./pages/Leaderboard'));
-const Referral            = lazy(() => import('./pages/Referral'));
 const Profile             = lazy(() => import('./pages/Profile'));
 const SecurityLogs        = lazy(() => import('./pages/SecurityLogs'));
 
@@ -164,7 +162,6 @@ function AppShell() {
       builder: '/app/builder', backtest: '/app/backtest',
       marketplace: '/app/marketplace', exchange: '/app/exchange',
       risk: '/app/risk', billing: '/app/billing',
-      leaderboard: '/app/leaderboard', referral: '/app/referral',
       profile: '/app/profile', support: '/app/support',
       notifications: '/app/notifications', 'bot-monitor': '/app/bot-monitor',
       'signal-trace': '/app/signal-trace', 'security-logs': '/app/security-logs',
@@ -262,12 +259,10 @@ export default function AppWrapper() {
                 <Route path="/app/exchange" element={<Suspense fallback={PAGE_FALLBACK}><ExchangeManager /></Suspense>} />
                 <Route path="/app/risk" element={<Suspense fallback={PAGE_FALLBACK}><RiskSettings /></Suspense>} />
                 <Route path="/app/billing" element={<Suspense fallback={PAGE_FALLBACK}><Billing /></Suspense>} />
-                <Route path="/app/leaderboard" element={<Suspense fallback={PAGE_FALLBACK}><Leaderboard /></Suspense>} />
-                <Route path="/app/referral" element={<Suspense fallback={PAGE_FALLBACK}><Referral /></Suspense>} />
                 <Route path="/app/profile" element={<Suspense fallback={PAGE_FALLBACK}><Profile /></Suspense>} />
                 <Route path="/app/security-logs" element={<Suspense fallback={PAGE_FALLBACK}><SecurityLogs /></Suspense>} />
-                <Route path="/app/support" element={<SupportPage />} />
-                <Route path="/app/notifications" element={<NotificationsPage />} />
+                <Route path="/app/support" element={<SupportCenter />} />
+                <Route path="/app/notifications" element={<NotificationCenter />} />
                 <Route path="/app/*" element={<Navigate to="/app/dashboard" replace />} />
               </Route>
             </Route>

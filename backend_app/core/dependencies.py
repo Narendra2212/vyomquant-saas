@@ -398,99 +398,10 @@ async def invalidate_profile_cache(user_id: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-#  TIER / LIMIT DEFINITIONS
+#  DEPRECATED: TIER / LIMIT DEFINITIONS
+#  These have been moved to the centralized subscription engine
+#  Use backend_app.core.subscription_engine for all entitlement checks
 # ══════════════════════════════════════════════════════════════════════════
-
-# Max simultaneous deployed bots per tier
-# FIX N3: Free tier gets 1 so users can demo the product before paying
-DEPLOYMENT_LIMITS = {
-    "free": 1,  # FIX N3: was 0 — blocked free users completely
-    "pro_999": 5,  # Up to 5 concurrent bots
-    "elite_1999": float("inf"),
-}
-
-ML_BUILD_LIMITS = {
-    "free": 0,  # No ML training on free tier
-    "pro_999": 0,  # No ML training on pro — elite only
-    "elite_1999": 2,  # Base 2 models + purchased add-ons
-}
-
-
-# ══════════════════════════════════════════════════════════════════════════
-#  DEPLOYMENT LIMIT CHECK
-# ══════════════════════════════════════════════════════════════════════════
-
-
-async def check_deployment_limit(
-    user: dict = Depends(get_current_user),
-    supabase: Any = Depends(get_request_supabase),
-):
-    """
-    FIX N14: Counts LIVE bots from FleetManager (ground truth) rather than
-             from the Supabase 'deployed_bots' counter column, which can
-             drift out of sync when bots crash without decrementing it.
-    FIX N3:  Free tier now gets 1 slot.
-    """
-    from backend_app.core.state import app_state
-
-    profile = await _get_cached_profile(user["id"], supabase)
-    if profile.get("is_frozen", False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is frozen. All deployments are blocked.",
-        )
-    tier = profile.get("subscription_tier", "free")
-    allowed = DEPLOYMENT_LIMITS.get(tier, 0)
-
-    # FIX N14: Count from FleetManager, not Supabase column
-    user_prefix = f"{user['id']}_"
-    live_bots = sum(
-        1 for k in app_state.fleet._active_fleet if k.startswith(user_prefix)
-    )
-
-    if live_bots >= allowed:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Bot limit reached: {live_bots}/{int(allowed) if allowed != float('inf') else '∞'} "
-                f"bots deployed on the '{tier}' plan. "
-                f"{'Upgrade to deploy more.' if tier != 'elite_1999' else 'Contact support.'}"
-            ),
-        )
-    return True
-
-
-# ══════════════════════════════════════════════════════════════════════════
-#  ML BUILD LIMIT CHECK
-# ══════════════════════════════════════════════════════════════════════════
-
-
-async def check_ml_build_limit(
-    user: dict = Depends(get_current_user),
-    supabase: Any = Depends(get_request_supabase),
-):
-    profile = await _get_cached_profile(user["id"], supabase)
-    tier = profile.get("subscription_tier", "free")
-    built = profile.get("ml_strategies_built", 0)
-    addons = profile.get("ml_addons_purchased", 0)
-
-    base_allowed = ML_BUILD_LIMITS.get(tier, 0)
-    if base_allowed == 0:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="ML/DL model training requires the Elite 1999 plan.",
-        )
-
-    total_allowed = base_allowed + addons
-    if built >= total_allowed:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"ML strategy limit reached ({built}/{total_allowed}). "
-                "Purchase an add-on (199 INR) for one additional model slot."
-            ),
-        )
-    return True
 
 
 # ══════════════════════════════════════════════════════════════════════════
