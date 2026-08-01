@@ -8,7 +8,6 @@ import { Lock } from "lucide-react";
 import ErrorBoundary from './components/ErrorBoundary';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
-import BotMonitoringConsole from './components/BotMonitoringConsole';
 import SignalTraceVisualization from './components/SignalTraceVisualization';
 import SupportCenter from './components/SupportCenter';
 import NotificationCenter from './components/NotificationCenter';
@@ -34,6 +33,7 @@ const LegalPage = lazy(() => import('./pages/LegalPage'));
 // Authenticated app pages (lazy - one chunk per route)
 const Dashboard           = lazy(() => import('./pages/Dashboard'));
 const Strategies          = lazy(() => import('./pages/Strategies'));
+const StrategyDetail      = lazy(() => import('./pages/StrategyDetail'));
 const StrategyBuilder     = lazy(() => import('./pages/StrategyBuilder'));
 const Backtester          = lazy(() => import('./pages/Backtester'));
 const StrategyMarketplace = lazy(() => import('./pages/StrategyMarketplace'));
@@ -163,7 +163,7 @@ function AppShell() {
       marketplace: '/app/marketplace', exchange: '/app/exchange',
       risk: '/app/risk', billing: '/app/billing',
       profile: '/app/profile', support: '/app/support',
-      notifications: '/app/notifications', 'bot-monitor': '/app/bot-monitor',
+      notifications: '/app/notifications',
       'signal-trace': '/app/signal-trace', 'security-logs': '/app/security-logs',
       landing: '/',
     };
@@ -251,10 +251,10 @@ export default function AppWrapper() {
                 <Route path="/app" element={<Navigate to="/app/dashboard" replace />} />
                 <Route path="/app/dashboard" element={<Suspense fallback={PAGE_FALLBACK}><Dashboard /></Suspense>} />
                 <Route path="/app/strategies" element={<Suspense fallback={PAGE_FALLBACK}><Strategies /></Suspense>} />
+                <Route path="/app/strategies/:strategyId" element={<Suspense fallback={PAGE_FALLBACK}><StrategyDetail /></Suspense>} />
                 <Route path="/app/builder" element={<Suspense fallback={PAGE_FALLBACK}><StrategyBuilder /></Suspense>} />
                 <Route path="/app/backtest" element={<Suspense fallback={PAGE_FALLBACK}><Backtester /></Suspense>} />
                 <Route path="/app/marketplace" element={<Suspense fallback={PAGE_FALLBACK}><StrategyMarketplace /></Suspense>} />
-                <Route path="/app/bot-monitor" element={<BotMonitoringConsole wsClient={wsClient} accountId={TENANT_ID} />} />
                 <Route path="/app/signal-trace" element={<SignalTraceVisualization wsClient={wsClient} accountId={TENANT_ID} />} />
                 <Route path="/app/exchange" element={<Suspense fallback={PAGE_FALLBACK}><ExchangeManager /></Suspense>} />
                 <Route path="/app/risk" element={<Suspense fallback={PAGE_FALLBACK}><RiskSettings /></Suspense>} />

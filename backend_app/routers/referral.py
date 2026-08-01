@@ -26,7 +26,7 @@ import os
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -98,7 +98,7 @@ class PayoutRecord(BaseModel):
 class CreatePayoutRequest(BaseModel):
     """Request to create a payout"""
     amount_usd: float = Field(..., gt=0)
-    payment_method: str = Field(..., regex="^(bank_transfer|paypal|upi)$")
+    payment_method: str = Field(..., pattern="^(bank_transfer|paypal|upi)$")
     payment_details: dict = Field(..., description="Payment method specific details")
 
 
@@ -168,6 +168,7 @@ def _ensure_referral_code_exists(user_id: str, supabase: SupabaseClient) -> str:
 @router.get("/referral/profile")
 @limiter.limit("60/minute")
 async def get_referral_profile(
+    request: Request,
     user: dict = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_request_supabase),
 ):
@@ -223,6 +224,7 @@ async def get_referral_profile(
 @router.get("/referral/stats")
 @limiter.limit("60/minute")
 async def get_referral_stats(
+    request: Request,
     user: dict = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_request_supabase),
 ):
@@ -313,7 +315,7 @@ async def get_referral_stats(
 async def get_commission_history(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    status: Optional[str] = Query(None, regex="^(pending|approved|paid|reversed)$"),
+    status: Optional[str] = Query(None, pattern="^(pending|approved|paid|reversed)$"),
     user: dict = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_request_supabase),
 ):
@@ -368,7 +370,7 @@ async def get_commission_history(
 async def get_payout_history(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    status: Optional[str] = Query(None, regex="^(pending|approved|processing|paid|failed|rejected)$"),
+    status: Optional[str] = Query(None, pattern="^(pending|approved|processing|paid|failed|rejected)$"),
     user: dict = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_request_supabase),
 ):
@@ -420,7 +422,8 @@ async def get_payout_history(
 @router.post("/referral/validate")
 @limiter.limit("30/minute")
 async def validate_referral_code(
-    request: ValidateReferralCodeRequest,
+    request: Request,
+    request_body: ValidateReferralCodeRequest,
     supabase: SupabaseClient = Depends(get_request_supabase),
 ):
     """
@@ -432,7 +435,7 @@ async def validate_referral_code(
     
     try:
         # Look up referral code
-        code_resp = supabase.table("referral_codes").select("user_id", "is_active").eq("code", request.referral_code.upper()).execute()
+        code_resp = supabase.table("referral_codes").select("user_id", "is_active").eq("code", request_body.referral_code.upper()).execute()
         
         if not code_resp.data or len(code_resp.data) == 0:
             return ValidateReferralCodeResponse(
@@ -530,7 +533,8 @@ async def reverse_referral_commission(
 @router.post("/referral/payouts")
 @limiter.limit("10/minute")
 async def create_payout_request(
-    request: CreatePayoutRequest,
+    request: Request,
+    payout_request: CreatePayoutRequest,
     user: dict = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_request_supabase),
 ):
@@ -553,14 +557,14 @@ async def create_payout_request(
         approved_balance = float(wallet.get("approved_balance_usd", 0))
         
         # Validate sufficient balance
-        if request.amount_usd > approved_balance:
+        if payout_request.amount_usd > approved_balance:
             raise HTTPException(
                 status_code=400, 
-                detail=f"Insufficient approved balance. Available: ${approved_balance}, Requested: ${request.amount_usd}"
+                detail=f"Insufficient approved balance. Available: ${approved_balance}, Requested: ${payout_request.amount_usd}"
             )
         
         # Validate minimum payout amount (e.g., $10)
-        if request.amount_usd < 10:
+        if payout_request.amount_usd < 10:
             raise HTTPException(
                 status_code=400,
                 detail="Minimum payout amount is $10"
@@ -569,21 +573,21 @@ async def create_payout_request(
         # Create payout record
         payout_resp = supabase.table("referral_payouts").insert({
             "user_id": user_id,
-            "amount_usd": request.amount_usd,
+            "amount_usd": payout_request.amount_usd,
             "status": "pending",
-            "payment_method": request.payment_method,
-            "payment_details": request.payment_details
+            "payment_method": payout_request.payment_method,
+            "payment_details": payout_request.payment_details
         }).execute()
         
         if not payout_resp.data or len(payout_resp.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to create payout request")
         
-        logger.info(f"Payout request created for user {user_id}, amount: ${request.amount_usd}")
+        logger.info(f"Payout request created for user {user_id}, amount: ${payout_request.amount_usd}")
         
         return {
             "status": "success",
             "payout_id": payout_resp.data[0]["id"],
-            "amount_usd": request.amount_usd,
+            "amount_usd": payout_request.amount_usd,
             "status": "pending"
         }
         

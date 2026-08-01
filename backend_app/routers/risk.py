@@ -5,12 +5,14 @@ FIXES APPLIED:
   C5:  ORDER_EXECUTION_ENGINE → order_execution_engine
   SQL: user['id'] wrapped through _safe_uid() before SQL injection
   SCALE: Uses exchange pool instead of new connection per request
+  PERF: Added Redis caching for risk settings to reduce DB load
 """
 
 import asyncio
 import logging
 import re
 from datetime import datetime
+from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -23,6 +25,9 @@ from backend_app.core.models import (KillSwitchRequest, RiskSettingsRequest,
 
 router = APIRouter()
 logger = logging.getLogger("RiskRouter")
+
+# Cache TTL for risk settings (5 minutes)
+RISK_SETTINGS_CACHE_TTL = 300
 
 
 def _sb(user: dict):
@@ -40,6 +45,19 @@ def _safe_uid(uid: str) -> str:
 
 @router.get("/settings")
 async def get_risk_settings(user: dict = Depends(get_current_user)):
+    # Try to get from cache first
+    try:
+        from backend_app.core.state import app_state
+        cache_key = f"risk_settings:{user['id']}"
+        if hasattr(app_state, 'redis_client') and app_state.redis_client:
+            cached = await app_state.redis_client.get(cache_key)
+            if cached:
+                import json
+                return json.loads(cached)
+    except Exception as e:
+        logger.warning(f"Cache read failed for user {user['id']}: {e}")
+    
+    # Fallback to database
     sb = _sb(user)
     if not sb:
         return {
@@ -49,7 +67,7 @@ async def get_risk_settings(user: dict = Depends(get_current_user)):
             "kill_switches": [],
         }
     resp = sb.table("risk_settings").select("*").eq("user_id", user["id"]).execute()
-    return (
+    result = (
         resp.data[0]
         if resp.data
         else {
@@ -59,6 +77,18 @@ async def get_risk_settings(user: dict = Depends(get_current_user)):
             "kill_switches": [],
         }
     )
+    
+    # Cache the result
+    try:
+        from backend_app.core.state import app_state
+        cache_key = f"risk_settings:{user['id']}"
+        if hasattr(app_state, 'redis_client') and app_state.redis_client:
+            import json
+            await app_state.redis_client.setex(cache_key, RISK_SETTINGS_CACHE_TTL, json.dumps(result))
+    except Exception as e:
+        logger.warning(f"Cache write failed for user {user['id']}: {e}")
+    
+    return result
 
 
 @router.put("/settings")
@@ -74,6 +104,16 @@ async def update_risk_settings(
         "kill_switches": [k.model_dump() for k in body.kill_switches],
     }
     _sb(user).table("risk_settings").upsert(data, on_conflict="user_id").execute()
+    
+    # Invalidate cache for this user
+    try:
+        from backend_app.core.state import app_state
+        cache_key = f"risk_settings:{user['id']}"
+        if hasattr(app_state, 'redis_client') and app_state.redis_client:
+            await app_state.redis_client.delete(cache_key)
+    except Exception as e:
+        logger.warning(f"Failed to invalidate cache for user {user['id']}: {e}")
+    
     return {"status": "ok"}
 
 
@@ -226,6 +266,49 @@ async def update_strategy_limits(
     except Exception as e:
         logger.error(f"Error updating strategy limits for {user['id']}: {e}")
         raise HTTPException(500, f"Failed to update strategy limits: {e}")
+
+
+# ── PUT /api/risk/strategy-limits/{strategy_id} ──────────────────────────────
+@router.put("/strategy-limits/{strategy_id}")
+async def update_single_strategy_limit(
+    strategy_id: str,
+    body: StrategyLimitsRequest,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Update a single strategy-specific risk limit.
+    """
+    try:
+        sb = _sb(user)
+        
+        if not body.limits or len(body.limits) == 0:
+            raise HTTPException(400, "No limits provided in request body")
+        
+        limit = body.limits[0]  # Take first limit from array
+        data = {
+            "user_id": user["id"],
+            "strategy_id": strategy_id,
+            "max_position_size": limit.max_position_size,
+            "max_daily_trades": limit.max_daily_trades,
+            "allowed_symbols": limit.allowed_symbols,
+            "max_drawdown_pct": limit.max_drawdown_pct,
+            "enabled": limit.enabled,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        
+        result = sb.table("strategy_limits").upsert(
+            data,
+            on_conflict="user_id,strategy_id"
+        ).execute()
+        
+        return {
+            "status": "ok",
+            "updated": strategy_id,
+            "count": 1
+        }
+    except Exception as e:
+        logger.error(f"Error updating single strategy limit for {user['id']}: {e}")
+        raise HTTPException(500, f"Failed to update strategy limit: {e}")
 
 
 # ── DELETE /api/risk/strategy-limits/{strategy_id} ─────────────────────────

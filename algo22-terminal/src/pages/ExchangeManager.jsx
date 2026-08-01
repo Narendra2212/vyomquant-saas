@@ -1,264 +1,738 @@
-﻿import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   Plus, Trash2, RefreshCw, CheckCircle, XCircle,
-  Globe, Key, Eye, EyeOff, Wifi, Database, AlertTriangle
+  Globe, Key, Eye, EyeOff, Wifi, Database, AlertTriangle, Shield, Activity,
+  Settings, Clock, Zap, Lock
 } from "lucide-react";
-import { endpoints } from "../api";
-import { C, Card, SectionH, PanelTitle, Btn, Inp, Toast, ToastContainer } from "../components/ui-legacy/primitives";
-export default function ExchangeManager() {
-  // Built-in fallback list of top CCXT exchanges to ensure UI is never empty
-  const POPULAR_EXCHANGES = [
-    "binance", "binanceus", "bybit", "okx", "kraken", "coinbasepro",
-    "kucoin", "htx", "bitget", "gateio", "mexc", "bitfinex", "bitstamp",
-    "gemini", "upbit", "deribit", "phemex", "woo", "bingx", "bitmart",
-    "huobi", "crypto.com", "ascendex", "poloniex", "whitebit"
-  ].sort();
+import { api } from "../api";
 
+export default function ExchangeManager() {
   const [connectedExchanges, setConnectedExchanges] = useState([]);
-  const [supportedExchanges, setSupportedExchanges] = useState(POPULAR_EXCHANGES);
-  const [selectedExchange, setSelectedExchange] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [secretKey, setSecretKey] = useState("");
-  const [label, setLabel] = useState("");
-  const [searchExchange, setSearchExchange] = useState("");
+  const [supportedExchanges, setSupportedExchanges] = useState([]);
+  const [selectedExchange, setSelectedExchange] = useState(null);
+  const [authSchema, setAuthSchema] = useState(null);
+  const [credentialValues, setCredentialValues] = useState({});
+  const [showPasswords, setShowPasswords] = useState({});
   const [loadingExchanges, setLoadingExchanges] = useState(true);
+  const [loadingSchema, setLoadingSchema] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [processingById, setProcessingById] = useState({});
   const [toast, setToast] = useState(null);
-  const chartContainerRef = useRef(null);
-  const chartRef = useRef(null);
-  const seriesRef = useRef(null);
 
-  const normalizeConnected = (rows = []) =>
-    (Array.isArray(rows) ? rows : []).map((row, i) => ({
-      id: row.id ?? row.exchange_id ?? i + 1,
-      name: row.name ?? row.exchange ?? "Unknown",
-      key: row.key_masked ?? row.masked_key ?? "????????????????????????????",
-      status: row.status ?? "connected",
-      perms: row.perms ?? row.permissions ?? ["Spot Trading", "Read"],
-      vol: row.vol ?? row.volume ?? "$0",
-      ts: row.ts ?? row.created_at ?? "Just now",
-    }));
-
-  const loadConnectedExchanges = async (signal) => {
+  const loadConnectedExchanges = async () => {
     try {
-      const data = await endpoints.exchange.list();
-      const rows = Array.isArray(data) ? data : data?.data || data?.exchanges || [];
-      setConnectedExchanges(normalizeConnected(rows));
+      const data = await api.exchange.list();
+      setConnectedExchanges(Array.isArray(data) ? data : []);
     } catch (err) {
-      if (err?.name !== "CanceledError") console.error("Failed loading connected exchanges:", err);
+      console.error("Failed loading connected exchanges:", err);
+      setToast({ type: "error", msg: "Failed to load exchange connections." });
+    }
+  };
+
+  const loadSupportedExchanges = async () => {
+    try {
+      const data = await api.exchange.getSupported();
+      setSupportedExchanges(data.exchanges || []);
+    } catch (err) {
+      console.error("Failed loading supported exchanges:", err);
+      setToast({ type: "error", msg: "Failed to load supported exchanges." });
+    }
+  };
+
+  const loadAuthSchema = async (exchangeId) => {
+    setLoadingSchema(true);
+    try {
+      const schema = await api.exchange.getAuthSchema(exchangeId);
+      setAuthSchema(schema);
+      // Initialize credential values with empty strings
+      const initialValues = {};
+      schema.fields.forEach(field => {
+        initialValues[field.name] = "";
+      });
+      setCredentialValues(initialValues);
+    } catch (err) {
+      console.error("Failed loading auth schema:", err);
+      setToast({ type: "error", msg: "Failed to load exchange authentication schema." });
+    } finally {
+      setLoadingSchema(false);
     }
   };
 
   useEffect(() => {
-    const controller = new AbortController();
     const loadAll = async () => {
       setLoadingExchanges(true);
       try {
-        // 1. Fetch connected exchanges
-        await loadConnectedExchanges(controller.signal);
-
-        // 2. Fetch supported CCXT exchanges
-        const supportedData = await endpoints.exchange.getSupported();
-        const rawSupported = Array.isArray(supportedData) ? supportedData : supportedData?.supported || [];
-
-        // Only overwrite the fallback if the backend successfully returns a valid array
-        if (rawSupported.length > 0) {
-          setSupportedExchanges(rawSupported);
-        }
+        await Promise.all([
+          loadSupportedExchanges(),
+          loadConnectedExchanges()
+        ]);
       } catch (err) {
-        if (err && err.name !== "CanceledError") {
-          console.warn("Backend CCXT list failed to load, utilizing built-in fallback list.");
-        }
+        console.error("Failed to load exchange data:", err);
+        setToast({ type: "error", msg: "Failed to load exchange data." });
       } finally {
         setLoadingExchanges(false);
       }
     };
     loadAll();
-    return () => controller.abort();
   }, []);
 
   useEffect(() => {
+    if (selectedExchange) {
+      loadAuthSchema(selectedExchange.id);
+    } else {
+      setAuthSchema(null);
+      setCredentialValues({});
+    }
+  }, [selectedExchange]);
+
+  useEffect(() => {
     if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 3000);
+    const timer = setTimeout(() => setToast(null), 4000);
     return () => clearTimeout(timer);
   }, [toast]);
 
   const handleTestConnection = async () => {
-    if (!selectedExchange || !apiKey || !secretKey || isTesting) return;
+    if (!selectedExchange || !credentialValues.api_key || !credentialValues.secret_key || isTesting) return;
     setIsTesting(true);
     try {
-      await endpoints.exchange.testConnection({
-        exchange_id: selectedExchange,
-        api_key: apiKey,
-        secret_key: secretKey,
-        label
+      const result = await api.exchange.testConnection({
+        exchange_id: selectedExchange.id,
+        api_key: credentialValues.api_key,
+        secret_key: credentialValues.secret_key,
+        password: credentialValues.password,
+        uid: credentialValues.uid,
       });
-      setToast({ type: "success", msg: "Connection verified via CCXT successfully." });
+      setToast({ 
+        type: "success", 
+        msg: `Connection verified! Balance: $${result.usdt_balance || 0} USDT. Clock: ${result.clock_sync}` 
+      });
     } catch (err) {
-      setToast({ type: "error", msg: err?.response?.data?.detail || "Connection test failed. Check API keys." });
+      setToast({ 
+        type: "error", 
+        msg: err?.response?.data?.detail || "Connection test failed. Check API keys." 
+      });
     } finally {
       setIsTesting(false);
     }
   };
 
   const handleSaveKey = async () => {
-    if (!selectedExchange || !apiKey || !secretKey || isSaving) return;
+    if (!selectedExchange || !credentialValues.api_key || !credentialValues.secret_key || isSaving) return;
     setIsSaving(true);
     try {
-      await endpoints.exchange.saveKeys({
-        exchange_id: selectedExchange,
-        api_key: apiKey,
-        secret_key: secretKey,
-        label
+      await api.exchange.saveKeys({
+        exchange_id: selectedExchange.id,
+        api_key: credentialValues.api_key,
+        secret_key: credentialValues.secret_key,
+        password: credentialValues.password,
+        uid: credentialValues.uid,
+        label: credentialValues.label,
       });
-      setToast({ type: "success", msg: "Exchange keys securely encrypted and stored in Vault." });
+      setToast({ type: "success", msg: "Exchange keys encrypted and stored securely." });
 
-      // SECURE CLEANUP: Immediately wipe raw secrets from client state
-      setApiKey("");
-      setSecretKey("");
-      setLabel("");
-      setSelectedExchange("");
+      setCredentialValues({});
+      setShowPasswords({});
+      setSelectedExchange(null);
+      setAuthSchema(null);
 
-      // Refresh the list from the backend
       await loadConnectedExchanges();
     } catch (err) {
-      setToast({ type: "error", msg: err?.response?.data?.detail || "Failed to save exchange keys." });
+      setToast({ 
+        type: "error", 
+        msg: err?.response?.data?.detail || "Failed to save exchange keys." 
+      });
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleDeleteSaved = async (id) => {
-    if (processingById[id]) return;
-    setProcessingById((p) => ({ ...p, [id]: true }));
+  const handleDeleteSaved = async (exchangeId, exchangeName) => {
+    if (processingById[exchangeId]) return;
+    
+    const exchange = connectedExchanges.find(e => e.exchange_id === exchangeId);
+    if (exchange && exchange.bot_count > 0) {
+      setToast({ 
+        type: "error", 
+        msg: `Cannot delete: ${exchange.bot_count} active bot(s) running. Stop bots first.` 
+      });
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to disconnect ${exchangeName.toUpperCase()}? This action cannot be undone.`)) {
+      return;
+    }
+
+    setProcessingById((p) => ({ ...p, [exchangeId]: true }));
     try {
-      await endpoints.exchange.delete(id);
-      setConnectedExchanges((rows) => rows.filter((row) => row.id !== id));
+      await api.exchange.delete(exchangeId);
+      setConnectedExchanges((rows) => rows.filter((row) => row.exchange_id !== exchangeId));
       setToast({ type: "success", msg: "Exchange connection removed." });
     } catch (err) {
-      setToast({ type: "error", msg: "Failed to delete exchange connection." });
+      setToast({ 
+        type: "error", 
+        msg: err?.response?.data?.detail || "Failed to delete exchange connection." 
+      });
     } finally {
-      setProcessingById((p) => ({ ...p, [id]: false }));
+      setProcessingById((p) => ({ ...p, [exchangeId]: false }));
     }
   };
 
-  const filteredSupported = supportedExchanges.filter((ex) =>
-    ex.toLowerCase().includes(searchExchange.toLowerCase())
-  );
+  const handleTestStoredConnection = async (exchangeId) => {
+    if (processingById[exchangeId]) return;
+    setProcessingById((p) => ({ ...p, [exchangeId]: true }));
+    try {
+      const result = await api.exchange.testStoredConnection({ exchange_id: exchangeId });
+      setToast({ 
+        type: "success", 
+        msg: `${exchangeId.toUpperCase()} verified! Balance: $${result.usdt_balance || 0} USDT` 
+      });
+    } catch (err) {
+      setToast({ 
+        type: "error", 
+        msg: err?.response?.data?.detail || "Connection test failed." 
+      });
+    } finally {
+      setProcessingById((p) => ({ ...p, [exchangeId]: false }));
+    }
+  };
+
+  const alphabeticalExchanges = useMemo(() => {
+    const grouped = {};
+    supportedExchanges.forEach(ex => {
+      const firstLetter = ex.display_name[0].toUpperCase();
+      if (!grouped[firstLetter]) grouped[firstLetter] = [];
+      grouped[firstLetter].push(ex);
+    });
+    return grouped;
+  }, [supportedExchanges]);
+
+  const handleCredentialChange = (fieldName, value) => {
+    setCredentialValues(prev => ({ ...prev, [fieldName]: value }));
+  };
+
+  const togglePasswordVisibility = (fieldName) => {
+    setShowPasswords(prev => ({ ...prev, [fieldName]: !prev[fieldName] }));
+  };
 
   return (
-    <div style={{ padding: 20, overflowY: "auto", flex: 1, position: "relative" }}>
-      <SectionH title="Exchange Vault" sub="Manage institutional API connections via CCXT engine" />
-
-      {/* Connected Exchanges */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
-        {loadingExchanges ? (
-          <Card cls="p-4"><div style={{ color: C.t3, fontFamily: "monospace", fontSize: 10 }}>Syncing with backend...</div></Card>
-        ) : connectedExchanges.length === 0 ? (
-          <Card cls="p-4 text-center"><div style={{ color: C.t3, fontFamily: "monospace", fontSize: 11, padding: "10px 0" }}>No active exchange connections found.</div></Card>
-        ) : connectedExchanges.map(ex => (
-          <Card key={ex.id} cls="p-5">
-            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-              <div style={{ background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.15)", borderRadius: 10, padding: 10, flexShrink: 0 }}>
-                <Globe size={20} style={{ color: C.cyan }} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                  <span style={{ color: C.t1, fontWeight: 900, fontSize: 15, textTransform: "capitalize" }}>{ex.name}</span>
-                  <Tag2 c="green">{ex.status.toUpperCase()}</Tag2>
-                </div>
-                <div style={{ color: C.t3, fontSize: 10, fontFamily: "monospace" }}>
-                  <Key size={9} style={{ display: "inline", marginRight: 4 }} />{ex.key}
-                  <span style={{ margin: "0 8px" }}>?</span>
-                  <Clock size={9} style={{ display: "inline", marginRight: 4 }} />Added: {ex.ts}
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 6 }}>
-                <Btn v="danger" sz="sm" Icon={Trash2} onClick={() => handleDeleteSaved(ex.id)} disabled={!!processingById[ex.id]} />
-              </div>
-            </div>
-          </Card>
-        ))}
+    <div style={{ padding: 24, overflowY: "auto", flex: 1, position: "relative", background: "#0f172a" }}>
+      {/* Header */}
+      <div style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+            <Globe size={28} style={{ color: "#3b82f6" }} />
+            <h1 style={{ color: "#f1f5f9", fontSize: 24, fontWeight: 700, margin: 0 }}>Exchange Management</h1>
+          </div>
+          <p style={{ color: "#94a3b8", fontSize: 14, margin: 0 }}>Manage institutional API connections via CCXT engine</p>
+        </div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <button
+            onClick={() => loadConnectedExchanges()}
+            disabled={loadingExchanges}
+            style={{
+              padding: "10px 16px",
+              borderRadius: 8,
+              border: "1px solid #475569",
+              background: "#1e293b",
+              color: "#94a3b8",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: loadingExchanges ? "not-allowed" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              transition: "all 0.2s"
+            }}
+          >
+            <RefreshCw size={16} style={loadingExchanges ? { animation: "spin 1s linear infinite" } : {}} />
+            Refresh
+          </button>
+        </div>
       </div>
 
-      {/* Add New Connection via CCXT */}
-      <Card cls="p-6">
-        <PanelTitle title="Connect New Exchange" sub="Select from over 100+ supported CCXT integrations. Keys are encrypted with AES-256." />
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-
-          {/* Left Column: CCXT Search & Scroll List */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <label style={{ color: C.t2, fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 3, textTransform: "uppercase" }}>Supported Exchanges</label>
-            <div style={{ position: "relative" }}>
-              <Search size={12} style={{ color: C.t3, position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", zIndex: 1 }} />
-              <input
-                placeholder="Search CCXT network..."
-                value={searchExchange}
-                onChange={e => setSearchExchange(e.target.value)}
-                style={{ width: "100%", background: C.bg3, border: `1px solid ${C.border}`, color: C.t1, padding: "8px 12px 8px 30px", borderRadius: 8, fontSize: 11, fontFamily: "monospace", outline: "none" }}
-              />
+      {/* Stats Cards */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
+        <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12, padding: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 8, background: "#10b98120", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <CheckCircle size={18} style={{ color: "#10b981" }} />
             </div>
-            <div style={{
-              background: C.bg1, border: `1px solid ${C.border}`, borderRadius: 8,
-              maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column",
-              scrollbarWidth: "thin", scrollbarColor: `${C.cyan}40 ${C.bg1}`
-            }}>
-              {filteredSupported.length === 0 ? (
-                <div style={{ padding: 20, textAlign: "center", color: C.t3, fontSize: 10, fontFamily: "monospace" }}>No exchanges match your search.</div>
-              ) : filteredSupported.map(ex => (
-                <div
-                  key={ex}
-                  onClick={() => setSelectedExchange(ex)}
-                  style={{
-                    padding: "10px 14px", borderBottom: `1px solid ${C.border}55`, cursor: "pointer",
-                    background: selectedExchange === ex ? `${C.cyan}20` : "transparent",
-                    color: selectedExchange === ex ? C.cyan : C.t2,
-                    fontSize: 11, fontFamily: "monospace", fontWeight: selectedExchange === ex ? 900 : 400,
-                    textTransform: "capitalize", transition: "all 0.1s"
-                  }}
-                  className="hover:bg-cyan-500/10 hover:text-cyan-400"
-                >
-                  {ex}
-                </div>
-              ))}
-            </div>
-            {selectedExchange && (
-              <div style={{ marginTop: 8, fontSize: 10, color: C.green, fontFamily: "monospace", display: "flex", alignItems: "center", gap: 6 }}>
-                <CheckCircle size={10} /> Selected: <span style={{ fontWeight: 900, textTransform: "uppercase" }}>{selectedExchange}</span>
-              </div>
-            )}
+            <span style={{ color: "#94a3b8", fontSize: 12 }}>Connected</span>
           </div>
-
-          {/* Right Column: Credentials Input */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <Inp lbl="API Key" ph="Enter exchange API key..." icon={Key} type="password" val={apiKey} onChange={e => setApiKey(e.target.value)} disabled={!selectedExchange} />
-            <Inp lbl="Secret Key" ph="Enter exchange secret key..." icon={Lock} type="password" val={secretKey} onChange={e => setSecretKey(e.target.value)} disabled={!selectedExchange} />
-            <Inp lbl="Label (optional)" ph="e.g., Main Binance Account" val={label} onChange={e => setLabel(e.target.value)} disabled={!selectedExchange} />
-
-            <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-              <Btn v="outline" sz="sm" Icon={Wifi} cls="flex-1 justify-center" onClick={handleTestConnection} disabled={isTesting || isSaving || !selectedExchange}>
-                {isTesting ? "Testing Engine..." : "Test Connection"}
-              </Btn>
-              <Btn v="primary" sz="sm" cls="flex-1 justify-center" onClick={handleSaveKey} disabled={isSaving || isTesting || !selectedExchange}>
-                {isSaving ? "Encrypting..." : "Save Keys"}
-              </Btn>
+          <div style={{ color: "#f1f5f9", fontSize: 24, fontWeight: 700 }}>{connectedExchanges.length}</div>
+        </div>
+        <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12, padding: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 8, background: "#3b82f620", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Activity size={18} style={{ color: "#3b82f6" }} />
             </div>
+            <span style={{ color: "#94a3b8", fontSize: 12 }}>Active Bots</span>
+          </div>
+          <div style={{ color: "#f1f5f9", fontSize: 24, fontWeight: 700 }}>
+            {connectedExchanges.reduce((sum, ex) => sum + (ex.bot_count || 0), 0)}
           </div>
         </div>
-      </Card>
+        <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12, padding: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 8, background: "#8b5cf620", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Shield size={18} style={{ color: "#8b5cf6" }} />
+            </div>
+            <span style={{ color: "#94a3b8", fontSize: 12 }}>Health</span>
+          </div>
+          <div style={{ color: "#10b981", fontSize: 24, fontWeight: 700 }}>
+            {connectedExchanges.length > 0 ? "Healthy" : "-"}
+          </div>
+        </div>
+        <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12, padding: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 8, background: "#f59e0b20", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Database size={18} style={{ color: "#f59e0b" }} />
+            </div>
+            <span style={{ color: "#94a3b8", fontSize: 12 }}>Supported</span>
+          </div>
+          <div style={{ color: "#f1f5f9", fontSize: 24, fontWeight: 700 }}>{supportedExchanges.length}+</div>
+        </div>
+      </div>
 
-      {/* Toast Notifications */}
+      {/* Connected Exchanges */}
+      <div style={{ marginBottom: 24 }}>
+        <h2 style={{ color: "#f1f5f9", fontSize: 18, fontWeight: 700, marginBottom: 16 }}>Connected Exchanges</h2>
+        {loadingExchanges ? (
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: 200, color: "#64748b", fontSize: 14 }}>
+            <RefreshCw size={24} style={{ animation: "spin 1s linear infinite", marginRight: 12 }} />
+            Loading exchange connections...
+          </div>
+        ) : connectedExchanges.length === 0 ? (
+          <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12, padding: 40, textAlign: "center", color: "#64748b" }}>
+            <Globe size={48} style={{ margin: "0 auto 16px", opacity: 0.3 }} />
+            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No exchanges connected</div>
+            <div style={{ fontSize: 13 }}>Connect your first exchange below to start trading</div>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(400px, 1fr))", gap: 16 }}>
+            {connectedExchanges.map(ex => (
+              <div key={ex.id} style={{ 
+                background: "#1e293b", 
+                border: "1px solid #334155", 
+                borderRadius: 12, 
+                padding: 20,
+                transition: "all 0.2s"
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ width: 48, height: 48, borderRadius: 12, background: "#3b82f620", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Globe size={24} style={{ color: "#3b82f6" }} />
+                    </div>
+                    <div>
+                      <div style={{ color: "#f1f5f9", fontSize: 16, fontWeight: 700, marginBottom: 4 }}>{ex.name}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#10b981" }} />
+                        <span style={{ color: "#10b981", fontSize: 12, fontWeight: 600 }}>{ex.status}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() => handleTestStoredConnection(ex.exchange_id)}
+                      disabled={!!processingById[ex.exchange_id]}
+                      style={{
+                        padding: 8,
+                        borderRadius: 8,
+                        border: "1px solid #475569",
+                        background: "#1e293b",
+                        color: "#94a3b8",
+                        cursor: processingById[ex.exchange_id] ? "not-allowed" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center"
+                      }}
+                      title="Test Connection"
+                    >
+                      <RefreshCw size={16} style={processingById[ex.exchange_id] ? { animation: "spin 1s linear infinite" } : {}} />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteSaved(ex.exchange_id, ex.name)}
+                      disabled={!!processingById[ex.exchange_id]}
+                      style={{
+                        padding: 8,
+                        borderRadius: 8,
+                        border: "1px solid #ef444450",
+                        background: "#ef444410",
+                        color: "#ef4444",
+                        cursor: processingById[ex.exchange_id] ? "not-allowed" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center"
+                      }}
+                      title="Disconnect"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginBottom: 16 }}>
+                  <div>
+                    <div style={{ color: "#64748b", fontSize: 11, marginBottom: 4 }}>API Key</div>
+                    <div style={{ color: "#f1f5f9", fontSize: 12, fontFamily: "monospace" }}>{ex.masked_key}</div>
+                  </div>
+                  <div>
+                    <div style={{ color: "#64748b", fontSize: 11, marginBottom: 4 }}>Account Type</div>
+                    <div style={{ color: "#f1f5f9", fontSize: 12 }}>{ex.account_type || "Spot"}</div>
+                  </div>
+                  <div>
+                    <div style={{ color: "#64748b", fontSize: 11, marginBottom: 4 }}>Active Bots</div>
+                    <div style={{ color: "#f1f5f9", fontSize: 12, fontWeight: 600 }}>{ex.bot_count || 0}</div>
+                  </div>
+                  <div>
+                    <div style={{ color: "#64748b", fontSize: 11, marginBottom: 4 }}>Health</div>
+                    <div style={{ color: "#10b981", fontSize: 12, fontWeight: 600 }}>{ex.health || "healthy"}</div>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 12, borderTop: "1px solid #334155" }}>
+                  <div style={{ display: "flex", gap: 16, fontSize: 11, color: "#64748b" }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <Clock size={12} />
+                      Connected: {ex.connected_at ? new Date(ex.connected_at).toLocaleDateString() : "Recently"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#64748b" }}>
+                    Tier: {ex.subscription_tier || "free"}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Connect New Exchange */}
+      <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12, padding: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 10, background: "#10b98120", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Plus size={20} style={{ color: "#10b981" }} />
+          </div>
+          <div>
+            <h2 style={{ color: "#f1f5f9", fontSize: 16, fontWeight: 700, margin: 0 }}>Connect New Exchange</h2>
+            <p style={{ color: "#64748b", fontSize: 12, margin: "4px 0 0 0" }}>
+              Select from 100+ supported CCXT integrations. Keys are encrypted with AES-256.
+            </p>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+          {/* Left Column: Exchange Selection */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <label style={{ color: "#94a3b8", fontSize: 12, fontWeight: 600, letterSpacing: 1 }}>SELECT EXCHANGE</label>
+            <div style={{
+              background: "#0f172a", 
+              border: "1px solid #334155", 
+              borderRadius: 8,
+              maxHeight: 500, 
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column"
+            }}>
+              {loadingExchanges ? (
+                <div style={{ padding: 40, textAlign: "center", color: "#64748b", fontSize: 13 }}>
+                  <RefreshCw size={24} style={{ animation: "spin 1s linear infinite", margin: "0 auto 12px" }} />
+                  Loading exchanges...
+                </div>
+              ) : supportedExchanges.length === 0 ? (
+                <div style={{ padding: 20, textAlign: "center", color: "#64748b", fontSize: 13 }}>
+                  No exchanges available
+                </div>
+              ) : (
+                <div>
+                  {Object.entries(alphabeticalExchanges).map(([letter, exchanges]) => (
+                    <div key={letter}>
+                      <div style={{ 
+                        padding: "8px 16px", 
+                        background: "#1e293b", 
+                        color: "#64748b", 
+                        fontSize: 11, 
+                        fontWeight: 600,
+                        borderBottom: "1px solid #334155",
+                        position: "sticky",
+                        top: 0,
+                        zIndex: 10
+                      }}>
+                        {letter} ({exchanges.length})
+                      </div>
+                      {exchanges.map(ex => (
+                        <div
+                          key={ex.id}
+                          onClick={() => setSelectedExchange(ex)}
+                          style={{
+                            padding: "10px 16px 10px 24px",
+                            cursor: "pointer",
+                            background: selectedExchange?.id === ex.id ? "#3b82f620" : "transparent",
+                            color: selectedExchange?.id === ex.id ? "#3b82f6" : "#94a3b8",
+                            fontSize: 13,
+                            fontWeight: selectedExchange?.id === ex.id ? 600 : 400,
+                            transition: "all 0.2s",
+                            borderBottom: "1px solid #1e293b",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10
+                          }}
+                        >
+                          <div style={{ 
+                            width: 24, 
+                            height: 24, 
+                            borderRadius: 6, 
+                            background: "#334155", 
+                            display: "flex", 
+                            alignItems: "center", 
+                            justifyContent: "center",
+                            fontSize: 10,
+                            fontWeight: 700,
+                            color: "#94a3b8"
+                          }}>
+                            {ex.display_name[0]}
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 500 }}>{ex.display_name}</div>
+                            <div style={{ fontSize: 11, color: "#64748b" }}>
+                              {ex.spot_support && "Spot"} 
+                              {ex.spot_support && ex.futures_support && " • "}
+                              {ex.futures_support && "Futures"}
+                              {ex.sandbox_support && " • Sandbox"}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right Column: Credentials */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <label style={{ color: "#94a3b8", fontSize: 12, fontWeight: 600, letterSpacing: 1 }}>API CREDENTIALS</label>
+            
+            {!selectedExchange ? (
+              <div style={{ 
+                padding: 40, 
+                textAlign: "center", 
+                color: "#64748b", 
+                fontSize: 13,
+                background: "#0f172a",
+                borderRadius: 8,
+                border: "1px dashed #334155"
+              }}>
+                <Globe size={32} style={{ margin: "0 auto 12px", opacity: 0.3 }} />
+                Select an exchange to view required credentials
+              </div>
+            ) : loadingSchema ? (
+              <div style={{ 
+                padding: 40, 
+                textAlign: "center", 
+                color: "#64748b", 
+                fontSize: 13,
+                background: "#0f172a",
+                borderRadius: 8,
+                border: "1px solid #334155"
+              }}>
+                <RefreshCw size={24} style={{ animation: "spin 1s linear infinite", margin: "0 auto 12px" }} />
+                Loading authentication schema...
+              </div>
+            ) : authSchema ? (
+              <>
+                <div style={{ 
+                  padding: 12, 
+                  background: "#1e293b", 
+                  borderRadius: 8, 
+                  marginBottom: 16,
+                  border: "1px solid #334155"
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <div style={{ 
+                      width: 32, 
+                      height: 32, 
+                      borderRadius: 8, 
+                      background: "#3b82f620", 
+                      display: "flex", 
+                      alignItems: "center", 
+                      justifyContent: "center",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "#3b82f6"
+                    }}>
+                      {selectedExchange.display_name[0]}
+                    </div>
+                    <div>
+                      <div style={{ color: "#f1f5f9", fontSize: 14, fontWeight: 600 }}>{selectedExchange.display_name}</div>
+                      <div style={{ color: "#64748b", fontSize: 11 }}>
+                        {selectedExchange.spot_support && "Spot"} 
+                        {selectedExchange.spot_support && selectedExchange.futures_support && " • "}
+                        {selectedExchange.futures_support && "Futures"}
+                        {selectedExchange.sandbox_support && " • Sandbox"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {authSchema.fields.map(field => (
+                  <div key={field.name}>
+                    <label style={{ color: "#64748b", fontSize: 11, marginBottom: 6, display: "block" }}>
+                      {field.label}
+                      {field.required && <span style={{ color: "#ef4444" }}> *</span>}
+                    </label>
+                    {field.type === "password" ? (
+                      <div style={{ position: "relative" }}>
+                        <input
+                          type={showPasswords[field.name] ? "text" : "password"}
+                          placeholder={field.placeholder}
+                          value={credentialValues[field.name] || ""}
+                          onChange={e => handleCredentialChange(field.name, e.target.value)}
+                          style={{ 
+                            width: "100%", 
+                            background: "#0f172a", 
+                            border: "1px solid #334155", 
+                            color: "#f1f5f9", 
+                            padding: "12px 16px", 
+                            paddingRight: 40,
+                            borderRadius: 8, 
+                            fontSize: 13,
+                            outline: "none"
+                          }}
+                        />
+                        <button
+                          onClick={() => togglePasswordVisibility(field.name)}
+                          style={{
+                            position: "absolute",
+                            right: 12,
+                            top: "50%",
+                            transform: "translateY(-50%)",
+                            background: "none",
+                            border: "none",
+                            color: "#64748b",
+                            cursor: "pointer",
+                            padding: 4
+                          }}
+                        >
+                          {showPasswords[field.name] ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                    ) : (
+                      <input
+                        type={field.type}
+                        placeholder={field.placeholder}
+                        value={credentialValues[field.name] || ""}
+                        onChange={e => handleCredentialChange(field.name, e.target.value)}
+                        style={{ 
+                          width: "100%", 
+                          background: "#0f172a", 
+                          border: "1px solid #334155", 
+                          color: "#f1f5f9", 
+                          padding: "12px 16px", 
+                          borderRadius: 8, 
+                          fontSize: 13,
+                          outline: "none"
+                        }}
+                      />
+                    )}
+                    {field.description && (
+                      <div style={{ color: "#64748b", fontSize: 10, marginTop: 4 }}>{field.description}</div>
+                    )}
+                  </div>
+                ))}
+
+                <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
+                  <button
+                    onClick={handleTestConnection}
+                    disabled={isTesting || isSaving || !credentialValues.api_key || !credentialValues.secret_key}
+                    style={{
+                      flex: 1,
+                      padding: "12px 20px",
+                      borderRadius: 8,
+                      border: "1px solid #475569",
+                      background: "#1e293b",
+                      color: "#94a3b8",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: (isTesting || isSaving || !credentialValues.api_key || !credentialValues.secret_key) ? "not-allowed" : "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 8,
+                      transition: "all 0.2s",
+                      opacity: (isTesting || isSaving || !credentialValues.api_key || !credentialValues.secret_key) ? 0.5 : 1
+                    }}
+                  >
+                    {isTesting ? <RefreshCw size={16} style={{ animation: "spin 1s linear infinite" }} /> : <Wifi size={16} />}
+                    {isTesting ? "Testing..." : "Test Connection"}
+                  </button>
+                  <button
+                    onClick={handleSaveKey}
+                    disabled={isSaving || isTesting || !credentialValues.api_key || !credentialValues.secret_key}
+                    style={{
+                      flex: 1,
+                      padding: "12px 20px",
+                      borderRadius: 8,
+                      border: "none",
+                      background: (isSaving || isTesting || !credentialValues.api_key || !credentialValues.secret_key) ? "#374151" : "#10b981",
+                      color: "#ffffff",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: (isSaving || isTesting || !credentialValues.api_key || !credentialValues.secret_key) ? "not-allowed" : "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 8,
+                      transition: "all 0.2s",
+                      opacity: (isSaving || isTesting || !credentialValues.api_key || !credentialValues.secret_key) ? 0.5 : 1
+                    }}
+                  >
+                    {isSaving ? <RefreshCw size={16} style={{ animation: "spin 1s linear infinite" }} /> : <Lock size={16} />}
+                    {isSaving ? "Encrypting..." : "Save Keys"}
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      {/* Toast Notification */}
       {toast && (
-        <div style={{ position: "fixed", right: 24, bottom: 24, background: toast.type === "success" ? `${C.green}20` : `${C.red}20`, border: `1px solid ${toast.type === "success" ? `${C.green}55` : `${C.red}55`}`, color: toast.type === "success" ? C.green : C.red, borderRadius: 8, padding: "10px 16px", fontSize: 11, fontFamily: "monospace", fontWeight: 700, zIndex: 120, boxShadow: "0 10px 30px rgba(0,0,0,0.5)" }}>
+        <div style={{ 
+          position: "fixed", 
+          right: 24, 
+          bottom: 24, 
+          background: toast.type === "success" ? "#10b98120" : toast.type === "error" ? "#ef444420" : "#3b82f620",
+          border: `1px solid ${toast.type === "success" ? "#10b981" : toast.type === "error" ? "#ef4444" : "#3b82f6"}`,
+          color: toast.type === "success" ? "#10b981" : toast.type === "error" ? "#ef4444" : "#3b82f6",
+          borderRadius: 12, 
+          padding: "16px 20px", 
+          fontSize: 13, 
+          fontFamily: "system-ui", 
+          fontWeight: 500, 
+          zIndex: 120, 
+          boxShadow: "0 10px 40px rgba(0,0,0,0.4)",
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          backdropFilter: "blur(10px)"
+        }}>
+          {toast.type === "success" && <CheckCircle size={20} />}
+          {toast.type === "error" && <AlertTriangle size={20} />}
+          {toast.type === "info" && <Zap size={20} />}
           {toast.msg}
         </div>
       )}
+
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }
-
-// ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
-//  PAGE: RISK SETTINGS
-// ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â

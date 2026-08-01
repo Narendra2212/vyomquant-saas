@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Filter, Plus, Layers, Radio, TrendingUp, Target, Edit2,
-  BarChart2, Pause, Play, Trash2, PlusCircle
+  BarChart2, Pause, Play, Trash2, PlusCircle, Copy, Settings,
+  Activity, Zap, Globe, Server, Clock, Shield
 } from "lucide-react";
 import { endpoints } from "../api";
 import {
@@ -12,14 +13,17 @@ import StrategyBuilder from "./StrategyBuilder";
 
 export default function Strategies() {
   const navigate = useNavigate();
+
+export default function Strategies() {
+  const navigate = useNavigate();
   const [view, setView] = useState("library");
-  const [sel, setSel] = useState(null);
   const [strategies, setStrategies] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState({});
   const [editingStrategy, setEditingStrategy] = useState(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [filterStatus, setFilterStatus] = useState("all");
+  const [filterEnvironment, setFilterEnvironment] = useState("all");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -85,7 +89,14 @@ export default function Strategies() {
   const avgWinRate = useMemo(() => totalStrategies
     ? strategies.reduce((sum, s) => sum + (Number.isFinite(Number(s.wr)) ? Number(s.wr) : 0), 0) / totalStrategies
     : 0, [strategies, totalStrategies]);
-  const visibleStrategies = useMemo(() => Array.isArray(strategies) ? strategies.filter((s) => filterStatus === "all" || s.status === filterStatus) : [], [strategies, filterStatus]);
+  const visibleStrategies = useMemo(() => {
+    if (!Array.isArray(strategies)) return [];
+    return strategies.filter((s) => {
+      const statusMatch = filterStatus === "all" || s.status === filterStatus;
+      const envMatch = filterEnvironment === "all" || s.environment === filterEnvironment;
+      return statusMatch && envMatch;
+    });
+  }, [strategies, filterStatus, filterEnvironment]);
   const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
 
   const setProcessingFor = (id, value) =>
@@ -97,11 +108,21 @@ export default function Strategies() {
     setProcessingFor(id, true);
     setStrategies((prev) => Array.isArray(prev) ? prev.map((s) => (s.id === id ? { ...s, status: "running" } : s)) : prev);
     try {
-      console.log(`📊 API CALL: POST /api/strategies/${id}/deploy`);
-      const res = await endpoints.strategies.deploy(id);
-      console.log("📊 API RESPONSE:", res);
+      // PHASE 2: Use new Strategy Operations API
+      const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+      const token = sessionStorage.getItem("token");
+      const res = await fetch(`${API_BASE}/api/strategies/${id}/deploy`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ environment: "paper" })
+      });
+      const data = await res.json();
+      console.log("📊 DEPLOY RESPONSE:", data);
     } catch (err) {
-      console.error("📊 API ERROR:", err.message);
+      console.error("📊 DEPLOY ERROR:", err.message);
       setStrategies(prevStrategies);
     } finally {
       setProcessingFor(id, false);
@@ -114,11 +135,20 @@ export default function Strategies() {
     setProcessingFor(id, true);
     setStrategies((prev) => Array.isArray(prev) ? prev.map((s) => (s.id === id ? { ...s, status: "paused" } : s)) : prev);
     try {
-      console.log(`📊 API CALL: POST /api/strategies/${id}/pause`);
-      const res = await endpoints.strategies.pause(id);
-      console.log("📊 API RESPONSE:", res);
+      // PHASE 2: Use new Strategy Operations API
+      const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+      const token = sessionStorage.getItem("token");
+      const res = await fetch(`${API_BASE}/api/strategies/${id}/pause`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      const data = await res.json();
+      console.log("📊 PAUSE RESPONSE:", data);
     } catch (err) {
-      console.error("📊 API ERROR:", err.message);
+      console.error("📊 PAUSE ERROR:", err.message);
       setStrategies(prevStrategies);
     } finally {
       setProcessingFor(id, false);
@@ -131,12 +161,51 @@ export default function Strategies() {
     setProcessingFor(id, true);
     setStrategies((prev) => prev.filter((s) => s.id !== id));
     try {
-      console.log(`📊 API CALL: DELETE /api/strategies/${id}`);
-      const res = await endpoints.strategies.delete(id);
-      console.log("📊 API RESPONSE:", res);
+      // PHASE 2: Use new Strategy Operations API
+      const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+      const token = sessionStorage.getItem("token");
+      const res = await fetch(`${API_BASE}/api/strategies/${id}`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      const data = await res.json();
+      console.log("📊 DELETE RESPONSE:", data);
     } catch (err) {
-      console.error("📊 API ERROR:", err.message);
+      console.error("📊 DELETE ERROR:", err.message);
       setStrategies(prevStrategies);
+    } finally {
+      setProcessingFor(id, false);
+    }
+  };
+
+  const handleCloneStrategy = async (id) => {
+    if (isProcessing[id]) return;
+    const prevStrategies = strategies;
+    setProcessingFor(id, true);
+    try {
+      // PHASE 2: Use new Strategy Operations API
+      const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+      const token = sessionStorage.getItem("token");
+      const strategy = strategies.find(s => s.id === id);
+      const res = await fetch(`${API_BASE}/api/strategies/${id}/clone`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ new_name: `${strategy.name} (Copy)` })
+      });
+      const data = await res.json();
+      console.log("📊 CLONE RESPONSE:", data);
+      // Reload strategies
+      const controller = new AbortController();
+      const payload = await endpoints.strategies.list();
+      const rows = Array.isArray(payload) ? payload : payload?.data || payload?.strategies || [];
+      if (Array.isArray(rows)) setStrategies(normalizeStrategies(rows));
+    } catch (err) {
+      console.error("📊 CLONE ERROR:", err.message);
     } finally {
       setProcessingFor(id, false);
     }
@@ -161,11 +230,16 @@ export default function Strategies() {
             <div style={{ display: "flex", gap: 8, position: "relative" }}>
               <Btn v="outline" sz="sm" Icon={Filter} onClick={() => setFilterOpen(v => !v)}>Filter</Btn>
               {filterOpen && (
-                <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 20, background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 8, padding: 6, minWidth: 130 }}>
+                <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 20, background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 8, padding: 6, minWidth: 180 }}>
+                  <div style={{ marginBottom: 8, borderBottom: `1px solid ${C.border}`, paddingBottom: 4 }}>
+                    <span style={{ color: C.t3, fontSize: 9, fontFamily: "monospace" }}>STATUS</span>
+                  </div>
                   {[
                     { id: "all", label: "All" },
                     { id: "running", label: "Running" },
                     { id: "paused", label: "Paused" },
+                    { id: "draft", label: "Draft" },
+                    { id: "backtesting", label: "Backtesting" },
                   ].map(opt => (
                     <button
                       key={opt.id}
@@ -174,6 +248,25 @@ export default function Strategies() {
                         setFilterOpen(false);
                       }}
                       style={{ width: "100%", textAlign: "left", background: filterStatus === opt.id ? C.cyan + "18" : "transparent", color: filterStatus === opt.id ? C.cyan : C.t2, border: `1px solid ${filterStatus === opt.id ? C.cyan + "30" : "transparent"}`, borderRadius: 6, padding: "5px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", marginBottom: 4 }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  <div style={{ marginTop: 8, marginBottom: 8, borderBottom: `1px solid ${C.border}`, paddingBottom: 4 }}>
+                    <span style={{ color: C.t3, fontSize: 9, fontFamily: "monospace" }}>ENVIRONMENT</span>
+                  </div>
+                  {[
+                    { id: "all", label: "All" },
+                    { id: "paper", label: "Paper" },
+                    { id: "live", label: "Live" },
+                  ].map(opt => (
+                    <button
+                      key={`env-${opt.id}`}
+                      onClick={() => {
+                        setFilterEnvironment(opt.id);
+                        setFilterOpen(false);
+                      }}
+                      style={{ width: "100%", textAlign: "left", background: filterEnvironment === opt.id ? C.cyan + "18" : "transparent", color: filterEnvironment === opt.id ? C.cyan : C.t2, border: `1px solid ${filterEnvironment === opt.id ? C.cyan + "30" : "transparent"}`, borderRadius: 6, padding: "5px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", marginBottom: 4 }}
                     >
                       {opt.label}
                     </button>
@@ -205,21 +298,51 @@ export default function Strategies() {
           {/* Strategy Cards */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
             {Array.isArray(visibleStrategies) && visibleStrategies.map(s => (
-              <Card key={s.id} cls="p-4 hover:border-cyan-500/20 transition-all cursor-pointer" onClick={() => setSel(sel === s.id ? null : s.id)}>
+              <Card key={s.id} cls="p-4 hover:border-cyan-500/20 transition-all cursor-pointer" onClick={() => navigate(`/app/strategies/${s.id}`)}>
+                {/* Header: Name, Status, Version */}
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <StatusDot status={s.status} />
                     <span style={{ color: C.t1, fontWeight: 900, fontSize: 12 }}>{s.name}</span>
                   </div>
-                  <Tag2 c={s.status === "running" ? "green" : s.status === "backtesting" ? "cyan" : s.status === "paused" ? "orange" : "red"}>
-                    {s.status}
-                  </Tag2>
+                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <Tag2 c="gray" style={{ fontSize: 9 }}>v{s.current_version || "1.0"}</Tag2>
+                    <Tag2 c={s.status === "running" ? "green" : s.status === "backtesting" ? "cyan" : s.status === "paused" ? "orange" : s.status === "draft" ? "gray" : "red"}>
+                      {s.status}
+                    </Tag2>
+                  </div>
                 </div>
-                <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+
+                {/* Meta Tags: Exchange, Pair, Timeframe, Environment */}
+                <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
                   <Tag2 c="cyan">{s.pair}</Tag2>
                   <Tag2 c="purple">{s.type}</Tag2>
                   <Tag2 c="gold">{s.tf}</Tag2>
+                  <Tag2 c={s.environment === "live" ? "red" : "green"}>{s.environment || "paper"}</Tag2>
+                  {s.worker_region && <Tag2 c="blue"><Globe size={10} style={{ marginRight: 2 }} />{s.worker_region}</Tag2>}
                 </div>
+
+                {/* Health and Worker Status */}
+                <div style={{ display: "flex", gap: 6, marginBottom: 10, fontSize: 9, fontFamily: "monospace", color: C.t3 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                    <Activity size={10} />
+                    <span>Health: {s.health || "healthy"}</span>
+                  </div>
+                  {s.is_running && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                      <Server size={10} />
+                      <span>Worker: Active</span>
+                    </div>
+                  )}
+                  {s.exchange_status && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                      <Shield size={10} />
+                      <span>Exchange: {s.exchange_status}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Performance Metrics */}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 6, marginBottom: 10 }}>
                   {[
                     { l: "P&L", v: `${s.pnl >= 0 ? "+" : ""}${s.pnl}%`, c: s.pnl >= 0 ? C.green : C.red },
@@ -232,13 +355,29 @@ export default function Strategies() {
                     </div>
                   ))}
                 </div>
+
+                {/* Timeline */}
+                <div style={{ display: "flex", gap: 12, marginBottom: 10, fontSize: 9, fontFamily: "monospace", color: C.t3 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                    <Clock size={10} />
+                    <span>Created: {s.created_at ? new Date(s.created_at).toLocaleDateString() : "N/A"}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                    <RefreshCw size={10} />
+                    <span>Updated: {s.updated_at ? new Date(s.updated_at).toLocaleDateString() : "N/A"}</span>
+                  </div>
+                </div>
+
                 <ProgressBar v={s.wr} max={100} color={s.pnl >= 0 ? C.green : C.red} h={3} />
+
+                {/* Action Buttons */}
                 <div style={{ display: "flex", gap: 4, marginTop: 10 }}>
                   <Btn v="ghost" sz="xs" Icon={Edit2} onClick={e => { e.stopPropagation(); setEditingStrategy(s); setView("builder"); }} disabled={!!isProcessing[s.id]}>Edit</Btn>
+                  <Btn v="ghost" sz="xs" Icon={Copy} onClick={e => { e.stopPropagation(); handleCloneStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Clone</Btn>
                   <Btn v="ghost" sz="xs" Icon={BarChart2} onClick={e => e.stopPropagation()} disabled={!!isProcessing[s.id]}>Backtest</Btn>
                   {s.status === "running"
                     ? <Btn v="ghost" sz="xs" Icon={Pause} onClick={e => { e.stopPropagation(); handlePauseStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Pause</Btn>
-                    : <Btn v="success" sz="xs" Icon={Play} onClick={e => { e.stopPropagation(); handleDeployStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Run</Btn>}
+                    : <Btn v="success" sz="xs" Icon={Play} onClick={e => { e.stopPropagation(); handleDeployStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Deploy</Btn>}
                   <Btn v="danger" sz="xs" Icon={Trash2} cls="ml-auto" onClick={e => { e.stopPropagation(); handleDeleteStrategy(s.id); }} disabled={!!isProcessing[s.id]} />
                 </div>
               </Card>

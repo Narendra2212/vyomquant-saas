@@ -4,8 +4,8 @@
  */
 
 export const CONFIG = {
-  apiBaseUrl: import.meta.env.VITE_API_URL || "https://api.algo22.io",
-  wsBaseUrl: import.meta.env.VITE_WS_URL || "wss://api.algo22.io",
+  apiBaseUrl: import.meta.env.VITE_API_URL || "http://localhost:8000",
+  wsBaseUrl: import.meta.env.VITE_WS_URL || "ws://localhost:8000",
   // 🔴 STEP 12: Request timeout - 30 seconds to prevent hanging requests
   REQUEST_TIMEOUT: 30000
 };

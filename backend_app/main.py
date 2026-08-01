@@ -55,6 +55,10 @@ from backend_app.backend.observability.sentry_config import initialize_sentry
 from backend_app.backend.order_watchdog import OrderWatchdog, WatchdogConfig
 from backend_app.backend.pnl_engine import PnLEngine
 # Portfolio management system
+from backend_app.backend.dashboard_data_ingester import (
+    start_dashboard_data_ingester, stop_dashboard_data_ingester)
+from backend_app.backend.portfolio_cache_updater import (
+    start_portfolio_cache_updater, stop_portfolio_cache_updater)
 from backend_app.backend.portfolio_management import \
     router as portfolio_mgmt_router
 from backend_app.backend.startup_recovery import run_startup_recovery
@@ -90,9 +94,9 @@ from backend_app.core.safety_monitor import log_blocked_execution
 from backend_app.core.supabase_connection import SupabaseConnection
 from backend_app.core.state import app_state
 #  Router imports 
-from backend_app.routers import (admin, analytics, auth, billing, exchange,
+from backend_app.routers import (admin, analytics, auth, billing, dashboard, exchange,
                                  library, market, metrics, notifications, orders,
-                                 portfolio, referral, risk, security, strategies, support, user)
+                                 portfolio, referral, risk, security, strategies, strategy_operations, support, user)
 # DAG task queue
 from backend_app.routers.dag_tasks import router as dag_tasks_router
 
@@ -390,6 +394,24 @@ async def lifespan(app: FastAPI):
         service_status["reconciliation_scheduler"] = "INACTIVE"
         logger.warning(f" ReconciliationScheduler: INACTIVE — {e}")
 
+    # ── Runtime Service: PortfolioCacheUpdater ─────────────────────────────
+    try:
+        await start_portfolio_cache_updater()
+        service_status["portfolio_cache_updater"] = "ACTIVE"
+        logger.info(" PortfolioCacheUpdater: ACTIVE (interval=3s, TTL=5s)")
+    except Exception as e:
+        service_status["portfolio_cache_updater"] = "INACTIVE"
+        logger.warning(f" PortfolioCacheUpdater: INACTIVE — {e}")
+
+    # ── Runtime Service: DashboardDataIngester ─────────────────────────────
+    try:
+        await start_dashboard_data_ingester()
+        service_status["dashboard_data_ingester"] = "ACTIVE"
+        logger.info(" DashboardDataIngester: ACTIVE (interval=60s)")
+    except Exception as e:
+        service_status["dashboard_data_ingester"] = "INACTIVE"
+        logger.warning(f" DashboardDataIngester: INACTIVE — {e}")
+
     logger.info(f" Service Status: {service_status}")
 
     # Start WebSocket Streamer
@@ -439,6 +461,20 @@ async def lifespan(app: FastAPI):
         logger.info(" ReconciliationScheduler: stopped")
     except Exception as e:
         logger.warning(f" ReconciliationScheduler shutdown error: {e}")
+
+    # Runtime Service: PortfolioCacheUpdater — stop background update loop
+    try:
+        await stop_portfolio_cache_updater()
+        logger.info(" PortfolioCacheUpdater: stopped")
+    except Exception as e:
+        logger.warning(f" PortfolioCacheUpdater shutdown error: {e}")
+
+    # Runtime Service: DashboardDataIngester — stop background ingestion loop
+    try:
+        await stop_dashboard_data_ingester()
+        logger.info(" DashboardDataIngester: stopped")
+    except Exception as e:
+        logger.warning(f" DashboardDataIngester shutdown error: {e}")
 
     # Engine L  stop all running BotRunner tasks safely
     try:
@@ -500,12 +536,14 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-app.add_middleware(SlowAPIMiddleware)
+# Temporarily disable SlowAPIMiddleware to debug billing endpoint
+# app.add_middleware(SlowAPIMiddleware)
 
-app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(PrometheusMiddleware)
-if CorrelationIdMiddleware:
-    app.add_middleware(CorrelationIdMiddleware)
+# Temporarily disable all middleware to isolate the 500 error
+# app.add_middleware(SecurityHeadersMiddleware)
+# app.add_middleware(PrometheusMiddleware)
+# if CorrelationIdMiddleware:
+#     app.add_middleware(CorrelationIdMiddleware)
 
 # Create database tables (skip if database not available)
 try:
@@ -541,10 +579,17 @@ app.include_router(market.router, prefix="/api/market", tags=["Market Data"])
 app.include_router(orders.router, prefix="/api/orders", tags=["Order Execution"])
 app.include_router(strategies.router, prefix="/api/strategies", tags=["Strategies"])
 app.include_router(portfolio.router, prefix="/api/portfolio", tags=["Portfolio"])
+app.include_router(dashboard.router, prefix="/api", tags=["Dashboard Aggregation"])
+app.include_router(strategy_operations.router, prefix="/api", tags=["Strategy Operations"])
 app.include_router(user.router, prefix="/api", tags=["User"])
 app.include_router(referral.router, prefix="/api", tags=["Referral"])
 app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin / God Mode"])
+# Test endpoint to verify basic routing works - must be before router includes
+@app.get("/api/test-basic")
+async def test_basic():
+    return {"status": "ok", "message": "Basic routing works"}
+
 app.include_router(risk.router, prefix="/api/risk", tags=["Risk Management"])
 app.include_router(billing.router, prefix="/api/billing", tags=["Billing"])
 app.include_router(security.router, prefix="/api/security", tags=["Security"])
@@ -638,6 +683,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch all unhandled exceptions and return a normalized 500 error response."""
+    import traceback
+    print(f"GLOBAL EXCEPTION HANDLER: {type(exc).__name__}: {exc}")
+    print(f"TRACEBACK: {traceback.format_exc()}")
     traceback.print_exc()
     from backend_app.core.schemas import create_api_error_response
     body = create_api_error_response(

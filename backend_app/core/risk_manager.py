@@ -18,6 +18,41 @@ from typing import Any, Dict, Optional, Tuple
 logger = logging.getLogger("RiskManager")
 
 
+def _load_user_risk_settings(user_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Load user-specific risk settings from Supabase.
+    
+    SECURITY NOTE: Uses SERVICE_ROLE_KEY to bypass RLS for backend-only access.
+    This is intentional - the risk engine needs to read user settings during trade validation
+    without requiring the user's session token. Access is still restricted by user_id filtering.
+    """
+    try:
+        from supabase import create_client
+        import os
+        
+        supabase_url = os.environ.get("SUPABASE_URL")
+        supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        
+        if not supabase_url or not supabase_key:
+            logger.warning("Supabase credentials not configured, using default risk thresholds")
+            return None
+            
+        sb = create_client(supabase_url, supabase_key)
+        resp = sb.table("risk_settings").select("*").eq("user_id", user_id).execute()
+        
+        if resp.data:
+            settings = resp.data[0]
+            return {
+                "max_daily_loss": settings.get("max_daily_loss", 500.0),
+                "max_positions": settings.get("max_positions", 10),
+                "max_leverage": settings.get("max_leverage", 3),
+            }
+        return None
+    except Exception as e:
+        logger.error(f"Failed to load user risk settings for {user_id}: {e}")
+        return None
+
+
 @dataclass
 class TradeRequest:
     """
@@ -359,6 +394,19 @@ class InstitutionalRiskManager:
         request: TradeRequest,
     ) -> Tuple[RiskVerdict, str]:
         """Master circuit breaker for trade validation using structured TradeRequest and RiskThresholds."""
+        # Load user-specific risk settings
+        user_settings = _load_user_risk_settings(request.user_id)
+        if user_settings:
+            # Override thresholds with user-specific settings
+            effective_max_daily_loss = user_settings["max_daily_loss"] / self.total_capital if self.total_capital > 0 else self.thresholds.max_daily_loss_pct
+            effective_max_positions = user_settings["max_positions"]
+            effective_max_leverage = user_settings["max_leverage"]
+        else:
+            # Use default thresholds
+            effective_max_daily_loss = self.thresholds.max_daily_loss_pct
+            effective_max_positions = self.thresholds.max_open_trades
+            effective_max_leverage = self.thresholds.base_max_leverage
+
         notional = request.amount * request.current_price
         signature = f"{request.user_id}_{request.symbol}_{request.side}"
         now = time.time()
@@ -409,10 +457,10 @@ class InstitutionalRiskManager:
                         RiskVerdict.REJECT_DRAWDOWN,
                         f"Account drawdown >{self.thresholds.max_drawdown*100:.0f}%. All new position opens are locked.",
                     )
-                if request.daily_pnl_pct < -self.thresholds.max_daily_loss_pct:
+                if request.daily_pnl_pct < -effective_max_daily_loss:
                     return (
                         RiskVerdict.REJECT_DAILY_LOSS,
-                        f"Daily loss limit ({self.thresholds.max_daily_loss_pct*100:.0f}%) triggered. New positions halted for today.",
+                        f"Daily loss limit ({effective_max_daily_loss*100:.0f}%) triggered. New positions halted for today.",
                     )
                 if request.weekly_pnl_pct < -self.thresholds.weekly_loss_limit:
                     return (
@@ -425,22 +473,22 @@ class InstitutionalRiskManager:
                         f"Monthly loss limit ({self.thresholds.monthly_loss_limit*100:.0f}%) triggered. New positions halted.",
                     )
                 effective_open = request.open_trades_count or self._open_trades_count
-                if effective_open >= self.thresholds.max_open_trades:
+                if effective_open >= effective_max_positions:
                     return (
                         RiskVerdict.REJECT_MAX_OPEN_TRADES,
-                        f"Max concurrent open trades limit ({self.thresholds.max_open_trades}) reached.",
+                        f"Max concurrent open trades limit ({effective_max_positions}) reached.",
                     )
 
             # 5. Leverage scaling
             if not request.is_reduce_only:
                 if request.current_drawdown_pct >= self.thresholds.drawdown_tier_1_pct:
-                    max_allowed_lev = self.thresholds.drawdown_tier_1_max_leverage
+                    max_allowed_lev = min(self.thresholds.drawdown_tier_1_max_leverage, effective_max_leverage)
                 elif request.current_drawdown_pct >= self.thresholds.drawdown_tier_2_pct:
-                    max_allowed_lev = self.thresholds.drawdown_tier_2_max_leverage
+                    max_allowed_lev = min(self.thresholds.drawdown_tier_2_max_leverage, effective_max_leverage)
                 elif request.current_drawdown_pct >= self.thresholds.drawdown_tier_3_pct:
-                    max_allowed_lev = self.thresholds.drawdown_tier_3_max_leverage
+                    max_allowed_lev = min(self.thresholds.drawdown_tier_3_max_leverage, effective_max_leverage)
                 else:
-                    max_allowed_lev = self.thresholds.base_max_leverage
+                    max_allowed_lev = effective_max_leverage
 
                 if request.leverage > max_allowed_lev:
                     return (

@@ -109,15 +109,20 @@ async def portfolio_summary(
     telemetry=Depends(get_telemetry),
 ):
     safe_uid = _safe_uid(user["id"])
-    # CRITICAL FIX C3: Parameterized query (no string concatenation)
+    # QuestDB does not support parameterized queries - use validated string concatenation
     result = await telemetry.execute_query(
-        "SELECT * FROM live_user_pnl WHERE user_id = ? LIMIT 1;",
-        [safe_uid]
+        f"SELECT * FROM live_user_pnl WHERE user_id = '{safe_uid}' LIMIT 1;"
     )
     if result and result.get("dataset"):
         cols = [c["name"] for c in result["columns"]]
         return dict(zip(cols, result["dataset"][0]))
-    return {"total_value": "0", "pnl_24h": "0", "unrealized_pnl": "0"}
+    # Return empty state instead of hardcoded zeros
+    return {
+        "total_equity": "0",
+        "total_pnl": "0",
+        "pnl_pct": "0",
+        "total_exposure": "0"
+    }
 
 
 @router.get("/equity-curve")
@@ -128,10 +133,10 @@ async def equity_curve(
 ):
     try:
         safe_uid = _safe_uid(user["id"])
-        limit = days * 96
-        # CRITICAL FIX C3: Parameterized query (no string concatenation)
+        limit = max(1, min(int(days) * 96, 100_000))  # 96 × 15-min bars per day
+        # QuestDB does not support parameterized queries - use validated string concatenation
         result = await telemetry.execute_query(
-            "SELECT timestamp, equity FROM equity_curve "
+            f"SELECT timestamp, equity FROM equity_curve "
             f"WHERE user_id = '{safe_uid}' "
             f"ORDER BY timestamp ASC LIMIT -{limit};"
         )

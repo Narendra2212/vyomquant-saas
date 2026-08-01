@@ -145,6 +145,9 @@ class TelemetryEngine:
         self.is_connected = True
         logger.info(f"TelemetryEngine connected to QuestDB at {self.host}:{self.port}")
 
+        # Create required QuestDB tables for Dashboard
+        await self._ensure_dashboard_tables()
+
     async def disconnect(self):
         """
         FIX TB-3: Sets self._session = None after closing, so connect()
@@ -155,6 +158,69 @@ class TelemetryEngine:
                 await self._session.close()
                 logger.info("TelemetryEngine disconnected from QuestDB.")
             self._session = None  # FIX TB-3: null the reference
+
+    async def _ensure_dashboard_tables(self):
+        """
+        Create QuestDB tables required for Dashboard widgets.
+        This is called during TelemetryEngine.connect() to ensure tables exist.
+        """
+        tables = [
+            # executions table - stores trade execution logs
+            """
+            CREATE TABLE IF NOT EXISTS executions (
+                timestamp TIMESTAMP,
+                user_id SYMBOL,
+                symbol SYMBOL,
+                side SYMBOL,
+                status SYMBOL,
+                amount DOUBLE,
+                price DOUBLE
+            ) TIMESTAMP(timestamp) PARTITION BY DAY;
+            """,
+            # equity_curve table - stores portfolio equity history
+            """
+            CREATE TABLE IF NOT EXISTS equity_curve (
+                timestamp TIMESTAMP,
+                user_id SYMBOL,
+                equity DOUBLE
+            ) TIMESTAMP(timestamp) PARTITION BY DAY;
+            """,
+            # account_health table - stores risk metrics
+            """
+            CREATE TABLE IF NOT EXISTS account_health (
+                timestamp TIMESTAMP,
+                user_id SYMBOL,
+                current_drawdown_pct DOUBLE,
+                daily_pnl_pct DOUBLE,
+                total_exposure_usdt DOUBLE
+            ) TIMESTAMP(timestamp) PARTITION BY DAY;
+            """,
+        ]
+
+        for i, table_sql in enumerate(tables, 1):
+            try:
+                await self.execute_query(table_sql)
+                logger.info(f"QuestDB table {i}/{len(tables)} ensured")
+            except Exception as e:
+                logger.warning(f"Failed to create QuestDB table {i}/{len(tables)}: {e}")
+
+        # Create live_user_pnl view - aggregates current portfolio state
+        try:
+            view_sql = """
+            CREATE VIEW IF NOT EXISTS live_user_pnl AS
+            SELECT
+                user_id,
+                last(equity) as total_equity,
+                last(equity) - first(equity) as total_pnl,
+                (last(equity) - first(equity)) / first(equity) * 100 as pnl_pct,
+                last(total_exposure_usdt) as total_exposure
+            FROM equity_curve
+            LATEST ON timestamp PARTITION BY user_id;
+            """
+            await self.execute_query(view_sql)
+            logger.info("QuestDB view live_user_pnl ensured")
+        except Exception as e:
+            logger.warning(f"Failed to create QuestDB view live_user_pnl: {e}")
 
     # ══════════════════════════════════════════════════════════════════════
     #  READ — SQL QUERY

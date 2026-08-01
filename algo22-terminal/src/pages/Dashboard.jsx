@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  TrendingUp, TrendingDown, Bot, Play, Pause, ArrowRight,
+  TrendingUp, TrendingDown, Play, Pause, ArrowRight,
   ShieldCheck, AlertTriangle, CheckCircle2, ChevronRight,
   Sparkles, Layers, RefreshCw, BarChart2, PlusCircle, Compass, KeyRound
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip
 } from "recharts";
-import { get, endpoints } from "../api";
+import { get, api } from "../api";
+import { dashboardApi } from "../api/modules/dashboard";
 import { C, Btn, Card, Tag2, StatusDot, SkeletonLine, AnimatedNumber, PnLBadge } from "../components/ui-legacy/primitives";
 
 export default function Dashboard() {
@@ -16,6 +17,7 @@ export default function Dashboard() {
   const [timeframe, setTimeframe] = useState("1M");
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState(null);
 
   // State data initialized to 0 / empty state
   const [portfolioData, setPortfolioData] = useState({
@@ -26,85 +28,73 @@ export default function Dashboard() {
     availableBalance: 0.00
   });
 
-  const [runningStrategies, setRunningStrategies] = useState([]);
+  const [strategies, setStrategies] = useState([]);
   const [tradingInsights, setTradingInsights] = useState([]);
   const [notifications, setNotifications] = useState([]);
 
   useEffect(() => {
     async function loadDashboardData() {
       setIsLoading(true);
+      setLoadError(null);
       try {
-        const [portRes, stratRes, sigRes] = await Promise.allSettled([
-          get(endpoints.portfolio || "/portfolio/summary"),
-          get(endpoints.strategies?.list || "/strategies"),
-          get("/signals?limit=5")
-        ]);
+        // PHASE 12: Use single aggregation API endpoint instead of multiple calls
+        const dashboardRes = await dashboardApi.getDashboard();
 
-        if (portRes.status === "fulfilled" && portRes.value) {
-          const p = portRes.value;
+        if (dashboardRes) {
+          // Map portfolio data from aggregation response
+          const overview = dashboardRes.overview || {};
           setPortfolioData({
-            totalValue: floatVal(p.total_balance || p.totalValue || 0.00),
-            todayPnl: floatVal(p.daily_pnl || p.todayPnl || 0.00),
-            todayReturnPct: floatVal(p.daily_return_pct || p.todayReturnPct || 0.00),
-            unrealizedPnl: floatVal(p.unrealized_pnl || p.unrealizedPnl || 0.00),
-            availableBalance: floatVal(p.available_balance || p.availableBalance || 0.00)
+            totalValue: floatVal(overview.total_value || 0.00),
+            todayPnl: floatVal(overview.today_pnl || 0.00),
+            todayReturnPct: floatVal(overview.today_return_pct || 0.00),
+            unrealizedPnl: floatVal(overview.unrealized_pnl || 0.00),
+            availableBalance: floatVal(overview.available_balance || 0.00)
           });
-        }
 
-        if (stratRes.status === "fulfilled" && Array.isArray(stratRes.value)) {
-          const mappedStrats = stratRes.value.map(s => ({
+          // Map strategies data from aggregation response
+          const strategiesData = dashboardRes.strategies || {};
+          const strategiesItems = strategiesData.items || [];
+          const mappedStrats = strategiesItems.map(s => ({
             id: s.id,
             name: s.name || "Strategy",
             pair: s.pair || s.symbol || "BTC/USDT",
-            status: s.is_active ? "active" : "paused",
-            health: s.is_active ? "healthy" : "idle",
+            status: s.status || "paused",
+            health: s.health || "idle",
             todayPnl: floatVal(s.today_pnl || 0.00),
             todayReturnPct: floatVal(s.today_return_pct || 0.00),
-            lastSignalTime: s.last_signal_at ? new Date(s.last_signal_at).toLocaleTimeString() : "No signals yet"
+            lastSignalTime: s.last_signal_time ? new Date(s.last_signal_time).toLocaleTimeString() : "No signals yet"
           }));
-          setRunningStrategies(mappedStrats);
-          
-          // Generate deterministic insights from actual state
-          const insights = [];
-          const inactive = mappedStrats.filter(st => st.status === "paused");
-          if (inactive.length > 0) {
-            insights.push({
-              id: "ins_1",
-              type: "warning",
-              text: `${inactive.length} strategy(ies) currently paused: ${inactive.map(i => i.name).join(", ")}.`,
-              actionText: "Manage Strategies",
-              actionPath: "/app/strategies"
-            });
-          }
-          const activeCount = mappedStrats.length - inactive.length;
-          insights.push({
-            id: "ins_2",
-            type: "info",
-            text: `${activeCount} active strategy execution bot(s) running on live connected exchanges.`,
-            actionText: "View Bots",
-            actionPath: "/app/strategies"
-          });
-          insights.push({
-            id: "ins_3",
-            type: "success",
-            text: "Risk Circuit Breakers active: Max drawdown limit enforced by Risk Engine.",
-            actionText: "Risk Settings",
-            actionPath: "/app/risk"
-          });
-          setTradingInsights(insights.slice(0, 3));
-        }
+          setStrategies(mappedStrats);
 
-        if (sigRes.status === "fulfilled" && sigRes.value?.items) {
-          const notifs = sigRes.value.items.slice(0, 5).map(sig => ({
-            id: sig.signal_id,
-            time: sig.execution_timeline?.[0]?.timestamp ? new Date(sig.execution_timeline[0].timestamp).toLocaleTimeString() : "Recent",
-            text: `Signal ${sig.decision}: ${sig.asset} on ${sig.exchange.toUpperCase()} (Risk: ${sig.risk_result})`,
-            type: sig.risk_result === "APPROVED" ? "success" : "warning"
+          // Use insights from aggregation response (calculated in backend)
+          const insightsData = dashboardRes.recent_activity?.insights || [];
+          setTradingInsights(insightsData.slice(0, 3));
+
+          // Map notifications from aggregation response
+          const signalsData = dashboardRes.recent_activity?.signals || [];
+          const notifs = signalsData.slice(0, 5).map(sig => ({
+            id: sig.id,
+            time: sig.time ? new Date(sig.time).toLocaleTimeString() : "Recent",
+            text: sig.text || "Signal update",
+            type: sig.type || "info"
           }));
           setNotifications(notifs);
+
+          // Store equity curve from aggregation response
+          if (dashboardRes.equity_curve && Array.isArray(dashboardRes.equity_curve)) {
+            setEquityCurve(
+              dashboardRes.equity_curve.map(row => ({
+                d: row.timestamp
+                  ? new Date(row.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                  : "",
+                v: parseFloat(row.equity ?? row.value ?? 0)
+              }))
+            );
+          }
         }
       } catch (err) {
-        console.error("Error loading live dashboard data:", err);
+        console.error("Error loading dashboard data from aggregation API:", err);
+        setLoadError("Failed to load dashboard data");
       } finally {
         setIsLoading(false);
       }
@@ -112,12 +102,16 @@ export default function Dashboard() {
     loadDashboardData();
   }, []);
 
+  const handleRetry = () => {
+    loadDashboardData();
+  };
+
   function floatVal(v) {
     const num = parseFloat(v);
     return isNaN(num) ? 0.00 : num;
   }
 
-  // Real equity curve data — fetched from /api/portfolio/equity-curve
+  // Real equity curve data — now fetched from aggregation API /api/dashboard
   const [equityCurve, setEquityCurve] = useState([]);
   const [equityLoading, setEquityLoading] = useState(false);
 
@@ -127,10 +121,11 @@ export default function Dashboard() {
       const dayMap = { "1D": 1, "1W": 7, "1M": 30, "3M": 90, "ALL": 365 };
       const days = dayMap[timeframe] || 30;
       try {
-        const data = await get(`/api/portfolio/equity-curve?days=${days}`);
-        if (Array.isArray(data) && data.length > 0) {
+        // PHASE 11: Use aggregation API with timeframe parameter - no duplicate calls
+        const data = await dashboardApi.getDashboard({ equity_days: days });
+        if (data?.equity_curve && Array.isArray(data.equity_curve) && data.equity_curve.length > 0) {
           setEquityCurve(
-            data.map(row => ({
+            data.equity_curve.map(row => ({
               d: row.timestamp
                 ? new Date(row.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })
                 : "",
@@ -142,7 +137,7 @@ export default function Dashboard() {
           setEquityCurve([]);
         }
       } catch (err) {
-        console.error("Failed to load equity curve:", err);
+        console.error("Failed to load equity curve from aggregation API:", err);
         setEquityCurve([]);
       } finally {
         setEquityLoading(false);
@@ -271,7 +266,69 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* ── LOADING STATE ────────────────────────────────────────────────────── */}
+      {isLoading && (
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 60,
+          background: "#0f172a",
+          border: "1px solid #1e293b",
+          borderRadius: 16,
+          marginBottom: 24
+        }}>
+          <RefreshCw size={32} style={{ color: "#6366f1", animation: "spin 1s linear infinite" }} />
+          <span style={{ color: "#94a3b8", fontSize: 14, marginTop: 16 }}>Loading dashboard data...</span>
+        </div>
+      )}
+
+      {/* ── ERROR STATE ──────────────────────────────────────────────────────── */}
+      {loadError && !isLoading && (
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 60,
+          background: "linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%)",
+          border: "1px solid #ef4444",
+          borderRadius: 16,
+          marginBottom: 24
+        }}>
+          <AlertTriangle size={32} style={{ color: "#ef4444" }} />
+          <span style={{ color: "#f8fafc", fontSize: 16, fontWeight: 600, marginTop: 16 }}>
+            {loadError}
+          </span>
+          <span style={{ color: "#94a3b8", fontSize: 13, marginTop: 8 }}>
+            Please check your connection and try again
+          </span>
+          <button
+            onClick={handleRetry}
+            style={{
+              marginTop: 20,
+              padding: "10px 24px",
+              background: "#6366f1",
+              border: "none",
+              borderRadius: 8,
+              color: "#ffffff",
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 8
+            }}
+          >
+            <RefreshCw size={16} />
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* ── SECTION 1: PORTFOLIO OVERVIEW HERO CARD ──────────────────────────── */}
+      {!isLoading && !loadError && (
       <div style={{
         background: "linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%)",
         border: "1px solid #312e81",
@@ -343,8 +400,10 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+      )}
 
       {/* ── MAIN CONTENT GRID ────────────────────────────────────────────────── */}
+      {!isLoading && !loadError && (
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 24, marginBottom: 24 }}>
         
         {/* LEFT COLUMN: PERFORMANCE & RUNNING STRATEGIES */}
@@ -432,7 +491,7 @@ export default function Dashboard() {
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <h2 style={{ fontSize: 15, fontWeight: 700, color: "#f8fafc", margin: 0 }}>
-                Running Strategies ({runningStrategies.filter(s => s.status === "active").length} Active)
+                Strategies ({strategies.filter(s => s.status === "active").length} Active)
               </h2>
               <button
                 onClick={() => navigate("/app/strategies")}
@@ -443,7 +502,7 @@ export default function Dashboard() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {runningStrategies.map(strat => (
+              {strategies.map(strat => (
                 <div
                   key={strat.id}
                   style={{
@@ -705,6 +764,7 @@ export default function Dashboard() {
 
         </div>
       </div>
+      )}
     </div>
   );
 }

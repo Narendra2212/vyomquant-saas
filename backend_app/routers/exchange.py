@@ -16,10 +16,117 @@ from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.core.dependencies import (get_current_user,
                                            get_request_supabase, get_vault)
 from backend_app.core.models import ExchangeKeysRequest, TestConnectionRequest
+from backend_app.backend.redis_manager import get_redis_manager
 from supabase import Client as SupabaseClient
 
 router = APIRouter()
 logger = logging.getLogger("ExchangeRouter")
+
+
+@router.get("/supported")
+async def get_supported_exchanges():
+    """
+    Returns list of all CCXT-supported exchanges with full metadata.
+    Includes: id, display name, spot/futures/margin support, sandbox support,
+    required auth fields, passphrase requirement, subaccount requirement, status.
+    Cached in Redis for 1 hour (exchanges list rarely changes).
+    
+    PUBLIC ENDPOINT - No authentication required (CCXT public data)
+    """
+    try:
+        # Try cache first (optional)
+        from backend_app.core.cache import redis_manager
+        cache_key = "supported_exchanges:metadata"
+        try:
+            cached = await redis_manager.cache_get_json(cache_key)
+            if cached:
+                logger.debug("Returning cached supported exchanges with metadata")
+                return cached
+        except Exception as e:
+            logger.warning(f"Redis cache lookup failed: {e}, fetching from CCXT")
+        
+        # Fetch from CCXT with full metadata
+        import ccxt as ccxt_base
+        exchanges = []
+        
+        for exchange_id in ccxt_base.exchanges:
+            try:
+                exchange_class = getattr(ccxt_base, exchange_id)
+                exchange_instance = exchange_class()
+                
+                # Extract capabilities
+                has = exchange_instance.has
+                
+                # Determine required auth fields dynamically from CCXT
+                required_fields = []
+                if has.get('apiKey'):
+                    required_fields.append('api_key')
+                if has.get('secret'):
+                    required_fields.append('secret_key')
+                if has.get('password'):
+                    required_fields.append('password')
+                if has.get('uid'):
+                    required_fields.append('uid')
+                
+                # Check for passphrase/password requirement dynamically
+                # Some exchanges call it 'password' in CCXT but it's actually a passphrase
+                requires_passphrase = has.get('password')
+                
+                # Check for subaccount support dynamically via exchange options
+                requires_subaccount = False
+                try:
+                    if hasattr(exchange_instance, 'options') and 'defaultType' in exchange_instance.options:
+                        # Exchanges with multiple account types may support subaccounts
+                        requires_subaccount = True
+                except:
+                    pass
+                
+                exchanges.append({
+                    "id": exchange_id,
+                    "display_name": exchange_instance.name or exchange_id.upper(),
+                    "logo": f"/logos/{exchange_id.lower()}.png",  # Placeholder for logo URL
+                    "spot_support": has.get('createOrder', False),
+                    "futures_support": has.get('createFuturesOrder', False) or has.get('futures', False),
+                    "margin_support": has.get('createMarginOrder', False) or has.get('margin', False),
+                    "sandbox_support": has.get('sandbox', False),
+                    "required_fields": required_fields,
+                    "requires_passphrase": requires_passphrase,
+                    "requires_subaccount": requires_subaccount,
+                    "status": "active"  # Could be enhanced with actual status checks
+                })
+            except Exception as e:
+                logger.warning(f"Failed to load metadata for {exchange_id}: {e}")
+                # Add minimal entry for exchanges that fail to instantiate
+                exchanges.append({
+                    "id": exchange_id,
+                    "display_name": exchange_id.upper(),
+                    "logo": f"/logos/{exchange_id.lower()}.png",
+                    "spot_support": True,
+                    "futures_support": False,
+                    "margin_support": False,
+                    "sandbox_support": False,
+                    "required_fields": ['api_key', 'secret_key'],
+                    "requires_passphrase": False,
+                    "requires_subaccount": False,
+                    "status": "unknown"
+                })
+        
+        # Sort by display name
+        exchanges.sort(key=lambda x: x['display_name'])
+        
+        result = {"exchanges": exchanges, "total": len(exchanges)}
+        
+        # Cache for 1 hour (3600 seconds) - optional
+        try:
+            await redis_manager.cache_set_json(cache_key, result, ttl=3600)
+            logger.debug("Cached supported exchanges with metadata for 1 hour")
+        except Exception as e:
+            logger.warning(f"Redis cache set failed: {e}")
+        
+        return result
+    except Exception as e:
+        logger.error(f"Failed to fetch supported exchanges: {e}")
+        raise HTTPException(500, "Failed to retrieve supported exchanges.")
 
 
 @router.post("/keys")
@@ -27,8 +134,13 @@ async def store_keys(
     body: ExchangeKeysRequest,
     user: dict = Depends(get_current_user),
     vault=Depends(get_vault),
+    redis_manager=Depends(get_redis_manager),
 ):
-    # Test connection first
+    """
+    Store encrypted exchange API keys in vault.
+    Tests connection before saving to ensure credentials are valid.
+    Invalidates cache on successful storage.
+    """
     bridge = None
     try:
         bridge = ConnectionEngine(
@@ -40,11 +152,7 @@ async def store_keys(
         exchange = await bridge.connect()
         await DataEngine(exchange).fetch_wallet_balance_snapshot()
     except Exception as e:
-        logger.warning(f"Onboarding connection test failed for user={user['id']} exchange={body.exchange_id}: {e}")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Exchange connection verification failed: {str(e)}"
-        )
+        raise HTTPException(400, f"Exchange connection verification failed: {str(e)}")
     finally:
         if bridge:
             await bridge.disconnect()
@@ -54,42 +162,99 @@ async def store_keys(
             user_id=user["id"],
             exchange_id=body.exchange_id,
             raw_api_key=body.api_key,
-            raw_secret=body.secret_key,
+            raw_secret_key=body.secret_key,
             raw_password=body.password,
+            label=body.label,
         )
-        return {
-            "status": "ok",
-            "message": f"Keys encrypted, verified, and stored for {body.exchange_id.upper()}",
-        }
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
         logger.error(f"Key storage failed for {user['id']}: {e}")
         raise HTTPException(500, "Failed to store keys in vault.")
 
+    # Invalidate cache
+    if redis_manager:
+        cache_key = f"exchanges:list:{user['id']}"
+        await redis_manager.cache_delete(cache_key)
+        logger.debug(f"Invalidated cache for user {user['id']} after storing new exchange")
+
+    return {"status": "ok", "message": "Exchange keys securely encrypted and stored in vault."}
+
 
 @router.get("/")
 async def list_exchanges(
     user: dict = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_request_supabase),
+    redis_manager=Depends(get_redis_manager),
 ):
+    """
+    List user's connected exchanges with full metadata.
+    Returns exchange status, permissions, bot count, strategy count, health metrics.
+    Cached in Redis for 30 seconds (metadata changes frequently but not instantly).
+    """
     try:
+        # Try cache first
+        cache_key = f"exchanges:list:{user['id']}"
+        cached = await redis_manager.cache_get_json(cache_key) if redis_manager else None
+        
+        if cached:
+            logger.debug(f"Returning cached exchange list for user {user['id']}")
+            return cached
+        
         resp = (
             supabase.table("exchange_keys")
-            .select("exchange_id, encrypted_api_key, created_at")
+            .select("*")
             .eq("user_id", user["id"])
             .execute()
         )
 
-        return [
-            {
-                "exchange_id": row["exchange_id"],
-                "masked_key": row["exchange_id"].upper()[:3] + "•" * 24,
-                "connected_at": row["created_at"],
+        # Get bot/strategy counts for each exchange
+        exchanges = []
+        for row in resp.data:
+            exchange_id = row["exchange_id"]
+            
+            # Count active bots for this exchange
+            bots_resp = (
+                supabase.table("strategies")
+                .select("id")
+                .eq("user_id", user["id"])
+                .eq("exchange_id", exchange_id)
+                .eq("status", "deployed")
+                .execute()
+            )
+            bot_count = len(bots_resp.data) if bots_resp.data else 0
+            
+            # Get connection health from vault if available
+            try:
+                from backend_app.backend.api_key_vault import APIKeyVault
+                vault = APIKeyVault()
+                tier_info = vault.get_user_tier(user["id"])
+            except:
+                tier_info = {"subscription_tier": "free", "max_api_slots": 1}
+
+            exchanges.append({
+                "id": row.get("id", f"{user['id']}_{exchange_id}"),
+                "exchange_id": exchange_id,
+                "name": exchange_id.upper(),
+                "masked_key": f"{exchange_id[:3].upper()}{'•' * 24}{exchange_id[-2:].upper() if len(exchange_id) > 2 else ''}",
                 "status": "CONNECTED",
-            }
-            for row in resp.data
-        ]
+                "permissions": ["Spot Trading", "Read"],
+                "bot_count": bot_count,
+                "strategy_count": bot_count,
+                "account_type": "Spot",
+                "enabled_features": ["Trading", "Balance"],
+                "connected_at": row.get("created_at"),
+                "last_sync": row.get("updated_at", row.get("created_at")),
+                "subscription_tier": tier_info.get("subscription_tier", "free"),
+                "health": "healthy"
+            })
+
+        # Cache for 30 seconds
+        if redis_manager:
+            await redis_manager.cache_set_json(cache_key, exchanges, ttl=30)
+            logger.debug(f"Cached exchange list for user {user['id']} for 30 seconds")
+
+        return exchanges
     except Exception as e:
         logger.error(f"List exchanges failed: {e}")
         raise HTTPException(500, "Failed to retrieve exchange connections.")
@@ -100,29 +265,235 @@ async def delete_connection(
     exchange_id: str,
     user: dict = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_request_supabase),
+    redis_manager=Depends(get_redis_manager),
 ):
+    """
+    Delete exchange connection with safety checks.
+    Warns if bots are running, strategies exist, or positions are open.
+    Invalidates cache on successful deletion.
+    """
     try:
+        # Check for active bots using this exchange
+        bots_resp = (
+            supabase.table("strategies")
+            .select("id, name")
+            .eq("user_id", user["id"])
+            .eq("exchange_id", exchange_id.lower())
+            .eq("status", "deployed")
+            .execute()
+        )
+        
+        active_bots = bots_resp.data if bots_resp.data else []
+        
+        if active_bots:
+            bot_names = [bot.get("name", bot.get("id")) for bot in active_bots]
+            raise HTTPException(
+                400,
+                f"Cannot delete exchange: {len(active_bots)} active bot(s) running. "
+                f"Stop bots first: {', '.join(bot_names[:3])}"
+            )
+
+        # Delete from database
         supabase.table("exchange_keys").delete().eq("user_id", user["id"]).eq(
             "exchange_id", exchange_id.lower()
         ).execute()
 
-        # EXCH-3: Evict from the exchange pool so the stale socket is closed
+        # Evict from the exchange pool so the stale socket is closed
         await release_exchange(user["id"], exchange_id.lower())
 
-        return {"status": "ok", "message": f"{exchange_id.upper()} disconnected."}
+        # Invalidate cache
+        if redis_manager:
+            cache_key = f"exchanges:list:{user['id']}"
+            await redis_manager.cache_delete(cache_key)
+            logger.debug(f"Invalidated cache for user {user['id']} after deleting exchange")
+
+        logger.info(f"Exchange {exchange_id} deleted for user {user['id']}")
+        return {"status": "ok", "message": f"{exchange_id.upper()} disconnected successfully."}
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Failed to disconnect {exchange_id}: {e}")
         raise HTTPException(500, f"Failed to disconnect: {e}")
+
+
+@router.get("/schema/{exchange_id}")
+async def get_exchange_auth_schema(
+    exchange_id: str,
+    redis_manager=Depends(get_redis_manager)
+):
+    """
+    Returns the authentication schema for a specific exchange.
+    Includes required fields, field labels, field types, and validation rules.
+    Cached in Redis for 1 hour.
+    """
+    try:
+        exchange_id = exchange_id.lower()
+        cache_key = f"exchange_schema:{exchange_id}"
+        cached = await redis_manager.cache_get_json(cache_key) if redis_manager else None
+        
+        if cached:
+            return cached
+        
+        # Fetch CCXT instance to inspect auth requirements
+        import ccxt as ccxt_base
+        if not hasattr(ccxt_base, exchange_id):
+            raise HTTPException(404, f"Exchange '{exchange_id}' not supported by CCXT.")
+        
+        exchange_class = getattr(ccxt_base, exchange_id)
+        exchange_instance = exchange_class()
+        has = exchange_instance.has
+        
+        # Build field definitions
+        fields = []
+        
+        if has.get('apiKey'):
+            fields.append({
+                "name": "api_key",
+                "label": "API Key",
+                "type": "text",
+                "required": True,
+                "placeholder": "Enter your API key",
+                "description": "Public identifier for your API credentials"
+            })
+        
+        if has.get('secret'):
+            fields.append({
+                "name": "secret_key",
+                "label": "Secret Key",
+                "type": "password",
+                "required": True,
+                "placeholder": "Enter your secret key",
+                "description": "Private key for signing requests"
+            })
+        
+        if has.get('password'):
+            fields.append({
+                "name": "password",
+                "label": "Password",
+                "type": "password",
+                "required": True,
+                "placeholder": "Enter your password",
+                "description": "Additional security parameter for API authentication"
+            })
+        
+        if has.get('uid'):
+            fields.append({
+                "name": "uid",
+                "label": "User ID",
+                "type": "text",
+                "required": True,
+                "placeholder": "Enter your user ID",
+                "description": "Unique identifier for your account"
+            })
+        
+        # Optional label field
+        fields.append({
+            "name": "label",
+            "label": "Connection Label",
+            "type": "text",
+            "required": False,
+            "placeholder": "e.g., Main Binance Account",
+            "description": "Optional label to identify this connection"
+        })
+        
+        schema = {
+            "exchange_id": exchange_id,
+            "display_name": exchange_instance.name or exchange_id.upper(),
+            "fields": fields,
+            "supports_testnet": has.get('sandbox', False),
+            "supports_subaccount": has.get('createFuturesOrder') or has.get('futures'),
+            "default_account_type": "spot" if has.get('createOrder') else None
+        }
+        
+        # Cache for 1 hour
+        if redis_manager:
+            await redis_manager.cache_set_json(cache_key, schema, ttl=3600)
+        
+        return schema
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch auth schema for {exchange_id}: {e}")
+        raise HTTPException(500, f"Failed to retrieve exchange schema: {e}")
 
 
 @router.post("/test")
 async def test_connection(
+    body: ExchangeKeysRequest,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Test exchange connection with provided credentials before saving.
+    Validates API keys, permissions, clock synchronization, and API scope.
+    """
+    bridge = None
+    try:
+        bridge = ConnectionEngine(
+            exchange_id=body.exchange_id,
+            api_key=body.api_key,
+            secret_key=body.secret_key,
+            password=body.password,
+        )
+        exchange = await bridge.connect()
+        
+        # Validate keys with lightweight call
+        is_valid = await bridge.validate_keys()
+        if not is_valid:
+            raise HTTPException(400, "Invalid API credentials or insufficient permissions.")
+        
+        # Fetch balance to verify trading permissions
+        balance = await DataEngine(exchange).fetch_wallet_balance_snapshot()
+        total_usdt = balance.get("USDT", {}).get("total", 0)
+        
+        # Check exchange status
+        status = await bridge.check_exchange_status()
+        
+        # Check clock synchronization
+        clock_sync = "ok"
+        try:
+            if hasattr(exchange, 'load_time_difference'):
+                await exchange.load_time_difference()
+                clock_sync = "synchronized"
+        except:
+            clock_sync = "assumed_ok"
+        
+        # Determine permissions based on what we could access
+        permissions = ["Read"]
+        if total_usdt >= 0:  # Successfully fetched balance
+            permissions.append("Spot Trading")
+        if exchange.has.get('createFuturesOrder'):
+            permissions.append("Futures Trading")
+        
+        return {
+            "status": "CONNECTED",
+            "exchange": body.exchange_id.upper(),
+            "usdt_balance": round(total_usdt, 2),
+            "exchange_status": status,
+            "clock_sync": clock_sync,
+            "permissions": permissions,
+            "message": "Connection verified successfully.",
+        }
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Connection test failed for {user['id']}: {e}")
+        raise HTTPException(400, f"Connection failed: {str(e)}")
+    finally:
+        if bridge:
+            await bridge.disconnect()
+
+
+@router.post("/test-stored")
+async def test_stored_connection(
     body: TestConnectionRequest,
     user: dict = Depends(get_current_user),
     vault=Depends(get_vault),
 ):
     """
-    One-time connection test — deliberately uses a fresh connection (not the pool)
-    so it validates the currently stored keys against the live exchange.
+    Test connection for already-stored exchange keys.
+    Used to verify existing connections are still valid.
     """
     bridge = None
     try:
@@ -139,16 +510,18 @@ async def test_connection(
         exchange = await bridge.connect()
         balance = await DataEngine(exchange).fetch_wallet_balance_snapshot()
         total_usdt = balance.get("USDT", {}).get("total", 0)
+        status = await bridge.check_exchange_status()
         return {
             "status": "CONNECTED",
             "exchange": body.exchange_id.upper(),
             "usdt_balance": round(total_usdt, 2),
-            "message": "Connection verified successfully.",
+            "exchange_status": status,
+            "message": "Stored keys verified successfully.",
         }
     except ValueError as e:
         raise HTTPException(404, str(e))
     except Exception as e:
-        logger.warning(f"Connection test failed for {user['id']}: {e}")
+        logger.warning(f"Stored connection test failed for {user['id']}: {e}")
         raise HTTPException(400, f"Connection failed: {str(e)}")
     finally:
         if bridge:

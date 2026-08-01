@@ -29,6 +29,7 @@ export { riskApi } from './modules/risk';
 export { billingApi } from './modules/billing';
 export { userApi } from './modules/user';
 export { referralApi } from './modules/referral';
+export { dashboardApi } from './modules/dashboard';
 
 // Import all modules for consolidated export
 import { authApi } from './modules/auth';
@@ -41,6 +42,7 @@ import { riskApi } from './modules/risk';
 import { billingApi } from './modules/billing';
 import { userApi } from './modules/user';
 import { referralApi } from './modules/referral';
+import { dashboardApi } from './modules/dashboard';
 
 /**
  * Consolidated API object - single entry point for all API calls
@@ -56,6 +58,7 @@ export const api = {
   billing: billingApi,
   user: userApi,
   referral: referralApi,
+  dashboard: dashboardApi,
 };
 
 /**

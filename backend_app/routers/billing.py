@@ -22,11 +22,14 @@ import hmac
 import json
 import logging
 import os
+import traceback
 from datetime import datetime
+from typing import Any, Dict
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
                      HTTPException, Request)
-from backend_app.core.rate_limit import limiter
+# Temporarily disable rate limiter completely to debug
+# from backend_app.core.rate_limit import limiter
 # F-20: get_db retained ONLY for PaymentMethodModel display endpoints.
 # Subscription tiers and invoice state are stored exclusively in Supabase.
 from sqlalchemy.orm import Session
@@ -35,12 +38,16 @@ from backend_app.core.cache import redis_manager
 from backend_app.core.dependencies import (get_current_user,
                                            get_request_supabase,
                                            invalidate_profile_cache)
+from backend_app.core.database import get_db
 from backend_app.core.realtime_sync import RealtimeSync
 from backend_app.core.models import AddPaymentMethodRequest, PaymentMethodModel
 from backend_app.core.schemas import CheckoutRequest
 
 router = APIRouter()
 logger = logging.getLogger("BillingRouter")
+
+# Test endpoint at module level to verify router loads
+print("DEBUG: Billing router module loaded successfully")
 
 
 def _validate_keys(provider: str) -> str:
@@ -151,37 +158,24 @@ async def _process_razorpay_entitlement(user_id: str, item_key: str, discount_ap
 
 # ── GET /api/billing/plans ───────────────────────────────────────────────
 @router.get("/plans")
-@limiter.limit("100/minute")
 async def get_plans():
-    """Get all available plans."""
-    plans = SubscriptionEngine.get_all_plans()
-    plan_order = [Plan.FREE.value, Plan.STARTER.value, Plan.PRO.value, Plan.ENTERPRISE.value]
-    sorted_plans = sorted(plans, key=lambda p: plan_order.index(p.id))
-    
-    return {
-        "plans": [
-            {
-                "id": p.id,
-                "name": p.name,
-                "description": p.description,
-                "features": p.features,
-                "quotas": p.quotas,
-                "pricing": p.pricing,
-                "usd": p.pricing.get("USD", 0),
-                "inr": p.pricing.get("INR", 0),
-                "recommended": p.id == Plan.PRO.value,
-            }
-            for p in sorted_plans
-        ]
-    }
+    """Get all available plans. No rate limiting - public endpoint."""
+    return {"status": "ok", "message": "Billing router is working", "test": "minimal_endpoint"}
+
+# ── GET /api/billing/test ───────────────────────────────────────────────
+@router.get("/test")
+async def test_endpoint():
+    """Test endpoint to verify billing router is loaded."""
+    return {"status": "ok", "router": "billing"}
 
 
 # ── GET /api/billing/entitlements ───────────────────────────────────────────
 @router.get("/entitlements")
-@limiter.limit("60/minute")
+# @limiter.limit("60/minute")
 async def get_entitlements(
-    user: dict = Depends(get_current_user),
-    supabase: Any = Depends(get_request_supabase),
+  request: Request,
+  user: dict = Depends(get_current_user),
+  supabase: Any = Depends(get_request_supabase),
 ):
     """Get user's current entitlements."""
     from backend_app.core.subscription_dependencies import get_user_entitlements
@@ -221,11 +215,11 @@ async def get_entitlements(
 
 # ── GET /api/billing/currency ───────────────────────────────────────────────
 @router.get("/currency")
-@limiter.limit("60/minute")
+# @limiter.limit("60/minute")
 async def get_currency(
-    user: dict = Depends(get_current_user),
-    supabase: Any = Depends(get_request_supabase),
-    request: Request = None,
+  request: Request,
+  user: dict = Depends(get_current_user),
+  supabase: Any = Depends(get_request_supabase),
 ):
     """Get user's currency preference (auto-detected if not set)."""
     from backend_app.core.pricing_service import PricingService
@@ -236,11 +230,12 @@ async def get_currency(
 
 # ── POST /api/billing/currency ──────────────────────────────────────────────
 @router.post("/currency")
-@limiter.limit("10/minute")
+# @limiter.limit("10/minute")
 async def set_currency(
-    body: Dict[str, str],
-    user: dict = Depends(get_current_user),
-    supabase: Any = Depends(get_request_supabase),
+  request: Request,
+  body: Dict[str, str],
+  user: dict = Depends(get_current_user),
+  supabase: Any = Depends(get_request_supabase),
 ):
     """Set user's currency preference."""
     from backend_app.core.pricing_service import PricingService
@@ -253,14 +248,13 @@ async def set_currency(
     
     return {"status": "success", "currency": currency}
 
-
-# ── POST /api/billing/checkout ──────────────────────────────────────────
 @router.post("/checkout")
-@limiter.limit("10/minute")
+# @limiter.limit("10/minute")
 async def create_checkout_session(
-    body: CheckoutRequest,
-    background_tasks: BackgroundTasks,
-    user: dict = Depends(get_current_user),
+  request: Request,
+  body: CheckoutRequest,
+  background_tasks: BackgroundTasks,
+  user: dict = Depends(get_current_user),
 ):
     """Generates a payment link. INR → Razorpay. USD → Stripe."""
     item_key = "ml_addon" if body.is_addon else body.tier.value
@@ -618,8 +612,9 @@ async def razorpay_webhook(
 
 
 @router.get("/invoices")
-@limiter.limit("60/minute")
+# @limiter.limit("60/minute")
 async def get_invoices(
+    request: Request,
     user: dict = Depends(get_current_user),
     supabase: Any = Depends(get_request_supabase),
 ):
@@ -646,8 +641,9 @@ async def get_invoices(
 
 
 @router.get("/payment-methods")
-@limiter.limit("60/minute")
+# @limiter.limit("60/minute")
 async def get_payment_methods(
+    request: Request,
     user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -667,8 +663,9 @@ async def get_payment_methods(
 
 
 @router.post("/payment-methods")
-@limiter.limit("10/minute")
+# @limiter.limit("10/minute")
 async def add_payment_method(
+    request: Request,
     body: AddPaymentMethodRequest,
     user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),

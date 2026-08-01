@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { Check, Loader2 } from 'lucide-react'
-import { api } from '../api'
+import { api } from '../../api'
 
 export default function Pricing() {
   const [isAnnual, setIsAnnual] = useState(false)

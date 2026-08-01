@@ -10,9 +10,11 @@ Channels:
   ticker    — per-symbol price feeds  (DataEngine.stream_ticker)
   orderbook — per-symbol L2 depth     (DataEngine.stream_order_book)
   candles   — per-symbol OHLCV        (DataEngine.stream_live_ohlcv)
-  user      — per-user private events (orders, fills, bot status, alerts)
+  user      — per-user private events (orders, fills, strategy status, alerts)
   pnl       — per-user P&L push       (TelemetryEngine.get_live_pnl every 2s)
   marketplace — marketplace events (new strategies, ratings, subscriptions)
+  dashboard — per-user dashboard realtime updates (PHASE 14)
+  strategy  — per-strategy realtime updates (PHASE 14)
 """
 
 import asyncio
@@ -51,6 +53,8 @@ class ConnectionManager:
         self._user: Dict[str, Set[WebSocket]] = defaultdict(set)
         self._pnl: Dict[str, Set[WebSocket]] = defaultdict(set)
         self._marketplace: Dict[str, Set[WebSocket]] = defaultdict(set)
+        self._dashboard: Dict[str, Set[WebSocket]] = defaultdict(set)  # PHASE 14: Dashboard channel
+        self._strategy: Dict[str, Set[WebSocket]] = defaultdict(set)  # PHASE 14: Strategy channel
         self._lock = asyncio.Lock()
         
         # STEP 8: Connection tracking for rate limiting
@@ -175,8 +179,15 @@ class ConnectionManager:
         Returns:
             user_id if applicable, None otherwise
         """
-        # User and pnl channels have user_id as the key
-        if channel in ("user", "pnl"):
+        # User, pnl, dashboard, and strategy channels have user_id in the key
+        if channel in ("user", "pnl", "dashboard", "strategy"):
+            # For dashboard channel, key is "dashboard_{user_id}"
+            if channel == "dashboard":
+                return key.replace("dashboard_", "")
+            # For strategy channel, key is "strategy_{strategy_id}" - we can't extract user_id from this
+            # Strategy-specific rate limiting would need to be done differently
+            if channel == "strategy":
+                return None
             return key
         # For other channels, we can't extract user_id from key alone
         # The WebSocket object itself would need to be tracked separately
@@ -213,7 +224,7 @@ class ConnectionManager:
         await self._publish_to_bridge("candles", symbol, data)
 
     async def broadcast_user(self, user_id: str, data: dict):
-        """Push to a specific user's private channel (fills, bot status, alerts)."""
+        """Push to a specific user's private channel (fills, strategy status, alerts)."""
         await self._publish_to_bridge("user", user_id, data)
 
     async def broadcast_pnl(self, user_id: str, data: dict):
@@ -222,6 +233,19 @@ class ConnectionManager:
     async def broadcast_marketplace(self, event_type: str, data: dict):
         """Broadcast marketplace events (new strategies, ratings, subscriptions)."""
         await self._publish_to_bridge("marketplace", event_type, data)
+
+    async def broadcast_to_channel(self, channel: str, key: str, data):
+        """
+        PHASE 7: Broadcast to a specific channel key.
+        
+        Used for dashboard incremental updates where we want to send
+        to a specific user's dashboard channel only.
+        """
+        store = self._get_store(channel)
+        if isinstance(data, str):
+            await self._broadcast(store, key, json.loads(data))
+        else:
+            await self._broadcast(store, key, data)
 
     # ── Core send ──────────────────────────────────────────────────────────
 
@@ -271,6 +295,8 @@ class ConnectionManager:
             "user": self._user,
             "pnl": self._pnl,
             "marketplace": self._marketplace,
+            "dashboard": self._dashboard,  # PHASE 14: Dashboard channel
+            "strategy": self._strategy,    # PHASE 14: Strategy channel
         }
         if channel not in mapping:
             raise ValueError(f"Unknown channel: {channel}")
@@ -284,6 +310,8 @@ class ConnectionManager:
             "user_connections": sum(len(v) for v in self._user.values()),
             "pnl_connections": sum(len(v) for v in self._pnl.values()),
             "marketplace_connections": sum(len(v) for v in self._marketplace.values()),
+            "dashboard_connections": sum(len(v) for v in self._dashboard.values()),
+            "strategy_connections": sum(len(v) for v in self._strategy.values()),
         }
 
     # ── Validation Suite Compatibility ────────────────────────────────────
