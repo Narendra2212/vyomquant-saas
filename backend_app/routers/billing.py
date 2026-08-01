@@ -23,8 +23,9 @@ import json
 import logging
 import os
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
+from uuid import UUID
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
                      HTTPException, Request)
@@ -87,12 +88,86 @@ from backend_app.core.subscription_engine import Plan, SubscriptionEngine
 
 VALID_ITEM_KEYS = {Plan.FREE.value, Plan.STARTER.value, Plan.PRO.value, Plan.ENTERPRISE.value, "ml_addon"}
 
+
+def _validate_uuid(value: str, field_name: str) -> str:
+    """
+    Validate that a string is a valid UUID.
+    Raises HTTPException(400) if invalid.
+    """
+    try:
+        UUID(value)
+        return value
+    except (ValueError, AttributeError, TypeError) as e:
+        logger.error(f"Invalid {field_name} format: {value}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {field_name} format: must be a valid UUID"
+        )
+
+
+async def _apply_marketplace_entitlement(user_id: str, library_id: str, subscription_id: str = None) -> None:
+    """
+    Activate a marketplace subscription after successful payment.
+    
+    Updates library_subscriptions status from 'pending' to 'active'.
+    Called from billing webhooks when item_key format is 'marketplace_{library_id}'.
+    """
+    # Validate UUID format for library_id and subscription_id if provided
+    _validate_uuid(library_id, "library_id")
+    if subscription_id:
+        _validate_uuid(subscription_id, "subscription_id")
+    
+    try:
+        sb = _background_sb()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        
+        # Update subscription status from pending to active
+        # Include subscription_id in WHERE clause for additional safety
+        update_query = sb.table("library_subscriptions").update({"status": "active", "started_at": now_iso})
+        update_query = update_query.eq("user_id", user_id).eq("library_id", library_id).eq("status", "pending")
+        if subscription_id:
+            update_query = update_query.eq("id", subscription_id)
+        
+        result = update_query.execute()
+        
+        if not result.data:
+            # Idempotency: subscription already activated by previous webhook
+            logger.info(
+                f"Marketplace subscription already active or not pending (idempotent): "
+                f"user={user_id} library={library_id}"
+            )
+            return  # Don't raise - webhook succeeded idempotently
+        
+        logger.info(f"Marketplace subscription activated: user={user_id} library={library_id}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to activate marketplace subscription: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to activate marketplace subscription"
+        )
+
 async def _apply_billing_entitlement(user_id: str, item_key: str, discount_applied: bool = False) -> None:
     """
     F-20: Writes billing state ONLY to Supabase profiles table.
     SQLite SubscriptionModel / InvoiceModel storage is retired.
     Supabase is the single source of truth for subscription_tier.
+    
+    Marketplace subscriptions (item_key format: marketplace_{library_id}) are handled
+    separately - they update library_subscriptions table, not profiles.subscription_tier.
     """
+    # Handle marketplace subscriptions separately
+    if item_key.startswith("marketplace_"):
+        library_id = item_key.replace("marketplace_", "")
+        # Extract subscription_id from metadata if available for additional safety
+        subscription_id = None
+        if isinstance(metadata, dict):
+            subscription_id = metadata.get("subscription_id")
+        await _apply_marketplace_entitlement(user_id, library_id, subscription_id)
+        return
+    
     if item_key not in VALID_ITEM_KEYS:
         logger.error(f"Invalid billing entitlement requested: user={user_id} tier={item_key}")
         raise HTTPException(
@@ -141,13 +216,13 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
     )
 
 
-async def _process_stripe_entitlement(user_id: str, item_key: str, discount_applied: bool = False) -> None:
-    await _apply_billing_entitlement(user_id, item_key, discount_applied)
+async def _process_stripe_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: dict = None) -> None:
+    await _apply_billing_entitlement(user_id, item_key, discount_applied, metadata or {})
     logger.info(f"Stripe: Processed '{item_key}' for user {user_id} (Discount: {discount_applied})")
 
 
-async def _process_razorpay_entitlement(user_id: str, item_key: str, discount_applied: bool = False) -> None:
-    await _apply_billing_entitlement(user_id, item_key, discount_applied)
+async def _process_razorpay_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: dict = None) -> None:
+    await _apply_billing_entitlement(user_id, item_key, discount_applied, metadata or {})
     logger.info(f"Razorpay: Processed '{item_key}' for user {user_id} (Discount: {discount_applied})")
 
 
@@ -431,11 +506,14 @@ async def stripe_webhook(
 
         if not user_id:
             logger.error("Stripe webhook: missing client_reference_id")
-            return {"status": "ignored"}
+            raise HTTPException(
+                status_code=400,
+                detail="Missing client_reference_id in Stripe session"
+            )
 
         discount_applied = metadata.get("discount_applied") == "true"
         try:
-            await _process_stripe_entitlement(user_id, item_key, discount_applied)
+            await _process_stripe_entitlement(user_id, item_key, discount_applied, metadata)
             
             # Process referral commission on successful payment
             payment_id = session.get("payment_intent") or session.get("id")
@@ -472,7 +550,10 @@ async def stripe_webhook(
 
         if not user_id:
             logger.error(f"Stripe subscription event {event['type']} missing user_id reference.")
-            return {"status": "ignored"}
+            raise HTTPException(
+                status_code=400,
+                detail="Missing user_id in Stripe subscription event metadata"
+            )
 
         if event["type"] == "customer.subscription.deleted":
             try:
@@ -574,15 +655,18 @@ async def razorpay_webhook(
         payment = payload["payload"]["payment"]["entity"]
         notes = payment.get("notes", {})
         user_id = notes.get("user_id")
-        item_key = notes.get("item")
+        item_key = notes.get("item") or notes.get("item_key")  # Support both keys for compatibility
 
         if not user_id or not item_key:
             logger.error("Razorpay webhook: missing user_id or item in notes")
-            return {"status": "ignored"}
+            raise HTTPException(
+                status_code=400,
+                detail="Missing user_id or item in Razorpay payment notes"
+            )
 
         discount_applied = notes.get("discount_applied") == "true"
         try:
-            await _process_razorpay_entitlement(user_id, item_key, discount_applied)
+            await _process_razorpay_entitlement(user_id, item_key, discount_applied, notes)
             
             # Process referral commission on successful payment
             payment_id = payment.get("id")

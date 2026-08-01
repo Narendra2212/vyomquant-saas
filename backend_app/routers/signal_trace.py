@@ -133,7 +133,7 @@ async def get_signal(
     try:
         service = await get_signal_service()
         
-        signal = await service.get_signal(user_id, signal_id)
+        signal = await service.get_signal(user["id"], signal_id)
         if not signal:
             raise HTTPException(
                 status_code=404,
@@ -141,7 +141,7 @@ async def get_signal(
             )
         
         # Get timeline
-        timeline = await service.get_signal_timeline(user_id, signal_id)
+        timeline = await service.get_signal_timeline(user["id"], signal_id)
         
         return {
             "signal": signal,

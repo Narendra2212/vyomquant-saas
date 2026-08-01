@@ -92,24 +92,12 @@ async def get_supported_exchanges():
                     "required_fields": required_fields,
                     "requires_passphrase": requires_passphrase,
                     "requires_subaccount": requires_subaccount,
-                    "status": "active"  # Could be enhanced with actual status checks
+                    "status": "available"  # Exchange is supported by CCXT, not necessarily operational
                 })
             except Exception as e:
                 logger.warning(f"Failed to load metadata for {exchange_id}: {e}")
-                # Add minimal entry for exchanges that fail to instantiate
-                exchanges.append({
-                    "id": exchange_id,
-                    "display_name": exchange_id.upper(),
-                    "logo": f"/logos/{exchange_id.lower()}.png",
-                    "spot_support": True,
-                    "futures_support": False,
-                    "margin_support": False,
-                    "sandbox_support": False,
-                    "required_fields": ['api_key', 'secret_key'],
-                    "requires_passphrase": False,
-                    "requires_subaccount": False,
-                    "status": "unknown"
-                })
+                # Skip exchanges that fail to instantiate - don't return partial data
+                continue
         
         # Sort by display name
         exchanges.sort(key=lambda x: x['display_name'])

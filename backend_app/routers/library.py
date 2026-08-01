@@ -1909,7 +1909,7 @@ async def create_marketplace_checkout(
                     "user_id": user_id,
                     "subscription_id": sub_id,
                     "library_id": str(lib_id),
-                    "item_key": f"marketplace_{lib_id}",
+                    "item": f"marketplace_{lib_id}",  # Razorpay webhook expects "item" key
                 },
             })
             
@@ -1945,21 +1945,43 @@ async def subscribe_to_strategy(
     _feature=Depends(require_marketplace_access),
 ):
     """
-    Subscribe to a paid marketplace strategy.
-
-    Creates a real subscription record in library_subscriptions.
-    Payment collection must be completed via billing.py Stripe/Razorpay
-    checkout flows before this endpoint is called — this endpoint records
-    the entitlement once payment is confirmed, it does not itself charge.
-
-    Revenue split (90/10) is computed for informational purposes; the
-    actual payout is handled by billing webhook → creator credit flow.
+    DEPRECATED: This endpoint previously bypassed payment verification.
+    
+    Use POST /api/library/{library_id}/checkout to create a payment session.
+    The billing webhook will automatically activate the subscription on successful payment.
+    
+    This endpoint now only activates an existing pending subscription after payment confirmation.
+    It cannot create new subscriptions without payment verification.
     """
     lib_id = _safe_uuid(library_id, "library_id")
     user_id = _safe_uuid(user["id"], "user_id")
     svc = _build_service_client()
     
-    # Fetch strategy details
+    # Check for existing pending subscription (created by checkout)
+    try:
+        pending_resp = (
+            svc.table("library_subscriptions")
+            .select("*")
+            .eq("library_id", lib_id)
+            .eq("user_id", user_id)
+            .eq("status", "pending")
+            .single()
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"Pending subscription lookup error: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to check subscription status.",
+        )
+
+    if not pending_resp.data:
+        raise HTTPException(
+            status_code=400,
+            detail="No pending subscription found. Please complete checkout at /api/library/{library_id}/checkout"
+        )
+
+    # Fetch strategy details (needed for response)
     strat_resp = svc.table("library_strategies").select("*").eq("id", lib_id).execute()
     if not strat_resp.data:
         raise HTTPException(status_code=404, detail="Marketplace strategy not found")
@@ -1988,33 +2010,31 @@ async def subscribe_to_strategy(
     creator_earnings = round(price * 0.90, 2)
     platform_fee = round(price * 0.10, 2)
 
-    # Generate subscription ID
-    sub_id = str(uuid.uuid4())
+    sub_id = pending_resp.data["id"]
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    # Persist subscription record in library_subscriptions
-    subscription_row = {
-        "library_id": lib_id,
-        "user_id": user_id,
-        "subscription_tier": subscription_tier,
-        "price_paid": price,
-        "currency": currency,
-        "status": "active",
-        "started_at": now_iso,
-        "expires_at": None,
-    }
-    
+    # Update subscription status from pending to active
     try:
-        insert_resp = svc.table("library_subscriptions").insert(subscription_row).execute()
-        if not insert_resp.data:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to persist subscription record. Please retry.",
-            )
+        update_resp = (
+            svc.table("library_subscriptions")
+            .update({"status": "active", "started_at": now_iso})
+            .eq("id", sub_id)
+            .eq("status", "pending")
+            .execute()
+        )
+        if not update_resp.data:
+            # Idempotency: subscription already activated by another request
+            logger.info(f"Subscription {sub_id} already active or not pending - idempotent no-op")
+            return {
+                "status": "already_active",
+                "subscription_id": sub_id,
+                "library_id": lib_id,
+                "message": "Subscription is already active"
+            }
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"subscribe_to_strategy DB write failed: {exc}")
+        logger.error(f"Subscription activation failed: {exc}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Subscription service temporarily unavailable.",
@@ -2029,14 +2049,17 @@ async def subscribe_to_strategy(
 
     # Increment subscriber_count on library_strategies
     try:
-        current_subs = strat.get("subscriber_count", 0)
-        svc.table("library_strategies").update(
-            {"subscriber_count": current_subs + 1, "updated_at": now_iso}
-        ).eq("id", lib_id).execute()
+        lib_resp = svc.table("library_strategies").select("subscriber_count").eq("id", lib_id).execute()
+        if lib_resp.data:
+            current = lib_resp.data[0].get("subscriber_count", 0)
+            svc.table("library_strategies").update({
+                "subscriber_count": current + 1,
+                "updated_at": now_iso
+            }).eq("id", lib_id).execute()
     except Exception as exc:
         logger.warning(f"Failed to increment subscriber_count: {exc}")
 
-    logger.info(f"Subscription created: library_id={lib_id} user={user_id}")
+    logger.info(f"Subscription activated: library_id={lib_id} user={user_id} sub_id={sub_id}")
 
     # Broadcast marketplace event
     try:
@@ -2051,7 +2074,7 @@ async def subscribe_to_strategy(
         logger.warning(f"Failed to broadcast marketplace event: {e}")
 
     return {
-        "status": "subscribed",
+        "status": "activated",
         "subscription_id": sub_id,
         "library_id": lib_id,
         "strategy_name": strat.get("name"),
@@ -2233,10 +2256,20 @@ async def cancel_subscription(sub_id: str, user: dict = Depends(get_current_user
     until = datetime.now(timezone.utc).isoformat()
     
     try:
-        svc.table("library_subscriptions").update({
+        # Only cancel if subscription is active (idempotent)
+        update_resp = svc.table("library_subscriptions").update({
             "status": "cancelled",
             "cancelled_at": until
-        }).eq("id", sub_uid).execute()
+        }).eq("id", sub_uid).eq("status", "active").execute()
+        
+        if not update_resp.data:
+            # Idempotency: subscription already cancelled or invalid state
+            logger.info(f"Subscription {sub_id} already cancelled or invalid state - idempotent no-op")
+            return {
+                "status": "already_cancelled",
+                "subscription_id": sub_id,
+                "message": "Subscription is already cancelled"
+            }
     except Exception as exc:
         logger.error(f"Cancel subscription update error: {exc}")
         raise HTTPException(500, "Failed to cancel subscription")
@@ -2292,18 +2325,39 @@ async def renew_subscription(sub_id: str, user: dict = Depends(get_current_user)
     now = datetime.now(timezone.utc).isoformat()
     
     try:
-        svc.table("library_subscriptions").update({
+        # Only renew if subscription is cancelled or expired (idempotent)
+        update_resp = svc.table("library_subscriptions").update({
             "status": "active",
             "cancelled_at": None,
             "expires_at": None
-        }).eq("id", sub_uid).execute()
+        }).eq("id", sub_uid).in_("status", ["cancelled", "expired"]).execute()
+        
+        if not update_resp.data:
+            # Idempotency: subscription already active or invalid state
+            logger.info(f"Subscription {sub_id} already active or invalid state - idempotent no-op")
+            return {
+                "status": "already_active",
+                "subscription_id": sub_id,
+                "message": "Subscription is already active"
+            }
     except Exception as exc:
         logger.error(f"Renew subscription update error: {exc}")
         raise HTTPException(500, "Failed to renew subscription")
     
+    # Re-fetch subscription to get library_id after update
+    try:
+        sub_resp = svc.table("library_subscriptions").select("*").eq("id", sub_uid).eq("user_id", user_id).execute()
+        if not sub_resp.data:
+            raise HTTPException(404, f"Subscription '{sub_id}' not found after renew.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Renew subscription post-update lookup error: {exc}")
+        raise HTTPException(500, "Failed to lookup subscription after renew")
+    
     # Re-grant deployment permission
     try:
-        sub = res.data[0]
+        sub = sub_resp.data[0]
         lib_id = sub.get("library_id")
         if lib_id:
             grant_deployment_permission(user_id, lib_id, "subscription", sub_uid)
@@ -2312,7 +2366,7 @@ async def renew_subscription(sub_id: str, user: dict = Depends(get_current_user)
     
     # Increment subscriber_count on library_strategies
     try:
-        sub = res.data[0]
+        sub = sub_resp.data[0]
         lib_id = sub.get("library_id")
         if lib_id:
             lib_resp = svc.table("library_strategies").select("subscriber_count").eq("id", lib_id).execute()

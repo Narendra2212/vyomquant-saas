@@ -228,7 +228,11 @@ class StrategyService:
             is_running = len(deployments_res.data or []) > 0
             
             # Get performance metrics from Telemetry
-            performance = await self._get_strategy_performance(user_id, strategy["id"])
+            try:
+                performance = await self._get_strategy_performance(user_id, strategy["id"])
+            except Exception as e:
+                logger.warning(f"Failed to fetch performance for strategy {strategy['id']}: {e}")
+                performance = None  # Explicitly indicate performance unavailable
             
             enriched.append({
                 **strategy,
@@ -245,15 +249,14 @@ class StrategyService:
         
         Returns:
             Performance metrics (PnL, ROI, win rate, etc.)
+        
+        Raises:
+            Exception if performance fetch fails - caller should handle gracefully
         """
-        try:
-            from backend_app.backend.metrics_service import get_metrics_service
-            metrics_service = await get_metrics_service()
-            
-            return await metrics_service.get_strategy_performance(user_id, strategy_id)
-        except Exception as e:
-            logger.error(f"Failed to fetch performance for strategy {strategy_id}: {e}")
-            return {}
+        from backend_app.backend.metrics_service import get_metrics_service
+        metrics_service = await get_metrics_service()
+        
+        return await metrics_service.get_strategy_performance(user_id, strategy_id)
     
     async def update_strategy(
         self,
