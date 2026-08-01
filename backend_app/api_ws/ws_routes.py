@@ -1253,6 +1253,4 @@ async def broadcast_signal_update(
         await manager.broadcast_to_channel("signal_trace", strategy_channel, json.dumps(message))
     
     logger.debug(f"[WS/signal-trace] Broadcast {update_type} update for user {user_id}")
-        except Exception as e:
-            logger.warning(f"[WS/pnl] QuestDB query error: {e}")
-        await asyncio.sleep(2)
+

@@ -602,7 +602,7 @@ class StrategyService:
         return {
             "deployment": deployment_result.data[0] if deployment_result.data else deployment_data,
             "success": success if 'success' in locals() else True,
-            "message": message if 'message' in locals' else "Deployment started"
+            "message": message if 'message' in locals() else "Deployment started"
         }
     
     # DEPRECATED: Marketplace operations moved to library.py router
@@ -745,7 +745,7 @@ class StrategyService:
         return {
             "deployment": deployment_result.data[0] if deployment_result.data else deployment_data,
             "success": success if 'success' in locals() else True,
-            "message": message if 'message' in locals' else "Deployment started"
+            "message": message if 'message' in locals() else "Deployment started"
         }
     
     async def stop_deployment(
