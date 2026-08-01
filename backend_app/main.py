@@ -594,9 +594,9 @@ app.include_router(risk.router, prefix="/api/risk", tags=["Risk Management"])
 app.include_router(billing.router, prefix="/api/billing", tags=["Billing"])
 app.include_router(security.router, prefix="/api/security", tags=["Security"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
-from backend_app.routers import signals
+from backend_app.routers import signal_trace
 
-app.include_router(signals.router, prefix="/api/signals", tags=["Signal Trace"])
+app.include_router(signal_trace.router, prefix="/api/signal-trace", tags=["Signal Trace"])
 app.include_router(support.router, prefix="/api/support", tags=["Support"])
 app.include_router(metrics.router, tags=["Observability"])
 

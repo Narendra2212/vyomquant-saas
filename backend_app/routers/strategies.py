@@ -825,12 +825,18 @@ async def create_strategy(
             }
         else:
             logger.error("[STRATEGIES] Failed to create strategy: no data returned")
-            raise HTTPException(500, "Failed to create strategy")
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "STRATEGY_CREATE_FAILED", "message": "Failed to create strategy: no data returned"}
+            )
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
         logger.error(f"[STRATEGIES] Error creating strategy: {e}")
-        raise HTTPException(500, f"Strategy creation failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "STRATEGY_CREATE_ERROR", "message": str(e)}
+        )
 
 
 # ── GET /api/strategies/{id} ─────────────────────────────────────────────
@@ -992,7 +998,10 @@ async def deploy_bot(
                 raise HTTPException(400, f"Deploy failed: {message}")
     except PublishError as e:
         logger.error(f"[STRATEGIES] PublishError deploying strategy {strategy_id}: {e}")
-        raise HTTPException(500, f"Failed to dispatch deployment command: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "DEPLOY_DISPATCH_FAILED", "message": str(e)}
+        )
 
     _sb(user).table("strategies").update({"status": "running"}).eq(
         "id", strategy_id
@@ -1066,7 +1075,10 @@ async def stop_bot(
             await fleet.stop_bot(user["id"], symbol)
     except PublishError as e:
         logger.error(f"[STRATEGIES] PublishError stopping strategy {strategy_id}: {e}")
-        raise HTTPException(500, f"Failed to dispatch stop command: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "STOP_DISPATCH_FAILED", "message": str(e)}
+        )
 
     # ═══════════════════════════════════════════════════════════════════
     # CANCEL ALL ORDERS - REMOVED: ALGO-ONLY EXECUTION ENFORCED
@@ -1732,7 +1744,7 @@ async def clone_strategy(strategy_id: str, user: dict = Depends(get_current_user
     if sb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
         
-    res = sb.table("user_strategies").select("*").eq("id", strategy_id).execute()
+    res = sb.table("strategies").select("*").eq("id", strategy_id).execute()
     if not res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
     
@@ -1741,13 +1753,10 @@ async def clone_strategy(strategy_id: str, user: dict = Depends(get_current_user
         "user_id": user["id"],
         "name": f"{orig.get('name', 'Strategy')} (Copy)",
         "description": f"Cloned from {strategy_id}",
-        "dag_config": orig.get("dag_config", {}),
-        "version": 1,
-        "is_validated": False,
         "created_at": datetime.utcnow().isoformat(),
     }
     try:
-        ins = sb.table("user_strategies").insert(cloned_payload).execute()
+        ins = sb.table("strategies").insert(cloned_payload).execute()
         if not ins.data:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to insert cloned strategy record.")
         return {"status": "cloned", "strategy": ins.data[0]}
@@ -1879,7 +1888,7 @@ async def pause_strategy(strategy_id: str, user: dict = Depends(get_current_user
     if sb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
         
-    res = sb.table("user_strategies").select("symbol, is_active, status").eq("id", strategy_id).eq("user_id", user["id"]).execute()
+    res = sb.table("strategies").select("symbol, is_active, status").eq("id", strategy_id).eq("user_id", user["id"]).execute()
     if not res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
     
@@ -1892,7 +1901,7 @@ async def pause_strategy(strategy_id: str, user: dict = Depends(get_current_user
     if hasattr(fleet, "stop_bot"):
         bot_stopped, _ = await fleet.stop_bot(user["id"], symbol)
         
-    upd = sb.table("user_strategies").update({"is_active": False, "status": "paused"}).eq("id", strategy_id).execute()
+    upd = sb.table("strategies").update({"is_active": False, "status": "paused"}).eq("id", strategy_id).execute()
     if not upd.data:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database update failed while pausing strategy.")
     
@@ -1905,7 +1914,7 @@ async def resume_strategy(strategy_id: str, user: dict = Depends(get_current_use
     if sb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
         
-    res = sb.table("user_strategies").select("symbol, is_active, status, dag_config").eq("id", strategy_id).eq("user_id", user["id"]).execute()
+    res = sb.table("strategies").select("symbol, is_active, status, dag_config").eq("id", strategy_id).eq("user_id", user["id"]).execute()
     if not res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
     
@@ -1923,7 +1932,7 @@ async def resume_strategy(strategy_id: str, user: dict = Depends(get_current_use
         if not bot_started:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Fleet failed to resume strategy bot: {msg}")
             
-    upd = sb.table("user_strategies").update({"is_active": True, "status": "running"}).eq("id", strategy_id).execute()
+    upd = sb.table("strategies").update({"is_active": True, "status": "running"}).eq("id", strategy_id).execute()
     if not upd.data:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database update failed while resuming strategy.")
         

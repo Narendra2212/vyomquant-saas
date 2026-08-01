@@ -24,8 +24,11 @@ CREATE TABLE IF NOT EXISTS strategy_versions (
     strategy_id UUID NOT NULL REFERENCES strategies(id) ON DELETE CASCADE,
     version VARCHAR(20) NOT NULL,  -- e.g., "v1.0", "v1.1", "v2.0"
     
-    -- Immutable blueprint data
+    -- Immutable blueprint data (visual graph)
     blueprint JSONB NOT NULL,
+    
+    -- Compiled execution graph (IR) - PHASE G: Compiler-based architecture
+    execution_graph JSONB,
     
     -- Version metadata
     is_draft BOOLEAN DEFAULT TRUE,
@@ -431,7 +434,73 @@ CREATE POLICY "Users can update their own subscriptions"
     USING (user_id = auth.uid());
 
 -- ══════════════════════════════════════════════════════════════════════════
--- 10. COMMENTS/DOCUMENTATION
+-- 10. STRATEGY RESEARCH REPORTS TABLE
+-- ══════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS strategy_research_reports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    strategy_id UUID NOT NULL REFERENCES strategies(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    version_id UUID NOT NULL REFERENCES strategy_versions(id) ON DELETE CASCADE,
+    version VARCHAR(20) NOT NULL,
+    
+    -- Research configuration
+    optimization_method VARCHAR(50),
+    validation_method VARCHAR(50),
+    n_iterations INTEGER,
+    
+    -- Research results
+    optimization_results JSONB,
+    best_parameters JSONB,
+    walk_forward_results JSONB,
+    monte_carlo_results JSONB,
+    sensitivity_results JSONB,
+    benchmark_comparison JSONB,
+    
+    -- Strategy score
+    strategy_score JSONB,
+    overall_quality_score DECIMAL(5, 4),
+    
+    -- Warnings
+    warnings TEXT[],
+    
+    -- Deployment gate
+    deployment_approved BOOLEAN DEFAULT FALSE,
+    deployment_gate_reason TEXT,
+    
+    -- Timestamps
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes for strategy_research_reports
+CREATE INDEX IF NOT EXISTS idx_strategy_research_reports_strategy_id ON strategy_research_reports(strategy_id);
+CREATE INDEX IF NOT EXISTS idx_strategy_research_reports_user_id ON strategy_research_reports(user_id);
+CREATE INDEX IF NOT EXISTS idx_strategy_research_reports_version_id ON strategy_research_reports(version_id);
+CREATE INDEX IF NOT EXISTS idx_strategy_research_reports_created_at ON strategy_research_reports(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_strategy_research_reports_quality_score ON strategy_research_reports(overall_quality_score DESC);
+
+-- RLS for strategy_research_reports
+ALTER TABLE strategy_research_reports ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view their own research reports"
+    ON strategy_research_reports FOR SELECT
+    USING (user_id = auth.uid());
+
+CREATE POLICY "Users can create their own research reports"
+    ON strategy_research_reports FOR INSERT
+    WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Users can update their own research reports"
+    ON strategy_research_reports FOR UPDATE
+    USING (user_id = auth.uid());
+
+CREATE POLICY "Users can delete their own research reports"
+    ON strategy_research_reports FOR DELETE
+    USING (user_id = auth.uid());
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 11. COMMENTS/DOCUMENTATION
 -- ══════════════════════════════════════════════════════════════════════════
 
 COMMENT ON TABLE strategy_versions IS 'Immutable strategy versions for version control';
@@ -439,6 +508,7 @@ COMMENT ON TABLE strategy_deployments IS 'Tracking of strategy deployments (bot 
 COMMENT ON TABLE strategy_backtests IS 'Complete backtest history for strategies';
 COMMENT ON TABLE marketplace_listings IS 'Marketplace listings for published strategies';
 COMMENT ON TABLE strategy_subscriptions IS 'User subscriptions to marketplace strategies';
+COMMENT ON TABLE strategy_research_reports IS 'Research and optimization reports for strategies';
 
 COMMENT ON COLUMN strategy_versions.is_current IS 'Marks the currently active version for the strategy';
 COMMENT ON COLUMN strategy_versions.is_draft IS 'Marks whether version is a draft (not backtested)';
@@ -446,3 +516,4 @@ COMMENT ON COLUMN strategy_deployments.environment IS 'Deployment environment: p
 COMMENT ON COLUMN strategy_backtests.status IS 'Backtest execution status';
 COMMENT ON COLUMN marketplace_listings.visibility IS 'Listing visibility: public, private, unlisted';
 COMMENT ON COLUMN strategy_subscriptions.status IS 'Subscription status: active, cancelled, expired';
+COMMENT ON COLUMN strategy_research_reports.deployment_approved IS 'Whether strategy passed deployment gate';

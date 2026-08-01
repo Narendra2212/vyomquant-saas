@@ -320,7 +320,7 @@ class DashboardAggregationService:
     
     async def get_marketplace_data(self, user_id: str) -> Dict:
         """
-        Get marketplace data.
+        Get marketplace data from library_strategies.
         
         Returns:
             Available strategies, user's publications, subscription counts
@@ -328,12 +328,12 @@ class DashboardAggregationService:
         try:
             sb = self._get_supabase({"id": user_id, "access_token": None})
             
-            # Get available marketplace strategies
-            res = sb.table("marketplace_strategies").select("*").eq("is_published", True).execute()
+            # Get available marketplace strategies from library_strategies
+            res = sb.table("library_strategies").select("*").eq("is_active", True).in_("moderation_status", ["approved", "featured"]).execute()
             available_strategies = res.data or []
             
             # Get user's published strategies
-            user_res = sb.table("marketplace_strategies").select("*").eq("creator_id", user_id).execute()
+            user_res = sb.table("library_strategies").select("*").eq("author_id", user_id).execute()
             user_publications = user_res.data or []
             
             # Calculate subscriber counts
@@ -345,7 +345,7 @@ class DashboardAggregationService:
                 "available_count": len(available_strategies),
                 "user_publications": len(user_publications),
                 "total_subscribers": total_subscribers,
-                "featured": available_strategies[:3]  # Top 3 featured strategies
+                "featured": [s for s in available_strategies if s.get("is_featured")][:3]  # Top 3 featured strategies
             }
         except Exception as e:
             logger.error(f"Failed to fetch marketplace data for user {user_id}: {e}")

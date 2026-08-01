@@ -8,13 +8,18 @@ import ReactFlow, {
   ReactFlowProvider,
   applyNodeChanges,
   applyEdgeChanges,
+  MiniMap,
+  useReactFlow,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import {
   Radio, Activity, Brain, GitBranch, AlertTriangle, BarChart2,
-  PlusCircle, Check, ArrowLeft, Wifi, BookOpen, WifiOff, Loader2
+  PlusCircle, Check, ArrowLeft, Wifi, BookOpen, WifiOff, Loader2,
+  Save, Undo, Redo, Search, Play, Rocket, Target, Settings, ZoomIn,
+  ZoomOut, Maximize, Copy, Trash2, Scissors, Keyboard, Layers,
+  X, ChevronDown, ChevronRight, PanelLeft, PanelRight
 } from "lucide-react";
-import { endpoints } from "../api";
+import { endpoints, post } from "../api";
 import {
   C, Btn, Inp, Card, Tag2, PanelTitle
 } from "../components/ui-legacy/primitives";
@@ -22,28 +27,9 @@ import { useDataPipeline, DataPipelineProvider } from "../contexts/DataPipelineC
 import { useIndicatorEngine, IndicatorEngineProvider } from "../contexts/IndicatorEngineContext";
 import { useLogicEngine, LogicEngineProvider } from "../contexts/LogicEngineContext";
 import { useStrategyEngine, StrategyEngineProvider } from "../contexts/StrategyEngineContext";
-
-const STRATEGY_TOOLBOX = [
-  {
-    g: "Data Sources", items: [
-      { label: "CCXT Asset Feed", type: "source" },
-      { label: "Orderbook Imbalance", type: "orderbook" },
-      { label: "Live Ticker", type: "liveticker" }
-    ]
-  },
-  {
-    g: "Indicators", type: "indicator", items: [
-      "SMA", "EMA", "WMA", "HMA", "RSI", "MACD", "ATR", "Bollinger Bands", "Stochastic", "CCI",
-      "Williams %R", "OBV", "MFI", "ADX", "Supertrend", "TRIX", "Vortex", "Choppiness", "Awesome Oscillator",
-      "Fisher Transform", "Z-Score", "Historical Volatility", "VWAP", "Momentum", "ROC", "Donchian",
-      "Keltner Channels", "Ichimoku", "CMF", "PSAR", "Fibonacci", "Pivot Standard", "Pivot Camarilla",
-    ]
-  },
-  { g: "ML Models", type: "mlmodel", items: ["XGBoost", "LightGBM", "RandomForest", "CatBoost", "LSTM", "GRU", "Transformer", "Autoencoder"] },
-  { g: "Logic", type: "logic", items: ["Signal Logic", "And Gate", "Or Gate", "Condition Builder"] },
-  { g: "Operators", type: "operator", items: ["Constant", "Compare", "Math", "Crosses"] },
-  { g: "Execution", type: "action", items: ["Buy Market", "Sell Market", "Close Position", "Trailing Stop"] },
-];
+import { useUndoRedo, UndoRedoProvider } from "../contexts/UndoRedoContext";
+import { useValidation, ValidationProvider } from "../contexts/ValidationContext";
+import { BlockRegistry, getBlocksByCategory, getCategoryIcon, getCategoryColor, BlockCategories } from "../lib/blockRegistry";
 
 const ApiSyncIndicator = ({ color, text, active = true }) => (
   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, paddingTop: 6, borderTop: `1px dashed ${C.border}` }}>
@@ -52,7 +38,7 @@ const ApiSyncIndicator = ({ color, text, active = true }) => (
   </div>
 );
 
-const PremiumNodeWrapper = ({ children, color, active = true }) => {
+const PremiumNodeWrapper = ({ children, color, active = true, selected = false, hasError = false }) => {
   const [isHovered, setIsHovered] = useState(false);
   return (
     <div
@@ -61,7 +47,7 @@ const PremiumNodeWrapper = ({ children, color, active = true }) => {
       style={{
         minWidth: 150,
         background: C.bg3,
-        border: `1.5px solid ${isHovered ? color : color + "90"}`,
+        border: `2px solid ${hasError ? C.red : selected ? C.cyan : isHovered ? color : color + "90"}`,
         borderRadius: 8,
         color: C.t1,
         padding: "10px",
@@ -69,7 +55,8 @@ const PremiumNodeWrapper = ({ children, color, active = true }) => {
         fontFamily: "monospace",
         transition: "all 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
         transform: isHovered ? "scale(1.02)" : "scale(1)",
-        cursor: "pointer"
+        cursor: "pointer",
+        position: "relative"
       }}
     >
       {children}
@@ -88,376 +75,71 @@ const PremiumNodeWrapper = ({ children, color, active = true }) => {
           <style>{`@keyframes nodePulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(0.8); } }`}</style>
         </div>
       )}
+      {hasError && (
+        <div style={{
+          position: "absolute",
+          top: 6,
+          right: 6,
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: C.red,
+          boxShadow: `0 0 8px ${C.red}`
+        }} />
+      )}
     </div>
   );
 };
 
-const SourceNode = React.memo(function SourceNode({ data }) {
-  return (
-    <PremiumNodeWrapper color={C.t2}>
-      <Handle type="source" position={Position.Right} style={{ background: C.t2, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
-      <div style={{ color: C.t2, fontSize: 8, letterSpacing: 2, textTransform: "uppercase", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
-        <Radio size={10} />
-        Data Ingestion
-      </div>
-      <div style={{ fontWeight: 900, fontSize: 13 }}>{data.label}</div>
-      <ApiSyncIndicator color={C.accent} text="WebSocket Active" active={true} />
-    </PremiumNodeWrapper>
-  );
-});
-
-const IndicatorNode = React.memo(function IndicatorNode({ data }) {
-  const outputKey = data?.params?.output;
-  const isMultiOutput = data?.label === 'MACD' || data?.label === 'Bollinger Bands';
+const DynamicNode = React.memo(function DynamicNode({ data, selected }) {
+  const block = BlockRegistry[data.type];
+  const BlockIcon = block ? block.icon : Activity;
+  const blockColor = block ? block.color : C.t2;
+  const hasError = data.hasError || false;
 
   return (
-    <PremiumNodeWrapper color={C.accent}>
-      <Handle type="target" position={Position.Left} style={{ background: C.accent, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
-      <div style={{ color: C.accent, fontSize: 8, letterSpacing: 2, textTransform: "uppercase", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
-        <Activity size={10} />
-        Transformation
+    <PremiumNodeWrapper color={blockColor} selected={selected} hasError={hasError}>
+      <Handle type="target" position={Position.Left} style={{ background: blockColor, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
+      <div style={{ color: blockColor, fontSize: 8, letterSpacing: 2, textTransform: "uppercase", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
+        <BlockIcon size={10} />
+        {block ? block.category : 'Block'}
       </div>
       <div style={{ fontWeight: 900, fontSize: 13 }}>{data.label}</div>
-      {isMultiOutput && outputKey && (
-        <div style={{ fontSize: 9, color: C.t2, marginTop: 2, fontFamily: 'monospace' }}>
-          output: {outputKey}
+      {hasError && (
+        <div style={{ fontSize: 8, color: C.red, marginTop: 2, fontFamily: 'monospace' }}>
+          ⚠ {data.errorMessage || 'Error'}
         </div>
       )}
-      <Handle type="source" position={Position.Right} style={{ background: C.accent, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
+      <Handle type="source" position={Position.Right} style={{ background: blockColor, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
     </PremiumNodeWrapper>
   );
 });
 
-const MlModelNode = React.memo(function MlModelNode({ data }) {
-  return (
-    <PremiumNodeWrapper color={C.purple}>
-      <Handle type="target" position={Position.Left} style={{ background: C.purple, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
-      <div style={{ color: C.purple, fontSize: 8, letterSpacing: 2, textTransform: "uppercase", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
-        <Brain size={10} />
-        Prediction
-      </div>
-      <div style={{ fontWeight: 900, fontSize: 13 }}>{data.label}</div>
-      <Handle type="source" position={Position.Right} style={{ background: C.purple, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
-      <ApiSyncIndicator color={C.purple} text="Model Synced" active={true} />
-    </PremiumNodeWrapper>
-  );
-});
-
-const OperatorNode = React.memo(function OperatorNode({ data }) {
-  return (
-    <PremiumNodeWrapper color={C.gold}>
-      <Handle type="target" position={Position.Left} style={{ background: C.gold, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
-      <div style={{ color: C.gold, fontSize: 8, letterSpacing: 2, textTransform: "uppercase", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
-        <GitBranch size={10} />
-        Logic Gate
-      </div>
-      <div style={{ fontWeight: 900, fontSize: 13 }}>{data.label}</div>
-      <Handle type="source" position={Position.Right} style={{ background: C.gold, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
-    </PremiumNodeWrapper>
-  );
-});
-
-const LogicNode = React.memo(function LogicNode({ data }) {
-  const lastSignal = data?.lastSignal;
-  const signalColor = lastSignal === 'BUY' ? C.profit : lastSignal === 'SELL' ? C.loss : C.t2;
-  const confidence = data?.confidence || 0;
-
-  return (
-    <PremiumNodeWrapper color={C.gold}>
-      <Handle type="target" position={Position.Left} style={{ background: C.gold, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
-      <div style={{ color: C.gold, fontSize: 8, letterSpacing: 2, textTransform: "uppercase", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
-        <GitBranch size={10} />
-        Signal Logic
-      </div>
-      <div style={{ fontWeight: 900, fontSize: 13 }}>{data.label}</div>
-      {lastSignal && (
-        <div style={{
-          fontSize: 9,
-          color: signalColor,
-          marginTop: 2,
-          fontFamily: 'monospace',
-          fontWeight: 700,
-          background: `${signalColor}20`,
-          padding: '2px 6px',
-          borderRadius: 3,
-          display: 'inline-block'
-        }}>
-          {lastSignal} {confidence > 0 && `(${Math.round(confidence * 100)}%)`}
-        </div>
-      )}
-      <Handle type="source" position={Position.Right} style={{ background: C.gold, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
-    </PremiumNodeWrapper>
-  );
-});
-
-const ActionNode = React.memo(function ActionNode({ data }) {
-  const isBuy = data.label.includes("Buy");
-  const isSell = data.label.includes("Sell") || data.label.includes("Close") || data.label.includes("Stop");
-  const color = isBuy ? C.profit : isSell ? C.loss : C.warning;
-
-  return (
-    <PremiumNodeWrapper color={color}>
-      <Handle type="target" position={Position.Left} style={{ background: color, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
-      <div style={{ color: color, fontSize: 8, letterSpacing: 2, textTransform: "uppercase", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
-        <Activity size={10} />
-        Execution Route
-      </div>
-      <div style={{ fontWeight: 900, fontSize: 13 }}>{data.label}</div>
-      <ApiSyncIndicator color={color} text="Router Armed" active={true} />
-    </PremiumNodeWrapper>
-  );
-});
-
-const OrderbookImbalanceNode = React.memo(function OrderbookImbalanceNode({ data }) {
-  const imbalance = data?.params?.imbalance || 0;
-  const isBullish = imbalance > 0;
-
-  return (
-    <PremiumNodeWrapper color={C.purple}>
-      <Handle type="target" position={Position.Left} style={{ background: C.purple, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
-      <div style={{ color: C.purple, fontSize: 8, letterSpacing: 2, textTransform: "uppercase", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
-        <BookOpen size={10} />
-        Orderbook Flow
-      </div>
-      <div style={{ fontWeight: 900, fontSize: 13 }}>{data.label}</div>
-      <div style={{
-        fontSize: 10,
-        color: isBullish ? C.profit : C.loss,
-        marginTop: 4,
-        fontFamily: "monospace"
-      }}>
-        Imbalance: {imbalance > 0 ? "+" : ""}{imbalance.toFixed(3)}
-      </div>
-      <ApiSyncIndicator color={C.purple} text={isBullish ? "Bid Dominant" : "Ask Dominant"} active={true} />
-      <Handle type="source" position={Position.Right} style={{ background: C.purple, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
-    </PremiumNodeWrapper>
-  );
-});
-
-const LiveTickerNode = React.memo(function LiveTickerNode({ data }) {
-  const isLive = data?.params?.mode === 'live';
-
-  return (
-    <PremiumNodeWrapper color={isLive ? C.accent : C.t3} active={isLive}>
-      <Handle type="source" position={Position.Right} style={{ background: isLive ? C.accent : C.t3, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
-      <div style={{ color: isLive ? C.accent : C.t3, fontSize: 8, letterSpacing: 2, textTransform: "uppercase", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
-        {isLive ? <Wifi size={10} /> : <WifiOff size={10} />}
-        Live Stream
-      </div>
-      <div style={{ fontWeight: 900, fontSize: 13 }}>{data.label}</div>
-      <div style={{ fontSize: 9, color: C.t2, marginTop: 4 }}>
-        {isLive ? "Real-time ticks" : "Backtest mode - disabled"}
-      </div>
-      <ApiSyncIndicator color={isLive ? C.accent : C.t3} text={isLive ? "Connected" : "Standby"} active={isLive} />
-    </PremiumNodeWrapper>
-  );
-});
-
-function StrategyStructuredView({ nodes, setNodes, edges, setEdges, toolbox, getNodeParamSchema, renderDynamicField, defaultDates }) {
-  const handleAddNode = (type, label) => {
-    const newNodeId = `n-${Date.now()}`;
-    const defaultParams = {};
-    if (type === "source") {
-      defaultParams.symbol = "BTC/USDT";
-      defaultParams.timeframe = "15m";
-      defaultParams.start_date = defaultDates.start_date;
-      defaultParams.end_date = defaultDates.end_date;
-    } else if (type === "indicator") {
-      defaultParams.window = 14;
-    }
-
-    const newNode = {
-      id: newNodeId,
-      type: type || "indicator",
-      position: { x: 250, y: nodes.length * 150 + 100 },
-      data: { label, params: defaultParams }
-    };
-    setNodes((nds) => [...nds, newNode]);
-  };
-
-  const handleDeleteNode = (nodeId) => {
-    setNodes((nds) => nds.filter((node) => node.id !== nodeId));
-    setEdges((eds) => eds.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
-  };
-
-  const handleAddEdge = (sourceId, targetId) => {
-    if (!targetId) return;
-    const edgeId = `e-${sourceId}-${targetId}`;
-    if (edges.some(e => e.id === edgeId)) return;
-    setEdges((eds) => [...eds, { id: edgeId, source: sourceId, target: targetId, animated: true, style: { stroke: C.cyan, strokeWidth: 2 } }]);
-  };
-
-  const handleRemoveEdge = (edgeId) => {
-    setEdges((eds) => eds.filter(e => e.id !== edgeId));
-  };
-
-  const [selectedToolboxItem, setSelectedToolboxItem] = useState("");
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16, overflowY: "auto", height: "100%", paddingBottom: 100, flex: 1 }}>
-      {/* Node List */}
-      {nodes.map(node => (
-        <Card key={node.id} cls="p-5" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {/* Header */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${C.border}`, paddingBottom: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ color: C.t1, fontSize: 14, fontWeight: 900 }}>{node.data.label}</span>
-              <Tag2 c="purple">{node.type}</Tag2>
-            </div>
-            <Btn v="danger" sz="sm" onClick={() => handleDeleteNode(node.id)}>Delete Block</Btn>
-          </div>
-
-          {/* Config */}
-          <div>
-            <div style={{ color: C.t3, fontSize: 10, fontFamily: "monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: 8 }}>Configuration</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              {getNodeParamSchema(node.data.label, node.type).map(field => renderDynamicField(field, node))}
-              {getNodeParamSchema(node.data.label, node.type).length === 0 && (
-                <div style={{ color: C.t3, fontSize: 11, fontFamily: "monospace" }}>No configuration required.</div>
-              )}
-            </div>
-          </div>
-
-          {/* Connections */}
-          <div style={{ marginTop: 8 }}>
-            <div style={{ color: C.t3, fontSize: 10, fontFamily: "monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: 8 }}>Outgoing Connections (Outputs)</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {edges.filter(e => e.source === node.id).map(edge => {
-                const targetNode = nodes.find(n => n.id === edge.target);
-                return (
-                  <div key={edge.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.bg3, border: `1px solid ${C.border}`, padding: "6px 12px", borderRadius: 6 }}>
-                    <span style={{ color: C.t1, fontSize: 12, fontFamily: "monospace" }}>â†’ {targetNode ? targetNode.data.label : edge.target}</span>
-                    <button onClick={() => handleRemoveEdge(edge.id)} style={{ color: C.red, background: "transparent", border: "none", cursor: "pointer", fontSize: 11, fontFamily: "monospace" }}>Remove</button>
-                  </div>
-                );
-              })}
-              {edges.filter(e => e.source === node.id).length === 0 && (
-                 <div style={{ color: C.t3, fontSize: 11, fontFamily: "monospace" }}>No outgoing connections.</div>
-              )}
-            </div>
-            
-            <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "flex-end" }}>
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
-                <label htmlFor={`connect-${node.id}`} style={{ color: C.t2, fontSize: 9, fontFamily: "monospace", fontWeight: 900, textTransform: "uppercase" }}>Connect to</label>
-                <select
-                  id={`connect-${node.id}`}
-                  style={{ width: "100%", background: C.bg3, border: `1px solid ${C.border}`, color: C.t1, borderRadius: 8, padding: "8px 10px", fontSize: 11, fontFamily: "monospace", outline: "none" }}
-                  defaultValue=""
-                >
-                  <option value="" disabled>Select a block to connect to...</option>
-                  {nodes.filter(n => n.id !== node.id).map(n => (
-                    <option key={n.id} value={n.id}>{n.data.label} (ID: {n.id})</option>
-                  ))}
-                </select>
-              </div>
-              <Btn v="outline" sz="sm" onClick={() => {
-                const select = document.getElementById(`connect-${node.id}`);
-                handleAddEdge(node.id, select.value);
-                select.value = "";
-              }}>Add Connection</Btn>
-            </div>
-          </div>
-        </Card>
-      ))}
-
-      {/* Add New Node */}
-      <Card cls="p-5">
-        <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
-            <label htmlFor="add-block-select" style={{ color: C.t2, fontSize: 9, fontFamily: "monospace", fontWeight: 900, textTransform: "uppercase" }}>Add New Block</label>
-            <select
-              id="add-block-select"
-              value={selectedToolboxItem}
-              onChange={(e) => setSelectedToolboxItem(e.target.value)}
-              style={{ width: "100%", background: C.bg3, border: `1px solid ${C.border}`, color: C.t1, borderRadius: 8, padding: "8px 10px", fontSize: 11, fontFamily: "monospace", outline: "none" }}
-            >
-              <option value="" disabled>Select a block type to add...</option>
-              {toolbox.map(group => (
-                <optgroup key={group.g} label={group.g}>
-                  {group.items.map(item => {
-                    const label = typeof item === "string" ? item : item.label;
-                    const type = typeof item === "string" ? group.type : item.type;
-                    return <option key={label} value={`${type}::${label}`}>{label}</option>
-                  })}
-                </optgroup>
-              ))}
-            </select>
-          </div>
-          <Btn v="primary" sz="sm" onClick={() => {
-            if (!selectedToolboxItem) return;
-            const [type, label] = selectedToolboxItem.split("::");
-            handleAddNode(type, label);
-            setSelectedToolboxItem("");
-          }}>Add Block</Btn>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-function StrategyBuilderInner({ onBack: onBackProp, strategy: strategyProp, initialStrategy, onBacktest: onBacktestProp }) {
+function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBacktestProp }) {
   const navigate = useNavigate();
   const location = useLocation();
-  // When used as a standalone /app/builder route, props are optional;
-  // fall back to route state (from navigate call) and navigate() for navigation.
   const strategy = strategyProp ?? location.state?.strategy ?? null;
   const onBack = onBackProp ?? (() => navigate("/app/strategies"));
   const onBacktest = onBacktestProp ?? ((payload) => navigate("/app/backtest", { state: { strategy: payload } }));
-  const {
-    mode: pipelineMode, setMode: setPipelineMode, activeExchange, isLoadingExchange,
-    availableTimeframes, availableSymbols, isLoadingSymbols, loadMarkets, fetchOHLCV,
-    fetchOrderbookImbalance, connectLiveData, isFetchingData, fetchProgress, isLiveConnected,
-    validateInputs, validationErrors
-  } = useDataPipeline();
-
-  const {
-    computeIndicator, computeIndicatorsBatch, indicatorCache, clearIndicatorCache,
-    isComputing, computationError, lastComputation, getAvailableOutputs, validateIndicatorParams
-  } = useIndicatorEngine();
-
-  const {
-    evaluateLogic, evaluateLogicBatch, logicCache, clearLogicCache, isEvaluating,
-    evaluationError, lastSignal, getAvailableOperators, getConditionTemplate
-  } = useLogicEngine();
-
-  const {
-    parseGraphToExecutionPlan, executeStrategy, validateStrategy, executionCache,
-    clearExecutionCache, isExecuting, executionError, lastExecution, generateExecutionId
-  } = useStrategyEngine();
+  
+  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const { pushState, undo, redo, canUndo, canRedo } = useUndoRedo();
+  const { errors, warnings, isValid, validateGraph, getErrorByNodeId } = useValidation();
 
   const [builderMode, setBuilderMode] = useState('backtest');
-  const [viewMode, setViewMode] = useState('canvas');
-
-  useEffect(() => {
-    setPipelineMode(builderMode);
-  }, [builderMode, setPipelineMode]);
-
-  useEffect(() => {
-    if (activeExchange && !isLoadingExchange) {
-      loadMarkets();
-    }
-  }, [activeExchange, isLoadingExchange, loadMarkets]);
-
-  const strategyNodeTypes = useMemo(() => ({
-    source: SourceNode,
-    indicator: IndicatorNode,
-    mlmodel: MlModelNode,
-    operator: OperatorNode,
-    logic: LogicNode,
-    action: ActionNode,
-    orderbook: OrderbookImbalanceNode,
-    liveticker: LiveTickerNode,
-  }), []);
-
-  const [strategyName, setStrategyName] = useState("Untitled Strategy");
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [isSavingStrategy, setIsSavingStrategy] = useState(false);
   const [saveState, setSaveState] = useState("");
-  const [ccxtMarkets, setCcxtMarkets] = useState(["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]);
+  const [collapsedCategories, setCollapsedCategories] = useState({});
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [libraryOpen, setLibraryOpen] = useState(true);
 
   const reactFlowWrapper = useRef(null);
   const nodeSeq = useRef(4);
   const loadedStrategy = initialStrategy || strategy || null;
   const [strategyIdState, setStrategyIdState] = useState(loadedStrategy?.id || null);
+  const [strategyName, setStrategyName] = useState(loadedStrategy?.name || "Untitled Strategy");
 
   const getDefaultDateRange = () => {
     const end = new Date();
@@ -472,10 +154,10 @@ function StrategyBuilderInner({ onBack: onBackProp, strategy: strategyProp, init
   const defaultDates = getDefaultDateRange();
 
   const initialNodes = [
-    { id: "n-1", type: "source", position: { x: 50, y: 250 }, data: { label: "CCXT Asset Feed", params: { symbol: "BTC/USDT", timeframe: "15m", start_date: defaultDates.start_date, end_date: defaultDates.end_date } } },
-    { id: "n-2", type: "indicator", position: { x: 300, y: 150 }, data: { label: "RSI", params: { window: 14 } } },
-    { id: "n-3", type: "mlmodel", position: { x: 550, y: 150 }, data: { label: "XGBoost", params: { confidence: 0.8 } } },
-    { id: "n-4", type: "action", position: { x: 800, y: 250 }, data: { label: "Buy Market", params: {} } },
+    { id: "n-1", type: "ccxt_asset_feed", position: { x: 50, y: 250 }, data: { label: "CCXT Asset Feed", params: { symbol: "BTC/USDT", timeframe: "15m", start_date: defaultDates.start_date, end_date: defaultDates.end_date } } },
+    { id: "n-2", type: "rsi", position: { x: 300, y: 150 }, data: { label: "RSI", params: { window: 14 } } },
+    { id: "n-3", type: "xgboost", position: { x: 550, y: 150 }, data: { label: "XGBoost", params: { confidence: 0.8 } } },
+    { id: "n-4", type: "buy_market", position: { x: 800, y: 250 }, data: { label: "Buy Market", params: {} } },
   ];
 
   const initialEdges = [
@@ -486,24 +168,109 @@ function StrategyBuilderInner({ onBack: onBackProp, strategy: strategyProp, init
 
   const [nodes, setNodes] = useState(initialNodes);
   const [edges, setEdges] = useState(initialEdges);
-  const [selectedNodeId, setSelectedNodeId] = useState(null);
 
+  const strategyNodeTypes = useMemo(() => ({
+    ccxt_asset_feed: DynamicNode,
+    orderbook_imbalance: DynamicNode,
+    live_ticker: DynamicNode,
+    sma: DynamicNode,
+    ema: DynamicNode,
+    rsi: DynamicNode,
+    macd: DynamicNode,
+    bollinger_bands: DynamicNode,
+    atr: DynamicNode,
+    constant: DynamicNode,
+    compare: DynamicNode,
+    math: DynamicNode,
+    crosses: DynamicNode,
+    signal_logic: DynamicNode,
+    and_gate: DynamicNode,
+    or_gate: DynamicNode,
+    condition_builder: DynamicNode,
+    xgboost: DynamicNode,
+    lightgbm: DynamicNode,
+    random_forest: DynamicNode,
+    lstm: DynamicNode,
+    gru: DynamicNode,
+    transformer: DynamicNode,
+    buy_market: DynamicNode,
+    sell_market: DynamicNode,
+    close_position: DynamicNode,
+    trailing_stop: DynamicNode,
+  }), []);
+
+  // PHASE H: Continuous validation
   useEffect(() => {
-    if (!loadedStrategy) return;
-    if (loadedStrategy.name) setStrategyName(loadedStrategy.name);
-    if (Array.isArray(loadedStrategy.nodes) && loadedStrategy.nodes.length > 0) {
-      setNodes(loadedStrategy.nodes);
-    }
-    if (Array.isArray(loadedStrategy.edges) && loadedStrategy.edges.length > 0) {
-      setEdges(loadedStrategy.edges);
-    }
-  }, [loadedStrategy]);
+    validateGraph(nodes, edges);
+  }, [nodes, edges, validateGraph]);
 
-  const onNodesChange = useCallback((changes) => setNodes((nds) => applyNodeChanges(changes, nds)), []);
-  const onEdgesChange = useCallback((changes) => setEdges((eds) => applyEdgeChanges(changes, eds)), []);
-  const onConnect = useCallback((params) => setEdges((eds) => [...eds, { ...params, id: `e-${params.source}-${params.target}`, animated: true, style: { stroke: C.cyan, strokeWidth: 2 } }]), []);
+  // Update nodes with error states
+  useEffect(() => {
+    setNodes(nds => nds.map(node => {
+      const error = getErrorByNodeId(node.id);
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          hasError: !!error,
+          errorMessage: error?.message
+        }
+      };
+    }));
+  }, [errors, getErrorByNodeId]);
 
-  const selectedNode = useMemo(() => nodes.find(n => n.id === selectedNodeId) || null, [nodes, selectedNodeId]);
+  const onNodesChange = useCallback((changes) => {
+    setNodes((nds) => applyNodeChanges(changes, nds));
+    pushState({ nodes: applyNodeChanges(changes, nodes), edges });
+  }, [edges, pushState]);
+
+  const onEdgesChange = useCallback((changes) => {
+    setEdges((eds) => applyEdgeChanges(changes, eds));
+    pushState({ nodes, edges: applyEdgeChanges(changes, edges) });
+  }, [nodes, pushState]);
+
+  const onConnect = useCallback((params) => {
+    // PHASE C: Strongly typed connections
+    const sourceNode = nodes.find(n => n.id === params.source);
+    const targetNode = nodes.find(n => n.id === params.target);
+    
+    if (!sourceNode || !targetNode) return;
+
+    const sourceBlock = BlockRegistry[sourceNode.type];
+    const targetBlock = BlockRegistry[targetNode.type];
+    
+    if (sourceBlock && targetBlock) {
+      const sourceOutput = sourceBlock.outputs[0];
+      const targetInput = targetBlock.inputs[0];
+      
+      // Allow NUMBER input to accept INDICATOR output
+      if (targetInput === 'number' && sourceOutput === 'indicator') {
+        setEdges((eds) => [...eds, { ...params, id: `e-${params.source}-${params.target}`, animated: true, style: { stroke: C.cyan, strokeWidth: 2 } }]);
+        pushState({ nodes, edges: [...edges, { ...params, id: `e-${params.source}-${params.target}`, animated: true, style: { stroke: C.cyan, strokeWidth: 2 } }] });
+        return;
+      }
+      
+      // Allow FEATURE input to accept INDICATOR output
+      if (targetInput === 'feature' && sourceOutput === 'indicator') {
+        setEdges((eds) => [...eds, { ...params, id: `e-${params.source}-${params.target}`, animated: true, style: { stroke: C.cyan, strokeWidth: 2 } }]);
+        pushState({ nodes, edges: [...edges, { ...params, id: `e-${params.source}-${params.target}`, animated: true, style: { stroke: C.cyan, strokeWidth: 2 } }] });
+        return;
+      }
+      
+      // Otherwise, types must match
+      if (sourceOutput !== targetInput) {
+        // Type mismatch - silently reject connection
+        return;
+      }
+    }
+
+    setEdges((eds) => [...eds, { ...params, id: `e-${params.source}-${params.target}`, animated: true, style: { stroke: C.cyan, strokeWidth: 2 } }]);
+    pushState({ nodes, edges: [...edges, { ...params, id: `e-${params.source}-${params.target}`, animated: true, style: { stroke: C.cyan, strokeWidth: 2 } }] });
+  }, [nodes, edges, pushState]);
+
+  const onNodeClick = useCallback((_, node) => {
+    setSelectedNodeId(node.id);
+  }, []);
 
   const handleDragOver = useCallback((event) => {
     event.preventDefault();
@@ -526,166 +293,170 @@ function StrategyBuilderInner({ onBack: onBackProp, strategy: strategyProp, init
     nodeSeq.current += 1;
     const newNodeId = `n-${nodeSeq.current}`;
 
+    const block = BlockRegistry[type];
     const defaultParams = {};
-    if (type === "source") {
-      const dates = getDefaultDateRange();
-      defaultParams.symbol = "BTC/USDT";
-      defaultParams.timeframe = "15m";
-      defaultParams.start_date = dates.start_date;
-      defaultParams.end_date = dates.end_date;
-    } else if (type === "indicator") {
-      defaultParams.window = 14;
+    
+    if (block && block.parameters) {
+      block.parameters.forEach(param => {
+        defaultParams[param.key] = param.default;
+      });
     }
 
     const newNode = {
       id: newNodeId,
-      type: type || "indicator",
+      type: type,
       position,
       data: { label, params: defaultParams }
     };
 
     setNodes((nds) => [...nds, newNode]);
     setSelectedNodeId(newNodeId);
-  }, []);
-
-  const handleParamChange = useCallback((nodeId, key, value) => {
-    setNodes((nds) =>
-      nds.map((node) => {
-        if (node.id === nodeId) {
-          return {
-            ...node,
-            data: {
-              ...node.data,
-              params: {
-                ...(node.data.params || {}),
-                [key]: value
-              }
-            }
-          };
-        }
-        return node;
-      })
-    );
-  }, []);
+    pushState({ nodes: [...nodes, newNode], edges });
+  }, [nodes, edges, pushState]);
 
   const handleDeleteNode = useCallback(() => {
     if (!selectedNodeId) return;
     setNodes((nds) => nds.filter((node) => node.id !== selectedNodeId));
     setEdges((eds) => eds.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
     setSelectedNodeId(null);
-  }, [selectedNodeId]);
+    pushState({ nodes: nodes.filter(n => n.id !== selectedNodeId), edges: edges.filter(e => e.source !== selectedNodeId && e.target !== selectedNodeId) });
+  }, [selectedNodeId, nodes, edges, pushState]);
 
-  const renderDynamicField = (field, node) => {
-    const val = node?.data?.params?.[field.key] ?? field.default;
-
-    if (field.type === "select") {
-      return (
-        <div key={field.key} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <label htmlFor={`field-${node.id}-${field.key}`} style={{ color: C.t2, fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 2, textTransform: "uppercase" }}>
-            {field.label}
-          </label>
-          <select
-            id={`field-${node.id}-${field.key}`}
-            value={val}
-            onChange={(e) => handleParamChange(node.id, field.key, e.target.value)}
-            style={{
-              width: "100%", background: C.bg3, border: `1px solid ${C.border}`,
-              color: C.t1, borderRadius: 8, padding: "8px 10px", fontSize: 11,
-              fontFamily: "monospace", outline: "none"
-            }}
-          >
-            {field.options.map((opt) => (
-              <option key={opt} value={opt}>{opt}</option>
-            ))}
-          </select>
-        </div>
-      );
+  const handleUndo = useCallback(() => {
+    const previousState = undo();
+    if (previousState) {
+      setNodes(previousState.nodes);
+      setEdges(previousState.edges);
     }
+  }, [undo]);
 
-    if (field.type === "date") {
-      return (
-        <div key={field.key} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <label htmlFor={`field-${node.id}-${field.key}`} style={{ color: C.t2, fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 2, textTransform: "uppercase" }}>
-            {field.label}
-          </label>
-          <input
-            id={`field-${node.id}-${field.key}`}
-            type="date"
-            value={val || ""}
-            onChange={(e) => handleParamChange(node.id, field.key, e.target.value)}
-            style={{
-              width: "100%", background: C.bg3, border: `1px solid ${C.border}`,
-              color: C.t1, borderRadius: 8, padding: "8px 10px", fontSize: 11,
-              fontFamily: "monospace", outline: "none"
-            }}
-          />
-        </div>
-      );
+  const handleRedo = useCallback(() => {
+    const nextState = redo();
+    if (nextState) {
+      setNodes(nextState.nodes);
+      setEdges(nextState.edges);
     }
+  }, [redo]);
 
-    return (
-      <Inp
-        key={field.key}
-        lbl={field.label}
-        type={field.type || "text"}
-        val={val}
-        onChange={(e) => handleParamChange(node.id, field.key, field.type === "number" ? Number(e.target.value) : e.target.value)}
-      />
-    );
-  };
+  const handleFitView = useCallback(() => {
+    fitView({ duration: 800 });
+  }, [fitView]);
 
-  const getNodeParamSchema = (label, type) => {
-    if (type === "source" || label === "CCXT Asset Feed") {
-      return [
-        { key: "symbol", label: "Asset Pair", type: "select", options: availableSymbols.length > 0 ? availableSymbols : ccxtMarkets, default: "BTC/USDT" },
-        { key: "timeframe", label: "Timeframe", type: "select", options: availableTimeframes.length > 0 ? availableTimeframes : ["1m", "5m", "15m", "1h", "4h", "1d"], default: "15m" },
-        { key: "start_date", label: "Start Date", type: "date", default: defaultDates.start_date },
-        { key: "end_date", label: "End Date", type: "date", default: defaultDates.end_date }
-      ];
-    }
-    if (type === "indicator") {
-      if (label === "RSI") {
-        return [
-          { key: "window", label: "Period (Window)", type: "number", default: 14 },
-          { key: "overbought", label: "Overbought", type: "number", default: 70 },
-          { key: "oversold", label: "Oversold", type: "number", default: 30 }
-        ];
+  // PHASE M: Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Prevent default for builder shortcuts
+      if (e.ctrlKey || e.metaKey) {
+        switch (e.key) {
+          case 's':
+            e.preventDefault();
+            handleSaveStrategy();
+            break;
+          case 'z':
+            e.preventDefault();
+            if (e.shiftKey) {
+              handleRedo();
+            } else {
+              handleUndo();
+            }
+            break;
+          case 'c':
+            e.preventDefault();
+            // Copy selected node
+            break;
+          case 'v':
+            e.preventDefault();
+            // Paste node
+            break;
+          case 'd':
+            e.preventDefault();
+            // Duplicate node
+            break;
+        }
+      } else {
+        switch (e.key) {
+          case 'Delete':
+          case 'Backspace':
+            if (selectedNodeId) {
+              e.preventDefault();
+              handleDeleteNode();
+            }
+            break;
+          case 'Escape':
+            setSelectedNodeId(null);
+            break;
+          case 'f':
+            e.preventDefault();
+            setLibraryOpen(!libraryOpen);
+            break;
+        }
       }
-      if (label === "SMA" || label === "EMA" || label === "WMA") {
-        return [{ key: "window", label: "Period (Window)", type: "number", default: 14 }];
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedNodeId, handleDeleteNode, handleUndo, handleRedo, libraryOpen]);
+
+  const handleSaveStrategy = async () => {
+    const trimmedName = strategyName.trim() || "Untitled Strategy";
+    setIsSavingStrategy(true);
+    setSaveState("Compiling...");
+
+    try {
+      const { nodes: serNodes, edges: serEdges } = serializeReactFlowToDAG(nodes, edges);
+      const sourceNode = serNodes.find((n) => n.type === "ccxt_asset_feed");
+      const pair = sourceNode?.params?.symbol || "BTC/USDT";
+      const timeframe = sourceNode?.params?.timeframe || "15m";
+
+      // PHASE G: Compiler-based workflow
+      const blueprint = {
+        nodes: serNodes,
+        edges: serEdges,
+        symbols: [pair],
+        timeframe: timeframe
+      };
+
+      setSaveState("Compiling...");
+      const compileResponse = await post('/api/strategies/compile', {
+        blueprint: blueprint,
+        version: "v1.0",
+        metadata: { name: trimmedName }
+      });
+
+      if (!compileResponse || compileResponse.error) {
+        throw new Error(compileResponse?.error || "Compilation failed");
       }
-      if (label === "MACD") {
-        return [
-          { key: "fast_period", label: "Fast Period", type: "number", default: 12 },
-          { key: "slow_period", label: "Slow Period", type: "number", default: 26 },
-          { key: "signal_period", label: "Signal Period", type: "number", default: 9 },
-          { key: "output", label: "Output Key", type: "select", options: ["macd", "signal", "histogram"], default: "macd" }
-        ];
+
+      setSaveState("Saving...");
+      const payload = {
+        name: trimmedName,
+        description: `Strategy created with ${serNodes.length} nodes`,
+        blueprint: blueprint,
+        execution_graph: compileResponse.execution_graph,
+        exchange: "binance",
+        symbol: pair,
+        timeframe: timeframe,
+        tags: []
+      };
+
+      let response;
+      if (strategyIdState) {
+        response = await post('/api/strategies/' + strategyIdState, payload);
+      } else {
+        response = await post('/api/strategies', payload);
       }
-      if (label === "Bollinger Bands") {
-        return [
-          { key: "window", label: "Period (Window)", type: "number", default: 20 },
-          { key: "num_std", label: "Std Dev Multiplier", type: "number", default: 2 },
-          { key: "output", label: "Output Key", type: "select", options: ["upper", "middle", "lower"], default: "middle" }
-        ];
+
+      if (response && response.strategy) {
+        setStrategyIdState(response.strategy.id);
       }
-      return [{ key: "window", label: "Lookback Period", type: "number", default: 14 }];
+      setSaveState("Saved");
+    } catch (err) {
+      console.error("Save strategy error:", err);
+      setSaveState("Save Failed: " + (err.message || "Unknown error"));
+    } finally {
+      setIsSavingStrategy(false);
+      setTimeout(() => setSaveState(""), 3000);
     }
-    if (type === "logic" || label === "Signal Logic" || label === "Condition Builder") {
-      return [
-        { key: "left_indicator", label: "Left Indicator", type: "select", options: ["RSI", "SMA", "EMA", "MACD", "Close"], default: "RSI" },
-        { key: "operator", label: "Operator", type: "select", options: [">", "<", ">=", "<=", "==", "crosses_above", "crosses_below"], default: ">" },
-        { key: "right_indicator", label: "Right Indicator / Constant", type: "select", options: ["RSI", "SMA", "EMA", "MACD", "Close", "Constant"], default: "Constant" },
-        { key: "right_value", label: "Right Value (if Constant)", type: "number", default: 70 }
-      ];
-    }
-    if (type === "mlmodel") {
-      return [
-        { key: "confidence", label: "Confidence Threshold", type: "number", default: 0.8 },
-        { key: "lookback", label: "Lookback Windows", type: "number", default: 50 }
-      ];
-    }
-    return [];
   };
 
   const serializeReactFlowToDAG = (nds, eds) => {
@@ -706,297 +477,431 @@ function StrategyBuilderInner({ onBack: onBackProp, strategy: strategyProp, init
     return { nodes: serializedNodes, edges: serializedEdges };
   };
 
-  const handleSaveStrategy = async () => {
-    const trimmedName = strategyName.trim() || "Untitled Strategy";
-    setIsSavingStrategy(true);
-    setSaveState("Saving...");
+  const toggleCategory = useCallback((category) => {
+    setCollapsedCategories(prev => ({
+      ...prev,
+      [category]: !prev[category]
+    }));
+  }, []);
 
-    try {
-      const { nodes: serNodes, edges: serEdges } = serializeReactFlowToDAG(nodes, edges);
-      const sourceNode = serNodes.find((n) => n.type === "source");
-      const pair = sourceNode?.params?.symbol || "BTC/USDT";
-      const timeframe = sourceNode?.params?.timeframe || "15m";
+  const filteredBlocks = useMemo(() => {
+    if (!searchQuery) return null;
+    
+    return Object.entries(BlockRegistry).filter(([type, block]) => {
+      const searchLower = searchQuery.toLowerCase();
+      return block.name.toLowerCase().includes(searchLower) ||
+             block.description.toLowerCase().includes(searchLower) ||
+             block.category.toLowerCase().includes(searchLower);
+    });
+  }, [searchQuery]);
 
-      const payload = {
-        name: trimmedName,
-        pair,
-        timeframe,
-        status: loadedStrategy?.status || "stopped",
-        pnl: Number(loadedStrategy?.pnl || 0),
-        win_rate: Number(loadedStrategy?.wr || 0),
-        nodes: serNodes,
-        edges: serEdges,
-      };
-
-      let response;
-      if (strategyIdState) {
-        response = await endpoints.strategies.update(strategyIdState, payload);
-      } else {
-        response = await endpoints.strategies.save(payload);
-      }
-
-      if (response && response.id) {
-        setStrategyIdState(response.id);
-      }
-      setSaveState("Saved");
-    } catch (err) {
-      console.error("Save strategy error:", err);
-      setSaveState("Save Failed");
-    } finally {
-      setIsSavingStrategy(false);
-      setTimeout(() => setSaveState(""), 3000);
+  // Load strategy on mount
+  useEffect(() => {
+    if (!loadedStrategy) return;
+    if (loadedStrategy.name) setStrategyName(loadedStrategy.name);
+    if (Array.isArray(loadedStrategy.nodes) && loadedStrategy.nodes.length > 0) {
+      setNodes(loadedStrategy.nodes);
     }
-  };
+    if (Array.isArray(loadedStrategy.edges) && loadedStrategy.edges.length > 0) {
+      setEdges(loadedStrategy.edges);
+    }
+  }, [loadedStrategy]);
+
+  // PHASE G: Autosave every 30 seconds
+  useEffect(() => {
+    const autosaveInterval = setInterval(() => {
+      // Save builder layout to localStorage
+      const layout = { nodes, edges, strategyName };
+      localStorage.setItem('builder_autosave', JSON.stringify(layout));
+    }, 30000);
+
+    return () => clearInterval(autosaveInterval);
+  }, [nodes, edges, strategyName]);
+
+  // Recover draft on mount
+  useEffect(() => {
+    const savedLayout = localStorage.getItem('builder_autosave');
+    if (savedLayout && !loadedStrategy) {
+      try {
+        const layout = JSON.parse(savedLayout);
+        setNodes(layout.nodes || initialNodes);
+        setEdges(layout.edges || initialEdges);
+        setStrategyName(layout.strategyName || "Untitled Strategy");
+      } catch (e) {
+        console.error("Failed to recover autosave:", e);
+      }
+    }
+  }, [loadedStrategy]);
+
+  const selectedNode = useMemo(() => nodes.find(n => n.id === selectedNodeId) || null, [nodes, selectedNodeId]);
 
   return (
-    <div style={{ padding: 16, height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      {/* Top Controls */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: C.bg1 }}>
+      {/* Toolbar */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: C.bg2, borderBottom: `1px solid ${C.border}`, gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Btn v="ghost" sz="sm" Icon={ArrowLeft} onClick={onBack}>Back</Btn>
-          <span style={{ color: C.t1, fontWeight: 900, fontSize: 16, letterSpacing: -0.5 }}>Algorithm Studio</span>
-          <Tag2 c="purple">DAG VectorBT Canvas</Tag2>
+          <Inp
+            value={strategyName}
+            onChange={(e) => setStrategyName(e.target.value)}
+            placeholder="Strategy Name"
+            style={{ width: 200, fontSize: 12, fontFamily: "monospace" }}
+          />
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          {saveState && <span style={{ color: saveState === "Saved" ? C.green : C.t3, fontSize: 10, fontFamily: "monospace", marginRight: 8 }}>{saveState}</span>}
 
-          <div style={{ display: "flex", background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 8, padding: 2, marginRight: 8 }}>
-            <button
-              onClick={() => setViewMode('canvas')}
-              style={{
-                padding: "4px 10px",
-                borderRadius: 6,
-                fontSize: 10,
-                fontFamily: "monospace",
-                fontWeight: 700,
-                border: "none",
-                background: viewMode === 'canvas' ? C.cyan : "transparent",
-                color: viewMode === 'canvas' ? "#000" : C.t2,
-                cursor: "pointer",
-                transition: "all 0.15s"
-              }}
-            >
-              Canvas View
-            </button>
-            <button
-              onClick={() => setViewMode('structured')}
-              style={{
-                padding: "4px 10px",
-                borderRadius: 6,
-                fontSize: 10,
-                fontFamily: "monospace",
-                fontWeight: 700,
-                border: "none",
-                background: viewMode === 'structured' ? C.purple : "transparent",
-                color: viewMode === 'structured' ? "#fff" : C.t2,
-                cursor: "pointer",
-                transition: "all 0.15s"
-              }}
-            >
-              Structured View
-            </button>
-          </div>
-
-          <div style={{ display: "flex", background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 8, padding: 2, marginRight: 8 }}>
-            <button
-              onClick={() => setBuilderMode('backtest')}
-              style={{
-                padding: "4px 10px",
-                borderRadius: 6,
-                fontSize: 10,
-                fontFamily: "monospace",
-                fontWeight: 700,
-                border: "none",
-                background: builderMode === 'backtest' ? C.cyan : "transparent",
-                color: builderMode === 'backtest' ? "#000" : C.t2,
-                cursor: "pointer",
-                transition: "all 0.15s"
-              }}
-            >
-              Backtest Mode
-            </button>
-            <button
-              onClick={() => setBuilderMode('live')}
-              style={{
-                padding: "4px 10px",
-                borderRadius: 6,
-                fontSize: 10,
-                fontFamily: "monospace",
-                fontWeight: 700,
-                border: "none",
-                background: builderMode === 'live' ? C.purple : "transparent",
-                color: builderMode === 'live' ? "#fff" : C.t2,
-                cursor: "pointer",
-                transition: "all 0.15s"
-              }}
-            >
-              Live Execution
-            </button>
-          </div>
-
-          <Btn v="outline" sz="sm" Icon={Check} onClick={handleSaveStrategy} disabled={isSavingStrategy}>
-            {isSavingStrategy ? "Saving..." : "Save Strategy"}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {/* PHASE I: Professional toolbar */}
+          <Btn v="ghost" sz="sm" Icon={Undo} onClick={handleUndo} disabled={!canUndo} title="Undo (Ctrl+Z)" />
+          <Btn v="ghost" sz="sm" Icon={Redo} onClick={handleRedo} disabled={!canRedo} title="Redo (Ctrl+Y)" />
+          <div style={{ width: 1, height: 24, background: C.border }} />
+          <Btn v="ghost" sz="sm" Icon={ZoomOut} onClick={() => zoomOut()} title="Zoom Out" />
+          <Btn v="ghost" sz="sm" Icon={ZoomIn} onClick={() => zoomIn()} title="Zoom In" />
+          <Btn v="ghost" sz="sm" Icon={Maximize} onClick={handleFitView} title="Fit View" />
+          <div style={{ width: 1, height: 24, background: C.border }} />
+          <Btn v="ghost" sz="sm" Icon={PanelLeft} onClick={() => setLibraryOpen(!libraryOpen)} title="Toggle Library (F)" />
+          <Btn v="ghost" sz="sm" Icon={PanelRight} onClick={() => setInspectorOpen(!inspectorOpen)} title="Toggle Inspector" />
+          <div style={{ width: 1, height: 24, background: C.border }} />
+          <Btn v="outline" sz="sm" Icon={Save} onClick={handleSaveStrategy} disabled={isSavingStrategy || !isValid}>
+            {isSavingStrategy ? "Saving..." : "Save"}
           </Btn>
-
+          <Btn v="primary" sz="sm" Icon={Play} onClick={handleSaveStrategy} disabled={!isValid} title="Compile & Save">
+            Compile
+          </Btn>
           {onBacktest && (
-            <Btn
-              v="primary"
-              sz="sm"
-              Icon={BarChart2}
-              onClick={() => {
-                onBacktest({
-                  id: strategyIdState,
-                  name: strategyName,
-                  nodes,
-                  edges
-                });
-              }}
-            >
-              Run VectorBT
+            <Btn v="primary" sz="sm" Icon={BarChart2} onClick={() => onBacktest({ id: strategyIdState, name: strategyName, nodes, edges })}>
+              Backtest
             </Btn>
           )}
         </div>
       </div>
 
-      <div style={{ flex: 1, display: viewMode === "canvas" ? "grid" : "flex", gridTemplateColumns: viewMode === "canvas" ? "220px 1fr 280px" : "1fr", gap: 12, minHeight: 0 }}>
-        {viewMode === "canvas" ? (
-          <>
-            {/* Left Toolbar */}
-            <Card cls="p-3 flex flex-col" style={{ overflowY: "auto" }}>
-              <PanelTitle title="Block Library" sub="Drag blocks onto the canvas" />
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {STRATEGY_TOOLBOX.map((group) => (
-                  <div key={group.g}>
-                    <div style={{ color: C.t3, fontSize: 8, fontFamily: "monospace", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 }}>
-                      {group.g}
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      {group.items.map((item) => {
-                        const label = typeof item === "string" ? item : item.label;
-                        const type = typeof item === "string" ? group.type : item.type;
-                        return (
-                          <div
-                            key={label}
-                            draggable
-                            onDragStart={(e) => {
-                              e.dataTransfer.setData("application/reactflow-type", type);
-                              e.dataTransfer.setData("application/reactflow-label", label);
-                              e.dataTransfer.effectAllowed = "move";
-                            }}
-                            style={{
-                              background: C.bg3,
-                              border: `1px solid ${C.border}`,
-                              borderRadius: 6,
-                              padding: "6px 8px",
-                              fontSize: 10,
-                              fontFamily: "monospace",
-                              color: C.t1,
-                              cursor: "grab",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 6
-                            }}
-                            className="hover:border-cyan-500/40 hover:text-cyan-400 transition-all"
-                          >
-                            <PlusCircle size={10} style={{ color: C.cyan }} />
-                            <span>{label}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </Card>
+      {/* Validation Bar */}
+      {!isValid && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", background: `${C.red}20`, borderBottom: `1px solid ${C.red}` }}>
+          <AlertTriangle size={16} style={{ color: C.red }} />
+          <span style={{ color: C.red, fontSize: 11, fontFamily: "monospace" }}>
+            {errors.length} error{errors.length !== 1 ? 's' : ''}: {errors[0]?.message}
+          </span>
+        </div>
+      )}
 
-            {/* Center Canvas */}
-            <Card cls="relative flex-1" style={{ minHeight: 0 }}>
-              <div ref={reactFlowWrapper} style={{ width: "100%", height: "100%" }} onDragOver={handleDragOver} onDrop={handleDrop}>
-                <ReactFlow
-                  nodes={nodes}
-                  edges={edges}
-                  onNodesChange={onNodesChange}
-                  onEdgesChange={onEdgesChange}
-                  onConnect={onConnect}
-                  nodeTypes={strategyNodeTypes}
-                  onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-                  fitView
-                  attributionPosition="bottom-left"
-                >
-                  <Background color={C.border} gap={16} />
-                  <Controls style={{ background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 6, button: { background: C.bg3, color: C.t1 } }} />
-                </ReactFlow>
+      {/* Main Content */}
+      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+        {/* Block Library */}
+        {libraryOpen && (
+          <div style={{ width: 260, background: C.bg2, borderRight: `1px solid ${C.border}`, display: "flex", flexDirection: "column" }}>
+            {/* PHASE J: Professional Search */}
+            <div style={{ padding: 12, borderBottom: `1px solid ${C.border}` }}>
+              <div style={{ position: "relative" }}>
+                <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: C.t3 }} />
+                <input
+                  type="text"
+                  placeholder="Search blocks..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{
+                    width: "100%",
+                    background: C.bg3,
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 6,
+                    padding: "8px 12px 8px 32",
+                    color: C.t1,
+                    fontSize: 11,
+                    fontFamily: "monospace",
+                    outline: "none"
+                  }}
+                />
               </div>
-            </Card>
+            </div>
 
-            {/* Right Inspector */}
-            <Card cls="p-4 flex flex-col" style={{ overflowY: "auto" }}>
-              <PanelTitle
-                title="Block Inspector"
-                sub={selectedNode ? `${selectedNode.data.label} Config` : "Select a block"}
-              />
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <Inp lbl="Strategy Name" ph="Untitled Strategy" val={strategyName} onChange={e => setStrategyName(e.target.value)} />
-                {selectedNode ? (
-                  getNodeParamSchema(selectedNode?.data?.label, selectedNode?.type).map((field) =>
-                    renderDynamicField(field, selectedNode)
-                  )
-                ) : (
-                  <div style={{ color: C.t3, fontSize: 10, fontFamily: "monospace" }}>Select a node to configure parameters.</div>
-                )}
-                {selectedNode && (
-                  <button
-                    onClick={handleDeleteNode}
-                    style={{
-                      width: "100%",
-                      background: `${C.red}20`,
-                      color: C.red,
-                      fontWeight: 900,
-                      borderRadius: 8,
-                      padding: "10px 0",
-                      border: `1px solid ${C.red}40`,
-                      cursor: "pointer",
-                      fontSize: 11,
-                      fontFamily: "monospace",
-                      transition: "all 0.2s"
-                    }}
-                    className="hover:bg-red-500/30"
-                  >
-                    Delete Block
-                  </button>
-                )}
-              </div>
-            </Card>
-          </>
-        ) : (
-          <StrategyStructuredView
-            nodes={nodes}
-            setNodes={setNodes}
-            edges={edges}
-            setEdges={setEdges}
-            toolbox={STRATEGY_TOOLBOX}
-            getNodeParamSchema={getNodeParamSchema}
-            renderDynamicField={renderDynamicField}
-            defaultDates={defaultDates}
-          />
+            <div style={{ flex: 1, overflowY: "auto", padding: 12 }}>
+              {filteredBlocks ? (
+                // Search results
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {filteredBlocks.map(([type, block]) => {
+                    const BlockIcon = block.icon;
+                    return (
+                      <div
+                        key={type}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData("application/reactflow-type", type);
+                          e.dataTransfer.setData("application/reactflow-label", block.name);
+                          e.dataTransfer.effectAllowed = "move";
+                        }}
+                        style={{
+                          background: C.bg3,
+                          border: `1px solid ${C.border}`,
+                          borderRadius: 6,
+                          padding: "10px",
+                          cursor: "grab",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8
+                        }}
+                      >
+                        <BlockIcon size={16} style={{ color: block.color }} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: C.t1 }}>{block.name}</div>
+                          <div style={{ fontSize: 9, color: C.t3 }}>{block.description}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                // Categories
+                Object.values(BlockCategories).map(category => {
+                  const categoryBlocks = getBlocksByCategory(category);
+                  const CategoryIcon = getCategoryIcon(category);
+                  const isCollapsed = collapsedCategories[category];
+                  
+                  return (
+                    <div key={category} style={{ marginBottom: 16 }}>
+                      <div
+                        onClick={() => toggleCategory(category)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "8px",
+                          cursor: "pointer",
+                          userSelect: "none"
+                        }}
+                      >
+                        {isCollapsed ? <ChevronRight size={14} style={{ color: C.t3 }} /> : <ChevronDown size={14} style={{ color: C.t3 }} />}
+                        <CategoryIcon size={14} style={{ color: getCategoryColor(category) }} />
+                        <span style={{ fontSize: 10, fontWeight: 700, color: C.t2, textTransform: "uppercase", letterSpacing: 1 }}>
+                          {category.replace('_', ' ')}
+                        </span>
+                        <span style={{ marginLeft: "auto", fontSize: 9, color: C.t3 }}>{categoryBlocks.length}</span>
+                      </div>
+                      
+                      {!isCollapsed && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
+                          {categoryBlocks.map(block => {
+                            const BlockIcon = block.icon;
+                            return (
+                              <div
+                                key={block.type}
+                                draggable
+                                onDragStart={(e) => {
+                                  e.dataTransfer.setData("application/reactflow-type", block.type);
+                                  e.dataTransfer.setData("application/reactflow-label", block.name);
+                                  e.dataTransfer.effectAllowed = "move";
+                                }}
+                                style={{
+                                  background: C.bg3,
+                                  border: `1px solid ${C.border}`,
+                                  borderRadius: 6,
+                                  padding: "8px 10px",
+                                  cursor: "grab",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  transition: "all 0.15s"
+                                }}
+                                onMouseEnter={(e) => e.currentTarget.style.background = C.bg4}
+                                onMouseLeave={(e) => e.currentTarget.style.background = C.bg3}
+                              >
+                                <BlockIcon size={14} style={{ color: block.color }} />
+                                <span style={{ fontSize: 10, color: C.t1 }}>{block.name}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
         )}
+
+        {/* Canvas */}
+        <div style={{ flex: 1, position: "relative" }} ref={reactFlowWrapper}>
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onNodeClick={onNodeClick}
+            nodeTypes={strategyNodeTypes}
+            fitView
+            deleteKeyCode={null}
+          >
+            <Background color={C.bg3} gap={16} />
+            <Controls />
+            <MiniMap 
+              nodeColor={C.cyan}
+              nodeStrokeWidth={3}
+              zoomable
+              pannable
+            />
+          </ReactFlow>
+          
+          {/* Drag drop overlay */}
+          <div
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 10
+            }}
+          />
+        </div>
+
+        {/* Inspector */}
+        {inspectorOpen && (
+          <div style={{ width: 300, background: C.bg2, borderLeft: `1px solid ${C.border}`, display: "flex", flexDirection: "column" }}>
+            <div style={{ padding: 12, borderBottom: `1px solid ${C.border}` }}>
+              <PanelTitle title="Inspector" sub={selectedNode ? selectedNode.data.label : "Select a node"} />
+            </div>
+            
+            <div style={{ flex: 1, overflowY: "auto", padding: 12 }}>
+              {selectedNode ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                  {/* Node Info */}
+                  <div>
+                    <div style={{ color: C.t3, fontSize: 9, fontFamily: "monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: 8 }}>
+                      Block Type
+                    </div>
+                    <Tag2 c={getCategoryColor(BlockRegistry[selectedNode.type]?.category)}>
+                      {BlockRegistry[selectedNode.type]?.name || selectedNode.type}
+                    </Tag2>
+                  </div>
+
+                  {/* Parameters */}
+                  {BlockRegistry[selectedNode.type]?.parameters && (
+                    <div>
+                      <div style={{ color: C.t3, fontSize: 9, fontFamily: "monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: 8 }}>
+                        Parameters
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {BlockRegistry[selectedNode.type].parameters.map(param => (
+                          <div key={param.key}>
+                            <label style={{ color: C.t2, fontSize: 9, fontFamily: "monospace", marginBottom: 4, display: "block" }}>
+                              {param.label}
+                            </label>
+                            {param.type === "select" ? (
+                              <select
+                                value={selectedNode.data?.params?.[param.key] ?? param.default}
+                                onChange={(e) => {
+                                  setNodes(nds => nds.map(n => n.id === selectedNodeId ? {
+                                    ...n,
+                                    data: { ...n.data, params: { ...n.data.params, [param.key]: e.target.value } }
+                                  } : n));
+                                  pushState({ nodes: nds.map(n => n.id === selectedNodeId ? {
+                                    ...n,
+                                    data: { ...n.data, params: { ...n.data.params, [param.key]: e.target.value } }
+                                  } : n), edges });
+                                }}
+                                style={{
+                                  width: "100%",
+                                  background: C.bg3,
+                                  border: `1px solid ${C.border}`,
+                                  borderRadius: 6,
+                                  padding: "8px",
+                                  color: C.t1,
+                                  fontSize: 11,
+                                  fontFamily: "monospace"
+                                }}
+                              >
+                                {param.options.map(opt => (
+                                  <option key={opt} value={opt}>{opt}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                type={param.type === "number" ? "number" : "text"}
+                                value={selectedNode.data?.params?.[param.key] ?? param.default}
+                                onChange={(e) => {
+                                  setNodes(nds => nds.map(n => n.id === selectedNodeId ? {
+                                    ...n,
+                                    data: { ...n.data, params: { ...n.data.params, [param.key]: e.target.value } }
+                                  } : n));
+                                  pushState({ nodes: nds.map(n => n.id === selectedNodeId ? {
+                                    ...n,
+                                    data: { ...n.data, params: { ...n.data.params, [param.key]: e.target.value } }
+                                  } : n), edges });
+                                }}
+                                style={{
+                                  width: "100%",
+                                  background: C.bg3,
+                                  border: `1px solid ${C.border}`,
+                                  borderRadius: 6,
+                                  padding: "8px",
+                                  color: C.t1,
+                                  fontSize: 11,
+                                  fontFamily: "monospace"
+                                }}
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div>
+                    <Btn v="danger" sz="sm" Icon={Trash2} onClick={handleDeleteNode} style={{ width: "100%" }}>
+                      Delete Node
+                    </Btn>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ color: C.t3, fontSize: 11, fontFamily: "monospace", textAlign: "center", padding: 20 }}>
+                  Click a node to inspect
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Status Bar */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 16px", background: C.bg2, borderTop: `1px solid ${C.border}`, fontSize: 10, fontFamily: "monospace", color: C.t3 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span>{nodes.length} nodes</span>
+          <span>{edges.length} connections</span>
+          {saveState && <span style={{ color: isValid ? C.green : C.red }}>{saveState}</span>}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span>Ctrl+S Save</span>
+          <span>Ctrl+Z Undo</span>
+          <span>Ctrl+Y Redo</span>
+          <span>F Toggle Library</span>
+        </div>
       </div>
     </div>
   );
 }
 
-export default function StrategyBuilder(props) {
+function StrategyBuilderWrapper(props) {
   return (
-    <DataPipelineProvider>
-      <IndicatorEngineProvider>
-        <LogicEngineProvider>
-          <StrategyEngineProvider>
-            <ReactFlowProvider>
-              <StrategyBuilderInner {...props} />
-            </ReactFlowProvider>
-          </StrategyEngineProvider>
-        </LogicEngineProvider>
-      </IndicatorEngineProvider>
-    </DataPipelineProvider>
+    <ReactFlowProvider>
+      <DataPipelineProvider mode="backtest">
+        <IndicatorEngineProvider>
+          <LogicEngineProvider>
+            <StrategyEngineProvider>
+              <UndoRedoProvider>
+                <ValidationProvider>
+                  <StrategyBuilderCanvas {...props} />
+                </ValidationProvider>
+              </UndoRedoProvider>
+            </StrategyEngineProvider>
+          </LogicEngineProvider>
+        </IndicatorEngineProvider>
+      </DataPipelineProvider>
+    </ReactFlowProvider>
   );
 }
+
+export default StrategyBuilderWrapper;

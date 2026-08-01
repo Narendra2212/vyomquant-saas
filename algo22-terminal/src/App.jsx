@@ -34,6 +34,7 @@ const LegalPage = lazy(() => import('./pages/LegalPage'));
 const Dashboard           = lazy(() => import('./pages/Dashboard'));
 const Strategies          = lazy(() => import('./pages/Strategies'));
 const StrategyDetail      = lazy(() => import('./pages/StrategyDetail'));
+const SignalTrace         = lazy(() => import('./pages/SignalTrace'));
 const StrategyBuilder     = lazy(() => import('./pages/StrategyBuilder'));
 const Backtester          = lazy(() => import('./pages/Backtester'));
 const StrategyMarketplace = lazy(() => import('./pages/StrategyMarketplace'));
@@ -252,10 +253,10 @@ export default function AppWrapper() {
                 <Route path="/app/dashboard" element={<Suspense fallback={PAGE_FALLBACK}><Dashboard /></Suspense>} />
                 <Route path="/app/strategies" element={<Suspense fallback={PAGE_FALLBACK}><Strategies /></Suspense>} />
                 <Route path="/app/strategies/:strategyId" element={<Suspense fallback={PAGE_FALLBACK}><StrategyDetail /></Suspense>} />
+                <Route path="/app/signal-trace" element={<Suspense fallback={PAGE_FALLBACK}><SignalTrace /></Suspense>} />
                 <Route path="/app/builder" element={<Suspense fallback={PAGE_FALLBACK}><StrategyBuilder /></Suspense>} />
                 <Route path="/app/backtest" element={<Suspense fallback={PAGE_FALLBACK}><Backtester /></Suspense>} />
                 <Route path="/app/marketplace" element={<Suspense fallback={PAGE_FALLBACK}><StrategyMarketplace /></Suspense>} />
-                <Route path="/app/signal-trace" element={<SignalTraceVisualization wsClient={wsClient} accountId={TENANT_ID} />} />
                 <Route path="/app/exchange" element={<Suspense fallback={PAGE_FALLBACK}><ExchangeManager /></Suspense>} />
                 <Route path="/app/risk" element={<Suspense fallback={PAGE_FALLBACK}><RiskSettings /></Suspense>} />
                 <Route path="/app/billing" element={<Suspense fallback={PAGE_FALLBACK}><Billing /></Suspense>} />

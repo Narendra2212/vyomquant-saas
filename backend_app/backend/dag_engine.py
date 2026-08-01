@@ -1245,6 +1245,9 @@ class DAGEngine:
         """
         Execute full DAG and return results.
         
+        This is the SAME execution pipeline used for both backtesting and live trading.
+        No duplicate execution logic.
+        
         Returns:
             {
                 "signals": pd.Series,  # Final action signals
@@ -1313,6 +1316,28 @@ class DAGEngine:
             "execution_log": self.execution_log,
             "action_nodes": action_nodes,
         }
+    
+    def execute(
+        self,
+        nodes: List[Dict],
+        edges: List[Dict],
+        market_data: pd.DataFrame
+    ) -> Dict[str, Any]:
+        """
+        Convenience method for backtesting.
+        
+        PHASE Backtesting Engine: This is the entry point for backtesting.
+        It uses the same execution pipeline as live trading.
+        
+        Args:
+            nodes: DAG nodes from execution graph
+            edges: DAG edges from execution graph
+            market_data: Historical market data DataFrame
+            
+        Returns:
+            Dictionary with signals and execution results
+        """
+        return self.execute_dag(nodes, edges, market_data)
     
     def generate_portfolio_signals(
         self,

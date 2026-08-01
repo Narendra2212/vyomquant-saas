@@ -85,9 +85,10 @@ class StrategyService:
         name: str,
         description: str,
         blueprint: dict,
-        exchange: str,
-        symbol: str,
-        timeframe: str,
+        execution_graph: Optional[dict] = None,
+        exchange: str = None,
+        symbol: str = None,
+        timeframe: str = None,
         tags: List[str] = None
     ) -> Dict:
         """
@@ -124,6 +125,7 @@ class StrategyService:
             "strategy_id": strategy_id,
             "version": "v1.0",
             "blueprint": blueprint,
+            "execution_graph": execution_graph,  # Store compiled execution graph
             "is_draft": True,
             "is_current": True,
             "created_at": datetime.now(timezone.utc).isoformat()
@@ -603,179 +605,8 @@ class StrategyService:
             "message": message if 'message' in locals' else "Deployment started"
         }
     
-    async def publish_to_marketplace(
-        self,
-        user_id: str,
-        strategy_id: str,
-        marketplace_data: Dict
-    ) -> Dict:
-        """
-        Publish a Strategy to Marketplace.
-        
-        Args:
-            user_id: User ID
-            strategy_id: Strategy ID
-            marketplace_data: Marketplace listing data (pricing, description, tags, etc.)
-            
-        Returns:
-            Marketplace listing record
-        """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
-        
-        # Get strategy
-        strategy = await self.get_strategy(user_id, strategy_id)
-        if not strategy:
-            raise ValueError(f"Strategy {strategy_id} not found")
-        
-        # Create marketplace listing
-        listing_id = str(uuid4())
-        listing_data = {
-            "id": listing_id,
-            "strategy_id": strategy_id,
-            "user_id": user_id,
-            "title": marketplace_data.get("title", strategy["strategy"]["name"]),
-            "description": marketplace_data.get("description", strategy["strategy"]["description"]),
-            "pricing": marketplace_data.get("pricing", {}),
-            "category": marketplace_data.get("category", "custom"),
-            "tags": marketplace_data.get("tags", []),
-            "visibility": marketplace_data.get("visibility", "public"),
-            "version": strategy["strategy"]["current_version"],
-            "is_published": True,
-            "published_at": datetime.now(timezone.utc).isoformat(),
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        listing_result = sb.table("marketplace_listings").insert(listing_data).execute()
-        
-        # Update strategy marketplace status
-        sb.table("strategies").update({
-            "is_published": True,
-            "marketplace_listing_id": listing_id
-        }).eq("id", strategy_id).execute()
-        
-        logger.info(f"Published strategy {strategy_id} to marketplace as listing {listing_id}")
-        
-        return {
-            "listing": listing_result.data[0] if listing_result.data else listing_data,
-            "strategy_id": strategy_id
-        }
-    
-    async def update_marketplace_listing(
-        self,
-        user_id: str,
-        strategy_id: str,
-        marketplace_data: Dict
-    ) -> Dict:
-        """
-        Update Marketplace listing for a Strategy.
-        
-        Args:
-            user_id: User ID
-            strategy_id: Strategy ID
-            marketplace_data: Updated marketplace data
-            
-        Returns:
-            Updated marketplace listing
-        """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
-        
-        # Get strategy marketplace listing ID
-        strategy_res = sb.table("strategies").select("marketplace_listing_id").eq("id", strategy_id).eq("user_id", user_id).execute()
-        if not strategy_res.data or not strategy_res.data[0]["marketplace_listing_id"]:
-            raise ValueError("Strategy not published to marketplace")
-        
-        listing_id = strategy_res.data[0]["marketplace_listing_id"]
-        
-        # Update listing
-        update_data = {
-            **marketplace_data,
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        result = sb.table("marketplace_listings").update(update_data).eq("id", listing_id).execute()
-        
-        logger.info(f"Updated marketplace listing {listing_id} for strategy {strategy_id}")
-        
-        return {
-            "listing": result.data[0] if result.data else {},
-            "strategy_id": strategy_id
-        }
-    
-    async def unpublish_from_marketplace(
-        self,
-        user_id: str,
-        strategy_id: str
-    ) -> bool:
-        """
-        Unpublish a Strategy from Marketplace.
-        
-        Args:
-            user_id: User ID
-            strategy_id: Strategy ID
-            
-        Returns:
-            Success status
-        """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
-        
-        # Get strategy marketplace listing ID
-        strategy_res = sb.table("strategies").select("marketplace_listing_id").eq("id", strategy_id).eq("user_id", user_id).execute()
-        if not strategy_res.data or not strategy_res.data[0]["marketplace_listing_id"]:
-            raise ValueError("Strategy not published to marketplace")
-        
-        listing_id = strategy_res.data[0]["marketplace_listing_id"]
-        
-        # Delete marketplace listing
-        sb.table("marketplace_listings").delete().eq("id", listing_id).execute()
-        
-        # Update strategy marketplace status
-        sb.table("strategies").update({
-            "is_published": False,
-            "marketplace_listing_id": None
-        }).eq("id", strategy_id).execute()
-        
-        logger.info(f"Unpublished strategy {strategy_id} from marketplace")
-        
-        return True
-    
-    async def get_marketplace_status(
-        self,
-        user_id: str,
-        strategy_id: str
-    ) -> Dict:
-        """
-        Get Marketplace status for a Strategy.
-        
-        Args:
-            user_id: User ID
-            strategy_id: Strategy ID
-            
-        Returns:
-            Marketplace status and listing data
-        """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
-        
-        # Get strategy
-        strategy_res = sb.table("strategies").select("*").eq("id", strategy_id).eq("user_id", user_id).execute()
-        if not strategy_res.data:
-            return {}
-        
-        strategy = strategy_res.data[0]
-        
-        if not strategy.get("is_published") or not strategy.get("marketplace_listing_id"):
-            return {
-                "is_published": False,
-                "strategy_id": strategy_id
-            }
-        
-        # Get marketplace listing
-        listing_res = sb.table("marketplace_listings").select("*").eq("id", strategy["marketplace_listing_id"]).execute()
-        
-        return {
-            "is_published": True,
-            "listing": listing_res.data[0] if listing_res.data else {},
-            "strategy_id": strategy_id
-        }
+    # DEPRECATED: Marketplace operations moved to library.py router
+    # Use /api/library/* endpoints instead
     
     async def delete_strategy(self, user_id: str, strategy_id: str) -> bool:
         """

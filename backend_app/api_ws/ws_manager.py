@@ -7,14 +7,15 @@ right subscribers, and handles clean disconnection.
 STEP 8: Added rate limiting to prevent IP bans from excessive connections.
 
 Channels:
-  ticker    — per-symbol price feeds  (DataEngine.stream_ticker)
-  orderbook — per-symbol L2 depth     (DataEngine.stream_order_book)
-  candles   — per-symbol OHLCV        (DataEngine.stream_live_ohlcv)
-  user      — per-user private events (orders, fills, strategy status, alerts)
-  pnl       — per-user P&L push       (TelemetryEngine.get_live_pnl every 2s)
-  marketplace — marketplace events (new strategies, ratings, subscriptions)
-  dashboard — per-user dashboard realtime updates (PHASE 14)
-  strategy  — per-strategy realtime updates (PHASE 14)
+  ticker       — per-symbol price feeds  (DataEngine.stream_ticker)
+  orderbook    — per-symbol L2 depth     (DataEngine.stream_order_book)
+  candles      — per-symbol OHLCV        (DataEngine.stream_live_ohlcv)
+  user         — per-user private events (orders, fills, strategy status, alerts)
+  pnl          — per-user P&L push       (TelemetryEngine.get_live_pnl every 2s)
+  marketplace  — marketplace events (new strategies, ratings, subscriptions)
+  dashboard    — per-user dashboard realtime updates (PHASE 14)
+  strategy     — per-strategy realtime updates (PHASE 14)
+  signal_trace — per-user/strategy signal trace realtime updates (PHASE 10)
 """
 
 import asyncio
@@ -55,6 +56,7 @@ class ConnectionManager:
         self._marketplace: Dict[str, Set[WebSocket]] = defaultdict(set)
         self._dashboard: Dict[str, Set[WebSocket]] = defaultdict(set)  # PHASE 14: Dashboard channel
         self._strategy: Dict[str, Set[WebSocket]] = defaultdict(set)  # PHASE 14: Strategy channel
+        self._signal_trace: Dict[str, Set[WebSocket]] = defaultdict(set)  # PHASE 10: Signal Trace channel
         self._lock = asyncio.Lock()
         
         # STEP 8: Connection tracking for rate limiting
@@ -297,6 +299,7 @@ class ConnectionManager:
             "marketplace": self._marketplace,
             "dashboard": self._dashboard,  # PHASE 14: Dashboard channel
             "strategy": self._strategy,    # PHASE 14: Strategy channel
+            "signal_trace": self._signal_trace,  # PHASE 10: Signal Trace channel
         }
         if channel not in mapping:
             raise ValueError(f"Unknown channel: {channel}")

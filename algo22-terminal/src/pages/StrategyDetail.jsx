@@ -4,9 +4,11 @@ import {
   ArrowLeft, Activity, BarChart2, Zap, Clock, Shield,
   Layers, Settings, Globe, Server, Play, Pause, Trash2,
   Copy, ExternalLink, Download, RefreshCw, CheckCircle,
-  AlertTriangle, FileText, TrendingUp, Target, PieChart
+  AlertTriangle, FileText, TrendingUp, Target, PieChart, Edit2
 } from "lucide-react";
 import { C, Btn, Card, Tag2, StatusDot, ProgressBar } from "../components/ui-legacy/primitives";
+import ResearchConsole from "../components/ResearchConsole";
+import DeploymentConsole from "../components/DeploymentConsole";
 
 /**
  * PHASE 8: Strategy Detail Page
@@ -63,6 +65,7 @@ export default function StrategyDetail() {
 
   const tabs = [
     { id: "overview", label: "Overview", Icon: Activity },
+    { id: "research", label: "Research", Icon: Target },
     { id: "deployments", label: "Deployments", Icon: Server },
     { id: "backtests", label: "Backtests", Icon: BarChart2 },
     { id: "executions", label: "Executions", Icon: Zap },
@@ -182,7 +185,8 @@ export default function StrategyDetail() {
       {/* Tab Content */}
       <div>
         {activeTab === "overview" && <OverviewTab strategy={strategy} />}
-        {activeTab === "deployments" && <DeploymentsTab deployments={deployments} />}
+        {activeTab === "research" && <ResearchConsole strategyId={strategyId} versionId={version.id} executionGraph={strat.blueprint} />}
+        {activeTab === "deployments" && <DeploymentConsole strategyId={strategyId} versionId={version.id} executionGraph={strat.blueprint} />}
         {activeTab === "backtests" && <BacktestsTab backtests={backtests} strategyId={strategyId} />}
         {activeTab === "versions" && <VersionsTab strategyId={strategyId} />}
         {activeTab === "metrics" && <MetricsTab strategyId={strategyId} />}
@@ -549,6 +553,48 @@ function LogsTab({ strategyId }) {
 function MarketplaceTab({ strategy }) {
   const strat = strategy.strategy || {};
   const isPublished = strat.is_published || false;
+  const [loading, setLoading] = useState(false);
+  const [libraryStatus, setLibraryStatus] = useState(null);
+
+  const checkLibraryStatus = async () => {
+    try {
+      const res = await client.get(`/api/library/me?strategy_id=${strat.id}`);
+      setLibraryStatus(res.data);
+    } catch (err) {
+      console.error('Failed to check library status:', err);
+    }
+  };
+
+  const publishToLibrary = async () => {
+    setLoading(true);
+    try {
+      const payload = {
+        strategy_id: strat.id,
+        name: strat.name,
+        description: strat.description,
+        category: 'custom',
+        difficulty: 'intermediate',
+        tags: [],
+        price: null,
+        currency: 'USD',
+        subscription_tier: 'free'
+      };
+      const res = await client.post('/api/library', payload);
+      alert('Strategy submitted for review!');
+      checkLibraryStatus();
+    } catch (err) {
+      console.error(err);
+      alert(err.response?.data?.detail || 'Failed to publish');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    checkLibraryStatus();
+  }, [strat.id]);
+
+  const hasLibraryEntry = libraryStatus && libraryStatus.strategies && libraryStatus.strategies.some(s => s.source_strategy_id === strat.id);
 
   return (
     <div>
@@ -557,30 +603,113 @@ function MarketplaceTab({ strategy }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ color: C.t1, fontWeight: 600, fontSize: 12 }}>Publication Status</div>
-            <Tag2 c={isPublished ? "green" : "gray"}>
-              {isPublished ? "Published" : "Not Published"}
+            <Tag2 c={hasLibraryEntry ? "green" : "gray"}>
+              {hasLibraryEntry ? "Published to Library" : "Not Published"}
             </Tag2>
           </div>
-          {!isPublished && <Btn v="primary" sz="sm">Publish to Marketplace</Btn>}
+          {!hasLibraryEntry && (
+            <Btn v="primary" sz="sm" onClick={publishToLibrary} disabled={loading}>
+              {loading ? 'Publishing...' : 'Publish to Library'}
+            </Btn>
+          )}
         </div>
       </Card>
     </div>
   );
 }
 
-function SubscribersTab({ strategyId }) {
+function SubscribersTab({ strategy }) {
+  const strat = strategy.strategy || {};
+  const [analytics, setAnalytics] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchAnalytics = async () => {
+      try {
+        const res = await client.get('/api/library/creator/analytics');
+        setAnalytics(res.data);
+      } catch (err) {
+        console.error('Failed to fetch creator analytics:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchAnalytics();
+  }, []);
+
+  if (loading) {
+    return <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>Loading...</Card>;
+  }
+
   return (
-    <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>
-      Subscriber data coming soon
-    </Card>
+    <div>
+      <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Subscriber Analytics</h3>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+        <Card cls="p-4">
+          <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Active Subscribers</div>
+          <div style={{ color: C.t1, fontSize: 24, fontWeight: 700 }}>{analytics?.active_subscribers || 0}</div>
+        </Card>
+        <Card cls="p-4">
+          <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Published Strategies</div>
+          <div style={{ color: C.t1, fontSize: 24, fontWeight: 700 }}>{analytics?.published_strategies_count || 0}</div>
+        </Card>
+        <Card cls="p-4">
+          <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Average Rating</div>
+          <div style={{ color: C.t1, fontSize: 24, fontWeight: 700 }}>{analytics?.rating_average || 0}/5</div>
+        </Card>
+        <Card cls="p-4">
+          <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Payout Schedule</div>
+          <div style={{ color: C.t1, fontSize: 12, fontWeight: 600 }}>{analytics?.payout_schedule || 'N/A'}</div>
+        </Card>
+      </div>
+    </div>
   );
 }
 
-function RevenueTab({ strategyId }) {
+function RevenueTab({ strategy }) {
+  const [analytics, setAnalytics] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchAnalytics = async () => {
+      try {
+        const res = await client.get('/api/library/creator/analytics');
+        setAnalytics(res.data);
+      } catch (err) {
+        console.error('Failed to fetch creator analytics:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchAnalytics();
+  }, []);
+
+  if (loading) {
+    return <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>Loading...</Card>;
+  }
+
   return (
-    <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>
-      Revenue data coming soon
-    </Card>
+    <div>
+      <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Revenue Analytics</h3>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+        <Card cls="p-4">
+          <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Total Earnings (USD)</div>
+          <div style={{ color: "#4ade80", fontSize: 24, fontWeight: 700 }}>${analytics?.total_earnings_usd || 0}</div>
+        </Card>
+        <Card cls="p-4">
+          <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Monthly Recurring Revenue</div>
+          <div style={{ color: "#60a5fa", fontSize: 24, fontWeight: 700 }}>${analytics?.monthly_recurring_revenue || 0}</div>
+        </Card>
+        <Card cls="p-4">
+          <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Platform Fee Paid</div>
+          <div style={{ color: "#f87171", fontSize: 24, fontWeight: 700 }}>${analytics?.platform_fee_paid || 0}</div>
+        </Card>
+        <Card cls="p-4">
+          <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Net Revenue (90%)</div>
+          <div style={{ color: "#4ade80", fontSize: 24, fontWeight: 700 }}>${analytics?.total_earnings_usd || 0}</div>
+        </Card>
+      </div>
+    </div>
   );
 }
 

@@ -1133,6 +1133,126 @@ async def broadcast_strategy_update(strategy_id: str, update_type: str, data: di
     
     await manager.broadcast_to_channel("strategy", strategy_channel, json.dumps(message))
     logger.debug(f"[WS/strategy] Broadcast {update_type} update for strategy {strategy_id}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# PHASE 10: SIGNAL TRACE WEBSOCKET
+# ══════════════════════════════════════════════════════════════════════════
+
+@ws_router.websocket("/ws/signal-trace")
+async def ws_signal_trace(
+    websocket: WebSocket,
+    token: str = Query(...),
+    user_id: str = Query(...),
+    strategy_id: Optional[str] = Query(None)
+):
+    """
+    PHASE 10: Signal Trace WebSocket for realtime updates.
+    
+    Only pushes updates for:
+    - New signals
+    - Signal status changes
+    - Order updates
+    - Execution updates
+    - PnL updates
+    
+    Does NOT push non-essential data.
+    """
+    manager = get_ws_manager()
+
+    if not await _validate_ws_token(token, user_id):
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    await websocket.accept()
+    
+    # Use strategy-specific channel if provided, otherwise user channel
+    if strategy_id:
+        signal_channel = f"signal_trace_{strategy_id}"
+    else:
+        signal_channel = f"signal_trace_{user_id}"
+    
+    await manager.subscribe("signal_trace", signal_channel, websocket)
+    logger.info(f"[WS/signal-trace] Signal trace channel open: {signal_channel}")
+
+    # Send initial connection confirmation
+    await websocket.send_text(json.dumps({
+        "type": "connected",
+        "channel": "signal_trace",
+        "strategy_id": strategy_id,
+        "user_id": user_id,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }))
+
+    # Start heartbeat
+    heartbeat_task = asyncio.create_task(_heartbeat_task(websocket, signal_channel, interval=30))
+    last_activity = asyncio.create_task(_track_activity(websocket, signal_channel, timeout=90))
+
+    try:
+        while True:
+            try:
+                message_raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+                
+                if last_activity and not last_activity.done():
+                    last_activity.cancel()
+                    last_activity = asyncio.create_task(_track_activity(websocket, signal_channel))
+                
+                try:
+                    message = json.loads(message_raw)
+                    if message.get("type") == "pong":
+                        continue
+                except json.JSONDecodeError:
+                    pass
+                    
+            except asyncio.TimeoutError:
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_text(json.dumps({"type": "ping"}))
+                    
+    except WebSocketDisconnect:
+        logger.info(f"[WS/signal-trace] Signal trace channel closed: {signal_channel}")
+    except Exception as e:
+        logger.error(f"[WS/signal-trace] Error for channel {signal_channel}: {e}")
+    finally:
+        heartbeat_task.cancel()
+        if last_activity and not last_activity.done():
+            last_activity.cancel()
+        await manager.unsubscribe("signal_trace", signal_channel, websocket)
+        logger.info(f"[WS/signal-trace] Cleanup complete for channel {signal_channel}")
+
+
+async def broadcast_signal_update(
+    user_id: str,
+    strategy_id: Optional[str],
+    update_type: str,
+    data: dict
+):
+    """
+    Broadcast signal trace update.
+    
+    Args:
+        user_id: User ID
+        strategy_id: Optional Strategy ID
+        update_type: Type of update (signal, order, execution, pnl)
+        data: Incremental data
+    """
+    manager = get_ws_manager()
+    
+    # Broadcast to user channel
+    user_channel = f"signal_trace_{user_id}"
+    message = {
+        "type": "signal_update",
+        "update_type": update_type,
+        "data": data,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+    await manager.broadcast_to_channel("signal_trace", user_channel, json.dumps(message))
+    
+    # Also broadcast to strategy-specific channel if provided
+    if strategy_id:
+        strategy_channel = f"signal_trace_{strategy_id}"
+        await manager.broadcast_to_channel("signal_trace", strategy_channel, json.dumps(message))
+    
+    logger.debug(f"[WS/signal-trace] Broadcast {update_type} update for user {user_id}")
         except Exception as e:
             logger.warning(f"[WS/pnl] QuestDB query error: {e}")
         await asyncio.sleep(2)
