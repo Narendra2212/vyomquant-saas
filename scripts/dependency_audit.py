@@ -101,7 +101,7 @@ def scan_backend_imports(backend_dir: str = "backend_app") -> Set[str]:
 
 # Standard library modules (non-exhaustive but covers common ones)
 STANDARD_LIBRARY = {
-    'abc', 'aifc', 'argparse', 'array', 'ast', 'asynchat', 'asyncio', 'asyncore',
+    '__future__', 'abc', 'aifc', 'argparse', 'array', 'ast', 'asynchat', 'asyncio', 'asyncore',
     'atexit', 'audioop', 'base64', 'bdb', 'binascii', 'binhex', 'bisect',
     'builtins', 'bz2', 'calendar', 'cgi', 'cgitb', 'chunk', 'cmath', 'cmd',
     'code', 'codecs', 'codeop', 'collections', 'colorsys', 'compileall',
