@@ -533,7 +533,7 @@ class ReconciliationWorker(WorkerBase):
             return {order.order_id: order for order in orders}
         except Exception as e:
             logger.error(f"Failed to fetch local orders: {e}")
-            raise
+            raise RuntimeError(f"Local reconciliation state service is unavailable: {e}") from e
     async def _fetch_local_positions(self, user_id: str) -> Dict[str, Any]:
         """Fetch local positions from StateService."""
         raise RuntimeError(

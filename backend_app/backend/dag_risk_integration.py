@@ -560,29 +560,47 @@ class RiskIntegratedEventLoop(DAGEventLoop):
         metadata: Dict
     ) -> Dict:
         """
-        Execute order (placeholder - integrate with actual order engine).
-        
-        Override this method to connect to real exchange.
+        Execute order via canonical ExecutionEngine gateway.
         """
         logger.info(
-            f"Executing order: {side.upper()} {size:.4f} {symbol} @ {price}"
+            f"Executing order via Canonical Gateway: {side.upper()} {size:.4f} {symbol} @ {price}"
         )
-        
-        # Simulate execution
-        await asyncio.sleep(0.01)  # Network delay simulation
-        
+        from backend_app.core.execution_engine import ExecutionEngine
+        from decimal import Decimal
+        from uuid import UUID
+
+        raw_tenant = (metadata or {}).get("tenant_id", "00000000-0000-0000-0000-000000000001")
+        tenant_id = UUID(str(raw_tenant)) if isinstance(raw_tenant, (str, UUID)) else raw_tenant
+        strategy_id = (metadata or {}).get("strategy_id", "dag_strategy")
+        portfolio_state = (metadata or {}).get("portfolio_state", {"total_equity": Decimal("100000.0")})
+
+        engine = getattr(self, "execution_engine", None)
+        if not engine:
+            engine = ExecutionEngine(portfolio_state=portfolio_state)
+
+        res = await engine.execute_trade(
+            tenant_id=tenant_id,
+            strategy_id=strategy_id,
+            symbol=symbol,
+            side=side,
+            size=Decimal(str(size)),
+            price=Decimal(str(price)),
+            metadata=metadata or {}
+        )
+
         return {
-            "order_id": f"sim-{datetime.now().timestamp()}",
+            "order_id": res.execution_id or f"ord-{datetime.now().timestamp()}",
             "symbol": symbol,
             "side": side,
             "size": size,
             "price": price,
-            "status": "filled",
-            "filled_size": size,
-            "filled_price": price,
+            "status": "filled" if res.success else "failed",
+            "filled_size": size if res.success else 0.0,
+            "filled_price": price if res.success else 0.0,
             "realized_pnl": 0.0,
-            "metadata": metadata,
+            "metadata": metadata or {},
             "executed_at": datetime.now().isoformat(),
+            "details": res.details or {}
         }
     
     def get_integrated_stats(self) -> Dict[str, Any]:
