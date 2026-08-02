@@ -2,8 +2,11 @@
   "status": "PASS",
   "root_count": 1,
   "backend_count": 1,
+  "base_count": 63,
   "mismatches": [],
   "missing_in_backend": [],
   "missing_in_root": [],
+  "missing_in_base": [],
+  "imported_not_declared": [],
   "duplicates": []
 }

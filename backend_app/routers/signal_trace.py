@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import Request, APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from backend_app.backend.signal_service import get_signal_service, SignalStatus, SignalDecision
@@ -78,8 +78,8 @@ class ExecutionUpdateRequest(BaseModel):
 
 @router.post("/signals")
 @limiter.limit("100/minute")
-async def create_signal(
-    request: SignalCreateRequest,
+async def create_signal(request: Request,
+    body: SignalCreateRequest,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -116,7 +116,7 @@ async def create_signal(
 
 @router.get("/signals/{signal_id}")
 @limiter.limit("200/minute")
-async def get_signal(
+async def get_signal(request: Request, 
     signal_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -159,7 +159,7 @@ async def get_signal(
 
 @router.get("/signals")
 @limiter.limit("200/minute")
-async def list_signals(
+async def list_signals(request: Request, 
     strategy_id: Optional[str] = Query(None),
     exchange_id: Optional[str] = Query(None),
     symbol: Optional[str] = Query(None),
@@ -222,9 +222,9 @@ async def list_signals(
 
 @router.put("/signals/{signal_id}/risk")
 @limiter.limit("100/minute")
-async def update_risk_decision(
+async def update_risk_decision(request: Request, 
     signal_id: str,
-    request: RiskDecisionRequest,
+    body: RiskDecisionRequest,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -259,9 +259,9 @@ async def update_risk_decision(
 
 @router.put("/signals/{signal_id}/order")
 @limiter.limit("100/minute")
-async def update_order(
+async def update_order(request: Request, 
     signal_id: str,
-    request: OrderUpdateRequest,
+    body: OrderUpdateRequest,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -298,9 +298,9 @@ async def update_order(
 
 @router.put("/signals/{signal_id}/execution")
 @limiter.limit("100/minute")
-async def update_execution(
+async def update_execution(request: Request, 
     signal_id: str,
-    request: ExecutionUpdateRequest,
+    body: ExecutionUpdateRequest,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -330,7 +330,7 @@ async def update_execution(
 
 @router.get("/signals/{signal_id}/timeline")
 @limiter.limit("200/minute")
-async def get_signal_timeline(
+async def get_signal_timeline(request: Request, 
     signal_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -363,7 +363,7 @@ async def get_signal_timeline(
 
 @router.get("/signals/export")
 @limiter.limit("50/minute")
-async def export_signals(
+async def export_signals(request: Request, 
     format: str = Query("json", pattern="^(json|csv)$"),
     strategy_id: Optional[str] = Query(None),
     exchange_id: Optional[str] = Query(None),

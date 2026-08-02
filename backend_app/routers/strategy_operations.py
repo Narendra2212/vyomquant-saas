@@ -13,7 +13,7 @@ import logging
 from typing import List, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import Request, APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from backend_app.backend.strategy_service import get_strategy_service, StrategyStatus, StrategyEnvironment
@@ -79,8 +79,8 @@ class StrategyCompileRequest(BaseModel):
 
 @router.post("/strategies")
 @limiter.limit("50/minute")
-async def create_strategy(
-    request: StrategyCreateRequest,
+async def create_strategy(request: Request,
+    body: StrategyCreateRequest,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -149,8 +149,8 @@ async def create_strategy(
 
 @router.post("/strategies/compile")
 @limiter.limit("100/minute")
-async def compile_strategy(
-    request: StrategyCompileRequest,
+async def compile_strategy(request: Request,
+    body: StrategyCompileRequest,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -205,7 +205,7 @@ async def compile_strategy(
 
 @router.get("/strategies")
 @limiter.limit("200/minute")
-async def list_strategies(
+async def list_strategies(request: Request, 
     status: Optional[str] = Query(None),
     environment: Optional[str] = Query(None),
     user: dict = Depends(get_current_user)
@@ -238,7 +238,7 @@ async def list_strategies(
 
 @router.get("/strategies/{strategy_id}")
 @limiter.limit("200/minute")
-async def get_strategy(
+async def get_strategy(request: Request, 
     strategy_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -270,9 +270,9 @@ async def get_strategy(
 
 @router.put("/strategies/{strategy_id}")
 @limiter.limit("100/minute")
-async def update_strategy(
+async def update_strategy(request: Request, 
     strategy_id: str,
-    request: StrategyUpdateRequest,
+    body: StrategyUpdateRequest,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -302,7 +302,7 @@ async def update_strategy(
 
 @router.delete("/strategies/{strategy_id}")
 @limiter.limit("50/minute")
-async def delete_strategy(
+async def delete_strategy(request: Request, 
     strategy_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -334,9 +334,9 @@ async def delete_strategy(
 
 @router.post("/strategies/{strategy_id}/clone")
 @limiter.limit("50/minute")
-async def clone_strategy(
+async def clone_strategy(request: Request, 
     strategy_id: str,
-    request: StrategyCloneRequest,
+    body: StrategyCloneRequest,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -368,9 +368,9 @@ async def clone_strategy(
 
 @router.post("/strategies/{strategy_id}/deploy")
 @limiter.limit("50/minute")
-async def deploy_strategy(
+async def deploy_strategy(request: Request, 
     strategy_id: str,
-    request: StrategyDeployRequest,
+    body: StrategyDeployRequest,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -401,7 +401,7 @@ async def deploy_strategy(
 
 @router.post("/deployments/{deployment_id}/stop")
 @limiter.limit("100/minute")
-async def stop_deployment(
+async def stop_deployment(request: Request, 
     deployment_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -433,7 +433,7 @@ async def stop_deployment(
 
 @router.post("/strategies/{strategy_id}/pause")
 @limiter.limit("50/minute")
-async def pause_strategy(
+async def pause_strategy(request: Request, 
     strategy_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -465,7 +465,7 @@ async def pause_strategy(
 
 @router.post("/strategies/{strategy_id}/resume")
 @limiter.limit("50/minute")
-async def resume_strategy(
+async def resume_strategy(request: Request, 
     strategy_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -494,7 +494,7 @@ async def resume_strategy(
 
 @router.get("/strategies/{strategy_id}/metrics")
 @limiter.limit("200/minute")
-async def get_strategy_metrics(
+async def get_strategy_metrics(request: Request, 
     strategy_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -528,7 +528,7 @@ async def get_strategy_metrics(
 
 @router.get("/strategies/{strategy_id}/performance")
 @limiter.limit("200/minute")
-async def get_strategy_performance(
+async def get_strategy_performance(request: Request, 
     strategy_id: str,
     time_range: str = Query("1d", description="Time range: 1d, 1w, 1m, 3m, all"),
     user: dict = Depends(get_current_user)
@@ -559,7 +559,7 @@ async def get_strategy_performance(
 
 @router.get("/strategies/{strategy_id}/equity-curve")
 @limiter.limit("200/minute")
-async def get_strategy_equity_curve(
+async def get_strategy_equity_curve(request: Request, 
     strategy_id: str,
     days: int = Query(30, ge=1, le=365, description="Number of days"),
     user: dict = Depends(get_current_user)
@@ -594,7 +594,7 @@ async def get_strategy_equity_curve(
 
 @router.get("/strategies/{strategy_id}/monthly-returns")
 @limiter.limit("200/minute")
-async def get_strategy_monthly_returns(
+async def get_strategy_monthly_returns(request: Request, 
     strategy_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -626,7 +626,7 @@ async def get_strategy_monthly_returns(
 
 @router.get("/strategies/{strategy_id}/daily-returns")
 @limiter.limit("200/minute")
-async def get_strategy_daily_returns(
+async def get_strategy_daily_returns(request: Request, 
     strategy_id: str,
     days: int = Query(30, ge=1, le=365, description="Number of days"),
     user: dict = Depends(get_current_user)
@@ -661,7 +661,7 @@ async def get_strategy_daily_returns(
 
 @router.get("/strategies/{strategy_id}/execution-metrics")
 @limiter.limit("200/minute")
-async def get_strategy_execution_metrics(
+async def get_strategy_execution_metrics(request: Request, 
     strategy_id: str,
     time_range: str = Query("1d", description="Time range: 1d, 1w, 1m, 3m, all"),
     user: dict = Depends(get_current_user)
@@ -696,7 +696,7 @@ async def get_strategy_execution_metrics(
 
 @router.get("/strategies/{strategy_id}/risk-metrics")
 @limiter.limit("200/minute")
-async def get_strategy_risk_metrics(
+async def get_strategy_risk_metrics(request: Request, 
     strategy_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -797,9 +797,9 @@ class DeploymentRequest(BaseModel):
 
 @router.post("/strategies/{strategy_id}/backtests")
 @limiter.limit("50/minute")
-async def create_backtest(
+async def create_backtest(request: Request, 
     strategy_id: str,
-    request: BacktestCreateRequest,
+    body: BacktestCreateRequest,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -838,9 +838,9 @@ async def create_backtest(
 
 @router.post("/strategies/{strategy_id}/backtests/execute")
 @limiter.limit("10/minute")
-async def execute_backtest(
+async def execute_backtest(request: Request, 
     strategy_id: str,
-    request: BacktestExecuteRequest,
+    body: BacktestExecuteRequest,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -924,7 +924,7 @@ async def execute_backtest(
 
 @router.get("/strategies/{strategy_id}/backtests")
 @limiter.limit("200/minute")
-async def list_backtests(
+async def list_backtests(request: Request, 
     strategy_id: str,
     limit: int = Query(50, ge=1, le=100),
     user: dict = Depends(get_current_user)
@@ -958,7 +958,7 @@ async def list_backtests(
 
 @router.get("/backtests/{backtest_id}")
 @limiter.limit("200/minute")
-async def get_backtest(
+async def get_backtest(request: Request, 
     backtest_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -988,7 +988,7 @@ async def get_backtest(
 
 @router.get("/backtests/{backtest_id}/report")
 @limiter.limit("200/minute")
-async def get_backtest_report(
+async def get_backtest_report(request: Request, 
     backtest_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -1024,9 +1024,9 @@ async def get_backtest_report(
 
 @router.post("/strategies/{strategy_id}/optimize")
 @limiter.limit("10/minute")
-async def run_optimization(
+async def run_optimization(request: Request, 
     strategy_id: str,
-    request: OptimizationRequest,
+    body: OptimizationRequest,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -1174,7 +1174,7 @@ async def run_optimization(
 
 @router.get("/strategies/{strategy_id}/research")
 @limiter.limit("200/minute")
-async def list_research_reports(
+async def list_research_reports(request: Request, 
     strategy_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -1208,7 +1208,7 @@ async def list_research_reports(
 
 @router.get("/research/{report_id}")
 @limiter.limit("200/minute")
-async def get_research_report(
+async def get_research_report(request: Request, 
     report_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -1245,9 +1245,9 @@ async def get_research_report(
 
 @router.post("/strategies/{strategy_id}/deploy")
 @limiter.limit("10/minute")
-async def deploy_strategy(
+async def deploy_strategy(request: Request, 
     strategy_id: str,
-    request: DeploymentRequest,
+    body: DeploymentRequest,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -1378,7 +1378,7 @@ async def deploy_strategy(
 
 @router.post("/deployments/{deployment_id}/pause")
 @limiter.limit("50/minute")
-async def pause_deployment(
+async def pause_deployment(request: Request, 
     deployment_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -1404,7 +1404,7 @@ async def pause_deployment(
 
 @router.post("/deployments/{deployment_id}/resume")
 @limiter.limit("50/minute")
-async def resume_deployment(
+async def resume_deployment(request: Request, 
     deployment_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -1430,7 +1430,7 @@ async def resume_deployment(
 
 @router.post("/deployments/{deployment_id}/restart")
 @limiter.limit("50/minute")
-async def restart_deployment(
+async def restart_deployment(request: Request, 
     deployment_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -1456,7 +1456,7 @@ async def restart_deployment(
 
 @router.post("/deployments/{deployment_id}/stop")
 @limiter.limit("50/minute")
-async def stop_deployment(
+async def stop_deployment(request: Request, 
     deployment_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -1482,7 +1482,7 @@ async def stop_deployment(
 
 @router.get("/strategies/{strategy_id}/deployments")
 @limiter.limit("200/minute")
-async def list_deployments(
+async def list_deployments(request: Request, 
     strategy_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -1521,7 +1521,7 @@ async def list_deployments(
 
 @router.get("/deployments/{deployment_id}")
 @limiter.limit("200/minute")
-async def get_deployment(
+async def get_deployment(request: Request, 
     deployment_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -1576,7 +1576,7 @@ async def get_deployment(
 
 @router.post("/backtests/compare")
 @limiter.limit("50/minute")
-async def compare_backtests(
+async def compare_backtests(request: Request, 
     backtest_ids: List[str],
     user: dict = Depends(get_current_user)
 ):
@@ -1601,7 +1601,7 @@ async def compare_backtests(
 
 @router.delete("/backtests/{backtest_id}")
 @limiter.limit("50/minute")
-async def delete_backtest(
+async def delete_backtest(request: Request, 
     backtest_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -1635,7 +1635,7 @@ async def delete_backtest(
 
 @router.get("/strategies/{strategy_id}/versions")
 @limiter.limit("200/minute")
-async def get_version_history(
+async def get_version_history(request: Request, 
     strategy_id: str,
     user: dict = Depends(get_current_user)
 ):
@@ -1664,7 +1664,7 @@ async def get_version_history(
 
 @router.post("/strategies/{strategy_id}/versions/compare")
 @limiter.limit("100/minute")
-async def compare_versions(
+async def compare_versions(request: Request, 
     strategy_id: str,
     version_a: str = Query(..., description="First version to compare"),
     version_b: str = Query(..., description="Second version to compare"),
@@ -1696,7 +1696,7 @@ async def compare_versions(
 
 @router.post("/strategies/{strategy_id}/versions/restore")
 @limiter.limit("50/minute")
-async def restore_version(
+async def restore_version(request: Request, 
     strategy_id: str,
     version: str = Query(..., description="Version to restore"),
     user: dict = Depends(get_current_user)
@@ -1731,7 +1731,7 @@ async def restore_version(
 
 @router.post("/strategies/{strategy_id}/versions/{version}/deploy")
 @limiter.limit("50/minute")
-async def deploy_version(
+async def deploy_version(request: Request, 
     strategy_id: str,
     version: str,
     environment: str = Query("paper", description="Deployment environment"),

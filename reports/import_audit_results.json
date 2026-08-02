@@ -1,28 +1,43 @@
 {
-  "total_files": 288,
+  "total_files": 312,
   "syntax_errors": [],
   "missing_init_dirs": [],
   "import_issues": [],
   "unused_imports": [
     {
       "file": "backend_app\\main.py",
-      "line": 77,
+      "line": 47,
+      "name": "SlowAPIMiddleware"
+    },
+    {
+      "file": "backend_app\\main.py",
+      "line": 81,
       "name": "ExecutionRecordModel"
     },
     {
       "file": "backend_app\\main.py",
-      "line": 80,
+      "line": 84,
       "name": "ReconciliationMismatchModel"
     },
     {
       "file": "backend_app\\main.py",
-      "line": 82,
+      "line": 86,
       "name": "PositionModel"
     },
     {
       "file": "backend_app\\main.py",
-      "line": 90,
+      "line": 94,
       "name": "SupabaseConnection"
+    },
+    {
+      "file": "backend_app\\test_exchange_management.py",
+      "line": 13,
+      "name": "traceback"
+    },
+    {
+      "file": "backend_app\\test_exchange_management.py",
+      "line": 14,
+      "name": "Any"
     },
     {
       "file": "backend_app\\worker.py",
@@ -35,6 +50,86 @@
       "name": "os"
     },
     {
+      "file": "backend_app\\backend\\backtest_runtime.py",
+      "line": 24,
+      "name": "asyncio"
+    },
+    {
+      "file": "backend_app\\backend\\backtest_runtime.py",
+      "line": 27,
+      "name": "Any"
+    },
+    {
+      "file": "backend_app\\backend\\backtest_runtime.py",
+      "line": 27,
+      "name": "Optional"
+    },
+    {
+      "file": "backend_app\\backend\\backtest_runtime.py",
+      "line": 27,
+      "name": "Tuple"
+    },
+    {
+      "file": "backend_app\\backend\\backtest_runtime.py",
+      "line": 28,
+      "name": "uuid4"
+    },
+    {
+      "file": "backend_app\\backend\\backtest_runtime.py",
+      "line": 33,
+      "name": "ExecutionGraph"
+    },
+    {
+      "file": "backend_app\\backend\\backtest_service.py",
+      "line": 18,
+      "name": "asyncio"
+    },
+    {
+      "file": "backend_app\\backend\\backtest_service.py",
+      "line": 21,
+      "name": "Decimal"
+    },
+    {
+      "file": "backend_app\\backend\\backtest_service.py",
+      "line": 22,
+      "name": "Any"
+    },
+    {
+      "file": "backend_app\\backend\\dag_event_loop.py",
+      "line": 13,
+      "name": "Query"
+    },
+    {
+      "file": "backend_app\\backend\\dashboard_aggregation_service.py",
+      "line": 17,
+      "name": "Optional"
+    },
+    {
+      "file": "backend_app\\backend\\dashboard_data_ingester.py",
+      "line": 21,
+      "name": "timedelta"
+    },
+    {
+      "file": "backend_app\\backend\\dashboard_data_ingester.py",
+      "line": 22,
+      "name": "Dict"
+    },
+    {
+      "file": "backend_app\\backend\\deployment_manager.py",
+      "line": 26,
+      "name": "timedelta"
+    },
+    {
+      "file": "backend_app\\backend\\deployment_manager.py",
+      "line": 32,
+      "name": "StrategyPackage"
+    },
+    {
+      "file": "backend_app\\backend\\deployment_manager.py",
+      "line": 34,
+      "name": "RiskEngine"
+    },
+    {
       "file": "backend_app\\backend\\indicators_backend.py",
       "line": 9,
       "name": "annotations"
@@ -45,9 +140,129 @@
       "name": "logging.handlers"
     },
     {
+      "file": "backend_app\\backend\\metrics_service.py",
+      "line": 17,
+      "name": "asyncio"
+    },
+    {
+      "file": "backend_app\\backend\\metrics_service.py",
+      "line": 20,
+      "name": "Decimal"
+    },
+    {
+      "file": "backend_app\\backend\\metrics_service.py",
+      "line": 21,
+      "name": "Any"
+    },
+    {
+      "file": "backend_app\\backend\\metrics_service.py",
+      "line": 21,
+      "name": "Optional"
+    },
+    {
+      "file": "backend_app\\backend\\optimization_engine.py",
+      "line": 15,
+      "name": "asyncio"
+    },
+    {
+      "file": "backend_app\\backend\\optimization_engine.py",
+      "line": 18,
+      "name": "Optional"
+    },
+    {
+      "file": "backend_app\\backend\\optimization_engine.py",
+      "line": 18,
+      "name": "Callable"
+    },
+    {
+      "file": "backend_app\\backend\\optimization_engine.py",
+      "line": 25,
+      "name": "pd"
+    },
+    {
+      "file": "backend_app\\backend\\optimization_engine.py",
+      "line": 27,
+      "name": "ExecutionGraph"
+    },
+    {
+      "file": "backend_app\\backend\\optimization_engine.py",
+      "line": 29,
+      "name": "RiskEngine"
+    },
+    {
+      "file": "backend_app\\backend\\signal_service.py",
+      "line": 8,
+      "name": "asyncio"
+    },
+    {
+      "file": "backend_app\\backend\\signal_service.py",
+      "line": 11,
+      "name": "Decimal"
+    },
+    {
+      "file": "backend_app\\backend\\signal_service.py",
+      "line": 12,
+      "name": "Any"
+    },
+    {
+      "file": "backend_app\\backend\\strategy_compiler.py",
+      "line": 15,
+      "name": "Set"
+    },
+    {
+      "file": "backend_app\\backend\\strategy_compiler.py",
+      "line": 18,
+      "name": "DAGNode"
+    },
+    {
+      "file": "backend_app\\backend\\strategy_compiler.py",
+      "line": 18,
+      "name": "DAGEdge"
+    },
+    {
+      "file": "backend_app\\backend\\strategy_service.py",
+      "line": 12,
+      "name": "asyncio"
+    },
+    {
+      "file": "backend_app\\backend\\strategy_service.py",
+      "line": 15,
+      "name": "Decimal"
+    },
+    {
+      "file": "backend_app\\backend\\strategy_service.py",
+      "line": 17,
+      "name": "Any"
+    },
+    {
+      "file": "backend_app\\backend\\strategy_service.py",
+      "line": 18,
+      "name": "UUID"
+    },
+    {
       "file": "backend_app\\core\\cache.py",
       "line": 3,
       "name": "annotations"
+    },
+    {
+      "file": "backend_app\\core\\entitlement_dependencies.py",
+      "line": 9,
+      "name": "Optional"
+    },
+    {
+      "file": "backend_app\\core\\entitlement_engine.py",
+      "line": 19,
+      "name": "List"
+    },
+    {
+      "file": "backend_app\\core\\entitlement_engine.py",
+      "line": 19,
+      "name": "Set"
+    },
+    {
+      "file": "backend_app\\core\\entitlement_engine.py",
+      "line": 23,
+      "name": "TenantContext"
     },
     {
       "file": "backend_app\\core\\event_bus.py",
@@ -55,14 +270,14 @@
       "name": "annotations"
     },
     {
-      "file": "backend_app\\core\\risk_manager.py",
-      "line": 10,
-      "name": "field"
+      "file": "backend_app\\core\\quota_scheduler.py",
+      "line": 8,
+      "name": "asyncio"
     },
     {
       "file": "backend_app\\core\\risk_manager.py",
-      "line": 16,
-      "name": "Any"
+      "line": 10,
+      "name": "field"
     },
     {
       "file": "backend_app\\core\\schemas.py",
@@ -75,9 +290,59 @@
       "name": "Union"
     },
     {
+      "file": "backend_app\\core\\subscription_dependencies.py",
+      "line": 9,
+      "name": "Dict"
+    },
+    {
+      "file": "backend_app\\core\\subscription_dependencies.py",
+      "line": 9,
+      "name": "Optional"
+    },
+    {
+      "file": "backend_app\\core\\subscription_dependencies.py",
+      "line": 13,
+      "name": "redis_manager"
+    },
+    {
+      "file": "backend_app\\core\\subscription_engine.py",
+      "line": 17,
+      "name": "Any"
+    },
+    {
       "file": "backend_app\\routers\\admin.py",
       "line": 11,
       "name": "asyncio"
+    },
+    {
+      "file": "backend_app\\routers\\billing.py",
+      "line": 25,
+      "name": "traceback"
+    },
+    {
+      "file": "backend_app\\routers\\dashboard.py",
+      "line": 18,
+      "name": "Optional"
+    },
+    {
+      "file": "backend_app\\routers\\library.py",
+      "line": 35,
+      "name": "BackgroundTasks"
+    },
+    {
+      "file": "backend_app\\routers\\library.py",
+      "line": 42,
+      "name": "check_feature_optional"
+    },
+    {
+      "file": "backend_app\\routers\\notifications.py",
+      "line": 11,
+      "name": "UUID"
+    },
+    {
+      "file": "backend_app\\routers\\notifications.py",
+      "line": 16,
+      "name": "get_ws_manager"
     },
     {
       "file": "backend_app\\routers\\orders.py",
@@ -85,9 +350,24 @@
       "name": "asyncio"
     },
     {
+      "file": "backend_app\\routers\\referral.py",
+      "line": 26,
+      "name": "datetime"
+    },
+    {
+      "file": "backend_app\\routers\\referral.py",
+      "line": 30,
+      "name": "validator"
+    },
+    {
       "file": "backend_app\\routers\\risk.py",
-      "line": 10,
+      "line": 11,
       "name": "asyncio"
+    },
+    {
+      "file": "backend_app\\routers\\risk.py",
+      "line": 15,
+      "name": "lru_cache"
     },
     {
       "file": "backend_app\\routers\\signals.py",
@@ -113,6 +393,71 @@
       "file": "backend_app\\routers\\signals.py",
       "line": 17,
       "name": "limiter"
+    },
+    {
+      "file": "backend_app\\routers\\signal_trace.py",
+      "line": 9,
+      "name": "datetime"
+    },
+    {
+      "file": "backend_app\\routers\\signal_trace.py",
+      "line": 9,
+      "name": "timezone"
+    },
+    {
+      "file": "backend_app\\routers\\signal_trace.py",
+      "line": 10,
+      "name": "Any"
+    },
+    {
+      "file": "backend_app\\routers\\signal_trace.py",
+      "line": 10,
+      "name": "List"
+    },
+    {
+      "file": "backend_app\\routers\\signal_trace.py",
+      "line": 15,
+      "name": "SignalStatus"
+    },
+    {
+      "file": "backend_app\\routers\\signal_trace.py",
+      "line": 15,
+      "name": "SignalDecision"
+    },
+    {
+      "file": "backend_app\\routers\\strategies.py",
+      "line": 1995,
+      "name": "timedelta"
+    },
+    {
+      "file": "backend_app\\routers\\strategy_operations.py",
+      "line": 19,
+      "name": "StrategyStatus"
+    },
+    {
+      "file": "backend_app\\routers\\strategy_operations.py",
+      "line": 19,
+      "name": "StrategyEnvironment"
+    },
+    {
+      "file": "backend_app\\routers\\strategy_operations.py",
+      "line": 26,
+      "name": "DeployConfig"
+    },
+    {
+      "file": "backend_app\\routers\\user.py",
+      "line": 10,
+      "name": "os"
+    },
+    {
+      "file": "backend_app\\routers\\user.py",
+      "line": 13,
+      "name": "Session"
+    },
+    {
+      "file": "backend_app\\routers\\user.py",
+      "line": 15,
+      "name": "get_db"
     },
     {
       "file": "backend_app\\strategies\\__init__.py",
@@ -230,6 +575,11 @@
       "name": "queue_manager"
     },
     {
+      "file": "backend_app\\backend\\observability\\compatibility_matrix.py",
+      "line": 11,
+      "name": "time"
+    },
+    {
       "file": "backend_app\\backend\\observability\\optimized_logging.py",
       "line": 13,
       "name": "logging.handlers"
@@ -255,19 +605,24 @@
       "name": "RedisClient"
     },
     {
-      "file": "backend_app\\core\\models\\__init__.py",
-      "line": 7,
-      "name": "InvoiceModel"
+      "file": "backend_app\\core\\cache\\__init__.py",
+      "line": 3,
+      "name": "MockRedisClient"
+    },
+    {
+      "file": "backend_app\\core\\models\\billing.py",
+      "line": 4,
+      "name": "datetime"
+    },
+    {
+      "file": "backend_app\\core\\models\\billing.py",
+      "line": 6,
+      "name": "DateTime"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
       "line": 7,
       "name": "PaymentMethodModel"
-    },
-    {
-      "file": "backend_app\\core\\models\\__init__.py",
-      "line": 7,
-      "name": "SubscriptionModel"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
@@ -602,6 +957,10 @@
       "backend_app.backend.order_watchdog",
       "backend_app.backend.order_watchdog",
       "backend_app.backend.pnl_engine",
+      "backend_app.backend.dashboard_data_ingester",
+      "backend_app.backend.dashboard_data_ingester",
+      "backend_app.backend.portfolio_cache_updater",
+      "backend_app.backend.portfolio_cache_updater",
       "backend_app.backend.portfolio_management",
       "backend_app.backend.startup_recovery",
       "backend_app.backend.state_persistence",
@@ -644,6 +1003,14 @@
       "backend_app.routers",
       "backend_app.routers",
       "backend_app.routers",
+      "backend_app.routers",
+      "backend_app.routers",
+      "backend_app.routers",
+      "backend_app.routers",
+      "backend_app.routers",
+      "backend_app.routers",
+      "backend_app.routers",
+      "backend_app.routers",
       "backend_app.routers.dag_tasks",
       "backend_app.backend.execution_router",
       "backend_app.core.safety_config",
@@ -652,6 +1019,7 @@
       "backend_app.routers",
       "backend_app.core.schemas",
       "backend_app.core.schemas",
+      "traceback",
       "backend_app.core.schemas",
       "backend_app.core.dependencies"
     ],
@@ -666,6 +1034,16 @@
       "asyncio",
       "os",
       "traceback",
+      "httpx",
+      "dotenv",
+      "supabase"
+    ],
+    "backend_app.test_exchange_management": [
+      "asyncio",
+      "os",
+      "traceback",
+      "typing",
+      "typing",
       "httpx",
       "dotenv",
       "supabase"
@@ -771,7 +1149,8 @@
       "backend_app.core.dependencies",
       "backend_app.core.state",
       "backend_app.core.websocket_auth",
-      "backend_app.backend.ws_event_stream"
+      "backend_app.backend.ws_event_stream",
+      "backend_app.core.dependencies"
     ],
     "backend_app.api_ws.__init__": [],
     "backend_app.backend.alert_engine": [
@@ -853,6 +1232,40 @@
       "pandas",
       "vectorbt",
       "joblib"
+    ],
+    "backend_app.backend.backtest_runtime": [
+      "asyncio",
+      "logging",
+      "datetime",
+      "datetime",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "uuid",
+      "numpy",
+      "pandas",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.dag_engine",
+      "backend_app.backend.backtesting_engine",
+      "backend_app.core.risk_engine",
+      "backend_app.backend.data_seeking_engine",
+      "backend_app.backend.backtest_service"
+    ],
+    "backend_app.backend.backtest_service": [
+      "asyncio",
+      "logging",
+      "datetime",
+      "datetime",
+      "decimal",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "uuid",
+      "backend_app.core.dependencies"
     ],
     "backend_app.backend.bot_telemetr": [
       "asyncio",
@@ -944,10 +1357,10 @@
       "backend_app.core.safety_config",
       "backend_app.backend.alert_system",
       "json",
-      "backend_app.core.redis_client",
+      "backend_app.core.cache.redis_manager",
       "json",
-      "backend_app.core.redis_client",
-      "backend_app.core.redis_client",
+      "backend_app.core.cache.redis_manager",
+      "backend_app.core.cache.redis_manager",
       "time"
     ],
     "backend_app.backend.dag_engine_parallel": [
@@ -1001,6 +1414,7 @@
       "fastapi",
       "fastapi",
       "fastapi",
+      "fastapi",
       "pydantic",
       "backend_app.backend.dag_engine",
       "backend_app.backend.dag_engine",
@@ -1008,17 +1422,18 @@
       "backend_app.core.feature_flags",
       "backend_app.core.safety_monitor",
       "backend_app.core.state",
-      "backend_app.core.redis_client",
+      "backend_app.core.cache.redis_manager",
       "hashlib",
-      "backend_app.core.redis_client",
-      "backend_app.core.redis_client",
+      "backend_app.core.cache.redis_manager",
+      "backend_app.core.cache.redis_manager",
       "backend_app.backend.event_publisher",
       "backend_app.backend.ws_event_stream",
       "backend_app.backend.ws_event_stream",
       "websockets",
       "json",
       "random",
-      "uuid"
+      "uuid",
+      "backend_app.core.websocket_auth"
     ],
     "backend_app.backend.dag_risk_integration": [
       "asyncio",
@@ -1042,6 +1457,9 @@
       "backend_app.backend.dag_event_loop",
       "backend_app.backend.dag_event_loop",
       "backend_app.core.risk_engine",
+      "backend_app.core.execution_engine",
+      "decimal",
+      "uuid",
       "uuid",
       "backend_app.backend.dag_event_loop",
       "backend_app.backend.dag_event_loop"
@@ -1079,6 +1497,34 @@
       "sqlalchemy",
       "backend_app.core.tenant"
     ],
+    "backend_app.backend.dashboard_aggregation_service": [
+      "asyncio",
+      "logging",
+      "re",
+      "datetime",
+      "typing",
+      "typing",
+      "typing",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "hashlib"
+    ],
+    "backend_app.backend.dashboard_data_ingester": [
+      "asyncio",
+      "logging",
+      "datetime",
+      "datetime",
+      "typing",
+      "typing",
+      "backend_app.core.cache.redis_manager",
+      "backend_app.core.state",
+      "backend_app.core.state",
+      "json",
+      "backend_app.core.state",
+      "backend_app.core.state"
+    ],
     "backend_app.backend.data_observabilit": [
       "logging",
       "dataclasses",
@@ -1113,6 +1559,30 @@
       "ccxt",
       "json",
       "backend_app.core.cache"
+    ],
+    "backend_app.backend.deployment_manager": [
+      "asyncio",
+      "logging",
+      "datetime",
+      "datetime",
+      "datetime",
+      "enum",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "uuid",
+      "dataclasses",
+      "dataclasses",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.dag_engine",
+      "backend_app.core.risk_engine",
+      "backend_app.core.deployment_config",
+      "backend_app.core.deployment_config",
+      "pandas",
+      "numpy"
     ],
     "backend_app.backend.event_listener": [
       "asyncio",
@@ -1314,22 +1784,7 @@
       "backend_app.core.execution_engine",
       "backend_app.core.feature_flags"
     ],
-    "backend_app.backend.execution_worker": [
-      "asyncio",
-      "json",
-      "logging",
-      "os",
-      "datetime",
-      "enum",
-      "typing",
-      "typing",
-      "typing",
-      "redis.asyncio",
-      "backend_app.backend.event_publisher",
-      "backend_app.core.execution_engine",
-      "backend_app.core.worker_base",
-      "signal"
-    ],
+    "backend_app.backend.execution_worker": [],
     "backend_app.backend.feature_engineering": [
       "logging",
       "numpy"
@@ -1491,6 +1946,20 @@
       "typing",
       "typing"
     ],
+    "backend_app.backend.metrics_service": [
+      "asyncio",
+      "logging",
+      "datetime",
+      "datetime",
+      "datetime",
+      "decimal",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies"
+    ],
     "backend_app.backend.metrics_system": [
       "logging",
       "collections",
@@ -1555,6 +2024,31 @@
       "tensorflow.keras.layers",
       "tensorflow.keras.layers",
       "tensorflow.keras.models"
+    ],
+    "backend_app.backend.optimization_engine": [
+      "asyncio",
+      "logging",
+      "datetime",
+      "datetime",
+      "datetime",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "uuid",
+      "dataclasses",
+      "dataclasses",
+      "enum",
+      "copy",
+      "numpy",
+      "pandas",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.backtest_runtime",
+      "backend_app.core.risk_engine",
+      "itertools"
     ],
     "backend_app.backend.order_watchdog": [
       "asyncio",
@@ -1630,23 +2124,7 @@
       "pydantic",
       "backend_app.core.decimal_utils"
     ],
-    "backend_app.backend.portfolio_worker": [
-      "asyncio",
-      "json",
-      "logging",
-      "os",
-      "datetime",
-      "enum",
-      "typing",
-      "typing",
-      "typing",
-      "redis.asyncio",
-      "backend_app.backend.event_publisher",
-      "backend_app.backend.position_engine",
-      "backend_app.core.cache",
-      "backend_app.core.worker_base",
-      "signal"
-    ],
+    "backend_app.backend.portfolio_worker": [],
     "backend_app.backend.position_engine": [
       "logging",
       "datetime",
@@ -1714,6 +2192,22 @@
       "uuid",
       "sqlalchemy",
       "sqlalchemy.orm"
+    ],
+    "backend_app.backend.signal_service": [
+      "asyncio",
+      "logging",
+      "datetime",
+      "datetime",
+      "decimal",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "uuid",
+      "backend_app.core.dependencies",
+      "csv",
+      "io",
+      "json"
     ],
     "backend_app.backend.signal_trace_engine": [
       "asyncio",
@@ -1824,6 +2318,49 @@
       "typing",
       "typing"
     ],
+    "backend_app.backend.strategy_compiler": [
+      "logging",
+      "dataclasses",
+      "dataclasses",
+      "datetime",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "uuid",
+      "backend_app.core.models.pydantic_models",
+      "backend_app.core.models.pydantic_models",
+      "backend_app.core.models.pydantic_models",
+      "backend_app.core.models.pydantic_models",
+      "collections",
+      "collections",
+      "collections"
+    ],
+    "backend_app.backend.strategy_service": [
+      "asyncio",
+      "logging",
+      "datetime",
+      "datetime",
+      "decimal",
+      "enum",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "uuid",
+      "uuid",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "backend_app.backend.metrics_service",
+      "backend_app.core.state",
+      "backend_app.core.state",
+      "backend_app.core.state"
+    ],
+    "backend_app.backend.subscription_service": [
+      "logging"
+    ],
     "backend_app.backend.task_recover": [
       "asyncio",
       "logging",
@@ -1909,7 +2446,8 @@
       "typing",
       "fastapi",
       "fastapi",
-      "backend_app.core.auth"
+      "fastapi",
+      "backend_app.core.websocket_auth"
     ],
     "backend_app.backend.websocket_monitor": [
       "asyncio",
@@ -1983,7 +2521,9 @@
       "fastapi.middleware.cors",
       "backend_app.backend.websocket_manager",
       "backend_app.backend.websocket_manager",
-      "backend_app.backend.websocket_monitor"
+      "backend_app.backend.websocket_monitor",
+      "backend_app.core.websocket_auth",
+      "backend_app.core.websocket_auth"
     ],
     "backend_app.backend.__init__": [],
     "backend_app.core.alerting_system": [
@@ -2076,6 +2616,17 @@
       "typing",
       "typing",
       "typing"
+    ],
+    "backend_app.core.billing_lifecycle": [
+      "logging",
+      "datetime",
+      "datetime",
+      "typing",
+      "typing",
+      "typing",
+      "backend_app.core.cache",
+      "backend_app.core.subscription_engine",
+      "backend_app.core.subscription_engine"
     ],
     "backend_app.core.cache": [
       "__future__",
@@ -2264,7 +2815,6 @@
       "backend_app.core.state",
       "backend_app.core.state",
       "backend_app.core.state",
-      "backend_app.core.state",
       "backend_app.core.state"
     ],
     "backend_app.core.deployment_config": [
@@ -2297,6 +2847,35 @@
       "backend_app.backend.redis_manager"
     ],
     "backend_app.core.engine_a_vault": [],
+    "backend_app.core.entitlement_dependencies": [
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "typing",
+      "backend_app.core.dependencies",
+      "backend_app.core.entitlement_engine",
+      "backend_app.core.entitlement_engine",
+      "backend_app.core.entitlement_engine",
+      "backend_app.core.entitlement_engine"
+    ],
+    "backend_app.core.entitlement_engine": [
+      "logging",
+      "dataclasses",
+      "enum",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "backend_app.core.cache",
+      "backend_app.core.hard_quota_enforcer",
+      "backend_app.core.tenant",
+      "backend_app.core.tenant",
+      "backend_app.core.tenant",
+      "backend_app.core.state",
+      "backend_app.core.state",
+      "datetime"
+    ],
     "backend_app.core.event_bus": [
       "__future__",
       "json",
@@ -2364,12 +2943,16 @@
       "typing",
       "typing",
       "uuid",
+      "uuid",
       "backend_app.core.database",
       "backend_app.core.metrics",
       "backend_app.core.models.execution_record",
       "backend_app.core.models.execution_record",
       "backend_app.core.models.execution_record",
       "backend_app.core.risk_manager",
+      "time",
+      "threading",
+      "backend_app.core.global_safety",
       "backend_app.core.global_safety",
       "backend_app.core.models.pydantic_models",
       "backend_app.core.models.pydantic_models",
@@ -2593,6 +3176,11 @@
       "sqlalchemy.orm",
       "backend_app.core.database"
     ],
+    "backend_app.core.pricing_service": [
+      "logging",
+      "typing",
+      "fastapi"
+    ],
     "backend_app.core.quota_errors": [
       "json",
       "dataclasses",
@@ -2600,6 +3188,14 @@
       "typing",
       "typing",
       "typing"
+    ],
+    "backend_app.core.quota_scheduler": [
+      "asyncio",
+      "logging",
+      "datetime",
+      "backend_app.core.cache",
+      "backend_app.core.subscription_engine",
+      "backend_app.core.subscription_engine"
     ],
     "backend_app.core.rate_limit": [
       "os",
@@ -2630,6 +3226,14 @@
       "backend_app.core.rate_limiter",
       "backend_app.core.rate_limiter"
     ],
+    "backend_app.core.realtime_sync": [
+      "json",
+      "logging",
+      "typing",
+      "typing",
+      "backend_app.api_ws.ws_manager",
+      "backend_app.core.cache"
+    ],
     "backend_app.core.reconciliation_engine": [
       "logging",
       "dataclasses",
@@ -2657,14 +3261,6 @@
       "backend_app.core.alerting_system",
       "backend_app.core.alerting_system"
     ],
-    "backend_app.core.redis_client": [
-      "json",
-      "logging",
-      "os",
-      "typing",
-      "typing",
-      "redis.asyncio"
-    ],
     "backend_app.core.redis_cluster": [
       "logging",
       "dataclasses",
@@ -2678,10 +3274,6 @@
       "typing",
       "redis.asyncio.cluster",
       "redis.cluster"
-    ],
-    "backend_app.core.redis_streams": [
-      "json",
-      "redis"
     ],
     "backend_app.core.replay_auth": [
       "hashlib",
@@ -2723,7 +3315,9 @@
       "typing",
       "typing",
       "typing",
-      "typing"
+      "typing",
+      "supabase",
+      "os"
     ],
     "backend_app.core.safety_config": [
       "logging",
@@ -2789,18 +3383,52 @@
       "backend_app.core.risk_manager",
       "backend_app.api_ws.ws_manager"
     ],
+    "backend_app.core.subscription_dependencies": [
+      "logging",
+      "typing",
+      "typing",
+      "typing",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "backend_app.core.cache",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "backend_app.core.subscription_engine",
+      "backend_app.core.subscription_engine",
+      "backend_app.core.subscription_engine",
+      "backend_app.core.subscription_engine"
+    ],
+    "backend_app.core.subscription_engine": [
+      "logging",
+      "dataclasses",
+      "enum",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "backend_app.core.cache"
+    ],
+    "backend_app.core.subscription_middleware": [
+      "logging",
+      "typing",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "starlette.middleware.base",
+      "backend_app.core.cache",
+      "backend_app.core.subscription_engine",
+      "backend_app.core.subscription_engine",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies"
+    ],
     "backend_app.core.supabase_connection": [
       "backend_app.core.config",
       "supabase"
     ],
-    "backend_app.core.telemetry_engine": [
-      "re",
-      "typing",
-      "typing",
-      "typing",
-      "requests",
-      "backend_app.core.config"
-    ],
+    "backend_app.core.telemetry_engine": [],
     "backend_app.core.tenant": [
       "dataclasses",
       "dataclasses",
@@ -2928,7 +3556,12 @@
       "json",
       "logging",
       "os",
+      "traceback",
       "datetime",
+      "datetime",
+      "typing",
+      "typing",
+      "uuid",
       "fastapi",
       "fastapi",
       "fastapi",
@@ -2936,15 +3569,21 @@
       "fastapi",
       "fastapi",
       "sqlalchemy.orm",
+      "backend_app.core.cache",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
       "backend_app.core.database",
-      "backend_app.core.dependencies",
-      "backend_app.core.dependencies",
-      "backend_app.core.dependencies",
-      "backend_app.core.dependencies",
+      "backend_app.core.realtime_sync",
       "backend_app.core.models",
       "backend_app.core.models",
       "backend_app.core.schemas",
       "supabase",
+      "backend_app.core.subscription_engine",
+      "backend_app.core.subscription_engine",
+      "backend_app.core.subscription_dependencies",
+      "backend_app.core.pricing_service",
+      "backend_app.core.pricing_service",
       "stripe",
       "razorpay",
       "stripe",
@@ -2982,6 +3621,18 @@
       "backend_app.core.cache",
       "backend_app.core.database"
     ],
+    "backend_app.routers.dashboard": [
+      "logging",
+      "typing",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "backend_app.backend.dashboard_aggregation_service",
+      "backend_app.core.dependencies",
+      "backend_app.core.rate_limit"
+    ],
     "backend_app.routers.distributed_execution": [
       "logging",
       "decimal",
@@ -2999,6 +3650,7 @@
       "backend_app.backend.distributed_execution",
       "backend_app.backend.distributed_execution",
       "backend_app.backend.distributed_execution",
+      "backend_app.core.dependencies",
       "backend_app.core.dependencies"
     ],
     "backend_app.routers.exchange": [
@@ -3014,7 +3666,12 @@
       "backend_app.core.dependencies",
       "backend_app.core.models",
       "backend_app.core.models",
-      "supabase"
+      "backend_app.backend.redis_manager",
+      "supabase",
+      "backend_app.core.cache",
+      "ccxt",
+      "backend_app.backend.api_key_vault",
+      "ccxt"
     ],
     "backend_app.routers.health": [
       "asyncio",
@@ -3059,6 +3716,10 @@
       "backend_app.core.dependencies",
       "backend_app.core.dependencies",
       "backend_app.core.dependencies",
+      "backend_app.core.subscription_dependencies",
+      "backend_app.core.subscription_dependencies",
+      "backend_app.core.subscription_dependencies",
+      "backend_app.core.subscription_dependencies",
       "backend_app.core.rate_limit",
       "supabase",
       "backend_app.api_ws.ws_manager",
@@ -3084,6 +3745,24 @@
       "fastapi",
       "prometheus_client",
       "prometheus_client"
+    ],
+    "backend_app.routers.notifications": [
+      "logging",
+      "datetime",
+      "datetime",
+      "typing",
+      "typing",
+      "uuid",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "pydantic",
+      "pydantic",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "supabase"
     ],
     "backend_app.routers.orders": [
       "asyncio",
@@ -3149,11 +3828,33 @@
       "backend_app.backend.safety_config",
       "backend_app.core.cache.redis_manager"
     ],
+    "backend_app.routers.referral": [
+      "logging",
+      "os",
+      "datetime",
+      "typing",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "pydantic",
+      "pydantic",
+      "pydantic",
+      "slowapi",
+      "slowapi.util",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "supabase",
+      "secrets",
+      "secrets"
+    ],
     "backend_app.routers.risk": [
       "asyncio",
       "logging",
       "re",
       "datetime",
+      "functools",
       "fastapi",
       "fastapi",
       "fastapi",
@@ -3166,6 +3867,11 @@
       "backend_app.core.models",
       "backend_app.core.models",
       "backend_app.core.models",
+      "backend_app.core.state",
+      "json",
+      "backend_app.core.state",
+      "json",
+      "backend_app.core.state",
       "backend_app.core.state",
       "backend_app.core.state"
     ],
@@ -3192,6 +3898,28 @@
       "backend_app.core.dependencies",
       "backend_app.core.rate_limit"
     ],
+    "backend_app.routers.signal_trace": [
+      "logging",
+      "datetime",
+      "datetime",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "pydantic",
+      "pydantic",
+      "backend_app.backend.signal_service",
+      "backend_app.backend.signal_service",
+      "backend_app.backend.signal_service",
+      "backend_app.core.dependencies",
+      "backend_app.core.rate_limit"
+    ],
     "backend_app.routers.strategies": [
       "asyncio",
       "logging",
@@ -3215,8 +3943,14 @@
       "backend_app.core.dependencies",
       "backend_app.core.dependencies",
       "backend_app.core.dependencies",
-      "backend_app.core.dependencies",
-      "backend_app.core.dependencies",
+      "backend_app.core.subscription_dependencies",
+      "backend_app.core.subscription_dependencies",
+      "backend_app.core.subscription_dependencies",
+      "backend_app.core.subscription_dependencies",
+      "backend_app.core.subscription_dependencies",
+      "backend_app.core.subscription_dependencies",
+      "backend_app.core.subscription_dependencies",
+      "backend_app.core.subscription_engine",
       "backend_app.core.event_bus",
       "backend_app.core.event_bus",
       "backend_app.core.rate_limit",
@@ -3250,7 +3984,75 @@
       "backend_app.strategies.aggregator",
       "backend_app.strategies.registry",
       "ccxt",
-      "numpy"
+      "numpy",
+      "backend_app.backend.optimization_engine",
+      "backend_app.backend.optimization_engine",
+      "backend_app.backend.optimization_engine",
+      "backend_app.backend.optimization_engine",
+      "backend_app.backend.backtest_runtime",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.strategy_compiler",
+      "uuid",
+      "ccxt",
+      "backend_app.core.cache",
+      "backend_app.worker",
+      "datetime",
+      "datetime",
+      "statistics",
+      "json",
+      "traceback"
+    ],
+    "backend_app.routers.strategy_operations": [
+      "logging",
+      "typing",
+      "typing",
+      "uuid",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "fastapi",
+      "pydantic",
+      "pydantic",
+      "backend_app.backend.strategy_service",
+      "backend_app.backend.strategy_service",
+      "backend_app.backend.strategy_service",
+      "backend_app.backend.metrics_service",
+      "backend_app.backend.backtest_service",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.backtest_runtime",
+      "backend_app.backend.optimization_engine",
+      "backend_app.backend.optimization_engine",
+      "backend_app.backend.optimization_engine",
+      "backend_app.backend.optimization_engine",
+      "backend_app.backend.deployment_manager",
+      "backend_app.backend.deployment_manager",
+      "backend_app.backend.deployment_manager",
+      "backend_app.core.dependencies",
+      "backend_app.core.rate_limit",
+      "backend_app.core.models.pydantic_models",
+      "backend_app.core.models.pydantic_models",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.strategy_compiler",
+      "ccxt",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.strategy_compiler",
+      "ccxt",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.strategy_compiler",
+      "backend_app.backend.deployment_manager",
+      "backend_app.backend.deployment_manager",
+      "ccxt",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
+      "backend_app.core.dependencies"
     ],
     "backend_app.routers.support": [
       "logging",
@@ -3279,10 +4081,7 @@
       "backend_app.core.dependencies",
       "backend_app.core.dependencies",
       "backend_app.core.models",
-      "backend_app.core.models",
-      "backend_app.core.models",
-      "supabase",
-      "backend_app.core.state"
+      "supabase"
     ],
     "backend_app.routers.__init__": [],
     "backend_app.strategies.aggregator": [
@@ -3515,7 +4314,8 @@
       "backend_app.backend.exchange_telemetry",
       "queue_manager",
       "queue_manager",
-      "queue_manager"
+      "queue_manager",
+      "backend_app.core.execution_engine"
     ],
     "backend_app.backend.distributed_execution.failover_coordinator": [
       "asyncio",
@@ -3619,7 +4419,10 @@
       "typing",
       "typing",
       "backend_app.core.cache.redis_manager",
-      "immutable_journal"
+      "immutable_journal",
+      "backend_app.core.execution_engine",
+      "decimal",
+      "uuid"
     ],
     "backend_app.backend.distributed_execution.immutable_journal": [
       "hashlib",
@@ -4097,7 +4900,8 @@
       "enum",
       "typing",
       "typing",
-      "typing"
+      "typing",
+      "itertools"
     ],
     "backend_app.backend.observability.file_replacement_ma": [
       "logging",
@@ -4172,7 +4976,6 @@
       "typing",
       "opentelemetry",
       "opentelemetry",
-      "opentelemetry.exporter.jaeger.thrift",
       "opentelemetry.exporter.otlp.proto.grpc.trace_exporter",
       "opentelemetry.instrumentation.aiohttp_client",
       "opentelemetry.instrumentation.fastapi",
@@ -4262,7 +5065,6 @@
       "typing",
       "typing",
       "opentelemetry",
-      "opentelemetry.exporter.jaeger.thrift",
       "opentelemetry.exporter.otlp.proto.grpc.trace_exporter",
       "opentelemetry.sdk.resources",
       "opentelemetry.sdk.trace",
@@ -4578,10 +5380,20 @@
     ],
     "backend_app.backend.observability.load_testing.__init__": [],
     "backend_app.core.cache.redis_manager": [
+      "json",
+      "logging",
+      "os",
       "typing",
       "typing",
+      "time",
       "backend_app.backend.redis_manager",
       "logging",
+      "logging",
+      "logging",
+      "logging",
+      "logging",
+      "logging",
+      "json",
       "logging",
       "logging",
       "asyncio",
@@ -4595,13 +5407,12 @@
       "redis_manager",
       "redis_manager",
       "redis_manager",
+      "redis_manager",
       "redis_manager"
     ],
     "backend_app.core.models.billing": [
       "uuid",
       "datetime",
-      "sqlalchemy",
-      "sqlalchemy",
       "sqlalchemy",
       "sqlalchemy",
       "sqlalchemy",
@@ -4714,8 +5525,6 @@
       "backend_app.core.database"
     ],
     "backend_app.core.models.__init__": [
-      "billing",
-      "billing",
       "billing",
       "execution_record",
       "execution_record",

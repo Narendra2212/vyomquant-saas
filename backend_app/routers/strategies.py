@@ -1952,7 +1952,7 @@ async def monte_carlo_simulation(payload: dict, user: dict = Depends(get_current
 async def walk_forward_optimization(
     payload: dict, 
     user: dict = Depends(get_current_user),
-    background_tasks: BackgroundTasks = Depends()
+    background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     """
     Run genuine rolling window walk-forward optimization on historical backtest data.

@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from backend_app.backend.distributed_execution import (JobPriority, JobStatus,
                                                        execution_orchestrator,
                                                        job_persistence)
-from backend_app.core.dependencies import get_current_user
+from backend_app.core.dependencies import get_admin_user, get_current_user
 
 router = APIRouter()
 logger = logging.getLogger("distributed_execution_api")
