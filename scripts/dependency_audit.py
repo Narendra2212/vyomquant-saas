@@ -134,6 +134,50 @@ STANDARD_LIBRARY = {
     'zipimport', 'zlib', 'zoneinfo'
 }
 
+# Package name mappings for common import names that differ from PyPI package names
+PACKAGE_NAME_MAPPINGS = {
+    'dotenv': 'python-dotenv',
+    'jwt': 'PyJWT',
+    'sklearn': 'scikit-learn',
+    'yaml': 'pyyaml',
+    'cv2': 'opencv-python',
+}
+
+# Local backend modules that should not be reported as undeclared
+LOCAL_BACKEND_MODULES = {
+    'data_seeking_engine',
+    'ml_models',
+    'connection_engine',
+    'dag_engine',
+    'dag_event_loop',
+    'dag_risk_integration',
+    'dag_scheduler',
+    'live_engine',
+    'strategy_compiler',
+    'state_persistence',
+    'dashboard_aggregation_service',
+    'websocket_manager',
+    'ws_server',
+    'metrics_exporter',
+    'health_checks',
+    'trading_worker',
+    'order_worker',
+    'signal_worker',
+    'backtest_runtime',
+    'deployment_manager',
+    'master_executor',
+    'portfolio_management',
+    'telemetry_engine',
+    'logging_config',
+    'subscription_middleware',
+    'tenant_middleware',
+    'rate_limit_middleware',
+    'pricing_service',
+    'subscription_dependencies',
+    'entitlement_dependencies',
+    'websocket_auth',
+}
+
 
 def audit_dependencies(root_req: str = "requirements.txt", backend_req: str = "backend_app/requirements.txt", requirements_base: str = "requirements-base.txt") -> Dict:
     """Compare and validate dependency manifest consistency."""
@@ -167,10 +211,15 @@ def audit_dependencies(root_req: str = "requirements.txt", backend_req: str = "b
         # Filter out internal packages
         if imported.startswith('backend_app'):
             continue
+        # Filter out local backend modules
+        if imported in LOCAL_BACKEND_MODULES:
+            continue
+        # Map import name to PyPI package name if needed
+        mapped_name = PACKAGE_NAME_MAPPINGS.get(imported, imported)
         # Check if declared (case-insensitive match)
-        declared = any(imported.lower() == declared.lower() for declared in all_declared)
+        declared = any(mapped_name.lower() == declared.lower() for declared in all_declared)
         if not declared:
-            report["imported_not_declared"].append({"package": imported})
+            report["imported_not_declared"].append({"package": imported, "mapped_to": mapped_name})
 
     if report["imported_not_declared"]:
         report["status"] = "FAIL"
@@ -237,7 +286,8 @@ def main():
     if res["imported_not_declared"]:
         print("\n--- IMPORTED BUT NOT DECLARED IN REQUIREMENTS ---")
         for imp in res["imported_not_declared"]:
-            print(f"  ❌ {imp['package']}")
+            mapped = imp.get("mapped_to", imp["package"])
+            print(f"  ❌ {imp['package']} (mapped to: {mapped})")
 
     os.makedirs("reports", exist_ok=True)
     with open("reports/dependency_audit_results.json", "w") as f:
