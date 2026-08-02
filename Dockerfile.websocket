@@ -60,7 +60,5 @@ CMD ["python", "-m", "uvicorn", "backend_app.backend.ws_server:app", \
      "--host", "0.0.0.0", \
      "--port", "8002", \
      "--workers", "4", \
-     "--loop", "uvloop", \
-     "--http", "httptools", \
      "--log-level", "info"]
 

@@ -11,6 +11,7 @@ python-multipart==0.0.9
 starlette==0.41.0
 gunicorn==23.0.0
 rq==1.16.2
+uvloop==0.22.0
 # --- Auth + Database -----------------------------------------------------
 supabase==2.7.4
 cryptography==43.0.0

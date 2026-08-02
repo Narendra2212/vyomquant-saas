@@ -19,7 +19,6 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Install Python dependencies (use CPU-only index for PyTorch to reduce image size by ~2.5GB)
 COPY requirements-base.txt requirements-cpu.txt ./
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir gunicorn httpx redis && \
     pip install --no-cache-dir --prefer-binary -r requirements-cpu.txt && \
     find /opt/venv -type f -name '*.pyc' -delete && \
     find /opt/venv -type d -name '__pycache__' -delete

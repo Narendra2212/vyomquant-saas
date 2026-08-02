@@ -29,7 +29,7 @@ RUN useradd -m -u 1000 appuser
 
 # Copy wheels and install
 COPY --from=builder /app/wheels /wheels
-COPY --from=builder /app/requirements.txt .
+COPY --from=builder /app/requirements-cpu.txt .
 RUN pip install --no-cache /wheels/*
 
 # Copy backend source code
