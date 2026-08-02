@@ -137,3 +137,40 @@ def test_startup_recovery():
     """Verify system startup recovery routine completes cleanly without error."""
     recovery = StartupRecovery(heartbeat_threshold_seconds=30.0, enable_recovery=True)
     assert recovery.enable_recovery is True
+
+
+def test_anti_bypass_validation_token_verification():
+    """Verify anti-bypass validation token generation and enforcement."""
+    async def _run():
+        from backend_app.backend.exchange_executor import BaseExchangeExecutor, OrderResult, OrderSide, OrderType
+        
+        class DummyExecutor(BaseExchangeExecutor):
+            async def connect(self): pass
+            async def disconnect(self): pass
+            async def cancel_order(self, order_id, symbol): pass
+            async def get_order_status(self, order_id, symbol): pass
+            async def get_balance(self): return {}
+            async def place_order(self, symbol, side, order_type, size=None, price=None, stop_price=None, **kwargs):
+                self.verify_and_consume_token(symbol, size or Decimal("0.1"))
+                return OrderResult(success=True, exchange_order_id="ex_token_123", status="pending", filled_size="0.1", remaining_size="0", avg_price="50000", raw_response={})
+
+        dummy_exec = DummyExecutor("binance", "api_key", "api_secret")
+
+        # Direct call without token MUST raise ValueError (Bypass attempt detected)
+        with pytest.raises(ValueError, match="Bypass attempt detected"):
+            await dummy_exec.place_order("BTC/USDT", OrderSide.BUY, OrderType.LIMIT, size=Decimal("0.1"), price=Decimal("50000.0"))
+
+        # Execution via ExecutionEngine gateway MUST succeed with token validation
+        engine = ExecutionEngine(portfolio_state={"total_equity": Decimal("100000.0")}, exchange_executor=dummy_exec)
+        res = await engine.execute_trade(
+            tenant_id=uuid.uuid4(),
+            strategy_id="test_token_strategy",
+            symbol="BTC/USDT",
+            side="buy",
+            size=Decimal("0.1"),
+            price=Decimal("50000.0")
+        )
+        assert res.success is True
+        assert res.status in ("completed", "skipped_completed")
+
+    asyncio.run(_run())

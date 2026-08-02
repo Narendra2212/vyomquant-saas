@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
+import uuid
 from uuid import UUID
 
 from backend_app.core.database import SessionLocal
@@ -192,6 +193,18 @@ class ExecutionEngine:
         ⚠️ WARNING: Direct calls to open_position/close_position are BLOCKED.
         Use this method for ALL trade executions.
         """
+        import time, threading
+        start_time = time.time()
+        thread_id = threading.get_ident()
+        task_id_str = str(task_id or uuid.uuid4())
+        correlation_id = f"corr-{tenant_id}-{strategy_id}-{int(start_time * 1000)}"
+
+        logger.info(
+            f"[TRACE][ENTRY] fn=execute_with_idempotency tenant_id={tenant_id} strategy_id={strategy_id} "
+            f"symbol={symbol} side={side} size={size} price={price} thread_id={thread_id} task_id={task_id_str} "
+            f"correlation_id={correlation_id}"
+        )
+
         # ═══════════════════════════════════════════════════════════════════
         # 🔴 STEP 6: EXECUTION GUARD - Only bot_runner allowed
         # ═══════════════════════════════════════════════════════════════════
@@ -301,7 +314,8 @@ class ExecutionEngine:
                     symbol=symbol,
                     side=side,
                     size=size,
-                    price=price
+                    price=price,
+                    execution_id=execution_id
                 )
                 
                 if success:
@@ -403,7 +417,8 @@ class ExecutionEngine:
         symbol: str,
         side: str,
         size: Decimal,
-        price: Decimal
+        price: Decimal,
+        execution_id: str = "exec_internal_default"
     ) -> Tuple[bool, Any]:
         """
         Internal trade execution - ONLY called by execute_with_idempotency.
@@ -416,9 +431,17 @@ class ExecutionEngine:
         # LIVE EXECUTION PATH
         if hasattr(self, 'exchange_executor') and self.exchange_executor is not None:
             try:
+                from backend_app.core.global_safety import generate_validation_token
                 from backend_app.core.models.pydantic_models import OrderSide
                 from backend_app.core.models.pydantic_models import \
                     OrderType as CoreOrderType
+
+                # Generate and attach anti-bypass validation token
+                token = generate_validation_token(execution_id, symbol, size)
+                if hasattr(self.exchange_executor, '_current_execution_id'):
+                    self.exchange_executor._current_execution_id = execution_id
+                if hasattr(self.exchange_executor, '_current_validation_token'):
+                    self.exchange_executor._current_validation_token = token
 
                 # Map inputs to CCXT requirements
                 c_order_type = CoreOrderType.market if price <= Decimal("0") else CoreOrderType.limit

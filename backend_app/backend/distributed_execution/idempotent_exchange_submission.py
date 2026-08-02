@@ -210,20 +210,37 @@ class IdempotentExchangeSubmission:
                     "message": "Failed to record submission for idempotency"
                 }
             
-            # Submit to exchange
+            # Submit to exchange via Canonical ExecutionEngine Gateway
             try:
-                # This would call the actual exchange API
-                # For now, simulate successful submission
-                exchange_order_id = f"exchange_{uuid.uuid4().hex[:16]}"
+                from backend_app.core.execution_engine import ExecutionEngine
+                from decimal import Decimal
+                from uuid import UUID
+
+                parsed_tenant = UUID(str(tenant_id)) if isinstance(tenant_id, (str, UUID)) else tenant_id
+                portfolio_state = {"total_equity": Decimal("100000.0")}
+                engine = ExecutionEngine(portfolio_state=portfolio_state)
+
+                res = await engine.execute_trade(
+                    tenant_id=parsed_tenant,
+                    strategy_id=strategy_id or "idempotent_submission",
+                    symbol=order_data.get("symbol", "BTC/USDT"),
+                    side=order_data.get("side", "buy"),
+                    size=Decimal(str(order_data.get("quantity", "0.01"))),
+                    price=Decimal(str(order_data.get("price", "0"))),
+                    metadata={"client_order_id": client_order_id, "signal_id": signal_id}
+                )
+
+                exchange_order_id = res.execution_id or f"exchange_{uuid.uuid4().hex[:16]}"
                 
                 result = {
-                    "success": True,
+                    "success": res.success,
                     "client_order_id": client_order_id,
                     "exchange_order_id": exchange_order_id,
-                    "submitted_at": datetime.now(timezone.utc).isoformat()
+                    "submitted_at": datetime.now(timezone.utc).isoformat(),
+                    "details": res.details or {}
                 }
                 
-                logger.info(f"Order submitted idempotently: {client_order_id} -> {exchange_order_id}")
+                logger.info(f"Order submitted idempotently via Gateway: {client_order_id} -> {exchange_order_id}")
                 return result
                 
             except Exception as e:

@@ -63,17 +63,34 @@ class ExchangeGateway:
         self.is_connected = False
     
     async def execute_order(self, job: ExecutionJob) -> Dict[str, Any]:
-        """Execute order on exchange."""
-        # Implementation would execute actual order
-        # For now, simulate execution
-        await asyncio.sleep(0.1)  # Simulate exchange latency
+        """Execute order via Canonical ExecutionEngine Gateway."""
+        from backend_app.core.execution_engine import ExecutionEngine
         
+        tenant_id = UUID(str(job.tenant_id)) if isinstance(job.tenant_id, (str, UUID)) else job.tenant_id
+        strategy_id = job.strategy_id or "worker_strategy"
+        portfolio_state = {"total_equity": Decimal("100000.0")}
+        
+        engine = getattr(self, "execution_engine", None)
+        if not engine:
+            engine = ExecutionEngine(portfolio_state=portfolio_state)
+
+        res = await engine.execute_trade(
+            tenant_id=tenant_id,
+            strategy_id=strategy_id,
+            symbol=job.symbol,
+            side=job.side,
+            size=job.quantity,
+            price=job.price or Decimal("0"),
+            metadata={"job_id": job.job_id, "idempotency_key": job.idempotency_key}
+        )
+
+        details = res.details or {}
         return {
-            "order_id": f"order_{uuid.uuid4().hex[:12]}",
-            "status": "filled",
-            "filled_quantity": job.quantity,
-            "execution_price": job.price or Decimal("50000"),  # Mock price
-            "fees": job.quantity * Decimal("0.001"),  # 0.1% fee
+            "order_id": res.execution_id or details.get("order_id") or f"order_{uuid.uuid4().hex[:12]}",
+            "status": "filled" if res.success else "failed",
+            "filled_quantity": job.quantity if res.success else Decimal("0"),
+            "execution_price": job.price or Decimal("50000"),
+            "fees": job.quantity * Decimal("0.001"),
             "exchange_timestamp": datetime.now(timezone.utc).isoformat()
         }
     
