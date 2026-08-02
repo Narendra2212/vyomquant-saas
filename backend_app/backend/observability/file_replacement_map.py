@@ -104,7 +104,7 @@ class ObservabilityFileReplacementMap:
                     'from backend.observability.opentelemetry_tracing import initialize_tracing',
                     'from backend.observability.opentelemetry_tracing import trace_execution'
                 ],
-                dependencies=['opentelemetry-api', 'opentelemetry-sdk', 'opentelemetry-exporter-jaeger'],
+                dependencies=['opentelemetry-api', 'opentelemetry-sdk', 'opentelemetry-exporter-otlp-proto-grpc'],
                 risk_level='CRITICAL',
                 notes='Adaptive sampling with HFT optimizations. Sampling rate changes affect tracing coverage.'
             ),
@@ -163,7 +163,11 @@ class ObservabilityFileReplacementMap:
                     'jaeger:',
                     '  image: jaegertracing/all-in-one:latest',
                     '  ports:',
-                    '    - "16686:16686"',
+                    '    - "16686:16686"',  # UI
+                    '    - "4317:4317"',  # OTLP gRPC
+                    '    - "4318:4318"',  # OTLP HTTP
+                    '  environment:',
+                    '    - COLLECTOR_OTLP_ENABLED=true',
                     'loki:',
                     '  image: grafana/loki:latest',
                     '  ports:',
@@ -177,7 +181,7 @@ class ObservabilityFileReplacementMap:
                 ],
                 dependencies=['docker'],
                 risk_level='LOW',
-                notes='Add new observability services without removing existing ones.'
+                notes='Add Jaeger with OTLP enabled (Jaeger native support). OTLP ports 4317/4318 required for trace export.'
             ),
             
             # Environment Configuration

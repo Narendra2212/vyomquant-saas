@@ -21,7 +21,6 @@ logger = logging.getLogger("opentelemetry_tracing")
 try:
     from opentelemetry import baggage, trace
     #     from opentelemetry.baggage.propagation import W3CBaggagePropagator
-    from opentelemetry.exporter.jaeger.thrift import JaegerExporter
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import \
         OTLPSpanExporter
     from opentelemetry.instrumentation.aiohttp_client import \
@@ -58,7 +57,6 @@ class TraceConfig:
     service_name: str = "algo-trading"
     service_version: str = "1.0.0"
     environment: str = "production"
-    jaeger_endpoint: Optional[str] = None
     otlp_endpoint: Optional[str] = None
     sample_rate: float = 1.0  # 100% sampling for production
     max_batch_size: int = 512
@@ -103,17 +101,7 @@ class TracingManager:
             # Configure exporters
             exporters = []
             
-            # Jaeger exporter
-            if self.config.jaeger_endpoint:
-                jaeger_exporter = JaegerExporter(
-                    endpoint=self.config.jaeger_endpoint,
-                    collector_endpoint=f"{self.config.jaeger_endpoint}/api/traces",
-                    udp_split_oversized_batch=True
-                )
-                exporters.append(jaeger_exporter)
-                logger.info(f"Jaeger exporter configured: {self.config.jaeger_endpoint}")
-            
-            # OTLP exporter
+            # OTLP exporter (Jaeger native support via OTLP)
             if self.config.otlp_endpoint:
                 otlp_exporter = OTLPSpanExporter(
                     endpoint=self.config.otlp_endpoint,

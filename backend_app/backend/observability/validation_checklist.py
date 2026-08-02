@@ -363,7 +363,7 @@ class ObservabilityValidationChecklist:
     
     async def _check_dependencies_installed(self) -> Dict[str, Any]:
         """Check if all required dependencies are installed."""
-        dependencies = ['prometheus-client', 'opentelemetry-api', 'psutil']
+        dependencies = ['prometheus-client', 'opentelemetry-api', 'opentelemetry-exporter-otlp-proto-grpc', 'psutil']
         missing_deps = []
         
         for dep in dependencies:

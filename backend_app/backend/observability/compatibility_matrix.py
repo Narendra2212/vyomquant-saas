@@ -107,7 +107,7 @@ class ObservabilityCompatibilityMatrix:
                 ],
                 migration_path='Replace import: from backend.observability.optimized_tracing import get_optimized_trading_tracer',
                 rollback_path='Replace import: from backend.observability.opentelemetry_tracing import get_trading_tracer',
-                notes='Optimized version provides adaptive sampling, high-frequency optimization, memory leak prevention'
+                notes='Optimized version provides adaptive sampling, high-frequency optimization, memory leak prevention. Jaeger exporter removed (deprecated in OpenTelemetry 1.22.0), use OTLP exporter instead.'
             ),
             
             'logging': ModuleCompatibility(
@@ -253,6 +253,8 @@ class ObservabilityCompatibilityMatrix:
             'TRACING_SAMPLE_RATE': '1.0|0.01',  # Original | Optimized
             'TRACING_STRATEGY': 'always|adaptive',
             'TRACING_MAX_SPANS': '10000|1000',  # Original | Optimized
+            'OTLP_ENDPOINT': 'http://localhost:4317',  # OTLP endpoint (Jaeger native support)
+            'JAEGER_ENDPOINT': 'DEPRECATED - Use OTLP_ENDPOINT instead'
             
             # Logging configuration
             'LOGGING_MODE': 'sync|async',

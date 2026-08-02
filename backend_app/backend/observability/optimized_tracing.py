@@ -22,7 +22,6 @@ logger = logging.getLogger("optimized_tracing")
 # Conditional imports for tracing
 try:
     from opentelemetry import trace
-    from opentelemetry.exporter.jaeger.thrift import JaegerExporter
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import \
         OTLPSpanExporter
     from opentelemetry.sdk.resources import Resource
@@ -55,7 +54,6 @@ class OptimizedTraceConfig:
     service_name: str = "algo-trading"
     service_version: str = "1.0.0"
     environment: str = "production"
-    jaeger_endpoint: Optional[str] = None
     otlp_endpoint: Optional[str] = None
     sampling_strategy: SamplingStrategy = SamplingStrategy.ADAPTIVE
     sample_rate: float = 0.01  # 1% sampling for HFT
@@ -191,18 +189,7 @@ class OptimizedTracingManager:
             # Configure optimized exporters
             exporters = []
             
-            # Jaeger exporter with optimized settings
-            if self.config.jaeger_endpoint:
-                jaeger_exporter = JaegerExporter(
-                    endpoint=self.config.jaeger_endpoint,
-                    collector_endpoint=f"{self.config.jaeger_endpoint}/api/traces",
-                    udp_split_oversized_batch=True,
-                    max_packet_size=65000  # Optimized packet size
-                )
-                exporters.append(jaeger_exporter)
-                logger.info(f"Optimized Jaeger exporter configured: {self.config.jaeger_endpoint}")
-            
-            # OTLP exporter with optimized settings
+            # OTLP exporter with optimized settings (Jaeger native support via OTLP)
             if self.config.otlp_endpoint:
                 otlp_exporter = OTLPSpanExporter(
                     endpoint=self.config.otlp_endpoint,
