@@ -284,12 +284,17 @@ async def update_strategy(request: Request,
     try:
         service = await get_strategy_service()
         
-        updates = request.dict(exclude_unset=True)
+        updates = body.dict(exclude_unset=True)
         result = await service.update_strategy(user["id"], strategy_id, updates)
+        if not result:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "STRATEGY_NOT_FOUND", "message": f"Strategy {strategy_id} not found"}
+            )
         
         return {
             "status": "updated",
-            "strategy": result["strategy"],
+            "strategy": result.get("strategy", result),
             "new_version": result.get("new_version")
         }
     except Exception as e:

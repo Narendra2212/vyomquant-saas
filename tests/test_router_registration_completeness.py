@@ -13,6 +13,7 @@ import sys
 import os
 import pytest
 from pathlib import Path
+from fastapi.routing import APIRoute
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -41,8 +42,11 @@ class TestRouterRegistrationCompleteness:
             if f.name != "__init__.py"
         ]
         
-        # Get all registered routes
-        registered_routes = {route.path for route in app.routes}
+        # Get all registered routes (only APIRoute objects have .path)
+        registered_routes = {
+            route.path for route in app.routes 
+            if isinstance(route, APIRoute)
+        }
         
         # List of router files that are expected to be registered
         expected_routers = {

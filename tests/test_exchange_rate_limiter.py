@@ -6,6 +6,7 @@ STEP 6: Verify exchange rate limiting works correctly.
 
 import asyncio
 import time
+import pytest
 
 # Adjust path for imports
 import sys
@@ -25,6 +26,7 @@ from backend_app.core.exchange_rate_limiter import (
 class TestTokenBucket:
     """Test token bucket algorithm."""
     
+    @pytest.mark.asyncio
     async def test_token_bucket_acquire(self):
         """Test basic token acquisition."""
         bucket = TokenBucket(rate=10, capacity=10)
@@ -36,6 +38,7 @@ class TestTokenBucket:
         
         print("[PASS] Token bucket: 10 tokens acquired immediately")
     
+    @pytest.mark.asyncio
     async def test_token_bucket_wait(self):
         """Test waiting for token refill."""
         bucket = TokenBucket(rate=10, capacity=1)
@@ -53,6 +56,7 @@ class TestTokenBucket:
         
         print(f"[PASS] Token bucket: Waited {elapsed:.3f}s for refill")
     
+    @pytest.mark.asyncio
     async def test_token_bucket_wait_time(self):
         """Test wait time calculation."""
         bucket = TokenBucket(rate=10, capacity=1)
@@ -71,6 +75,7 @@ class TestTokenBucket:
 class TestExchangeRateLimiter:
     """Test exchange rate limiter."""
     
+    @pytest.mark.asyncio
     async def test_acquire_context_manager(self):
         """Test acquire context manager."""
         limiter = ExchangeRateLimiter()
@@ -78,6 +83,7 @@ class TestExchangeRateLimiter:
         async with limiter.acquire("binance"):
             print("[PASS] Acquire context: Binance request allowed")
     
+    @pytest.mark.asyncio
     async def test_decorator(self):
         """Test exchange_limited decorator."""
         
@@ -90,6 +96,7 @@ class TestExchangeRateLimiter:
         
         print("[PASS] Decorator: Rate limited function executed")
     
+    @pytest.mark.asyncio
     async def test_exchange_limits(self):
         """Test different exchange limits."""
         
@@ -107,6 +114,7 @@ class TestExchangeRateLimiter:
         
         print("[PASS] Exchange limits: All exchanges configured correctly")
     
+    @pytest.mark.asyncio
     async def test_stats(self):
         """Test stats tracking."""
         limiter = ExchangeRateLimiter()
@@ -121,6 +129,7 @@ class TestExchangeRateLimiter:
         
         print(f"[PASS] Stats: Tracked {stats['requests_total']} requests")
     
+    @pytest.mark.asyncio
     async def test_reset(self):
         """Test reset functionality."""
         limiter = ExchangeRateLimiter()
@@ -141,6 +150,7 @@ class TestExchangeRateLimiter:
 class TestRetryHandler:
     """Test retry handler."""
     
+    @pytest.mark.asyncio
     async def test_retry_success(self):
         """Test successful execution without retry."""
         

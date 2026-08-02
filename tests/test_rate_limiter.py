@@ -12,21 +12,21 @@ from backend_app.core.rate_limiter import RateLimiter, RateLimitExceeded
 
 
 @pytest.fixture(autouse=True)
-async def reset_redis_singletons():
+def reset_redis_singletons():
     """Ensure a completely fresh Redis connection pool and manager for each test."""
-    from core.cache import redis_manager
-    import backend.redis_manager
-    redis_manager._redis_manager = None
-    backend.redis_manager._redis_manager = None
-    backend.redis_manager.RedisManager._instance = None
-    yield
     try:
-        await redis_manager.disconnect()
+        from backend_app.core.cache import redis_manager
+        if hasattr(redis_manager, "pool"):
+            redis_manager.pool = None
     except Exception:
         pass
-    redis_manager._redis_manager = None
-    backend.redis_manager._redis_manager = None
-    backend.redis_manager.RedisManager._instance = None
+    try:
+        import backend_app.backend.redis_manager as b_rm
+        b_rm._redis_manager = None
+        b_rm.RedisManager._instance = None
+    except Exception:
+        pass
+    yield
 
 
 @pytest.fixture
@@ -50,6 +50,7 @@ async def rate_limiter():
         pass
 
 
+@pytest.mark.anyio
 class TestTradeRateLimits:
     """Test trade per second/minute limits."""
     
@@ -119,6 +120,7 @@ class TestTradeRateLimits:
         await rate_limiter.reset_limits(user_id)
 
 
+@pytest.mark.anyio
 class TestPositionLimits:
     """Test open position limits."""
     
@@ -181,6 +183,7 @@ class TestPositionLimits:
         await rate_limiter.reset_limits(user_id)
 
 
+@pytest.mark.anyio
 class TestRateLimitStatus:
     """Test status reporting."""
     
@@ -233,6 +236,7 @@ class TestRateLimitStatus:
         await rate_limiter.reset_limits(user_id)
 
 
+@pytest.mark.anyio
 class TestReset:
     """Test limit reset functionality."""
     
@@ -266,6 +270,7 @@ class TestReset:
         
         # Cleanup
         await rate_limiter.reset_limits(user_id)
+
 
 
 if __name__ == "__main__":

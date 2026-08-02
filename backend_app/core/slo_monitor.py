@@ -51,10 +51,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 # Prometheus client (optional)
 try:
-    from prometheus_client import Counter, Gauge, Histogram
+    from prometheus_client import Counter, Gauge, Histogram, REGISTRY
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
+    REGISTRY = None
 
 logger = logging.getLogger("SLOMonitor")
 
@@ -250,39 +251,62 @@ class SLOMonitor:
         logger.info(f"[SLOMonitor] Initialized with {len(self.thresholds)} SLO thresholds")
     
     def _init_prometheus_metrics(self):
-        """Initialize Prometheus metrics."""
+        """Initialize Prometheus metrics idempotently without duplicate registration conflicts."""
         if not PROMETHEUS_AVAILABLE:
             return
-        
+
+        def _get_or_create_metric(metric_cls, name, documentation, labelnames=(), buckets=None):
+            """Return existing collector if already registered, otherwise create a new one."""
+            # Fast-path: check the internal name-to-collector mapping first
+            if hasattr(REGISTRY, "_names_to_collectors") and name in REGISTRY._names_to_collectors:
+                return REGISTRY._names_to_collectors[name]
+
+            kwargs = {}
+            if labelnames:
+                kwargs["labelnames"] = list(labelnames)
+            if buckets is not None:
+                kwargs["buckets"] = buckets
+
+            try:
+                return metric_cls(name, documentation, **kwargs)
+            except ValueError:
+                # Race or missed the fast-path check — retrieve what's already registered
+                if hasattr(REGISTRY, "_names_to_collectors") and name in REGISTRY._names_to_collectors:
+                    return REGISTRY._names_to_collectors[name]
+                raise
+
         # Latency histograms
-        self._latency_histograms: Dict[str, Histogram] = {}
+        self._latency_histograms: Dict[str, object] = {}
         for threshold in self.thresholds:
             if threshold.slo_type in [SLOType.LATENCY_P99, SLOType.LATENCY_P95]:
                 name = f"{threshold.service}_latency_seconds"
                 if name not in self._latency_histograms:
-                    self._latency_histograms[name] = Histogram(
+                    self._latency_histograms[name] = _get_or_create_metric(
+                        Histogram,
                         name,
                         f'{threshold.service} request latency',
                         buckets=[0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
                     )
-        
+
         # Success/error counters
-        self._request_counters: Dict[str, Counter] = {}
+        self._request_counters: Dict[str, object] = {}
         for threshold in self.thresholds:
             if threshold.slo_type == SLOType.SUCCESS_RATE:
                 name = f"{threshold.service}_requests_total"
                 if name not in self._request_counters:
-                    self._request_counters[name] = Counter(
+                    self._request_counters[name] = _get_or_create_metric(
+                        Counter,
                         name,
                         f'{threshold.service} requests',
-                        ['status']
+                        labelnames=['status']
                     )
-        
+
         # Compliance gauges
-        self._compliance_gauges: Dict[str, Gauge] = {}
+        self._compliance_gauges: Dict[str, object] = {}
         for threshold in self.thresholds:
             name = f"slo_compliance_{threshold.service}_{threshold.slo_type.value}"
-            self._compliance_gauges[name] = Gauge(
+            self._compliance_gauges[name] = _get_or_create_metric(
+                Gauge,
                 name,
                 f'SLO compliance for {threshold.service}'
             )

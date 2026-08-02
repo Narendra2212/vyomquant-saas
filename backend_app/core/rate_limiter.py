@@ -26,17 +26,94 @@ USAGE:
 """
 
 import asyncio
+import fnmatch
 import logging
 import time
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, List, Optional, Tuple, Any
 
 try:
     from backend_app.core.cache import redis_manager
 except ImportError:
-    from backend_app.core.cache import redis_manager
+    redis_manager = None
 
 logger = logging.getLogger("RateLimiter")
+
+
+class InMemoryRedis:
+    """In-memory Redis fallback for testing or when Redis server is offline."""
+    def __init__(self):
+        self.kv: Dict[str, str] = {}
+        self.zsets: Dict[str, Dict[str, float]] = {}
+
+    async def get(self, key: str) -> Optional[str]:
+        return self.kv.get(key)
+
+    async def set(self, key: str, value: str):
+        self.kv[key] = str(value)
+        return True
+
+    async def incr(self, key: str) -> int:
+        val = int(self.kv.get(key, "0")) + 1
+        self.kv[key] = str(val)
+        return val
+
+    async def decr(self, key: str) -> int:
+        val = int(self.kv.get(key, "0")) - 1
+        self.kv[key] = str(val)
+        return val
+
+    async def delete(self, *keys):
+        for k in keys:
+            if isinstance(k, (list, tuple, set)):
+                for subk in k:
+                    self.kv.pop(subk, None)
+                    self.zsets.pop(subk, None)
+            else:
+                self.kv.pop(k, None)
+                self.zsets.pop(k, None)
+        return True
+
+    async def expire(self, key: str, ttl: int):
+        return True
+
+    async def keys(self, pattern: str) -> List[str]:
+        all_keys = set(self.kv.keys()) | set(self.zsets.keys())
+        return [k for k in all_keys if fnmatch.fnmatch(k, pattern)]
+
+    async def zadd(self, key: str, mapping: Dict[str, float]):
+        if key not in self.zsets:
+            self.zsets[key] = {}
+        for member, score in mapping.items():
+            self.zsets[key][member] = float(score)
+        return len(mapping)
+
+    async def zremrangebyscore(self, key: str, min_score: float, max_score: float) -> int:
+        if key not in self.zsets:
+            return 0
+        to_remove = [
+            m for m, score in self.zsets[key].items()
+            if min_score <= score <= max_score
+        ]
+        for m in to_remove:
+            del self.zsets[key][m]
+        return len(to_remove)
+
+    async def zcard(self, key: str) -> int:
+        if key not in self.zsets:
+            return 0
+        return len(self.zsets[key])
+
+    async def zrange(self, key: str, start: int, stop: int, withscores: bool = False):
+        if key not in self.zsets:
+            return []
+        sorted_items = sorted(self.zsets[key].items(), key=lambda x: x[1])
+        if stop < 0:
+            stop = len(sorted_items) + stop
+        sliced = sorted_items[start : stop + 1]
+        if withscores:
+            return [(m, s) for m, s in sliced]
+        return [m for m, s in sliced]
 
 
 class RateLimitExceeded(Exception):
@@ -75,6 +152,7 @@ class RateLimiter:
     - 20 open positions max
     
     Uses Redis for distributed rate limiting across multiple workers.
+    Falls back gracefully to in-memory tracking if Redis is offline.
     """
     
     # Default limits
@@ -82,9 +160,30 @@ class RateLimiter:
     DEFAULT_TRADES_PER_MINUTE = 100
     DEFAULT_MAX_POSITIONS = 20
     
-    def __init__(self):
-        self.redis = redis_manager
+    def __init__(self, redis_client=None):
+        self._redis_override = redis_client
+        self._fallback_redis = InMemoryRedis()
         self._lock = asyncio.Lock()
+    
+    @property
+    def redis(self):
+        if self._redis_override is not None:
+            return self._redis_override
+        if redis_manager is not None:
+            # Check if core.cache RedisClient pool is connected
+            pool = getattr(redis_manager, "pool", None)
+            if pool is not None and not isinstance(pool, type(redis_manager)):
+                return pool
+            # Check if backend.redis_manager RedisManager is connected
+            if getattr(redis_manager, "_connected", False):
+                cache_client = getattr(redis_manager, "cache", None)
+                if cache_client is not None:
+                    return cache_client
+        return self._fallback_redis
+
+    @redis.setter
+    def redis(self, value):
+        self._redis_override = value
     
     def _get_keys(self, user_id: str) -> Dict[str, str]:
         """Get Redis keys for a user."""
@@ -122,7 +221,7 @@ class RateLimiter:
             # Find oldest trade in window to calculate retry_after
             oldest = await self.redis.zrange(second_key, 0, 0, withscores=True)
             retry_after = 1.0 - (now - oldest[0][1]) if oldest else 1.0
-            violations.append(("trades_per_second", trades_second, self.DEFAULT_TRADES_PER_SECOND, retry_after))
+            violations.append(("trades_per_second", trades_second, self.DEFAULT_TRADES_PER_SECOND, max(0.1, retry_after)))
         
         # Check trades per minute (sliding window)
         minute_key = keys["trades_minute"]
@@ -138,7 +237,7 @@ class RateLimiter:
             # Find oldest trade in window
             oldest = await self.redis.zrange(minute_key, 0, 0, withscores=True)
             retry_after = 60.0 - (now - oldest[0][1]) if oldest else 60.0
-            violations.append(("trades_per_minute", trades_minute, self.DEFAULT_TRADES_PER_MINUTE, retry_after))
+            violations.append(("trades_per_minute", trades_minute, self.DEFAULT_TRADES_PER_MINUTE, max(0.1, retry_after)))
         
         # Raise if any violations
         if violations:
@@ -187,36 +286,47 @@ class RateLimiter:
                 "open_positions",
                 current_positions,
                 self.DEFAULT_MAX_POSITIONS,
-                retry_after=0  # Positions must be closed manually
+                retry_after=0.0  # Positions must be closed manually
             )
         
         return True
     
     async def get_open_position_count(self, user_id: str) -> int:
-        """Get current open position count for user."""
+        """Get current open position count for user (never negative)."""
         keys = self._get_keys(user_id)
         count = await self.redis.get(keys["positions"])
-        return int(count) if count else 0
+        if not count:
+            return 0
+        try:
+            val = int(count)
+            return max(0, val)
+        except (ValueError, TypeError):
+            return 0
     
     async def increment_position_count(self, user_id: str) -> int:
         """Increment open position count. Returns new count."""
         keys = self._get_keys(user_id)
-        new_count = await self.redis.incr(keys["positions"])
+        current = await self.get_open_position_count(user_id)
+        new_count = current + 1
+        await self.redis.set(keys["positions"], str(new_count))
         return new_count
     
     async def decrement_position_count(self, user_id: str) -> int:
-        """Decrement open position count. Returns new count."""
+        """Decrement open position count. Enforces non-negative invariant."""
         keys = self._get_keys(user_id)
-        current = await self.redis.get(keys["positions"])
-        if current and int(current) > 0:
-            new_count = await self.redis.decr(keys["positions"])
+        current = await self.get_open_position_count(user_id)
+        if current > 0:
+            new_count = current - 1
+            await self.redis.set(keys["positions"], str(new_count))
             return new_count
+        await self.redis.set(keys["positions"], "0")
         return 0
     
     async def set_position_count(self, user_id: str, count: int):
-        """Set exact position count (useful for reconciliation)."""
+        """Set exact position count (never negative)."""
         keys = self._get_keys(user_id)
-        await self.redis.set(keys["positions"], str(count))
+        safe_count = max(0, count)
+        await self.redis.set(keys["positions"], str(safe_count))
     
     async def get_status(self, user_id: str) -> RateLimitStatus:
         """Get current rate limit status for a user."""
@@ -268,13 +378,11 @@ class RateLimiter:
     
     async def get_all_user_limits(self) -> Dict[str, RateLimitStatus]:
         """Get rate limit status for all users (admin only)."""
-        # This is expensive - use sparingly
         pattern = "rate_limit:user:*:trades:second"
         keys = await self.redis.keys(pattern)
         
         results = {}
         for key in keys:
-            # Extract user_id from key
             parts = key.split(":")
             if len(parts) >= 3:
                 user_id = parts[2]
@@ -285,3 +393,4 @@ class RateLimiter:
 
 # Global singleton
 rate_limiter = RateLimiter()
+

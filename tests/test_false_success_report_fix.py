@@ -76,6 +76,7 @@ class TestMarketplaceBillingWebhook:
         Before fix: marketplace_{lib_id} item_key was rejected as invalid
         After fix:  Updates library_subscriptions status to active
         """
+        import asyncio
         import backend_app.routers.billing as billing_module
         
         # Mock the background supabase to have a pending subscription
@@ -88,7 +89,7 @@ class TestMarketplaceBillingWebhook:
         
         with patch.object(billing_module, '_background_sb', mock_background_sb):
             try:
-                await billing_module._apply_marketplace_entitlement("user_123", "lib_456")
+                asyncio.run(billing_module._apply_marketplace_entitlement("user_123", "lib_456"))
                 # Should not raise HTTPException
             except Exception as e:
                 pytest.fail(f"Should not raise exception for valid marketplace item_key: {e}")
@@ -164,8 +165,9 @@ class TestPerformanceFetchError:
                 service._get_supabase = lambda user: MagicMock()
                 service.get_strategy = AsyncMock(return_value={"strategy": {"id": "strat_123"}})
                 
+                import asyncio
                 with pytest.raises(RuntimeError):
-                    await service._get_strategy_performance("user_123", "strat_123")
+                    asyncio.run(service._get_strategy_performance("user_123", "strat_123"))
             except Exception as e:
                 pytest.fail(f"Should raise RuntimeError, got: {e}")
 

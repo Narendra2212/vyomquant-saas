@@ -18,7 +18,7 @@ def test_nightly_audit_workflow_contains_audit_steps():
     assert "pip-audit" in content, "Nightly workflow missing pip-audit step"
     assert "npm audit" in content, "Nightly workflow missing npm audit step"
     assert "cargo audit" in content, "Nightly workflow missing cargo audit step"
-    assert "pip-audit -r requirements.txt" in content, "Nightly workflow missing pip-audit command"
+    assert "pip-audit -r requirements-cpu.txt" in content, "Nightly workflow missing pip-audit command"
     assert "cd algo22-terminal" in content, "Nightly workflow missing npm audit path"
     assert "cd algo22-terminal/src-tauri" in content, "Nightly workflow missing cargo audit path"
 

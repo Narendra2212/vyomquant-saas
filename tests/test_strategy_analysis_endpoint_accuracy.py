@@ -15,6 +15,10 @@ import os
 import pytest
 from unittest.mock import MagicMock, patch
 
+os.environ["DEV_MODE"] = "true"
+os.environ["ENV"] = "testing"
+os.environ["REDIS_URL"] = ""
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 
@@ -42,17 +46,27 @@ class TestWalkForwardEndpointAccuracy:
         mock_optimization_engine.run_walk_forward_analysis = AsyncMock(return_value=[mock_walk_forward_result])
         
         mock_backtest_runtime = MagicMock()
+        mock_binance = MagicMock()
+        mock_binance.return_value.fetch_ohlcv = AsyncMock(return_value=[[1700000000000 + i*60000, 50000, 51000, 49000, 50500, 100] for i in range(100)])
         
         # Mock the get_optimization_engine and get_backtest_runtime functions
         with patch('backend_app.routers.strategies.get_optimization_engine', return_value=mock_optimization_engine), \
+             patch('backend_app.backend.optimization_engine.get_optimization_engine', return_value=mock_optimization_engine), \
              patch('backend_app.routers.strategies.get_backtest_runtime', return_value=mock_backtest_runtime), \
-             patch('backend_app.routers.strategies.ccxt.binance'):
+             patch('backend_app.routers.strategies.ccxt.binance', mock_binance):
             
             # Test payload with proper DAG configuration
             payload = {
                 "dag": {
-                    "nodes": [{"id": "test-node", "type": "indicator"}],
-                    "edges": [],
+                    "nodes": [
+                        {"id": "data-node", "type": "market_data"},
+                        {"id": "rsi-node", "type": "indicator", "indicator": "rsi"},
+                        {"id": "action-node", "type": "action"}
+                    ],
+                    "edges": [
+                        {"source": "data-node", "target": "rsi-node"},
+                        {"source": "rsi-node", "target": "action-node"}
+                    ],
                     "strategy_name": "Test Strategy"
                 },
                 "start_date": "2023-01-01",
@@ -105,15 +119,25 @@ class TestWalkForwardEndpointAccuracy:
         mock_optimization_engine.run_walk_forward_analysis = AsyncMock(return_value=mock_results)
         
         mock_backtest_runtime = MagicMock()
+        mock_binance = MagicMock()
+        mock_binance.return_value.fetch_ohlcv = AsyncMock(return_value=[[1700000000000 + i*60000, 50000, 51000, 49000, 50500, 100] for i in range(100)])
         
         with patch('backend_app.routers.strategies.get_optimization_engine', return_value=mock_optimization_engine), \
+             patch('backend_app.backend.optimization_engine.get_optimization_engine', return_value=mock_optimization_engine), \
              patch('backend_app.routers.strategies.get_backtest_runtime', return_value=mock_backtest_runtime), \
-             patch('backend_app.routers.strategies.ccxt.binance'):
+             patch('backend_app.routers.strategies.ccxt.binance', mock_binance):
             
             payload = {
                 "dag": {
-                    "nodes": [{"id": "test-node", "type": "indicator"}],
-                    "edges": [],
+                    "nodes": [
+                        {"id": "data-node", "type": "market_data"},
+                        {"id": "rsi-node", "type": "indicator", "indicator": "rsi"},
+                        {"id": "action-node", "type": "action"}
+                    ],
+                    "edges": [
+                        {"source": "data-node", "target": "rsi-node"},
+                        {"source": "rsi-node", "target": "action-node"}
+                    ],
                     "strategy_name": "Test Strategy"
                 },
                 "start_date": "2023-01-01",

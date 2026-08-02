@@ -304,7 +304,14 @@ class BacktestRuntime:
         Returns:
             Dictionary of performance metrics
         """
-        equity_series = pd.Series(equity_curve)
+        if isinstance(equity_curve, list) and len(equity_curve) > 0 and isinstance(equity_curve[0], dict):
+            equity_series = pd.Series([float(e.get("equity", 0.0)) for e in equity_curve])
+        else:
+            equity_series = pd.Series(equity_curve, dtype=float)
+        
+        if len(equity_series) == 0:
+            return {"sortino_ratio": 0.0, "calmar_ratio": 0.0, "recovery_factor": 0.0}
+            
         returns = equity_series.pct_change().dropna()
         
         # Calculate additional metrics
@@ -318,7 +325,10 @@ class BacktestRuntime:
             metrics["sortino_ratio"] = 0.0
         
         # Calmar Ratio (annual return / max drawdown)
-        annual_return = (equity_series.iloc[-1] / equity_series.iloc[0] - 1) * (252 / len(equity_series))
+        if len(equity_series) > 0 and equity_series.iloc[0] != 0:
+            annual_return = (equity_series.iloc[-1] / equity_series.iloc[0] - 1) * (252 / len(equity_series))
+        else:
+            annual_return = 0.0
         max_dd = stats.get("Max Drawdown [%]", 0) / 100
         if max_dd > 0:
             metrics["calmar_ratio"] = annual_return / max_dd

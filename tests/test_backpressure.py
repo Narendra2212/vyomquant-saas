@@ -7,6 +7,7 @@ STEP 9: Verify backpressure system works correctly.
 import sys
 import os
 import time
+import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from backend_app.core.backpressure import (
@@ -194,6 +195,7 @@ def test_stats():
     print(f"[PASS] Stats collected: {stats['total_accepted']} accepted, {stats['total_rejected']} rejected")
 
 
+@pytest.mark.asyncio
 async def test_admission_control():
     """Test admission control context manager."""
     import asyncio
@@ -218,6 +220,7 @@ async def test_admission_control():
     print("[PASS] Admission control works")
 
 
+@pytest.mark.asyncio
 async def test_circuit_breaker():
     """Test circuit breaker pattern."""
     import asyncio

@@ -40,6 +40,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend_app.core.cache import redis_manager
+from backend_app.core.subscription_engine import SubscriptionEngine
 
 # ══════════════════════════════════════════════════════════════════════════
 #  SAFE SUPABASE TYPE IMPORT
@@ -279,6 +280,26 @@ async def get_operator_user(user: dict = Depends(get_current_user)) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════
+#  LEGACY DEPLOYMENT LIMITS (Backward Compatibility)
+#  These constants are maintained for backward compatibility with existing tests
+#  and fleet_manager.py. The new subscription engine in subscription_engine.py
+#  is the authoritative source for quota enforcement.
+# ══════════════════════════════════════════════════════════════════════════
+
+DEPLOYMENT_LIMITS = {
+    "free": 1,
+    "pro_999": 5,
+    "elite_1999": float("inf"),
+}
+
+ML_BUILD_LIMITS = {
+    "free": 0,
+    "pro_999": 0,
+    "elite_1999": 2,
+}
+
+
+# ══════════════════════════════════════════════════════════════════════════
 #  REDIS-CACHED PROFILE HELPER
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -335,6 +356,11 @@ async def _get_cached_profile(user_id: str, supabase_or_token: Any) -> dict:
         supabase = create_request_supabase(supabase_or_token)
     else:
         supabase = supabase_or_token
+
+    if supabase is None:
+        if DEV_MODE:
+            return {"subscription_tier": "free", "deployed_bots": 0, "ml_strategies_built": 0, "ml_addons_purchased": 0, "is_frozen": False}
+        raise RuntimeError("Supabase client is None")
 
     try:
         resp = (

@@ -34,6 +34,9 @@ from backend_app.core.subscription_dependencies import (
 from backend_app.core.subscription_engine import Resource
 from backend_app.core.event_bus import publish_command, PublishError
 from backend_app.core.rate_limit import limiter
+import ccxt
+from backend_app.backend.optimization_engine import get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
+from backend_app.backend.backtest_runtime import get_backtest_runtime
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -497,14 +500,14 @@ class DAGCompiler:
         """
         action_nodes = [
             n.get("id") for n in nodes
-            if n.get("type") == "action" and n.get("id") in reachable
+            if n.get("type") in ("action", "signal", "logic") and n.get("id") in reachable
         ]
         
         if not action_nodes:
             raise DAGCompilationError(
                 "No ACTION nodes reachable in DAG. "
                 f"Reachable nodes: {reachable}. "
-                "DAG must have at least one 'action' type node that produces signals."
+                "DAG must have at least one 'action', 'signal', or 'logic' type node that produces signals."
             )
         
         return action_nodes
@@ -2005,177 +2008,162 @@ async def walk_forward_optimization(
             "robustness_score": 0.0
         }
     
-    # Generate job ID for background task
+    # Generate job ID
     job_id = str(uuid4())
+    async_job = payload.get("async_job", False)
     
-    async def _run_walk_forward_background():
-        """Background task to run walk-forward analysis."""
-        try:
-            # Update job status to running
-            await redis_manager.hset(_status_key(job_id), {
-                "status": "running",
-                "progress": "0%",
-                "message": "Initializing walk-forward analysis..."
-            })
-            
-            # Reconstruct Strategy Package from DAG config
-            execution_graph = ExecutionGraph(
-                id=str(uuid4()),
-                version="v1.0",
-                nodes=dag_config.get("nodes", []),
-                edges=dag_config.get("edges", []),
-                execution_order=[],
-                metadata={"strategy_name": dag_config.get("strategy_name", "Walk Forward Strategy")}
-            )
-            
-            strategy_package = StrategyPackage(
-                id=str(uuid4()),
-                strategy_id="walk-forward-analysis",
-                version="v1.0",
-                execution_graph=execution_graph,
-                metadata=execution_graph.metadata,
-                dependencies={}
-            )
-            
-            # Get optimization engine and backtest runtime
-            optimization_engine = get_optimization_engine()
-            backtest_runtime = get_backtest_runtime()
-            
-            # Inject backtest runtime
-            optimization_engine.set_backtest_runtime(backtest_runtime)
-            
-            # Create exchange instance
-            exchange_instance = ccxt.binance()
-            
-            # Create optimization config for walk-forward
-            config = OptimizationConfig(
-                method=OptimizationMethod.GRID_SEARCH,  # Use grid search as base
-                validation_method=ValidationMethod.WALK_FORWARD,
-                parameters={
-                    "start_date": start_date,
-                    "end_date": end_date,
-                    **payload.get("parameters", {})
-                },
-                n_iterations=1,  # Single iteration for walk-forward
-                n_trials=1,
-                training_window_days=training_window_days,
-                validation_window_days=test_window_days,
-                test_window_days=test_window_days,
-                initial_capital=payload.get("initial_capital", 10000.0),
-                commission=payload.get("commission", 0.001),
-                slippage=payload.get("slippage", 0.0005),
-                risk_per_trade=payload.get("risk_per_trade", 0.01),
-                max_drawdown=payload.get("max_drawdown", 0.2),
-                daily_loss_limit=payload.get("daily_loss_limit", 0.05)
-            )
-            
-            await redis_manager.hset(_status_key(job_id), {
-                "status": "running",
-                "progress": "20%",
-                "message": "Running walk-forward window analysis..."
-            })
-            
-            # Run genuine walk-forward analysis
-            walk_forward_results = await optimization_engine.run_walk_forward_analysis(
-                strategy_package=strategy_package,
-                config=config,
-                user_id=user["id"],
-                strategy_id="walk-forward-analysis",
-                version_id=None,
-                version="v1.0",
-                exchange_instance=exchange_instance
-            )
-            
-            if not walk_forward_results:
+    async def _execute_walk_forward():
+        """Run walk-forward analysis computation."""
+        # Reconstruct Strategy Package from DAG config
+        execution_graph = ExecutionGraph(
+            id=str(uuid4()),
+            version="v1.0",
+            nodes=dag_config.get("nodes", []),
+            edges=dag_config.get("edges", []),
+            execution_order=[],
+            metadata={"strategy_name": dag_config.get("strategy_name", "Walk Forward Strategy")}
+        )
+        
+        strategy_package = StrategyPackage(
+            id=str(uuid4()),
+            strategy_id="walk-forward-analysis",
+            version="v1.0",
+            execution_graph=execution_graph,
+            metadata=execution_graph.metadata,
+            dependencies={}
+        )
+        
+        # Get optimization engine and backtest runtime
+        optimization_engine = get_optimization_engine()
+        backtest_runtime = get_backtest_runtime()
+        
+        # Inject backtest runtime
+        optimization_engine.set_backtest_runtime(backtest_runtime)
+        
+        # Create exchange instance
+        exchange_instance = ccxt.binance()
+        
+        # Create optimization config for walk-forward
+        config = OptimizationConfig(
+            method=OptimizationMethod.GRID_SEARCH,  # Use grid search as base
+            validation_method=ValidationMethod.WALK_FORWARD,
+            parameters={
+                "start_date": start_date,
+                "end_date": end_date,
+                **payload.get("parameters", {})
+            },
+            n_iterations=1,  # Single iteration for walk-forward
+            n_trials=1,
+            training_window_days=training_window_days,
+            validation_window_days=test_window_days,
+            test_window_days=test_window_days,
+            initial_capital=payload.get("initial_capital", 10000.0),
+            fees=payload.get("commission", 0.001),
+            slippage=payload.get("slippage", 0.0005),
+            risk_per_trade=payload.get("risk_per_trade", 0.01),
+            max_drawdown=payload.get("max_drawdown", 0.2),
+            daily_loss_limit=payload.get("daily_loss_limit", 0.05)
+        )
+        
+        # Run genuine walk-forward analysis
+        walk_forward_results = await optimization_engine.run_walk_forward_analysis(
+            strategy_package=strategy_package,
+            config=config,
+            user_id=user["id"],
+            strategy_id="walk-forward-analysis",
+            version_id=None,
+            version="v1.0",
+            exchange_instance=exchange_instance
+        )
+        
+        if not walk_forward_results:
+            return {
+                "status": "failed",
+                "error": "Walk forward analysis failed to generate results."
+            }
+        
+        # Aggregate metrics across all windows
+        train_sharpes = [r.train_metrics.get("sharpe_ratio", 0) for r in walk_forward_results]
+        test_sharpes = [r.test_metrics.get("sharpe_ratio", 0) for r in walk_forward_results]
+        train_returns = [r.train_metrics.get("total_return_pct", 0) for r in walk_forward_results]
+        test_returns = [r.test_metrics.get("total_return_pct", 0) for r in walk_forward_results]
+        
+        avg_train_sharpe = sum(train_sharpes) / len(train_sharpes) if train_sharpes else 0
+        avg_test_sharpe = sum(test_sharpes) / len(test_sharpes) if test_sharpes else 0
+        avg_train_return = sum(train_returns) / len(train_returns) if train_returns else 0
+        avg_test_return = sum(test_returns) / len(test_returns) if test_returns else 0
+        
+        # Calculate robustness score (consistency across windows)
+        if len(test_sharpes) > 1:
+            import statistics
+            sharpe_std = statistics.stdev(test_sharpes) if len(test_sharpes) > 1 else 0
+            robustness_score = max(0, 1 - (sharpe_std / (abs(avg_test_sharpe) + 0.01)))
+        else:
+            robustness_score = 0.5
+        
+        result = {
+            "status": "completed",
+            "computation_method": "genuine_walk_forward_analysis",
+            "computation_note": (
+                "Genuine rolling window walk-forward analysis with sequential in-sample/out-of-sample windows. "
+                "Each out-of-sample window uses parameters fit only on the preceding in-sample window. "
+                f"Analyzed {len(walk_forward_results)} windows with {training_window_days}-day training and {test_window_days}-day test periods."
+            ),
+            "windows_analyzed": len(walk_forward_results),
+            "robustness_score": round(robustness_score, 3),
+            "avg_in_sample_sharpe": round(avg_train_sharpe, 2),
+            "avg_out_of_sample_sharpe": round(avg_test_sharpe, 2),
+            "avg_in_sample_return_pct": round(avg_train_return, 2),
+            "avg_out_of_sample_return_pct": round(avg_test_return, 2),
+            "window_results": [
+                {
+                    "iteration": r.iteration,
+                    "train_start": r.train_start,
+                    "train_end": r.train_end,
+                    "test_start": r.test_start,
+                    "test_end": r.test_end,
+                    "train_sharpe": r.train_metrics.get("sharpe_ratio", 0),
+                    "test_sharpe": r.test_metrics.get("sharpe_ratio", 0),
+                    "train_return_pct": r.train_metrics.get("total_return_pct", 0),
+                    "test_return_pct": r.test_metrics.get("total_return_pct", 0)
+                }
+                for r in walk_forward_results
+            ]
+        }
+        return result
+
+    if async_job:
+        async def _run_walk_forward_background():
+            try:
+                await redis_manager.hset(_status_key(job_id), {
+                    "status": "running",
+                    "progress": "0%",
+                    "message": "Initializing walk-forward analysis..."
+                })
+                res = await _execute_walk_forward()
+                import json
+                await redis_manager.hset(_status_key(job_id), {
+                    "status": res.get("status", "completed"),
+                    "result": json.dumps(res),
+                    "progress": "100%",
+                    "message": "Walk-forward analysis completed"
+                })
+            except Exception as e:
+                logger.error(f"Error in walk-forward background task: {e}")
                 await redis_manager.hset(_status_key(job_id), {
                     "status": "failed",
-                    "error": "Walk forward analysis failed to generate results."
+                    "error": str(e)
                 })
-                return
-            
-            await redis_manager.hset(_status_key(job_id), {
-                "status": "running",
-                "progress": "80%",
-                "message": "Aggregating window results..."
-            })
-            
-            # Aggregate metrics across all windows
-            train_sharpes = [r.train_metrics.get("sharpe_ratio", 0) for r in walk_forward_results]
-            test_sharpes = [r.test_metrics.get("sharpe_ratio", 0) for r in walk_forward_results]
-            train_returns = [r.train_metrics.get("total_return_pct", 0) for r in walk_forward_results]
-            test_returns = [r.test_metrics.get("total_return_pct", 0) for r in walk_forward_results]
-            
-            avg_train_sharpe = sum(train_sharpes) / len(train_sharpes) if train_sharpes else 0
-            avg_test_sharpe = sum(test_sharpes) / len(test_sharpes) if test_sharpes else 0
-            avg_train_return = sum(train_returns) / len(train_returns) if train_returns else 0
-            avg_test_return = sum(test_returns) / len(test_returns) if test_returns else 0
-            
-            # Calculate robustness score (consistency across windows)
-            if len(test_sharpes) > 1:
-                import statistics
-                sharpe_std = statistics.stdev(test_sharpes) if len(test_sharpes) > 1 else 0
-                robustness_score = max(0, 1 - (sharpe_std / (abs(avg_test_sharpe) + 0.01)))
-            else:
-                robustness_score = 0.5
-            
-            result = {
-                "status": "completed",
-                "computation_method": "genuine_walk_forward_analysis",
-                "computation_note": (
-                    "Genuine rolling window walk-forward analysis with sequential in-sample/out-of-sample windows. "
-                    "Each out-of-sample window uses parameters fit only on the preceding in-sample window. "
-                    f"Analyzed {len(walk_forward_results)} windows with {training_window_days}-day training and {test_window_days}-day test periods."
-                ),
-                "windows_analyzed": len(walk_forward_results),
-                "robustness_score": round(robustness_score, 3),
-                "avg_in_sample_sharpe": round(avg_train_sharpe, 2),
-                "avg_out_of_sample_sharpe": round(avg_test_sharpe, 2),
-                "avg_in_sample_return_pct": round(avg_train_return, 2),
-                "avg_out_of_sample_return_pct": round(avg_test_return, 2),
-                "window_results": [
-                    {
-                        "iteration": r.iteration,
-                        "train_start": r.train_start,
-                        "train_end": r.train_end,
-                        "test_start": r.test_start,
-                        "test_end": r.test_end,
-                        "train_sharpe": r.train_metrics.get("sharpe_ratio", 0),
-                        "test_sharpe": r.test_metrics.get("sharpe_ratio", 0),
-                        "train_return_pct": r.train_metrics.get("total_return_pct", 0),
-                        "test_return_pct": r.test_metrics.get("total_return_pct", 0)
-                    }
-                    for r in walk_forward_results
-                ]
-            }
-            
-            # Store result in Redis
-            import json
-            await redis_manager.hset(_status_key(job_id), {
-                "status": "completed",
-                "result": json.dumps(result),
-                "progress": "100%",
-                "message": "Walk-forward analysis completed successfully"
-            })
-            
-        except Exception as e:
-            logger.error(f"Error in walk-forward background task: {e}")
-            import traceback
-            traceback.print_exc()
-            await redis_manager.hset(_status_key(job_id), {
-                "status": "failed",
-                "error": str(e),
-                "message": f"Walk forward analysis failed: {str(e)}"
-            })
-    
-    # Add background task
-    background_tasks.add_task(_run_walk_forward_background)
-    
-    return {
-        "status": "queued",
-        "job_id": job_id,
-        "message": "Walk-forward analysis queued as background task. Use GET /api/strategies/backtest-status/{job_id} to check progress.",
-        "check_status_endpoint": f"/api/strategies/backtest-status/{job_id}"
-    }
+
+        background_tasks.add_task(_run_walk_forward_background)
+        return {
+            "status": "queued",
+            "job_id": job_id,
+            "message": "Walk-forward analysis queued as background task.",
+            "check_status_endpoint": f"/api/strategies/backtest-status/{job_id}"
+        }
+    else:
+        return await _execute_walk_forward()
 
 @router.post("/{strategy_id}/pause")
 async def pause_strategy(strategy_id: str, user: dict = Depends(get_current_user), fleet=Depends(get_fleet)):

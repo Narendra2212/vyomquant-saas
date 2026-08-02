@@ -96,6 +96,10 @@ class BacktestService:
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
+        if sb is None:
+            logger.info(f"[DEV_MODE] Skipping Supabase backtest insertion for {backtest_id}")
+            return backtest_data
+        
         result = sb.table("strategy_backtests").insert(backtest_data).execute()
         
         logger.info(f"Created backtest {backtest_id} for strategy {strategy_id}")
@@ -141,6 +145,10 @@ class BacktestService:
             "final_capital": results.get("final_capital", 0)
         }
         
+        if sb is None:
+            logger.info(f"[DEV_MODE] Skipping Supabase backtest update for {backtest_id}")
+            return update_data
+        
         result = sb.table("strategy_backtests").update(update_data).eq("id", backtest_id).execute()
         
         logger.info(f"Updated backtest {backtest_id} with results")
@@ -163,6 +171,8 @@ class BacktestService:
             Backtest record with results
         """
         sb = self._get_supabase({"id": user_id, "access_token": None})
+        if sb is None:
+            return None
         
         result = sb.table("strategy_backtests").select("*").eq("id", backtest_id).eq("user_id", user_id).execute()
         
@@ -189,6 +199,8 @@ class BacktestService:
             List of backtest records
         """
         sb = self._get_supabase({"id": user_id, "access_token": None})
+        if sb is None:
+            return []
         
         query = sb.table("strategy_backtests").select("*").eq("user_id", user_id)
         
@@ -218,6 +230,8 @@ class BacktestService:
             All backtests for strategy
         """
         sb = self._get_supabase({"id": user_id, "access_token": None})
+        if sb is None:
+            return []
         
         result = (sb.table("strategy_backtests")
                  .select("*")

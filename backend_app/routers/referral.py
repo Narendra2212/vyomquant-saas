@@ -233,11 +233,25 @@ async def get_referral_stats(
     Includes commission history and payout history.
     """
     if not supabase:
-        raise HTTPException(status_code=503, detail="Database connection unavailable")
-    
+        # DEV_MODE fallback — same pattern as user.py endpoints (return safe empty stub)
+        return {
+            "status": "active",
+            "referral_code": "DEV-OFFLINE",
+            "referral_link": _get_referral_link("DEV-OFFLINE"),
+            "total_referrals": 0,
+            "active_referrals": 0,
+            "pending_earnings": 0.0,
+            "approved_earnings": 0.0,
+            "paid_earnings": 0.0,
+            "lifetime_earnings": 0.0,
+            "commission_history": [],
+            "payout_history": [],
+            "available_discounts": 0,
+        }
+
     try:
         user_id = user["id"]
-        
+
         # Ensure referral code exists
         referral_code = _ensure_referral_code_exists(user_id, supabase)
         

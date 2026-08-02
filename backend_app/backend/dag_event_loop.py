@@ -311,26 +311,28 @@ class DAGEventLoop:
     def __init__(self, 
                  dag_nodes: List[Dict], 
                  dag_edges: List[Dict],
-                 symbols: List[str],
+                 symbols: Optional[List[str]] = None,
                  timeframe: str = "1m",
                  tenant_id: str = "default",
-                 max_rolling_window: int = 1000):
+                 max_rolling_window: int = 1000,
+                 strategy_id: Optional[str] = None):
         self.dag_nodes = dag_nodes
         self.dag_edges = dag_edges
-        self.symbols = symbols
+        self.symbols = symbols if symbols is not None else []
         self.timeframe = timeframe
         self.tenant_id = tenant_id
         self.max_rolling_window = max_rolling_window
+        self.strategy_id = strategy_id
         
         # Initialize DAG engines for each symbol
         self.dag_engines: Dict[str, DAGEngine] = {
-            symbol: DAGEngine() for symbol in symbols
+            symbol: DAGEngine() for symbol in self.symbols
         }
         
         # Initialize rolling windows for each symbol
         self.rolling_windows: Dict[str, RollingWindow] = {
             symbol: RollingWindow(symbol=symbol, timeframe=timeframe, max_size=1000) 
-            for symbol in symbols
+            for symbol in self.symbols
         }
         
         # Signal callbacks
@@ -684,10 +686,14 @@ class DAGEventLoop:
         Uses Redis set for deduplication tracking.
         Propagates errors directly (fail-closed).
         """
+        import inspect
         from backend_app.core.cache.redis_manager import redis_manager
         redis_client = await redis_manager.get_client()
         redis_key = f"executed_signals:{tenant_id}"
-        return await redis_client.sismember(redis_key, signal_id)
+        res = redis_client.sismember(redis_key, signal_id)
+        if inspect.isawaitable(res):
+            res = await res
+        return bool(res)
 
     async def _mark_signal_executed(self, tenant_id: str, signal_id: str, ttl_seconds: int = 86400):
         """
@@ -695,11 +701,16 @@ class DAGEventLoop:
         
         Propagates errors directly (fail-closed).
         """
+        import inspect
         from backend_app.core.cache.redis_manager import redis_manager
         redis_client = await redis_manager.get_client()
         redis_key = f"executed_signals:{tenant_id}"
-        await redis_client.sadd(redis_key, signal_id)
-        await redis_client.expire(redis_key, ttl_seconds)
+        res1 = redis_client.sadd(redis_key, signal_id)
+        if inspect.isawaitable(res1):
+            await res1
+        res2 = redis_client.expire(redis_key, ttl_seconds)
+        if inspect.isawaitable(res2):
+            await res2
 
     async def _emit_signal(self, signal: Signal):
         """

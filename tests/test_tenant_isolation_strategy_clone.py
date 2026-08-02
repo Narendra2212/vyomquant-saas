@@ -14,6 +14,10 @@ import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+os.environ["DEV_MODE"] = "true"
+os.environ["ENV"] = "testing"
+os.environ["REDIS_URL"] = ""
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from fastapi import HTTPException
@@ -40,12 +44,14 @@ class TestStrategyCloneTenantIsolation:
         import jwt
         import time
         
-        secret = os.getenv("SUPABASE_JWT_SECRET", "test_secret")
+        secret = os.getenv("SUPABASE_JWT_SECRET", "dev-secret-change-in-production")
         payload = {
             "sub": "user_a_123",
             "email": "user_a@example.com",
             "tenant_id": "tenant_a",
             "role": "authenticated",
+            "aud": "authenticated",
+            "iss": "algo22-test",
             "exp": int(time.time()) + 3600
         }
         return jwt.encode(payload, secret, algorithm="HS256")
@@ -56,12 +62,14 @@ class TestStrategyCloneTenantIsolation:
         import jwt
         import time
         
-        secret = os.getenv("SUPABASE_JWT_SECRET", "test_secret")
+        secret = os.getenv("SUPABASE_JWT_SECRET", "dev-secret-change-in-production")
         payload = {
             "sub": "user_b_456",
             "email": "user_b@example.com",
             "tenant_id": "tenant_b",
             "role": "authenticated",
+            "aud": "authenticated",
+            "iss": "algo22-test",
             "exp": int(time.time()) + 3600
         }
         return jwt.encode(payload, secret, algorithm="HS256")
@@ -69,22 +77,18 @@ class TestStrategyCloneTenantIsolation:
     @pytest.fixture
     def mock_supabase(self):
         """Mock Supabase client for testing."""
-        with patch('backend_app.routers.strategies.create_request_supabase') as mock:
+        with patch('backend_app.routers.strategies._sb') as mock_sb, \
+             patch('backend_app.routers.strategies.create_request_supabase') as mock:
             mock_client = MagicMock()
-            mock.table = MagicMock()
-            mock.select = MagicMock()
-            mock.eq = MagicMock()
-            mock.execute = MagicMock()
-            mock.insert = MagicMock()
-            mock.update = MagicMock()
-            
+            mock_client.table = MagicMock()
             mock.return_value = mock_client
-            yield mock
+            mock_sb.return_value = mock_client
+            yield mock_client
 
     def test_clone_own_strategy_succeeds(self, client, user_a_token, mock_supabase):
         """Test that user can clone their own strategy."""
         # Mock successful strategy fetch and clone
-        mock_supabase.return_value.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
             {
                 "id": "strategy_123",
                 "user_id": "user_a_123",
@@ -93,7 +97,7 @@ class TestStrategyCloneTenantIsolation:
             }
         ]
         
-        mock_supabase.return_value.table.return_value.insert.return_value.execute.return_value.data = [
+        mock_supabase.table.return_value.insert.return_value.execute.return_value.data = [
             {
                 "id": "strategy_456",
                 "user_id": "user_a_123",
@@ -114,7 +118,7 @@ class TestStrategyCloneTenantIsolation:
     def test_clone_other_user_strategy_returns_404(self, client, user_b_token, mock_supabase):
         """Test that user cannot clone another user's strategy - returns 404."""
         # Mock empty result (strategy not found for this user)
-        mock_supabase.return_value.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
         
         response = client.post(
             "/api/strategies/strategy_123/clone",
