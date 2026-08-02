@@ -141,6 +141,10 @@ PACKAGE_NAME_MAPPINGS = {
     'sklearn': 'scikit-learn',
     'yaml': 'pyyaml',
     'cv2': 'opencv-python',
+    'asgi_correlation_id': 'asgi-correlation-id',
+    'opentelemetry': 'opentelemetry-api',
+    'prometheus_client': 'prometheus-client',
+    'sentry_sdk': 'sentry-sdk',
 }
 
 # Local backend modules that should not be reported as undeclared
@@ -178,6 +182,11 @@ LOCAL_BACKEND_MODULES = {
     'websocket_auth',
 }
 
+# Optional dependencies that may be in separate requirements files
+OPTIONAL_DEPENDENCIES = {
+    'torch',  # In requirements-cpu.txt with extra index URL
+}
+
 
 def audit_dependencies(root_req: str = "requirements.txt", backend_req: str = "backend_app/requirements.txt", requirements_base: str = "requirements-base.txt") -> Dict:
     """Compare and validate dependency manifest consistency."""
@@ -213,6 +222,9 @@ def audit_dependencies(root_req: str = "requirements.txt", backend_req: str = "b
             continue
         # Filter out local backend modules
         if imported in LOCAL_BACKEND_MODULES:
+            continue
+        # Filter out optional dependencies
+        if imported in OPTIONAL_DEPENDENCIES:
             continue
         # Map import name to PyPI package name if needed
         mapped_name = PACKAGE_NAME_MAPPINGS.get(imported, imported)
