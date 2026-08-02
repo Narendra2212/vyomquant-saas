@@ -522,6 +522,14 @@ class SharedRedisManager:
         """Return self for compatibility (health check calls pool.ping())."""
         return self
 
+    def pubsub(self):
+        """Return pubsub instance from cache client or mock pubsub."""
+        if DEV_MODE:
+            return MockRedisPubSub()
+        if self._redis_manager and self._redis_manager.cache:
+            return self._redis_manager.cache.pubsub()
+        return MockRedisPubSub()
+
 
 # Global singleton instance
 redis_manager = SharedRedisManager()
