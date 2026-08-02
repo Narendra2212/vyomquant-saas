@@ -11,7 +11,7 @@ python-multipart==0.0.9
 starlette==0.41.0
 gunicorn==23.0.0
 rq==1.16.2
-uvloop==0.22.0
+
 # --- Auth + Database -----------------------------------------------------
 supabase==2.7.4
 cryptography==43.0.0
@@ -69,10 +69,15 @@ slowapi==0.1.9
 psutil==6.0.0
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
+opentelemetry-instrumentation==0.46b0
+opentelemetry-semantic-conventions==0.46b0
+opentelemetry-util-http==0.46b0
+opentelemetry-instrumentation-asgi==0.46b0
 opentelemetry-instrumentation-fastapi==0.46b0
 opentelemetry-instrumentation-aiohttp-client==0.46b0
 opentelemetry-instrumentation-redis==0.46b0
 opentelemetry-instrumentation-sqlalchemy==0.46b0
+wrapt==1.16.0
 elasticsearch==8.14.0
 aiosmtplib==3.0.1
 asgi-correlation-id==4.3.1
