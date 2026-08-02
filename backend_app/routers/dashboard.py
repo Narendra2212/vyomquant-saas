@@ -17,7 +17,7 @@ Enterprise-grade aggregation:
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Request
 
 from backend_app.backend.dashboard_aggregation_service import get_dashboard_service
 from backend_app.core.dependencies import get_current_user
@@ -30,6 +30,7 @@ logger = logging.getLogger("DashboardRouter")
 @router.get("/dashboard")
 @limiter.limit("100/minute")
 async def get_dashboard(
+    request: Request,
     equity_days: int = Query(30, ge=1, le=365, description="Number of days for equity curve data"),
     user: dict = Depends(get_current_user)
 ):
@@ -86,6 +87,7 @@ async def get_dashboard(
 @router.get("/dashboard/overview")
 @limiter.limit("200/minute")
 async def get_dashboard_overview(
+    request: Request,
     user: dict = Depends(get_current_user)
 ):
     """
@@ -121,6 +123,7 @@ async def get_dashboard_overview(
 @router.get("/dashboard/strategies")
 @limiter.limit("200/minute")
 async def get_dashboard_strategies(
+    request: Request,
     user: dict = Depends(get_current_user)
 ):
     """
