@@ -40,6 +40,11 @@ class MockRedisClient:
         self._store = {}
         self._pubsub = {}
     
+    @property
+    def redis(self):
+        """Return self for compatibility with redis_manager.redis pattern."""
+        return self
+    
     async def get(self, key: str) -> Optional[str]:
         return self._store.get(key)
     
@@ -134,6 +139,26 @@ class MockRedisClient:
         if count:
             entries = entries[:count]
         return entries
+    
+    async def xreadgroup(self, group: str, consumer: str, streams: dict, count: int = 10, block: int = 1000):
+        """Mock xreadgroup for streams - returns empty list"""
+        return []
+    
+    async def xack(self, stream: str, group: str, *ids: str):
+        """Mock xack for streams - always returns 0"""
+        return 0
+    
+    async def xgroup_create(self, stream: str, group: str, id: str = "$", mkstream: bool = False):
+        """Mock xgroup_create for streams - no-op"""
+        return True
+    
+    async def zpopmin(self, key: str, count: int = 1):
+        """Mock zpopmin for sorted sets - returns empty list"""
+        return []
+    
+    async def zadd(self, key: str, mapping: dict, *args, **kwargs) -> int:
+        """Mock zadd for sorted sets - returns 0"""
+        return 0
 
 
 class MockRedisPubSub:
@@ -522,6 +547,15 @@ class SharedRedisManager:
         """Return self for compatibility (health check calls pool.ping())."""
         return self
 
+    @property
+    def redis(self):
+        """
+        Return self for backward compatibility with legacy .redis access pattern.
+        The legacy code expects a single client with both cache and stream methods.
+        This proxy provides unified access to both cache and events operations.
+        """
+        return self
+
     def pubsub(self):
         """Return pubsub instance from cache client or mock pubsub."""
         if DEV_MODE:
@@ -529,6 +563,150 @@ class SharedRedisManager:
         if self._redis_manager and self._redis_manager.cache:
             return self._redis_manager.cache.pubsub()
         return MockRedisPubSub()
+
+    async def xreadgroup(
+        self,
+        group: str,
+        consumer: str,
+        streams: dict,
+        count: int = 10,
+        block: int = 1000,
+    ):
+        """Read from a Redis stream consumer group with fail-soft behavior."""
+        if DEV_MODE:
+            return await self._mock_client.xreadgroup(group, consumer, streams, count, block)
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.events:
+            try:
+                return await self._redis_manager.events.xreadgroup(
+                    group, consumer, streams, count=count, block=block
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Redis XREADGROUP failed for '{group}': {e}")
+                return []
+        return []
+
+    async def xack(self, stream: str, group: str, *ids: str):
+        """Acknowledge messages from a Redis stream consumer group with fail-soft behavior."""
+        if DEV_MODE:
+            return 0  # Mock: always return success
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.events:
+            try:
+                return await self._redis_manager.events.xack(stream, group, *ids)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Redis XACK failed for '{stream}': {e}")
+                return 0
+        return 0
+
+    async def xgroup_create(self, stream: str, group: str, id: str = "$", mkstream: bool = False):
+        """Create a Redis stream consumer group with fail-soft behavior."""
+        if DEV_MODE:
+            return True  # Mock: always return success
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.events:
+            try:
+                return await self._redis_manager.events.xgroup_create(stream, group, id=id, mkstream=mkstream)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Redis XGROUP_CREATE failed for '{stream}': {e}")
+                return False
+        return False
+
+    async def zpopmin(self, key: str, count: int = 1):
+        """Pop minimum scores from sorted set with fail-soft behavior."""
+        if DEV_MODE:
+            return await self._mock_client.zpopmin(key, count)
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.cache:
+            try:
+                return await self._redis_manager.cache.zpopmin(key, count)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Redis ZPOPMIN failed for '{key}': {e}")
+                return []
+        return []
+
+    async def publish(self, channel: str, message: str):
+        """Publish to a Redis channel with fail-soft behavior."""
+        if DEV_MODE:
+            return await self._mock_client.publish(channel, message)
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.cache:
+            try:
+                return await self._redis_manager.cache.publish(channel, message)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Redis PUBLISH failed for '{channel}': {e}")
+                return 0
+        return 0
+
+    async def publish(self, channel: str, message: str):
+        """Publish to a Redis channel with fail-soft behavior."""
+        if DEV_MODE:
+            return await self._mock_client.publish(channel, message)
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.cache:
+            try:
+                return await self._redis_manager.cache.publish(channel, message)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Redis PUBLISH failed for '{channel}': {e}")
+                return 0
+        return 0
+
+    async def publish(self, channel: str, message: str):
+        """Publish to a Redis channel with fail-soft behavior."""
+        if DEV_MODE:
+            return await self._mock_client.publish(channel, message)
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.cache:
+            try:
+                return await self._redis_manager.cache.publish(channel, message)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Redis PUBLISH failed for '{channel}': {e}")
+                return 0
+        return 0
+
+    async def publish(self, channel: str, message: str):
+        """Publish to a Redis channel with fail-soft behavior."""
+        if DEV_MODE:
+            return await self._mock_client.publish(channel, message)
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.cache:
+            try:
+                return await self._redis_manager.cache.publish(channel, message)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Redis PUBLISH failed for '{channel}': {e}")
+                return 0
+        return 0
+
+    async def publish(self, channel: str, message: str):
+        """Publish to a Redis channel with fail-soft behavior."""
+        if DEV_MODE:
+            return await self._mock_client.publish(channel, message)
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.cache:
+            try:
+                return await self._redis_manager.cache.publish(channel, message)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Redis PUBLISH failed for '{channel}': {e}")
+                return 0
+        return 0
 
 
 # Global singleton instance

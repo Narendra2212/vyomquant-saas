@@ -5,6 +5,7 @@ Loads environment variables from .env file and provides typed settings access.
 All sensitive values should be stored in .env file, never committed to git.
 """
 
+import logging
 import os
 from enum import Enum
 from typing import Optional
@@ -13,6 +14,8 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class Environment(Enum):
@@ -229,6 +232,27 @@ def print_config_status():
     print("\n" + "=" * 50)
     print(" SYSTEM MODE:", status["mode"].upper())
     print("=" * 50)
+    
+    # 🚨 DEV_MODE SAFETY CHECK
+    dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
+    env = os.environ.get("ENV", "").lower()
+    production_like_envs = {"production", "prod", "live", "staging"}
+    
+    if dev_mode and env in production_like_envs:
+        logger.critical(
+            "🚨 CRITICAL: DEV_MODE=true is set in a production-like environment (ENV=%s). "
+            "This causes Redis and other backends to use in-memory mocks instead of real connections, "
+            "silently bypassing durability guarantees. This is a dangerous misconfiguration.",
+            env.upper()
+        )
+        print(f" ⚠️  WARNING: DEV_MODE=true detected with ENV={env.upper()}")
+        print(f"     This enables in-memory mocks for Redis and other backends.")
+        print(f"     Expected ENV values for DEV_MODE: development, testing, dev")
+        print(f"     Actual ENV value: {env.upper()}")
+    elif dev_mode:
+        print(f" DEV_MODE: ON (appropriate for ENV={env.upper()})")
+    else:
+        print(f" DEV_MODE: OFF")
     
     # Supabase status
     if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_ROLE_KEY:

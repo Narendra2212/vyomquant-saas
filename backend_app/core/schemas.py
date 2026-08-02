@@ -121,7 +121,7 @@ def create_api_error_response(
     return {
         "error": str(error_code),
         "message": message,
-        "detail": message,  # Backward compatibility for legacy frontend reads
+        "detail": detail_or_msg,  # Preserve original structured dict or string
         "status_code": status_code,
         "timestamp": now_iso,
         "path": path,
