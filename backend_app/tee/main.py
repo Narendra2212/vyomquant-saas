@@ -66,6 +66,20 @@ async def process_start_bot(payload: dict):
     if not strategy_id:
         logger.error("No strategy ID in blueprint")
         return False
+    
+    # SECURITY: Validate ML/DL strategies have trained models before TEE deployment
+    nodes = []
+    if isinstance(blueprint.get("buy_logic"), dict):
+        nodes = blueprint["buy_logic"].get("_nodes", [])
+    elif isinstance(blueprint.get("nodes"), list):
+        nodes = blueprint["nodes"]
+    
+    # Check for ML/DL nodes
+    ml_nodes = [n for n in nodes if n.get("type", "").lower() in ["ml", "dl"]]
+    
+    if ml_nodes and not blueprint.get("ml_model_path"):
+        logger.error(f"TEE deployment blocked: Strategy {strategy_id} contains ML/DL nodes but no trained model reference")
+        return False
         
     # Attempt Leader Election for this strategy
     acquired = await try_acquire_lock(strategy_id)

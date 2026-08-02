@@ -18,14 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install core runner dependencies first to leverage Docker layer caching
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir gunicorn httpx redis
-
 # Install heavy PyTorch CPU package in isolated cached layer
-RUN pip install --no-cache-dir --prefer-binary torch==2.3.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --prefer-binary torch==2.3.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu
 
-# Install remaining backend requirements
+# Install all backend requirements from requirements-cpu.txt (includes requirements-base.txt)
 COPY requirements-base.txt requirements-cpu.txt ./
 RUN pip install --no-cache-dir --prefer-binary -r requirements-cpu.txt && \
     find /opt/venv -type f -name '*.pyc' -delete && \

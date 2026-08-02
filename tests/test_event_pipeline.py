@@ -162,7 +162,7 @@ async def test_pipeline_initialization():
 
 def test_idempotency_checker():
     """Test idempotency checker."""
-    from backend_app.core.redis_client import MockRedisClient
+    from backend_app.core.cache import MockRedisClient
     checker = IdempotencyChecker(MockRedisClient())
     
     # Generate key

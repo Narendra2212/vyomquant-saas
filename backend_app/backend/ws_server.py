@@ -298,16 +298,46 @@ async def websocket_endpoint(
     
     Args:
         tenant_id: Tenant identifier
-        token: Authentication token (optional, for private channels)
+        token: Authentication token (required)
         channels: Comma-separated list of channels to subscribe
     """
+    # Verify WebSocket auth — FAIL CLOSED
+    if not token:
+        await websocket.close(code=4001, reason="Authentication required: provide ?token=")
+        return
+        
+    try:
+        from backend_app.core.websocket_auth import _decode_hs256_token
+        payload = _decode_hs256_token(token)
+        if not payload:
+            await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+            return
+        
+        token_user_id = payload.get("sub")
+        if not token_user_id:
+            await websocket.close(code=4003, reason="Invalid token: missing user ID")
+            return
+        
+        # Verify tenant_id matches token
+        if str(token_user_id) != str(tenant_id):
+            await websocket.close(code=4003, reason="Unauthorized: tenant_id mismatch")
+            return
+    except Exception as e:
+        logger.warning(f"WebSocket auth failed for tenant {tenant_id}: {e}")
+        await websocket.close(code=4003, reason="Authentication verification failed")
+        return
+    
     manager = get_ws_manager()
     
     # Generate client ID
     client_id = f"{tenant_id}_{datetime.utcnow().timestamp()}_{id(websocket)}"
     
+    # Accept connection
+    await websocket.accept()
+    
     # Register connection
-    conn = await manager.connect(websocket, tenant_id, client_id)
+    conn = WebSocketConnection(websocket, tenant_id, client_id)
+    await manager.connect(conn)
     
     # Subscribe to requested channels
     if channels:
@@ -370,13 +400,35 @@ async def websocket_endpoint(
 @app.websocket("/ws/public/{channel}")
 async def public_websocket(
     websocket: WebSocket,
-    channel: str
+    channel: str,
+    token: str = Query(None)
 ):
-    """Public WebSocket endpoint (no authentication required)."""
+    """Public WebSocket endpoint - authentication required."""
     manager = get_ws_manager()
     
+    # Verify WebSocket auth — FAIL CLOSED
+    if not token:
+        await websocket.close(code=4001, reason="Authentication required: provide ?token=")
+        return
+        
+    try:
+        from backend_app.core.websocket_auth import _decode_hs256_token
+        payload = _decode_hs256_token(token)
+        if not payload:
+            await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+            return
+        
+        user_id = payload.get("sub")
+        if not user_id:
+            await websocket.close(code=4003, reason="Invalid token: missing user ID")
+            return
+        tenant_id = user_id
+    except Exception as e:
+        logger.warning(f"WebSocket auth failed for public channel {channel}: {e}")
+        await websocket.close(code=4003, reason="Authentication verification failed")
+        return
+    
     client_id = f"public_{channel}_{datetime.utcnow().timestamp()}_{id(websocket)}"
-    tenant_id = "public"
     
     await websocket.accept()
     

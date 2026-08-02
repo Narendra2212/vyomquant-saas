@@ -9,6 +9,7 @@ All Redis operations MUST go through this manager to ensure:
 - No connection leaks
 - No race conditions
 - High performance
+- DEV_MODE fallback for local development
 
 MANDATORY IMPORT:
     from backend_app.core.cache.redis_manager import redis_manager
@@ -20,7 +21,132 @@ STRICT RULES:
 - ✅ YES: redis_manager.get_client()
 """
 
+import json
+import logging
+import os
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+# DEV_MODE detection
+DEV_MODE = os.environ.get("DEV_MODE", "false").lower() == "true" or \
+           os.environ.get("ENV", "").lower() == "development"
+
+
+class MockRedisClient:
+    """In-memory mock Redis for DEV_MODE"""
+    
+    def __init__(self):
+        self._store = {}
+        self._pubsub = {}
+    
+    async def get(self, key: str) -> Optional[str]:
+        return self._store.get(key)
+    
+    async def set(self, key: str, value: str, ex: int = None, **kwargs):
+        nx = kwargs.get('nx', False)
+        if nx and key in self._store:
+            return None
+        self._store[key] = value
+        return True
+    
+    async def delete(self, key: str):
+        self._store.pop(key, None)
+        return True
+
+    async def exists(self, key: str) -> bool:
+        return key in self._store
+
+    async def setex(self, key: str, seconds: int, value: str):
+        self._store[key] = value
+        return True
+
+    async def sismember(self, key: str, member: Any) -> bool:
+        s = self._store.get(key, set())
+        if not isinstance(s, set):
+            return False
+        return member in s
+
+    async def sadd(self, key: str, *members: Any) -> int:
+        if key not in self._store or not isinstance(self._store[key], set):
+            self._store[key] = set()
+        added = 0
+        for m in members:
+            if m not in self._store[key]:
+                self._store[key].add(m)
+                added += 1
+        return added
+
+    async def hset(self, key: str, name: str = None, value: str = None, mapping: dict = None) -> int:
+        if key not in self._store or not isinstance(self._store[key], dict):
+            self._store[key] = {}
+        count = 0
+        if mapping:
+            for k, v in mapping.items():
+                self._store[key][k] = str(v)
+                count += 1
+        elif name is not None:
+            self._store[key][name] = str(value)
+            count = 1
+        return count
+
+    async def hget(self, key: str, field: str) -> Optional[str]:
+        d = self._store.get(key, {})
+        return d.get(field) if isinstance(d, dict) else None
+
+    async def hgetall(self, key: str) -> dict:
+        d = self._store.get(key, {})
+        return dict(d) if isinstance(d, dict) else {}
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        return True
+    
+    async def publish(self, channel: str, message: str):
+        logger.debug(f"MockRedis: publish to {channel}: {message}")
+        return 1
+    
+    async def subscribe(self, channel: str):
+        return MockRedisPubSub()
+    
+    async def ping(self):
+        return True
+
+    async def close(self):
+        pass
+    
+    async def keys(self, pattern: str = "*") -> list:
+        return [k for k in self._store.keys() if pattern == "*" or pattern in k]
+    
+    async def xadd(self, stream: str, data: dict, **kwargs):
+        """Mock xadd for streams - stores in memory"""
+        if stream not in self._store:
+            self._store[stream] = []
+        import time
+        entry_id = f"{int(time.time() * 1000)}-0"
+        self._store[stream].append((entry_id, data))
+        return entry_id
+    
+    async def xrevrange(self, stream: str, count: int = None, **kwargs):
+        """Mock xrevrange for streams - returns in reverse order"""
+        if stream not in self._store:
+            return []
+        entries = self._store[stream][::-1]  # Reverse for xrevrange
+        if count:
+            entries = entries[:count]
+        return entries
+
+
+class MockRedisPubSub:
+    """Mock pub/sub client"""
+    
+    async def get_message(self, ignore_subscribe_messages=False, timeout=0):
+        return None
+    
+    async def listen(self):
+        return iter([])
+    
+    async def close(self):
+        pass
 
 
 class PublishError(RuntimeError):
@@ -36,10 +162,12 @@ class SharedRedisManager:
     Wrapper around backend RedisManager providing unified interface.
     
     This ensures all code uses the shared connection pool.
+    Includes DEV_MODE fallback with MockRedisClient for local development.
     """
     
     _instance: Optional['SharedRedisManager'] = None
     _redis_manager = None
+    _mock_client = None
     
     def __new__(cls):
         if cls._instance is None:
@@ -51,6 +179,7 @@ class SharedRedisManager:
         if self._initialized:
             return
         self._initialized = True
+        self._mock_client = MockRedisClient()
     
     async def _ensure_manager(self):
         """Ensure the backend manager is initialized. Delegates reconnection debouncing to get_redis_manager."""
@@ -64,13 +193,19 @@ class SharedRedisManager:
         """
         Get the shared Redis client (cache database by default).
         
+        DEV_MODE: Returns MockRedisClient if Redis unavailable or in DEV_MODE.
+        
         Returns:
-            Redis client from shared pool
+            Redis client from shared pool or mock client in DEV_MODE
             
         Usage:
             redis_client = await redis_manager.get_client()
             await redis_client.setex(key, ttl, value)
         """
+        if DEV_MODE:
+            logger.info("DEV_MODE: Using MockRedisClient")
+            return self._mock_client
+        
         await self._ensure_manager()
         return self._redis_manager.cache if self._redis_manager else None
     
@@ -146,6 +281,9 @@ class SharedRedisManager:
 
     async def get(self, key: str):
         """Proxy to cache get method."""
+        if DEV_MODE:
+            return await self._mock_client.get(key)
+        
         await self._ensure_manager()
         if self._redis_manager and self._redis_manager.cache:
             try:
@@ -158,6 +296,9 @@ class SharedRedisManager:
 
     async def set(self, key: str, value: Any, **kwargs):
         """Proxy to cache set method."""
+        if DEV_MODE:
+            return await self._mock_client.set(key, value, **kwargs)
+        
         await self._ensure_manager()
         if self._redis_manager and self._redis_manager.cache:
             try:
@@ -170,6 +311,9 @@ class SharedRedisManager:
 
     async def delete(self, *keys: str):
         """Proxy to cache delete method."""
+        if DEV_MODE:
+            return await self._mock_client.delete(*keys)
+        
         await self._ensure_manager()
         if self._redis_manager and self._redis_manager.cache:
             try:
@@ -179,6 +323,86 @@ class SharedRedisManager:
                 logging.getLogger(__name__).warning(f"Cache DELETE failed for '{keys}': {e}")
                 return 0
         return 0
+    
+    async def sismember(self, key: str, member: Any) -> bool:
+        """Proxy to sismember method."""
+        if DEV_MODE:
+            return await self._mock_client.sismember(key, member)
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.cache:
+            try:
+                return await self._redis_manager.cache.sismember(key, member)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"SISMEMBER failed for '{key}': {e}")
+                return False
+        return False
+    
+    async def sadd(self, key: str, *members: Any) -> int:
+        """Proxy to sadd method."""
+        if DEV_MODE:
+            return await self._mock_client.sadd(key, *members)
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.cache:
+            try:
+                return await self._redis_manager.cache.sadd(key, *members)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"SADD failed for '{key}': {e}")
+                return 0
+        return 0
+    
+    async def expire(self, key: str, seconds: int) -> bool:
+        """Proxy to expire method."""
+        if DEV_MODE:
+            return await self._mock_client.expire(key, seconds)
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.cache:
+            try:
+                return await self._redis_manager.cache.expire(key, seconds)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"EXPIRE failed for '{key}': {e}")
+                return False
+        return False
+    
+    async def xadd(self, stream: str, data: dict, **kwargs):
+        """Proxy to xadd method (for streams)."""
+        if DEV_MODE:
+            return await self._mock_client.xadd(stream, data, **kwargs)
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.events:
+            try:
+                import json
+                body = {
+                    k: json.dumps(v) if not isinstance(v, str) else v
+                    for k, v in data.items()
+                }
+                return await self._redis_manager.events.xadd(stream, body, **kwargs)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"XADD failed for '{stream}': {e}")
+                return None
+        return None
+    
+    async def xrevrange(self, stream: str, count: int = None, **kwargs):
+        """Proxy to xrevrange method (for streams)."""
+        if DEV_MODE:
+            return await self._mock_client.xrevrange(stream, count, **kwargs)
+        
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.events:
+            try:
+                return await self._redis_manager.events.xrevrange(stream, count=count, **kwargs)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"XREVRANGE failed for '{stream}': {e}")
+                return []
+        return []
 
     async def xadd(
         self,

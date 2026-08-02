@@ -681,6 +681,21 @@ class StrategyService:
         if not strategy:
             raise ValueError(f"Strategy {strategy_id} not found")
         
+        # SECURITY: Validate ML/DL strategies have trained models before deployment
+        strategy_data = strategy.get("strategy", {})
+        nodes = []
+        if isinstance(strategy_data.get("buy_logic"), dict):
+            nodes = strategy_data["buy_logic"].get("_nodes", [])
+        
+        # Check for ML/DL nodes
+        ml_nodes = [n for n in nodes if n.get("type", "").lower() in ["ml", "dl"]]
+        
+        if ml_nodes and not strategy_data.get("ml_model_path"):
+            raise ValueError(
+                "Strategy contains ML/DL nodes but no trained model reference. "
+                "Train the model via POST /api/strategies/train-ml before deployment."
+            )
+        
         # Get specific version or current
         if version:
             version_res = (sb.table("strategy_versions")

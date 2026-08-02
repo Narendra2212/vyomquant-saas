@@ -68,6 +68,69 @@ class NodeType(Enum):
     ACTION = "action"
 
 
+def _detect_ml_nodes(nodes: List[Dict]) -> List[Dict]:
+    """
+    Detect ML/DL nodes in a DAG.
+    
+    Returns list of ML/DL nodes with their model_id requirements.
+    """
+    ml_nodes = []
+    for node in nodes:
+        node_type = node.get("type", "").lower()
+        if node_type in [NodeType.ML.value, NodeType.DL.value]:
+            ml_nodes.append(node)
+    return ml_nodes
+
+
+def _validate_ml_models_present(blueprint: Dict) -> None:
+    """
+    Validate that ML/DL strategies have trained models before deployment.
+    
+    Raises HTTPException if ML/DL nodes exist but no valid model reference.
+    """
+    # Extract nodes from blueprint
+    nodes = []
+    if "nodes" in blueprint:
+        nodes = blueprint["nodes"]
+    elif "buy_logic" in blueprint and isinstance(blueprint["buy_logic"], dict):
+        nodes = blueprint["buy_logic"].get("_nodes", [])
+    
+    # Check for ML/DL nodes
+    ml_nodes = _detect_ml_nodes(nodes)
+    
+    if not ml_nodes:
+        return  # No ML/DL nodes, no validation needed
+    
+    # Strategy contains ML/DL nodes - validate model references
+    ml_model_path = blueprint.get("ml_model_path")
+    
+    if not ml_model_path:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "ML_MODEL_MISSING",
+                "message": "Strategy contains ML/DL nodes but no trained model reference found. "
+                         "Train the model via POST /api/strategies/train-ml before deployment."
+            }
+        )
+    
+    # Validate that ML nodes have model_id
+    for node in ml_nodes:
+        model_id = node.get("model_id")
+        if not model_id:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "ML_NODE_MISSING_MODEL_ID",
+                    "message": f"ML/DL node '{node.get('id')}' missing model_id. "
+                             "Each ML/DL node must specify a trained model_id."
+                }
+            )
+    
+    # TODO: Add additional validation to check if model file actually exists
+    # This would require filesystem access or model registry check
+
+
 # Type compatibility rules: source_type -> [allowed_target_types]
 TYPE_COMPATIBILITY: Dict[str, List[str]] = {
     NodeType.MARKET_DATA.value: [NodeType.INDICATOR.value, NodeType.FEATURE.value, NodeType.MATH.value, NodeType.VALIDATION.value],
@@ -886,6 +949,19 @@ async def update_strategy(
     sb = _sb(user)
     if not sb:
         return {"id": strategy_id, "user_id": user["id"], "name": body.get("name", "Updated Dev Strategy")}
+    
+    # SECURITY: Prevent direct status updates that bypass deployment guards
+    if "status" in body and body["status"] in ["running", "deployed"]:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "DIRECT_STATUS_UPDATE_FORBIDDEN",
+                "message": "Cannot directly set status to 'running' or 'deployed'. "
+                         "Use the dedicated deploy endpoint POST /api/strategies/{id}/deploy "
+                         "which includes ML validation and other safety checks."
+            }
+        )
+    
     resp = (
         sb
         .table("strategies")
@@ -977,6 +1053,9 @@ async def deploy_bot(
     blueprint["exchange_id"] = body.get(
         "exchange_id", blueprint.get("exchange_id", "binance")
     )
+    
+    # SECURITY: Validate ML/DL strategies have trained models before deployment
+    _validate_ml_models_present(blueprint)
 
     symbol = blueprint.get("symbol", "BTC/USDT")
 
@@ -1744,7 +1823,8 @@ async def clone_strategy(strategy_id: str, user: dict = Depends(get_current_user
     if sb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
         
-    res = sb.table("strategies").select("*").eq("id", strategy_id).execute()
+    # SECURITY: Add ownership check to prevent tenant isolation bypass
+    res = sb.table("strategies").select("*").eq("id", strategy_id).eq("user_id", user["id"]).execute()
     if not res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
     
@@ -1766,7 +1846,16 @@ async def clone_strategy(strategy_id: str, user: dict = Depends(get_current_user
 
 @router.post("/optimize")
 async def optimize_strategy(payload: dict, user: dict = Depends(get_current_user)):
-    """Automatic hyperparameter optimization for strategy DAGs based on backtest results."""
+    """
+    Automatic DAG graph optimization (prunes unused nodes and redundant passes).
+    
+    IMPORTANT: This endpoint performs DAG structure optimization (pruning unused nodes),
+    NOT hyperparameter optimization. It does not search for optimal parameter values.
+    
+    For genuine hyperparameter optimization (Grid Search, Random Search, Bayesian, Genetic),
+    use POST /api/strategies/strategies/{strategy_id}/optimize which uses the
+    optimization_engine with proper parameter search algorithms.
+    """
     dag = payload.get("dag", {})
     nodes = dag.get("nodes", [])
     edges = dag.get("edges", [])
@@ -1791,6 +1880,12 @@ async def optimize_strategy(payload: dict, user: dict = Depends(get_current_user
     opt_dag = DAGCompiler.optimize_dag(nodes, edges)
     return {
         "status": "optimized",
+        "computation_method": "dag_structure_optimization",
+        "computation_note": (
+            "This endpoint performs DAG structure optimization (pruning unused nodes), "
+            "NOT hyperparameter optimization. Parameters are unchanged. "
+            "For genuine hyperparameter optimization, use POST /api/strategies/strategies/{strategy_id}/optimize."
+        ),
         "optimized_dag": opt_dag,
         "best_parameters": payload.get("parameters", {}),
         "actual_sharpe": bt_res.get("sharpe_ratio", 0.0),
@@ -1799,7 +1894,9 @@ async def optimize_strategy(payload: dict, user: dict = Depends(get_current_user
             "win_rate_pct": bt_res.get("win_rate_pct", 0.0),
             "max_drawdown_pct": bt_res.get("max_drawdown_pct", 0.0),
             "total_trades": bt_res.get("total_trades", 0)
-        }
+        },
+        "alternative_endpoint": "/api/strategies/strategies/{strategy_id}/optimize",
+        "alternative_description": "Hyperparameter optimization endpoint with Grid Search, Random Search, Bayesian, and Genetic algorithms"
     }
 
 @router.post("/monte-carlo")
@@ -1852,33 +1949,232 @@ async def monte_carlo_simulation(payload: dict, user: dict = Depends(get_current
     }
 
 @router.post("/walk-forward")
-async def walk_forward_optimization(payload: dict, user: dict = Depends(get_current_user)):
-    """Run out-of-sample Walk Forward optimization on historical backtest data."""
-    bt_res = backtest_internal(payload)
-    if bt_res.get("error") or bt_res.get("total_trades", 0) == 0:
+async def walk_forward_optimization(
+    payload: dict, 
+    user: dict = Depends(get_current_user),
+    background_tasks: BackgroundTasks = Depends()
+):
+    """
+    Run genuine rolling window walk-forward optimization on historical backtest data.
+    
+    This endpoint now implements actual walk-forward analysis by:
+    1. Splitting historical data into sequential in-sample/out-of-sample windows
+    2. Running backtests on each window using parameters fit only on the in-sample data
+    3. Aggregating real per-window metrics (not a fixed multiplier)
+    
+    IMPORTANT: Walk-forward analysis runs as a BACKGROUND TASK to avoid HTTP timeouts.
+    Results are stored in Redis and can be retrieved via the job status endpoint.
+    
+    Uses the optimization_engine.run_walk_forward_analysis() method for proper implementation.
+    """
+    from backend_app.backend.optimization_engine import get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
+    from backend_app.backend.backtest_runtime import get_backtest_runtime
+    from backend_app.backend.strategy_compiler import StrategyPackage, ExecutionGraph
+    from uuid import uuid4
+    import ccxt
+    from backend_app.core.cache import redis_manager
+    from backend_app.worker import _status_key
+    
+    # Extract configuration from payload
+    dag_config = payload.get("dag")
+    if not dag_config or not dag_config.get("nodes"):
         return {
             "status": "unavailable",
-            "message": "Walk forward optimization requires backtest trade signals.",
+            "message": "Walk forward optimization requires a DAG configuration with nodes.",
             "robustness_score": 0.0
         }
     
-    sharpe = bt_res.get("sharpe_ratio", 0.0)
-    # NOTE: out_of_sample_sharpe_estimate is a heuristic (in-sample Sharpe * 0.85),
-    # NOT the result of rolling out-of-sample window evaluation. A real walk-forward
-    # analysis requires repeated backtest_internal calls across sequential date windows.
-    # This is labelled as an estimate to avoid misrepresenting the computation.
-    oos_estimate = round(sharpe * 0.85, 2) if sharpe > 0 else 0.0
+    # Get walk-forward specific parameters
+    training_window_days = payload.get("training_window_days", 180)
+    test_window_days = payload.get("test_window_days", 30)
+    start_date = payload.get("start_date", "2023-01-01")
+    end_date = payload.get("end_date", "2023-12-31")
+    n_windows = payload.get("n_windows", 5)
+    
+    # Check if we have enough data for walk-forward
+    from datetime import datetime, timedelta
+    start_dt = datetime.fromisoformat(start_date)
+    end_dt = datetime.fromisoformat(end_date)
+    total_days = (end_dt - start_dt).days
+    required_days = training_window_days + test_window_days
+    
+    if total_days < required_days:
+        return {
+            "status": "unavailable",
+            "message": f"Insufficient data for walk-forward. Need {required_days} days, got {total_days} days.",
+            "robustness_score": 0.0
+        }
+    
+    # Generate job ID for background task
+    job_id = str(uuid4())
+    
+    async def _run_walk_forward_background():
+        """Background task to run walk-forward analysis."""
+        try:
+            # Update job status to running
+            await redis_manager.hset(_status_key(job_id), {
+                "status": "running",
+                "progress": "0%",
+                "message": "Initializing walk-forward analysis..."
+            })
+            
+            # Reconstruct Strategy Package from DAG config
+            execution_graph = ExecutionGraph(
+                id=str(uuid4()),
+                version="v1.0",
+                nodes=dag_config.get("nodes", []),
+                edges=dag_config.get("edges", []),
+                execution_order=[],
+                metadata={"strategy_name": dag_config.get("strategy_name", "Walk Forward Strategy")}
+            )
+            
+            strategy_package = StrategyPackage(
+                id=str(uuid4()),
+                strategy_id="walk-forward-analysis",
+                version="v1.0",
+                execution_graph=execution_graph,
+                metadata=execution_graph.metadata,
+                dependencies={}
+            )
+            
+            # Get optimization engine and backtest runtime
+            optimization_engine = get_optimization_engine()
+            backtest_runtime = get_backtest_runtime()
+            
+            # Inject backtest runtime
+            optimization_engine.set_backtest_runtime(backtest_runtime)
+            
+            # Create exchange instance
+            exchange_instance = ccxt.binance()
+            
+            # Create optimization config for walk-forward
+            config = OptimizationConfig(
+                method=OptimizationMethod.GRID_SEARCH,  # Use grid search as base
+                validation_method=ValidationMethod.WALK_FORWARD,
+                parameters={
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    **payload.get("parameters", {})
+                },
+                n_iterations=1,  # Single iteration for walk-forward
+                n_trials=1,
+                training_window_days=training_window_days,
+                validation_window_days=test_window_days,
+                test_window_days=test_window_days,
+                initial_capital=payload.get("initial_capital", 10000.0),
+                commission=payload.get("commission", 0.001),
+                slippage=payload.get("slippage", 0.0005),
+                risk_per_trade=payload.get("risk_per_trade", 0.01),
+                max_drawdown=payload.get("max_drawdown", 0.2),
+                daily_loss_limit=payload.get("daily_loss_limit", 0.05)
+            )
+            
+            await redis_manager.hset(_status_key(job_id), {
+                "status": "running",
+                "progress": "20%",
+                "message": "Running walk-forward window analysis..."
+            })
+            
+            # Run genuine walk-forward analysis
+            walk_forward_results = await optimization_engine.run_walk_forward_analysis(
+                strategy_package=strategy_package,
+                config=config,
+                user_id=user["id"],
+                strategy_id="walk-forward-analysis",
+                version_id=None,
+                version="v1.0",
+                exchange_instance=exchange_instance
+            )
+            
+            if not walk_forward_results:
+                await redis_manager.hset(_status_key(job_id), {
+                    "status": "failed",
+                    "error": "Walk forward analysis failed to generate results."
+                })
+                return
+            
+            await redis_manager.hset(_status_key(job_id), {
+                "status": "running",
+                "progress": "80%",
+                "message": "Aggregating window results..."
+            })
+            
+            # Aggregate metrics across all windows
+            train_sharpes = [r.train_metrics.get("sharpe_ratio", 0) for r in walk_forward_results]
+            test_sharpes = [r.test_metrics.get("sharpe_ratio", 0) for r in walk_forward_results]
+            train_returns = [r.train_metrics.get("total_return_pct", 0) for r in walk_forward_results]
+            test_returns = [r.test_metrics.get("total_return_pct", 0) for r in walk_forward_results]
+            
+            avg_train_sharpe = sum(train_sharpes) / len(train_sharpes) if train_sharpes else 0
+            avg_test_sharpe = sum(test_sharpes) / len(test_sharpes) if test_sharpes else 0
+            avg_train_return = sum(train_returns) / len(train_returns) if train_returns else 0
+            avg_test_return = sum(test_returns) / len(test_returns) if test_returns else 0
+            
+            # Calculate robustness score (consistency across windows)
+            if len(test_sharpes) > 1:
+                import statistics
+                sharpe_std = statistics.stdev(test_sharpes) if len(test_sharpes) > 1 else 0
+                robustness_score = max(0, 1 - (sharpe_std / (abs(avg_test_sharpe) + 0.01)))
+            else:
+                robustness_score = 0.5
+            
+            result = {
+                "status": "completed",
+                "computation_method": "genuine_walk_forward_analysis",
+                "computation_note": (
+                    "Genuine rolling window walk-forward analysis with sequential in-sample/out-of-sample windows. "
+                    "Each out-of-sample window uses parameters fit only on the preceding in-sample window. "
+                    f"Analyzed {len(walk_forward_results)} windows with {training_window_days}-day training and {test_window_days}-day test periods."
+                ),
+                "windows_analyzed": len(walk_forward_results),
+                "robustness_score": round(robustness_score, 3),
+                "avg_in_sample_sharpe": round(avg_train_sharpe, 2),
+                "avg_out_of_sample_sharpe": round(avg_test_sharpe, 2),
+                "avg_in_sample_return_pct": round(avg_train_return, 2),
+                "avg_out_of_sample_return_pct": round(avg_test_return, 2),
+                "window_results": [
+                    {
+                        "iteration": r.iteration,
+                        "train_start": r.train_start,
+                        "train_end": r.train_end,
+                        "test_start": r.test_start,
+                        "test_end": r.test_end,
+                        "train_sharpe": r.train_metrics.get("sharpe_ratio", 0),
+                        "test_sharpe": r.test_metrics.get("sharpe_ratio", 0),
+                        "train_return_pct": r.train_metrics.get("total_return_pct", 0),
+                        "test_return_pct": r.test_metrics.get("total_return_pct", 0)
+                    }
+                    for r in walk_forward_results
+                ]
+            }
+            
+            # Store result in Redis
+            import json
+            await redis_manager.hset(_status_key(job_id), {
+                "status": "completed",
+                "result": json.dumps(result),
+                "progress": "100%",
+                "message": "Walk-forward analysis completed successfully"
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in walk-forward background task: {e}")
+            import traceback
+            traceback.print_exc()
+            await redis_manager.hset(_status_key(job_id), {
+                "status": "failed",
+                "error": str(e),
+                "message": f"Walk forward analysis failed: {str(e)}"
+            })
+    
+    # Add background task
+    background_tasks.add_task(_run_walk_forward_background)
+    
     return {
-        "status": "completed",
-        "computation_method": "heuristic_oos_discount",
-        "computation_note": (
-            "out_of_sample_sharpe_estimate is computed as in_sample_sharpe * 0.85 "
-            "(15% heuristic discount). Rolling window walk-forward is not yet implemented."
-        ),
-        "in_sample_sharpe": sharpe,
-        "out_of_sample_sharpe_estimate": oos_estimate,
-        "total_trades_analyzed": bt_res.get("total_trades", 0),
-        "total_return_pct": bt_res.get("total_return_pct", 0.0),
+        "status": "queued",
+        "job_id": job_id,
+        "message": "Walk-forward analysis queued as background task. Use GET /api/strategies/backtest-status/{job_id} to check progress.",
+        "check_status_endpoint": f"/api/strategies/backtest-status/{job_id}"
     }
 
 @router.post("/{strategy_id}/pause")
@@ -1921,6 +2217,13 @@ async def resume_strategy(strategy_id: str, user: dict = Depends(get_current_use
     rec = res.data[0]
     if rec.get("is_active") and rec.get("status") == "running":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Strategy '{strategy_id}' is already running.")
+    
+    # SECURITY: Validate ML/DL strategies have trained models before resume
+    blueprint = {
+        "nodes": rec.get("buy_logic", {}).get("_nodes", []),
+        "ml_model_path": rec.get("ml_model_path")
+    }
+    _validate_ml_models_present(blueprint)
     
     symbol = rec.get("symbol", "BTC/USDT")
     dag_config = rec.get("dag_config") or {"strategy_id": strategy_id}

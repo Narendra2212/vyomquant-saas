@@ -108,15 +108,20 @@ class WebSocketManager:
     
     async def connect(
         self,
-        websocket: WebSocket,
+        websocket_or_connection,
         tenant_id: str,
         client_id: str
     ) -> WebSocketConnection:
-        """Accept new WebSocket connection."""
-        await websocket.accept()
+        """Accept new WebSocket connection or register existing connection."""
+        from fastapi import WebSocket
         
-        # Create connection
-        connection = WebSocketConnection(websocket, tenant_id, client_id)
+        if isinstance(websocket_or_connection, WebSocket):
+            # Legacy behavior: accept WebSocket and create connection
+            await websocket_or_connection.accept()
+            connection = WebSocketConnection(websocket_or_connection, tenant_id, client_id)
+        else:
+            # New behavior: connection already created and accepted
+            connection = websocket_or_connection
         
         # Store connection
         if tenant_id not in self._connections:
@@ -412,14 +417,21 @@ async def websocket_endpoint(
         ws.send(JSON.stringify({"action": "subscribe", "channel": "orders"}));
     """
     # Authenticate and get tenant_id from token
-    from backend_app.core.auth import \
-        verify_token  # Assuming auth module exists
-    
     try:
-        user = verify_token(token)
-        tenant_id = str(user.tenant_id)
+        from backend_app.core.websocket_auth import _decode_hs256_token
+        payload = _decode_hs256_token(token)
+        if not payload:
+            await websocket.close(code=1008, reason="Invalid token")
+            return
+        
+        user_id = payload.get("sub")
+        if not user_id:
+            await websocket.close(code=1008, reason="Invalid token: missing user ID")
+            return
+        
+        tenant_id = payload.get("tenant_id") or payload.get("app_metadata", {}).get("tenant_id") or user_id
         client_id = f"{tenant_id}_{id(websocket)}"
-    except Exception:
+    except Exception as e:
         await websocket.close(code=1008, reason="Invalid token")
         return
     
@@ -427,7 +439,9 @@ async def websocket_endpoint(
     manager = get_websocket_manager()
     
     # Connect
-    connection = await manager.connect(websocket, tenant_id, client_id)
+    await websocket.accept()
+    connection = WebSocketConnection(websocket, tenant_id, client_id)
+    await manager.connect(connection)
     
     try:
         while True:

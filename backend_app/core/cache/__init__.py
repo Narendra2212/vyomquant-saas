@@ -1,5 +1,11 @@
 """Core cache module with shared Redis connection pool."""
 
-from .redis_manager import redis_manager, PublishError, TRADING_CRITICAL_STREAMS, SharedRedisManager as RedisClient
+from .redis_manager import (
+    redis_manager, 
+    PublishError, 
+    TRADING_CRITICAL_STREAMS, 
+    SharedRedisManager as RedisClient,
+    MockRedisClient
+)
 
-__all__ = ["redis_manager", "RedisClient", "PublishError", "TRADING_CRITICAL_STREAMS"]
+__all__ = ["redis_manager", "RedisClient", "PublishError", "TRADING_CRITICAL_STREAMS", "MockRedisClient"]

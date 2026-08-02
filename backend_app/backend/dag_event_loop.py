@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from backend_app.backend.dag_engine import DAGEngine, NodeExecutor
@@ -572,7 +572,8 @@ class DAGEventLoop:
         lock_key = f"dag_lock:{self.tenant_id}:{symbol}"
         
         try:
-            from backend_app.core.redis_client import redis_client
+            from backend_app.core.cache.redis_manager import redis_manager
+            redis_client = await redis_manager.get_client()
 
             # Try to acquire lock with 5 second timeout
             lock_acquired = await redis_client.set(
@@ -683,7 +684,8 @@ class DAGEventLoop:
         Uses Redis set for deduplication tracking.
         Propagates errors directly (fail-closed).
         """
-        from backend_app.core.redis_client import redis_client
+        from backend_app.core.cache.redis_manager import redis_manager
+        redis_client = await redis_manager.get_client()
         redis_key = f"executed_signals:{tenant_id}"
         return await redis_client.sismember(redis_key, signal_id)
 
@@ -693,7 +695,8 @@ class DAGEventLoop:
         
         Propagates errors directly (fail-closed).
         """
-        from backend_app.core.redis_client import redis_client
+        from backend_app.core.cache.redis_manager import redis_manager
+        redis_client = await redis_manager.get_client()
         redis_key = f"executed_signals:{tenant_id}"
         await redis_client.sadd(redis_key, signal_id)
         await redis_client.expire(redis_key, ttl_seconds)
@@ -1248,6 +1251,31 @@ async def stop_event_driven_backtest(session_id: str):
 @router.websocket("/ws/{session_id}")
 async def event_driven_websocket(websocket: WebSocket, session_id: str):
     """WebSocket for real-time signal streaming."""
+    
+    # Verify WebSocket auth — FAIL CLOSED
+    # No token → deny. Verification error → deny. Tenant mismatch → deny.
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4001, reason="Authentication required: provide ?token=")
+        return
+
+    try:
+        from backend_app.core.websocket_auth import _decode_hs256_token
+        payload = _decode_hs256_token(token)
+        if not payload:
+            await websocket.close(code=4003, reason="Invalid or expired authentication token")
+            return
+        
+        user_id = payload.get("sub")
+        if not user_id:
+            await websocket.close(code=4003, reason="Invalid token: missing user ID")
+            return
+    except Exception as e:
+        logger.warning(f"WebSocket auth failed for session {session_id}: {e}")
+        await websocket.close(code=4003, reason="Authentication verification failed")
+        return
+    
+    # Only accept connection after successful authentication
     await websocket.accept()
     
     if session_id not in active_loops:
@@ -1256,6 +1284,11 @@ async def event_driven_websocket(websocket: WebSocket, session_id: str):
         return
     
     session = active_loops[session_id]
+    
+    # Verify user owns this session
+    if session.get('user_id') and str(session.get('user_id')) != str(user_id):
+        await websocket.close(code=4003, reason="Unauthorized: session belongs to different user")
+        return
     
     # Track last signal index sent
     last_index = 0

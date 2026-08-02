@@ -1443,6 +1443,25 @@ async def clone_strategy(
     source = src_resp.data
     now_ts = datetime.now(timezone.utc).isoformat()
 
+    # SECURITY: Validate ML/DL strategies have trained models before cloning
+    # Extract nodes from buy_logic if present
+    nodes = []
+    if isinstance(source.get("buy_logic"), dict):
+        nodes = source["buy_logic"].get("_nodes", [])
+    
+    # Check for ML/DL nodes
+    ml_nodes = [n for n in nodes if n.get("type", "").lower() in ["ml", "dl"]]
+    
+    if ml_nodes and not source.get("ml_model_path"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "ML_MODEL_MISSING",
+                "message": "Source strategy contains ML/DL nodes but no trained model reference. "
+                         "Cannot clone untrained ML strategy."
+            }
+        )
+
     # 5. Insert clone into strategies table
     clone_payload = {
         "user_id": user_id,
@@ -2189,6 +2208,25 @@ async def deploy_marketplace_strategy(
 
     source = src_resp.data
     now_ts = datetime.now(timezone.utc).isoformat()
+
+    # SECURITY: Validate ML/DL strategies have trained models before deployment
+    # Extract nodes from buy_logic if present
+    nodes = []
+    if isinstance(source.get("buy_logic"), dict):
+        nodes = source["buy_logic"].get("_nodes", [])
+    
+    # Check for ML/DL nodes
+    ml_nodes = [n for n in nodes if n.get("type", "").lower() in ["ml", "dl"]]
+    
+    if ml_nodes and not source.get("ml_model_path"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "ML_MODEL_MISSING",
+                "message": "Source strategy contains ML/DL nodes but no trained model reference. "
+                         "Cannot deploy untrained ML strategy."
+            }
+        )
 
     # Insert clone into strategies table
     clone_payload = {

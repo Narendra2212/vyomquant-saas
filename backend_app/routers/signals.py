@@ -162,35 +162,79 @@ async def replay_signal_trace(
 ):
     """
     Retrieve the stored signal trace record for audit/review purposes.
-
-    NOTE: This endpoint is labelled 'replay' in the URL but does NOT
-    perform an independent re-execution of the signal DAG against
-    historical inputs. It returns the stored execution record fields.
-    A true replay would re-run the DAG with the stored indicator/ML inputs
-    and compare the output to the stored decision \u2014 that is not yet implemented.
-    The 'replay_implemented' field below makes this explicit.
-    """
-    sb = _sb(user)
-    if sb is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Signal trace '{signal_id}' not found.")
-        
-    res = sb.table("execution_records").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
-    if not res.data:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Signal trace '{signal_id}' not found.")
     
-    rec = res.data[0]
-    stored_decision = (rec.get("side") or "BUY").upper()
-    return {
-        "status": "retrieved",
-        "signal_id": signal_id,
-        "stored_decision": stored_decision,
-        "replay_implemented": False,
-        "replay_note": (
-            "Independent DAG re-execution against stored inputs is not yet implemented. "
-            "This response reflects the stored execution record, not an independent replay."
-        ),
-        "retrieval_timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    IMPORTANT: This endpoint is labelled 'replay' in the URL but does NOT
+    perform an independent re-execution of the signal DAG against historical
+    inputs. It returns the stored execution record fields for audit purposes.
+    
+    GENUINE SIGNAL REPLAY LIMITATION:
+    Implementing true DAG re-execution would require:
+    1. Storing complete indicator/market inputs at signal generation time
+    2. Storing the complete strategy DAG state at that time  
+    3. Historical market data access for the exact signal timestamp
+    4. DAG execution engine integration for re-running logic
+    5. Comparison framework for fresh output vs stored decision
+    
+    This architectural change would require substantial modifications to the
+    signal generation pipeline, database schema, and execution infrastructure.
+    
+    This endpoint provides stored signal data for compliance and audit review,
+    not independent verification of signal generation logic.
+    
+    For signal verification, use the research report analysis which includes
+    signal consistency metrics across historical data.
+    """
+    try:
+        sb = _sb(user)
+        if sb is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Signal trace '{signal_id}' not found.")
+        
+        # Try to query from signals table (proper schema)
+        res = sb.table("signals").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
+        
+        # Fallback to execution_records if signals table doesn't have the record
+        if not res.data:
+            res = sb.table("execution_records").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
+            
+        if not res.data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Signal trace '{signal_id}' not found.")
+        
+        rec = res.data[0]
+        # Handle both table schemas - 'decision' in signals table, 'side' in execution_records
+        stored_decision = (rec.get("decision") or rec.get("side") or "BUY").upper()
+        
+        return {
+            "status": "audit_retrieval",
+            "signal_id": signal_id,
+            "stored_decision": stored_decision,
+            "replay_implemented": False,
+            "replay_note": (
+                "Independent DAG re-execution against stored inputs is not implemented. "
+                "This endpoint provides audit retrieval of stored signal records for compliance purposes. "
+                "True signal replay requires architectural changes to signal generation pipeline, "
+                "database schema for storing complete inputs, and DAG execution engine integration. "
+                "For signal consistency analysis, use the research report endpoint with appropriate analysis configuration."
+            ),
+            "audit_functionality": "stored_record_retrieval",
+            "retrieval_timestamp": datetime.now(timezone.utc).isoformat(),
+            "execution_metadata": {
+                "timestamp": rec.get("created_at") or rec.get("generated_at"),
+                "symbol": rec.get("symbol"),
+                "strategy_id": rec.get("strategy_id"),
+                "user_id": rec.get("user_id"),
+                "indicators": rec.get("indicators"),
+                "market_info": rec.get("market_info"),
+                "ml_info": rec.get("ml_info")
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving signal trace {signal_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "SIGNAL_RETRIEVAL_FAILED", "message": str(e)}
+        )
 
 
 

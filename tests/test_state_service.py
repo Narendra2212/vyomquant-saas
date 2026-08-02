@@ -20,7 +20,7 @@ from backend_app.backend.state_service import (
     IdempotencyChecker,
     ConcurrentModificationError,
 )
-from backend_app.core.redis_client import MockRedisClient
+from backend_app.core.cache import MockRedisClient
 
 
 def test_idempotency_checker():

@@ -957,7 +957,8 @@ class DAGEngine:
         try:
             import json
 
-            from backend_app.core.redis_client import redis_client
+            from backend_app.core.cache.redis_manager import redis_manager
+            redis_client = await redis_manager.get_client()
             
             stream_key = self._event_buffer_key.format(tenant_id=tenant_id)
             
@@ -997,7 +998,8 @@ class DAGEngine:
         try:
             import json
 
-            from backend_app.core.redis_client import redis_client
+            from backend_app.core.cache.redis_manager import redis_manager
+            redis_client = await redis_manager.get_client()
             
             stream_key = self._event_buffer_key.format(tenant_id=tenant_id)
             
@@ -1125,7 +1127,8 @@ class DAGEngine:
     async def clear_event_buffer(self, tenant_id: str) -> bool:
         """Clear event buffer for tenant (useful for testing/reset)."""
         try:
-            from backend_app.core.redis_client import redis_client
+            from backend_app.core.cache.redis_manager import redis_manager
+            redis_client = await redis_manager.get_client()
             stream_key = self._event_buffer_key.format(tenant_id=tenant_id)
             await redis_client.delete(stream_key)
             logger.info(f"Event buffer cleared for tenant {tenant_id}")

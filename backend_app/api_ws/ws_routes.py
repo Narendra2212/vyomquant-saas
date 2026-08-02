@@ -342,18 +342,15 @@ async def ws_telemetry(
         await websocket.close(code=4001, reason="Unauthorized: Missing token")
         return
         
-    if token == "test_token":
-        tenant_id = "test_user_id_123"
-    else:
-        payload = _decode_hs256_token(token)
-        if not payload:
-            await websocket.close(code=4001, reason="Unauthorized: Invalid token")
-            return
-            
-        tenant_id = payload.get("sub")
-        if not tenant_id:
-            await websocket.close(code=4001, reason="Unauthorized: Missing sub claim")
-            return
+    payload = _decode_hs256_token(token)
+    if not payload:
+        await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+        return
+        
+    tenant_id = payload.get("sub")
+    if not tenant_id:
+        await websocket.close(code=4001, reason="Unauthorized: Missing sub claim")
+        return
         
     await websocket.accept()
     logger.info(f"[WS/telemetry] Connection accepted for tenant {tenant_id}")
@@ -363,8 +360,18 @@ async def ws_telemetry(
 
 
 @ws_router.websocket("/ws/ticker/{symbol}")
-async def ws_ticker(websocket: WebSocket, symbol: str):
+async def ws_ticker(websocket: WebSocket, symbol: str, token: str = Query(None)):
     global _health_check_task
+    
+    # Verify WebSocket auth — FAIL CLOSED
+    if not token:
+        await websocket.close(code=4001, reason="Authentication required: provide ?token=")
+        return
+        
+    payload = _decode_hs256_token(token)
+    if not payload:
+        await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+        return
     
     symbol = unquote(symbol).replace("-", "/")
     manager = get_ws_manager()
@@ -490,7 +497,17 @@ async def _stream_ticker(data_engine, symbol, manager):
 
 
 @ws_router.websocket("/ws/orderbook/{symbol}")
-async def ws_orderbook(websocket: WebSocket, symbol: str, depth: int = Query(20)):
+async def ws_orderbook(websocket: WebSocket, symbol: str, depth: int = Query(20), token: str = Query(None)):
+    # Verify WebSocket auth — FAIL CLOSED
+    if not token:
+        await websocket.close(code=4001, reason="Authentication required: provide ?token=")
+        return
+        
+    payload = _decode_hs256_token(token)
+    if not payload:
+        await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+        return
+    
     symbol = unquote(symbol).replace("-", "/")
     manager = get_ws_manager()
 
@@ -535,7 +552,17 @@ async def _stream_orderbook(data_engine, symbol, depth, manager):
 
 
 @ws_router.websocket("/ws/candles/{symbol}/{timeframe}")
-async def ws_candles(websocket: WebSocket, symbol: str, timeframe: str = "5m"):
+async def ws_candles(websocket: WebSocket, symbol: str, timeframe: str = "5m", token: str = Query(None)):
+    # Verify WebSocket auth — FAIL CLOSED
+    if not token:
+        await websocket.close(code=4001, reason="Authentication required: provide ?token=")
+        return
+        
+    payload = _decode_hs256_token(token)
+    if not payload:
+        await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+        return
+    
     symbol = unquote(symbol).replace("-", "/")
     manager = get_ws_manager()
     channel_key = f"{symbol}_{timeframe}"

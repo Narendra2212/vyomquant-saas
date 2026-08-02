@@ -94,9 +94,10 @@ from backend_app.core.safety_monitor import log_blocked_execution
 from backend_app.core.supabase_connection import SupabaseConnection
 from backend_app.core.state import app_state
 #  Router imports 
-from backend_app.routers import (admin, analytics, auth, billing, dashboard, exchange,
-                                 library, market, metrics, notifications, orders,
-                                 portfolio, referral, risk, security, strategies, strategy_operations, support, user)
+from backend_app.routers import (admin, analytics, auth, billing, dashboard, distributed_execution,
+                                 exchange, health, health_websocket, library, market, metrics, notifications,
+                                 orders, portfolio, referral, risk, security, signals, strategies, 
+                                 strategy_operations, support, user)
 # DAG task queue
 from backend_app.routers.dag_tasks import router as dag_tasks_router
 
@@ -594,6 +595,10 @@ app.include_router(risk.router, prefix="/api/risk", tags=["Risk Management"])
 app.include_router(billing.router, prefix="/api/billing", tags=["Billing"])
 app.include_router(security.router, prefix="/api/security", tags=["Security"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
+app.include_router(distributed_execution.router, prefix="/api/distributed-execution", tags=["Distributed Execution"])
+app.include_router(health.router, prefix="/health", tags=["Health"])
+app.include_router(health_websocket.router, prefix="/health", tags=["Health"])
+app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
 from backend_app.routers import signal_trace
 
 app.include_router(signal_trace.router, prefix="/api/signal-trace", tags=["Signal Trace"])

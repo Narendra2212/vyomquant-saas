@@ -150,9 +150,7 @@ d:\aerora_quant_backend_updated_final1\
 │   │   ├── rate_limiter.py
 │   │   ├── reconciliation_engine.py
 │   │   ├── reconciliation_scheduler.py ← Background 30s reconciliation loop
-│   │   ├── redis_client.py             ← RedisClient + MockRedisClient
 │   │   ├── redis_cluster.py
-│   │   ├── redis_streams.py
 │   │   ├── replay_auth.py
 │   │   ├── replay_reconstruction_engine.py
 │   │   ├── risk_engine.py
