@@ -171,7 +171,9 @@ const StrategyMarketplace = () => {
       }
     } catch (err) {
       console.error(err);
-      alert(err.response?.data?.detail || err.message || 'Failed to create checkout session.');
+      const detail = err?.response?.data?.detail;
+      const message = typeof detail === 'string' ? detail : (err.message || 'Failed to create checkout session.');
+      alert(message);
     }
   };
 

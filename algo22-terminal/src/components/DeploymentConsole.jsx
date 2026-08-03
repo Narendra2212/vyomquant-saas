@@ -19,7 +19,7 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Play, Pause, Square, RotateCcw, Server, Activity, Cpu, Memory, Zap, AlertTriangle, CheckCircle, Clock, ChevronDown, ChevronRight } from "lucide-react";
+import { Play, Pause, Square, RotateCcw, Server, Activity, Cpu, Zap, AlertTriangle, CheckCircle, Clock, ChevronDown, ChevronRight } from "lucide-react";
 import { C, Btn, Card, Tag2, PanelTitle } from "../components/ui-legacy/primitives";
 import { post, get } from "../api";
 

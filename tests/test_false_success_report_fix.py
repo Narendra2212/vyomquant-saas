@@ -48,10 +48,14 @@ class TestMarketplacePaymentVerification:
         """
         import backend_app.routers.library as lib_module
         
-        # Mock supabase to return no pending subscription
+        # Verify POST is blocked (security fix)
         def mock_supabase():
             sb = MagicMock()
-            sb.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.single.return_value.execute.return_value.data = None
+            sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+            # Mock profile with pro plan for marketplace access
+            profile_result = MagicMock()
+            profile_result.data = [{"subscription_tier": "pro_999"}]
+            sb.table.return_value.select.return_value.eq.return_value.execute.return_value = profile_result
             return sb
         
         app.dependency_overrides[get_current_user] = lambda: _user()
@@ -59,9 +63,11 @@ class TestMarketplacePaymentVerification:
         
         try:
             client = TestClient(app, raise_server_exceptions=False)
-            r = client.post("/api/library/test-lib-id/subscribe")
-            assert r.status_code == 400, f"Expected 400 (no pending sub), got {r.status_code}"
-            assert "pending subscription" in r.json()["detail"].lower()
+            # Use valid UUID for library_id
+            lib_uuid = "550e8400-e29b-41d4-a716-446655440000"
+            # POST should return 405 (Method Not Allowed) - manual activation is blocked
+            r = client.post(f"/api/library/{lib_uuid}/subscribe")
+            assert r.status_code == 405, f"Expected 405 (Method Not Allowed), got {r.status_code}"
         finally:
             app.dependency_overrides.clear()
 
@@ -89,7 +95,8 @@ class TestMarketplaceBillingWebhook:
         
         with patch.object(billing_module, '_background_sb', mock_background_sb):
             try:
-                asyncio.run(billing_module._apply_marketplace_entitlement("user_123", "lib_456"))
+                # Use valid UUID format for library_id
+                asyncio.run(billing_module._apply_marketplace_entitlement("user_123", "550e8400-e29b-41d4-a716-446655440000"))
                 # Should not raise HTTPException
             except Exception as e:
                 pytest.fail(f"Should not raise exception for valid marketplace item_key: {e}")

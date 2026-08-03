@@ -584,7 +584,9 @@ function MarketplaceTab({ strategy }) {
       checkLibraryStatus();
     } catch (err) {
       console.error(err);
-      alert(err.response?.data?.detail || 'Failed to publish');
+      const detail = err?.response?.data?.detail;
+      const message = typeof detail === 'string' ? detail : 'Failed to publish';
+      alert(message);
     } finally {
       setLoading(false);
     }

@@ -59,6 +59,8 @@ def _sanitize_validation_errors(errors: list) -> list:
                     ck: str(cv) if isinstance(cv, Exception) else cv
                     for ck, cv in v.items()
                 }
+            elif isinstance(v, Exception):
+                clean[k] = str(v)
             else:
                 clean[k] = v
         sanitized.append(clean)
@@ -79,6 +81,7 @@ def create_api_error_response(
     message = "An error occurred."
     details = None
     solution = None
+    detail_field = detail_or_msg  # Separate variable for the detail field
 
     if isinstance(detail_or_msg, dict):
         error_code = detail_or_msg.get("error") or detail_or_msg.get("error_code") or f"HTTP_{status_code}_ERROR"
@@ -93,7 +96,9 @@ def create_api_error_response(
     elif isinstance(detail_or_msg, list):
         error_code = "VALIDATION_ERROR"
         message = "Input validation failed."
-        details = _sanitize_validation_errors(detail_or_msg)
+        sanitized = _sanitize_validation_errors(detail_or_msg)
+        details = sanitized
+        detail_field = sanitized  # Use sanitized version for detail field
     elif isinstance(detail_or_msg, str):
         message = detail_or_msg
         if status_code == 400:
@@ -121,7 +126,7 @@ def create_api_error_response(
     return {
         "error": str(error_code),
         "message": message,
-        "detail": detail_or_msg,  # Preserve original structured dict or string
+        "detail": detail_field,
         "status_code": status_code,
         "timestamp": now_iso,
         "path": path,

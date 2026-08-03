@@ -144,8 +144,9 @@ async def get_task_status(
     
     # Verify tenant ownership
     task = await dag_task_queue._load_task(task_id)
-    if task and task.tenant_id != tenant["id"]:
-        raise HTTPException(403, "Access denied")
+    if task:
+        if task.tenant_id != tenant["id"]:
+            raise HTTPException(403, "Access denied")
     
     return TaskStatusResponse(
         task_id=task_id,
@@ -334,7 +335,11 @@ async def task_websocket(websocket: WebSocket, task_id: str):
             return
         
         # Verify tenant access
-        if str(auth_user.get("id")) != str(getattr(task, "tenant_id", auth_user.get("id"))):
+        task_tenant_id = getattr(task, "tenant_id", None)
+        if task_tenant_id is None:
+            await websocket.close(code=4003, reason="Task record missing tenant information")
+            return
+        if str(auth_user.get("id")) != str(task_tenant_id):
             await websocket.close(code=4003, reason="Unauthorized tenant task access")
             return
 

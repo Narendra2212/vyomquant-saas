@@ -13,9 +13,6 @@ import StrategyBuilder from "./StrategyBuilder";
 
 export default function Strategies() {
   const navigate = useNavigate();
-
-export default function Strategies() {
-  const navigate = useNavigate();
   const [view, setView] = useState("library");
   const [strategies, setStrategies] = useState([]);
   const [isLoading, setIsLoading] = useState(true);

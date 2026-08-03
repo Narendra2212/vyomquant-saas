@@ -108,9 +108,11 @@ export default function ExchangeManager() {
         msg: `Connection verified! Balance: $${result.usdt_balance || 0} USDT. Clock: ${result.clock_sync}` 
       });
     } catch (err) {
+      const detail = err?.response?.data?.detail;
+      const message = typeof detail === 'string' ? detail : "Connection test failed. Check API keys.";
       setToast({ 
         type: "error", 
-        msg: err?.response?.data?.detail || "Connection test failed. Check API keys." 
+        msg: message
       });
     } finally {
       setIsTesting(false);
@@ -138,9 +140,11 @@ export default function ExchangeManager() {
 
       await loadConnectedExchanges();
     } catch (err) {
+      const detail = err?.response?.data?.detail;
+      const message = typeof detail === 'string' ? detail : "Failed to save exchange keys.";
       setToast({ 
         type: "error", 
-        msg: err?.response?.data?.detail || "Failed to save exchange keys." 
+        msg: message
       });
     } finally {
       setIsSaving(false);
@@ -169,9 +173,11 @@ export default function ExchangeManager() {
       setConnectedExchanges((rows) => rows.filter((row) => row.exchange_id !== exchangeId));
       setToast({ type: "success", msg: "Exchange connection removed." });
     } catch (err) {
+      const detail = err?.response?.data?.detail;
+      const message = typeof detail === 'string' ? detail : "Failed to delete exchange connection.";
       setToast({ 
         type: "error", 
-        msg: err?.response?.data?.detail || "Failed to delete exchange connection." 
+        msg: message
       });
     } finally {
       setProcessingById((p) => ({ ...p, [exchangeId]: false }));
@@ -188,9 +194,11 @@ export default function ExchangeManager() {
         msg: `${exchangeId.toUpperCase()} verified! Balance: $${result.usdt_balance || 0} USDT` 
       });
     } catch (err) {
+      const detail = err?.response?.data?.detail;
+      const message = typeof detail === 'string' ? detail : "Connection test failed.";
       setToast({ 
         type: "error", 
-        msg: err?.response?.data?.detail || "Connection test failed." 
+        msg: message
       });
     } finally {
       setProcessingById((p) => ({ ...p, [exchangeId]: false }));

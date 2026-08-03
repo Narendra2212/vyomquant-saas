@@ -1377,7 +1377,9 @@ export const publicGet = async (url, params = {}) => {
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     const error = new ApiError(
-      errorData.message || errorData.detail || `HTTP error! status: ${response.status}`,
+      errorData.message ||
+      (typeof errorData.detail === 'string' ? errorData.detail : null) ||
+      `HTTP error! status: ${response.status}`,
       {
         url: fullUrl,
         method: 'GET',

@@ -188,7 +188,9 @@ export default function Billing() {
       }
     } catch (err) {
       console.error("Checkout error:", err);
-      setBillingError(err?.response?.data?.detail || "Checkout initialization failed.");
+      const detail = err?.response?.data?.detail;
+      const message = typeof detail === 'string' ? detail : "Checkout initialization failed.";
+      setBillingError(message);
     } finally {
       setIsCheckoutLoading("");
     }

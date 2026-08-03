@@ -193,6 +193,7 @@ class SharedRedisManager:
     _instance: Optional['SharedRedisManager'] = None
     _redis_manager = None
     _mock_client = None
+    _test_mode = False  # Test-only seam to bypass reassignment for dependency injection
     
     def __new__(cls):
         if cls._instance is None:
@@ -208,11 +209,31 @@ class SharedRedisManager:
     
     async def _ensure_manager(self):
         """Ensure the backend manager is initialized. Delegates reconnection debouncing to get_redis_manager."""
+        # Test mode: skip reassignment to allow dependency injection
+        if self._test_mode:
+            return
+        
         from backend_app.backend.redis_manager import get_redis_manager
         # Always call get_redis_manager; it is debounce-safe and handles reconnects internally
         mgr = await get_redis_manager()
         if mgr is not None:
             self._redis_manager = mgr
+    
+    def _set_test_mode(self, enabled: bool = True):
+        """
+        Test-only seam to enable/disable test mode.
+        When enabled, _ensure_manager() skips reassignment to allow dependency injection.
+        Must be called before any operations that would trigger _ensure_manager().
+        """
+        self._test_mode = enabled
+    
+    def _bypass_dev_mode(self, enabled: bool = True):
+        """
+        Test-only seam to bypass DEV_MODE check for testing fail-soft behavior.
+        When enabled, get()/set()/delete() will exercise the real Redis path even in DEV_MODE.
+        Must be called before any cache operations.
+        """
+        self._dev_mode_bypass = enabled
     
     async def get_client(self) -> Optional[object]:
         """
@@ -306,7 +327,7 @@ class SharedRedisManager:
 
     async def get(self, key: str):
         """Proxy to cache get method."""
-        if DEV_MODE:
+        if DEV_MODE and not getattr(self, '_dev_mode_bypass', False):
             return await self._mock_client.get(key)
         
         await self._ensure_manager()
@@ -321,7 +342,7 @@ class SharedRedisManager:
 
     async def set(self, key: str, value: Any, **kwargs):
         """Proxy to cache set method."""
-        if DEV_MODE:
+        if DEV_MODE and not getattr(self, '_dev_mode_bypass', False):
             return await self._mock_client.set(key, value, **kwargs)
         
         await self._ensure_manager()
@@ -336,7 +357,7 @@ class SharedRedisManager:
 
     async def delete(self, *keys: str):
         """Proxy to cache delete method."""
-        if DEV_MODE:
+        if DEV_MODE and not getattr(self, '_dev_mode_bypass', False):
             return await self._mock_client.delete(*keys)
         
         await self._ensure_manager()

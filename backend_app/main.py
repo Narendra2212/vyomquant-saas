@@ -260,6 +260,17 @@ async def lifespan(app: FastAPI):
         logger.critical(f"FATAL: Missing required environment variables: {', '.join(missing_settings)}")
         raise RuntimeError(f"FATAL: Missing required environment variables: {', '.join(missing_settings)}")
     
+    # Security check: DEV_MODE should not be enabled in production-like environments
+    if settings.DEV_MODE and settings.ENV.lower() in ("production", "staging"):
+        logger.critical(
+            f"FATAL: DEV_MODE is enabled in {settings.ENV.upper()} environment. "
+            "This bypasses Redis cache failure detection and is unsafe for production deployments."
+        )
+        raise RuntimeError(
+            f"FATAL: DEV_MODE=true is not allowed in {settings.ENV.upper()} environment. "
+            "Set DEV_MODE=false or use ENV=development/ENV=testing for local development."
+        )
+    
     logger.info(" ALGO22 server starting up...")
     
     # 

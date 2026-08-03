@@ -7,7 +7,7 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, HeatMap } from "recharts";
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Activity, TrendingUp, BarChart3, Zap, Target, AlertTriangle, CheckCircle, Play, RefreshCw, Download, ChevronDown, ChevronRight } from "lucide-react";
 import { C, Btn, Card, Tag2, PanelTitle } from "../components/ui-legacy/primitives";
 import { post } from "../api";

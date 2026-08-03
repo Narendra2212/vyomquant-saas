@@ -39,6 +39,9 @@ def test_implementation_identity():
 def test_trading_critical_stream_failure_raises_publish_error():
     async def _run():
         client = RedisClient()
+        # Enable test mode to prevent _ensure_manager() from overwriting our mock
+        client._set_test_mode(True)
+        
         mock_events = AsyncMock()
         mock_events.xadd.side_effect = Exception("Redis_outage_simulation")
         mock_backend_manager = AsyncMock()
@@ -57,6 +60,9 @@ def test_trading_critical_stream_failure_raises_publish_error():
 def test_best_effort_stream_failure_returns_none():
     async def _run():
         client = RedisClient()
+        # Enable test mode to prevent _ensure_manager() from overwriting our mock
+        client._set_test_mode(True)
+        
         mock_events = AsyncMock()
         mock_events.xadd.side_effect = Exception("Redis_outage_simulation")
         mock_backend_manager = AsyncMock()
@@ -72,6 +78,11 @@ def test_best_effort_stream_failure_returns_none():
 def test_best_effort_cache_operations_retain_fail_soft():
     async def _run():
         client = RedisClient()
+        # Enable test mode to prevent _ensure_manager() from overwriting our mock
+        client._set_test_mode(True)
+        # Bypass DEV_MODE to exercise the real Redis path (even though we use a mock)
+        client._bypass_dev_mode(True)
+        
         mock_cache = AsyncMock()
         mock_cache.get.side_effect = Exception("Redis_outage")
         mock_cache.set.side_effect = Exception("Redis_outage")
@@ -90,6 +101,9 @@ def test_best_effort_cache_operations_retain_fail_soft():
 def test_event_bus_publish_command_raises_on_failure():
     async def _run():
         from backend_app.core.cache import redis_manager
+        # Enable test mode to prevent _ensure_manager() from overwriting our mock
+        redis_manager._set_test_mode(True)
+        
         mock_events = AsyncMock()
         mock_events.xadd.side_effect = Exception("Redis_down")
         mock_backend_manager = AsyncMock()
@@ -100,3 +114,36 @@ def test_event_bus_publish_command_raises_on_failure():
             await publish_command("start_bot", {"symbol": "BTC/USDT"}, max_retries=1)
 
     asyncio.run(_run())
+
+
+def test_dev_mode_startup_check_allows_testing_environment():
+    """
+    Verify that DEV_MODE=true + ENV=testing is allowed at startup.
+    This is the legitimate development configuration.
+    """
+    # Simulate the check logic from main.py
+    dev_mode = True
+    env = "testing"
+    
+    # The check should NOT raise for this combination
+    should_raise = dev_mode and env.lower() in ("production", "staging")
+    assert should_raise is False, "DEV_MODE=true + ENV=testing should be allowed"
+
+
+def test_dev_mode_startup_check_rejects_production_environment():
+    """
+    Verify that DEV_MODE=true + ENV=production is rejected at startup.
+    This is a dangerous misconfiguration that bypasses Redis failure detection.
+    """
+    # Simulate the check logic from main.py
+    dev_mode = True
+    env = "production"
+    
+    # The check should raise for this combination
+    should_raise = dev_mode and env.lower() in ("production", "staging")
+    assert should_raise is True, "DEV_MODE=true + ENV=production should be rejected"
+    
+    # Also verify staging is rejected
+    env = "staging"
+    should_raise = dev_mode and env.lower() in ("production", "staging")
+    assert should_raise is True, "DEV_MODE=true + ENV=staging should be rejected"

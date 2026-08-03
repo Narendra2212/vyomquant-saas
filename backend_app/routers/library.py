@@ -1957,155 +1957,58 @@ async def create_marketplace_checkout(
 # POST /api/library/{library_id}/subscribe — Subscribe to strategy
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.post("/{library_id}/subscribe", status_code=status.HTTP_200_OK)
-async def subscribe_to_strategy(
+@router.get("/{library_id}/subscribe", status_code=status.HTTP_200_OK)
+async def get_subscription_status(
     library_id: str,
     user: dict = Depends(get_current_user),
     _feature=Depends(require_marketplace_access),
 ):
     """
-    DEPRECATED: This endpoint previously bypassed payment verification.
+    Get current subscription status for a marketplace strategy.
     
     Use POST /api/library/{library_id}/checkout to create a payment session.
     The billing webhook will automatically activate the subscription on successful payment.
     
-    This endpoint now only activates an existing pending subscription after payment confirmation.
-    It cannot create new subscriptions without payment verification.
+    This endpoint is read-only and returns the current subscription status.
+    Manual activation without payment verification is not permitted.
     """
     lib_id = _safe_uuid(library_id, "library_id")
     user_id = _safe_uuid(user["id"], "user_id")
     svc = _build_service_client()
     
-    # Check for existing pending subscription (created by checkout)
+    # Check for existing subscription
     try:
-        pending_resp = (
+        sub_resp = (
             svc.table("library_subscriptions")
             .select("*")
             .eq("library_id", lib_id)
             .eq("user_id", user_id)
-            .eq("status", "pending")
-            .single()
             .execute()
         )
     except Exception as exc:
-        logger.error(f"Pending subscription lookup error: {exc}")
+        logger.error(f"Subscription lookup error: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to check subscription status.",
         )
 
-    if not pending_resp.data:
-        raise HTTPException(
-            status_code=400,
-            detail="No pending subscription found. Please complete checkout at /api/library/{library_id}/checkout"
-        )
-
-    # Fetch strategy details (needed for response)
-    strat_resp = svc.table("library_strategies").select("*").eq("id", lib_id).execute()
-    if not strat_resp.data:
-        raise HTTPException(status_code=404, detail="Marketplace strategy not found")
-
-    strat = strat_resp.data[0]
-    author_id = strat.get("author_id")
-    price = float(strat.get("price") or 0)
-    currency = strat.get("currency", "USD")
-    subscription_tier = strat.get("subscription_tier", "free")
-
-    # Block subscription to free strategies
-    if subscription_tier == "free":
-        raise HTTPException(
-            status_code=400,
-            detail="This strategy is free. Clone it instead of subscribing."
-        )
-
-    # Block self-subscription
-    if author_id == user_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot subscribe to your own strategy."
-        )
-
-    # 90/10 Revenue Split Calculation
-    creator_earnings = round(price * 0.90, 2)
-    platform_fee = round(price * 0.10, 2)
-
-    sub_id = pending_resp.data["id"]
-    now_iso = datetime.now(timezone.utc).isoformat()
-
-    # Update subscription status from pending to active
-    try:
-        update_resp = (
-            svc.table("library_subscriptions")
-            .update({"status": "active", "started_at": now_iso})
-            .eq("id", sub_id)
-            .eq("status", "pending")
-            .execute()
-        )
-        if not update_resp.data:
-            # Idempotency: subscription already activated by another request
-            logger.info(f"Subscription {sub_id} already active or not pending - idempotent no-op")
-            return {
-                "status": "already_active",
-                "subscription_id": sub_id,
-                "library_id": lib_id,
-                "message": "Subscription is already active"
-            }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error(f"Subscription activation failed: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Subscription service temporarily unavailable.",
-        )
-
-    # Grant deployment permission
-    try:
-        grant_deployment_permission(user_id, lib_id, "subscription", sub_id)
-    except Exception as exc:
-        logger.warning(f"Failed to grant deployment permission after subscription: {exc}")
-        # Non-critical - subscription succeeded, permission can be granted later
-
-    # Increment subscriber_count on library_strategies
-    try:
-        lib_resp = svc.table("library_strategies").select("subscriber_count").eq("id", lib_id).execute()
-        if lib_resp.data:
-            current = lib_resp.data[0].get("subscriber_count", 0)
-            svc.table("library_strategies").update({
-                "subscriber_count": current + 1,
-                "updated_at": now_iso
-            }).eq("id", lib_id).execute()
-    except Exception as exc:
-        logger.warning(f"Failed to increment subscriber_count: {exc}")
-
-    logger.info(f"Subscription activated: library_id={lib_id} user={user_id} sub_id={sub_id}")
-
-    # Broadcast marketplace event
-    try:
-        await ws_manager.broadcast_marketplace("subscription_created", {
+    if not sub_resp.data:
+        return {
+            "status": "not_subscribed",
             "library_id": lib_id,
-            "user_id": user_id,
-            "subscription_id": sub_id,
-            "subscription_tier": subscription_tier,
-            "started_at": now_iso,
-        })
-    except Exception as e:
-        logger.warning(f"Failed to broadcast marketplace event: {e}")
+            "message": "No subscription found. Complete checkout at /api/library/{library_id}/checkout"
+        }
 
+    subscription = sub_resp.data[0]
+    current_status = subscription.get("status", "unknown")
+    
     return {
-        "status": "activated",
-        "subscription_id": sub_id,
+        "status": current_status,
+        "subscription_id": subscription.get("id"),
         "library_id": lib_id,
-        "strategy_name": strat.get("name"),
-        "subscriber_id": user_id,
-        "price": price,
-        "currency": currency,
-        "subscription_tier": subscription_tier,
-        "revenue_split": {
-            "creator_share_90pct": creator_earnings,
-            "platform_share_10pct": platform_fee,
-            "creator_id": author_id,
-        },
+        "started_at": subscription.get("started_at"),
+        "expires_at": subscription.get("expires_at"),
+        "message": f"Subscription status: {current_status}"
     }
 
 

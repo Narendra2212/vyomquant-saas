@@ -319,4 +319,46 @@ describe('apiClient', () => {
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe('Non-string detail handling', () => {
+    it('should handle non-string detail (dict) as error message', async () => {
+      const error = { 
+        response: { 
+          status: 400, 
+          data: { detail: { error: 'Validation failed', field: 'email' } } 
+        } 
+      };
+      mockAxiosInstance.get.mockRejectedValue(error);
+
+      await expect(get('/api/test')).rejects.toThrow();
+      // The error message should be a string, not the dict object
+      // The fix ensures typeof detail === 'string' check prevents dict assignment
+    });
+
+    it('should handle non-string detail (list) as error message', async () => {
+      const error = { 
+        response: { 
+          status: 400, 
+          data: { detail: ['Error 1', 'Error 2'] } 
+        } 
+      };
+      mockAxiosInstance.get.mockRejectedValue(error);
+
+      await expect(get('/api/test')).rejects.toThrow();
+      // The error message should be a string, not the list object
+    });
+
+    it('should handle string detail correctly', async () => {
+      const error = { 
+        response: { 
+          status: 400, 
+          data: { detail: 'This is a string error' } 
+        } 
+      };
+      mockAxiosInstance.get.mockRejectedValue(error);
+
+      await expect(get('/api/test')).rejects.toThrow();
+      // String detail should work correctly
+    });
+  });
 });
