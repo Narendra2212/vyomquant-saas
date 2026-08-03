@@ -153,6 +153,8 @@ def test_anti_bypass_validation_token_verification():
             async def get_balance(self): return {}
             async def place_order(self, symbol, side, order_type, size=None, price=None, stop_price=None, **kwargs):
                 # This should succeed because the engine sets the token before calling
+                # Verify and consume the anti-bypass token (matches production code path)
+                self.verify_and_consume_token(symbol, size)
                 return OrderResult(success=True, exchange_order_id="ex_token_123", status="pending", filled_size="0.1", remaining_size="0", avg_price="50000", raw_response={})
 
         dummy_exec = DummyExecutor("binance", "api_key", "api_secret")

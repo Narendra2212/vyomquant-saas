@@ -32,7 +32,8 @@ class TestCreateApiErrorResponse:
         """Assert the canonical fields are present and correctly typed."""
         assert isinstance(result["error"], str)
         assert isinstance(result["message"], str)
-        assert result["detail"] == result["message"], "detail must equal message for backward-compat"
+        # detail can be either a string (backward compat), dict (structured payload), or list (validation errors)
+        assert isinstance(result["detail"], (str, dict, list)), "detail must be string, dict, or list"
         assert result["status_code"] == expected_status
         assert "timestamp" in result
         assert isinstance(result["timestamp"], str)

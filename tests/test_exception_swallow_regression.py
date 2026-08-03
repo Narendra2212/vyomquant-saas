@@ -64,7 +64,8 @@ class TestGetTicketsExceptionSwallow:
             assert r.status_code == 503, (
                 f"Expected 503 (db crash), got {r.status_code}: {r.text}"
             )
-            assert r.json()["detail"]["error"] == "TICKETS_FETCH_FAILED"
+            # Error code is in top-level "error" field, structured payload (if any) in "details"
+            assert r.json()["error"] == "TICKETS_FETCH_FAILED"
         finally:
             app.dependency_overrides.clear()
 
@@ -95,8 +96,8 @@ class TestListSignalTracesExceptionSwallow:
             assert r.status_code == 503, (
                 f"Expected 503 (db crash), got {r.status_code}: {r.text}"
             )
-            detail = r.json().get("detail", {})
-            assert detail.get("error") == "SIGNAL_FETCH_FAILED"
+            # Error code is in top-level "error" field
+            assert r.json()["error"] == "SIGNAL_FETCH_FAILED"
         finally:
             sig_module.create_request_supabase = original
             app.dependency_overrides.clear()
@@ -129,7 +130,7 @@ class TestEquityCurveExceptionSwallow:
             assert r.status_code == 503, (
                 f"Expected 503 (telemetry crash), got {r.status_code}: {r.text}"
             )
-            assert r.json()["detail"]["error"] == "EQUITY_CURVE_FETCH_FAILED"
+            assert r.json()["error"] == "EQUITY_CURVE_FETCH_FAILED"
         finally:
             app.dependency_overrides.clear()
 
@@ -161,7 +162,7 @@ class TestRecentTransactionsExceptionSwallow:
             assert r.status_code == 503, (
                 f"Expected 503 (telemetry crash), got {r.status_code}: {r.text}"
             )
-            assert r.json()["detail"]["error"] == "TRANSACTIONS_FETCH_FAILED"
+            assert r.json()["error"] == "TRANSACTIONS_FETCH_FAILED"
         finally:
             app.dependency_overrides.clear()
 
@@ -190,7 +191,7 @@ class TestGetStrategyLimitsExceptionSwallow:
             assert r.status_code == 503, (
                 f"Expected 503 (db crash), got {r.status_code}: {r.text}"
             )
-            assert r.json()["detail"]["error"] == "STRATEGY_LIMITS_FETCH_FAILED"
+            assert r.json()["error"] == "STRATEGY_LIMITS_FETCH_FAILED"
         finally:
             risk_module.create_request_supabase = original
             app.dependency_overrides.clear()
