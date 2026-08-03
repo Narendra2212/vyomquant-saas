@@ -1,14 +1,9 @@
 {
-  "total_files": 312,
+  "total_files": 311,
   "syntax_errors": [],
   "missing_init_dirs": [],
   "import_issues": [],
   "unused_imports": [
-    {
-      "file": "backend_app\\main.py",
-      "line": 47,
-      "name": "SlowAPIMiddleware"
-    },
     {
       "file": "backend_app\\main.py",
       "line": 81,
@@ -240,9 +235,9 @@
       "name": "UUID"
     },
     {
-      "file": "backend_app\\core\\cache.py",
-      "line": 3,
-      "name": "annotations"
+      "file": "backend_app\\core\\dependencies.py",
+      "line": 43,
+      "name": "SubscriptionEngine"
     },
     {
       "file": "backend_app\\core\\entitlement_dependencies.py",
@@ -273,6 +268,16 @@
       "file": "backend_app\\core\\quota_scheduler.py",
       "line": 8,
       "name": "asyncio"
+    },
+    {
+      "file": "backend_app\\core\\rate_limiter.py",
+      "line": 33,
+      "name": "Tuple"
+    },
+    {
+      "file": "backend_app\\core\\rate_limiter.py",
+      "line": 33,
+      "name": "Any"
     },
     {
       "file": "backend_app\\core\\risk_manager.py",
@@ -426,7 +431,7 @@
     },
     {
       "file": "backend_app\\routers\\strategies.py",
-      "line": 1995,
+      "line": 1998,
       "name": "timedelta"
     },
     {
@@ -1424,7 +1429,9 @@
       "backend_app.core.state",
       "backend_app.core.cache.redis_manager",
       "hashlib",
+      "inspect",
       "backend_app.core.cache.redis_manager",
+      "inspect",
       "backend_app.core.cache.redis_manager",
       "backend_app.backend.event_publisher",
       "backend_app.backend.ws_event_stream",
@@ -2628,19 +2635,6 @@
       "backend_app.core.subscription_engine",
       "backend_app.core.subscription_engine"
     ],
-    "backend_app.core.cache": [
-      "__future__",
-      "asyncio",
-      "json",
-      "logging",
-      "os",
-      "time",
-      "typing",
-      "typing",
-      "typing",
-      "redis.asyncio",
-      "sentry_sdk"
-    ],
     "backend_app.core.cancellation_idempotency_manager": [
       "hashlib",
       "json",
@@ -2663,6 +2657,7 @@
       "typing"
     ],
     "backend_app.core.config": [
+      "logging",
       "os",
       "enum",
       "typing",
@@ -2805,6 +2800,7 @@
       "fastapi.security",
       "fastapi.security",
       "backend_app.core.cache",
+      "backend_app.core.subscription_engine",
       "supabase",
       "supabase",
       "supabase",
@@ -3206,11 +3202,15 @@
     ],
     "backend_app.core.rate_limiter": [
       "asyncio",
+      "fnmatch",
       "logging",
       "time",
       "dataclasses",
       "typing",
-      "backend_app.core.cache",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
       "backend_app.core.cache"
     ],
     "backend_app.core.rate_limit_middleware": [
@@ -3369,6 +3369,7 @@
       "typing",
       "typing",
       "typing",
+      "prometheus_client",
       "prometheus_client",
       "prometheus_client",
       "prometheus_client"
@@ -3568,6 +3569,7 @@
       "fastapi",
       "fastapi",
       "fastapi",
+      "backend_app.core.rate_limit",
       "sqlalchemy.orm",
       "backend_app.core.cache",
       "backend_app.core.dependencies",
@@ -3954,6 +3956,12 @@
       "backend_app.core.event_bus",
       "backend_app.core.event_bus",
       "backend_app.core.rate_limit",
+      "ccxt",
+      "backend_app.backend.optimization_engine",
+      "backend_app.backend.optimization_engine",
+      "backend_app.backend.optimization_engine",
+      "backend_app.backend.optimization_engine",
+      "backend_app.backend.backtest_runtime",
       "hashlib",
       "json",
       "asyncio",
@@ -3999,8 +4007,7 @@
       "datetime",
       "datetime",
       "statistics",
-      "json",
-      "traceback"
+      "json"
     ],
     "backend_app.routers.strategy_operations": [
       "logging",
@@ -5401,6 +5408,15 @@
       "logging",
       "logging",
       "sentry_sdk",
+      "logging",
+      "logging",
+      "logging",
+      "logging",
+      "logging",
+      "logging",
+      "logging",
+      "logging",
+      "logging",
       "logging"
     ],
     "backend_app.core.cache.__init__": [

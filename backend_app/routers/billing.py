@@ -698,28 +698,29 @@ async def razorpay_webhook(
                 except Exception as ref_err:
                     logger.error(f"Failed to process referral commission for payment {payment_id}: {ref_err}")
                     # Don't fail the webhook if commission processing fails
-        elif payload.get("event") in ("refund.processed", "refund.failed"):
-            # Handle Razorpay refunds - reverse referral commission
-            refund = payload.get("payload", {}).get("refund", {}).get("entity", {})
-            payment_id = refund.get("payment_id")
-            
-            if payment_id:
-                try:
-                    sb = _background_sb()
-                    sb.rpc("reverse_referral_commission", {
-                        "p_payment_id": payment_id,
-                        "p_reversal_reason": payload.get("event")
-                    }).execute()
-                    logger.info(f"Referral commission reversed for Razorpay payment {payment_id} due to {payload.get('event')}")
-                except Exception as ref_err:
-                    logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
-                    # Don't fail the webhook if commission reversal fails
         except Exception as e:
             logger.error(f"Razorpay entitlement processing failed: {e}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Entitlement update failed: {e}"
             )
+
+    elif payload.get("event") in ("refund.processed", "refund.failed"):
+        # Handle Razorpay refunds - reverse referral commission
+        refund = payload.get("payload", {}).get("refund", {}).get("entity", {})
+        payment_id = refund.get("payment_id")
+        
+        if payment_id:
+            try:
+                sb = _background_sb()
+                sb.rpc("reverse_referral_commission", {
+                    "p_payment_id": payment_id,
+                    "p_reversal_reason": payload.get("event")
+                }).execute()
+                logger.info(f"Referral commission reversed for Razorpay payment {payment_id} due to {payload.get('event')}")
+            except Exception as ref_err:
+                logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
+                # Don't fail the webhook if commission reversal fails
 
     return {"status": "success"}
 
