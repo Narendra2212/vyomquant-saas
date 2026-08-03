@@ -537,14 +537,12 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-# Temporarily disable SlowAPIMiddleware to debug billing endpoint
-# app.add_middleware(SlowAPIMiddleware)
+app.add_middleware(SlowAPIMiddleware)
 
-# Temporarily disable all middleware to isolate the 500 error
-# app.add_middleware(SecurityHeadersMiddleware)
-# app.add_middleware(PrometheusMiddleware)
-# if CorrelationIdMiddleware:
-#     app.add_middleware(CorrelationIdMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(PrometheusMiddleware)
+if CorrelationIdMiddleware:
+    app.add_middleware(CorrelationIdMiddleware)
 
 # Create database tables (skip if database not available)
 try:

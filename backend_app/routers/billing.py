@@ -29,8 +29,7 @@ from uuid import UUID
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
                      HTTPException, Request)
-# Temporarily disable rate limiter completely to debug
-# from backend_app.core.rate_limit import limiter
+from backend_app.core.rate_limit import limiter
 # F-20: get_db retained ONLY for PaymentMethodModel display endpoints.
 # Subscription tiers and invoice state are stored exclusively in Supabase.
 from sqlalchemy.orm import Session
@@ -46,9 +45,6 @@ from backend_app.core.schemas import CheckoutRequest
 
 router = APIRouter()
 logger = logging.getLogger("BillingRouter")
-
-# Test endpoint at module level to verify router loads
-print("DEBUG: Billing router module loaded successfully")
 
 
 def _validate_keys(provider: str) -> str:
@@ -246,7 +242,7 @@ async def test_endpoint():
 
 # ── GET /api/billing/entitlements ───────────────────────────────────────────
 @router.get("/entitlements")
-# @limiter.limit("60/minute")
+@limiter.limit("60/minute")
 async def get_entitlements(
   request: Request,
   user: dict = Depends(get_current_user),
@@ -290,7 +286,7 @@ async def get_entitlements(
 
 # ── GET /api/billing/currency ───────────────────────────────────────────────
 @router.get("/currency")
-# @limiter.limit("60/minute")
+@limiter.limit("60/minute")
 async def get_currency(
   request: Request,
   user: dict = Depends(get_current_user),
@@ -305,7 +301,7 @@ async def get_currency(
 
 # ── POST /api/billing/currency ──────────────────────────────────────────────
 @router.post("/currency")
-# @limiter.limit("10/minute")
+@limiter.limit("10/minute")
 async def set_currency(
   request: Request,
   body: Dict[str, str],
@@ -324,7 +320,7 @@ async def set_currency(
     return {"status": "success", "currency": currency}
 
 @router.post("/checkout")
-# @limiter.limit("10/minute")
+@limiter.limit("10/minute")
 async def create_checkout_session(
   request: Request,
   body: CheckoutRequest,
@@ -600,6 +596,23 @@ async def stripe_webhook(
                 logger.error(f"Stripe payment failure handler failed to freeze account: {e}")
                 raise HTTPException(500, f"Payment failure handler failed: {e}")
 
+    elif event["type"] in ("charge.refunded", "charge.refund.updated"):
+        # Handle refunds and chargebacks - reverse referral commission
+        charge_obj = event["data"]["object"]
+        payment_id = charge_obj.get("id")
+        
+        if payment_id:
+            try:
+                sb = _background_sb()
+                sb.rpc("reverse_referral_commission", {
+                    "p_payment_id": payment_id,
+                    "p_reversal_reason": event["type"]
+                }).execute()
+                logger.info(f"Referral commission reversed for Stripe payment {payment_id} due to {event['type']}")
+            except Exception as ref_err:
+                logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
+                # Don't fail the webhook if commission reversal fails
+
     return {"status": "success"}
 
 
@@ -685,6 +698,22 @@ async def razorpay_webhook(
                 except Exception as ref_err:
                     logger.error(f"Failed to process referral commission for payment {payment_id}: {ref_err}")
                     # Don't fail the webhook if commission processing fails
+        elif payload.get("event") in ("refund.processed", "refund.failed"):
+            # Handle Razorpay refunds - reverse referral commission
+            refund = payload.get("payload", {}).get("refund", {}).get("entity", {})
+            payment_id = refund.get("payment_id")
+            
+            if payment_id:
+                try:
+                    sb = _background_sb()
+                    sb.rpc("reverse_referral_commission", {
+                        "p_payment_id": payment_id,
+                        "p_reversal_reason": payload.get("event")
+                    }).execute()
+                    logger.info(f"Referral commission reversed for Razorpay payment {payment_id} due to {payload.get('event')}")
+                except Exception as ref_err:
+                    logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
+                    # Don't fail the webhook if commission reversal fails
         except Exception as e:
             logger.error(f"Razorpay entitlement processing failed: {e}")
             raise HTTPException(
@@ -696,7 +725,7 @@ async def razorpay_webhook(
 
 
 @router.get("/invoices")
-# @limiter.limit("60/minute")
+@limiter.limit("60/minute")
 async def get_invoices(
     request: Request,
     user: dict = Depends(get_current_user),
@@ -725,7 +754,7 @@ async def get_invoices(
 
 
 @router.get("/payment-methods")
-# @limiter.limit("60/minute")
+@limiter.limit("60/minute")
 async def get_payment_methods(
     request: Request,
     user: dict = Depends(get_current_user),
@@ -747,7 +776,7 @@ async def get_payment_methods(
 
 
 @router.post("/payment-methods")
-# @limiter.limit("10/minute")
+@limiter.limit("10/minute")
 async def add_payment_method(
     request: Request,
     body: AddPaymentMethodRequest,
