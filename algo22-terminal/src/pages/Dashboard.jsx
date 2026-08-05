@@ -12,6 +12,13 @@ import { get, api } from "../api";
 import { dashboardApi } from "../api/modules/dashboard";
 import { C, Btn, Card, Tag2, StatusDot, SkeletonLine, AnimatedNumber, PnLBadge } from "../components/ui-legacy/primitives";
 
+// Export floatVal for testing
+export function floatVal(v) {
+  const num = parseFloat(v);
+  if (isNaN(num) || !isFinite(num)) return 0.00;
+  return num;
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const [timeframe, setTimeframe] = useState("1M");
@@ -105,11 +112,6 @@ export default function Dashboard() {
   const handleRetry = () => {
     loadDashboardData();
   };
-
-  function floatVal(v) {
-    const num = parseFloat(v);
-    return isNaN(num) ? 0.00 : num;
-  }
 
   // Real equity curve data — now fetched from aggregation API /api/dashboard
   const [equityCurve, setEquityCurve] = useState([]);

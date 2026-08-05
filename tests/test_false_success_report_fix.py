@@ -128,7 +128,7 @@ class TestExchangeStatus:
         After fix:  returns "status": "available" (supported by CCXT)
         """
         client = TestClient(app, raise_server_exceptions=False)
-        r = client.get("/api/exchange/supported")
+        r = client.get("/api/exchanges/supported")  # Fixed: plural "exchanges"
         assert r.status_code == 200
         data = r.json()
         
@@ -149,6 +149,7 @@ class TestPerformanceFetchError:
         After fix:  error is propagated and caught by caller with None indicator
         """
         import backend_app.backend.strategy_service as strat_service
+        import backend_app.backend.metrics_service as metrics_service
         from backend_app.core.dependencies import get_telemetry
         
         # Mock crashing telemetry
@@ -165,7 +166,7 @@ class TestPerformanceFetchError:
                     raise RuntimeError("Metrics service unavailable")
             return CrashingMetricsService()
         
-        with patch.object(strat_service, 'get_metrics_service', mock_get_metrics_service):
+        with patch.object(metrics_service, 'get_metrics_service', mock_get_metrics_service):
             try:
                 service = strat_service.StrategyService()
                 # This should now raise an error instead of returning {}

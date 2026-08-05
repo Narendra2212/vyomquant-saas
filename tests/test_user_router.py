@@ -5,7 +5,7 @@ Unit tests for backend_app/routers/user.py
 Validates:
 1. GET /api/user/profile returns user profile data.
 2. PUT /api/user/profile allows updating whitelisted fields and rejects protected fields (e.g. subscription_tier).
-3. GET /api/billing/plan returns billing plan details.
+3. GET /api/billing/plans returns billing plan details.
 4. GET /api/referral/stats returns referral statistics without crashing when supabase is None.
 5. GET /api/notifications/settings returns settings dict.
 6. GET /api/security/logs returns security log entries.

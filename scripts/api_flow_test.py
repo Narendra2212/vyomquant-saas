@@ -181,7 +181,7 @@ class APITester:
 
         # Billing API
         print("\n--- BILLING API ---")
-        self.test_get("/api/billing/plan")
+        self.test_get("/api/billing/plans")
         self.test_get("/api/billing/invoices")
         self.test_get("/api/billing/payment-methods")
         self.test_post("/api/billing/checkout", {"planId": "pro", "currency": "USD"})

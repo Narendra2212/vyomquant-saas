@@ -341,17 +341,22 @@ async def ws_telemetry(
     if not token:
         await websocket.close(code=4001, reason="Unauthorized: Missing token")
         return
+    
+    try:
+        payload = _decode_hs256_token(token)
+        if not payload:
+            await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+            return
         
-    payload = _decode_hs256_token(token)
-    if not payload:
-        await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+        tenant_id = payload.get("sub")
+        if not tenant_id:
+            await websocket.close(code=4001, reason="Unauthorized: Missing sub claim")
+            return
+    except Exception as e:
+        logger.warning(f"[WS/telemetry] Token validation failed: {e}")
+        await websocket.close(code=4003, reason="Authentication verification failed")
         return
-        
-    tenant_id = payload.get("sub")
-    if not tenant_id:
-        await websocket.close(code=4001, reason="Unauthorized: Missing sub claim")
-        return
-        
+    
     await websocket.accept()
     logger.info(f"[WS/telemetry] Connection accepted for tenant {tenant_id}")
     
@@ -367,10 +372,15 @@ async def ws_ticker(websocket: WebSocket, symbol: str, token: str = Query(None))
     if not token:
         await websocket.close(code=4001, reason="Authentication required: provide ?token=")
         return
-        
-    payload = _decode_hs256_token(token)
-    if not payload:
-        await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+    
+    try:
+        payload = _decode_hs256_token(token)
+        if not payload:
+            await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+            return
+    except Exception as e:
+        logger.warning(f"[WS/ticker] Token validation failed: {e}")
+        await websocket.close(code=4003, reason="Authentication verification failed")
         return
     
     symbol = unquote(symbol).replace("-", "/")
@@ -502,10 +512,15 @@ async def ws_orderbook(websocket: WebSocket, symbol: str, depth: int = Query(20)
     if not token:
         await websocket.close(code=4001, reason="Authentication required: provide ?token=")
         return
-        
-    payload = _decode_hs256_token(token)
-    if not payload:
-        await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+    
+    try:
+        payload = _decode_hs256_token(token)
+        if not payload:
+            await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+            return
+    except Exception as e:
+        logger.warning(f"[WS/orderbook] Token validation failed: {e}")
+        await websocket.close(code=4003, reason="Authentication verification failed")
         return
     
     symbol = unquote(symbol).replace("-", "/")
@@ -557,10 +572,15 @@ async def ws_candles(websocket: WebSocket, symbol: str, timeframe: str = "5m", t
     if not token:
         await websocket.close(code=4001, reason="Authentication required: provide ?token=")
         return
-        
-    payload = _decode_hs256_token(token)
-    if not payload:
-        await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+    
+    try:
+        payload = _decode_hs256_token(token)
+        if not payload:
+            await websocket.close(code=4001, reason="Unauthorized: Invalid token")
+            return
+    except Exception as e:
+        logger.warning(f"[WS/candles] Token validation failed: {e}")
+        await websocket.close(code=4003, reason="Authentication verification failed")
         return
     
     symbol = unquote(symbol).replace("-", "/")

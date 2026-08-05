@@ -212,7 +212,10 @@ class TelemetryEngine:
                 user_id,
                 last(equity) as total_equity,
                 last(equity) - first(equity) as total_pnl,
-                (last(equity) - first(equity)) / first(equity) * 100 as pnl_pct,
+                CASE 
+                    WHEN first(equity) = 0 THEN 0
+                    ELSE (last(equity) - first(equity)) / first(equity) * 100
+                END as pnl_pct,
                 last(total_exposure_usdt) as total_exposure
             FROM equity_curve
             LATEST ON timestamp PARTITION BY user_id;

@@ -439,6 +439,58 @@ class TestWebSocketAuthFailClosed:
                 pass
         
         assert exc_info.value.code in (4003, 4001, 1008, 1000)
+    
+    def test_ws_telemetry_verification_exception(self, client):
+        """Test /ws/telemetry rejects connection when verification throws exception."""
+        from backend_app.core.websocket_auth import _decode_hs256_token
+        
+        with patch('backend_app.api_ws.ws_routes._decode_hs256_token') as mock_decode:
+            mock_decode.side_effect = Exception("Verification failed unexpectedly")
+            
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                with client.websocket_connect("/ws/telemetry?token=some_token") as websocket:
+                    pass
+            
+            assert exc_info.value.code in (4003, 1008, 1000)
+    
+    def test_ws_ticker_verification_exception(self, client):
+        """Test /ws/ticker/{symbol} rejects connection when verification throws exception."""
+        from backend_app.core.websocket_auth import _decode_hs256_token
+        
+        with patch('backend_app.api_ws.ws_routes._decode_hs256_token') as mock_decode:
+            mock_decode.side_effect = Exception("Verification failed unexpectedly")
+            
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                with client.websocket_connect("/ws/ticker/BTC-USDT?token=some_token") as websocket:
+                    pass
+            
+            assert exc_info.value.code in (4003, 1008, 1000)
+    
+    def test_ws_orderbook_verification_exception(self, client):
+        """Test /ws/orderbook/{symbol} rejects connection when verification throws exception."""
+        from backend_app.core.websocket_auth import _decode_hs256_token
+        
+        with patch('backend_app.api_ws.ws_routes._decode_hs256_token') as mock_decode:
+            mock_decode.side_effect = Exception("Verification failed unexpectedly")
+            
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                with client.websocket_connect("/ws/orderbook/BTC-USDT?token=some_token") as websocket:
+                    pass
+            
+            assert exc_info.value.code in (4003, 1008, 1000)
+    
+    def test_ws_candles_verification_exception(self, client):
+        """Test /ws/candles/{symbol}/{timeframe} rejects connection when verification throws exception."""
+        from backend_app.core.websocket_auth import _decode_hs256_token
+        
+        with patch('backend_app.api_ws.ws_routes._decode_hs256_token') as mock_decode:
+            mock_decode.side_effect = Exception("Verification failed unexpectedly")
+            
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                with client.websocket_connect("/ws/candles/BTC-USDT/5m?token=some_token") as websocket:
+                    pass
+            
+            assert exc_info.value.code in (4003, 1008, 1000)
 
 
 def run_all_tests():
