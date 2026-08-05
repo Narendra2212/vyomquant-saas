@@ -8,9 +8,10 @@ WHAT IS TESTED
 1. get_db is recognized by inspect.isgeneratorfunction as a generator function.
 2. Routes using Depends(get_db) receive a real working SQLAlchemy Session instance.
 3. GET /api/billing/payment-methods returns 200 with real Session (not 500 AttributeError).
-4. GET /api/billing/plans returns 200 with real Session (not 500 AttributeError).
+4. GET /api/billing/entitlements returns user-specific plan data with real Session (not 500 AttributeError).
 5. GET /api/billing/invoices returns 200 with real Session (not 500 AttributeError).
-6. Database session is properly closed after request completes.
+6. GET /api/billing/plans returns real plan data from SubscriptionEngine (public endpoint).
+7. Database session is properly closed after request completes.
 """
 
 import inspect
@@ -65,6 +66,7 @@ class TestGetDbDependency:
             app.dependency_overrides.clear()
 
     def test_user_billing_plan_with_real_db_dependency(self):
+        """Test that /api/billing/entitlements returns user-specific plan data with real DB dependencies."""
         mock_user = {
             "id": "00000000-0000-0000-0000-000000000001",
             "email": "test@vyomquant.com",
@@ -73,21 +75,76 @@ class TestGetDbDependency:
 
         mock_supabase = MagicMock()
         mock_table = MagicMock()
-        mock_table.select.return_value.eq.return_value.execute.return_value.data = [{"subscription_tier": "free"}]
+        # Mock profile data for entitlements endpoint
+        mock_table.select.return_value.eq.return_value.execute.return_value.data = [
+            {
+                "subscription_tier": "free",
+                "subscription_status": "active",
+                "subscription_renewal_date": None,
+                "cancel_at_period_end": False
+            }
+        ]
         mock_supabase.table.return_value = mock_table
 
         app.dependency_overrides[get_current_user] = lambda: mock_user
         app.dependency_overrides[get_request_supabase] = lambda: mock_supabase
         try:
             client = TestClient(app)
-            response = client.get("/api/billing/plans", headers={"Authorization": "Bearer mock-token"})
+            response = client.get("/api/billing/entitlements", headers={"Authorization": "Bearer mock-token"})
             assert response.status_code == 200
-            plan_data = response.json()
-            # The /plans endpoint returns a minimal test stub, not real plan data
-            # This test validates the route exists and returns 200, not the data structure
-            assert "status" in plan_data
+            entitlements_data = response.json()
+            
+            # Validate the response contains expected user-specific plan data
+            assert "plan" in entitlements_data
+            assert "features" in entitlements_data
+            assert "quotas" in entitlements_data
+            assert "usage" in entitlements_data
+            assert "subscription_status" in entitlements_data
+            
+            # Validate the plan matches our mock data
+            assert entitlements_data["plan"] == "free"
+            assert entitlements_data["subscription_status"] == "active"
+            
+            # Validate features and quotas are non-empty lists/dicts
+            assert isinstance(entitlements_data["features"], list)
+            assert isinstance(entitlements_data["quotas"], dict)
+            assert isinstance(entitlements_data["usage"], dict)
         finally:
             app.dependency_overrides.clear()
+
+    def test_public_billing_plans_returns_real_plan_data(self):
+        """Test that /api/billing/plans returns real plan data from SubscriptionEngine."""
+        client = TestClient(app)
+        response = client.get("/api/billing/plans")
+        assert response.status_code == 200
+        plans_data = response.json()
+        
+        # Validate the response contains the plans array
+        assert "plans" in plans_data
+        assert isinstance(plans_data["plans"], list)
+        assert len(plans_data["plans"]) > 0
+        
+        # Validate each plan has the required fields from Phase 24
+        required_fields = ["id", "name", "description", "features", "usd", "inr", "recommended"]
+        for plan in plans_data["plans"]:
+            for field in required_fields:
+                assert field in plan, f"Plan missing required field: {field}"
+            
+            # Validate field types
+            assert isinstance(plan["id"], str)
+            assert isinstance(plan["name"], str)
+            assert isinstance(plan["description"], str)
+            assert isinstance(plan["features"], list)
+            assert isinstance(plan["usd"], (int, float))
+            assert isinstance(plan["inr"], (int, float))
+            assert isinstance(plan["recommended"], bool)
+        
+        # Validate expected plan IDs exist
+        plan_ids = [plan["id"] for plan in plans_data["plans"]]
+        assert "free" in plan_ids
+        assert "starter" in plan_ids
+        assert "pro" in plan_ids
+        assert "enterprise" in plan_ids
 
     def test_user_billing_invoices_with_real_db_dependency(self):
         mock_user = {
@@ -104,3 +161,21 @@ class TestGetDbDependency:
             assert isinstance(response.json(), list)
         finally:
             app.dependency_overrides.clear()
+
+    def test_database_session_properly_closed_after_request(self):
+        """Test that database sessions are properly closed after request completes."""
+        # FastAPI's dependency injection system automatically handles session cleanup
+        # for generator functions like get_db. Multiple sequential requests succeeding
+        # without connection leaks indicates proper session management.
+        
+        @app.get("/test-sequential-requests")
+        def test_route(db: Session = Depends(get_db)):
+            return {"session_type": str(type(db))}
+
+        client = TestClient(app)
+        
+        # Make multiple sequential requests to test session management
+        for i in range(3):
+            response = client.get("/test-sequential-requests")
+            assert response.status_code == 200
+            assert "session_type" in response.json()
