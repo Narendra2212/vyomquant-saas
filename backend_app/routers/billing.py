@@ -231,7 +231,24 @@ async def _process_razorpay_entitlement(user_id: str, item_key: str, discount_ap
 @router.get("/plans")
 async def get_plans():
     """Get all available plans. No rate limiting - public endpoint."""
-    return {"status": "ok", "message": "Billing router is working", "test": "minimal_endpoint"}
+    from backend_app.core.subscription_engine import SubscriptionEngine
+    
+    plans = SubscriptionEngine.get_all_plans()
+    
+    # Transform to frontend-expected format
+    frontend_plans = []
+    for plan in plans:
+        frontend_plans.append({
+            "id": plan.id,
+            "name": plan.name,
+            "description": plan.description,
+            "features": plan.features,
+            "usd": plan.pricing.get("USD", 0) // 100,  # Convert cents to dollars
+            "inr": plan.pricing.get("INR", 0) // 100,  # Convert paise to rupees
+            "recommended": plan.id == "pro"  # Pro is the recommended mid-tier plan
+        })
+    
+    return {"plans": frontend_plans}
 
 # ── GET /api/billing/test ───────────────────────────────────────────────
 @router.get("/test")
