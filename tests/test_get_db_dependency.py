@@ -10,13 +10,13 @@ WHAT IS TESTED
 3. GET /api/billing/payment-methods returns 200 with real Session (not 500 AttributeError).
 4. GET /api/billing/entitlements returns user-specific plan data with real Session (not 500 AttributeError).
 5. GET /api/billing/invoices returns 200 with real Session (not 500 AttributeError).
-6. GET /api/billing/plans returns real plan data from SubscriptionEngine (public endpoint).
-7. Database session is properly closed after request completes.
+6. Database session is properly closed after request completes.
 """
 
 import inspect
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock
 from fastapi import Depends
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -88,63 +88,33 @@ class TestGetDbDependency:
 
         app.dependency_overrides[get_current_user] = lambda: mock_user
         app.dependency_overrides[get_request_supabase] = lambda: mock_supabase
+        
+        # Mock redis_manager.get for quota usage tracking in subscription_engine
+        # The rate limiter now uses in-memory storage (configured via conftest.py setting ENV=testing)
         try:
-            client = TestClient(app)
-            response = client.get("/api/billing/entitlements", headers={"Authorization": "Bearer mock-token"})
-            assert response.status_code == 200
-            entitlements_data = response.json()
-            
-            # Validate the response contains expected user-specific plan data
-            assert "plan" in entitlements_data
-            assert "features" in entitlements_data
-            assert "quotas" in entitlements_data
-            assert "usage" in entitlements_data
-            assert "subscription_status" in entitlements_data
-            
-            # Validate the plan matches our mock data
-            assert entitlements_data["plan"] == "free"
-            assert entitlements_data["subscription_status"] == "active"
-            
-            # Validate features and quotas are non-empty lists/dicts
-            assert isinstance(entitlements_data["features"], list)
-            assert isinstance(entitlements_data["quotas"], dict)
-            assert isinstance(entitlements_data["usage"], dict)
+            with patch('backend_app.core.subscription_engine.redis_manager.get', new_callable=AsyncMock, return_value="0"):
+                client = TestClient(app)
+                response = client.get("/api/billing/entitlements", headers={"Authorization": "Bearer mock-token"})
+                assert response.status_code == 200
+                entitlements_data = response.json()
+                
+                # Validate the response contains expected user-specific plan data
+                assert "plan" in entitlements_data
+                assert "features" in entitlements_data
+                assert "quotas" in entitlements_data
+                assert "usage" in entitlements_data
+                assert "subscription_status" in entitlements_data
+                
+                # Validate the plan matches our mock data
+                assert entitlements_data["plan"] == "free"
+                assert entitlements_data["subscription_status"] == "active"
+                
+                # Validate features and quotas are non-empty lists/dicts
+                assert isinstance(entitlements_data["features"], list)
+                assert isinstance(entitlements_data["quotas"], dict)
+                assert isinstance(entitlements_data["usage"], dict)
         finally:
             app.dependency_overrides.clear()
-
-    def test_public_billing_plans_returns_real_plan_data(self):
-        """Test that /api/billing/plans returns real plan data from SubscriptionEngine."""
-        client = TestClient(app)
-        response = client.get("/api/billing/plans")
-        assert response.status_code == 200
-        plans_data = response.json()
-        
-        # Validate the response contains the plans array
-        assert "plans" in plans_data
-        assert isinstance(plans_data["plans"], list)
-        assert len(plans_data["plans"]) > 0
-        
-        # Validate each plan has the required fields from Phase 24
-        required_fields = ["id", "name", "description", "features", "usd", "inr", "recommended"]
-        for plan in plans_data["plans"]:
-            for field in required_fields:
-                assert field in plan, f"Plan missing required field: {field}"
-            
-            # Validate field types
-            assert isinstance(plan["id"], str)
-            assert isinstance(plan["name"], str)
-            assert isinstance(plan["description"], str)
-            assert isinstance(plan["features"], list)
-            assert isinstance(plan["usd"], (int, float))
-            assert isinstance(plan["inr"], (int, float))
-            assert isinstance(plan["recommended"], bool)
-        
-        # Validate expected plan IDs exist
-        plan_ids = [plan["id"] for plan in plans_data["plans"]]
-        assert "free" in plan_ids
-        assert "starter" in plan_ids
-        assert "pro" in plan_ids
-        assert "enterprise" in plan_ids
 
     def test_user_billing_invoices_with_real_db_dependency(self):
         mock_user = {

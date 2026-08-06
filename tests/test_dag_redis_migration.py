@@ -10,9 +10,6 @@ import os
 import pytest
 from unittest.mock import patch, MagicMock
 
-# Set DEV_MODE for testing
-os.environ["DEV_MODE"] = "true"
-
 
 class TestDAGEngineRedisMigration:
     """Test DAG engine migration to canonical Redis client."""
@@ -44,8 +41,7 @@ class TestDAGEngineRedisMigration:
         from backend_app.backend.dag_engine import DAGEngine
         from backend_app.core.cache import MockRedisClient
         
-        # Set DEV_MODE explicitly
-        os.environ["DEV_MODE"] = "true"
+        # DEV_MODE is set by conftest.py
         
         # Create DAG engine instance
         engine = DAGEngine("test_tenant")

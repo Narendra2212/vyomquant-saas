@@ -22,10 +22,6 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-os.environ["DEV_MODE"] = "true"
-os.environ["ENV"] = "testing"
-os.environ["REDIS_URL"] = ""
-
 from backend_app.core.dependencies import get_current_user, get_request_supabase
 from backend_app.main import app
 

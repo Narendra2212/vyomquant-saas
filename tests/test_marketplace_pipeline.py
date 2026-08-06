@@ -48,11 +48,6 @@ import pytest
 # ─── Path and environment bootstrapping ───────────────────────────────────────
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-os.environ["DEV_MODE"] = "true"
-os.environ["ENV"] = "testing"
-os.environ["JWT_SECRET"] = "dev-secret-change-in-production"
-os.environ["SUPABASE_JWT_SECRET"] = "dev-secret-change-in-production"
-
 from fastapi.testclient import TestClient
 
 from backend_app.core.dependencies import get_admin_user, get_current_user
@@ -63,9 +58,9 @@ client = TestClient(app, raise_server_exceptions=True)
 
 # ─── Shared user identities ───────────────────────────────────────────────────
 
-AUTHOR_ID = "user-author-aaa"
-CLONER_ID = "user-cloner-bbb"
-ADMIN_ID = "admin-user-ccc"
+AUTHOR_ID = str(uuid.uuid4())
+CLONER_ID = str(uuid.uuid4())
+ADMIN_ID = str(uuid.uuid4())
 
 AUTHOR_USER = {
     "id": AUTHOR_ID,
@@ -232,9 +227,8 @@ class FakeTable:
         # --- SELECT ---
         if self._single:
             if not result:
-                raise Exception(
-                    "JSON object requested, multiple (or no) rows returned"
-                )
+                # Supabase returns data: None when single() finds no rows
+                return _Resp(None)
             return _Resp(result[0])
         return _Resp(result)
 
@@ -657,7 +651,7 @@ class TestMarketplacePipeline:
         patched_db.stores["library_strategies"].append(
             _approved_lib_row(lib_id, AUTHOR_ID, STRATEGY_UUID)
         )
-        # No verified-clone marker for CLONER_ID
+        # No verified-clone marker for CLONER_ID (intentionally omitted to test rejection)
         with_user(CLONER_USER)
 
         resp = client.post(

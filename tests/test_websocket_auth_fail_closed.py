@@ -17,11 +17,6 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-os.environ["DEV_MODE"] = "true"
-os.environ["ENV"] = "testing"
-os.environ["REDIS_URL"] = ""
-os.environ["DEFAULT_EXCHANGE"] = "binance"
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from fastapi import FastAPI, WebSocket

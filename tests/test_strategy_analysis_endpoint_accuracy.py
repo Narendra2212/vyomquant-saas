@@ -15,10 +15,6 @@ import os
 import pytest
 from unittest.mock import MagicMock, patch
 
-os.environ["DEV_MODE"] = "true"
-os.environ["ENV"] = "testing"
-os.environ["REDIS_URL"] = ""
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 

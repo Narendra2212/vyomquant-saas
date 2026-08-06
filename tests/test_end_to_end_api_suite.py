@@ -25,11 +25,7 @@ from fastapi.testclient import TestClient
 import jwt
 import time
 
-# Ensure DEV_MODE and test environment defaults
-os.environ["DEV_MODE"] = "true"
-os.environ["ENV"] = "testing"
-os.environ["JWT_SECRET"] = "dev-secret-change-in-production"
-os.environ["SUPABASE_JWT_SECRET"] = "dev-secret-change-in-production"
+
 
 from backend_app.main import app
 

@@ -9,10 +9,6 @@ Verifies:
   4. GET /backtest/{job_id} surfaces status, results, and errors correctly.
 """
 
-import os
-os.environ["ENV"] = "development"
-os.environ["DEV_MODE"] = "true"
-
 import asyncio
 import json
 import uuid
