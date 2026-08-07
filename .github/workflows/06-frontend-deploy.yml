@@ -11,7 +11,7 @@ on:
 
 env:
   AWS_REGION: ap-southeast-1
-  S3_BUCKET: vyomquant-frontend-static-prod
+  S3_BUCKET: vyomquant-frontend
   CLOUDFRONT_DISTRIBUTION_ID: EE0XECPHQ8SR0
   NODE_VERSION: '20'
 
