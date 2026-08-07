@@ -12,7 +12,7 @@ on:
 env:
   AWS_REGION: ap-southeast-1
   S3_BUCKET: vyomquant-frontend
-  CLOUDFRONT_DISTRIBUTION_ID: EE0XECPHQ8SR0
+  CLOUDFRONT_DISTRIBUTION_ID: EEOXECPHQ8SR0
   NODE_VERSION: '20'
 
 jobs:
@@ -27,6 +27,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'algo22-terminal/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: ./algo22-terminal
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: ./algo22-terminal
+        run: npm run build
+        env:
+          NODE_ENV: production
+
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -34,27 +51,48 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: DIAGNOSTIC 1 — AWS Identity
+      - name: Sync build artifacts to S3
+        working-directory: ./algo22-terminal
         run: |
-          echo "=== AWS Account Identity ==="
-          aws sts get-caller-identity
+          echo "=== Syncing frontend assets to S3 ==="
+          aws s3 sync dist/ s3://${{ env.S3_BUCKET }}/ \
+            --delete \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "*.html" \
+            --exclude "*.map"
+          
+          echo "=== Syncing HTML files with shorter cache ==="
+          aws s3 sync dist/ s3://${{ env.S3_BUCKET }}/ \
+            --delete \
+            --cache-control "public, max-age=0, must-revalidate" \
+            --exclude "*" \
+            --include "*.html"
 
-      - name: DIAGNOSTIC 2 — Verify S3 Bucket
+      - name: Invalidate CloudFront cache
         run: |
-          echo "=== Verify vyomquant-frontend Bucket ==="
-          aws s3api head-bucket --bucket vyomquant-frontend
+          echo "=== Invalidating CloudFront cache ==="
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
+            --distribution-id ${{ env.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*" \
+            --query "Invalidation.Id" \
+            --output text)
+          
+          echo "Created invalidation: $INVALIDATION_ID"
+          
+          echo "=== Waiting for invalidation to complete ==="
+          aws cloudfront wait invalidation-completed \
+            --distribution-id ${{ env.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --id $INVALIDATION_ID
+          
+          echo "=== CloudFront invalidation completed ==="
 
-      - name: DIAGNOSTIC 3 — List CloudFront Distributions
+      - name: Verify deployment
         run: |
-          echo "=== List All CloudFront Distributions ==="
-          aws cloudfront list-distributions \
-            --query "DistributionList.Items[*].[Id,DomainName,Origins.Items[0].DomainName,Comment]" \
-            --output table
-
-      - name: DIAGNOSTIC 4 — Get Configured Distribution
-        run: |
-          echo "=== Get Configured CloudFront Distribution ==="
+          echo "=== Verifying S3 bucket contents ==="
+          aws s3 ls s3://${{ env.S3_BUCKET }}/ --recursive | head -20
+          
+          echo "=== Checking CloudFront distribution status ==="
           aws cloudfront get-distribution \
             --id ${{ env.CLOUDFRONT_DISTRIBUTION_ID }} \
-            --query "Distribution.{Id:Id,DomainName:DomainName,Status:Status,Origins:Origins.Items[0].DomainName}" \
-            --output table
+            --query "Distribution.Status" \
+            --output text
