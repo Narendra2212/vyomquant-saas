@@ -1,13 +1,11 @@
 import js from "@eslint/js";
-import jsxA11y from "eslint-plugin-jsx-a11y";
+import jsxA11y from "eslint-plugin-jsx-a11y-x";
 
 export default [
   js.configs.recommended,
+  ...jsxA11y.flatConfigs.recommended,
   {
     files: ["src/**/*.{js,jsx,ts,tsx}"],
-    plugins: {
-      "jsx-a11y": jsxA11y,
-    },
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "module",
@@ -35,7 +33,6 @@ export default [
       },
     },
     rules: {
-      ...jsxA11y.flatConfigs.recommended.rules,
       "no-unused-vars": "warn",
       "no-undef": "error",
       "no-eval": "error",
