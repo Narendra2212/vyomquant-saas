@@ -220,8 +220,15 @@ def test_market_symbols():
 
 
 def test_market_ticker():
+    """
+    Test market ticker endpoint.
+    In test environment, vault may not be initialized, so we expect
+    401 (auth required) or 404 (service unavailable) but not 500 errors.
+    """
     headers = get_auth_headers()
     res = client.get("/api/market/ticker/BTC-USD", headers=headers)
+    # Allow 401 (auth), 404 (service), or 200 (if mock vault works)
+    # but should not crash with 500 due to NoneType
     assert res.status_code in (200, 401, 404)
 
 
