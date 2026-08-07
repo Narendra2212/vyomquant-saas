@@ -12,6 +12,21 @@ import numpy as np
 
 EPS = 1e-12
 
+# Available indicators for Strategy Builder
+AVAILABLE_INDICATORS = [
+    'sma', 'ema', 'wma', 'hma',
+    'rsi', 'macd', 'atr', 'bollinger_bands',
+    'stochastic', 'cci', 'williams_r', 'obv',
+    'mfi', 'adx', 'supertrend', 'trix',
+    'vortex_indicator', 'choppiness_index',
+    'awesome_oscillator', 'fisher_transform',
+    'rolling_z_score', 'historical_volatility',
+    'rolling_vwap', 'momentum', 'roc',
+    'donchian_channel', 'keltner_channels',
+    'ichimoku_cloud', 'cmf', 'psar',
+    'fibonacci_rolling', 'pivot_standard', 'pivot_camarilla'
+]
+
 
 def _as_float_array(x):
     return np.asarray(x, dtype=np.float64)

@@ -7,7 +7,7 @@
 export { Accordion } from './Accordion';
 export { Badge } from './Badge';
 export { Button } from './Button';
-export { Card as UiCard } from './Card';
+export { Card } from './Card';
 
 // Re-export all primitive elements, C token object, and shared hooks
 export * from '../ui-legacy/primitives';

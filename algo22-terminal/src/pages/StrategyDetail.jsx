@@ -6,7 +6,9 @@ import {
   Copy, ExternalLink, Download, RefreshCw, CheckCircle,
   AlertTriangle, FileText, TrendingUp, Target, PieChart, Edit2
 } from "lucide-react";
-import { C, Btn, Card, Tag2, StatusDot, ProgressBar } from "../components/ui-legacy/primitives";
+import { C, Tag2, StatusDot, ProgressBar } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 import ResearchConsole from "../components/ResearchConsole";
 import DeploymentConsole from "../components/DeploymentConsole";
 
@@ -94,9 +96,9 @@ export default function StrategyDetail() {
   if (!strategy) {
     return (
       <div style={{ padding: 20 }}>
-        <Btn v="ghost" sz="sm" Icon={ArrowLeft} onClick={() => navigate("/app/strategies")}>
+        <Button variant="ghost" size="sm" icon={ArrowLeft} onClick={() => navigate("/app/strategies")}>
           Back to Strategies
-        </Btn>
+        </Button>
         <div style={{ marginTop: 20, color: C.t3 }}>Strategy not found</div>
       </div>
     );
@@ -112,9 +114,9 @@ export default function StrategyDetail() {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <Btn v="ghost" sz="sm" Icon={ArrowLeft} onClick={() => navigate("/app/strategies")}>
+          <Button variant="ghost" size="sm" icon={ArrowLeft} onClick={() => navigate("/app/strategies")}>
             Back
-          </Btn>
+          </Button>
           <div>
             <h1 style={{ color: C.t1, fontWeight: 900, fontSize: 20, margin: 0 }}>{strat.name}</h1>
             <p style={{ color: C.t2, fontSize: 10, fontFamily: "monospace", margin: "4px 0 0 0" }}>
@@ -123,20 +125,20 @@ export default function StrategyDetail() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <Btn v="ghost" sz="sm" Icon={RefreshCw} onClick={loadStrategyDetail}>Refresh</Btn>
-          <Btn v="ghost" sz="sm" Icon={Copy}>Clone</Btn>
-          <Btn v="ghost" sz="sm" Icon={Edit2}>Edit</Btn>
+          <Button variant="ghost" size="sm" icon={RefreshCw} onClick={loadStrategyDetail}>Refresh</Button>
+          <Button variant="ghost" size="sm" icon={Copy}>Clone</Button>
+          <Button variant="ghost" size="sm" icon={Edit2}>Edit</Button>
           {strat.status === "running" ? (
-            <Btn v="ghost" sz="sm" Icon={Pause}>Pause</Btn>
+            <Button variant="ghost" size="sm" icon={Pause}>Pause</Button>
           ) : (
-            <Btn v="success" sz="sm" Icon={Play}>Deploy</Btn>
+            <Button variant="success" size="sm" icon={Play}>Deploy</Button>
           )}
-          <Btn v="danger" sz="sm" Icon={Trash2}>Delete</Btn>
+          <Button variant="danger" size="sm" icon={Trash2}>Delete</Button>
         </div>
       </div>
 
       {/* Status Bar */}
-      <Card cls="p-4 mb-4">
+      <Card className="p-4 mb-4">
         <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <StatusDot status={strat.status} />
@@ -216,7 +218,7 @@ function OverviewTab({ strategy }) {
   
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
-      <Card cls="p-4">
+      <Card className="p-4">
         <h3 style={{ color: C.t1, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>Performance</h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
           {[
@@ -233,7 +235,7 @@ function OverviewTab({ strategy }) {
         </div>
       </Card>
       
-      <Card cls="p-4">
+      <Card className="p-4">
         <h3 style={{ color: C.t1, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>Strategy Info</h3>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 10, fontFamily: "monospace", color: C.t2 }}>
           <div>Exchange: {strat.exchange}</div>
@@ -244,7 +246,7 @@ function OverviewTab({ strategy }) {
         </div>
       </Card>
       
-      <Card cls="p-4">
+      <Card className="p-4">
         <h3 style={{ color: C.t1, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>Status</h3>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 10, fontFamily: "monospace", color: C.t2 }}>
           <div>Status: {strat.status}</div>
@@ -262,7 +264,7 @@ function DeploymentsTab({ deployments }) {
     <div>
       <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Active Deployments</h3>
       {deployments.length === 0 ? (
-        <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>
+        <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
           No active deployments
         </Card>
       ) : (
@@ -293,7 +295,7 @@ function BacktestsTab({ backtests, strategyId }) {
     <div>
       <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Backtest History</h3>
       {backtests.length === 0 ? (
-        <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>
+        <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
           No backtests yet
         </Card>
       ) : (
@@ -349,7 +351,7 @@ function VersionsTab({ strategyId }) {
     <div>
       <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Version History</h3>
       {versions.length === 0 ? (
-        <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>
+        <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
           No versions yet
         </Card>
       ) : (
@@ -368,9 +370,9 @@ function VersionsTab({ strategyId }) {
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 4 }}>
-                  <Btn v="ghost" sz="xs">Compare</Btn>
-                  {!ver.is_current && <Btn v="ghost" sz="xs">Restore</Btn>}
-                  <Btn v="ghost" sz="xs">Deploy</Btn>
+                  <Button variant="ghost" size="xs">Compare</Button>
+                  {!ver.is_current && <Button variant="ghost" size="xs">Restore</Button>}
+                  <Button variant="ghost" size="xs">Deploy</Button>
                 </div>
               </div>
             </Card>
@@ -474,16 +476,16 @@ function RiskTab({ strategyId }) {
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
-      <Card cls="p-4">
+      <Card className="p-4">
         <h3 style={{ color: C.t1, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>Drawdown</h3>
         <div style={{ color: C.red, fontSize: 24, fontWeight: 900 }}>{risk.max_drawdown || 0}%</div>
       </Card>
-      <Card cls="p-4">
+      <Card className="p-4">
         <h3 style={{ color: C.t1, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>Exposure</h3>
         <div style={{ color: C.t1, fontSize: 24, fontWeight: 900 }}>{risk.current_exposure || 0}%</div>
         <div style={{ color: C.t3, fontSize: 10, fontFamily: "monospace" }}>Limit: {risk.exposure_limit || 100}%</div>
       </Card>
-      <Card cls="p-4">
+      <Card className="p-4">
         <h3 style={{ color: C.t1, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>Circuit Breaker</h3>
         <Tag2 c={risk.kill_switch_active ? "red" : "green"}>
           {risk.kill_switch_active ? "Active" : "Inactive"}
@@ -501,7 +503,7 @@ function ConfigurationTab({ strategy }) {
   return (
     <div>
       <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Strategy Configuration</h3>
-      <Card cls="p-4">
+      <Card className="p-4">
         <pre style={{ color: C.t2, fontSize: 10, fontFamily: "monospace", overflow: "auto" }}>
           {JSON.stringify(blueprint, null, 2)}
         </pre>
@@ -512,7 +514,7 @@ function ConfigurationTab({ strategy }) {
 
 function ExecutionsTab({ strategyId }) {
   return (
-    <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>
+    <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
       Execution history coming soon
     </Card>
   );
@@ -520,7 +522,7 @@ function ExecutionsTab({ strategyId }) {
 
 function SignalsTab({ strategyId }) {
   return (
-    <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>
+    <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
       Signal history coming soon
     </Card>
   );
@@ -528,7 +530,7 @@ function SignalsTab({ strategyId }) {
 
 function OrdersTab({ strategyId }) {
   return (
-    <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>
+    <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
       Order history coming soon
     </Card>
   );
@@ -536,7 +538,7 @@ function OrdersTab({ strategyId }) {
 
 function PositionsTab({ strategyId }) {
   return (
-    <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>
+    <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
       Position data coming soon
     </Card>
   );
@@ -544,7 +546,7 @@ function PositionsTab({ strategyId }) {
 
 function LogsTab({ strategyId }) {
   return (
-    <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>
+    <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
       Execution logs coming soon
     </Card>
   );
@@ -601,7 +603,7 @@ function MarketplaceTab({ strategy }) {
   return (
     <div>
       <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Marketplace Status</h3>
-      <Card cls="p-4">
+      <Card className="p-4">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ color: C.t1, fontWeight: 600, fontSize: 12 }}>Publication Status</div>
@@ -610,9 +612,9 @@ function MarketplaceTab({ strategy }) {
             </Tag2>
           </div>
           {!hasLibraryEntry && (
-            <Btn v="primary" sz="sm" onClick={publishToLibrary} disabled={loading}>
+            <Button variant="primary" size="sm" onClick={publishToLibrary} disabled={loading}>
               {loading ? 'Publishing...' : 'Publish to Library'}
-            </Btn>
+            </Button>
           )}
         </div>
       </Card>
@@ -640,26 +642,26 @@ function SubscribersTab({ strategy }) {
   }, []);
 
   if (loading) {
-    return <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>Loading...</Card>;
+    return <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>Loading...</Card>;
   }
 
   return (
     <div>
       <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Subscriber Analytics</h3>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-        <Card cls="p-4">
+        <Card className="p-4">
           <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Active Subscribers</div>
           <div style={{ color: C.t1, fontSize: 24, fontWeight: 700 }}>{analytics?.active_subscribers || 0}</div>
         </Card>
-        <Card cls="p-4">
+        <Card className="p-4">
           <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Published Strategies</div>
           <div style={{ color: C.t1, fontSize: 24, fontWeight: 700 }}>{analytics?.published_strategies_count || 0}</div>
         </Card>
-        <Card cls="p-4">
+        <Card className="p-4">
           <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Average Rating</div>
           <div style={{ color: C.t1, fontSize: 24, fontWeight: 700 }}>{analytics?.rating_average || 0}/5</div>
         </Card>
-        <Card cls="p-4">
+        <Card className="p-4">
           <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Payout Schedule</div>
           <div style={{ color: C.t1, fontSize: 12, fontWeight: 600 }}>{analytics?.payout_schedule || 'N/A'}</div>
         </Card>
@@ -687,26 +689,26 @@ function RevenueTab({ strategy }) {
   }, []);
 
   if (loading) {
-    return <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>Loading...</Card>;
+    return <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>Loading...</Card>;
   }
 
   return (
     <div>
       <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Revenue Analytics</h3>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-        <Card cls="p-4">
+        <Card className="p-4">
           <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Total Earnings (USD)</div>
           <div style={{ color: "#4ade80", fontSize: 24, fontWeight: 700 }}>${analytics?.total_earnings_usd || 0}</div>
         </Card>
-        <Card cls="p-4">
+        <Card className="p-4">
           <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Monthly Recurring Revenue</div>
           <div style={{ color: "#60a5fa", fontSize: 24, fontWeight: 700 }}>${analytics?.monthly_recurring_revenue || 0}</div>
         </Card>
-        <Card cls="p-4">
+        <Card className="p-4">
           <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Platform Fee Paid</div>
           <div style={{ color: "#f87171", fontSize: 24, fontWeight: 700 }}>${analytics?.platform_fee_paid || 0}</div>
         </Card>
-        <Card cls="p-4">
+        <Card className="p-4">
           <div style={{ color: C.t2, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Net Revenue (90%)</div>
           <div style={{ color: "#4ade80", fontSize: 24, fontWeight: 700 }}>${analytics?.total_earnings_usd || 0}</div>
         </Card>
@@ -717,7 +719,7 @@ function RevenueTab({ strategy }) {
 
 function AuditTab({ strategyId }) {
   return (
-    <Card cls="p-8" style={{ textAlign: "center", color: C.t3 }}>
+    <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
       Audit history coming soon
     </Card>
   );

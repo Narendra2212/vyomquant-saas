@@ -56,9 +56,38 @@ export default {
         sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
         mono: ['JetBrains Mono', '"IBM Plex Mono"', '"Fira Code"', 'SF Mono', 'Menlo', 'Consolas', 'monospace'],
       },
+      fontSize: {
+        'micro': '0.5rem',      // 8px - for very small UI elements
+        'caption-sm': '0.5625rem', // 9px - for smaller captions
+        caption: '0.625rem',   // 10px
+        'body-sm': '0.6875rem', // 11px
+        body: '0.75rem',        // 12px
+        'body-lg': '0.8125rem',  // 13px
+        'heading-sm': '0.875rem', // 14px
+        heading: '0.9375rem',   // 15px
+        'heading-lg': '1.125rem', // 18px
+      },
       spacing: {
+        '0.5': '2px',
+        '1': '4px',
+        '1.5': '6px',
+        '2': '8px',
+        '2.5': '10px',
+        '3': '12px',
+        '3.5': '14px',
+        '4': '16px',
+        '5': '20px',
+        '6': '24px',
+        '7': '28px',
+        '8': '32px',
+        '10': '40px',
+        '12': '48px',
+        '16': '64px',
         '18': '4.5rem',
+        '20': '80px',
         '22': '5.5rem',
+        '24': '96px',
+        '32': '128px',
         '88': '22rem',
       },
       boxShadow: {

@@ -1,7 +1,9 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { Filter, Download } from "lucide-react";
 import { api } from "../api";
-import { C, Card, SectionH, Btn } from "../components/ui-legacy/primitives";
+import { C, SectionH } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 export default function TradeHistory() {
   const [trades, setTrades] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -83,8 +85,8 @@ export default function TradeHistory() {
 
   return (
     <div style={{ padding: 20, overflowY: "auto", flex: 1 }}>
-      <SectionH title="Trade Ledger" sub={`${trades.length} total trades ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Institutional Execution Log`}
-        right={<div style={{ display: "flex", gap: 6 }}><Btn v="outline" sz="sm" Icon={Filter}>Filter</Btn><Btn v="outline" sz="sm" Icon={Download} onClick={exportFilteredToCsv} disabled={filtered.length === 0}>Export CSV</Btn></div>} />
+      <SectionH title="Trade Ledger" sub={`${trades.length} total trades Ã¢â‚¬â€ Institutional Execution Log`}
+        right={<div style={{ display: "flex", gap: 6 }}><Button variant="outline" size="sm" Icon={Filter}>Filter</Button><Button variant="outline" size="sm" Icon={Download} onClick={exportFilteredToCsv} disabled={filtered.length === 0}>Export CSV</Button></div>} />
 
       {/* Summary Stats */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 8, marginBottom: 14 }}>

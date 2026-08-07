@@ -1,9 +1,11 @@
-﻿import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   CreditCard, CheckCircle, Star, Zap, Globe, Award, ArrowUpRight, Plus, AlertTriangle, XCircle, Loader2, TrendingUp, Bot, Cpu, Database, BarChart3, Shield, Crown, ChevronRight
 } from "lucide-react";
 import { api } from "../api";
-import { C, Card, SectionH, PanelTitle, Btn, Tag2 } from "../components/ui-legacy/primitives";
+import { C, SectionH, PanelTitle, Tag2 } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 
 export default function Billing() {
   const [currentPlan, setCurrentPlan] = useState(null);
@@ -206,7 +208,7 @@ export default function Billing() {
   }, []);
 
   const money = useCallback((amountUSD, amountINR) => {
-    return currency === "INR" ? `₹${Number(amountINR || 0).toLocaleString()}` : `$${Number(amountUSD || 0).toLocaleString()}`;
+    return currency === "INR" ? `?${Number(amountINR || 0).toLocaleString()}` : `$${Number(amountUSD || 0).toLocaleString()}`;
   }, [currency]);
 
   const fmtDate = useCallback((d) => {
@@ -265,7 +267,7 @@ export default function Billing() {
       ) : (
         <>
           {/* Current Plan Overview */}
-          <Card cls="p-6 mb-6" style={{ border: `1px solid ${C.cyan}40`, background: `linear-gradient(135deg, ${C.bg2} 0%, ${C.bg1} 100%)` }}>
+          <Card className="p-6 mb-6" style={{ border: `1px solid ${C.cyan}40`, background: `linear-gradient(135deg, ${C.bg2} 0%, ${C.bg1} 100%)` }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <div style={{ background: `${C.cyan}20`, borderRadius: 12, padding: 12 }}>
@@ -299,7 +301,7 @@ export default function Billing() {
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <div style={{ display: "flex", background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 999, padding: 4 }}>
                   <button onClick={() => handleCurrencyChange("USD")} style={{ background: currency === "USD" ? `${C.cyan}20` : "transparent", color: currency === "USD" ? C.cyan : C.t2, border: `1px solid ${currency === "USD" ? `${C.cyan}55` : "transparent"}`, borderRadius: 999, padding: "6px 14px", fontSize: 11, fontFamily: "monospace", fontWeight: 700, cursor: "pointer", transition: "all 0.2s" }}>USD ($)</button>
-                  <button onClick={() => handleCurrencyChange("INR")} style={{ background: currency === "INR" ? `${C.cyan}20` : "transparent", color: currency === "INR" ? C.cyan : C.t2, border: `1px solid ${currency === "INR" ? `${C.cyan}55` : "transparent"}`, borderRadius: 999, padding: "6px 14px", fontSize: 11, fontFamily: "monospace", fontWeight: 700, cursor: "pointer", transition: "all 0.2s" }}>INR (₹)</button>
+                  <button onClick={() => handleCurrencyChange("INR")} style={{ background: currency === "INR" ? `${C.cyan}20` : "transparent", color: currency === "INR" ? C.cyan : C.t2, border: `1px solid ${currency === "INR" ? `${C.cyan}55` : "transparent"}`, borderRadius: 999, padding: "6px 14px", fontSize: 11, fontFamily: "monospace", fontWeight: 700, cursor: "pointer", transition: "all 0.2s" }}>INR (?)</button>
                 </div>
               </div>
             </div>
@@ -314,7 +316,7 @@ export default function Billing() {
               ].map((item) => {
                 const percent = item.limit === Infinity ? 0 : getUsagePercent(item.label.toLowerCase().replace(" ", "_"));
                 const color = getUsageColor(percent);
-                const displayLimit = item.limit === Infinity ? "∞" : item.limit;
+                const displayLimit = item.limit === Infinity ? "8" : item.limit;
                 return (
                   <div key={item.label} style={{ background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
@@ -384,7 +386,7 @@ export default function Billing() {
                     <div style={{ color: C.t3, fontSize: 12, fontFamily: "monospace", marginBottom: 16 }}>{p.description}</div>
 
                     <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 20 }}>
-                      <span style={{ color: C.cyan, fontWeight: 900, fontSize: 40, lineHeight: 1 }}>{currency === "INR" ? "₹" : "$"}{priceValue.toLocaleString()}</span>
+                      <span style={{ color: C.cyan, fontWeight: 900, fontSize: 40, lineHeight: 1 }}>{currency === "INR" ? "?" : "$"}{priceValue.toLocaleString()}</span>
                       <span style={{ color: C.t3, fontSize: 12, fontFamily: "monospace" }}>/month</span>
                     </div>
 
@@ -459,7 +461,7 @@ export default function Billing() {
           </div>
 
           {/* Feature Comparison Table */}
-          <Card cls="p-6 mb-6">
+          <Card className="p-6 mb-6">
             <h3 style={{ color: C.t1, fontSize: 18, fontWeight: 900, marginBottom: 16 }}>Feature Comparison</h3>
             {plans.length === 0 ? (
               <div style={{ color: C.t3, fontSize: 12, fontFamily: "monospace", textAlign: "center", padding: 24 }}>Loading plans...</div>
@@ -476,23 +478,23 @@ export default function Billing() {
                   </thead>
                   <tbody>
                     {[
-                      { feature: "Strategy Builder", getVal: (p) => p.features.includes("unlimited_builder") ? "✓" : "✗" },
-                      { feature: "Backtesting", getVal: (p) => p.features.includes("unlimited_backtesting") ? "✓" : "✗" },
-                      { feature: "Live Trading", getVal: (p) => p.features.includes("live_trading") ? "✓" : "✗" },
-                      { feature: "Saved Strategies", getVal: (p) => p.quotas?.strategies === Infinity ? "∞" : p.quotas?.strategies || 0 },
-                      { feature: "Live Bots", getVal: (p) => p.quotas?.bots === Infinity ? "∞" : p.quotas?.bots || 0 },
-                      { feature: "ML Training", getVal: (p) => p.features.includes("ml_training") ? (p.quotas?.ml_trainings === Infinity ? "∞" : p.quotas?.ml_trainings || 0) : "✗" },
-                      { feature: "Marketplace Access", getVal: (p) => p.features.includes("marketplace_access") ? "✓" : "✗" },
-                      { feature: "Marketplace Publishing", getVal: (p) => p.features.includes("marketplace_publish") ? (p.quotas?.marketplace_published === Infinity ? "∞" : p.quotas?.marketplace_published || 0) : "✗" },
-                      { feature: "API Access", getVal: (p) => p.features.includes("api_access") ? "✓" : "✗" },
-                      { feature: "Priority Support", getVal: (p) => p.features.includes("priority_support") ? "✓" : "✗" },
+                      { feature: "Strategy Builder", getVal: (p) => p.features.includes("unlimited_builder") ? "?" : "?" },
+                      { feature: "Backtesting", getVal: (p) => p.features.includes("unlimited_backtesting") ? "?" : "?" },
+                      { feature: "Live Trading", getVal: (p) => p.features.includes("live_trading") ? "?" : "?" },
+                      { feature: "Saved Strategies", getVal: (p) => p.quotas?.strategies === Infinity ? "8" : p.quotas?.strategies || 0 },
+                      { feature: "Live Bots", getVal: (p) => p.quotas?.bots === Infinity ? "8" : p.quotas?.bots || 0 },
+                      { feature: "ML Training", getVal: (p) => p.features.includes("ml_training") ? (p.quotas?.ml_trainings === Infinity ? "8" : p.quotas?.ml_trainings || 0) : "?" },
+                      { feature: "Marketplace Access", getVal: (p) => p.features.includes("marketplace_access") ? "?" : "?" },
+                      { feature: "Marketplace Publishing", getVal: (p) => p.features.includes("marketplace_publish") ? (p.quotas?.marketplace_published === Infinity ? "8" : p.quotas?.marketplace_published || 0) : "?" },
+                      { feature: "API Access", getVal: (p) => p.features.includes("api_access") ? "?" : "?" },
+                      { feature: "Priority Support", getVal: (p) => p.features.includes("priority_support") ? "?" : "?" },
                     ].map((row, ri) => (
                       <tr key={ri} style={{ borderBottom: `1px solid ${C.border}20` }}>
                         <td style={{ padding: "12px 16px", color: C.t2, fontWeight: 600 }}>{row.feature}</td>
                         {plans.map(p => {
                           const val = row.getVal(p);
                           const isCurrent = currentPlan?.id === p.id;
-                          const isIncluded = val === "✓" || val === "∞" || (typeof val === "number" && val > 0);
+                          const isIncluded = val === "?" || val === "8" || (typeof val === "number" && val > 0);
                           return (
                             <td key={p.id} style={{ padding: "12px 16px", textAlign: "center", color: isCurrent ? C.cyan : isIncluded ? C.t1 : C.t3, background: isCurrent ? `${C.cyan}10` : "transparent", fontWeight: isCurrent ? 700 : 400 }}>
                               {val}
@@ -509,7 +511,7 @@ export default function Billing() {
 
           {/* Payment Methods & Billing History */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))", gap: 16 }}>
-            <Card cls="p-6">
+            <Card className="p-6">
               <PanelTitle title="Payment Methods" />
               {!defaultMethod ? (
                 <div style={{ background: C.bg3, border: `1px dashed ${C.border}`, borderRadius: 10, padding: 24, color: C.t3, fontSize: 12, fontFamily: "monospace", textAlign: "center", marginTop: 16 }}>No payment methods on file.</div>
@@ -519,16 +521,16 @@ export default function Billing() {
                     <CreditCard size={20} style={{ color: "#fff" }} />
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ color: C.t1, fontWeight: 700, fontSize: 13 }}>{defaultMethod.brand} •••• {defaultMethod.last4}</div>
+                    <div style={{ color: C.t1, fontWeight: 700, fontSize: 13 }}>{defaultMethod.brand} ���� {defaultMethod.last4}</div>
                     <div style={{ color: C.t3, fontSize: 11, fontFamily: "monospace" }}>Expires {defaultMethod.expiry_month}/{defaultMethod.expiry_year}</div>
                   </div>
                   {defaultMethod.is_default && <Tag2 c="green">DEFAULT</Tag2>}
                 </div>
               )}
-              <Btn v="ghost" sz="sm" Icon={Plus} cls="w-full justify-center mt-4">Add Payment Method</Btn>
+              <Button variant="ghost" size="sm" Icon={Plus} cls="w-full justify-center mt-4">Add Payment Method</Button>
             </Card>
 
-            <Card cls="p-6">
+            <Card className="p-6">
               <PanelTitle title="Billing History" />
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace", marginTop: 16 }}>
                 <thead>
@@ -557,6 +559,6 @@ export default function Billing() {
   );
 }
 
-// ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 //  PAGE: SECURITY LOGS
-// ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â

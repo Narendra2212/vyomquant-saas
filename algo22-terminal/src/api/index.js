@@ -30,6 +30,7 @@ export { billingApi } from './modules/billing';
 export { userApi } from './modules/user';
 export { referralApi } from './modules/referral';
 export { dashboardApi } from './modules/dashboard';
+export { healthApi } from './modules/health';
 
 // Import all modules for consolidated export
 import { authApi } from './modules/auth';
@@ -43,6 +44,7 @@ import { billingApi } from './modules/billing';
 import { userApi } from './modules/user';
 import { referralApi } from './modules/referral';
 import { dashboardApi } from './modules/dashboard';
+import { healthApi } from './modules/health';
 
 /**
  * Consolidated API object - single entry point for all API calls
@@ -59,6 +61,7 @@ export const api = {
   user: userApi,
   referral: referralApi,
   dashboard: dashboardApi,
+  health: healthApi,
 };
 
 /**

@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import { UserCheck, Mail, Shield, Edit2, Check, AlertCircle, CreditCard, TrendingUp, Lock, Bell, Settings, Copy, ExternalLink, RefreshCw, Loader2, Link2 } from "lucide-react";
 import { api } from "../api";
-import { C, Card, SectionH, PanelTitle, Btn, Inp } from "../components/ui-legacy/primitives";
+import { C, SectionH, PanelTitle, Inp } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 import wsClient from "../websocketClient";
 
 export default function Profile() {
@@ -301,34 +303,33 @@ export default function Profile() {
           </div>
           
           {errorType === "auth" && (
-            <Btn onClick={() => window.location.href = "/login"}>
+            <Button onClick={() => window.location.href = "/login"}>
               Go to Login
-            </Btn>
+            </Button>
           )}
           
           {errorType === "network" && (
-            <Btn onClick={handleRetry}>
+            <Button onClick={handleRetry}>
               <RefreshCw size={16} style={{ marginRight: 8 }} />
               Retry Connection
-            </Btn>
+            </Button>
           )}
           
           {(errorType === "server" || errorType === "timeout" || errorType === "unknown") && (
             <div style={{ display: "flex", gap: 8 }}>
-              <Btn onClick={handleRetry}>
-                <RefreshCw size={16} style={{ marginRight: 8 }} />
+              <Button onClick={handleRetry} icon={RefreshCw}>
                 Retry
-              </Btn>
-              <Btn onClick={() => window.location.reload()} variant="secondary">
+              </Button>
+              <Button onClick={() => window.location.reload()} variant="secondary">
                 Refresh Page
-              </Btn>
+              </Button>
             </div>
           )}
           
           {errorType === "not_found" && (
-            <Btn onClick={() => window.location.href = "/support"}>
+            <Button onClick={() => window.location.href = "/support"}>
               Contact Support
-            </Btn>
+            </Button>
           )}
           
           {retryCount > 0 && (
@@ -378,10 +379,9 @@ export default function Profile() {
               Role: {profile?.role || "user"}
             </div>
           </div>
-          <Btn onClick={() => setEditingProfile(!editingProfile)}>
-            <Edit2 size={16} style={{ marginRight: 6 }} />
+          <Button onClick={() => setEditingProfile(!editingProfile)} icon={Edit2}>
             {editingProfile ? "Cancel" : "Edit Profile"}
-          </Btn>
+          </Button>
         </div>
 
         {editingProfile && (
@@ -420,13 +420,12 @@ export default function Profile() {
                 />
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <Btn onClick={handleProfileUpdate} disabled={saving}>
-                  {saving ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />}
-                  {saving ? "Saving..." : "Save Changes"}
-                </Btn>
-                <Btn onClick={() => setEditingProfile(false)} variant="secondary">
+          <Button onClick={handleProfileUpdate} disabled={saving} icon={saving ? Loader2 : Check}>
+            {saving ? "Saving..." : "Save Changes"}
+          </Button>
+                <Button onClick={() => setEditingProfile(false)} variant="secondary">
                   Cancel
-                </Btn>
+                </Button>
               </div>
             </div>
           </div>
@@ -584,9 +583,8 @@ export default function Profile() {
                   {referral.referral_code || profile?.id?.substring(0, 8).toUpperCase() || "Loading..."}
                 </code>
               </div>
-              <Btn onClick={() => copyToClipboard(referral.referral_code || profile?.id?.substring(0, 8).toUpperCase())} size="sm">
-                <Copy size={14} />
-              </Btn>
+              <Button onClick={() => copyToClipboard(referral.referral_code || profile?.id?.substring(0, 8).toUpperCase())} size="sm" icon={Copy}>
+              </Button>
             </div>
 
             <div style={{ color: C.t2, fontSize: 10, marginBottom: 8, fontFamily: "monospace", letterSpacing: 1, textTransform: "uppercase" }}>
@@ -608,9 +606,8 @@ export default function Profile() {
                   {referral.referral_link || "Loading..."}
                 </code>
               </div>
-              <Btn onClick={() => copyToClipboard(referral.referral_link)} size="sm" disabled={!referral.referral_link}>
-                <Copy size={14} />
-              </Btn>
+              <Button onClick={() => copyToClipboard(referral.referral_link)} size="sm" disabled={!referral.referral_link} icon={Copy}>
+              </Button>
             </div>
           </div>
 
@@ -688,9 +685,8 @@ export default function Profile() {
               outline: "none"
             }}
           />
-          <Btn onClick={() => copyToClipboard(profile?.id || "")} size="sm">
-            <Copy size={14} />
-          </Btn>
+          <Button onClick={() => copyToClipboard(profile?.id || "")} size="sm" icon={Copy}>
+          </Button>
         </div>
       </Card>
     </div>

@@ -9,7 +9,9 @@
 import React, { useState, useEffect } from "react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Activity, TrendingUp, BarChart3, Zap, Target, AlertTriangle, CheckCircle, Play, RefreshCw, Download, ChevronDown, ChevronRight } from "lucide-react";
-import { C, Btn, Card, Tag2, PanelTitle } from "../components/ui-legacy/primitives";
+import { C, Tag2, PanelTitle } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 import { post } from "../api";
 
 const ResearchConsole = ({ strategyId, versionId, executionGraph }) => {
@@ -91,7 +93,7 @@ const ResearchConsole = ({ strategyId, versionId, executionGraph }) => {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {/* Best Parameters */}
-        <Card cls="p-5">
+        <Card className="p-5">
           <PanelTitle title="Best Parameters" sub="Optimized configuration" />
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginTop: 12 }}>
             {Object.entries(report.best_parameters || {}).map(([key, value]) => (
@@ -108,7 +110,7 @@ const ResearchConsole = ({ strategyId, versionId, executionGraph }) => {
         </Card>
         
         {/* Optimization Chart */}
-        <Card cls="p-5">
+        <Card className="p-5">
           <PanelTitle title="Optimization Progress" sub="Sharpe Ratio across iterations" />
           <div style={{ height: 300, marginTop: 12 }}>
             <ResponsiveContainer width="100%" height="100%">
@@ -137,7 +139,7 @@ const ResearchConsole = ({ strategyId, versionId, executionGraph }) => {
     
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <Card cls="p-5">
+        <Card className="p-5">
           <PanelTitle title="Walk Forward Analysis" sub="Training vs Testing performance" />
           <div style={{ height: 300, marginTop: 12 }}>
             <ResponsiveContainer width="100%" height="100%">
@@ -168,7 +170,7 @@ const ResearchConsole = ({ strategyId, versionId, executionGraph }) => {
     
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <Card cls="p-5">
+        <Card className="p-5">
           <PanelTitle title="Monte Carlo Simulation" sub={`${mcResult.n_simulations} simulations`} />
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginTop: 12 }}>
             <div style={{ background: C.bg3, padding: 12, borderRadius: 8 }}>
@@ -238,7 +240,7 @@ const ResearchConsole = ({ strategyId, versionId, executionGraph }) => {
     const score = report.strategy_score;
     
     return (
-      <Card cls="p-5">
+      <Card className="p-5">
         <PanelTitle title="Strategy Quality Score" sub={`Overall: ${(report.overall_quality_score * 100).toFixed(1)}%`} />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 12, marginTop: 12 }}>
           {Object.entries(score).map(([key, value]) => (
@@ -318,9 +320,9 @@ const ResearchConsole = ({ strategyId, versionId, executionGraph }) => {
           <Activity size={24} style={{ color: C.cyan }} />
           <span style={{ fontSize: 18, fontWeight: 700, color: C.t1 }}>Research Console</span>
         </div>
-        <Btn v="primary" sz="sm" Icon={Play} onClick={runOptimization} disabled={isRunning}>
+        <Button variant="primary" size="sm" Icon={Play} onClick={runOptimization} disabled={isRunning}>
           {isRunning ? "Running..." : "Run Optimization"}
-        </Btn>
+        </Button>
       </div>
       
       {/* Tabs */}

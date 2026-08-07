@@ -1,7 +1,8 @@
-﻿import React, { useState, useRef } from "react";
+import React, { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { ShieldCheck, Lock, Copy } from "lucide-react";
-import { C, Btn, Inp } from "../components/ui-legacy/primitives";
+import { C, Inp } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
 
 export default function TwoFA() {
   const navigate = useNavigate();
@@ -41,7 +42,7 @@ export default function TwoFA() {
                 <Copy size={13} style={{ color: C.t3, cursor: "pointer" }} className="hover:text-cyan-400" />
               </div>
             </div>
-            <Btn v="primary" cls="w-full justify-center" onClick={() => setStep(2)}>I've Added It â€” Verify Code â†’</Btn>
+            <Button variant="primary" cls="w-full justify-center" onClick={() => setStep(2)}>I've Added It — Verify Code →</Button>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -52,9 +53,9 @@ export default function TwoFA() {
                   style={{ background: C.bg3, border: `1px solid ${d ? C.cyan : C.border}`, color: C.t1, width: 46, height: 54, textAlign: "center", fontSize: 22, fontWeight: 900, borderRadius: 8, outline: "none", fontFamily: "monospace", transition: "all 0.15s" }} />
               ))}
             </div>
-            <Btn v="primary" cls="w-full justify-center" onClick={() => navigate("/wizard")}>Verify & Continue â†’</Btn>
+            <Button variant="primary" cls="w-full justify-center" onClick={() => navigate("/wizard")}>Verify & Continue →</Button>
             <button style={{ color: C.t3, fontSize: 10, fontFamily: "monospace", textAlign: "center", cursor: "pointer" }} onClick={() => setStep(1)} className="hover:text-cyan-400">
-              â† Back to QR code
+              ← Back to QR code
             </button>
           </div>
         )}
@@ -63,7 +64,7 @@ export default function TwoFA() {
   );
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════════════
 //  PAGE: SETUP WIZARD
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════════════
 

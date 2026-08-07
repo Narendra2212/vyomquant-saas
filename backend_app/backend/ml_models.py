@@ -27,6 +27,16 @@ import numpy as np
 
 logger = logging.getLogger("MLModels")
 
+# Available ML models for Strategy Builder
+AVAILABLE_ML_MODELS = [
+    'xgboost', 'lightgbm', 'random_forest', 'catboost'
+]
+
+# Available DL models for Strategy Builder
+AVAILABLE_DL_MODELS = [
+    'lstm', 'gru', 'transformer', 'autoencoder'
+]
+
 # Import ML safety infrastructure for institutional-grade safety
 try:
     from backend_app.core.ml_safety import (DeterministicEnforcer,

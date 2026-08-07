@@ -141,6 +141,12 @@ export const strategiesApi = {
    * @returns {Promise<{status: string, message: string}>}
    */
   trainMl: (params) => post('/api/strategies/train-ml', params),
+
+  /**
+   * Get available blocks for Strategy Builder
+   * @returns {Promise<{indicators: Array, ml_models: Array, dl_models: Array, total_blocks: number}>}
+   */
+  getBlocks: () => get('/api/strategies/blocks'),
 };
 
 // Legacy compatibility

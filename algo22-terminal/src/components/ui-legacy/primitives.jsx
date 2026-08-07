@@ -16,6 +16,7 @@ import {
   ArrowUpRight, XCircle, Bot, Info, Activity,
   AlertTriangle, RefreshCw, Zap
 } from "lucide-react";
+import { Button } from "../ui/Button";
 
 // Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 //  DESIGN SYSTEM - PROFESSIONAL TRADING THEME
@@ -137,72 +138,6 @@ export const Tag2 = ({ c = "accent", children, interactive = false }) => {
   );
 };
 
-export const Btn = ({ children, v = "primary", sz = "md", Icon, onClick, disabled, cls = "", "aria-label": ariaLabel, ...rest }) => {
-  const V = {
-    primary: { background: C.accent, color: "#fff", fontWeight: 600, border: "none", boxShadow: C.shadow, hoverBg: C.accentHover, hoverTransform: "translateY(-1px)", activeTransform: "translateY(0) scale(0.98)" },
-    outline: { background: "transparent", border: `1px solid ${C.border}`, color: C.accent, hoverBg: C.bg3, hoverBorder: C.borderLight, hoverTransform: "translateY(-1px)", activeTransform: "translateY(0) scale(0.98)" },
-    ghost: { background: "transparent", border: "none", color: C.t2, hoverBg: C.bg3, hoverColor: C.t1, hoverTransform: "none", activeTransform: "scale(0.98)" },
-    danger: { background: C.lossBg, border: `1px solid rgba(239,68,68,0.3)`, color: C.loss, hoverBg: "rgba(239,68,68,0.2)", hoverTransform: "translateY(-1px)", activeTransform: "translateY(0) scale(0.98)" },
-    success: { background: C.profitBg, border: `1px solid rgba(34,197,94,0.3)`, color: C.profit, hoverBg: "rgba(34,197,94,0.2)", hoverTransform: "translateY(-1px)", activeTransform: "translateY(0) scale(0.98)" },
-    gold: { background: C.gold, color: "#000", fontWeight: 600, border: "none", boxShadow: C.shadow, hoverBg: "#FCD34D", hoverTransform: "translateY(-1px)", activeTransform: "translateY(0) scale(0.98)" },
-    red: { background: C.loss, color: "#fff", fontWeight: 600, border: "none", boxShadow: C.shadow, hoverBg: C.lossDark, hoverTransform: "translateY(-1px)", activeTransform: "translateY(0) scale(0.98)" },
-  };
-  const S = {
-    xs: { padding: "4px 8px", fontSize: "9px" },
-    sm: { padding: "5px 12px", fontSize: "10px" },
-    md: { padding: "7px 16px", fontSize: "12px" },
-    lg: { padding: "10px 24px", fontSize: "14px" }
-  };
-  const icon = Icon ? <Icon size={sz === "xs" ? 9 : sz === "sm" ? 11 : 13} aria-hidden="true" /> : null;
-  const variant = V[v] || V.primary;
-  const [isHovered, setIsHovered] = useState(false);
-  const [isPressed, setIsPressed] = useState(false);
-  const [isFocused, setIsFocused] = useState(false);
-
-  const calculatedAriaLabel = ariaLabel || (typeof children === "string" ? children : undefined);
-
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      aria-label={calculatedAriaLabel}
-      tabIndex={disabled ? -1 : 0}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => { setIsHovered(false); setIsPressed(false); }}
-      onMouseDown={() => setIsPressed(true)}
-      onMouseUp={() => setIsPressed(false)}
-      onFocus={() => setIsFocused(true)}
-      onBlur={() => setIsFocused(false)}
-      style={{
-        ...S[sz],
-        background: isHovered && variant.hoverBg ? variant.hoverBg : variant.background,
-        border: isHovered && variant.hoverBorder ? `1px solid ${variant.hoverBorder}` : variant.border,
-        color: isHovered && variant.hoverColor ? variant.hoverColor : variant.color,
-        fontWeight: variant.fontWeight,
-        boxShadow: isHovered ? C.shadowMd : variant.boxShadow,
-        borderRadius: C.radius.md,
-        fontFamily: "monospace",
-        letterSpacing: 0.5,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 6,
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.4 : 1,
-        transform: isPressed ? variant.activeTransform : (isHovered ? variant.hoverTransform : "none"),
-        outline: isFocused ? `2px solid ${C.accent}` : "none",
-        outlineOffset: "2px",
-        transition: "all 0.15s cubic-bezier(0.4, 0, 0.2, 1)"
-      }}
-      className={cls}
-      {...rest}
-    >
-      {icon}{children}
-    </button>
-  );
-};
-
 export const Inp = ({ id, lbl, ph, type = "text", icon: Icon, hint, val, onChange, disabled = false, "aria-label": ariaLabel, ...rest }) => {
   const [isFocused, setIsFocused] = useState(false);
   const inputId = id || (lbl ? `inp-${lbl.toLowerCase().replace(/[^a-z0-9]/g, "-")}` : undefined);
@@ -238,27 +173,6 @@ export const Inp = ({ id, lbl, ph, type = "text", icon: Icon, hint, val, onChang
         />
       </div>
       {hint && <p style={{ color: C.t3, fontSize: 9, fontFamily: "monospace" }}>{hint}</p>}
-    </div>
-  );
-};
-
-export const Card = ({ children, cls = "", style = {}, hover = false, elevate = false }) => {
-  const [isHovered, setIsHovered] = useState(false);
-  return (
-    <div
-      onMouseEnter={() => hover && setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-      style={{
-        background: C.bg2, border: `1px solid ${isHovered ? C.borderLight : C.border}`,
-        borderRadius: C.radius.lg,
-        boxShadow: isHovered && elevate ? C.shadowMd : C.shadow,
-        transform: isHovered && elevate ? "translateY(-2px)" : "none",
-        transition: "all 0.15s cubic-bezier(0.4, 0, 0.2, 1)",
-        ...style
-      }}
-      className={cls}
-    >
-      {children}
     </div>
   );
 };
@@ -630,12 +544,12 @@ export const LiveStatusV2 = React.memo( ({ status = "stopped", label }) => {
 //  BUTTON WITH LOADING STATE
 // Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
-export const AsyncBtn = React.memo( ({ children, onClick, loading = false, loadingText, disabled, v = "primary", sz = "md", Icon }) => {
+export const AsyncBtn = React.memo( ({ children, onClick, loading = false, loadingText, disabled, variant = "primary", size = "md", icon: Icon }) => {
   const isDisabled = disabled || loading;
   return (
-    <Btn v={v} sz={sz} Icon={loading ? null : Icon} onClick={onClick} disabled={isDisabled}>
-      {loading ? (<><Spinner size={sz === "lg" ? 14 : sz === "sm" ? 10 : 12} /><span>{loadingText || children}</span></>) : children}
-    </Btn>
+    <Button variant={variant} size={size} icon={loading ? null : Icon} onClick={onClick} disabled={isDisabled}>
+      {loading ? (<><Spinner size={size === "lg" ? 14 : size === "sm" ? 10 : 12} /><span>{loadingText || children}</span></>) : children}
+    </Button>
   );
 });
 
@@ -656,8 +570,8 @@ export const EmptyState = ({ icon: Icon, title, subtitle, action, actionLabel, h
         <p style={{ color: C.t2, fontSize: s.title, fontWeight: 600, marginBottom: 4 }}>{title}</p>
         {subtitle && <p style={{ color: C.t3, fontSize: s.subtitle }}>{subtitle}</p>}
       </div>
-      {hint && <div style={{ background: C.bg3, border: `1px dashed ${C.border}`, borderRadius: C.radius.md, padding: "8px 12px", marginTop: 8 }}><p style={{ color: C.t4, fontSize: 10, fontStyle: "italic" }}>Ã°Å¸â€™Â¡ {hint}</p></div>}
-      {action && actionLabel && <Btn v="outline" sz="sm" onClick={action}>{actionLabel}</Btn>}
+      {hint && <div style={{ background: C.bg3, border: `1px dashed ${C.border}`, borderRadius: C.radius.md, padding: "8px 12px", marginTop: 8 }}><p style={{ color: C.t4, fontSize: 10, fontStyle: "italic" }}>💡 {hint}</p></div>}
+      {action && actionLabel && <Button variant="outline" size="sm" onClick={action}>{actionLabel}</Button>}
     </div>
   );
 };

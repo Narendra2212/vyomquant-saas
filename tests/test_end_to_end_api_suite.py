@@ -33,6 +33,7 @@ def create_access_token(data: dict) -> str:
     payload = data.copy()
     payload.setdefault("aud", "authenticated")
     payload.setdefault("exp", int(time.time()) + 3600)
+    payload.setdefault("iss", "algo22-test")  # Required for auth_middleware test fallback
     secret = os.environ.get("SUPABASE_JWT_SECRET") or os.environ.get("JWT_SECRET") or "dev-secret-change-in-production"
     return jwt.encode(payload, secret, algorithm="HS256")
 

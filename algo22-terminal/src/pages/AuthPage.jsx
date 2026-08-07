@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Eye, EyeOff, Lock, Mail, Zap, Globe, AlertCircle, CheckCircle, Check, X } from "lucide-react";
-import { C, Btn, Inp } from "../components/ui-legacy/primitives";
+import { C, Inp } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
 import { supabase } from "../supabase";
 
 const evaluatePasswordStrength = (pwd) => {
@@ -401,9 +402,9 @@ export default function AuthPage({ mode, go }) {
               </button>
             </div>
           )}
-          <Btn v="primary" sz="md" cls="w-full justify-center mt-1" disabled={isLoading} type="submit">
+          <Button variant="primary" size="md" cls="w-full justify-center mt-1" disabled={isLoading} type="submit">
             {isUp ? (loadingAction === "signup" ? "Creating Account..." : "Create Account") : (loadingAction === "signin" ? "Signing In..." : "Sign In")}
-          </Btn>
+          </Button>
         </form>
 
         {!!error && (

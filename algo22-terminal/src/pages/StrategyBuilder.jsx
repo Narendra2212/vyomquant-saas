@@ -19,22 +19,24 @@ import {
   ZoomOut, Maximize, Copy, Trash2, Scissors, Keyboard, Layers,
   X, ChevronDown, ChevronRight, PanelLeft, PanelRight
 } from "lucide-react";
-import { endpoints, post } from "../api";
 import {
-  C, Btn, Inp, Card, Tag2, PanelTitle
+  C, Inp, Tag2, PanelTitle
 } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 import { useDataPipeline, DataPipelineProvider } from "../contexts/DataPipelineContext";
 import { useIndicatorEngine, IndicatorEngineProvider } from "../contexts/IndicatorEngineContext";
 import { useLogicEngine, LogicEngineProvider } from "../contexts/LogicEngineContext";
 import { useStrategyEngine, StrategyEngineProvider } from "../contexts/StrategyEngineContext";
 import { useUndoRedo, UndoRedoProvider } from "../contexts/UndoRedoContext";
 import { useValidation, ValidationProvider } from "../contexts/ValidationContext";
-import { BlockRegistry, getBlocksByCategory, getCategoryIcon, getCategoryColor, BlockCategories } from "../lib/blockRegistry";
+import { BlockRegistry, getBlocksByCategory, getCategoryIcon, getCategoryColor, BlockCategories, StreamTypes } from "../lib/blockRegistry";
+import { strategiesApi } from "../api/modules/strategies";
 
 const ApiSyncIndicator = ({ color, text, active = true }) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, paddingTop: 6, borderTop: `1px dashed ${C.border}` }}>
+  <div style={{ display: 'flex', alignItems: 'center', gap: "6px", marginTop: "10px", paddingTop: 6, borderTop: `1px dashed ${C.border}` }}>
     <div style={{ width: 6, height: 6, borderRadius: '50%', background: active ? color : C.t3, boxShadow: active ? `0 0 8px ${color}` : 'none', transition: 'all 0.3s' }} />
-    <span style={{ fontSize: 8, color: active ? C.t2 : C.t4, letterSpacing: 1, fontFamily: "monospace", textTransform: "uppercase", fontWeight: 700 }}>{text}</span>
+    <span className="text-micro" style={{ color: active ? C.t2 : C.t4, letterSpacing: 1, fontFamily: "monospace", textTransform: "uppercase", fontWeight: 700 }}>{text}</span>
   </div>
 );
 
@@ -50,7 +52,7 @@ const PremiumNodeWrapper = ({ children, color, active = true, selected = false, 
         border: `2px solid ${hasError ? C.red : selected ? C.cyan : isHovered ? color : color + "90"}`,
         borderRadius: 8,
         color: C.t1,
-        padding: "10px",
+        padding: "2.5",
         boxShadow: isHovered ? `${C.glow[color === C.green ? "profit" : color === C.red ? "loss" : "accent"]}, 0 4px 12px rgba(0,0,0,0.3)` : `0 0 15px ${color}25`,
         fontFamily: "monospace",
         transition: "all 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
@@ -99,18 +101,18 @@ const DynamicNode = React.memo(function DynamicNode({ data, selected }) {
 
   return (
     <PremiumNodeWrapper color={blockColor} selected={selected} hasError={hasError}>
-      <Handle type="target" position={Position.Left} style={{ background: blockColor, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
-      <div style={{ color: blockColor, fontSize: 8, letterSpacing: 2, textTransform: "uppercase", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
+      <Handle type="target" position={Position.Left} style={{ background: blockColor, border: `1px solid ${C.bg1}`, width: "0.625rem", height: "0.625rem" }} />
+      <div style={{ color: blockColor, letterSpacing: 2, textTransform: "uppercase", marginBottom: "4px", display: "flex", alignItems: "center", gap: "4px" }}>
         <BlockIcon size={10} />
         {block ? block.category : 'Block'}
       </div>
-      <div style={{ fontWeight: 900, fontSize: 13 }}>{data.label}</div>
+      <div className="text-body-lg" style={{ fontWeight: 900 }}>{data.label}</div>
       {hasError && (
-        <div style={{ fontSize: 8, color: C.red, marginTop: 2, fontFamily: 'monospace' }}>
+        <div className="text-micro" style={{ color: C.red, marginTop: "2px", fontFamily: 'monospace' }}>
           ⚠ {data.errorMessage || 'Error'}
         </div>
       )}
-      <Handle type="source" position={Position.Right} style={{ background: blockColor, border: `1px solid ${C.bg1}`, width: 10, height: 10 }} />
+      <Handle type="source" position={Position.Right} style={{ background: blockColor, border: `1px solid ${C.bg1}`, width: "0.625rem", height: "0.625rem" }} />
     </PremiumNodeWrapper>
   );
 });
@@ -134,6 +136,8 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
   const [collapsedCategories, setCollapsedCategories] = useState({});
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [libraryOpen, setLibraryOpen] = useState(true);
+  const [backendBlocks, setBackendBlocks] = useState(null);
+  const [loadingBlocks, setLoadingBlocks] = useState(true);
 
   const reactFlowWrapper = useRef(null);
   const nodeSeq = useRef(4);
@@ -218,6 +222,61 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
       };
     }));
   }, [errors, getErrorByNodeId]);
+
+  // Fetch backend blocks for dynamic synchronization
+  useEffect(() => {
+    const fetchBackendBlocks = async () => {
+      try {
+        setLoadingBlocks(true);
+        const response = await strategiesApi.getBlocks();
+        setBackendBlocks(response);
+      } catch (error) {
+        console.error('[StrategyBuilder] Failed to fetch backend blocks:', error);
+        // Fall back to static registry if backend fails
+        setBackendBlocks(null);
+      } finally {
+        setLoadingBlocks(false);
+      }
+    };
+
+    fetchBackendBlocks();
+  }, []);
+
+  // Dynamic block getter that uses backend data if available
+  const getDynamicBlocksByCategory = useCallback((category) => {
+    if (backendBlocks) {
+      // Use backend data
+      const categoryMap = {
+        [BlockCategories.INDICATORS]: backendBlocks.indicators || [],
+        [BlockCategories.ML]: backendBlocks.ml_models || [],
+        [BlockCategories.DL]: backendBlocks.dl_models || [],
+        [BlockCategories.DATA]: getBlocksByCategory(BlockCategories.DATA),
+        [BlockCategories.FEATURE_ENGINEERING]: getBlocksByCategory(BlockCategories.FEATURE_ENGINEERING),
+        [BlockCategories.MATH]: getBlocksByCategory(BlockCategories.MATH),
+        [BlockCategories.LOGIC]: getBlocksByCategory(BlockCategories.LOGIC),
+        [BlockCategories.ACTION]: getBlocksByCategory(BlockCategories.ACTION),
+      };
+      
+      const backendCategoryBlocks = categoryMap[category] || [];
+      
+      // Convert backend format to frontend format
+      return backendCategoryBlocks.map(block => ({
+        type: block.id,
+        name: block.name,
+        description: block.description,
+        category: block.category,
+        icon: getCategoryIcon(block.category),
+        color: getCategoryColor(block.category),
+        parameters: block.parameters || [],
+        inputs: [StreamTypes.OHLCV],
+        outputs: [StreamTypes.INDICATOR],
+        backendType: block.category === 'indicators' ? 'indicator' : block.category
+      }));
+    }
+    
+    // Fall back to static registry
+    return getBlocksByCategory(category);
+  }, [backendBlocks, getBlocksByCategory, getCategoryIcon, getCategoryColor]);
 
   const onNodesChange = useCallback((changes) => {
     setNodes((nds) => applyNodeChanges(changes, nds));
@@ -487,13 +546,69 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
   const filteredBlocks = useMemo(() => {
     if (!searchQuery) return null;
     
-    return Object.entries(BlockRegistry).filter(([type, block]) => {
-      const searchLower = searchQuery.toLowerCase();
-      return block.name.toLowerCase().includes(searchLower) ||
-             block.description.toLowerCase().includes(searchLower) ||
-             block.category.toLowerCase().includes(searchLower);
+    // Search both static registry and backend blocks
+    const searchLower = searchQuery.toLowerCase();
+    const results = [];
+    
+    // Search static registry
+    Object.entries(BlockRegistry).forEach(([type, block]) => {
+      if (block.name.toLowerCase().includes(searchLower) ||
+          block.description.toLowerCase().includes(searchLower) ||
+          block.category.toLowerCase().includes(searchLower)) {
+        results.push([type, block]);
+      }
     });
-  }, [searchQuery]);
+    
+    // Search backend blocks if available
+    if (backendBlocks) {
+      backendBlocks.indicators?.forEach(block => {
+        if (block.name.toLowerCase().includes(searchLower) ||
+            block.description.toLowerCase().includes(searchLower) ||
+            block.category.toLowerCase().includes(searchLower)) {
+          results.push([block.id, {
+            ...block,
+            icon: getCategoryIcon(block.category),
+            color: getCategoryColor(block.category),
+            inputs: [StreamTypes.OHLCV],
+            outputs: [StreamTypes.INDICATOR],
+            backendType: 'indicator'
+          }]);
+        }
+      });
+      
+      backendBlocks.ml_models?.forEach(block => {
+        if (block.name.toLowerCase().includes(searchLower) ||
+            block.description.toLowerCase().includes(searchLower) ||
+            block.category.toLowerCase().includes(searchLower)) {
+          results.push([block.id, {
+            ...block,
+            icon: getCategoryIcon(block.category),
+            color: getCategoryColor(block.category),
+            inputs: [StreamTypes.OHLCV],
+            outputs: [StreamTypes.INDICATOR],
+            backendType: 'ml'
+          }]);
+        }
+      });
+      
+      backendBlocks.dl_models?.forEach(block => {
+        if (block.name.toLowerCase().includes(searchLower) ||
+            block.description.toLowerCase().includes(searchLower) ||
+            block.category.toLowerCase().includes(searchLower)) {
+          results.push([block.id, {
+            ...block,
+            icon: getCategoryIcon(block.category),
+            color: getCategoryColor(block.category),
+            inputs: [StreamTypes.OHLCV],
+            outputs: [StreamTypes.INDICATOR],
+            backendType: 'dl'
+          }]);
+        }
+      });
+    }
+    
+    return results;
+  }, [searchQuery, backendBlocks, getCategoryIcon, getCategoryColor]);
 
   // Load strategy on mount
   useEffect(() => {
@@ -538,48 +653,48 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: C.bg1 }}>
       {/* Toolbar */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: C.bg2, borderBottom: `1px solid ${C.border}`, gap: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Btn v="ghost" sz="sm" Icon={ArrowLeft} onClick={onBack}>Back</Btn>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: C.bg2, borderBottom: `1px solid ${C.border}`, gap: "8px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <Button variant="ghost" size="sm" Icon={ArrowLeft} onClick={onBack}>Back</Button>
           <Inp
             value={strategyName}
             onChange={(e) => setStrategyName(e.target.value)}
             placeholder="Strategy Name"
-            style={{ width: 200, fontSize: 12, fontFamily: "monospace" }}
+            className="text-body" style={{ width: 200, fontFamily: "monospace" }}
           />
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           {/* PHASE I: Professional toolbar */}
-          <Btn v="ghost" sz="sm" Icon={Undo} onClick={handleUndo} disabled={!canUndo} title="Undo (Ctrl+Z)" />
-          <Btn v="ghost" sz="sm" Icon={Redo} onClick={handleRedo} disabled={!canRedo} title="Redo (Ctrl+Y)" />
+          <Button variant="ghost" size="sm" Icon={Undo} onClick={handleUndo} disabled={!canUndo} title="Undo (Ctrl+Z)" />
+          <Button variant="ghost" size="sm" Icon={Redo} onClick={handleRedo} disabled={!canRedo} title="Redo (Ctrl+Y)" />
           <div style={{ width: 1, height: 24, background: C.border }} />
-          <Btn v="ghost" sz="sm" Icon={ZoomOut} onClick={() => zoomOut()} title="Zoom Out" />
-          <Btn v="ghost" sz="sm" Icon={ZoomIn} onClick={() => zoomIn()} title="Zoom In" />
-          <Btn v="ghost" sz="sm" Icon={Maximize} onClick={handleFitView} title="Fit View" />
+          <Button variant="ghost" size="sm" Icon={ZoomOut} onClick={() => zoomOut()} title="Zoom Out" />
+          <Button variant="ghost" size="sm" Icon={ZoomIn} onClick={() => zoomIn()} title="Zoom In" />
+          <Button variant="ghost" size="sm" Icon={Maximize} onClick={handleFitView} title="Fit View" />
           <div style={{ width: 1, height: 24, background: C.border }} />
-          <Btn v="ghost" sz="sm" Icon={PanelLeft} onClick={() => setLibraryOpen(!libraryOpen)} title="Toggle Library (F)" />
-          <Btn v="ghost" sz="sm" Icon={PanelRight} onClick={() => setInspectorOpen(!inspectorOpen)} title="Toggle Inspector" />
+          <Button variant="ghost" size="sm" Icon={PanelLeft} onClick={() => setLibraryOpen(!libraryOpen)} title="Toggle Library (F)" />
+          <Button variant="ghost" size="sm" Icon={PanelRight} onClick={() => setInspectorOpen(!inspectorOpen)} title="Toggle Inspector" />
           <div style={{ width: 1, height: 24, background: C.border }} />
-          <Btn v="outline" sz="sm" Icon={Save} onClick={handleSaveStrategy} disabled={isSavingStrategy || !isValid}>
+          <Button variant="outline" size="sm" Icon={Save} onClick={handleSaveStrategy} disabled={isSavingStrategy || !isValid}>
             {isSavingStrategy ? "Saving..." : "Save"}
-          </Btn>
-          <Btn v="primary" sz="sm" Icon={Play} onClick={handleSaveStrategy} disabled={!isValid} title="Compile & Save">
+          </Button>
+          <Button variant="primary" size="sm" Icon={Play} onClick={handleSaveStrategy} disabled={!isValid} title="Compile & Save">
             Compile
-          </Btn>
+          </Button>
           {onBacktest && (
-            <Btn v="primary" sz="sm" Icon={BarChart2} onClick={() => onBacktest({ id: strategyIdState, name: strategyName, nodes, edges })}>
+            <Button variant="primary" size="sm" Icon={BarChart2} onClick={() => onBacktest({ id: strategyIdState, name: strategyName, nodes, edges })}>
               Backtest
-            </Btn>
+            </Button>
           )}
         </div>
       </div>
 
       {/* Validation Bar */}
       {!isValid && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", background: `${C.red}20`, borderBottom: `1px solid ${C.red}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 16px", background: `${C.red}20`, borderBottom: `1px solid ${C.red}` }}>
           <AlertTriangle size={16} style={{ color: C.red }} />
-          <span style={{ color: C.red, fontSize: 11, fontFamily: "monospace" }}>
+          <span className="text-body-sm" style={{ color: C.red, fontFamily: "monospace" }}>
             {errors.length} error{errors.length !== 1 ? 's' : ''}: {errors[0]?.message}
           </span>
         </div>
@@ -591,7 +706,7 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
         {libraryOpen && (
           <div style={{ width: 260, background: C.bg2, borderRight: `1px solid ${C.border}`, display: "flex", flexDirection: "column" }}>
             {/* PHASE J: Professional Search */}
-            <div style={{ padding: 12, borderBottom: `1px solid ${C.border}` }}>
+            <div style={{ padding: "12px", borderBottom: `1px solid ${C.border}` }}>
               <div style={{ position: "relative" }}>
                 <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: C.t3 }} />
                 <input
@@ -599,25 +714,24 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
                   placeholder="Search blocks..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
+                  className="text-body-sm"
                   style={{
                     width: "100%",
                     background: C.bg3,
                     border: `1px solid ${C.border}`,
-                    borderRadius: 6,
+                    borderRadius: "0.375rem",
                     padding: "8px 12px 8px 32",
                     color: C.t1,
-                    fontSize: 11,
-                    fontFamily: "monospace",
                     outline: "none"
                   }}
                 />
               </div>
             </div>
 
-            <div style={{ flex: 1, overflowY: "auto", padding: 12 }}>
+            <div style={{ flex: 1, overflowY: "auto", padding: "12px" }}>
               {filteredBlocks ? (
                 // Search results
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                   {filteredBlocks.map(([type, block]) => {
                     const BlockIcon = block.icon;
                     return (
@@ -632,18 +746,18 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
                         style={{
                           background: C.bg3,
                           border: `1px solid ${C.border}`,
-                          borderRadius: 6,
+                          borderRadius: "0.375rem",
                           padding: "10px",
                           cursor: "grab",
                           display: "flex",
                           alignItems: "center",
-                          gap: 8
+                          gap: "8px"
                         }}
                       >
                         <BlockIcon size={16} style={{ color: block.color }} />
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 11, fontWeight: 600, color: C.t1 }}>{block.name}</div>
-                          <div style={{ fontSize: 9, color: C.t3 }}>{block.description}</div>
+                          <div className="text-body-sm" style={{ fontWeight: 600, color: C.t1 }}>{block.name}</div>
+                          <div className="text-caption-sm" style={{ color: C.t3 }}>{block.description}</div>
                         </div>
                       </div>
                     );
@@ -652,18 +766,18 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
               ) : (
                 // Categories
                 Object.values(BlockCategories).map(category => {
-                  const categoryBlocks = getBlocksByCategory(category);
+                  const categoryBlocks = getDynamicBlocksByCategory(category);
                   const CategoryIcon = getCategoryIcon(category);
                   const isCollapsed = collapsedCategories[category];
                   
                   return (
-                    <div key={category} style={{ marginBottom: 16 }}>
+                    <div key={category} style={{ marginBottom: "16px" }}>
                       <div
                         onClick={() => toggleCategory(category)}
                         style={{
                           display: "flex",
                           alignItems: "center",
-                          gap: 6,
+                          gap: "6px",
                           padding: "8px",
                           cursor: "pointer",
                           userSelect: "none"
@@ -671,14 +785,18 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
                       >
                         {isCollapsed ? <ChevronRight size={14} style={{ color: C.t3 }} /> : <ChevronDown size={14} style={{ color: C.t3 }} />}
                         <CategoryIcon size={14} style={{ color: getCategoryColor(category) }} />
-                        <span style={{ fontSize: 10, fontWeight: 700, color: C.t2, textTransform: "uppercase", letterSpacing: 1 }}>
+                        <span className="text-caption" style={{ fontWeight: 700, color: C.t2, textTransform: "uppercase", letterSpacing: 1 }}>
                           {category.replace('_', ' ')}
                         </span>
-                        <span style={{ marginLeft: "auto", fontSize: 9, color: C.t3 }}>{categoryBlocks.length}</span>
+                        {loadingBlocks && (category === BlockCategories.INDICATORS || category === BlockCategories.ML || category === BlockCategories.DL) ? (
+                          <span className="text-caption-sm" style={{ marginLeft: "auto", color: C.t3 }}>Loading...</span>
+                        ) : (
+                          <span className="text-caption-sm" style={{ marginLeft: "auto", color: C.t3 }}>{categoryBlocks.length}</span>
+                        )}
                       </div>
                       
                       {!isCollapsed && (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
                           {categoryBlocks.map(block => {
                             const BlockIcon = block.icon;
                             return (
@@ -693,19 +811,19 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
                                 style={{
                                   background: C.bg3,
                                   border: `1px solid ${C.border}`,
-                                  borderRadius: 6,
+                                  borderRadius: "0.375rem",
                                   padding: "8px 10px",
                                   cursor: "grab",
                                   display: "flex",
                                   alignItems: "center",
-                                  gap: 8,
+                                  gap: "8px",
                                   transition: "all 0.15s"
                                 }}
                                 onMouseEnter={(e) => e.currentTarget.style.background = C.bg4}
                                 onMouseLeave={(e) => e.currentTarget.style.background = C.bg3}
                               >
                                 <BlockIcon size={14} style={{ color: block.color }} />
-                                <span style={{ fontSize: 10, color: C.t1 }}>{block.name}</span>
+                                <span className="text-caption" style={{ color: C.t1 }}>{block.name}</span>
                               </div>
                             );
                           })}
@@ -760,16 +878,16 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
         {/* Inspector */}
         {inspectorOpen && (
           <div style={{ width: 300, background: C.bg2, borderLeft: `1px solid ${C.border}`, display: "flex", flexDirection: "column" }}>
-            <div style={{ padding: 12, borderBottom: `1px solid ${C.border}` }}>
+            <div style={{ padding: "12px", borderBottom: `1px solid ${C.border}` }}>
               <PanelTitle title="Inspector" sub={selectedNode ? selectedNode.data.label : "Select a node"} />
             </div>
             
-            <div style={{ flex: 1, overflowY: "auto", padding: 12 }}>
+            <div style={{ flex: 1, overflowY: "auto", padding: "12px" }}>
               {selectedNode ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                   {/* Node Info */}
                   <div>
-                    <div style={{ color: C.t3, fontSize: 9, fontFamily: "monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: 8 }}>
+                    <div className="text-caption-sm" style={{ color: C.t3, fontFamily: "monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: "8px" }}>
                       Block Type
                     </div>
                     <Tag2 c={getCategoryColor(BlockRegistry[selectedNode.type]?.category)}>
@@ -780,13 +898,13 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
                   {/* Parameters */}
                   {BlockRegistry[selectedNode.type]?.parameters && (
                     <div>
-                      <div style={{ color: C.t3, fontSize: 9, fontFamily: "monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: 8 }}>
+                      <div className="text-caption-sm" style={{ color: C.t3, fontFamily: "monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: "8px" }}>
                         Parameters
                       </div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                         {BlockRegistry[selectedNode.type].parameters.map(param => (
                           <div key={param.key}>
-                            <label style={{ color: C.t2, fontSize: 9, fontFamily: "monospace", marginBottom: 4, display: "block" }}>
+                            <label className="text-caption-sm" style={{ color: C.t2, fontFamily: "monospace", marginBottom: "4px", display: "block" }}>
                               {param.label}
                             </label>
                             {param.type === "select" ? (
@@ -806,12 +924,12 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
                                   width: "100%",
                                   background: C.bg3,
                                   border: `1px solid ${C.border}`,
-                                  borderRadius: 6,
+                                  borderRadius: "0.375rem",
                                   padding: "8px",
                                   color: C.t1,
-                                  fontSize: 11,
-                                  fontFamily: "monospace"
+                                  outline: "none"
                                 }}
+                                className="text-body-sm"
                               >
                                 {param.options.map(opt => (
                                   <option key={opt} value={opt}>{opt}</option>
@@ -835,12 +953,12 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
                                   width: "100%",
                                   background: C.bg3,
                                   border: `1px solid ${C.border}`,
-                                  borderRadius: 6,
+                                  borderRadius: "0.375rem",
                                   padding: "8px",
                                   color: C.t1,
-                                  fontSize: 11,
-                                  fontFamily: "monospace"
+                                  outline: "none"
                                 }}
+                                className="text-body-sm"
                               />
                             )}
                           </div>
@@ -851,13 +969,13 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
 
                   {/* Actions */}
                   <div>
-                    <Btn v="danger" sz="sm" Icon={Trash2} onClick={handleDeleteNode} style={{ width: "100%" }}>
+                    <Button variant="danger" size="sm" Icon={Trash2} onClick={handleDeleteNode} style={{ width: "100%" }}>
                       Delete Node
-                    </Btn>
+                    </Button>
                   </div>
                 </div>
               ) : (
-                <div style={{ color: C.t3, fontSize: 11, fontFamily: "monospace", textAlign: "center", padding: 20 }}>
+                <div className="text-body-sm" style={{ color: C.t3, fontFamily: "monospace", textAlign: "center", padding: "20px" }}>
                   Click a node to inspect
                 </div>
               )}
@@ -867,13 +985,13 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
       </div>
 
       {/* Status Bar */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 16px", background: C.bg2, borderTop: `1px solid ${C.border}`, fontSize: 10, fontFamily: "monospace", color: C.t3 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div className="text-caption" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 16px", background: C.bg2, borderTop: `1px solid ${C.border}`, fontFamily: "monospace", color: C.t3 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <span>{nodes.length} nodes</span>
           <span>{edges.length} connections</span>
           {saveState && <span style={{ color: isValid ? C.green : C.red }}>{saveState}</span>}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <span>Ctrl+S Save</span>
           <span>Ctrl+Z Undo</span>
           <span>Ctrl+Y Redo</span>

@@ -747,7 +747,64 @@ def _safe_uid(uid: str) -> str:
 
 
 # ── GET /api/strategies ─────────────────────────────────────────────────
-@router.get("/")
+@router.get("/blocks")
+async def get_available_blocks():
+    """
+    Get all available blocks for the Strategy Builder.
+    Returns dynamic block registry from backend capabilities.
+    """
+    from backend_app.backend.indicators_backend import AVAILABLE_INDICATORS
+    from backend_app.backend.ml_models import AVAILABLE_ML_MODELS, AVAILABLE_DL_MODELS
+    
+    # Available indicators from backend
+    indicators = []
+    for indicator_name in AVAILABLE_INDICATORS:
+        indicators.append({
+            "id": indicator_name.lower(),
+            "name": indicator_name.upper(),
+            "category": "indicators",
+            "description": f"{indicator_name} technical indicator",
+            "parameters": [
+                {"key": "window", "label": "Period", "type": "number", "default": 14, "min": 1, "max": 500}
+            ]
+        })
+    
+    # Available ML models from backend
+    ml_models = []
+    for model_name in AVAILABLE_ML_MODELS:
+        ml_models.append({
+            "id": model_name.lower(),
+            "name": model_name.upper(),
+            "category": "ml",
+            "description": f"{model_name} machine learning model",
+            "parameters": [
+                {"key": "model_id", "label": "Model ID", "type": "text", "default": ""},
+                {"key": "confidence_threshold", "label": "Confidence Threshold", "type": "number", "default": 0.7, "min": 0, "max": 1}
+            ]
+        })
+    
+    # Available DL models from backend
+    dl_models = []
+    for model_name in AVAILABLE_DL_MODELS:
+        dl_models.append({
+            "id": model_name.lower(),
+            "name": model_name.upper(),
+            "category": "dl",
+            "description": f"{model_name} deep learning model",
+            "parameters": [
+                {"key": "model_id", "label": "Model ID", "type": "text", "default": ""},
+                {"key": "confidence_threshold", "label": "Confidence Threshold", "type": "number", "default": 0.7, "min": 0, "max": 1}
+            ]
+        })
+    
+    return {
+        "indicators": indicators,
+        "ml_models": ml_models,
+        "dl_models": dl_models,
+        "total_blocks": len(indicators) + len(ml_models) + len(dl_models)
+    }
+
+
 async def list_strategies(user: dict = Depends(get_current_user)):
     """Returns all strategies saved in Supabase for this user."""
     try:

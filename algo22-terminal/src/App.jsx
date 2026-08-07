@@ -14,9 +14,10 @@ import NotificationCenter from './components/NotificationCenter';
 import CopilotChat from './components/CopilotChat';
 import DesktopOnlyOverlay from './components/DesktopOnlyOverlay';
 import {
-  C, Btn, Inp, ToastContainer,
+  C, Inp, ToastContainer,
   LoadingProvider,
 } from './components/ui-legacy/primitives';
+import { Button } from './components/ui/Button';
 
 // Public routes (lazy)
 const LandingPage    = lazy(() => import('./components/landing/LandingPage'));
@@ -93,9 +94,9 @@ function UpdatePasswordPage() {
               onChange={(e) => setPassword(e.target.value)}
               disabled={loading}
             />
-            <Btn v="primary" sz="md" cls="w-full justify-center mt-2" disabled={loading}>
+            <Button variant="primary" size="md" className="w-full justify-center mt-2" disabled={loading}>
               {loading ? "Updating..." : "Update Password"}
-            </Btn>
+            </Button>
             {!!error && (
               <div style={{ marginTop: 10, color: C.red, fontSize: 12, textAlign: "center" }}>{error}</div>
             )}

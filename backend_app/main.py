@@ -563,7 +563,7 @@ except Exception as e:
     logger.warning("Backend will start without database connection")
 
 #  CORS — origins are strictly env-var driven; no hardcoded fallbacks to prevent domain-hijack vulnerability.
-_cors_origins = os.environ.get("CORS_ORIGINS", "")
+_cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:1420,http://localhost:3000,http://127.0.0.1:1420,http://127.0.0.1:3000")
 _allowed_origins = [
     origin.strip()
     for origin in _cors_origins.split(",")

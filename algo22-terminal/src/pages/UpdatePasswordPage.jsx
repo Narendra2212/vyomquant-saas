@@ -1,7 +1,9 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Lock } from "lucide-react";
-import { C, Btn, Inp, Card } from "../components/ui-legacy/primitives";
+import { C, Inp } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 
 export default function UpdatePasswordPage() {
   const navigate = useNavigate();
@@ -44,16 +46,16 @@ export default function UpdatePasswordPage() {
           <form onSubmit={handleUpdate} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Inp
               lbl="New Password"
-              ph="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+              ph="•••••••••••"
               type="password"
               icon={Lock}
               val={password}
               onChange={(e) => setPassword(e.target.value)}
               disabled={loading}
             />
-            <Btn v="primary" sz="md" cls="w-full justify-center mt-2" disabled={loading}>
+            <Button variant="primary" size="md" cls="w-full justify-center mt-2" disabled={loading}>
               {loading ? "Updating..." : "Update Password"}
-            </Btn>
+            </Button>
             {!!error && <div style={{ marginTop: 10, color: C.red, fontSize: 12, textAlign: "center" }}>{error}</div>}
           </form>
         )}

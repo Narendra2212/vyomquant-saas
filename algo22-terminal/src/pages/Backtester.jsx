@@ -5,7 +5,9 @@ import {
   ResponsiveContainer, AreaChart, Area, CartesianGrid, XAxis, YAxis, Tooltip
 } from "recharts";
 import { endpoints } from "../api";
-import { C, Btn, Inp, Card, PanelTitle, CustomTooltip } from "../components/ui-legacy/primitives";
+import { C, Inp, PanelTitle, CustomTooltip } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 
 const serializeReactFlowToDAG = (nds, eds) => {
   const serializedNodes = (nds || []).map((node) => ({
@@ -191,8 +193,8 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
 
   return (
     <div style={{ padding: 16, overflowY: "auto", flex: 1, display: "grid", gridTemplateColumns: "260px 1fr", gap: 12 }}>
-      <Card cls="p-4" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <Btn v="ghost" sz="sm" Icon={ArrowLeft} onClick={onBack}>Back</Btn>
+      <Card className="p-4" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <Button variant="ghost" size="sm" icon={ArrowLeft} onClick={onBack}>Back</Button>
         <div style={{ color: C.t1, fontWeight: 900, fontSize: 15 }}>VectorBT Engine</div>
         <div style={{ color: C.t2, fontSize: 10, fontFamily: "monospace" }}>{strategy?.name || "Untitled Strategy"}</div>
 
@@ -250,7 +252,7 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
             </Card>
           ))}
         </div>
-        <Card cls="p-4 flex-1 flex flex-col">
+        <Card className="p-4 flex-1 flex flex-col">
           <PanelTitle title="Equity Curve" sub={results ? `Simulated performance over ${lookbackDays} days` : "Awaiting backtest execution..."} />
           <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
             <ResponsiveContainer width="100%" height="100%">

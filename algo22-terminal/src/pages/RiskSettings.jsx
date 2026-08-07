@@ -1,7 +1,9 @@
-﻿import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Shield, AlertTriangle, Sliders, Target, Zap, CheckCircle, Lock, Activity, TrendingDown, Settings, Save, RefreshCw } from "lucide-react";
 import { api } from "../api";
-import { C, Card, SectionH, PanelTitle, Btn, Inp, Toast, ToastContainer, ProgressBar, RiskMeter } from "../components/ui-legacy/primitives";
+import { C, SectionH, PanelTitle, Inp, Toast, ToastContainer, ProgressBar, RiskMeter } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 export default function RiskSettings() {
   const [maxLoss, setMaxLoss] = useState(500);
   const [maxPos, setMaxPos] = useState(10);
@@ -260,7 +262,7 @@ export default function RiskSettings() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 20 }}>
           {/* Global Risk Limits - Left Column */}
           <div style={{ gridColumn: "span 6", display: "flex", flexDirection: "column", gap: 20 }}>
-            <Card cls="p-6" style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12 }}>
+            <Card className="p-6" style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 10, background: "#10b98120", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <Sliders size={20} style={{ color: "#10b981" }} />
@@ -309,7 +311,7 @@ export default function RiskSettings() {
               </div>
             </Card>
 
-            <Card cls="p-6" style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12 }}>
+            <Card className="p-6" style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 10, background: "#ef444420", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <AlertTriangle size={20} style={{ color: "#ef4444" }} />
@@ -354,7 +356,7 @@ export default function RiskSettings() {
 
           {/* Right Column */}
           <div style={{ gridColumn: "span 6", display: "flex", flexDirection: "column", gap: 20 }}>
-            <Card cls="p-6" style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12 }}>
+            <Card className="p-6" style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 10, background: "#3b82f620", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <Target size={20} style={{ color: "#3b82f6" }} />
@@ -408,7 +410,7 @@ export default function RiskSettings() {
               )}
             </Card>
 
-            <Card cls="p-6" style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12 }}>
+            <Card className="p-6" style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 10, background: "#06b6d420", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <Activity size={20} style={{ color: "#06b6d4" }} />

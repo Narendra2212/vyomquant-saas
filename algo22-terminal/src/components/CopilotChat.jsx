@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Bot, X, Send, RotateCcw } from "lucide-react";
 import { useCopilot } from "../contexts/CopilotContext";
-import { C, Btn, Spinner } from "./ui-legacy/primitives";
+import { C, Spinner } from "./ui-legacy/primitives";
+import { Button } from "./ui/Button";
 
 export default function CopilotChat() {
   const [isOpen, setIsOpen] = useState(false);

@@ -20,7 +20,9 @@
 
 import React, { useState, useEffect } from "react";
 import { Play, Pause, Square, RotateCcw, Server, Activity, Cpu, Zap, AlertTriangle, CheckCircle, Clock, ChevronDown, ChevronRight } from "lucide-react";
-import { C, Btn, Card, Tag2, PanelTitle } from "../components/ui-legacy/primitives";
+import { C, Tag2, PanelTitle } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 import { post, get } from "../api";
 
 const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
@@ -145,9 +147,9 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
           <Server size={24} style={{ color: C.cyan }} />
           <span style={{ fontSize: 18, fontWeight: 700, color: C.t1 }}>Deployment Console</span>
         </div>
-        <Btn v="primary" sz="sm" Icon={Play} onClick={deployStrategy} disabled={isDeploying}>
+        <Button variant="primary" size="sm" Icon={Play} onClick={deployStrategy} disabled={isDeploying}>
           {isDeploying ? "Deploying..." : "Deploy Strategy"}
-        </Btn>
+        </Button>
       </div>
       
       {/* Tabs */}
@@ -197,23 +199,23 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
                     <div style={{ display: "flex", gap: 4 }}>
                       {deployment.status === "running" && (
                         <>
-                          <Btn v="secondary" sz="xs" Icon={Pause} onClick={() => pauseDeployment(deployment.deployment_id)}>
+                          <Button variant="secondary" size="xs" Icon={Pause} onClick={() => pauseDeployment(deployment.deployment_id)}>
                             Pause
-                          </Btn>
-                          <Btn v="secondary" sz="xs" Icon={RotateCcw} onClick={() => restartDeployment(deployment.deployment_id)}>
+                          </Button>
+                          <Button variant="secondary" size="xs" Icon={RotateCcw} onClick={() => restartDeployment(deployment.deployment_id)}>
                             Restart
-                          </Btn>
+                          </Button>
                         </>
                       )}
                       {deployment.status === "paused" && (
-                        <Btn v="secondary" sz="xs" Icon={Play} onClick={() => resumeDeployment(deployment.deployment_id)}>
+                        <Button variant="secondary" size="xs" Icon={Play} onClick={() => resumeDeployment(deployment.deployment_id)}>
                           Resume
-                        </Btn>
+                        </Button>
                       )}
                       {(deployment.status === "running" || deployment.status === "paused") && (
-                        <Btn v="danger" sz="xs" Icon={Square} onClick={() => stopDeployment(deployment.deployment_id)}>
+                        <Button variant="danger" size="xs" Icon={Square} onClick={() => stopDeployment(deployment.deployment_id)}>
                           Stop
-                        </Btn>
+                        </Button>
                       )}
                     </div>
                   </div>
@@ -275,7 +277,7 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
         )}
         
         {activeTab === "worker" && selectedDeployment && (
-          <Card cls="p-5">
+          <Card className="p-5">
             <PanelTitle title="Worker Status" sub="Worker health and metrics" />
             <div style={{ marginTop: 12 }}>
               <div style={{ fontSize: 11, color: C.t3 }}>
@@ -286,7 +288,7 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
         )}
         
         {activeTab === "health" && selectedDeployment && (
-          <Card cls="p-5">
+          <Card className="p-5">
             <PanelTitle title="Health Monitoring" sub="System health metrics" />
             <div style={{ marginTop: 12 }}>
               <div style={{ fontSize: 11, color: C.t3 }}>
@@ -297,7 +299,7 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
         )}
         
         {activeTab === "logs" && selectedDeployment && (
-          <Card cls="p-5">
+          <Card className="p-5">
             <PanelTitle title="Execution Logs" sub="Runtime logs and events" />
             <div style={{ marginTop: 12, fontFamily: "monospace", fontSize: 10, color: C.t2 }}>
               <div>Logs will be displayed here</div>

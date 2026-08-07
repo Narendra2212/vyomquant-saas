@@ -5,7 +5,9 @@ import {
   TrendingUp, Shield, DollarSign, CheckCircle, XCircle, AlertTriangle,
   ChevronRight, ChevronDown, ExternalLink, Copy
 } from "lucide-react";
-import { C, Btn, Card, Tag2, StatusDot, ProgressBar } from "../components/ui-legacy/primitives";
+import { C, Tag2, StatusDot, ProgressBar } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 
 /**
  * Signal Trace - Professional Execution Audit Console
@@ -154,14 +156,14 @@ export default function SignalTrace() {
           </p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <Btn v="ghost" sz="sm" Icon={RefreshCw} onClick={loadSignals}>Refresh</Btn>
-          <Btn v="ghost" sz="sm" Icon={Download} onClick={() => exportSignals("json")}>Export JSON</Btn>
-          <Btn v="ghost" sz="sm" Icon={Download} onClick={() => exportSignals("csv")}>Export CSV</Btn>
+          <Button variant="ghost" size="sm" icon={RefreshCw} onClick={loadSignals}>Refresh</Button>
+          <Button variant="ghost" size="sm" icon={Download} onClick={() => exportSignals("json")}>Export JSON</Button>
+          <Button variant="ghost" size="sm" icon={Download} onClick={() => exportSignals("csv")}>Export CSV</Button>
         </div>
       </div>
 
       {/* Filters */}
-      <Card cls="p-4 mb-4">
+      <Card className="p-4 mb-4">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
           <div>
             <label style={{ color: C.t3, fontSize: 9, fontFamily: "monospace", marginBottom: 4, display: "block" }}>Strategy</label>
@@ -345,8 +347,8 @@ export default function SignalTrace() {
               fontFamily: "monospace"
             }}
           />
-          <Btn v="primary" sz="sm" Icon={Search} onClick={loadSignals}>Search</Btn>
-          <Btn v="ghost" sz="sm" Icon={Filter} onClick={() => setFilters({
+          <Button variant="primary" size="sm" icon={Search} onClick={loadSignals}>Search</Button>
+          <Button variant="ghost" size="sm" icon={Filter} onClick={() => setFilters({
             strategy_id: "",
             exchange_id: "",
             symbol: "",
@@ -356,12 +358,12 @@ export default function SignalTrace() {
             date_from: "",
             date_to: "",
             search: ""
-          })}>Clear</Btn>
+          })}>Clear</Button>
         </div>
       </Card>
 
       {/* Signals Table */}
-      <Card cls="p-4">
+      <Card className="p-4">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <h3 style={{ color: C.t1, fontSize: 12, fontWeight: 700, margin: 0 }}>
             Signals ({pagination.total} total)
@@ -410,7 +412,7 @@ export default function SignalTrace() {
                   <span style={{ color: C.t3, fontSize: 9, fontFamily: "monospace" }}>
                     {signal.generated_at ? new Date(signal.generated_at).toLocaleString() : "-"}
                   </span>
-                  <Btn v="ghost" sz="xs" Icon={ExternalLink} onClick={(e) => { e.stopPropagation(); navigate(`/app/signal-trace/${signal.id}`); }} />
+                  <Button variant="ghost" size="xs" icon={ExternalLink} onClick={(e) => { e.stopPropagation(); navigate(`/app/signal-trace/${signal.id}`); }} />
                 </div>
 
                 {expandedRows[signal.id] && selectedSignal && selectedSignal.id === signal.id && (
@@ -501,22 +503,22 @@ export default function SignalTrace() {
             Showing {pagination.offset + 1}-{Math.min(pagination.offset + pagination.limit, pagination.total)} of {pagination.total}
           </span>
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn
-              v="ghost"
-              sz="sm"
+            <Button
+              variant="ghost"
+              size="sm"
               disabled={pagination.offset === 0}
               onClick={() => setPagination(prev => ({ ...prev, offset: Math.max(0, prev.offset - prev.limit) }))}
             >
               Previous
-            </Btn>
-            <Btn
-              v="ghost"
-              sz="sm"
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               disabled={pagination.offset + pagination.limit >= pagination.total}
               onClick={() => setPagination(prev => ({ ...prev, offset: prev.offset + prev.limit }))}
             >
               Next
-            </Btn>
+            </Button>
           </div>
         </div>
       </Card>

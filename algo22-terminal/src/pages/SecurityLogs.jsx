@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Shield, ShieldCheck, AlertCircle, Clock, Search, Download } from "lucide-react";
-import { C, Card, SectionH, PanelTitle, Inp, Btn, Tag2 } from "../components/ui-legacy/primitives";
+import { C, SectionH, PanelTitle, Inp, Tag2 } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 
 export default function SecurityLogs() {
   const [logs, setLogs] = useState([]);
@@ -84,7 +86,7 @@ export default function SecurityLogs() {
             style={{ background: "transparent", border: "none", outline: "none", color: C.t1, fontSize: 11, fontFamily: "monospace", flex: 1 }}
             className="placeholder:text-slate-700"
           />
-          <Btn v="outline" sz="xs" Icon={Download} onClick={handleExport} disabled={filteredLogs.length === 0}>Export</Btn>
+          <Button variant="outline" size="xs" Icon={Download} onClick={handleExport} disabled={filteredLogs.length === 0}>Export</Button>
         </div>
 
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, fontFamily: "monospace" }}>

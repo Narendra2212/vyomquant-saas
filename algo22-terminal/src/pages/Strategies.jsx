@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import {
   Filter, Plus, Layers, Radio, TrendingUp, Target, Edit2,
   BarChart2, Pause, Play, Trash2, PlusCircle, Copy, Settings,
@@ -7,12 +7,15 @@ import {
 } from "lucide-react";
 import { endpoints } from "../api";
 import {
-  C, Btn, Card, Tag2, StatusDot, ProgressBar
+  C, Tag2, StatusDot, ProgressBar
 } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 import StrategyBuilder from "./StrategyBuilder";
 
 export default function Strategies() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [view, setView] = useState("library");
   const [strategies, setStrategies] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -21,6 +24,8 @@ export default function Strategies() {
   const [filterOpen, setFilterOpen] = useState(false);
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterEnvironment, setFilterEnvironment] = useState("all");
+  
+  const resumeBuilderStrategy = location.state?.resumeBuilderStrategy || null;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -72,11 +77,11 @@ export default function Strategies() {
     return () => controller.abort();
   }, []);
 
+  // Handle resume from StrategyBuilder
   useEffect(() => {
     if (!resumeBuilderStrategy) return;
     setEditingStrategy(resumeBuilderStrategy);
     setView("builder");
-    if (onResumeBuilderConsumed) onResumeBuilderConsumed();
   }, [resumeBuilderStrategy]);
 
   // Memoised aggregates – only recompute when strategies or filter change
@@ -225,7 +230,7 @@ export default function Strategies() {
               <p style={{ color: C.t2, fontSize: 10, fontFamily: "monospace", marginTop: 3 }}>Manage, backtest, and deploy your algorithmic strategies</p>
             </div>
             <div style={{ display: "flex", gap: 8, position: "relative" }}>
-              <Btn v="outline" sz="sm" Icon={Filter} onClick={() => setFilterOpen(v => !v)}>Filter</Btn>
+              <Button variant="outline" size="sm" icon={Filter} onClick={() => setFilterOpen(v => !v)}>Filter</Button>
               {filterOpen && (
                 <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 20, background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 8, padding: 6, minWidth: 180 }}>
                   <div style={{ marginBottom: 8, borderBottom: `1px solid ${C.border}`, paddingBottom: 4 }}>
@@ -270,7 +275,7 @@ export default function Strategies() {
                   ))}
                 </div>
               )}
-              <Btn v="primary" sz="sm" Icon={Plus} onClick={() => setView("builder")}>New Strategy</Btn>
+              <Button variant="primary" size="sm" icon={Plus} onClick={() => setView("builder")}>New Strategy</Button>
             </div>
           </div>
 
@@ -369,13 +374,13 @@ export default function Strategies() {
 
                 {/* Action Buttons */}
                 <div style={{ display: "flex", gap: 4, marginTop: 10 }}>
-                  <Btn v="ghost" sz="xs" Icon={Edit2} onClick={e => { e.stopPropagation(); setEditingStrategy(s); setView("builder"); }} disabled={!!isProcessing[s.id]}>Edit</Btn>
-                  <Btn v="ghost" sz="xs" Icon={Copy} onClick={e => { e.stopPropagation(); handleCloneStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Clone</Btn>
-                  <Btn v="ghost" sz="xs" Icon={BarChart2} onClick={e => e.stopPropagation()} disabled={!!isProcessing[s.id]}>Backtest</Btn>
+                  <Button variant="ghost" size="xs" icon={Edit2} onClick={e => { e.stopPropagation(); setEditingStrategy(s); setView("builder"); }} disabled={!!isProcessing[s.id]}>Edit</Button>
+                  <Button variant="ghost" size="xs" icon={Copy} onClick={e => { e.stopPropagation(); handleCloneStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Clone</Button>
+                  <Button variant="ghost" size="xs" icon={BarChart2} onClick={e => e.stopPropagation()} disabled={!!isProcessing[s.id]}>Backtest</Button>
                   {s.status === "running"
-                    ? <Btn v="ghost" sz="xs" Icon={Pause} onClick={e => { e.stopPropagation(); handlePauseStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Pause</Btn>
-                    : <Btn v="success" sz="xs" Icon={Play} onClick={e => { e.stopPropagation(); handleDeployStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Deploy</Btn>}
-                  <Btn v="danger" sz="xs" Icon={Trash2} cls="ml-auto" onClick={e => { e.stopPropagation(); handleDeleteStrategy(s.id); }} disabled={!!isProcessing[s.id]} />
+                    ? <Button variant="ghost" size="xs" icon={Pause} onClick={e => { e.stopPropagation(); handlePauseStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Pause</Button>
+                    : <Button variant="success" size="xs" icon={Play} onClick={e => { e.stopPropagation(); handleDeployStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Deploy</Button>}
+                  <Button variant="danger" size="xs" icon={Trash2} cls="ml-auto" onClick={e => { e.stopPropagation(); handleDeleteStrategy(s.id); }} disabled={!!isProcessing[s.id]} />
                 </div>
               </Card>
             ))}

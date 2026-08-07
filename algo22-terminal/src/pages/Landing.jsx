@@ -1,9 +1,11 @@
-﻿import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Zap, ChevronRight, Shield, Cpu, Activity, ArrowUpRight, Check, BarChart2,
-  Lock, Terminal, Globe, Award, HelpCircle, User, Star, Layers, Play
+  Lock, Terminal, Globe, Award, HelpCircle, User, Star, Layers, Play, Loader2
 } from 'lucide-react';
-import { C, Btn } from '../components/ui-legacy/primitives';
+import { C } from '../components/ui-legacy/primitives';
+import { Button } from '../components/ui/Button';
+import { api } from '../api';
 
 function LandingFeatureCard({ f, i }) {
   const [isHovered, setIsHovered] = useState(false);
@@ -48,7 +50,7 @@ function LandingFeatureCard({ f, i }) {
   );
 }
 
-function LandingPricingCard({ plan, go }) {
+function LandingPricingCard({ plan }) {
   const [isHovered, setIsHovered] = useState(false);
   const isElite = plan.name === "Elite";
   const isPro = plan.name === "Pro";
@@ -131,7 +133,7 @@ function LandingPricingCard({ plan, go }) {
           transition: "all 0.2s"
         }}
       >
-        {plan.cta}
+        {plan.cta || "Get Started"}
       </button>
     </div>
   );
@@ -221,8 +223,51 @@ function LandingTestimonialCard({ t }) {
 
 export default function Landing() {
   const navigate = useNavigate();
-  const navigate = useNavigate();
   const [showDemoModal, setShowDemoModal] = useState(false);
+  const [pricingPlans, setPricingPlans] = useState([]);
+  const [isLoadingPlans, setIsLoadingPlans] = useState(true);
+
+  useEffect(() => {
+    const loadPlans = async () => {
+      try {
+        const response = await api.billing.getPlans();
+        const frontendPlans = response.plans.map(plan => ({
+          name: plan.name,
+          desc: plan.description,
+          price: plan.recommended ? `$${plan.usd}` : `$${plan.usd}`,
+          features: plan.features.map(f => {
+            // Convert feature keys to human-readable text
+            const featureMap = {
+              'unlimited_builder': 'Unlimited Strategy Builder',
+              'unlimited_backtesting': 'Unlimited Backtesting',
+              'live_trading': 'Live Trading',
+              'ml_training': 'ML Model Training',
+              'marketplace_access': 'Marketplace Access',
+              'marketplace_publish': 'Marketplace Publishing',
+              'api_access': 'API Access',
+              'priority_support': 'Priority Support'
+            };
+            return featureMap[f] || f;
+          })
+        }));
+        setPricingPlans(frontendPlans);
+      } catch (err) {
+        console.error('Failed to load plans:', err);
+        // Fallback to minimal plans if API fails
+        setPricingPlans([
+          {
+            name: "Free",
+            desc: "For exploring the builder and basic backtesting",
+            price: "$0",
+            features: ["Unlimited Strategy Builder", "Unlimited Backtesting"]
+          }
+        ]);
+      } finally {
+        setIsLoadingPlans(false);
+      }
+    };
+    loadPlans();
+  }, []);
 
   const features = [
     {
@@ -255,45 +300,6 @@ export default function Landing() {
       t: "Institutional Risk Controls",
       d: "Enforce strict margin safety limits and automatic global liquidation thresholds at the account level.",
     },
-  ];
-
-  const pricingPlans = [
-    {
-      name: "Free",
-      desc: "For exploring the builder and basic backtesting",
-      price: "$0",
-      features: [
-        "1 Deployed Paper Bot",
-        "3 Backtests / month",
-        "Basic indicator access",
-        "No live execution"
-      ],
-      cta: "Start Free"
-    },
-    {
-      name: "Pro",
-      desc: "For active automated traders forward-testing",
-      price: "$12",
-      features: [
-        "5 Deployed Paper Bots",
-        "Unlimited Backtesting",
-        "Algorithm Indicators access",
-        "Advanced performance analytics"
-      ],
-      cta: "Upgrade to Pro"
-    },
-    {
-      name: "Elite",
-      desc: "For professional quants requiring machine learning",
-      price: "$24",
-      features: [
-        "Infinite Deployed Paper Bots",
-        "3 ML/DL Model Training Slots",
-        "Priority strategy execution queue",
-        "24/7 dedicated support SLA"
-      ],
-      cta: "Go Elite"
-    }
   ];
 
   const testimonials = [
@@ -469,9 +475,15 @@ export default function Landing() {
             <p style={{ color: C.t2, fontSize: 14, fontFamily: "monospace" }}>Pay as you scale your quantitative pipeline</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            {pricingPlans.map((plan) => (
-              <LandingPricingCard key={plan.name} plan={plan} go={go} />
-            ))}
+            {isLoadingPlans ? (
+              <div className="col-span-3 flex justify-center items-center py-20">
+                <Loader2 className="animate-spin" style={{ color: C.accent }} size={32} />
+              </div>
+            ) : (
+              pricingPlans.map((plan) => (
+                <LandingPricingCard key={plan.name} plan={plan} />
+              ))
+            )}
           </div>
         </div>
       </section>
@@ -571,7 +583,7 @@ export default function Landing() {
               }}
               className="hover:text-white"
             >
-              Ã—
+              ×
             </button>
             <h2 style={{ color: C.t1, fontWeight: 900, fontSize: 20, marginBottom: 6 }}>Book a Private Demo</h2>
             <p style={{ color: C.t2, fontSize: 11, fontFamily: "monospace", marginBottom: 24 }}>
@@ -612,7 +624,7 @@ export default function Landing() {
   );
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════════════
 //  PAGE: AUTH
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════════════
 

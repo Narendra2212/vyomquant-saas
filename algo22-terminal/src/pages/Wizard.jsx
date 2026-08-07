@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Check, Shield, Zap, Rocket, ChevronRight, Layers, ArrowRight, ShieldCheck, Mail, Bell, CheckCircle, Key, Lock, Wifi, Database, Activity, Loader2 } from "lucide-react";
-import { C, Btn, Inp, Card } from "../components/ui-legacy/primitives";
+import { C, Inp } from "../components/ui-legacy/primitives";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
 import { api } from "../api";
 import { supabase } from "../supabase";
 
@@ -124,10 +126,10 @@ export default function Wizard() {
                       <div style={{ color: C.t1, fontSize: 12, fontWeight: 700 }}>{r.t}</div>
                       <div style={{ color: C.t2, fontSize: 10, fontFamily: "monospace" }}>{r.d}</div>
                     </div>
-                    {r.ok ? <CheckCircle size={15} style={{ color: C.green }} /> : <Btn v="outline" sz="xs" onClick={() => {}}>{r.action}</Btn>}
+                    {r.ok ? <CheckCircle size={15} style={{ color: C.green }} /> : <Button variant="outline" size="xs" onClick={() => {}}>{r.action}</Button>}
                   </div>
                 ))}
-                <Btn v="primary" cls="w-full justify-center mt-4" onClick={() => setStep(1)}>Continue →</Btn>
+                <Button variant="primary" cls="w-full justify-center mt-4" onClick={() => setStep(1)}>Continue →</Button>
               </>
             )}
           </div>
@@ -137,14 +139,14 @@ export default function Wizard() {
             <h2 style={{ color: C.t1, fontWeight: 900, fontSize: 18, marginBottom: 4 }}>Run Your First Backtest</h2>
             <p style={{ color: C.t2, fontSize: 11, fontFamily: "monospace", marginBottom: 20 }}>See how a simple MACD crossover strategy would have performed on BTC/USDT over the last 30 days.</p>
             
-            <Card cls="p-6 flex flex-col items-center justify-center mb-6" style={{ minHeight: 180 }}>
+            <Card className="p-6 flex flex-col items-center justify-center mb-6" style={{ minHeight: 180 }}>
               {backtestStatus === "idle" && (
                 <>
                   <Database size={40} style={{ color: C.cyan, marginBottom: 16, opacity: 0.8 }} />
-                  <Btn v="primary" onClick={() => {
+                  <Button variant="primary" onClick={() => {
                     setBacktestStatus("running");
                     setTimeout(() => setBacktestStatus("complete"), 2000);
-                  }}>Run Simulated Backtest</Btn>
+                  }}>Run Simulated Backtest</Button>
                 </>
               )}
               {backtestStatus === "running" && (
@@ -172,9 +174,9 @@ export default function Wizard() {
               )}
             </Card>
             
-            <Btn v="primary" cls="w-full justify-center" disabled={backtestStatus !== "complete"} onClick={() => setStep(2)}>
+            <Button variant="primary" cls="w-full justify-center" disabled={backtestStatus !== "complete"} onClick={() => setStep(2)}>
               Next: Connect Exchange →
-            </Btn>
+            </Button>
           </div>
         )}
         {step === 2 && (
@@ -192,8 +194,8 @@ export default function Wizard() {
               <Inp lbl="Secret Key" ph="Paste your secret key..." icon={Lock} type="password" />
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <Btn v="outline" sz="sm" Icon={Wifi}>Test Connection</Btn>
-              <Btn v="primary" cls="flex-1 justify-center" onClick={() => setStep(3)}>Next: Choose Plan →</Btn>
+              <Button variant="outline" size="sm" icon={Wifi}>Test Connection</Button>
+              <Button variant="primary" cls="flex-1 justify-center" onClick={() => setStep(3)}>Next: Choose Plan →</Button>
             </div>
           </div>
         )}
@@ -218,9 +220,9 @@ export default function Wizard() {
                     <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 5, marginBottom: 14 }}>
                       {p.features.slice(0, 4).map(f => <div key={f} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, fontFamily: "monospace", color: C.t2 }}><CheckCircle size={9} style={{ color: isRecommended ? C.cyan : C.green, flexShrink: 0 }} />{f}</div>)}
                     </div>
-                    <Btn v={priceINR === 0 ? "outline" : "primary"} sz="sm" cls="w-full justify-center" disabled={isCheckoutLoading === p.id} onClick={() => handleSelectPlan(p)}>
+                    <Button v={priceINR === 0 ? "outline" : "primary"} size="sm" cls="w-full justify-center" disabled={isCheckoutLoading === p.id} onClick={() => handleSelectPlan(p)}>
                       {isCheckoutLoading === p.id ? "Loading..." : priceINR === 0 ? "Start Free" : "Select →"}
-                    </Btn>
+                    </Button>
                   </div>
                 );
               })}

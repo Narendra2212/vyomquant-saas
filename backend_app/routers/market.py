@@ -102,19 +102,33 @@ async def get_funding_rate(
 
 @router.get("/symbols")
 async def get_symbols():
-    """Get available trading symbols"""
-    return [
-        "NIFTY",
-        "BANKNIFTY",
-        "BTCUSDT",
-        "ETHUSDT",
-        "SOLUSDT",
-        "BNBUSDT",
-        "XRPUSDT",
-        "ADAUSDT",
-        "DOGEUSDT",
-        "MATICUSDT",
-    ]
+    """Get available trading symbols from CCXT"""
+    try:
+        import ccxt as ccxt_base
+        # Get symbols from Binance as the default exchange
+        exchange = ccxt_base.binance()
+        exchange.load_markets()
+        
+        # Return USDT pairs only, sorted by symbol name (top 50)
+        usdt_pairs = [symbol for symbol in exchange.markets if symbol.endswith('/USDT')]
+        # Sort and take top 50
+        usdt_pairs.sort()
+        return usdt_pairs[:50]
+    except Exception as e:
+        logger.warning(f"Failed to load symbols from CCXT: {e}, using fallback")
+        # Fallback to hardcoded list
+        return [
+            "BTC/USDT",
+            "ETH/USDT", 
+            "SOL/USDT",
+            "BNB/USDT",
+            "XRP/USDT",
+            "ADA/USDT",
+            "DOGE/USDT",
+            "MATIC/USDT",
+            "DOT/USDT",
+            "LTC/USDT"
+        ]
 
 
 @router.get("/data/{symbol}/{timeframe}")

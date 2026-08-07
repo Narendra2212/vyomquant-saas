@@ -18,7 +18,7 @@ export const DataPipelineProvider = ({ children, mode = 'backtest' }) => {
   // Exchange from vault (no user selection needed)
   const [activeExchange, setActiveExchange] = useState(null);
   const [isLoadingExchange, setIsLoadingExchange] = useState(true);
-  const [availableTimeframes, setAvailableTimeframes] = useState(["1m", "5m", "15m", "1h", "4h", "1d"]);
+  const [availableTimeframes, setAvailableTimeframes] = useState(["1m", "5m", "15m", "1h", "4h", "1d", "1w"]);
 
   // Symbol discovery
   const [availableSymbols, setAvailableSymbols] = useState([]);
@@ -87,9 +87,11 @@ export const DataPipelineProvider = ({ children, mode = 'backtest' }) => {
       }
     } catch (err) {
       console.error("Failed to load markets:", err);
-      // Fallback to hardcoded popular pairs
+      // Fallback to hardcoded popular pairs if API fails
       const fallback = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
         "ADA/USDT", "DOGE/USDT", "MATIC/USDT", "DOT/USDT", "LTC/USDT"];
+      // Note: These are fallback defaults - normally loaded from exchange API via loadMarkets()
+      console.warn("Using fallback symbol list - exchange API unavailable");
       setAvailableSymbols(fallback);
       return fallback;
     } finally {
@@ -340,7 +342,9 @@ export const DataPipelineProvider = ({ children, mode = 'backtest' }) => {
       errors.push({ field: 'symbol', message: 'Invalid or unavailable symbol' });
     }
 
-    const validTimeframes = ["1m", "5m", "15m", "1h", "4h", "1d"];
+    // Common timeframes supported by most exchanges
+    // Note: These are standard timeframes - individual exchanges may have varying support
+    const validTimeframes = ["1m", "5m", "15m", "1h", "4h", "1d", "1w"];
     if (!validTimeframes.includes(timeframe)) {
       errors.push({ field: 'timeframe', message: 'Invalid timeframe' });
     }
