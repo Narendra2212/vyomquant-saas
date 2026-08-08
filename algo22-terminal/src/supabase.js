@@ -50,7 +50,12 @@ const validateSupabaseConfig = () => {
 };
 
 // Validate configuration before creating client
-validateSupabaseConfig();
+try {
+  validateSupabaseConfig();
+} catch (error) {
+  console.error('Supabase configuration validation failed:', error.message);
+  // Don't throw - allow app to load with degraded functionality
+}
 
 // Create and export Supabase client
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {

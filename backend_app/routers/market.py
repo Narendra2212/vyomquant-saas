@@ -33,6 +33,10 @@ async def _get_data_engine(user, vault, exchange_id: str) -> DataEngine:
             exchange_id,
             access_token=user.get("access_token"),
         )
+        # FIX: Guard against None or incomplete dict from vault
+        if not keys or not isinstance(keys, dict):
+            raise ValueError("Invalid or missing keys from vault")
+        
         exchange = await get_or_create_exchange(
             user_id=user["id"],
             exchange_id=exchange_id,

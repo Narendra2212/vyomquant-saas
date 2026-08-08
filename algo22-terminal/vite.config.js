@@ -23,6 +23,7 @@ const deleteSourcemapsPlugin = () => ({
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
+  base: '/',
   plugins: [
     react(),
     visualizer({ open: false, filename: 'bundle-analysis.html' }),

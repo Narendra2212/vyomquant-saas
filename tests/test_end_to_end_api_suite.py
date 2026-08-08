@@ -226,7 +226,7 @@ def test_market_ticker():
     401 (auth required) or 404 (service unavailable) but not 500 errors.
     """
     headers = get_auth_headers()
-    res = client.get("/api/market/ticker/BTC-USD", headers=headers)
+    res = client.get("/api/market/ticker/BTC/USDT", headers=headers)
     # Allow 401 (auth), 404 (service), or 200 (if mock vault works)
     # but should not crash with 500 due to NoneType
     assert res.status_code in (200, 401, 404)
