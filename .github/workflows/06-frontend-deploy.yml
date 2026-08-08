@@ -155,12 +155,13 @@ jobs:
             echo "✅ Security check: ws://localhost:8000 NOT in production build"
           fi
           
-          # Verify production API hostname is present (check for api.vyomquant.in pattern)
-          if grep -q "api\.vyomquant\.in" "$INDEX_BUNDLE" 2>/dev/null; then
-            echo "✅ Production API hostname api.vyomquant.in found in build"
+          # Verify production API hostname is present (check for CloudFront or custom domain pattern)
+          if grep -q "d7d88qs4jmch\.cloudfront\.net" "$INDEX_BUNDLE" 2>/dev/null || grep -q "api\.vyomquant\.in" "$INDEX_BUNDLE" 2>/dev/null; then
+            echo "✅ Production API hostname found in build"
           else
-            echo "❌ Production API hostname api.vyomquant.in NOT found in build"
+            echo "❌ Production API hostname NOT found in build"
             echo "Error: VITE_API_URL not properly substituted - production hostname missing"
+            echo "Expected: d7d88qs4jmch.cloudfront.net or api.vyomquant.in"
             exit 1
           fi
           
