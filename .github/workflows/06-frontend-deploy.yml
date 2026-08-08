@@ -59,6 +59,22 @@ jobs:
             echo "✅ VITE_SUPABASE_ANON_KEY: PRESENT"
           fi
           
+          if [ -z "${{ secrets.VITE_API_URL }}" ]; then
+            echo "❌ VITE_API_URL: MISSING"
+            echo "Error: VITE_API_URL secret is not configured in GitHub repository"
+            exit 1
+          else
+            echo "✅ VITE_API_URL: PRESENT"
+          fi
+          
+          if [ -z "${{ secrets.VITE_WS_URL }}" ]; then
+            echo "❌ VITE_WS_URL: MISSING"
+            echo "Error: VITE_WS_URL secret is not configured in GitHub repository"
+            exit 1
+          else
+            echo "✅ VITE_WS_URL: PRESENT"
+          fi
+          
           echo "=== All Required Variables Present ==="
 
       - name: Build frontend
@@ -112,6 +128,43 @@ jobs:
           fi
           
           echo "=== Build Verification Complete ==="
+
+      - name: Verify production API configuration embedded in build
+        working-directory: ./algo22-terminal
+        run: |
+          echo "=== Verifying Production API Configuration in Build ==="
+          
+          # Find the main index bundle
+          INDEX_BUNDLE=$(ls dist/assets/index-*.js | head -1)
+          echo "Main bundle: $INDEX_BUNDLE"
+          
+          # SECURITY: Verify localhost fallbacks are NOT in production build
+          if grep -q "localhost:8000" "$INDEX_BUNDLE" 2>/dev/null; then
+            echo "❌ SECURITY VIOLATION: localhost:8000 found in production build"
+            echo "Error: Production build contains localhost fallback - VITE_API_URL not properly substituted"
+            exit 1
+          else
+            echo "✅ Security check: localhost:8000 NOT in production build"
+          fi
+          
+          if grep -q "ws://localhost:8000" "$INDEX_BUNDLE" 2>/dev/null; then
+            echo "❌ SECURITY VIOLATION: ws://localhost:8000 found in production build"
+            echo "Error: Production build contains localhost WebSocket fallback - VITE_WS_URL not properly substituted"
+            exit 1
+          else
+            echo "✅ Security check: ws://localhost:8000 NOT in production build"
+          fi
+          
+          # Verify production API hostname is present (check for api.vyomquant.in pattern)
+          if grep -q "api\.vyomquant\.in" "$INDEX_BUNDLE" 2>/dev/null; then
+            echo "✅ Production API hostname api.vyomquant.in found in build"
+          else
+            echo "❌ Production API hostname api.vyomquant.in NOT found in build"
+            echo "Error: VITE_API_URL not properly substituted - production hostname missing"
+            exit 1
+          fi
+          
+          echo "=== Production API Verification Complete ==="
 
       - name: Record build artifact metadata
         working-directory: ./algo22-terminal
