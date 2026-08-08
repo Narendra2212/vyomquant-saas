@@ -38,6 +38,29 @@ jobs:
         working-directory: ./algo22-terminal
         run: npm ci
 
+      - name: Validate required environment variables
+        working-directory: ./algo22-terminal
+        run: |
+          echo "=== Validating Required Environment Variables ==="
+          
+          if [ -z "${{ secrets.VITE_SUPABASE_URL }}" ]; then
+            echo "❌ VITE_SUPABASE_URL: MISSING"
+            echo "Error: VITE_SUPABASE_URL secret is not configured in GitHub repository"
+            exit 1
+          else
+            echo "✅ VITE_SUPABASE_URL: PRESENT"
+          fi
+          
+          if [ -z "${{ secrets.VITE_SUPABASE_ANON_KEY }}" ]; then
+            echo "❌ VITE_SUPABASE_ANON_KEY: MISSING"
+            echo "Error: VITE_SUPABASE_ANON_KEY secret is not configured in GitHub repository"
+            exit 1
+          else
+            echo "✅ VITE_SUPABASE_ANON_KEY: PRESENT"
+          fi
+          
+          echo "=== All Required Variables Present ==="
+
       - name: Build frontend
         working-directory: ./algo22-terminal
         run: npm run build
@@ -45,11 +68,67 @@ jobs:
           NODE_ENV: production
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          VITE_SUPABASE_SERVICE_KEY: ${{ secrets.VITE_SUPABASE_SERVICE_KEY }}
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_URL }}
           VITE_WS_URL: ${{ secrets.VITE_WS_URL }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+
+      - name: Verify Supabase configuration embedded in build
+        working-directory: ./algo22-terminal
+        run: |
+          echo "=== Verifying Supabase Configuration in Build ==="
+          
+          # Find the main index bundle
+          INDEX_BUNDLE=$(ls dist/assets/index-*.js | head -1)
+          echo "Main bundle: $INDEX_BUNDLE"
+          
+          # Check if Supabase URL was substituted (search for actual URL pattern, not variable name)
+          # A real Supabase URL contains "supabase.co"
+          if grep -q "supabase\.co" "$INDEX_BUNDLE" 2>/dev/null; then
+            echo "✅ Supabase URL substituted: YES"
+          else
+            echo "❌ Supabase URL substituted: NO"
+            echo "Error: VITE_SUPABASE_URL was not properly substituted into the build"
+            exit 1
+          fi
+          
+          # Check if anon key was substituted (search for JWT pattern, not variable name)
+          # Supabase keys are JWT tokens starting with "eyJ"
+          if grep -q "eyJ" "$INDEX_BUNDLE" 2>/dev/null; then
+            echo "✅ Supabase anon key substituted: YES"
+          else
+            echo "❌ Supabase anon key substituted: NO"
+            echo "Error: VITE_SUPABASE_ANON_KEY was not properly substituted into the build"
+            exit 1
+          fi
+          
+          # SECURITY: Verify service role key is NOT in frontend build
+          if grep -q "service_role" "$INDEX_BUNDLE" 2>/dev/null; then
+            echo "❌ SECURITY VIOLATION: Service role key found in frontend build"
+            echo "Error: VITE_SUPABASE_SERVICE_KEY must not be embedded in frontend"
+            exit 1
+          else
+            echo "✅ Security check: Service role key NOT in frontend build"
+          fi
+          
+          echo "=== Build Verification Complete ==="
+
+      - name: Record build artifact metadata
+        working-directory: ./algo22-terminal
+        run: |
+          echo "=== Build Artifact Metadata ==="
+          INDEX_BUNDLE=$(ls dist/assets/index-*.js | head -1)
+          BUNDLE_NAME=$(basename "$INDEX_BUNDLE")
+          BUNDLE_CHECKSUM=$(sha256sum "$INDEX_BUNDLE" | cut -d' ' -f1)
+          BUNDLE_SIZE=$(stat -c%s "$INDEX_BUNDLE" 2>/dev/null || stat -f%z "$INDEX_BUNDLE" 2>/dev/null || wc -c < "$INDEX_BUNDLE")
+          
+          echo "Bundle filename: $BUNDLE_NAME"
+          echo "Bundle SHA256: $BUNDLE_CHECKSUM"
+          echo "Bundle size: $BUNDLE_SIZE bytes"
+          
+          echo "BUNDLE_NAME=$BUNDLE_NAME" >> $GITHUB_OUTPUT
+          echo "BUNDLE_CHECKSUM=$BUNDLE_CHECKSUM" >> $GITHUB_OUTPUT
+        id: build-metadata
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -62,6 +141,10 @@ jobs:
         working-directory: ./algo22-terminal
         run: |
           echo "=== Syncing frontend assets to S3 ==="
+          echo "Target bucket: s3://${{ env.S3_BUCKET }}/"
+          echo "Source bundle: ${{ steps.build-metadata.outputs.BUNDLE_NAME }}"
+          echo "Source checksum: ${{ steps.build-metadata.outputs.BUNDLE_CHECKSUM }}"
+          
           aws s3 sync dist/ s3://${{ env.S3_BUCKET }}/ \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
@@ -74,10 +157,23 @@ jobs:
             --cache-control "public, max-age=0, must-revalidate" \
             --exclude "*" \
             --include "*.html"
+          
+          echo "=== Verifying uploaded bundle checksum ==="
+          UPLOADED_CHECKSUM=$(aws s3api head-object \
+            --bucket ${{ env.S3_BUCKET }} \
+            --key assets/${{ steps.build-metadata.outputs.BUNDLE_NAME }} \
+            --query "Checksum" \
+            --output text 2>/dev/null || echo "NOT_AVAILABLE")
+          
+          echo "Uploaded object checksum: $UPLOADED_CHECKSUM"
+          echo "Build bundle checksum: ${{ steps.build-metadata.outputs.BUNDLE_CHECKSUM }}"
 
       - name: Invalidate CloudFront cache
         run: |
           echo "=== Invalidating CloudFront cache ==="
+          echo "Distribution ID: ${{ env.CLOUDFRONT_DISTRIBUTION_ID }}"
+          echo "Invalidation paths: /*"
+          
           INVALIDATION_ID=$(aws cloudfront create-invalidation \
             --distribution-id ${{ env.CLOUDFRONT_DISTRIBUTION_ID }} \
             --paths "/*" \
@@ -85,6 +181,7 @@ jobs:
             --output text)
           
           echo "Created invalidation: $INVALIDATION_ID"
+          echo "INVALIDATION_ID=$INVALIDATION_ID" >> $GITHUB_OUTPUT
           
           echo "=== Waiting for invalidation to complete ==="
           aws cloudfront wait invalidation-completed \
@@ -92,9 +189,17 @@ jobs:
             --id $INVALIDATION_ID
           
           echo "=== CloudFront invalidation completed ==="
+        id: cloudfront-invalidation
 
       - name: Verify deployment
         run: |
+          echo "=== Deployment Verification Summary ==="
+          echo "S3 Bucket: ${{ env.S3_BUCKET }}"
+          echo "CloudFront Distribution: ${{ env.CLOUDFRONT_DISTRIBUTION_ID }}"
+          echo "CloudFront Invalidation: ${{ steps.cloudfront-invalidation.outputs.INVALIDATION_ID }}"
+          echo "Deployed Bundle: ${{ steps.build-metadata.outputs.BUNDLE_NAME }}"
+          echo "Deployed Bundle SHA256: ${{ steps.build-metadata.outputs.BUNDLE_CHECKSUM }}"
+          
           echo "=== Verifying S3 bucket contents ==="
           aws s3 ls s3://${{ env.S3_BUCKET }}/ --recursive | head -20
           

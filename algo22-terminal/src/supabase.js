@@ -50,20 +50,37 @@ const validateSupabaseConfig = () => {
 };
 
 // Validate configuration before creating client
+let supabase;
 try {
   validateSupabaseConfig();
+  // Create and export Supabase client
+  supabase = createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true
+    }
+  });
 } catch (error) {
   console.error('Supabase configuration validation failed:', error.message);
-  // Don't throw - allow app to load with degraded functionality
+  console.warn('App will run without Supabase functionality');
+  // Create a dummy/mock client to prevent crashes
+  supabase = {
+    auth: {
+      signInWithPassword: () => ({ data: null, error: new Error('Supabase not configured') }),
+      signUp: () => ({ data: null, error: new Error('Supabase not configured') }),
+      signOut: () => ({ error: null }),
+      getUser: () => ({ data: { user: null }, error: new Error('Supabase not configured') }),
+      updateUser: () => ({ data: null, error: new Error('Supabase not configured') }),
+    },
+    from: () => ({
+      select: () => ({ data: [], error: new Error('Supabase not configured') }),
+      insert: () => ({ data: null, error: new Error('Supabase not configured') }),
+      update: () => ({ data: null, error: new Error('Supabase not configured') }),
+      delete: () => ({ data: null, error: new Error('Supabase not configured') }),
+    }),
+  };
 }
 
-// Create and export Supabase client
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true
-  }
-});
-
+export { supabase };
 export default supabase;
