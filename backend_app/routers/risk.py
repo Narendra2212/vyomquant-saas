@@ -174,18 +174,52 @@ async def user_kill_switch(
 
 @router.get("/account-health")
 async def account_health(user: dict = Depends(get_current_user)):
-    safe_uid = _safe_uid(user["id"])  # FIX SQL
-    from backend_app.core.state import app_state
+    try:
+        safe_uid = _safe_uid(user["id"])  # FIX SQL
+        from backend_app.core.state import app_state
 
-    query = (
-        "SELECT current_drawdown_pct, daily_pnl_pct, total_exposure "
-        "FROM account_health WHERE user_id = '" + safe_uid + "' LIMIT 1;"
-    )
-    result = await app_state.telemetry.execute_query(query)
-    if result and result.get("dataset"):
-        cols = [c["name"] for c in result["columns"]]
-        return dict(zip(cols, result["dataset"][0]))
-    return {"current_drawdown_pct": 0.0, "daily_pnl_pct": 0.0, "total_exposure": 0.0}
+        query = (
+            "SELECT current_drawdown_pct, daily_pnl_pct, total_exposure "
+            "FROM account_health WHERE user_id = '" + safe_uid + "' LIMIT 1;"
+        )
+        result = await app_state.telemetry.execute_query(query)
+        if result and result.get("dataset"):
+            cols = [c["name"] for c in result["columns"]]
+            return dict(zip(cols, result["dataset"][0]))
+        return {"current_drawdown_pct": 0.0, "daily_pnl_pct": 0.0, "total_exposure": 0.0}
+    except Exception as e:
+        import traceback
+        import inspect
+        
+        # Safe diagnostic logging - no sensitive data
+        exc_type = type(e).__name__
+        exc_module = type(e).__module__
+        exc_message = str(e)
+        
+        # Get caller info
+        frame = inspect.currentframe()
+        caller_filename = frame.f_back.f_code.co_filename if frame.f_back else "unknown"
+        caller_lineno = frame.f_back.f_lineno if frame.f_back else 0
+        
+        # Log comprehensive diagnostic info
+        logger.error(
+            f"[RISK_ACCOUNT_HEALTH_ENDPOINT] Exception details: "
+            f"endpoint=/api/risk/account-health, "
+            f"exception_type={exc_type}, "
+            f"exception_module={exc_module}, "
+            f"exception_message={exc_message}, "
+            f"caller_file={caller_filename}, "
+            f"caller_line={caller_lineno}, "
+            f"user_id_truncated={user['id'][:8] if user.get('id') else 'missing'}..."
+        )
+        
+        # Log full traceback for debugging
+        logger.error(f"[RISK_ACCOUNT_HEALTH_ENDPOINT] Full traceback:\n{traceback.format_exc()}")
+        
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "RISK_ACCOUNT_HEALTH_FAILED", "message": "Failed to fetch account health"}
+        )
 
 
 # ── GET /api/risk/strategy-limits ─────────────────────────────────────────

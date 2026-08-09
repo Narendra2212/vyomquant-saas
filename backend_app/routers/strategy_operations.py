@@ -229,7 +229,36 @@ async def list_strategies(request: Request,
             "total": len(strategies)
         }
     except Exception as e:
-        logger.error(f"Error listing strategies for user {user['id']}: {e}")
+        import traceback
+        import inspect
+        
+        # Safe diagnostic logging - no sensitive data
+        exc_type = type(e).__name__
+        exc_module = type(e).__module__
+        exc_message = str(e)
+        
+        # Get caller info
+        frame = inspect.currentframe()
+        caller_filename = frame.f_back.f_code.co_filename if frame.f_back else "unknown"
+        caller_lineno = frame.f_back.f_lineno if frame.f_back else 0
+        
+        # Log comprehensive diagnostic info
+        logger.error(
+            f"[STRATEGIES_LIST_ENDPOINT] Exception details: "
+            f"endpoint=/api/strategies, "
+            f"exception_type={exc_type}, "
+            f"exception_module={exc_module}, "
+            f"exception_message={exc_message}, "
+            f"caller_file={caller_filename}, "
+            f"caller_line={caller_lineno}, "
+            f"status_filter={status}, "
+            f"environment_filter={environment}, "
+            f"user_id_truncated={user['id'][:8] if user.get('id') else 'missing'}..."
+        )
+        
+        # Log full traceback for debugging
+        logger.error(f"[STRATEGIES_LIST_ENDPOINT] Full traceback:\n{traceback.format_exc()}")
+        
         raise HTTPException(
             status_code=500,
             detail={"error": "STRATEGIES_LIST_FAILED", "message": str(e)}

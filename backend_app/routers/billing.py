@@ -266,39 +266,70 @@ async def get_entitlements(
   supabase: Any = Depends(get_request_supabase),
 ):
     """Get user's current entitlements."""
-    from backend_app.core.subscription_dependencies import get_user_entitlements
-    
-    entitlements = await get_user_entitlements(user, supabase)
-    
-    # Get subscription details from profile
-    subscription_status = "active"
-    renewal_date = None
-    cancel_at_period_end = False
-    
-    if supabase:
-        try:
-            resp = (
-                supabase.table("profiles")
-                .select("subscription_status, subscription_renewal_date, cancel_at_period_end")
-                .eq("id", user["id"])
-                .execute()
-            )
-            if resp.data:
-                subscription_status = resp.data[0].get("subscription_status", "active")
-                renewal_date = resp.data[0].get("subscription_renewal_date")
-                cancel_at_period_end = resp.data[0].get("cancel_at_period_end", False)
-        except Exception as e:
-            logger.warning(f"Failed to get subscription details: {e}")
-    
-    return {
-        "plan": entitlements.plan,
-        "features": entitlements.features,
-        "quotas": entitlements.quotas,
-        "usage": entitlements.usage,
-        "subscription_status": subscription_status,
-        "renewal_date": renewal_date,
-        "cancel_at_period_end": cancel_at_period_end,
-    }
+    try:
+        from backend_app.core.subscription_dependencies import get_user_entitlements
+        
+        entitlements = await get_user_entitlements(user, supabase)
+        
+        # Get subscription details from profile
+        subscription_status = "active"
+        renewal_date = None
+        cancel_at_period_end = False
+        
+        if supabase:
+            try:
+                resp = (
+                    supabase.table("profiles")
+                    .select("subscription_status, subscription_renewal_date, cancel_at_period_end")
+                    .eq("id", user["id"])
+                    .execute()
+                )
+                if resp.data:
+                    subscription_status = resp.data[0].get("subscription_status", "active")
+                    renewal_date = resp.data[0].get("subscription_renewal_date")
+                    cancel_at_period_end = resp.data[0].get("cancel_at_period_end", False)
+            except Exception as e:
+                logger.warning(f"Failed to get subscription details: {e}")
+        
+        return {
+            "plan": entitlements.plan,
+            "features": entitlements.features,
+            "quotas": entitlements.quotas,
+            "usage": entitlements.usage,
+            "subscription_status": subscription_status,
+            "renewal_date": renewal_date,
+            "cancel_at_period_end": cancel_at_period_end,
+        }
+    except Exception as e:
+        import traceback
+        import inspect
+        
+        # Safe diagnostic logging - no sensitive data
+        exc_type = type(e).__name__
+        exc_module = type(e).__module__
+        exc_message = str(e)
+        
+        # Get caller info
+        frame = inspect.currentframe()
+        caller_filename = frame.f_back.f_code.co_filename if frame.f_back else "unknown"
+        caller_lineno = frame.f_back.f_lineno if frame.f_back else 0
+        
+        # Log comprehensive diagnostic info
+        logger.error(
+            f"[BILLING_ENTITLEMENTS_ENDPOINT] Exception details: "
+            f"endpoint=/api/billing/entitlements, "
+            f"exception_type={exc_type}, "
+            f"exception_module={exc_module}, "
+            f"exception_message={exc_message}, "
+            f"caller_file={caller_filename}, "
+            f"caller_line={caller_lineno}, "
+            f"user_id_truncated={user['id'][:8] if user.get('id') else 'missing'}..."
+        )
+        
+        # Log full traceback for debugging
+        logger.error(f"[BILLING_ENTITLEMENTS_ENDPOINT] Full traceback:\n{traceback.format_exc()}")
+        
+        raise HTTPException(status_code=500, detail="Failed to fetch billing entitlements")
 
 
 # ── GET /api/billing/currency ───────────────────────────────────────────────
