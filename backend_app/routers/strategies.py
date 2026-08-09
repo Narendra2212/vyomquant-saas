@@ -113,7 +113,7 @@ def _validate_ml_models_present(blueprint: Dict) -> None:
             detail={
                 "error": "ML_MODEL_MISSING",
                 "message": "Strategy contains ML/DL nodes but no trained model reference found. "
-                         "Train the model via POST /api/strategies/train-ml before deployment."
+                         "Train the model via POST /api/strategies/{strategy_id}/train before deployment."
             }
         )
     
@@ -1250,9 +1250,10 @@ async def stop_bot(
     return {"status": "stopped"}
 
 
-# ── POST /api/strategies/train-ml ────────────────────────────────────────
-@router.post("/train-ml")
+# ── POST /api/strategies/{strategy_id}/train ─────────────────────────────
+@router.post("/{strategy_id}/train")
 async def train_ml_strategy(
+    strategy_id: str,
     body: Dict[str, Any],
     background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
@@ -1264,6 +1265,10 @@ async def train_ml_strategy(
     """
     Triggers XGBoost/DL training as a background task.
     Result is pushed to the user via WebSocket when complete.
+    
+    PHASE 53: Now accepts strategy_id directly from path parameter instead of
+    ambiguous name-based lookup. Eliminates silent failure when user has multiple
+    strategies with the same name.
     """
 
     async def _train():
@@ -1272,6 +1277,37 @@ async def train_ml_strategy(
             from backend_app.backend.connection_engine import ConnectionEngine
             from data_seeking_engine import DataEngine
             from ml_models import XGBoostStrategyBlock
+
+            # Verify strategy belongs to user and fetch buy_logic for ML node updates
+            sb = _sb(user)
+            strategy_buy_logic = None
+            if sb:
+                try:
+                    import asyncio
+                    query = (
+                        sb.table("strategies")
+                        .select("id, name, buy_logic")
+                        .eq("id", strategy_id)
+                        .eq("user_id", user["id"])
+                        .single()
+                    )
+                    resp = await asyncio.to_thread(query.execute)
+                    if not resp.data:
+                        logger.error(f"[ML TRAINING] Strategy {strategy_id} not found for user {user['id']}")
+                        await ws_mgr.broadcast_user(
+                            user["id"], 
+                            {"type": "model_error", "error": f"Strategy {strategy_id} not found"}
+                        )
+                        return
+                    strategy_buy_logic = resp.data.get("buy_logic")
+                    logger.info(f"[ML TRAINING] Verified strategy_id: {strategy_id} for user {user['id']}")
+                except Exception as lookup_error:
+                    logger.error(f"[ML TRAINING] Strategy lookup failed: {lookup_error}")
+                    await ws_mgr.broadcast_user(
+                        user["id"], 
+                        {"type": "model_error", "error": f"Strategy lookup failed: {lookup_error}"}
+                    )
+                    return
 
             keys = vault.load_decrypted_keys(
                 user["id"],
@@ -1292,7 +1328,7 @@ async def train_ml_strategy(
             block = XGBoostStrategyBlock(f"user_strategies/{user['id']}/")
             path = block.train_custom_strategy(
                 user["id"],
-                body["strategy_name"],
+                body.get("strategy_name", f"strategy_{strategy_id}"),  # Fallback to ID if name not provided
                 np_data,
                 ["Open", "High", "Low", "Close", "Volume"],
                 body.get("indicators", ["Close"]),
@@ -1301,12 +1337,52 @@ async def train_ml_strategy(
             # Increment ML training usage
             await increment_usage(Resource.ML_TRAININGS.value, user)
 
+            # Update strategy record with ml_model_path if strategy_id was found
+            db_update_success = False
+            if strategy_id and sb:
+                try:
+                    update_query = (
+                        sb.table("strategies")
+                        .update({"ml_model_path": path})
+                        .eq("id", strategy_id)
+                        .eq("user_id", user["id"])
+                    )
+                    await asyncio.to_thread(update_query.execute)
+                    db_update_success = True
+                    logger.info(f"[ML TRAINING] Updated ml_model_path for strategy {strategy_id}: {path}")
+                    
+                    # Also update ML nodes in DAG with model_id
+                    if strategy_buy_logic and isinstance(strategy_buy_logic, dict):
+                        nodes = strategy_buy_logic.get("_nodes", [])
+                        ml_nodes_updated = False
+                        for node in nodes:
+                            if node.get("type", "").lower() in ["ml", "dl"]:
+                                if not node.get("model_id"):
+                                    node["model_id"] = path  # Use path as model_id
+                                    ml_nodes_updated = True
+                        
+                        if ml_nodes_updated:
+                            update_dag_query = (
+                                sb.table("strategies")
+                                .update({"buy_logic": strategy_buy_logic})
+                                .eq("id", strategy_id)
+                                .eq("user_id", user["id"])
+                            )
+                            await asyncio.to_thread(update_dag_query.execute)
+                            logger.info(f"[ML TRAINING] Updated ML nodes with model_id for strategy {strategy_id}")
+                                
+                except Exception as db_error:
+                    logger.error(f"[ML TRAINING] Database update failed for strategy {strategy_id}: {db_error}")
+                    # Continue with WebSocket broadcast even if DB update fails
+
             await ws_mgr.broadcast_user(
                 user["id"],
                 {
                     "type": "model_trained",
                     "model_path": path,
                     "strategy": body.get("strategy_name"),
+                    "strategy_id": strategy_id,
+                    "db_update_success": db_update_success,
                 },
             )
         except Exception as e:
@@ -1878,7 +1954,11 @@ def backtest_internal(payload: dict):
 
 @router.post("/{strategy_id}/clone")
 async def clone_strategy(strategy_id: str, user: dict = Depends(get_current_user)):
-    """Clone an existing strategy into user's account with new ID and reset model links."""
+    """Clone an existing strategy into user's account with new ID and reset model links.
+    
+    Preserves full DAG structure (nodes, edges, buy_logic, sell_logic, risk, indicators, ml_model_path)
+    and re-validates the clone by recomputing dag_hash and execution_order via DAGCompiler.
+    """
     sb = _sb(user)
     if sb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
@@ -1889,12 +1969,37 @@ async def clone_strategy(strategy_id: str, user: dict = Depends(get_current_user
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
     
     orig = res.data[0]
+    
+    # Copy full DAG data from original strategy
     cloned_payload = {
         "user_id": user["id"],
         "name": f"{orig.get('name', 'Strategy')} (Copy)",
         "description": f"Cloned from {strategy_id}",
+        "symbol": orig.get("symbol", ""),
+        "timeframe": orig.get("timeframe", ""),
+        "exchange_id": orig.get("exchange_id", ""),
+        "buy_logic": orig.get("buy_logic"),
+        "sell_logic": orig.get("sell_logic"),
+        "risk": orig.get("risk"),
+        "indicators": orig.get("indicators"),
+        "ml_model_path": orig.get("ml_model_path"),
         "created_at": datetime.utcnow().isoformat(),
     }
+    
+    # Recompute dag_hash and execution_order for the clone to ensure validation
+    # This closes part of Defect 1's exposure for the clone entry point
+    if isinstance(orig.get("buy_logic"), dict):
+        nodes = orig["buy_logic"].get("_nodes", [])
+        edges = orig["buy_logic"].get("_edges", [])
+        if nodes and edges:
+            try:
+                compiled = DAGCompiler.compile(nodes, edges)
+                cloned_payload["dag_hash"] = compiled.get("dag_hash")
+                cloned_payload["execution_order"] = compiled.get("execution_order")
+            except Exception as e:
+                logger.warning(f"[STRATEGIES] Clone DAG validation failed for {strategy_id}: {e}")
+                # Continue with clone even if validation fails - matches existing behavior
+    
     try:
         ins = sb.table("strategies").insert(cloned_payload).execute()
         if not ins.data:

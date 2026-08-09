@@ -46,11 +46,14 @@ export const DataPipelineProvider = ({ children, mode = 'backtest' }) => {
         // Try to fetch from user's exchange vault/connected accounts
         const accounts = await endpoints.exchange?.getAccounts?.() ||
           await endpoints.user?.getConnectedExchanges?.() ||
-          await get('/api/exchange/accounts');
+          await get('/api/exchanges/');
 
-        if (accounts && accounts.length > 0) {
+        // Normalize response to ensure it's an array
+        const accountsArray = Array.isArray(accounts) ? accounts : [];
+
+        if (accountsArray.length > 0) {
           // Get first active exchange
-          const active = accounts.find(a => a.status === 'active' || a.is_connected) || accounts[0];
+          const active = accountsArray.find(a => a.status === 'active' || a.is_connected) || accountsArray[0];
           setActiveExchange({
             id: active.id,
             name: active.exchange || active.name || 'binance',

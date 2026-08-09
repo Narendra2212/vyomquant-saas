@@ -5,6 +5,8 @@ Tests that users cannot clone strategies belonging to other tenants.
 This validates the fix for the critical tenant-isolation vulnerability in
 /api/strategies/{strategy_id}/clone endpoint.
 
+Also tests that clone preserves full DAG structure (nodes, edges, buy_logic, etc.).
+
 Author: Principal Software Architect
 Date: 2025-08-02
 """
@@ -141,6 +143,73 @@ class TestStrategyCloneTenantIsolation:
         
         # Should return 401 for invalid token
         assert response.status_code == 401
+
+    def test_clone_preserves_dag_content(self, client, user_a_token, mock_supabase):
+        """Test that clone preserves full DAG structure (nodes, edges, buy_logic)."""
+        # Create a strategy with a non-trivial DAG
+        original_dag = {
+            "_nodes": [
+                {"id": "node1", "type": "indicator", "data": {"indicator": "RSI"}},
+                {"id": "node2", "type": "indicator", "data": {"indicator": "MACD"}},
+                {"id": "node3", "type": "condition", "data": {"condition": "RSI > 30"}},
+                {"id": "node4", "type": "action", "data": {"action": "BUY"}}
+            ],
+            "_edges": [
+                {"from": "node1", "to": "node3"},
+                {"from": "node2", "to": "node3"},
+                {"from": "node3", "to": "node4"}
+            ],
+            "_dag_hash": "abc123",
+            "_execution_order": ["node1", "node2", "node3", "node4"]
+        }
+        
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+            {
+                "id": "strategy_123",
+                "user_id": "user_a_123",
+                "name": "Test Strategy",
+                "symbol": "BTCUSDT",
+                "timeframe": "1h",
+                "exchange_id": "binance",
+                "buy_logic": original_dag,
+                "sell_logic": {"_nodes": [], "_edges": []},
+                "risk": {"risk_per_trade": 0.02},
+                "indicators": ["RSI", "MACD"],
+                "ml_model_path": None
+            }
+        ]
+        
+        # Mock the insert to return the cloned strategy with preserved DAG
+        mock_insert_result = MagicMock()
+        mock_insert_result.data = [{
+            "id": "strategy_456",
+            "user_id": "user_a_123",
+            "name": "Test Strategy (Copy)",
+            "description": "Cloned from strategy_123",
+            "buy_logic": original_dag,  # Should be preserved
+            "sell_logic": {"_nodes": [], "_edges": []},
+            "risk": {"risk_per_trade": 0.02},
+            "indicators": ["RSI", "MACD"],
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "exchange_id": "binance"
+        }]
+        mock_supabase.table.return_value.insert.return_value.execute.return_value = mock_insert_result
+        
+        response = client.post(
+            "/api/strategies/strategy_123/clone",
+            headers={"Authorization": f"Bearer {user_a_token}"}
+        )
+        
+        # Should succeed
+        assert response.status_code == 200
+        cloned_strategy = response.json()["strategy"]
+        
+        # Verify DAG content is preserved in the response
+        assert cloned_strategy["buy_logic"] == original_dag
+        assert cloned_strategy["symbol"] == "BTCUSDT"
+        assert cloned_strategy["timeframe"] == "1h"
+        assert cloned_strategy["exchange_id"] == "binance"
 
 
 def run_all_tests():

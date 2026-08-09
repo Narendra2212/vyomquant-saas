@@ -137,10 +137,11 @@ export const strategiesApi = {
 
   /**
    * Train ML model
-   * @param {Object} params
+   * @param {string} strategyId - Strategy ID
+   * @param {Object} params - Training parameters
    * @returns {Promise<{status: string, message: string}>}
    */
-  trainMl: (params) => post('/api/strategies/train-ml', params),
+  trainMl: (strategyId, params) => post(`/api/strategies/${strategyId}/train`, params),
 
   /**
    * Get available blocks for Strategy Builder
