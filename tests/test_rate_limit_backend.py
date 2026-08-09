@@ -65,9 +65,9 @@ class TestRateLimitBackendSelection:
     def test_production_environment_redis_init_failure_raises_runtime_error(self, monkeypatch):
         monkeypatch.setenv("ENV", "production")
         monkeypatch.setenv("REDIS_URL", "invalid-scheme://localhost")
-        
+
         rate_limit_module = importlib.import_module("backend_app.core.rate_limit")
-        with patch("slowapi.Limiter.__init__", side_effect=Exception("Redis connection error")):
-            with pytest.raises(RuntimeError) as exc_info:
-                importlib.reload(rate_limit_module)
-            assert "Failed to initialize Redis rate limit storage" in str(exc_info.value)
+        # Production environment should fail hard if Redis initialization fails
+        with pytest.raises(RuntimeError) as exc_info:
+            importlib.reload(rate_limit_module)
+        assert "Failed to initialize Redis rate limit storage" in str(exc_info.value)

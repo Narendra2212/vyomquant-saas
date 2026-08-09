@@ -39,15 +39,51 @@ REDIS_DB_QUEUE = 1    # Task queue (persistent)
 REDIS_DB_EVENTS = 2   # Event streams and time-series
 
 # Redis URL from environment
+# REDIS_URL takes precedence over individual host/port/password
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 
 
 def get_redis_url(db: int = 0) -> str:
-    """Get Redis URL for specific database."""
-    auth = f":{REDIS_PASSWORD}@" if REDIS_PASSWORD else ""
-    return f"redis://{auth}{REDIS_HOST}:{REDIS_PORT}/{db}"
+    """Get Redis URL for specific database.
+
+    If REDIS_URL is provided, it is used as the base URL with the DB number appended.
+    Otherwise, constructs URL from REDIS_HOST, REDIS_PORT, REDIS_PASSWORD.
+
+    Supports both redis:// and rediss:// schemes for TLS.
+    """
+    if REDIS_URL:
+        # Parse existing REDIS_URL and append DB number
+        # Handle URLs with existing path or query parameters
+        from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+
+        parsed = urlparse(REDIS_URL)
+
+        # Extract existing query parameters
+        query_params = parse_qs(parsed.query)
+
+        # Set DB via query parameter or path
+        # Redis-py supports both ?db=0 and /0 syntax
+        query_params['db'] = str(db)
+
+        # Reconstruct URL with new DB parameter
+        new_query = urlencode(query_params, doseq=True)
+        new_url = urlunparse((
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            new_query,
+            parsed.fragment
+        ))
+
+        return new_url
+    else:
+        # Fallback to host/port/password construction
+        auth = f":{REDIS_PASSWORD}@" if REDIS_PASSWORD else ""
+        return f"redis://{auth}{REDIS_HOST}:{REDIS_PORT}/{db}"
 
 
 class RedisManager:
