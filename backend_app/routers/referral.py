@@ -131,33 +131,41 @@ def _ensure_referral_code_exists(user_id: str, supabase: SupabaseClient) -> str:
     Returns the referral code.
     """
     # Check if referral code exists
-    code_resp = supabase.table("referral_codes").select("code").eq("user_id", user_id).execute()
-    
-    if code_resp.data and len(code_resp.data) > 0:
-        return code_resp.data[0]["code"]
-    
-    # Generate new code using database function
     try:
-        result = supabase.rpc("create_referral_code_for_user", {"user_uuid": user_id}).execute()
-        
-        # Fetch the newly created code
         code_resp = supabase.table("referral_codes").select("code").eq("user_id", user_id).execute()
+
         if code_resp.data and len(code_resp.data) > 0:
             return code_resp.data[0]["code"]
-        
-        # Fallback: generate code manually
-        import secrets
-        code = f"VQ-{secrets.token_urlsafe(6).upper()[:6]}"
-        supabase.table("referral_codes").insert({"user_id": user_id, "code": code}).execute()
-        return code
-        
+
+        # Generate new code using database function
+        try:
+            result = supabase.rpc("create_referral_code_for_user", {"user_uuid": user_id}).execute()
+
+            # Fetch the newly created code
+            code_resp = supabase.table("referral_codes").select("code").eq("user_id", user_id).execute()
+            if code_resp.data and len(code_resp.data) > 0:
+                return code_resp.data[0]["code"]
+
+            # Fallback: generate code manually
+            import secrets
+            code = f"VQ-{secrets.token_urlsafe(6).upper()[:6]}"
+            supabase.table("referral_codes").insert({"user_id": user_id, "code": code}).execute()
+            return code
+
+        except Exception as e:
+            logger.error(f"Failed to create referral code for user {user_id}: {e}")
+            # Fallback to simple code
+            import secrets
+            code = f"VQ-{secrets.token_urlsafe(6).upper()[:6]}"
+            supabase.table("referral_codes").insert({"user_id": user_id, "code": code}).execute()
+            return code
     except Exception as e:
-        logger.error(f"Failed to create referral code for user {user_id}: {e}")
-        # Fallback to simple code
-        import secrets
-        code = f"VQ-{secrets.token_urlsafe(6).upper()[:6]}"
-        supabase.table("referral_codes").insert({"user_id": user_id, "code": code}).execute()
-        return code
+        # If referral_codes table doesn't exist, return a placeholder
+        if "PGRST205" in str(e) or "Could not find the table" in str(e):
+            logger.warning(f"Referral tables not found, returning placeholder code for user {user_id[:8]}...")
+            return "NOT-AVAILABLE"
+        else:
+            raise
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -181,7 +189,29 @@ async def get_referral_profile(
     
     try:
         user_id = user["id"]
-        
+
+        # Check if referral tables exist (fallback if migration not run)
+        try:
+            # Test if referral_codes table exists
+            supabase.table("referral_codes").select("code").limit(1).execute()
+        except Exception as table_check_error:
+            # If referral tables don't exist, return safe empty response
+            if "PGRST205" in str(table_check_error) or "Could not find the table" in str(table_check_error):
+                logger.warning(f"Referral tables not found in database, returning empty profile for user {user_id[:8]}...")
+                return ReferralProfileResponse(
+                    referral_code="NOT-AVAILABLE",
+                    referral_link=_get_referral_link("NOT-AVAILABLE"),
+                    total_referrals=0,
+                    active_referrals=0,
+                    pending_earnings=0.0,
+                    approved_earnings=0.0,
+                    paid_earnings=0.0,
+                    lifetime_earnings=0.0
+                )
+            else:
+                # Different error, re-raise
+                raise
+
         # Ensure referral code exists
         referral_code = _ensure_referral_code_exists(user_id, supabase)
         
@@ -252,9 +282,35 @@ async def get_referral_stats(
     try:
         user_id = user["id"]
 
+        # Check if referral tables exist (fallback if migration not run)
+        try:
+            # Test if referral_codes table exists
+            supabase.table("referral_codes").select("code").limit(1).execute()
+        except Exception as table_check_error:
+            # If referral tables don't exist, return safe empty response
+            if "PGRST205" in str(table_check_error) or "Could not find the table" in str(table_check_error):
+                logger.warning(f"Referral tables not found in database, returning empty stats for user {user_id[:8]}...")
+                return {
+                    "status": "active",
+                    "referral_code": "NOT-AVAILABLE",
+                    "referral_link": _get_referral_link("NOT-AVAILABLE"),
+                    "total_referrals": 0,
+                    "active_referrals": 0,
+                    "pending_earnings": 0.0,
+                    "approved_earnings": 0.0,
+                    "paid_earnings": 0.0,
+                    "lifetime_earnings": 0.0,
+                    "commission_history": [],
+                    "payout_history": [],
+                }
+            else:
+                # Different error, re-raise
+                raise
+
+        # If we get here, tables exist - proceed with normal logic
         # Ensure referral code exists
         referral_code = _ensure_referral_code_exists(user_id, supabase)
-        
+
         # Get referral wallet
         wallet_resp = supabase.table("referral_wallets").select("*").eq("user_id", user_id).execute()
         wallet = wallet_resp.data[0] if wallet_resp.data else {
@@ -263,14 +319,14 @@ async def get_referral_stats(
             "paid_balance_usd": 0,
             "lifetime_earnings_usd": 0
         }
-        
+
         # Get referral relationships count
         relationships_resp = supabase.table("referral_relationships").select("status").eq("referrer_id", user_id).execute()
         relationships = relationships_resp.data or []
-        
+
         total_referrals = len(relationships)
         active_referrals = sum(1 for r in relationships if r.get("status") == "active")
-        
+
         # Get commission history (last 20)
         commissions_resp = supabase.table("referral_commissions").select("*").eq("referrer_id", user_id).order("created_at", desc=True).limit(20).execute()
         commission_history = [
@@ -288,7 +344,7 @@ async def get_referral_stats(
             )
             for c in commissions_resp.data or []
         ]
-        
+
         # Get payout history (last 20)
         payouts_resp = supabase.table("referral_payouts").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(20).execute()
         payout_history = [
@@ -304,7 +360,7 @@ async def get_referral_stats(
             )
             for p in payouts_resp.data or []
         ]
-        
+
         return ReferralStatsResponse(
             referral_code=referral_code,
             referral_link=_get_referral_link(referral_code),
