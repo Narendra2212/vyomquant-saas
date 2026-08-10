@@ -179,6 +179,10 @@ async def list_exchanges(
     List user's connected exchanges with full metadata.
     Returns exchange status, permissions, bot count, strategy count, health metrics.
     Cached in Redis for 30 seconds (metadata changes frequently but not instantly).
+
+    PERFORMANCE FIX: Eliminated N+1 query pattern by fetching user tier once
+    and all deployed strategies in a single query, then counting in memory.
+    Reduced from 1 + 2N database queries to 3 constant queries.
     """
     try:
         # Try cache first
@@ -189,6 +193,7 @@ async def list_exchanges(
             logger.debug(f"Returning cached exchange list for user {user['id']}")
             return cached
         
+        # Fetch user's exchange keys
         resp = (
             supabase.table("exchange_keys")
             .select("*")
@@ -196,29 +201,35 @@ async def list_exchanges(
             .execute()
         )
 
-        # Get bot/strategy counts for each exchange
+        # Fetch user tier once (outside the loop)
+        try:
+            from backend_app.backend.api_key_vault import APIKeyVault
+            vault = APIKeyVault()
+            tier_info = vault.get_user_tier(user["id"])
+        except:
+            tier_info = {"subscription_tier": "free", "max_api_slots": 1}
+
+        # Fetch all deployed strategies for the user in a single query
+        all_strategies_resp = (
+            supabase.table("strategies")
+            .select("exchange_id")
+            .eq("user_id", user["id"])
+            .eq("status", "deployed")
+            .execute()
+        )
+
+        # Build a dictionary of bot counts by exchange_id
+        bot_counts = {}
+        for strategy_row in (all_strategies_resp.data or []):
+            exchange_id = strategy_row.get("exchange_id")
+            if exchange_id:
+                bot_counts[exchange_id] = bot_counts.get(exchange_id, 0) + 1
+
+        # Build exchange list with metadata
         exchanges = []
         for row in resp.data:
             exchange_id = row["exchange_id"]
-            
-            # Count active bots for this exchange
-            bots_resp = (
-                supabase.table("strategies")
-                .select("id")
-                .eq("user_id", user["id"])
-                .eq("exchange_id", exchange_id)
-                .eq("status", "deployed")
-                .execute()
-            )
-            bot_count = len(bots_resp.data) if bots_resp.data else 0
-            
-            # Get connection health from vault if available
-            try:
-                from backend_app.backend.api_key_vault import APIKeyVault
-                vault = APIKeyVault()
-                tier_info = vault.get_user_tier(user["id"])
-            except:
-                tier_info = {"subscription_tier": "free", "max_api_slots": 1}
+            bot_count = bot_counts.get(exchange_id, 0)
 
             exchanges.append({
                 "id": row.get("id", f"{user['id']}_{exchange_id}"),

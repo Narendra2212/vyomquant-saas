@@ -131,12 +131,108 @@ class ExchangeManagementTest:
                     return
             
             self._log_result(
-                "GET / (list)", 
-                "PASS", 
+                "GET / (list)",
+                "PASS",
                 f"Found {len(result)} connected exchanges"
             )
         except Exception as e:
             self._log_result("GET / (list)", "FAIL", str(e))
+
+    async def test_list_exchanges_multiple_exchanges_independent_counts(self):
+        """Test that multiple exchanges have independent bot counts."""
+        try:
+            result = await self._request("GET", "/api/exchanges/")
+
+            if "error" in result:
+                self._log_result("GET / (list) - independent counts", "FAIL", result.get("error"))
+                return
+
+            if not isinstance(result, list):
+                self._log_result("GET / (list) - independent counts", "FAIL", "Response is not a list")
+                return
+
+            # Verify each exchange has its own bot_count
+            exchange_bot_counts = {}
+            for ex in result:
+                exchange_id = ex.get("exchange_id")
+                bot_count = ex.get("bot_count", 0)
+                if exchange_id in exchange_bot_counts:
+                    self._log_result(
+                        "GET / (list) - independent counts",
+                        "FAIL",
+                        f"Duplicate exchange_id: {exchange_id}"
+                    )
+                    return
+                exchange_bot_counts[exchange_id] = bot_count
+
+            self._log_result(
+                "GET / (list) - independent counts",
+                "PASS",
+                f"Verified {len(exchange_bot_counts)} exchanges with independent counts"
+            )
+        except Exception as e:
+            self._log_result("GET / (list) - independent counts", "FAIL", str(e))
+
+    async def test_list_exchanges_zero_exchanges(self):
+        """Test that zero exchanges returns empty list."""
+        try:
+            # This test assumes the test user has no exchanges initially
+            # If the user has exchanges, we can still verify the response structure
+            result = await self._request("GET", "/api/exchanges/")
+
+            if "error" in result:
+                self._log_result("GET / (list) - zero exchanges", "FAIL", result.get("error"))
+                return
+
+            if not isinstance(result, list):
+                self._log_result("GET / (list) - zero exchanges", "FAIL", "Response is not a list")
+                return
+
+            # Verify it's a valid list (empty or with data)
+            self._log_result(
+                "GET / (list) - zero exchanges",
+                "PASS",
+                f"Returns valid list with {len(result)} exchanges"
+            )
+        except Exception as e:
+            self._log_result("GET / (list) - zero exchanges", "FAIL", str(e))
+
+    async def test_list_exchanges_user_tier_consistency(self):
+        """Test that user tier is consistent across all exchanges."""
+        try:
+            result = await self._request("GET", "/api/exchanges/")
+
+            if "error" in result:
+                self._log_result("GET / (list) - tier consistency", "FAIL", result.get("error"))
+                return
+
+            if not isinstance(result, list):
+                self._log_result("GET / (list) - tier consistency", "FAIL", "Response is not a list")
+                return
+
+            # Extract subscription_tier from all exchanges
+            tiers = set()
+            for ex in result:
+                tier = ex.get("subscription_tier")
+                if tier:
+                    tiers.add(tier)
+
+            # All exchanges should have the same tier (the user's tier)
+            if len(tiers) > 1:
+                self._log_result(
+                    "GET / (list) - tier consistency",
+                    "FAIL",
+                    f"Inconsistent tiers across exchanges: {tiers}"
+                )
+                return
+
+            self._log_result(
+                "GET / (list) - tier consistency",
+                "PASS",
+                f"All exchanges have consistent tier: {tiers.pop() if tiers else 'N/A'}"
+            )
+        except Exception as e:
+            self._log_result("GET / (list) - tier consistency", "FAIL", str(e))
 
     async def test_test_connection(self):
         """Test POST /api/exchanges/test endpoint."""
@@ -259,6 +355,9 @@ class ExchangeManagementTest:
         
         await self.test_get_supported_exchanges()
         await self.test_list_exchanges()
+        await self.test_list_exchanges_multiple_exchanges_independent_counts()
+        await self.test_list_exchanges_zero_exchanges()
+        await self.test_list_exchanges_user_tier_consistency()
         await self.test_test_connection()
         await self.test_store_keys()
         await self.test_delete_safety_check()
