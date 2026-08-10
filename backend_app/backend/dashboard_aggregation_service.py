@@ -42,11 +42,11 @@ class DashboardAggregationService:
         self._telemetry = None
         self._supabase = None
     
-    async def _get_telemetry(self):
+    def _get_telemetry(self):
         """Get TelemetryEngine instance."""
         if self._telemetry is None:
             from backend_app.core.dependencies import get_telemetry
-            self._telemetry = await get_telemetry()
+            self._telemetry = get_telemetry()
         return self._telemetry
     
     def _get_supabase(self, user: dict):
@@ -363,7 +363,7 @@ class DashboardAggregationService:
         Returns:
             total_equity, total_pnl, pnl_pct, total_exposure, available_balance
         """
-        telemetry = await self._get_telemetry()
+        telemetry = self._get_telemetry()
         safe_uid = self._safe_uid(user_id)
         
         result = await telemetry.execute_query(
@@ -390,7 +390,7 @@ class DashboardAggregationService:
         Returns:
             List of {timestamp, equity} records
         """
-        telemetry = await self._get_telemetry()
+        telemetry = self._get_telemetry()
         safe_uid = self._safe_uid(user_id)
         limit = max(1, min(int(days) * 96, 100_000))
         

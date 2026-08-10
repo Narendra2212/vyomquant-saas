@@ -36,11 +36,11 @@ class MetricsService:
     def __init__(self):
         self._telemetry = None
     
-    async def _get_telemetry(self):
+    def _get_telemetry(self):
         """Get TelemetryEngine instance."""
         if self._telemetry is None:
             from backend_app.core.dependencies import get_telemetry
-            self._telemetry = await get_telemetry()
+            self._telemetry = get_telemetry()
         return self._telemetry
     
     async def get_strategy_performance(
@@ -63,7 +63,7 @@ class MetricsService:
             Performance metrics dictionary
         """
         try:
-            telemetry = await self._get_telemetry()
+            telemetry = self._get_telemetry()
             
             # Calculate time range
             time_range_map = {
@@ -174,7 +174,7 @@ class MetricsService:
             Realtime metrics (CPU, memory, worker uptime, exchange latency)
         """
         try:
-            telemetry = await self._get_telemetry()
+            telemetry = self._get_telemetry()
             
             # Query realtime metrics
             query = f"""
@@ -255,7 +255,7 @@ class MetricsService:
             List of equity curve points
         """
         try:
-            telemetry = await self._get_telemetry()
+            telemetry = self._get_telemetry()
             
             start_time = datetime.now(timezone.utc) - timedelta(days=days)
             
@@ -300,7 +300,7 @@ class MetricsService:
             List of monthly returns
         """
         try:
-            telemetry = await self._get_telemetry()
+            telemetry = self._get_telemetry()
             
             query = f"""
             SELECT
@@ -346,7 +346,7 @@ class MetricsService:
             List of daily returns
         """
         try:
-            telemetry = await self._get_telemetry()
+            telemetry = self._get_telemetry()
             
             start_time = datetime.now(timezone.utc) - timedelta(days=days)
             
@@ -395,7 +395,7 @@ class MetricsService:
             Execution metrics (order count, signal count, latency, slippage)
         """
         try:
-            telemetry = await self._get_telemetry()
+            telemetry = self._get_telemetry()
             
             time_range_map = {
                 "1d": timedelta(days=1),
@@ -450,7 +450,7 @@ class MetricsService:
             Risk metrics (drawdown, exposure, position limits, kill switch)
         """
         try:
-            telemetry = await self._get_telemetry()
+            telemetry = self._get_telemetry()
             
             query = f"""
             SELECT

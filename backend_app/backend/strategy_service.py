@@ -68,11 +68,11 @@ class StrategyService:
     def __init__(self):
         self._telemetry = None
     
-    async def _get_telemetry(self):
+    def _get_telemetry(self):
         """Get TelemetryEngine instance."""
         if self._telemetry is None:
             from backend_app.core.dependencies import get_telemetry
-            self._telemetry = await get_telemetry()
+            self._telemetry = get_telemetry()
         return self._telemetry
     
     def _get_supabase(self, user: dict):
