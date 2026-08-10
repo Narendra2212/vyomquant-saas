@@ -29,6 +29,12 @@ FIX HISTORY
   _SUBPROCESS_HEADROOM so the AWS CLI is never killed before it concludes.
 * collect_diagnostics now passes --service-name to filter stopped tasks to this service.
 * execute_deployment writes a structured summary to GITHUB_STEP_SUMMARY.
+* CONFIGURATION PRESERVATION FIX: Changed register_task_definition to fetch the
+  current production task definition from ECS and preserve ALL existing configuration
+  (environment variables, secrets, CPU, memory, etc.) while updating ONLY the
+  container image. This prevents stale configuration from ecs-task-definition-full.json
+  from overwriting production settings. Added validate_critical_config() to fail
+  deployment if critical configuration (REDIS_URL, secrets, etc.) is incorrect.
 """
 
 import json
@@ -74,42 +80,117 @@ def run_aws_cmd(cmd: List[str], timeout: int = 60) -> Tuple[int, str, str]:
         return 1, "", str(exc)
 
 
-def register_task_definition(image_uri: str) -> Tuple[bool, str]:
-    """Register updated task definition with new container image."""
-    task_def_file = "ecs-task-definition-full.json"
-    if not os.path.exists(task_def_file):
-        return False, f"File {task_def_file} not found"
-
+def get_current_task_definition() -> Tuple[bool, Dict]:
+    """Fetch the currently active task definition from ECS."""
+    code, stdout, stderr = run_aws_cmd([
+        "ecs", "describe-task-definition",
+        "--task-definition", TASK_FAMILY
+    ])
+    if code != 0:
+        return False, {}
     try:
-        with open(task_def_file, "r", encoding="utf-8") as f:
-            td = json.load(f)
-
-        # Update container image
-        if td.get("containerDefinitions"):
-            td["containerDefinitions"][0]["image"] = image_uri
-
-        # Strip fields not accepted by register-task-definition
-        for key in ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes',
-                    'compatibilities', 'registeredAt', 'registeredBy', 'deregisteredAt']:
-            td.pop(key, None)
-
-        temp_td_file = "task-def-rendered.json"
-        with open(temp_td_file, "w", encoding="utf-8") as f:
-            json.dump(td, f, indent=2)
-
-        code, stdout, stderr = run_aws_cmd([
-            "ecs", "register-task-definition",
-            "--cli-input-json", f"file://{temp_td_file}"
-        ])
-
-        if code != 0:
-            return False, f"Task def registration failed: {stderr}"
-
-        parsed = json.loads(stdout)
-        arn = parsed.get("taskDefinition", {}).get("taskDefinitionArn", "")
-        return True, arn
+        data = json.loads(stdout)
+        return True, data.get("taskDefinition", {})
     except Exception as e:
-        return False, f"Exception during task def registration: {e}"
+        print(f"[ecs_deploy] Exception parsing task definition: {e}")
+        return False, {}
+
+
+def validate_critical_config(task_def: Dict) -> Tuple[bool, str]:
+    """Validate critical production configuration before deployment.
+
+    Fails deployment if critical configuration is missing or incorrect.
+    This prevents accidental deployment of broken configuration.
+    """
+    if not task_def.get("containerDefinitions"):
+        return False, "No container definitions found"
+
+    container = task_def["containerDefinitions"][0]
+    env_vars = {env["name"]: env["value"] for env in container.get("environment", [])}
+
+    # Validate REDIS_URL is production ElastiCache, not localhost
+    redis_url = env_vars.get("REDIS_URL", "")
+    expected_redis = "rediss://master.vyomquant-redis-production-cmd.4lf97k.apse1.cache.amazonaws.com:6379"
+
+    if redis_url != expected_redis:
+        return False, f"CRITICAL: REDIS_URL is '{redis_url}', expected '{expected_redis}'"
+
+    # Validate secret names are present
+    secret_names = {secret["name"] for secret in container.get("secrets", [])}
+    required_secrets = {
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_ANON_KEY",
+        "SUPABASE_JWT_SECRET",
+        "DATABASE_URL",
+        "MASTER_ENCRYPTION_KEYS",
+        "CREDENTIAL_VAULT_SALT",
+        "JWT_SECRET"
+    }
+
+    missing_secrets = required_secrets - secret_names
+    if missing_secrets:
+        return False, f"CRITICAL: Missing secrets: {missing_secrets}"
+
+    # Validate container port
+    port_mappings = container.get("portMappings", [])
+    if not port_mappings or port_mappings[0].get("containerPort") != 8000:
+        return False, "CRITICAL: Container port is not 8000"
+
+    # Validate CPU and memory
+    if task_def.get("cpu") != "1024":
+        return False, f"CRITICAL: CPU is not 1024, got {task_def.get('cpu')}"
+    if task_def.get("memory") != "2048":
+        return False, f"CRITICAL: Memory is not 2048, got {task_def.get('memory')}"
+
+    return True, "All critical validations passed"
+
+
+def register_task_definition(image_uri: str) -> Tuple[bool, str]:
+    """Register updated task definition with new container image.
+
+    This function now fetches the current production task definition and
+    preserves ALL existing configuration, changing ONLY the container image.
+    This prevents stale configuration from ecs-task-definition-full.json
+    from overwriting production settings.
+    """
+    # Step 1: Fetch current production task definition
+    success, current_td = get_current_task_definition()
+    if not success:
+        return False, "Failed to fetch current task definition from ECS"
+
+    # Step 2: Validate critical configuration before proceeding
+    valid, validation_msg = validate_critical_config(current_td)
+    if not valid:
+        return False, f"Deployment safety validation failed: {validation_msg}"
+
+    print(f"[ecs_deploy] ✅ Critical configuration validation passed: {validation_msg}")
+
+    # Step 3: Update ONLY the container image
+    if current_td.get("containerDefinitions"):
+        current_td["containerDefinitions"][0]["image"] = image_uri
+
+    # Step 4: Strip fields not accepted by register-task-definition
+    for key in ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes',
+                'compatibilities', 'registeredAt', 'registeredBy', 'deregisteredAt']:
+        current_td.pop(key, None)
+
+    # Step 5: Write temporary file for registration
+    temp_td_file = "task-def-rendered.json"
+    with open(temp_td_file, "w", encoding="utf-8") as f:
+        json.dump(current_td, f, indent=2)
+
+    # Step 6: Register the task definition
+    code, stdout, stderr = run_aws_cmd([
+        "ecs", "register-task-definition",
+        "--cli-input-json", f"file://{temp_td_file}"
+    ])
+
+    if code != 0:
+        return False, f"Task def registration failed: {stderr}"
+
+    parsed = json.loads(stdout)
+    arn = parsed.get("taskDefinition", {}).get("taskDefinitionArn", "")
+    return True, arn
 
 
 def deploy_new_image(task_def_arn: str) -> Tuple[bool, str]:

@@ -67,7 +67,7 @@
         },
         {
           "name": "REDIS_URL",
-          "value": "redis://localhost:6379"
+          "value": "rediss://master.vyomquant-redis-production-cmd.4lf97k.apse1.cache.amazonaws.com:6379"
         },
         {
           "name": "CORS_ORIGINS",
