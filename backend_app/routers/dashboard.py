@@ -64,7 +64,7 @@ async def get_dashboard(
         
         # Get complete dashboard data from aggregation service
         dashboard_data = await dashboard_service.get_dashboard_data(
-            user_id=user["id"],
+            user=user,
             equity_days=equity_days
         )
         
@@ -126,7 +126,7 @@ async def get_dashboard_overview(
     try:
         dashboard_service = await get_dashboard_service()
         
-        portfolio = await dashboard_service.get_portfolio_overview(user["id"])
+        portfolio = await dashboard_service.get_portfolio_overview(user)
         
         return {
             "overview": {
@@ -162,8 +162,8 @@ async def get_dashboard_strategies(
     try:
         dashboard_service = await get_dashboard_service()
         
-        strategies = await dashboard_service.get_strategies(user["id"])
-        insights = await dashboard_service.get_strategy_insights(user["id"])
+        strategies = await dashboard_service.get_strategies(user)
+        insights = await dashboard_service.get_strategy_insights(user)
         
         active_strategies = [s for s in strategies if s["status"] == "active"]
         paused_strategies = [s for s in strategies if s["status"] == "paused"]

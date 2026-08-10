@@ -60,7 +60,7 @@ class DashboardAggregationService:
             return str(uid)
         raise ValueError(f"Unsafe user_id: '{uid}'")
     
-    async def get_subscription_data(self, user_id: str) -> Dict:
+    async def get_subscription_data(self, user: dict) -> Dict:
         """
         Get subscription and billing data.
         
@@ -68,18 +68,18 @@ class DashboardAggregationService:
             Subscription tier, usage metrics, billing status
         """
         try:
-            sb = self._get_supabase({"id": user_id, "access_token": None})
+            sb = self._get_supabase(user)
             
             # Get user profile with subscription info
-            res = sb.table("profiles").select("*").eq("id", user_id).execute()
+            res = sb.table("profiles").select("*").eq("id", user["id"]).execute()
             profile = res.data[0] if res.data else {}
             
             # Get subscription tier from profile
             subscription_tier = profile.get("subscription_tier", "free")
             
             # Calculate usage metrics
-            strategies_used = len(await self.get_strategies(user_id))
-            active_bots = len([s for s in await self.get_strategies(user_id) if s["status"] == "active"])
+            strategies_used = len(await self.get_strategies(user))
+            active_bots = len([s for s in await self.get_strategies(user) if s["status"] == "active"])
             
             # Get tier limits (these should come from subscription engine)
             tier_limits = {
@@ -106,7 +106,7 @@ class DashboardAggregationService:
                 "is_trial": profile.get("is_trial", False)
             }
         except Exception as e:
-            logger.error(f"Failed to fetch subscription data for user {user_id}: {e}")
+            logger.error(f"Failed to fetch subscription data for user {user['id']}: {e}")
             return {
                 "tier": "free",
                 "usage": {"strategies": 0, "strategies_limit": 3, "bots": 0, "bots_limit": 1, "ml_training_used": 0, "ml_training_limit": 0},
@@ -115,7 +115,7 @@ class DashboardAggregationService:
                 "is_trial": False
             }
     
-    async def get_exchange_data(self, user_id: str) -> Dict:
+    async def get_exchange_data(self, user: dict) -> Dict:
         """
         Get exchange connection data.
         
@@ -123,10 +123,10 @@ class DashboardAggregationService:
             Connected exchanges, connection status, latency metrics
         """
         try:
-            sb = self._get_supabase({"id": user_id, "access_token": None})
+            sb = self._get_supabase(user)
             
             # Get user's exchange connections
-            res = sb.table("exchange_connections").select("*").eq("user_id", user_id).execute()
+            res = sb.table("exchange_connections").select("*").eq("user_id", user["id"]).execute()
             connections = res.data or []
             
             # Calculate exchange metrics
@@ -152,7 +152,7 @@ class DashboardAggregationService:
                 "can_trade": len(connected_exchanges) > 0
             }
         except Exception as e:
-            logger.error(f"Failed to fetch exchange data for user {user_id}: {e}")
+            logger.error(f"Failed to fetch exchange data for user {user['id']}: {e}")
             return {
                 "total_exchanges": 0,
                 "connected_exchanges": 0,
@@ -160,7 +160,7 @@ class DashboardAggregationService:
                 "can_trade": False
             }
     
-    async def get_notification_data(self, user_id: str) -> Dict:
+    async def get_notification_data(self, user: dict) -> Dict:
         """
         Get notification data.
         
@@ -168,16 +168,16 @@ class DashboardAggregationService:
             Unread count, recent notifications, notification categories
         """
         try:
-            sb = self._get_supabase({"id": user_id, "access_token": None})
+            sb = self._get_supabase(user)
             
             # Get unread count
-            res = sb.table("notifications").select("*").eq("user_id", user_id).eq("read", False).execute()
+            res = sb.table("notifications").select("*").eq("user_id", user["id"]).eq("read", False).execute()
             unread_count = len(res.data) if res.data else 0
             
             # Get recent notifications
             recent_res = (sb.table("notifications")
                          .select("*")
-                         .eq("user_id", user_id)
+                         .eq("user_id", user["id"])
                          .order("created_at", desc=True)
                          .limit(10)
                          .execute())
@@ -208,7 +208,7 @@ class DashboardAggregationService:
                 "categories": categories
             }
         except Exception as e:
-            logger.error(f"Failed to fetch notification data for user {user_id}: {e}")
+            logger.error(f"Failed to fetch notification data for user {user['id']}: {e}")
             return {
                 "unread_count": 0,
                 "total_count": 0,
@@ -216,7 +216,7 @@ class DashboardAggregationService:
                 "categories": {}
             }
     
-    async def get_referral_data(self, user_id: str) -> Dict:
+    async def get_referral_data(self, user: dict) -> Dict:
         """
         Get referral data.
         
@@ -224,18 +224,18 @@ class DashboardAggregationService:
             Referral code, referral count, earnings
         """
         try:
-            sb = self._get_supabase({"id": user_id, "access_token": None})
+            sb = self._get_supabase(user)
             
             # Get referral profile
-            res = sb.table("referral_profiles").select("*").eq("user_id", user_id).execute()
+            res = sb.table("referral_profiles").select("*").eq("user_id", user["id"]).execute()
             profile = res.data[0] if res.data else {}
             
             if not profile:
                 # Generate referral code if doesn't exist
                 import hashlib
-                referral_code = hashlib.md5(user_id.encode()).hexdigest()[:8].upper()
+                referral_code = hashlib.md5(user["id"].encode()).hexdigest()[:8].upper()
                 sb.table("referral_profiles").insert({
-                    "user_id": user_id,
+                    "user_id": user["id"],
                     "referral_code": referral_code,
                     "total_referrals": 0,
                     "active_referrals": 0,
@@ -256,7 +256,7 @@ class DashboardAggregationService:
                 "lifetime_earnings": float(profile.get("lifetime_earnings", 0.0))
             }
         except Exception as e:
-            logger.error(f"Failed to fetch referral data for user {user_id}: {e}")
+            logger.error(f"Failed to fetch referral data for user {user['id']}: {e}")
             return {
                 "referral_code": "",
                 "referral_link": "",
@@ -267,7 +267,7 @@ class DashboardAggregationService:
                 "lifetime_earnings": 0.0
             }
     
-    async def get_risk_data(self, user_id: str) -> Dict:
+    async def get_risk_data(self, user: dict) -> Dict:
         """
         Get risk management data.
         
@@ -275,14 +275,14 @@ class DashboardAggregationService:
             Risk settings, current risk level, circuit breaker status
         """
         try:
-            sb = self._get_supabase({"id": user_id, "access_token": None})
+            sb = self._get_supabase(user)
             
             # Get risk settings
-            res = sb.table("risk_settings").select("*").eq("user_id", user_id).execute()
+            res = sb.table("risk_settings").select("*").eq("user_id", user["id"]).execute()
             settings = res.data[0] if res.data else {}
             
             # Get current risk metrics from portfolio
-            portfolio = await self.get_portfolio_overview(user_id)
+            portfolio = await self.get_portfolio_overview(user)
             current_drawdown = abs(float(portfolio.get("pnl_pct", 0)))
             
             # Determine risk level
@@ -306,7 +306,7 @@ class DashboardAggregationService:
                 "kill_switches": settings.get("kill_switches", [])
             }
         except Exception as e:
-            logger.error(f"Failed to fetch risk data for user {user_id}: {e}")
+            logger.error(f"Failed to fetch risk data for user {user['id']}: {e}")
             return {
                 "risk_level": "low",
                 "current_drawdown_pct": 0.0,
@@ -318,7 +318,7 @@ class DashboardAggregationService:
                 "kill_switches": []
             }
     
-    async def get_marketplace_data(self, user_id: str) -> Dict:
+    async def get_marketplace_data(self, user: dict) -> Dict:
         """
         Get marketplace data from library_strategies.
         
@@ -326,14 +326,14 @@ class DashboardAggregationService:
             Available strategies, user's publications, subscription counts
         """
         try:
-            sb = self._get_supabase({"id": user_id, "access_token": None})
+            sb = self._get_supabase(user)
             
             # Get available marketplace strategies from library_strategies
             res = sb.table("library_strategies").select("*").eq("is_active", True).in_("moderation_status", ["approved", "featured"]).execute()
             available_strategies = res.data or []
             
             # Get user's published strategies
-            user_res = sb.table("library_strategies").select("*").eq("author_id", user_id).execute()
+            user_res = sb.table("library_strategies").select("*").eq("author_id", user["id"]).execute()
             user_publications = user_res.data or []
             
             # Calculate subscriber counts
@@ -348,7 +348,7 @@ class DashboardAggregationService:
                 "featured": [s for s in available_strategies if s.get("is_featured")][:3]  # Top 3 featured strategies
             }
         except Exception as e:
-            logger.error(f"Failed to fetch marketplace data for user {user_id}: {e}")
+            logger.error(f"Failed to fetch marketplace data for user {user['id']}: {e}")
             return {
                 "available_count": 0,
                 "user_publications": 0,
@@ -356,7 +356,7 @@ class DashboardAggregationService:
                 "featured": []
             }
     
-    async def get_portfolio_overview(self, user_id: str) -> Dict:
+    async def get_portfolio_overview(self, user: dict) -> Dict:
         """
         Get portfolio overview data.
         
@@ -364,7 +364,7 @@ class DashboardAggregationService:
             total_equity, total_pnl, pnl_pct, total_exposure, available_balance
         """
         telemetry = self._get_telemetry()
-        safe_uid = self._safe_uid(user_id)
+        safe_uid = self._safe_uid(user["id"])
         
         result = await telemetry.execute_query(
             f"SELECT * FROM live_user_pnl WHERE user_id = '{safe_uid}' LIMIT 1;"
@@ -383,7 +383,7 @@ class DashboardAggregationService:
             "available_balance": "0"
         }
     
-    async def get_equity_curve(self, user_id: str, days: int = 30) -> List[Dict]:
+    async def get_equity_curve(self, user: dict, days: int = 30) -> List[Dict]:
         """
         Get equity curve data.
         
@@ -391,7 +391,7 @@ class DashboardAggregationService:
             List of {timestamp, equity} records
         """
         telemetry = self._get_telemetry()
-        safe_uid = self._safe_uid(user_id)
+        safe_uid = self._safe_uid(user["id"])
         limit = max(1, min(int(days) * 96, 100_000))
         
         result = await telemetry.execute_query(
@@ -406,16 +406,16 @@ class DashboardAggregationService:
         
         return []
     
-    async def get_strategies(self, user_id: str) -> List[Dict]:
+    async def get_strategies(self, user: dict) -> List[Dict]:
         """
         Get strategies with calculated metrics.
         
         Returns:
             List of strategies with status, health, PnL, etc.
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
-        res = sb.table("strategies").select("*").eq("user_id", user_id).execute()
+        res = sb.table("strategies").select("*").eq("user_id", user["id"]).execute()
         strategies = res.data or []
         
         # Calculate metrics in backend
@@ -434,14 +434,14 @@ class DashboardAggregationService:
         
         return enriched
     
-    async def get_strategy_insights(self, user_id: str) -> List[Dict]:
+    async def get_strategy_insights(self, user: dict) -> List[Dict]:
         """
         Calculate trading insights from strategy state.
         
         Returns:
             List of insight objects with type, text, action
         """
-        strategies = await self.get_strategies(user_id)
+        strategies = await self.get_strategies(user)
         
         insights = []
         
@@ -477,18 +477,18 @@ class DashboardAggregationService:
         
         return insights[:3]
     
-    async def get_recent_signals(self, user_id: str, limit: int = 5) -> List[Dict]:
+    async def get_recent_signals(self, user: dict, limit: int = 5) -> List[Dict]:
         """
         Get recent signal traces for notifications.
         
         Returns:
             List of signal objects with decision, asset, risk_result, etc.
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         res = (sb.table("execution_records")
                .select("*")
-               .eq("user_id", user_id)
+               .eq("user_id", user["id"])
                .order("created_at", desc=True)
                .limit(limit)
                .execute())
@@ -506,7 +506,7 @@ class DashboardAggregationService:
         
         return notifications
     
-    async def get_health_status(self, user_id: str) -> Dict:
+    async def get_health_status(self, user: dict) -> Dict:
         """
         Get system health status.
         
@@ -522,7 +522,7 @@ class DashboardAggregationService:
             "order_state_sync_status": "synchronized"
         }
     
-    async def get_dashboard_data(self, user_id: str, equity_days: int = 30) -> Dict:
+    async def get_dashboard_data(self, user: dict, equity_days: int = 30) -> Dict:
         """
         Get complete dashboard data in one call.
         
@@ -530,7 +530,7 @@ class DashboardAggregationService:
         All calculations performed in backend.
         
         Args:
-            user_id: User UUID
+            user: User dict with id and access_token
             equity_days: Number of days for equity curve
         
         Returns:
@@ -551,18 +551,18 @@ class DashboardAggregationService:
         try:
             # Parallel data fetching from all modules
             results = await asyncio.gather(
-                self.get_portfolio_overview(user_id),
-                self.get_equity_curve(user_id, equity_days),
-                self.get_strategies(user_id),
-                self.get_strategy_insights(user_id),
-                self.get_recent_signals(user_id),
-                self.get_health_status(user_id),
-                self.get_subscription_data(user_id),
-                self.get_exchange_data(user_id),
-                self.get_notification_data(user_id),
-                self.get_referral_data(user_id),
-                self.get_risk_data(user_id),
-                self.get_marketplace_data(user_id),
+                self.get_portfolio_overview(user),
+                self.get_equity_curve(user, equity_days),
+                self.get_strategies(user),
+                self.get_strategy_insights(user),
+                self.get_recent_signals(user),
+                self.get_health_status(user),
+                self.get_subscription_data(user),
+                self.get_exchange_data(user),
+                self.get_notification_data(user),
+                self.get_referral_data(user),
+                self.get_risk_data(user),
+                self.get_marketplace_data(user),
                 return_exceptions=True
             )
             
@@ -704,7 +704,7 @@ class DashboardAggregationService:
             }
             
         except Exception as e:
-            logger.error(f"Dashboard aggregation failed for user {user_id}: {e}")
+            logger.error(f"Dashboard aggregation failed for user {user['id']}: {e}")
             raise
 
 

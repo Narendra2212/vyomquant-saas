@@ -91,7 +91,7 @@ async def create_signal(request: Request,
         service = await get_signal_service()
         
         signal = await service.create_signal(
-            user_id=user["id"],
+            user=user,
             strategy_id=request.strategy_id,
             strategy_version=request.strategy_version,
             deployment_id=request.deployment_id,
@@ -133,7 +133,7 @@ async def get_signal(request: Request,
     try:
         service = await get_signal_service()
         
-        signal = await service.get_signal(user["id"], signal_id)
+        signal = await service.get_signal(user, signal_id)
         if not signal:
             raise HTTPException(
                 status_code=404,
@@ -141,7 +141,7 @@ async def get_signal(request: Request,
             )
         
         # Get timeline
-        timeline = await service.get_signal_timeline(user["id"], signal_id)
+        timeline = await service.get_signal_timeline(user, signal_id)
         
         return {
             "signal": signal,
@@ -190,7 +190,7 @@ async def list_signals(request: Request,
         service = await get_signal_service()
         
         signals = await service.list_signals(
-            user_id=user["id"],
+            user=user,
             strategy_id=strategy_id,
             exchange_id=exchange_id,
             symbol=symbol,
@@ -236,7 +236,7 @@ async def update_risk_decision(request: Request,
         service = await get_signal_service()
         
         signal = await service.update_risk_decision(
-            user_id=user["id"],
+            user=user,
             signal_id=signal_id,
             risk_passed=request.risk_passed,
             risk_reason=request.risk_reason,
@@ -273,7 +273,7 @@ async def update_order(request: Request,
         service = await get_signal_service()
         
         signal = await service.update_order(
-            user_id=user["id"],
+            user=user,
             signal_id=signal_id,
             order_id=request.order_id,
             exchange_order_id=request.exchange_order_id,
@@ -312,7 +312,7 @@ async def update_execution(request: Request,
         service = await get_signal_service()
         
         signal = await service.update_execution(
-            user_id=user["id"],
+            user=user,
             signal_id=signal_id,
             trade_id=request.trade_id,
             pnl=request.pnl,
@@ -347,7 +347,7 @@ async def get_signal_timeline(request: Request,
     try:
         service = await get_signal_service()
         
-        timeline = await service.get_signal_timeline(user_id, signal_id)
+        timeline = await service.get_signal_timeline(user, signal_id)
         
         return {
             "signal_id": signal_id,
@@ -390,7 +390,7 @@ async def export_signals(request: Request,
             "date_to": date_to
         }
         
-        data = await service.export_signals(user_id, filters, format)
+        data = await service.export_signals(user, filters, format)
         
         if format == "csv":
             return Response(

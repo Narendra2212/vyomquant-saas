@@ -110,7 +110,7 @@ async def create_strategy(request: Request,
         )
         
         result = await service.create_strategy(
-            user_id=user["id"],
+            user=user,
             name=request.name,
             description=request.description,
             blueprint=request.blueprint,
@@ -219,7 +219,7 @@ async def list_strategies(request: Request,
         service = await get_strategy_service()
         
         strategies = await service.list_strategies(
-            user_id=user["id"],
+            user=user,
             status_filter=status,
             environment_filter=environment
         )
@@ -279,7 +279,7 @@ async def get_strategy(request: Request,
     try:
         service = await get_strategy_service()
         
-        strategy = await service.get_strategy(user["id"], strategy_id)
+        strategy = await service.get_strategy(user=user, strategy_id=strategy_id)
         if not strategy:
             raise HTTPException(
                 status_code=404,
@@ -314,7 +314,7 @@ async def update_strategy(request: Request,
         service = await get_strategy_service()
         
         updates = body.dict(exclude_unset=True)
-        result = await service.update_strategy(user["id"], strategy_id, updates)
+        result = await service.update_strategy(user=user, strategy_id=strategy_id, updates=updates)
         if not result:
             raise HTTPException(
                 status_code=404,
@@ -348,7 +348,7 @@ async def delete_strategy(request: Request,
     try:
         service = await get_strategy_service()
         
-        success = await service.delete_strategy(user["id"], strategy_id)
+        success = await service.delete_strategy(user=user, strategy_id=strategy_id)
         if not success:
             raise HTTPException(
                 status_code=404,
@@ -381,7 +381,7 @@ async def clone_strategy(request: Request,
     try:
         service = await get_strategy_service()
         
-        result = await service.clone_strategy(user["id"], strategy_id, request.new_name)
+        result = await service.clone_strategy(user=user, strategy_id=strategy_id, new_name=request.new_name)
         
         return {
             "status": "cloned",
@@ -417,7 +417,7 @@ async def deploy_strategy(request: Request,
         service = await get_strategy_service()
         
         result = await service.deploy_strategy(
-            user_id=user["id"],
+            user=user,
             strategy_id=strategy_id,
             version=request.version,
             environment=request.environment,
@@ -447,7 +447,7 @@ async def stop_deployment(request: Request,
     try:
         service = await get_strategy_service()
         
-        success = await service.stop_deployment(user_id, deployment_id)
+        success = await service.stop_deployment(user=user, deployment_id=deployment_id)
         if not success:
             raise HTTPException(
                 status_code=404,
@@ -479,7 +479,7 @@ async def pause_strategy(request: Request,
     try:
         service = await get_strategy_service()
         
-        success = await service.pause_strategy(user["id"], strategy_id)
+        success = await service.pause_strategy(user=user, strategy_id=strategy_id)
         if not success:
             raise HTTPException(
                 status_code=404,
@@ -511,7 +511,7 @@ async def resume_strategy(request: Request,
     try:
         service = await get_strategy_service()
         
-        result = await service.resume_strategy(user["id"], strategy_id)
+        result = await service.resume_strategy(user=user, strategy_id=strategy_id)
         
         return result
     except Exception as e:
@@ -541,7 +541,7 @@ async def get_strategy_metrics(request: Request,
     try:
         service = await get_strategy_service()
         
-        metrics = await service.get_strategy_metrics(user["id"], strategy_id)
+        metrics = await service.get_strategy_metrics(user=user, strategy_id=strategy_id)
         
         if not metrics:
             raise HTTPException(
@@ -577,7 +577,7 @@ async def get_strategy_performance(request: Request,
         metrics_service = await get_metrics_service()
         
         performance = await metrics_service.get_strategy_performance(
-            user_id=user["id"],
+            user=user,
             strategy_id=strategy_id,
             time_range=time_range
         )
@@ -608,7 +608,7 @@ async def get_strategy_equity_curve(request: Request,
         metrics_service = await get_metrics_service()
         
         equity_curve = await metrics_service.get_equity_curve(
-            user_id=user["id"],
+            user=user,
             strategy_id=strategy_id,
             days=days
         )
@@ -642,7 +642,7 @@ async def get_strategy_monthly_returns(request: Request,
         metrics_service = await get_metrics_service()
         
         monthly_returns = await metrics_service.get_monthly_returns(
-            user_id=user["id"],
+            user=user,
             strategy_id=strategy_id
         )
         
@@ -675,7 +675,7 @@ async def get_strategy_daily_returns(request: Request,
         metrics_service = await get_metrics_service()
         
         daily_returns = await metrics_service.get_daily_returns(
-            user_id=user["id"],
+            user=user,
             strategy_id=strategy_id,
             days=days
         )
@@ -710,7 +710,7 @@ async def get_strategy_execution_metrics(request: Request,
         metrics_service = await get_metrics_service()
         
         execution_metrics = await metrics_service.get_execution_metrics(
-            user_id=user["id"],
+            user=user,
             strategy_id=strategy_id,
             time_range=time_range
         )
@@ -744,7 +744,7 @@ async def get_strategy_risk_metrics(request: Request,
         metrics_service = await get_metrics_service()
         
         risk_metrics = await metrics_service.get_risk_metrics(
-            user_id=user["id"],
+            user=user,
             strategy_id=strategy_id
         )
         
@@ -845,7 +845,7 @@ async def create_backtest(request: Request,
         backtest_service = await get_backtest_service()
         
         backtest = await backtest_service.create_backtest(
-            user_id=user["id"],
+            user=user,
             strategy_id=strategy_id,
             version_id=request.version_id,
             version=request.version,
@@ -895,7 +895,7 @@ async def execute_backtest(request: Request,
     try:
         # Get strategy to retrieve version info
         strategy_service = await get_strategy_service()
-        strategy = await strategy_service.get_strategy(user["id"], strategy_id)
+        strategy = await strategy_service.get_strategy(user=user, strategy_id=strategy_id)
         
         if not strategy:
             raise HTTPException(
@@ -935,7 +935,7 @@ async def execute_backtest(request: Request,
         # Execute backtest
         results = await backtest_runtime.run_backtest(
             strategy_package=strategy_package,
-            user_id=user["id"],
+            user=user,
             strategy_id=strategy_id,
             version_id=strategy["version"]["id"] if strategy["version"] else None,
             version=strategy["version"]["version"] if strategy["version"] else "v1.0",
@@ -972,7 +972,7 @@ async def list_backtests(request: Request,
         backtest_service = await get_backtest_service()
         
         backtests = await backtest_service.list_backtests(
-            user_id=user["id"],
+            user=user,
             strategy_id=strategy_id,
             limit=limit
         )
@@ -1002,7 +1002,7 @@ async def get_backtest(request: Request,
     try:
         backtest_service = await get_backtest_service()
         
-        backtest = await backtest_service.get_backtest(user_id, backtest_id)
+        backtest = await backtest_service.get_backtest(user=user, backtest_id=backtest_id)
         if not backtest:
             raise HTTPException(
                 status_code=404,
@@ -1034,7 +1034,7 @@ async def get_backtest_report(request: Request,
     try:
         backtest_service = await get_backtest_service()
         
-        report = await backtest_service.get_backtest_report(user_id, backtest_id)
+        report = await backtest_service.get_backtest_report(user=user, backtest_id=backtest_id)
         if not report:
             raise HTTPException(
                 status_code=404,
@@ -1083,7 +1083,7 @@ async def run_optimization(request: Request,
     try:
         # Get strategy to retrieve version info
         strategy_service = await get_strategy_service()
-        strategy = await strategy_service.get_strategy(user["id"], strategy_id)
+        strategy = await strategy_service.get_strategy(user=user, strategy_id=strategy_id)
         
         if not strategy:
             raise HTTPException(
@@ -1149,7 +1149,7 @@ async def run_optimization(request: Request,
         research_report = await optimization_engine.generate_research_report(
             strategy_package=strategy_package,
             config=config,
-            user_id=user["id"],
+            user=user,
             strategy_id=strategy_id,
             version_id=strategy["version"]["id"] if strategy["version"] else None,
             version=strategy["version"]["version"] if strategy["version"] else "v1.0",
@@ -1302,7 +1302,7 @@ async def deploy_strategy(request: Request,
     try:
         # Get strategy to retrieve version info
         strategy_service = await get_strategy_service()
-        strategy = await strategy_service.get_strategy(user["id"], strategy_id)
+        strategy = await strategy_service.get_strategy(user=user, strategy_id=strategy_id)
         
         if not strategy:
             raise HTTPException(
@@ -1622,7 +1622,7 @@ async def compare_backtests(request: Request,
     try:
         backtest_service = await get_backtest_service()
         
-        comparison = await backtest_service.compare_backtests(user_id, backtest_ids)
+        comparison = await backtest_service.compare_backtests(user=user, backtest_ids=backtest_ids)
         
         return comparison
     except Exception as e:
@@ -1645,7 +1645,7 @@ async def delete_backtest(request: Request,
     try:
         backtest_service = await get_backtest_service()
         
-        success = await backtest_service.delete_backtest(user_id, backtest_id)
+        success = await backtest_service.delete_backtest(user=user, backtest_id=backtest_id)
         if not success:
             raise HTTPException(
                 status_code=404,
@@ -1681,7 +1681,7 @@ async def get_version_history(request: Request,
     try:
         service = await get_strategy_service()
         
-        versions = await service.get_version_history(user["id"], strategy_id)
+        versions = await service.get_version_history(user=user, strategy_id=strategy_id)
         
         return {
             "strategy_id": strategy_id,
@@ -1712,7 +1712,7 @@ async def compare_versions(request: Request,
     try:
         service = await get_strategy_service()
         
-        comparison = await service.compare_versions(user["id"], strategy_id, version_a, version_b)
+        comparison = await service.compare_versions(user=user, strategy_id=strategy_id, version_a=version_a, version_b=version_b)
         
         return comparison
     except ValueError as e:
@@ -1743,7 +1743,7 @@ async def restore_version(request: Request,
     try:
         service = await get_strategy_service()
         
-        new_version = await service.restore_version(user["id"], strategy_id, version)
+        new_version = await service.restore_version(user=user, strategy_id=strategy_id, version=version)
         
         return {
             "status": "restored",
@@ -1779,7 +1779,7 @@ async def deploy_version(request: Request,
     try:
         service = await get_strategy_service()
         
-        deployment = await service.deploy_version(user["id"], strategy_id, version, environment)
+        deployment = await service.deploy_version(user=user, strategy_id=strategy_id, version=version, environment=environment)
         
         return deployment
     except ValueError as e:

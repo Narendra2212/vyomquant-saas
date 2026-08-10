@@ -62,7 +62,7 @@ class SignalService:
     
     async def create_signal(
         self,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         strategy_version: str,
         deployment_id: str,
@@ -79,7 +79,7 @@ class SignalService:
         Create a new signal record.
         
         Args:
-            user_id: User ID
+            user: User dict with id and access_token
             strategy_id: Strategy ID
             strategy_version: Strategy version
             deployment_id: Deployment ID
@@ -95,13 +95,13 @@ class SignalService:
         Returns:
             Signal record
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         signal_id = str(uuid4())
         
         signal_data = {
             "id": signal_id,
-            "user_id": user_id,
+            "user_id": user["id"],
             "strategy_id": strategy_id,
             "strategy_version": strategy_version,
             "deployment_id": deployment_id,
@@ -125,7 +125,7 @@ class SignalService:
     
     async def update_risk_decision(
         self,
-        user_id: str,
+        user: dict,
         signal_id: str,
         risk_passed: bool,
         risk_reason: str,
@@ -140,7 +140,7 @@ class SignalService:
         Update signal with risk decision.
         
         Args:
-            user_id: User ID
+            user: User dict with id and access_token
             signal_id: Signal ID
             risk_passed: Whether risk check passed
             risk_reason: Reason for risk decision
@@ -154,7 +154,7 @@ class SignalService:
         Returns:
             Updated signal record
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         update_data = {
             "risk_passed": risk_passed,
@@ -174,7 +174,7 @@ class SignalService:
         else:
             update_data["status"] = SignalStatus.ACCEPTED
         
-        result = sb.table("signals").update(update_data).eq("id", signal_id).eq("user_id", user_id).execute()
+        result = sb.table("signals").update(update_data).eq("id", signal_id).eq("user_id", user["id"]).execute()
         
         logger.info(f"Updated risk decision for signal {signal_id}: {risk_passed}")
         
@@ -182,7 +182,7 @@ class SignalService:
     
     async def update_order(
         self,
-        user_id: str,
+        user: dict,
         signal_id: str,
         order_id: str,
         exchange_order_id: Optional[str],
@@ -199,7 +199,7 @@ class SignalService:
         Update signal with order information.
         
         Args:
-            user_id: User ID
+            user: User dict with id and access_token
             signal_id: Signal ID
             order_id: Order ID
             exchange_order_id: Exchange order ID
@@ -215,7 +215,7 @@ class SignalService:
         Returns:
             Updated signal record
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         update_data = {
             "order_id": order_id,
@@ -239,7 +239,7 @@ class SignalService:
         elif order_status == "FAILED":
             update_data["status"] = SignalStatus.FAILED
         
-        result = sb.table("signals").update(update_data).eq("id", signal_id).eq("user_id", user_id).execute()
+        result = sb.table("signals").update(update_data).eq("id", signal_id).eq("user_id", user["id"]).execute()
         
         logger.info(f"Updated order for signal {signal_id}: {order_status}")
         
@@ -247,7 +247,7 @@ class SignalService:
     
     async def update_execution(
         self,
-        user_id: str,
+        user: dict,
         signal_id: str,
         trade_id: str,
         pnl: float,
@@ -257,7 +257,7 @@ class SignalService:
         Update signal with execution and PnL information.
         
         Args:
-            user_id: User ID
+            user: User dict with id and access_token
             signal_id: Signal ID
             trade_id: Trade ID
             pnl: PnL
@@ -266,7 +266,7 @@ class SignalService:
         Returns:
             Updated signal record
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         update_data = {
             "trade_id": trade_id,
@@ -275,7 +275,7 @@ class SignalService:
             "executed_at": datetime.now(timezone.utc).isoformat()
         }
         
-        result = sb.table("signals").update(update_data).eq("id", signal_id).eq("user_id", user_id).execute()
+        result = sb.table("signals").update(update_data).eq("id", signal_id).eq("user_id", user["id"]).execute()
         
         logger.info(f"Updated execution for signal {signal_id}: pnl={pnl}")
         
@@ -283,22 +283,22 @@ class SignalService:
     
     async def get_signal(
         self,
-        user_id: str,
+        user: dict,
         signal_id: str
     ) -> Optional[Dict]:
         """
         Get complete signal data.
         
         Args:
-            user_id: User ID
+            user: User dict with id and access_token
             signal_id: Signal ID
             
         Returns:
             Signal record with all details
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
-        result = sb.table("signals").select("*").eq("id", signal_id).eq("user_id", user_id).execute()
+        result = sb.table("signals").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
         
         if not result.data:
             return None
@@ -307,7 +307,7 @@ class SignalService:
     
     async def list_signals(
         self,
-        user_id: str,
+        user: dict,
         strategy_id: Optional[str] = None,
         exchange_id: Optional[str] = None,
         symbol: Optional[str] = None,
@@ -326,7 +326,7 @@ class SignalService:
         List signals with filters.
         
         Args:
-            user_id: User ID
+            user: User dict with id and access_token
             strategy_id: Filter by strategy
             exchange_id: Filter by exchange
             symbol: Filter by symbol
@@ -344,9 +344,9 @@ class SignalService:
         Returns:
             List of signal records
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
-        query = sb.table("signals").select("*").eq("user_id", user_id)
+        query = sb.table("signals").select("*").eq("user_id", user["id"])
         
         if strategy_id:
             query = query.eq("strategy_id", strategy_id)
@@ -380,7 +380,7 @@ class SignalService:
     
     async def get_signal_timeline(
         self,
-        user_id: str,
+        user: dict,
         signal_id: str
     ) -> List[Dict]:
         """
@@ -388,7 +388,7 @@ class SignalService:
         
         Returns all events in chronological order.
         """
-        signal = await self.get_signal(user_id, signal_id)
+        signal = await self.get_signal(user, signal_id)
         if not signal:
             return []
         
@@ -457,7 +457,7 @@ class SignalService:
     
     async def export_signals(
         self,
-        user_id: str,
+        user: dict,
         filters: Dict,
         format: str = "json"
     ) -> str:
@@ -465,14 +465,14 @@ class SignalService:
         Export signals with filters.
         
         Args:
-            user_id: User ID
+            user: User dict with id and access_token
             filters: Filter criteria
             format: Export format (json, csv)
             
         Returns:
             Exported data
         """
-        signals = await self.list_signals(user_id, limit=1000, **filters)
+        signals = await self.list_signals(user, limit=1000, **filters)
         
         if format == "csv":
             import csv

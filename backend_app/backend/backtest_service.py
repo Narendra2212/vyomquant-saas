@@ -44,7 +44,7 @@ class BacktestService:
     
     async def create_backtest(
         self,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_id: str,
         version: str,
@@ -60,7 +60,7 @@ class BacktestService:
         Create a new backtest record.
         
         Args:
-            user_id: User ID
+            user: User dict
             strategy_id: Strategy ID
             version_id: Version ID
             version: Version string
@@ -75,14 +75,14 @@ class BacktestService:
         Returns:
             Backtest record
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         backtest_id = str(uuid4())
         
         backtest_data = {
             "id": backtest_id,
             "strategy_id": strategy_id,
-            "user_id": user_id,
+            "user_id": user["id"],
             "version_id": version_id,
             "version": version,
             "blueprint": blueprint,
@@ -108,7 +108,7 @@ class BacktestService:
     
     async def update_backtest_results(
         self,
-        user_id: str,
+        user: dict,
         backtest_id: str,
         results: Dict
     ) -> Dict:
@@ -116,14 +116,14 @@ class BacktestService:
         Update backtest with execution results.
         
         Args:
-            user_id: User ID
+            user: User dict
             backtest_id: Backtest ID
             results: Backtest results dictionary
             
         Returns:
             Updated backtest record
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         update_data = {
             "status": "completed",
@@ -157,24 +157,24 @@ class BacktestService:
     
     async def get_backtest(
         self,
-        user_id: str,
+        user: dict,
         backtest_id: str
     ) -> Optional[Dict]:
         """
         Get complete backtest data.
         
         Args:
-            user_id: User ID
+            user: User dict
             backtest_id: Backtest ID
             
         Returns:
             Backtest record with results
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         if sb is None:
             return None
         
-        result = sb.table("strategy_backtests").select("*").eq("id", backtest_id).eq("user_id", user_id).execute()
+        result = sb.table("strategy_backtests").select("*").eq("id", backtest_id).eq("user_id", user["id"]).execute()
         
         if not result.data:
             return None
@@ -183,7 +183,7 @@ class BacktestService:
     
     async def list_backtests(
         self,
-        user_id: str,
+        user: dict,
         strategy_id: Optional[str] = None,
         limit: int = 50
     ) -> List[Dict]:
@@ -191,18 +191,18 @@ class BacktestService:
         List backtests for user or strategy.
         
         Args:
-            user_id: User ID
+            user: User dict
             strategy_id: Optional strategy filter
             limit: Maximum number of results
             
         Returns:
             List of backtest records
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         if sb is None:
             return []
         
-        query = sb.table("strategy_backtests").select("*").eq("user_id", user_id)
+        query = sb.table("strategy_backtests").select("*").eq("user_id", user["id"])
         
         if strategy_id:
             query = query.eq("strategy_id", strategy_id)
@@ -213,7 +213,7 @@ class BacktestService:
     
     async def get_backtest_history(
         self,
-        user_id: str,
+        user: dict,
         strategy_id: str
     ) -> List[Dict]:
         """
@@ -223,20 +223,20 @@ class BacktestService:
         Store forever.
         
         Args:
-            user_id: User ID
+            user: User dict
             strategy_id: Strategy ID
             
         Returns:
             All backtests for strategy
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         if sb is None:
             return []
         
         result = (sb.table("strategy_backtests")
                  .select("*")
                  .eq("strategy_id", strategy_id)
-                 .eq("user_id", user_id)
+                 .eq("user_id", user["id"])
                  .order("created_at", desc=True)
                  .execute())
         
@@ -244,24 +244,24 @@ class BacktestService:
     
     async def compare_backtests(
         self,
-        user_id: str,
+        user: dict,
         backtest_ids: List[str]
     ) -> Dict:
         """
         Compare multiple backtests.
         
         Args:
-            user_id: User ID
+            user: User dict
             backtest_ids: List of backtest IDs to compare
             
         Returns:
             Comparison results
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         backtests = []
         for backtest_id in backtest_ids:
-            result = sb.table("strategy_backtests").select("*").eq("id", backtest_id).eq("user_id", user_id).execute()
+            result = sb.table("strategy_backtests").select("*").eq("id", backtest_id).eq("user_id", user["id"]).execute()
             if result.data:
                 backtests.append(result.data[0])
         
@@ -284,38 +284,42 @@ class BacktestService:
     
     async def delete_backtest(
         self,
-        user_id: str,
+        user: dict,
         backtest_id: str
     ) -> bool:
         """
         Delete a backtest.
         
         Args:
-            user_id: User ID
+            user: User dict
             backtest_id: Backtest ID
             
         Returns:
             Success status
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
-        result = sb.table("strategy_backtests").delete().eq("id", backtest_id).eq("user_id", user_id).execute()
+        result = sb.table("strategy_backtests").delete().eq("id", backtest_id).eq("user_id", user["id"]).execute()
         
         logger.info(f"Deleted backtest {backtest_id}")
         return True
     
     async def get_backtest_report(
         self,
-        user_id: str,
+        user: dict,
         backtest_id: str
     ) -> Dict:
         """
         Generate comprehensive backtest report.
-        
+
+        Args:
+            user: User dict
+            backtest_id: Backtest ID
+
         Returns:
             Complete backtest report with all metrics
         """
-        backtest = await self.get_backtest(user_id, backtest_id)
+        backtest = await self.get_backtest(user, backtest_id)
         if not backtest:
             return {}
         

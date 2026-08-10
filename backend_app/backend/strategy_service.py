@@ -81,7 +81,7 @@ class StrategyService:
     
     async def create_strategy(
         self,
-        user_id: str,
+        user: dict,
         name: str,
         description: str,
         blueprint: dict,
@@ -97,7 +97,7 @@ class StrategyService:
         Returns:
             Strategy record with initial version
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         strategy_id = str(uuid4())
         version_id = str(uuid4())
@@ -105,7 +105,7 @@ class StrategyService:
         # Create strategy with version
         strategy_data = {
             "id": strategy_id,
-            "user_id": user_id,
+            "user_id": user["id"],
             "name": name,
             "description": description,
             "exchange": exchange,
@@ -137,24 +137,24 @@ class StrategyService:
         # Store version
         version_result = sb.table("strategy_versions").insert(version_data).execute()
         
-        logger.info(f"Created strategy {strategy_id} v1.0 for user {user_id}")
+        logger.info(f"Created strategy {strategy_id} v1.0 for user {user['id']}")
         
         return {
             "strategy": strategy_result.data[0] if strategy_result.data else strategy_data,
             "version": version_result.data[0] if version_result.data else version_data
         }
     
-    async def get_strategy(self, user_id: str, strategy_id: str) -> Optional[Dict]:
+    async def get_strategy(self, user: dict, strategy_id: str) -> Optional[Dict]:
         """
         Get complete Strategy data with current version.
         
         Returns:
             Strategy with version, deployments, and metrics
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         # Get strategy
-        strategy_res = sb.table("strategies").select("*").eq("id", strategy_id).eq("user_id", user_id).execute()
+        strategy_res = sb.table("strategies").select("*").eq("id", strategy_id).eq("user_id", user["id"]).execute()
         if not strategy_res.data:
             return None
         
@@ -192,7 +192,7 @@ class StrategyService:
     
     async def list_strategies(
         self,
-        user_id: str,
+        user: dict,
         status_filter: Optional[str] = None,
         environment_filter: Optional[str] = None
     ) -> List[Dict]:
@@ -202,9 +202,9 @@ class StrategyService:
         Returns:
             List of strategies with summary metrics
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
-        query = sb.table("strategies").select("*").eq("user_id", user_id)
+        query = sb.table("strategies").select("*").eq("user_id", user["id"])
         
         if status_filter:
             query = query.eq("status", status_filter)
@@ -229,7 +229,7 @@ class StrategyService:
             
             # Get performance metrics from Telemetry
             try:
-                performance = await self._get_strategy_performance(user_id, strategy["id"])
+                performance = await self._get_strategy_performance(user, strategy["id"])
             except Exception as e:
                 logger.warning(f"Failed to fetch performance for strategy {strategy['id']}: {e}")
                 performance = None  # Explicitly indicate performance unavailable
@@ -243,24 +243,24 @@ class StrategyService:
         
         return enriched
     
-    async def _get_strategy_performance(self, user_id: str, strategy_id: str) -> Dict:
+    async def _get_strategy_performance(self, user: dict, strategy_id: str) -> Dict:
         """
         Get Strategy performance metrics from MetricsService.
-        
+
         Returns:
             Performance metrics (PnL, ROI, win rate, etc.)
-        
+
         Raises:
             Exception if performance fetch fails - caller should handle gracefully
         """
         from backend_app.backend.metrics_service import get_metrics_service
         metrics_service = await get_metrics_service()
-        
-        return await metrics_service.get_strategy_performance(user_id, strategy_id)
+
+        return await metrics_service.get_strategy_performance(user["id"], strategy_id)
     
     async def update_strategy(
         self,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         updates: Dict
     ) -> Dict:
@@ -270,7 +270,7 @@ class StrategyService:
         Returns:
             Updated strategy with new version if applicable
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         # Check if blueprint is being updated
         blueprint_changed = "blueprint" in updates
@@ -335,16 +335,16 @@ class StrategyService:
     
     async def get_version_history(
         self,
-        user_id: str,
+        user: dict,
         strategy_id: str
     ) -> List[Dict]:
         """
         Get complete version history for a Strategy.
-        
+
         Returns:
             List of all versions with metadata
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         result = (sb.table("strategy_versions")
                  .select("*")
@@ -356,18 +356,18 @@ class StrategyService:
     
     async def compare_versions(
         self,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_a: str,
         version_b: str
     ) -> Dict:
         """
         Compare two strategy versions.
-        
+
         Returns:
             Comparison of blueprints and metadata
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         # Get both versions
         version_a_res = (sb.table("strategy_versions")
@@ -459,19 +459,19 @@ class StrategyService:
     
     async def restore_version(
         self,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version: str
     ) -> Dict:
         """
         Restore a previous version as current.
-        
+
         Creates a new version based on the restored version.
-        
+
         Returns:
             New version record
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         # Get version to restore
         version_res = (sb.table("strategy_versions")
@@ -524,20 +524,20 @@ class StrategyService:
     
     async def deploy_version(
         self,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version: str,
         environment: str = "paper"
     ) -> Dict:
         """
         Deploy a specific version of a Strategy.
-        
+
         Deployment always references an immutable version.
-        
+
         Returns:
             Deployment record
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
+        sb = self._get_supabase(user)
         
         # Get version
         version_res = (sb.table("strategy_versions")
@@ -556,7 +556,7 @@ class StrategyService:
         deployment_data = {
             "id": deployment_id,
             "strategy_id": strategy_id,
-            "user_id": user_id,
+            "user_id": user["id"],
             "version_id": version_data["id"],
             "version": version,
             "environment": environment,
@@ -580,7 +580,7 @@ class StrategyService:
         from backend_app.core.state import app_state
         if hasattr(app_state, 'fleet'):
             success, message = await app_state.fleet.start_bot(
-                user_id=user_id,
+                user_id=user["id"],
                 symbol=strategy_res.data[0]["symbol"] if strategy_res.data else "BTC/USDT",
                 blueprint=version_data["blueprint"]
             )
@@ -611,46 +611,46 @@ class StrategyService:
     # DEPRECATED: Marketplace operations moved to library.py router
     # Use /api/library/* endpoints instead
     
-    async def delete_strategy(self, user_id: str, strategy_id: str) -> bool:
+    async def delete_strategy(self, user: dict, strategy_id: str) -> bool:
         """
         Delete Strategy and all associated data.
-        
+
         Returns:
             Success status
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
-        
+        sb = self._get_supabase(user)
+
         # Stop all running deployments first
-        await self.stop_all_deployments(user_id, strategy_id)
-        
+        await self.stop_all_deployments(user, strategy_id)
+
         # Delete strategy (cascade delete handled by database)
-        result = sb.table("strategies").delete().eq("id", strategy_id).eq("user_id", user_id).execute()
-        
-        logger.info(f"Deleted strategy {strategy_id} for user {user_id}")
+        result = sb.table("strategies").delete().eq("id", strategy_id).eq("user_id", user["id"]).execute()
+
+        logger.info(f"Deleted strategy {strategy_id} for user {user['id']}")
         return True
     
     async def clone_strategy(
         self,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         new_name: str
     ) -> Dict:
         """
         Clone a Strategy (creates new strategy with same blueprint).
-        
+
         Returns:
             New strategy record
         """
         # Get original strategy
-        original = await self.get_strategy(user_id, strategy_id)
+        original = await self.get_strategy(user, strategy_id)
         if not original:
             raise ValueError(f"Strategy {strategy_id} not found")
-        
+
         # Create new strategy with cloned blueprint
         blueprint = original["version"]["blueprint"] if original["version"] else {}
-        
+
         return await self.create_strategy(
-            user_id=user_id,
+            user=user,
             name=new_name,
             description=f"Cloned from {original['strategy']['name']}",
             blueprint=blueprint,
@@ -662,7 +662,7 @@ class StrategyService:
     
     async def deploy_strategy(
         self,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version: Optional[str] = None,
         environment: str = "paper",
@@ -670,14 +670,14 @@ class StrategyService:
     ) -> Dict:
         """
         Deploy a Strategy (creates running bot instance).
-        
+
         Returns:
             Deployment record
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
-        
+        sb = self._get_supabase(user)
+
         # Get strategy
-        strategy = await self.get_strategy(user_id, strategy_id)
+        strategy = await self.get_strategy(user, strategy_id)
         if not strategy:
             raise ValueError(f"Strategy {strategy_id} not found")
         
@@ -715,7 +715,7 @@ class StrategyService:
         deployment_data = {
             "id": deployment_id,
             "strategy_id": strategy_id,
-            "user_id": user_id,
+            "user_id": user["id"],
             "version_id": version_data["id"],
             "version": version_data["version"],
             "environment": environment,
@@ -735,7 +735,7 @@ class StrategyService:
         from backend_app.core.state import app_state
         if hasattr(app_state, 'fleet'):
             success, message = await app_state.fleet.start_bot(
-                user_id=user_id,
+                user_id=user["id"],
                 symbol=strategy["strategy"]["symbol"],
                 blueprint=version_data["blueprint"]
             )
@@ -768,29 +768,29 @@ class StrategyService:
     
     async def stop_deployment(
         self,
-        user_id: str,
+        user: dict,
         deployment_id: str
     ) -> bool:
         """
         Stop a running Strategy deployment.
-        
+
         Returns:
             Success status
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
-        
+        sb = self._get_supabase(user)
+
         # Get deployment
-        deployment_res = sb.table("strategy_deployments").select("*").eq("id", deployment_id).eq("user_id", user_id).execute()
+        deployment_res = sb.table("strategy_deployments").select("*").eq("id", deployment_id).eq("user_id", user["id"]).execute()
         if not deployment_res.data:
             return False
-        
+
         deployment = deployment_res.data[0]
-        
+
         # Stop via FleetManager
         from backend_app.core.state import app_state
         if hasattr(app_state, 'fleet'):
             success, message = await app_state.fleet.stop_bot(
-                user_id=user_id,
+                user_id=user["id"],
                 symbol=deployment["exchange_id"]
             )
         
@@ -814,40 +814,40 @@ class StrategyService:
         logger.info(f"Stopped deployment {deployment_id}")
         return True
     
-    async def stop_all_deployments(self, user_id: str, strategy_id: str) -> int:
+    async def stop_all_deployments(self, user: dict, strategy_id: str) -> int:
         """
         Stop all running deployments for a Strategy.
-        
+
         Returns:
             Number of deployments stopped
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
-        
+        sb = self._get_supabase(user)
+
         # Get all running deployments
         running_res = (sb.table("strategy_deployments")
                         .select("*")
                         .eq("strategy_id", strategy_id)
                         .eq("status", "running")
                         .execute())
-        
+
         stopped_count = 0
         for deployment in running_res.data or []:
-            if await self.stop_deployment(user_id, deployment["id"]):
+            if await self.stop_deployment(user, deployment["id"]):
                 stopped_count += 1
-        
+
         return stopped_count
     
-    async def pause_strategy(self, user_id: str, strategy_id: str) -> bool:
+    async def pause_strategy(self, user: dict, strategy_id: str) -> bool:
         """
         Pause a running Strategy (stops all deployments).
-        
+
         Returns:
             Success status
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
-        
+        sb = self._get_supabase(user)
+
         # Stop all deployments
-        await self.stop_all_deployments(user_id, strategy_id)
+        await self.stop_all_deployments(user, strategy_id)
         
         # Update strategy status
         sb.table("strategies").update({"status": StrategyStatus.PAUSED.value}).eq("id", strategy_id).execute()
@@ -855,36 +855,36 @@ class StrategyService:
         logger.info(f"Paused strategy {strategy_id}")
         return True
     
-    async def resume_strategy(self, user_id: str, strategy_id: str) -> Dict:
+    async def resume_strategy(self, user: dict, strategy_id: str) -> Dict:
         """
         Resume a paused Strategy (redeploys with current version).
-        
+
         Returns:
             Deployment record
         """
         # Deploy again with current version
-        return await self.deploy_strategy(user_id, strategy_id)
+        return await self.deploy_strategy(user, strategy_id)
     
     async def get_strategy_metrics(
         self,
-        user_id: str,
+        user: dict,
         strategy_id: str
     ) -> Dict:
         """
         Get comprehensive Strategy metrics.
-        
+
         Returns:
             All performance metrics from backend
         """
-        sb = self._get_supabase({"id": user_id, "access_token": None})
-        
+        sb = self._get_supabase(user)
+
         # Get strategy
-        strategy = await self.get_strategy(user_id, strategy_id)
+        strategy = await self.get_strategy(user, strategy_id)
         if not strategy:
             return {}
-        
+
         # Get performance from Telemetry
-        performance = await self._get_strategy_performance(user_id, strategy_id)
+        performance = await self._get_strategy_performance(user, strategy_id)
         
         # Get deployment metrics
         deployments_res = (sb.table("strategy_deployments")

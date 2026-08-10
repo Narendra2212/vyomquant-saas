@@ -149,7 +149,7 @@ class OptimizationEngine:
         self,
         strategy_package: StrategyPackage,
         config: OptimizationConfig,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_id: str,
         version: str,
@@ -157,41 +157,41 @@ class OptimizationEngine:
     ) -> List[OptimizationResult]:
         """
         Run parameter optimization.
-        
+
         PHASE A: Parameter Optimization
         Supports Grid Search, Random Search, Bayesian Optimization, Genetic Algorithm.
-        
+
         Args:
             strategy_package: Strategy Package from compiler
             config: Optimization configuration
-            user_id: User ID
+            user: User dictionary
             strategy_id: Strategy ID
             version_id: Version ID
             version: Version string
             exchange_instance: CCXT exchange instance
-            
+
         Returns:
             List of optimization results
         """
         logger.info(f"[OPTIMIZATION] Starting {config.method.value} with {config.n_iterations} iterations")
-        
+
         results = []
-        
+
         if config.method == OptimizationMethod.GRID_SEARCH:
             results = await self._grid_search(
-                strategy_package, config, user_id, strategy_id, version_id, version, exchange_instance
+                strategy_package, config, user, strategy_id, version_id, version, exchange_instance
             )
         elif config.method == OptimizationMethod.RANDOM_SEARCH:
             results = await self._random_search(
-                strategy_package, config, user_id, strategy_id, version_id, version, exchange_instance
+                strategy_package, config, user, strategy_id, version_id, version, exchange_instance
             )
         elif config.method == OptimizationMethod.BAYESIAN_OPTIMIZATION:
             results = await self._bayesian_optimization(
-                strategy_package, config, user_id, strategy_id, version_id, version, exchange_instance
+                strategy_package, config, user, strategy_id, version_id, version, exchange_instance
             )
         elif config.method == OptimizationMethod.GENETIC_ALGORITHM:
             results = await self._genetic_algorithm(
-                strategy_package, config, user_id, strategy_id, version_id, version, exchange_instance
+                strategy_package, config, user, strategy_id, version_id, version, exchange_instance
             )
         else:
             raise ValueError(f"Unsupported optimization method: {config.method}")
@@ -206,7 +206,7 @@ class OptimizationEngine:
         self,
         strategy_package: StrategyPackage,
         config: OptimizationConfig,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_id: str,
         version: str,
@@ -234,7 +234,7 @@ class OptimizationEngine:
             try:
                 backtest_result = await self.backtest_runtime.run_backtest(
                     strategy_package=modified_package,
-                    user_id=user_id,
+                    user=user,
                     strategy_id=strategy_id,
                     version_id=version_id,
                     version=version,
@@ -262,7 +262,7 @@ class OptimizationEngine:
         self,
         strategy_package: StrategyPackage,
         config: OptimizationConfig,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_id: str,
         version: str,
@@ -284,7 +284,7 @@ class OptimizationEngine:
             try:
                 backtest_result = await self.backtest_runtime.run_backtest(
                     strategy_package=modified_package,
-                    user_id=user_id,
+                    user=user,
                     strategy_id=strategy_id,
                     version_id=version_id,
                     version=version,
@@ -312,7 +312,7 @@ class OptimizationEngine:
         self,
         strategy_package: StrategyPackage,
         config: OptimizationConfig,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_id: str,
         version: str,
@@ -323,14 +323,14 @@ class OptimizationEngine:
         # In production, use scikit-optimize or Optuna
         logger.warning("[BAYESIAN] Using random search as fallback (implement scikit-optimize for full Bayesian)")
         return await self._random_search(
-            strategy_package, config, user_id, strategy_id, version_id, version, exchange_instance
+            strategy_package, config, user, strategy_id, version_id, version, exchange_instance
         )
     
     async def _genetic_algorithm(
         self,
         strategy_package: StrategyPackage,
         config: OptimizationConfig,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_id: str,
         version: str,
@@ -341,14 +341,14 @@ class OptimizationEngine:
         # In production, use DEAP or similar library
         logger.warning("[GENETIC] Using random search as fallback (implement DEAP for full GA)")
         return await self._random_search(
-            strategy_package, config, user_id, strategy_id, version_id, version, exchange_instance
+            strategy_package, config, user, strategy_id, version_id, version, exchange_instance
         )
     
     async def run_walk_forward_analysis(
         self,
         strategy_package: StrategyPackage,
         config: OptimizationConfig,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_id: str,
         version: str,
@@ -377,13 +377,13 @@ class OptimizationEngine:
             # Train on training window
             train_metrics = await self._evaluate_on_window(
                 strategy_package, best_params, train_start, train_end,
-                user_id, strategy_id, version_id, version, exchange_instance
+                user, strategy_id, version_id, version, exchange_instance
             )
-            
+
             # Test on testing window
             test_metrics = await self._evaluate_on_window(
                 strategy_package, best_params, test_start, test_end,
-                user_id, strategy_id, version_id, version, exchange_instance
+                user, strategy_id, version_id, version, exchange_instance
             )
             
             result = WalkForwardResult(
@@ -406,7 +406,7 @@ class OptimizationEngine:
         self,
         strategy_package: StrategyPackage,
         config: OptimizationConfig,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_id: str,
         version: str,
@@ -445,7 +445,7 @@ class OptimizationEngine:
             try:
                 backtest_result = await self.backtest_runtime.run_backtest(
                     strategy_package=strategy_package,
-                    user_id=user_id,
+                    user=user,
                     strategy_id=strategy_id,
                     version_id=version_id,
                     version=version,
@@ -482,7 +482,7 @@ class OptimizationEngine:
         self,
         strategy_package: StrategyPackage,
         config: OptimizationConfig,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_id: str,
         version: str,
@@ -521,7 +521,7 @@ class OptimizationEngine:
                         
                         backtest_result = await self.backtest_runtime.run_backtest(
                             strategy_package=modified_package,
-                            user_id=user_id,
+                            user=user,
                             strategy_id=strategy_id,
                             version_id=version_id,
                             version=version,
@@ -554,7 +554,7 @@ class OptimizationEngine:
         self,
         strategy_package: StrategyPackage,
         config: OptimizationConfig,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_id: str,
         version: str,
@@ -576,7 +576,7 @@ class OptimizationEngine:
         
         strategy_result = await self.backtest_runtime.run_backtest(
             strategy_package=modified_package,
-            user_id=user_id,
+            user=user,
             strategy_id=strategy_id,
             version_id=version_id,
             version=version,
@@ -587,7 +587,7 @@ class OptimizationEngine:
         
         # Run buy & hold benchmark
         buy_hold_result = await self._run_buy_hold_benchmark(
-            config, user_id, strategy_id, exchange_instance
+            config, user, strategy_id, exchange_instance
         )
         
         comparison = {
@@ -603,7 +603,7 @@ class OptimizationEngine:
         self,
         strategy_package: StrategyPackage,
         config: OptimizationConfig,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_id: str,
         version: str,
@@ -616,26 +616,26 @@ class OptimizationEngine:
         Compiles all optimization results into a comprehensive report.
         """
         logger.info(f"[RESEARCH] Generating research report")
-        
+
         # Run all analyses
         optimization_results = await self.run_optimization(
-            strategy_package, config, user_id, strategy_id, version_id, version, exchange_instance
+            strategy_package, config, user, strategy_id, version_id, version, exchange_instance
         )
-        
+
         walk_forward_results = await self.run_walk_forward_analysis(
-            strategy_package, config, user_id, strategy_id, version_id, version, exchange_instance
+            strategy_package, config, user, strategy_id, version_id, version, exchange_instance
         )
-        
+
         monte_carlo_results = await self.run_monte_carlo_simulation(
-            strategy_package, config, user_id, strategy_id, version_id, version, exchange_instance
+            strategy_package, config, user, strategy_id, version_id, version, exchange_instance
         )
-        
+
         sensitivity_results = await self.run_sensitivity_analysis(
-            strategy_package, config, user_id, strategy_id, version_id, version, exchange_instance
+            strategy_package, config, user, strategy_id, version_id, version, exchange_instance
         )
-        
+
         benchmark_comparison = await self.run_benchmark_comparison(
-            strategy_package, config, user_id, strategy_id, version_id, version, exchange_instance
+            strategy_package, config, user, strategy_id, version_id, version, exchange_instance
         )
         
         # Calculate strategy score
@@ -758,7 +758,7 @@ class OptimizationEngine:
         params: Dict,
         start_date: str,
         end_date: str,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_id: str,
         version: str,
@@ -769,7 +769,7 @@ class OptimizationEngine:
         
         result = await self.backtest_runtime.run_backtest(
             strategy_package=modified_package,
-            user_id=user_id,
+            user=user,
             strategy_id=strategy_id,
             version_id=version_id,
             version=version,
@@ -837,7 +837,7 @@ class OptimizationEngine:
     async def _run_buy_hold_benchmark(
         self,
         config: OptimizationConfig,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         exchange_instance
     ) -> Dict:

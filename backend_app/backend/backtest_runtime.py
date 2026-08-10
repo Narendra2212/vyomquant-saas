@@ -109,7 +109,7 @@ class BacktestRuntime:
     async def run_backtest(
         self,
         strategy_package: StrategyPackage,
-        user_id: str,
+        user: dict,
         strategy_id: str,
         version_id: str,
         version: str,
@@ -122,7 +122,7 @@ class BacktestRuntime:
         
         Args:
             strategy_package: Compiled Strategy Package from compiler
-            user_id: User ID
+            user: User dictionary
             strategy_id: Strategy ID
             version_id: Version ID
             version: Version string
@@ -140,7 +140,7 @@ class BacktestRuntime:
         
         # PHASE K: Create backtest record
         backtest_record = await self.backtest_service.create_backtest(
-            user_id=user_id,
+            user=user,
             strategy_id=strategy_id,
             version_id=version_id,
             version=version,
@@ -260,7 +260,7 @@ class BacktestRuntime:
             
             # PHASE K: Update backtest with results
             await self.backtest_service.update_backtest_results(
-                user_id=user_id,
+                user=user,
                 backtest_id=backtest_id,
                 results=results
             )
@@ -277,7 +277,7 @@ class BacktestRuntime:
             logger.error(f"[BACKTEST] Failed: {e}")
             # Update backtest with error status
             await self.backtest_service.update_backtest_results(
-                user_id=user_id,
+                user=user,
                 backtest_id=backtest_id,
                 results={
                     "status": "failed",

@@ -2231,7 +2231,7 @@ async def walk_forward_optimization(
         walk_forward_results = await optimization_engine.run_walk_forward_analysis(
             strategy_package=strategy_package,
             config=config,
-            user_id=user["id"],
+            user=user,
             strategy_id="walk-forward-analysis",
             version_id=None,
             version="v1.0",
