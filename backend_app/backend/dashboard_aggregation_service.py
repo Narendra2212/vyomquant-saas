@@ -77,9 +77,10 @@ class DashboardAggregationService:
             # Get subscription tier from profile
             subscription_tier = profile.get("subscription_tier", "free")
             
-            # Calculate usage metrics
-            strategies_used = len(await self.get_strategies(user))
-            active_bots = len([s for s in await self.get_strategies(user) if s["status"] == "active"])
+            # Calculate usage metrics (fetch strategies once to avoid duplicate query)
+            strategies = await self.get_strategies(user)
+            strategies_used = len(strategies)
+            active_bots = len([s for s in strategies if s["status"] == "active"])
             
             # Get tier limits (these should come from subscription engine)
             tier_limits = {
@@ -267,22 +268,27 @@ class DashboardAggregationService:
                 "lifetime_earnings": 0.0
             }
     
-    async def get_risk_data(self, user: dict) -> Dict:
+    async def get_risk_data(self, user: dict, portfolio: Optional[Dict] = None) -> Dict:
         """
         Get risk management data.
         
+        Args:
+            user: User dict
+            portfolio: Optional portfolio data (to avoid duplicate query if already fetched)
+
         Returns:
             Risk settings, current risk level, circuit breaker status
         """
         try:
             sb = self._get_supabase(user)
-            
+
             # Get risk settings
             res = sb.table("risk_settings").select("*").eq("user_id", user["id"]).execute()
             settings = res.data[0] if res.data else {}
-            
-            # Get current risk metrics from portfolio
-            portfolio = await self.get_portfolio_overview(user)
+
+            # Get current risk metrics from portfolio (use provided portfolio if available)
+            if portfolio is None:
+                portfolio = await self.get_portfolio_overview(user)
             current_drawdown = abs(float(portfolio.get("pnl_pct", 0)))
             
             # Determine risk level
@@ -561,19 +567,21 @@ class DashboardAggregationService:
                 self.get_exchange_data(user),
                 self.get_notification_data(user),
                 self.get_referral_data(user),
-                self.get_risk_data(user),
                 self.get_marketplace_data(user),
                 return_exceptions=True
             )
             
             # Unpack results with error handling
-            portfolio, equity, strategies, insights, signals, health, subscription, exchange, notifications, referral, risk, marketplace = results
-            
+            portfolio, equity, strategies, insights, signals, health, subscription, exchange, notifications, referral, marketplace = results
+
+            # Get risk data with the already-fetched portfolio (to avoid duplicate query)
+            risk = await self.get_risk_data(user, portfolio)
+
             # Handle exceptions with fallbacks
             if isinstance(portfolio, Exception):
                 logger.error(f"Portfolio fetch failed: {portfolio}")
                 portfolio = {"total_equity": "0", "total_pnl": "0", "pnl_pct": "0", "total_exposure": "0", "available_balance": "0"}
-            
+
             if isinstance(equity, Exception):
                 logger.error(f"Equity curve fetch failed: {equity}")
                 equity = []
