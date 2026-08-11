@@ -13,6 +13,7 @@ Referral, Signal Trace, Support, Health
 import asyncio
 import logging
 import re
+import time
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -42,6 +43,42 @@ class DashboardAggregationService:
         self._telemetry = None
         self._supabase = None
     
+    async def _timed_operation(self, operation_name: str, operation):
+        """
+        Wrapper coroutine to measure operation duration while preserving exact execution semantics.
+
+        This wrapper:
+        - Records monotonic start time
+        - Awaits the exact original coroutine
+        - Records monotonic end time
+        - Logs duration
+        - Returns the exact original result
+        - Re-raises any exceptions without masking
+
+        Args:
+            operation_name: Name of the operation for logging
+            operation: The coroutine to measure
+
+        Returns:
+            The exact result from the original operation
+
+        Raises:
+            Any exception raised by the original operation (not masked)
+        """
+        start = time.perf_counter()
+        try:
+            result = await operation
+            return result
+        finally:
+            duration_ms = (time.perf_counter() - start) * 1000
+            logger.info(
+                f"dashboard_operation_timing",
+                extra={
+                    "operation": operation_name,
+                    "duration_ms": round(duration_ms, 2),
+                },
+            )
+
     def _get_telemetry(self):
         """Get TelemetryEngine instance."""
         if self._telemetry is None:
@@ -554,28 +591,47 @@ class DashboardAggregationService:
             - exchange
             - recent_activity
         """
+        dashboard_start = time.perf_counter()
         try:
-            # Parallel data fetching from all modules
+            # Parallel data fetching from all modules with timing wrappers
+            gather_start = time.perf_counter()
             results = await asyncio.gather(
-                self.get_portfolio_overview(user),
-                self.get_equity_curve(user, equity_days),
-                self.get_strategies(user),
-                self.get_strategy_insights(user),
-                self.get_recent_signals(user),
-                self.get_health_status(user),
-                self.get_subscription_data(user),
-                self.get_exchange_data(user),
-                self.get_notification_data(user),
-                self.get_referral_data(user),
-                self.get_marketplace_data(user),
+                self._timed_operation("get_portfolio_overview", self.get_portfolio_overview(user)),
+                self._timed_operation("get_equity_curve", self.get_equity_curve(user, equity_days)),
+                self._timed_operation("get_strategies", self.get_strategies(user)),
+                self._timed_operation("get_strategy_insights", self.get_strategy_insights(user)),
+                self._timed_operation("get_recent_signals", self.get_recent_signals(user)),
+                self._timed_operation("get_health_status", self.get_health_status(user)),
+                self._timed_operation("get_subscription_data", self.get_subscription_data(user)),
+                self._timed_operation("get_exchange_data", self.get_exchange_data(user)),
+                self._timed_operation("get_notification_data", self.get_notification_data(user)),
+                self._timed_operation("get_referral_data", self.get_referral_data(user)),
+                self._timed_operation("get_marketplace_data", self.get_marketplace_data(user)),
                 return_exceptions=True
+            )
+            gather_duration_ms = (time.perf_counter() - gather_start) * 1000
+            logger.info(
+                f"dashboard_gather_timing",
+                extra={
+                    "operation": "asyncio_gather",
+                    "duration_ms": round(gather_duration_ms, 2),
+                },
             )
             
             # Unpack results with error handling
             portfolio, equity, strategies, insights, signals, health, subscription, exchange, notifications, referral, marketplace = results
 
             # Get risk data with the already-fetched portfolio (to avoid duplicate query)
+            risk_start = time.perf_counter()
             risk = await self.get_risk_data(user, portfolio)
+            risk_duration_ms = (time.perf_counter() - risk_start) * 1000
+            logger.info(
+                f"dashboard_operation_timing",
+                extra={
+                    "operation": "get_risk_data",
+                    "duration_ms": round(risk_duration_ms, 2),
+                },
+            )
 
             # Handle exceptions with fallbacks
             if isinstance(portfolio, Exception):
@@ -631,6 +687,14 @@ class DashboardAggregationService:
             paused_strategies = [s for s in strategies if s["status"] == "paused"]
             
             # Build complete dashboard response
+            dashboard_duration_ms = (time.perf_counter() - dashboard_start) * 1000
+            logger.info(
+                f"dashboard_total_timing",
+                extra={
+                    "operation": "get_dashboard_data",
+                    "duration_ms": round(dashboard_duration_ms, 2),
+                },
+            )
             return {
                 "overview": {
                     "total_value": float(portfolio.get("total_equity", 0)),
