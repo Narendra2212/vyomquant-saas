@@ -97,25 +97,32 @@ class DashboardAggregationService:
             return str(uid)
         raise ValueError(f"Unsafe user_id: '{uid}'")
     
-    async def get_subscription_data(self, user: dict) -> Dict:
+    async def get_subscription_data(self, user: dict, strategies_task: Optional['asyncio.Task'] = None) -> Dict:
         """
         Get subscription and billing data.
-        
+
+        Args:
+            user: User dict
+            strategies_task: Optional request-local task for strategies fetch. If provided, will await it instead of fetching.
+
         Returns:
             Subscription tier, usage metrics, billing status
         """
         try:
             sb = self._get_supabase(user)
-            
+
             # Get user profile with subscription info
             res = sb.table("profiles").select("*").eq("id", user["id"]).execute()
             profile = res.data[0] if res.data else {}
-            
+
             # Get subscription tier from profile
             subscription_tier = profile.get("subscription_tier", "free")
-            
-            # Calculate usage metrics (fetch strategies once to avoid duplicate query)
-            strategies = await self.get_strategies(user)
+
+            # Calculate usage metrics (use provided task if available, otherwise fetch directly)
+            if strategies_task is not None:
+                strategies = await strategies_task
+            else:
+                strategies = await self.get_strategies(user)
             strategies_used = len(strategies)
             active_bots = len([s for s in strategies if s["status"] == "active"])
             
@@ -477,14 +484,22 @@ class DashboardAggregationService:
         
         return enriched
     
-    async def get_strategy_insights(self, user: dict) -> List[Dict]:
+    async def get_strategy_insights(self, user: dict, strategies_task: Optional['asyncio.Task'] = None) -> List[Dict]:
         """
         Calculate trading insights from strategy state.
-        
+
+        Args:
+            user: User dict
+            strategies_task: Optional request-local task for strategies fetch. If provided, will await it instead of fetching.
+
         Returns:
             List of insight objects with type, text, action
         """
-        strategies = await self.get_strategies(user)
+        # Use provided task if available, otherwise fetch directly
+        if strategies_task is not None:
+            strategies = await strategies_task
+        else:
+            strategies = await self.get_strategies(user)
         
         insights = []
         
@@ -593,16 +608,21 @@ class DashboardAggregationService:
         """
         dashboard_start = time.perf_counter()
         try:
+            # Create request-local shared task for strategies fetch
+            # This task starts executing immediately but doesn't block gather
+            strategies_start = time.perf_counter()
+            strategies_task = asyncio.create_task(self.get_strategies(user))
+
             # Parallel data fetching from all modules with timing wrappers
+            # Pass the shared task to insights and subscription to avoid duplicate queries
             gather_start = time.perf_counter()
             results = await asyncio.gather(
                 self._timed_operation("get_portfolio_overview", self.get_portfolio_overview(user)),
                 self._timed_operation("get_equity_curve", self.get_equity_curve(user, equity_days)),
-                self._timed_operation("get_strategies", self.get_strategies(user)),
-                self._timed_operation("get_strategy_insights", self.get_strategy_insights(user)),
+                self._timed_operation("get_strategy_insights", self.get_strategy_insights(user, strategies_task)),
                 self._timed_operation("get_recent_signals", self.get_recent_signals(user)),
                 self._timed_operation("get_health_status", self.get_health_status(user)),
-                self._timed_operation("get_subscription_data", self.get_subscription_data(user)),
+                self._timed_operation("get_subscription_data", self.get_subscription_data(user, strategies_task)),
                 self._timed_operation("get_exchange_data", self.get_exchange_data(user)),
                 self._timed_operation("get_notification_data", self.get_notification_data(user)),
                 self._timed_operation("get_referral_data", self.get_referral_data(user)),
@@ -617,9 +637,20 @@ class DashboardAggregationService:
                     "duration_ms": round(gather_duration_ms, 2),
                 },
             )
-            
+
             # Unpack results with error handling
-            portfolio, equity, strategies, insights, signals, health, subscription, exchange, notifications, referral, marketplace = results
+            portfolio, equity, insights, signals, health, subscription, exchange, notifications, referral, marketplace = results
+
+            # Await the shared strategies task to get the result and log timing
+            strategies = await strategies_task
+            strategies_duration_ms = (time.perf_counter() - strategies_start) * 1000
+            logger.info(
+                f"dashboard_operation_timing",
+                extra={
+                    "operation": "get_strategies",
+                    "duration_ms": round(strategies_duration_ms, 2),
+                },
+            )
 
             # Get risk data with the already-fetched portfolio (to avoid duplicate query)
             risk_start = time.perf_counter()
@@ -641,11 +672,11 @@ class DashboardAggregationService:
             if isinstance(equity, Exception):
                 logger.error(f"Equity curve fetch failed: {equity}")
                 equity = []
-            
-            if isinstance(strategies, Exception):
-                logger.error(f"Strategies fetch failed: {strategies}")
-                strategies = []
-            
+
+            # Strategies task exception handling: if task failed, let it propagate
+            # Do NOT convert database errors to [] - preserve exception semantics
+            # The await on line 645 will raise if the task failed
+
             if isinstance(insights, Exception):
                 logger.error(f"Insights generation failed: {insights}")
                 insights = []
