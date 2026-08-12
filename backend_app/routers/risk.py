@@ -47,16 +47,17 @@ def _safe_uid(uid: str) -> str:
 async def get_risk_settings(user: dict = Depends(get_current_user)):
     # Try to get from cache first
     try:
-        from backend_app.core.state import app_state
-        cache_key = f"risk_settings:{user['id']}"
-        if hasattr(app_state, 'redis_client') and app_state.redis_client:
-            cached = await app_state.redis_client.get(cache_key)
+        from backend_app.core.cache.redis_manager import redis_manager
+        redis_client = await redis_manager.get_client()
+        if redis_client:
+            cache_key = f"risk_settings:{user['id']}"
+            cached = await redis_client.get(cache_key)
             if cached:
                 import json
                 return json.loads(cached)
     except Exception as e:
         logger.warning(f"Cache read failed for user {user['id']}: {e}")
-    
+
     # Fallback to database
     sb = _sb(user)
     if not sb:
@@ -77,17 +78,18 @@ async def get_risk_settings(user: dict = Depends(get_current_user)):
             "kill_switches": [],
         }
     )
-    
+
     # Cache the result
     try:
-        from backend_app.core.state import app_state
-        cache_key = f"risk_settings:{user['id']}"
-        if hasattr(app_state, 'redis_client') and app_state.redis_client:
+        from backend_app.core.cache.redis_manager import redis_manager
+        redis_client = await redis_manager.get_client()
+        if redis_client:
+            cache_key = f"risk_settings:{user['id']}"
             import json
-            await app_state.redis_client.setex(cache_key, RISK_SETTINGS_CACHE_TTL, json.dumps(result))
+            await redis_client.setex(cache_key, RISK_SETTINGS_CACHE_TTL, json.dumps(result))
     except Exception as e:
         logger.warning(f"Cache write failed for user {user['id']}: {e}")
-    
+
     return result
 
 
@@ -104,16 +106,17 @@ async def update_risk_settings(
         "kill_switches": [k.model_dump() for k in body.kill_switches],
     }
     _sb(user).table("risk_settings").upsert(data, on_conflict="user_id").execute()
-    
+
     # Invalidate cache for this user
     try:
-        from backend_app.core.state import app_state
-        cache_key = f"risk_settings:{user['id']}"
-        if hasattr(app_state, 'redis_client') and app_state.redis_client:
-            await app_state.redis_client.delete(cache_key)
+        from backend_app.core.cache.redis_manager import redis_manager
+        redis_client = await redis_manager.get_client()
+        if redis_client:
+            cache_key = f"risk_settings:{user['id']}"
+            await redis_client.delete(cache_key)
     except Exception as e:
         logger.warning(f"Failed to invalidate cache for user {user['id']}: {e}")
-    
+
     return {"status": "ok"}
 
 

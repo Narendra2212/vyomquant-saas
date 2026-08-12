@@ -805,6 +805,8 @@ async def get_available_blocks():
     }
 
 
+@router.get("/")
+@limiter.limit("100/minute")
 async def list_strategies(user: dict = Depends(get_current_user)):
     """Returns all strategies saved in Supabase for this user."""
     try:
@@ -833,12 +835,12 @@ async def list_strategies(user: dict = Depends(get_current_user)):
                 item["dag_updated_at"] = bl.pop("_dag_updated_at", None)
                 item["dag_hash"] = bl.pop("_dag_hash", None)
                 item["buy_logic"] = bl
-        return results
+        return {"strategies": results, "total": len(results)}
     except Exception as e:
         import traceback
         logger.error(f"[STRATEGIES] Error listing strategies: {e}")
         traceback.print_exc()
-        return {"error": str(e)}
+        return {"strategies": [], "total": 0, "error": str(e)}
 
 
 # ── POST /api/strategies ─────────────────────────────────────────────────
@@ -1360,7 +1362,7 @@ async def train_ml_strategy(
                                 if not node.get("model_id"):
                                     node["model_id"] = path  # Use path as model_id
                                     ml_nodes_updated = True
-                        
+
                         if ml_nodes_updated:
                             update_dag_query = (
                                 sb.table("strategies")
