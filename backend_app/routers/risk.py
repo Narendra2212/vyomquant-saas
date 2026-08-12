@@ -67,17 +67,24 @@ async def get_risk_settings(user: dict = Depends(get_current_user)):
             "max_leverage": 3,
             "kill_switches": [],
         }
-    resp = sb.table("risk_settings").select("*").eq("user_id", user["id"]).execute()
-    result = (
-        resp.data[0]
-        if resp.data
-        else {
-            "max_daily_loss": 500,
-            "max_positions": 10,
-            "max_leverage": 3,
-            "kill_switches": [],
-        }
-    )
+    try:
+        resp = sb.table("risk_settings").select("*").eq("user_id", user["id"]).execute()
+        result = (
+            resp.data[0]
+            if resp.data
+            else {
+                "max_daily_loss": 500,
+                "max_positions": 10,
+                "max_leverage": 3,
+                "kill_switches": [],
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to fetch risk settings for user {user['id']}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to retrieve risk settings. Please try again later."
+        )
 
     # Cache the result
     try:

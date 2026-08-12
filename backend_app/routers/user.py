@@ -38,12 +38,19 @@ async def get_profile(
 ):
     if not supabase:
         return {"id": user["id"], "email": user.get("email"), "role": user.get("role", "user")}
-    resp = supabase.table("profiles").select("*").eq("id", user["id"]).execute()
-    profile = resp.data[0] if resp.data else {}
-    # Ensure role is always present from auth token if not in profiles table
-    if profile and "role" not in profile:
-        profile["role"] = user.get("role", "user")
-    return profile
+    try:
+        resp = supabase.table("profiles").select("*").eq("id", user["id"]).execute()
+        profile = resp.data[0] if resp.data else {}
+        # Ensure role is always present from auth token if not in profiles table
+        if profile and "role" not in profile:
+            profile["role"] = user.get("role", "user")
+        return profile
+    except Exception as e:
+        logger.error(f"Failed to fetch profile for user {user['id']}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to retrieve profile. Please try again later."
+        )
 
 
 @router.put("/user/profile")
@@ -77,13 +84,20 @@ async def get_notif_settings(
 ):
     if not supabase:
         return {}
-    resp = (
-        supabase.table("notification_settings")
-        .select("*")
-        .eq("user_id", user["id"])
-        .execute()
-    )
-    return resp.data[0] if resp.data else {}
+    try:
+        resp = (
+            supabase.table("notification_settings")
+            .select("*")
+            .eq("user_id", user["id"])
+            .execute()
+        )
+        return resp.data[0] if resp.data else {}
+    except Exception as e:
+        logger.error(f"Failed to fetch notification settings for user {user['id']}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to retrieve notification settings. Please try again later."
+        )
 
 
 @router.put("/notifications/settings")
@@ -111,12 +125,19 @@ async def get_security_logs(
 ):
     if not supabase:
         return []
-    resp = (
-        supabase.table("security_logs")
-        .select("*")
-        .eq("user_id", user["id"])
-        .order("created_at", desc=True)
-        .limit(limit)
-        .execute()
-    )
-    return resp.data
+    try:
+        resp = (
+            supabase.table("security_logs")
+            .select("*")
+            .eq("user_id", user["id"])
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return resp.data
+    except Exception as e:
+        logger.error(f"Failed to fetch security logs for user {user['id']}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to retrieve security logs. Please try again later."
+        )

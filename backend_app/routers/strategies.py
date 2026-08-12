@@ -837,9 +837,12 @@ async def list_strategies(user: dict = Depends(get_current_user)):
         return {"strategies": results, "total": len(results)}
     except Exception as e:
         import traceback
-        logger.error(f"[STRATEGIES] Error listing strategies: {e}")
+        logger.error(f"[STRATEGIES] Error listing strategies for user {user['id']}: {e}")
         traceback.print_exc()
-        return {"strategies": [], "total": 0, "error": str(e)}
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to retrieve strategies. Please try again later."
+        )
 
 
 # ── POST /api/strategies ─────────────────────────────────────────────────
