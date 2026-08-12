@@ -137,7 +137,6 @@ def create_request_supabase(access_token: str):
         from supabase import create_client
         client = create_client(supabase_url, supabase_anon)
         # Inject the user's JWT so RLS auth.uid() resolves correctly
-        client.auth.set_session(access_token=access_token, refresh_token="")
         client.postgrest.auth(access_token)
         return client
     except Exception as e:
