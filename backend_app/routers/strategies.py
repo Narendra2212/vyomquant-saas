@@ -806,7 +806,6 @@ async def get_available_blocks():
 
 
 @router.get("/")
-@limiter.limit("100/minute")
 async def list_strategies(user: dict = Depends(get_current_user)):
     """Returns all strategies saved in Supabase for this user."""
     try:
