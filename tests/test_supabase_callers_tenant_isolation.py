@@ -54,10 +54,10 @@ async def test_all_services_async_supabase_tenant_isolation():
 
     # Transport sharing check
     transport = await get_shared_async_transport()
-    assert sb_sig_a._transport is transport
-    assert sb_bt_b._transport is transport
-    assert sb_st_a._transport is transport
-    assert sb_dash_b._transport is transport
+    assert sb_sig_a._shared_transport is transport
+    assert sb_bt_b._shared_transport is transport
+    assert sb_st_a._shared_transport is transport
+    assert sb_dash_b._shared_transport is transport
 
 
 @pytest.mark.asyncio

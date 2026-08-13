@@ -38,8 +38,18 @@ import ccxt
 from backend_app.backend.optimization_engine import get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
 from backend_app.backend.backtest_runtime import get_backtest_runtime
 
+import inspect
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+async def _persist_trained_model_path(sb: Any, user_id: str, strategy_id: str, ml_model_path: str) -> bool:
+    """Persist trained ML model path to strategy record filtered by strategy_id and user_id."""
+    res = sb.table("strategies").update({"ml_model_path": ml_model_path}).eq("id", strategy_id).eq("user_id", user_id).execute()
+    if inspect.isawaitable(res):
+        await res
+    return True
 
 
 # ═══════════════════════════════════════════════════════════════════════════
