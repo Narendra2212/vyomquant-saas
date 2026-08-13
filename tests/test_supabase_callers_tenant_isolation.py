@@ -53,7 +53,7 @@ async def test_all_services_async_supabase_tenant_isolation():
     assert sb_dash_b.session.headers["Authorization"] == "Bearer token_user_b_bbb"
 
     # Transport sharing check
-    transport = get_shared_async_transport()
+    transport = await get_shared_async_transport()
     assert sb_sig_a._transport is transport
     assert sb_bt_b._transport is transport
     assert sb_st_a._transport is transport
