@@ -9,6 +9,7 @@ Replaces Bot Monitor with Strategy-centric architecture.
 A deployed Strategy IS the running trading bot.
 """
 
+import inspect
 import logging
 from typing import List, Optional
 from uuid import uuid4
@@ -1215,17 +1216,20 @@ async def list_research_reports(request: Request,
     """
     List all research reports for a Strategy.
     """
+    import inspect
     try:
-        from backend_app.core.dependencies import create_request_supabase
+        from backend_app.core.dependencies import create_request_supabase_async
         
-        sb = create_request_supabase(user.get("access_token"))
+        sb_res = create_request_supabase_async(user.get("access_token"))
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        result = (sb.table("strategy_research_reports")
+        q = (sb.table("strategy_research_reports")
                  .select("*")
                  .eq("strategy_id", strategy_id)
                  .eq("user_id", user["id"])
                  .order("created_at", desc=True)
                  .execute())
+        result = await q if inspect.isawaitable(q) else q
         
         return {
             "strategy_id": strategy_id,
@@ -1249,12 +1253,15 @@ async def get_research_report(request: Request,
     """
     Get complete research report.
     """
+    import inspect
     try:
-        from backend_app.core.dependencies import create_request_supabase
+        from backend_app.core.dependencies import create_request_supabase_async
         
-        sb = create_request_supabase(user.get("access_token"))
+        sb_res = create_request_supabase_async(user.get("access_token"))
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        result = sb.table("strategy_research_reports").select("*").eq("id", report_id).eq("user_id", user["id"]).execute()
+        q = sb.table("strategy_research_reports").select("*").eq("id", report_id).eq("user_id", user["id"]).execute()
+        result = await q if inspect.isawaitable(q) else q
         
         if not result.data:
             raise HTTPException(
@@ -1299,6 +1306,7 @@ async def deploy_strategy(request: Request,
     
     Deployment executes ONLY the Strategy Package from compiler.
     """
+    import inspect
     try:
         # Get strategy to retrieve version info
         strategy_service = await get_strategy_service()
@@ -1311,17 +1319,19 @@ async def deploy_strategy(request: Request,
             )
         
         # PHASE K: Check deployment gate - strategy must be approved by research
-        from backend_app.core.dependencies import create_request_supabase
-        sb = create_request_supabase(user.get("access_token"))
+        from backend_app.core.dependencies import create_request_supabase_async
+        sb_res = create_request_supabase_async(user.get("access_token"))
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         # Get latest research report
-        research_result = (sb.table("strategy_research_reports")
+        q1 = (sb.table("strategy_research_reports")
                          .select("*")
                          .eq("strategy_id", strategy_id)
                          .eq("user_id", user["id"])
                          .order("created_at", desc=True)
                          .limit(1)
                          .execute())
+        research_result = await q1 if inspect.isawaitable(q1) else q1
         
         if not research_result.data or not research_result.data[0].get("deployment_approved"):
             raise HTTPException(
@@ -1390,7 +1400,9 @@ async def deploy_strategy(request: Request,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
-        sb.table("strategy_deployments").insert(deployment_data).execute()
+        q2 = sb.table("strategy_deployments").insert(deployment_data).execute()
+        if inspect.isawaitable(q2):
+            await q2
         
         logger.info(f"[DEPLOYMENT] Strategy {strategy_id} deployed with ID {deployment_config.deployment_id}")
         
@@ -1417,15 +1429,19 @@ async def pause_deployment(request: Request,
     user: dict = Depends(get_current_user)
 ):
     """Pause a running deployment."""
+    import inspect
     try:
         deployment_manager = get_deployment_manager()
         deployment_state = await deployment_manager.pause_deployment(deployment_id)
         
         # Update database
-        from backend_app.core.dependencies import create_request_supabase
-        sb = create_request_supabase(user.get("access_token"))
+        from backend_app.core.dependencies import create_request_supabase_async
+        sb_res = create_request_supabase_async(user.get("access_token"))
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        sb.table("strategy_deployments").update({"status": "paused"}).eq("id", deployment_id).execute()
+        q = sb.table("strategy_deployments").update({"status": "paused"}).eq("id", deployment_id).execute()
+        if inspect.isawaitable(q):
+            await q
         
         return {"status": "paused", "deployment_state": deployment_state}
     except Exception as e:
@@ -1443,15 +1459,19 @@ async def resume_deployment(request: Request,
     user: dict = Depends(get_current_user)
 ):
     """Resume a paused deployment."""
+    import inspect
     try:
         deployment_manager = get_deployment_manager()
         deployment_state = await deployment_manager.resume_deployment(deployment_id)
         
         # Update database
-        from backend_app.core.dependencies import create_request_supabase
-        sb = create_request_supabase(user.get("access_token"))
+        from backend_app.core.dependencies import create_request_supabase_async
+        sb_res = create_request_supabase_async(user.get("access_token"))
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        sb.table("strategy_deployments").update({"status": "running"}).eq("id", deployment_id).execute()
+        q = sb.table("strategy_deployments").update({"status": "running"}).eq("id", deployment_id).execute()
+        if inspect.isawaitable(q):
+            await q
         
         return {"status": "resumed", "deployment_state": deployment_state}
     except Exception as e:
@@ -1469,15 +1489,19 @@ async def restart_deployment(request: Request,
     user: dict = Depends(get_current_user)
 ):
     """Restart a deployment."""
+    import inspect
     try:
         deployment_manager = get_deployment_manager()
         deployment_state = await deployment_manager.restart_deployment(deployment_id)
         
         # Update database
-        from backend_app.core.dependencies import create_request_supabase
-        sb = create_request_supabase(user.get("access_token"))
+        from backend_app.core.dependencies import create_request_supabase_async
+        sb_res = create_request_supabase_async(user.get("access_token"))
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        sb.table("strategy_deployments").update({"status": "running"}).eq("id", deployment_id).execute()
+        q = sb.table("strategy_deployments").update({"status": "running"}).eq("id", deployment_id).execute()
+        if inspect.isawaitable(q):
+            await q
         
         return {"status": "restarted", "deployment_state": deployment_state}
     except Exception as e:
@@ -1500,10 +1524,14 @@ async def stop_deployment(request: Request,
         deployment_state = await deployment_manager.stop_deployment(deployment_id)
         
         # Update database
-        from backend_app.core.dependencies import create_request_supabase
-        sb = create_request_supabase(user.get("access_token"))
+        from datetime import datetime, timezone
+        from backend_app.core.dependencies import create_request_supabase_async
+        sb_res = create_request_supabase_async(user.get("access_token"))
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        sb.table("strategy_deployments").update({"status": "stopped", "stopped_at": datetime.now(timezone.utc).isoformat()}).eq("id", deployment_id).execute()
+        q = sb.table("strategy_deployments").update({"status": "stopped", "stopped_at": datetime.now(timezone.utc).isoformat()}).eq("id", deployment_id).execute()
+        if inspect.isawaitable(q):
+            await q
         
         return {"status": "stopped", "deployment_state": deployment_state}
     except Exception as e:
