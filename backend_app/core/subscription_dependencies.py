@@ -5,6 +5,7 @@ Provides FastAPI dependency injection functions for subscription checks.
 All entitlement checks should use these dependencies.
 """
 
+import inspect
 import logging
 from typing import Any, Dict, Optional
 
@@ -25,13 +26,14 @@ logger = logging.getLogger("SubscriptionDependencies")
 async def _get_user_plan(user_id: str, supabase: Any) -> str:
     """Get user's plan from Supabase."""
     try:
-        resp = (
+        res = (
             supabase.table("profiles")
             .select("subscription_tier")
             .eq("id", user_id)
             .execute()
         )
-        if resp.data:
+        resp = await res if inspect.isawaitable(res) else res
+        if resp and hasattr(resp, "data") and resp.data:
             tier = resp.data[0].get("subscription_tier", Plan.FREE.value)
             # Migrate old plan key if necessary
             return SubscriptionEngine.migrate_plan_key(tier)

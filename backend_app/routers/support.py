@@ -9,6 +9,7 @@ Endpoints:
   PUT  /api/support/tickets/{ticket_id} — Update ticket (close/reopen)
 """
 
+import inspect
 import logging
 from datetime import datetime
 from typing import Optional
@@ -43,11 +44,13 @@ async def get_tickets(
         if status:
             query = query.eq("status", status)
         
-        resp = query.order("created_at", desc=True).limit(limit).offset(offset).execute()
+        res = query.order("created_at", desc=True).limit(limit).offset(offset).execute()
+        resp = await res if inspect.isawaitable(res) else res
         
         tickets = []
-        if resp.data:
-            for row in resp.data:
+        rows = resp.data if resp and hasattr(resp, "data") and resp.data else []
+        if rows:
+            for row in rows:
                 tickets.append({
                     "id": row.get("id"),
                     "subject": row.get("subject"),
@@ -63,7 +66,7 @@ async def get_tickets(
         return {
             "tickets": tickets,
             "count": len(tickets),
-            "total": len(resp.data) if resp.data else 0,
+            "total": len(rows),
             "offset": offset,
             "limit": limit,
         }
@@ -100,9 +103,10 @@ async def create_ticket(
             "comment_count": 0,
         }
         
-        result = supabase.table("support_tickets").insert(data).execute()
+        res = supabase.table("support_tickets").insert(data).execute()
+        result = await res if inspect.isawaitable(res) else res
         
-        if result.data:
+        if result and hasattr(result, "data") and result.data:
             ticket = result.data[0]
             logger.info(f"Created ticket {ticket['id']} for user {user['id']}")
             return {
@@ -135,20 +139,23 @@ async def get_ticket(
     """
     try:
         # Get ticket
-        ticket_resp = supabase.table("support_tickets").select("*").eq(
+        res1 = supabase.table("support_tickets").select("*").eq(
             "id", ticket_id
         ).eq("user_id", user["id"]).execute()
+        ticket_resp = await res1 if inspect.isawaitable(res1) else res1
         
-        if not ticket_resp.data:
+        if not ticket_resp or not hasattr(ticket_resp, "data") or not ticket_resp.data:
             raise HTTPException(404, "Ticket not found")
         
         ticket = ticket_resp.data[0]
         
         # Mark as read
-        supabase.table("support_tickets").update({
+        res_upd = supabase.table("support_tickets").update({
             "has_unread": False,
             "updated_at": datetime.utcnow().isoformat()
         }).eq("id", ticket_id).execute()
+        if inspect.isawaitable(res_upd):
+            await res_upd
         
         result = {
             "id": ticket["id"],
@@ -164,13 +171,15 @@ async def get_ticket(
         
         # Get comments if requested
         if include_comments:
-            comments_resp = supabase.table("ticket_comments").select("*").eq(
+            res_comm = supabase.table("ticket_comments").select("*").eq(
                 "ticket_id", ticket_id
             ).order("created_at", desc=True).execute()
+            comments_resp = await res_comm if inspect.isawaitable(res_comm) else res_comm
             
             comments = []
-            if comments_resp.data:
-                for row in comments_resp.data:
+            rows = comments_resp.data if comments_resp and hasattr(comments_resp, "data") and comments_resp.data else []
+            if rows:
+                for row in rows:
                     comments.append({
                         "id": row.get("id"),
                         "message": row.get("message"),
@@ -203,11 +212,12 @@ async def add_comment(
     """
     try:
         # Verify ticket ownership
-        ticket_check = supabase.table("support_tickets").select("id, status").eq(
+        res_chk = supabase.table("support_tickets").select("id, status").eq(
             "id", ticket_id
         ).eq("user_id", user["id"]).execute()
+        ticket_check = await res_chk if inspect.isawaitable(res_chk) else res_chk
         
-        if not ticket_check.data:
+        if not ticket_check or not hasattr(ticket_check, "data") or not ticket_check.data:
             raise HTTPException(404, "Ticket not found")
         
         if ticket_check.data[0]["status"] == TicketStatus.CLOSED.value:
@@ -222,18 +232,25 @@ async def add_comment(
             "created_at": datetime.utcnow().isoformat(),
         }
         
-        result = supabase.table("ticket_comments").insert(comment_data).execute()
+        res_ins = supabase.table("ticket_comments").insert(comment_data).execute()
+        result = await res_ins if inspect.isawaitable(res_ins) else res_ins
         
+        res_cnt = supabase.table("ticket_comments").select("id", count="exact").eq("ticket_id", ticket_id).execute()
+        cnt_resp = await res_cnt if inspect.isawaitable(res_cnt) else res_cnt
+        comment_count = cnt_resp.count if cnt_resp and hasattr(cnt_resp, "count") else 0
+
         # Update ticket
-        supabase.table("support_tickets").update({
+        res_upd = supabase.table("support_tickets").update({
             "has_unread": True,  # Mark for staff
             "updated_at": datetime.utcnow().isoformat(),
-            "comment_count": supabase.table("ticket_comments").select("id", count="exact").eq("ticket_id", ticket_id).execute().count
+            "comment_count": comment_count
         }).eq("id", ticket_id).execute()
+        if inspect.isawaitable(res_upd):
+            await res_upd
         
         return {
             "status": "ok",
-            "comment_id": result.data[0]["id"] if result.data else None,
+            "comment_id": result.data[0]["id"] if result and hasattr(result, "data") and result.data else None,
             "created_at": comment_data["created_at"],
         }
         
@@ -257,11 +274,12 @@ async def update_ticket(
     """
     try:
         # Verify ownership
-        check = supabase.table("support_tickets").select("id, status").eq(
+        res_chk = supabase.table("support_tickets").select("id, status").eq(
             "id", ticket_id
         ).eq("user_id", user["id"]).single().execute()
+        check = await res_chk if inspect.isawaitable(res_chk) else res_chk
         
-        if not check.data:
+        if not check or not hasattr(check, "data") or not check.data:
             raise HTTPException(404, "Ticket not found")
         
         current_status = check.data["status"]
@@ -283,9 +301,11 @@ async def update_ticket(
         else:
             raise HTTPException(400, f"Invalid status transition from {current_status} to {status}")
         
-        supabase.table("support_tickets").update(update_data).eq(
+        res_upd = supabase.table("support_tickets").update(update_data).eq(
             "id", ticket_id
         ).execute()
+        if inspect.isawaitable(res_upd):
+            await res_upd
         
         return {
             "status": "ok",

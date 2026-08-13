@@ -6,6 +6,7 @@ FIXES:
   USER-2: Uses get_supabase() singleton throughout
 """
 
+import inspect
 import logging
 import os
 
@@ -39,8 +40,9 @@ async def get_profile(
     if not supabase:
         return {"id": user["id"], "email": user.get("email"), "role": user.get("role", "user")}
     try:
-        resp = supabase.table("profiles").select("*").eq("id", user["id"]).execute()
-        profile = resp.data[0] if resp.data else {}
+        res = supabase.table("profiles").select("*").eq("id", user["id"]).execute()
+        resp = await res if inspect.isawaitable(res) else res
+        profile = resp.data[0] if resp and hasattr(resp, "data") and resp.data else {}
         # Ensure role is always present from auth token if not in profiles table
         if profile and "role" not in profile:
             profile["role"] = user.get("role", "user")
@@ -73,7 +75,9 @@ async def update_profile(
 
     if not supabase:
         return {"status": "success", "updated_fields": list(clean.keys())}
-    supabase.table("profiles").update(clean).eq("id", user["id"]).execute()
+    res = supabase.table("profiles").update(clean).eq("id", user["id"]).execute()
+    if inspect.isawaitable(res):
+        await res
     return {"status": "ok"}
 
 
@@ -85,13 +89,14 @@ async def get_notif_settings(
     if not supabase:
         return {}
     try:
-        resp = (
+        res = (
             supabase.table("notification_settings")
             .select("*")
             .eq("user_id", user["id"])
             .execute()
         )
-        return resp.data[0] if resp.data else {}
+        resp = await res if inspect.isawaitable(res) else res
+        return resp.data[0] if resp and hasattr(resp, "data") and resp.data else {}
     except Exception as e:
         logger.error(f"Failed to fetch notification settings for user {user['id']}: {e}")
         raise HTTPException(
@@ -113,7 +118,9 @@ async def update_notif_settings(
         "channels": body.channels.model_dump(),
         "events": body.events.model_dump(),
     }
-    supabase.table("notification_settings").upsert(data).execute()
+    res = supabase.table("notification_settings").upsert(data).execute()
+    if inspect.isawaitable(res):
+        await res
     return {"status": "ok"}
 
 
@@ -126,7 +133,7 @@ async def get_security_logs(
     if not supabase:
         return []
     try:
-        resp = (
+        res = (
             supabase.table("security_logs")
             .select("*")
             .eq("user_id", user["id"])
@@ -134,7 +141,8 @@ async def get_security_logs(
             .limit(limit)
             .execute()
         )
-        return resp.data
+        resp = await res if inspect.isawaitable(res) else res
+        return resp.data if resp and hasattr(resp, "data") and resp.data else []
     except Exception as e:
         logger.error(f"Failed to fetch security logs for user {user['id']}: {e}")
         raise HTTPException(

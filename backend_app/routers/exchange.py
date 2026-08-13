@@ -6,6 +6,7 @@ FIXES:
   EXCH-3: delete_connection() now evicts the stale entry from the exchange pool
 """
 
+import inspect
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -195,12 +196,13 @@ async def list_exchanges(
             return cached
         
         # Fetch user's exchange keys
-        resp = (
+        res_keys = (
             supabase.table("exchange_keys")
             .select("*")
             .eq("user_id", user["id"])
             .execute()
         )
+        resp = await res_keys if inspect.isawaitable(res_keys) else res_keys
 
         # Fetch user tier once (outside the loop)
         try:
@@ -209,24 +211,27 @@ async def list_exchanges(
             tier_info = {"subscription_tier": "free", "max_api_slots": 1}
 
         # Fetch all deployed strategies for the user in a single query
-        all_strategies_resp = (
+        res_strats = (
             supabase.table("strategies")
             .select("exchange_id")
             .eq("user_id", user["id"])
             .eq("status", "deployed")
             .execute()
         )
+        all_strategies_resp = await res_strats if inspect.isawaitable(res_strats) else res_strats
 
         # Build a dictionary of bot counts by exchange_id
         bot_counts = {}
-        for strategy_row in (all_strategies_resp.data or []):
+        strat_rows = all_strategies_resp.data if all_strategies_resp and hasattr(all_strategies_resp, "data") and isinstance(all_strategies_resp.data, list) else []
+        for strategy_row in strat_rows:
             exchange_id = strategy_row.get("exchange_id")
             if exchange_id:
                 bot_counts[exchange_id] = bot_counts.get(exchange_id, 0) + 1
 
         # Build exchange list with metadata
         exchanges = []
-        for row in resp.data:
+        rows = resp.data if resp and hasattr(resp, "data") and isinstance(resp.data, list) else []
+        for row in rows:
             exchange_id = row["exchange_id"]
             bot_count = bot_counts.get(exchange_id, 0)
 
@@ -272,7 +277,7 @@ async def delete_connection(
     """
     try:
         # Check for active bots using this exchange
-        bots_resp = (
+        res_bots = (
             supabase.table("strategies")
             .select("id, name")
             .eq("user_id", user["id"])
@@ -280,8 +285,9 @@ async def delete_connection(
             .eq("status", "deployed")
             .execute()
         )
+        bots_resp = await res_bots if inspect.isawaitable(res_bots) else res_bots
         
-        active_bots = bots_resp.data if bots_resp.data else []
+        active_bots = bots_resp.data if bots_resp and hasattr(bots_resp, "data") and bots_resp.data else []
         
         if active_bots:
             bot_names = [bot.get("name", bot.get("id")) for bot in active_bots]
@@ -292,9 +298,11 @@ async def delete_connection(
             )
 
         # Delete from database
-        supabase.table("exchange_keys").delete().eq("user_id", user["id"]).eq(
+        res_del = supabase.table("exchange_keys").delete().eq("user_id", user["id"]).eq(
             "exchange_id", exchange_id.lower()
         ).execute()
+        if inspect.isawaitable(res_del):
+            await res_del
 
         # Evict from the exchange pool so the stale socket is closed
         await release_exchange(user["id"], exchange_id.lower())

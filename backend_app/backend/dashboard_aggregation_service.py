@@ -771,15 +771,11 @@ class DashboardAggregationService:
                     "ml_training_limit": 0
                 }),
                 "strategies": {
-                    "running": len(active_strategies),
-                    "stopped": len(paused_strategies),
-                    "total": len(strategies),
-                    "items": strategies
-                },
-                "strategies": {
                     "total": len(strategies),
                     "active": len(active_strategies),
                     "paused": len(paused_strategies),
+                    "running": len(active_strategies),
+                    "stopped": len(paused_strategies),
                     "items": strategies
                 },
                 "marketplace": {

@@ -21,6 +21,8 @@ PRINCIPAL ARCHITECT: Referral System Redesign
 DATE: 2026-08-01
 """
 
+import asyncio
+import inspect
 import logging
 import os
 from datetime import datetime
@@ -125,31 +127,37 @@ def _get_referral_link(referral_code: str) -> str:
     return f"{app_url}/signup?ref={referral_code}"
 
 
-def _ensure_referral_code_exists(user_id: str, supabase: SupabaseClient) -> str:
+async def _ensure_referral_code_exists(user_id: str, supabase: SupabaseClient) -> str:
     """
     Ensure user has a referral code, create if missing.
     Returns the referral code.
     """
     # Check if referral code exists
     try:
-        code_resp = supabase.table("referral_codes").select("code").eq("user_id", user_id).execute()
+        res = supabase.table("referral_codes").select("code").eq("user_id", user_id).execute()
+        code_resp = await res if inspect.isawaitable(res) else res
 
-        if code_resp.data and len(code_resp.data) > 0:
+        if code_resp and hasattr(code_resp, "data") and code_resp.data and len(code_resp.data) > 0:
             return code_resp.data[0]["code"]
 
         # Generate new code using database function
         try:
-            result = supabase.rpc("create_referral_code_for_user", {"user_uuid": user_id}).execute()
+            rpc_res = supabase.rpc("create_referral_code_for_user", {"user_uuid": user_id}).execute()
+            if inspect.isawaitable(rpc_res):
+                await rpc_res
 
             # Fetch the newly created code
-            code_resp = supabase.table("referral_codes").select("code").eq("user_id", user_id).execute()
-            if code_resp.data and len(code_resp.data) > 0:
+            res2 = supabase.table("referral_codes").select("code").eq("user_id", user_id).execute()
+            code_resp = await res2 if inspect.isawaitable(res2) else res2
+            if code_resp and hasattr(code_resp, "data") and code_resp.data and len(code_resp.data) > 0:
                 return code_resp.data[0]["code"]
 
             # Fallback: generate code manually
             import secrets
             code = f"VQ-{secrets.token_urlsafe(6).upper()[:6]}"
-            supabase.table("referral_codes").insert({"user_id": user_id, "code": code}).execute()
+            res3 = supabase.table("referral_codes").insert({"user_id": user_id, "code": code}).execute()
+            if inspect.isawaitable(res3):
+                await res3
             return code
 
         except Exception as e:
@@ -157,7 +165,9 @@ def _ensure_referral_code_exists(user_id: str, supabase: SupabaseClient) -> str:
             # Fallback to simple code
             import secrets
             code = f"VQ-{secrets.token_urlsafe(6).upper()[:6]}"
-            supabase.table("referral_codes").insert({"user_id": user_id, "code": code}).execute()
+            res4 = supabase.table("referral_codes").insert({"user_id": user_id, "code": code}).execute()
+            if inspect.isawaitable(res4):
+                await res4
             return code
     except Exception as e:
         # If referral_codes table doesn't exist, return a placeholder
@@ -193,7 +203,9 @@ async def get_referral_profile(
         # Check if referral tables exist (fallback if migration not run)
         try:
             # Test if referral_codes table exists
-            supabase.table("referral_codes").select("code").limit(1).execute()
+            t_res = supabase.table("referral_codes").select("code").limit(1).execute()
+            if inspect.isawaitable(t_res):
+                await t_res
         except Exception as table_check_error:
             # If referral tables don't exist, return safe empty response
             if "PGRST205" in str(table_check_error) or "Could not find the table" in str(table_check_error):
@@ -213,20 +225,36 @@ async def get_referral_profile(
                 raise
 
         # Ensure referral code exists
-        referral_code = _ensure_referral_code_exists(user_id, supabase)
+        referral_code = await _ensure_referral_code_exists(user_id, supabase)
         
-        # Get referral wallet
-        wallet_resp = supabase.table("referral_wallets").select("*").eq("user_id", user_id).execute()
-        wallet = wallet_resp.data[0] if wallet_resp.data else {
+        # Parallelize independent queries
+        async def _fetch_wallet():
+            res = supabase.table("referral_wallets").select("*").eq("user_id", user_id).execute()
+            return await res if inspect.isawaitable(res) else res
+
+        async def _fetch_relationships():
+            res = supabase.table("referral_relationships").select("status").eq("referrer_id", user_id).execute()
+            return await res if inspect.isawaitable(res) else res
+
+        wallet_resp, relationships_resp = await asyncio.gather(
+            _fetch_wallet(),
+            _fetch_relationships(),
+            return_exceptions=True
+        )
+
+        wallet = (wallet_resp.data[0] if wallet_resp and hasattr(wallet_resp, "data") and wallet_resp.data else {
+            "pending_balance_usd": 0,
+            "approved_balance_usd": 0,
+            "paid_balance_usd": 0,
+            "lifetime_earnings_usd": 0
+        }) if not isinstance(wallet_resp, Exception) else {
             "pending_balance_usd": 0,
             "approved_balance_usd": 0,
             "paid_balance_usd": 0,
             "lifetime_earnings_usd": 0
         }
         
-        # Get referral relationships count
-        relationships_resp = supabase.table("referral_relationships").select("status").eq("referrer_id", user_id).execute()
-        relationships = relationships_resp.data or []
+        relationships = (relationships_resp.data or [] if relationships_resp and hasattr(relationships_resp, "data") else []) if not isinstance(relationships_resp, Exception) else []
         
         total_referrals = len(relationships)
         active_referrals = sum(1 for r in relationships if r.get("status") == "active")
@@ -285,7 +313,9 @@ async def get_referral_stats(
         # Check if referral tables exist (fallback if migration not run)
         try:
             # Test if referral_codes table exists
-            supabase.table("referral_codes").select("code").limit(1).execute()
+            t_res = supabase.table("referral_codes").select("code").limit(1).execute()
+            if inspect.isawaitable(t_res):
+                await t_res
         except Exception as table_check_error:
             # If referral tables don't exist, return safe empty response
             if "PGRST205" in str(table_check_error) or "Could not find the table" in str(table_check_error):
@@ -309,26 +339,51 @@ async def get_referral_stats(
 
         # If we get here, tables exist - proceed with normal logic
         # Ensure referral code exists
-        referral_code = _ensure_referral_code_exists(user_id, supabase)
+        referral_code = await _ensure_referral_code_exists(user_id, supabase)
 
-        # Get referral wallet
-        wallet_resp = supabase.table("referral_wallets").select("*").eq("user_id", user_id).execute()
-        wallet = wallet_resp.data[0] if wallet_resp.data else {
+        # Parallelize independent queries using asyncio.gather
+        async def _fetch_wallet():
+            res = supabase.table("referral_wallets").select("*").eq("user_id", user_id).execute()
+            return await res if inspect.isawaitable(res) else res
+
+        async def _fetch_relationships():
+            res = supabase.table("referral_relationships").select("status").eq("referrer_id", user_id).execute()
+            return await res if inspect.isawaitable(res) else res
+
+        async def _fetch_commissions():
+            res = supabase.table("referral_commissions").select("*").eq("referrer_id", user_id).order("created_at", desc=True).limit(20).execute()
+            return await res if inspect.isawaitable(res) else res
+
+        async def _fetch_payouts():
+            res = supabase.table("referral_payouts").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(20).execute()
+            return await res if inspect.isawaitable(res) else res
+
+        wallet_resp, relationships_resp, commissions_resp, payouts_resp = await asyncio.gather(
+            _fetch_wallet(),
+            _fetch_relationships(),
+            _fetch_commissions(),
+            _fetch_payouts(),
+            return_exceptions=True
+        )
+
+        wallet = (wallet_resp.data[0] if wallet_resp and hasattr(wallet_resp, "data") and wallet_resp.data else {
+            "pending_balance_usd": 0,
+            "approved_balance_usd": 0,
+            "paid_balance_usd": 0,
+            "lifetime_earnings_usd": 0
+        }) if not isinstance(wallet_resp, Exception) else {
             "pending_balance_usd": 0,
             "approved_balance_usd": 0,
             "paid_balance_usd": 0,
             "lifetime_earnings_usd": 0
         }
 
-        # Get referral relationships count
-        relationships_resp = supabase.table("referral_relationships").select("status").eq("referrer_id", user_id).execute()
-        relationships = relationships_resp.data or []
+        relationships = (relationships_resp.data or [] if relationships_resp and hasattr(relationships_resp, "data") else []) if not isinstance(relationships_resp, Exception) else []
 
         total_referrals = len(relationships)
         active_referrals = sum(1 for r in relationships if r.get("status") == "active")
 
-        # Get commission history (last 20)
-        commissions_resp = supabase.table("referral_commissions").select("*").eq("referrer_id", user_id).order("created_at", desc=True).limit(20).execute()
+        commission_raw = (commissions_resp.data or [] if commissions_resp and hasattr(commissions_resp, "data") else []) if not isinstance(commissions_resp, Exception) else []
         commission_history = [
             CommissionRecord(
                 id=c["id"],
@@ -342,11 +397,10 @@ async def get_referral_stats(
                 paid_at=c.get("paid_at"),
                 reversal_reason=c.get("reversal_reason")
             )
-            for c in commissions_resp.data or []
+            for c in commission_raw
         ]
 
-        # Get payout history (last 20)
-        payouts_resp = supabase.table("referral_payouts").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(20).execute()
+        payout_raw = (payouts_resp.data or [] if payouts_resp and hasattr(payouts_resp, "data") else []) if not isinstance(payouts_resp, Exception) else []
         payout_history = [
             PayoutRecord(
                 id=p["id"],
@@ -358,7 +412,7 @@ async def get_referral_stats(
                 paid_at=p.get("paid_at"),
                 rejection_reason=p.get("rejection_reason")
             )
-            for p in payouts_resp.data or []
+            for p in payout_raw
         ]
 
         return ReferralStatsResponse(

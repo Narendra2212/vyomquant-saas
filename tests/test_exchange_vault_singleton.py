@@ -41,7 +41,7 @@ def test_list_exchanges_response_shape_and_no_per_request_vault_init():
     with patch("backend_app.routers.exchange.get_redis_manager", return_value=None):
         with patch("backend_app.routers.exchange.get_request_supabase", return_value=_mock_supabase_for_exchanges()):
             with patch.object(APIKeyVault, "__init__", return_value=None) as mock_init:
-                res = client.get("/api/exchanges/")
+                res = client.get("/api/exchanges/", headers={"Authorization": "Bearer token_123"})
                 assert res.status_code == 200
                 data = res.json()
 
@@ -79,7 +79,7 @@ def test_concurrent_tenant_isolation_subscription_tiers():
         client = TestClient(app)
         with patch("backend_app.routers.exchange.get_redis_manager", return_value=None):
             with patch("backend_app.routers.exchange.get_request_supabase", return_value=_mock_supabase_for_exchanges()):
-                res = client.get("/api/exchanges/")
+                res = client.get("/api/exchanges/", headers={"Authorization": f"Bearer {user_dict['access_token']}"})
                 assert res.status_code == 200
                 return user_dict["id"]
 

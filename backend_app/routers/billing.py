@@ -281,13 +281,14 @@ async def get_entitlements(
         
         if supabase:
             try:
-                resp = (
+                res = (
                     supabase.table("profiles")
                     .select("subscription_status, subscription_renewal_date, cancel_at_period_end")
                     .eq("id", user["id"])
                     .execute()
                 )
-                if resp.data:
+                resp = await res if inspect.isawaitable(res) else res
+                if resp and hasattr(resp, "data") and resp.data:
                     subscription_status = resp.data[0].get("subscription_status", "active")
                     renewal_date = resp.data[0].get("subscription_renewal_date")
                     cancel_at_period_end = resp.data[0].get("cancel_at_period_end", False)
