@@ -264,7 +264,7 @@ async def get_request_supabase(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing Authorization header. Bearer token required.",
         )
-    return create_request_supabase(credentials.credentials)
+    return await create_request_supabase_async(credentials.credentials)
 
 
 
@@ -461,7 +461,7 @@ async def _get_cached_profile(user_id: str, supabase_or_token: Any) -> dict:
     # ── Slow path: Supabase fetch ────────────────────────────────────────
     # Build the Supabase client lazily — only here, not on every request.
     if isinstance(supabase_or_token, str):
-        supabase = create_request_supabase(supabase_or_token)
+        supabase = await create_request_supabase_async(supabase_or_token)
     else:
         supabase = supabase_or_token
 
@@ -471,7 +471,7 @@ async def _get_cached_profile(user_id: str, supabase_or_token: Any) -> dict:
         raise RuntimeError("Supabase client is None")
 
     try:
-        resp = (
+        res = (
             supabase.table("profiles")
             .select(
                 "subscription_tier, deployed_bots, ml_strategies_built, ml_addons_purchased, is_frozen"
@@ -479,11 +479,12 @@ async def _get_cached_profile(user_id: str, supabase_or_token: Any) -> dict:
             .eq("id", user_id)
             .execute()
         )
+        resp = await res if asyncio.iscoroutine(res) else res
     except Exception as e:
         # Fallback: is_frozen column may not exist yet in legacy DB schemas
         logger.warning(f"Querying is_frozen column failed for user {user_id}: {e}")
         try:
-            resp = (
+            res = (
                 supabase.table("profiles")
                 .select(
                     "subscription_tier, deployed_bots, ml_strategies_built, ml_addons_purchased"
@@ -491,6 +492,7 @@ async def _get_cached_profile(user_id: str, supabase_or_token: Any) -> dict:
                 .eq("id", user_id)
                 .execute()
             )
+            resp = await res if asyncio.iscoroutine(res) else res
         except Exception as db_err:
             error_msg = f"Database query failed during profile retrieval for user {user_id}: {db_err}"
             logger.error(error_msg)
