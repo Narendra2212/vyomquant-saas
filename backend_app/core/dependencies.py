@@ -10,11 +10,16 @@ FIXES APPLIED:
   DEV: DEV_MODE support - safe startup without Supabase env vars
 """
 
+import asyncio
 import json
 import logging
 import os
 import threading
 from typing import Any, Optional
+
+import httpx
+from postgrest import AsyncPostgrestClient
+from postgrest.constants import DEFAULT_POSTGREST_CLIENT_TIMEOUT
 
 # ══════════════════════════════════════════════════════════════════════════
 #  PROFILE CACHE CONFIGURATION
@@ -145,6 +150,110 @@ def create_request_supabase(access_token: str):
             return None
         logger.error(f"Failed to create request Supabase client: {e}")
         raise RuntimeError(f"Failed to initialize request Supabase client: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  POOLED ASYNC POSTGREST CLIENT (Connection-Pooled & Tenant-Isolated)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class _PooledAsyncPostgrestClient(AsyncPostgrestClient):
+    """
+    Subclass of AsyncPostgrestClient that reuses a shared httpx.AsyncHTTPTransport
+    across requests for connection pooling while retaining per-request-isolated headers.
+    """
+    def __init__(self, *args, transport: httpx.AsyncHTTPTransport, **kwargs):
+        self._shared_transport = transport
+        super().__init__(*args, **kwargs)
+
+    def create_session(
+        self,
+        base_url: str,
+        headers: dict,
+        timeout: Any,
+        verify: bool = True,
+    ) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            base_url=base_url,
+            headers=headers,
+            timeout=timeout,
+            verify=verify,
+            follow_redirects=True,
+            http2=True,
+            transport=self._shared_transport,
+        )
+
+
+_shared_async_transport: Optional[httpx.AsyncHTTPTransport] = None
+_shared_async_transport_lock = asyncio.Lock()
+
+
+async def get_shared_async_transport() -> httpx.AsyncHTTPTransport:
+    """
+    Returns module-level shared AsyncHTTPTransport singleton with connection pooling.
+    Lazily initialized with double-checked locking using asyncio.Lock.
+    """
+    global _shared_async_transport
+    if _shared_async_transport is None:
+        async with _shared_async_transport_lock:
+            if _shared_async_transport is None:
+                max_keepalive = int(os.environ.get("SUPABASE_POOL_MAX_KEEPALIVE", "20"))
+                max_connections = int(os.environ.get("SUPABASE_POOL_MAX_CONNECTIONS", "100"))
+                limits = httpx.Limits(
+                    max_keepalive_connections=max_keepalive,
+                    max_connections=max_connections,
+                )
+                _shared_async_transport = httpx.AsyncHTTPTransport(
+                    limits=limits,
+                    http2=True,
+                )
+                logger.info(
+                    "Initialized shared AsyncHTTPTransport singleton (max_keepalive=%d, max_connections=%d)",
+                    max_keepalive,
+                    max_connections,
+                )
+    return _shared_async_transport
+
+
+async def create_request_supabase_async(access_token: str) -> Optional[_PooledAsyncPostgrestClient]:
+    """
+    Creates an async PostgREST client operating under the authenticated user's JWT identity,
+    reusing a shared httpx.AsyncHTTPTransport singleton for connection pooling while keeping
+    headers immutable per-request.
+    """
+    supabase_url = os.environ.get("SUPABASE_URL")
+    supabase_anon = os.environ.get("SUPABASE_ANON_KEY")
+
+    if not supabase_url or not supabase_anon:
+        if DEV_MODE:
+            logger.warning("SUPABASE_URL / SUPABASE_ANON_KEY missing in DEV_MODE, using None")
+            return None
+        logger.error("SUPABASE_URL and SUPABASE_ANON_KEY not set")
+        raise RuntimeError(
+            "Supabase request credentials required. Set SUPABASE_URL and SUPABASE_ANON_KEY."
+        )
+
+    try:
+        transport = await get_shared_async_transport()
+        headers = {
+            "apiKey": supabase_anon,
+            "Authorization": f"Bearer {access_token}",
+        }
+        rest_url = f"{supabase_url.rstrip('/')}/rest/v1"
+        client = _PooledAsyncPostgrestClient(
+            base_url=rest_url,
+            schema="public",
+            headers=headers,
+            timeout=DEFAULT_POSTGREST_CLIENT_TIMEOUT,
+            transport=transport,
+        )
+        return client
+    except Exception as e:
+        if DEV_MODE:
+            logger.warning(f"DEV_MODE: request async Supabase client init fallback ({e})")
+            return None
+        logger.error(f"Failed to create async request Supabase client: {e}")
+        raise RuntimeError(f"Failed to initialize async request Supabase client: {e}")
 
 
 async def get_request_supabase(
