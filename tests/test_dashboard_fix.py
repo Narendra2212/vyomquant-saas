@@ -38,13 +38,16 @@ class TestDashboardAggregationService:
             assert result is mock_telemetry
             assert result == mock_telemetry
 
-    @patch('backend_app.backend.dashboard_aggregation_service.get_dashboard_service')
-    @patch('backend_app.core.dependencies.create_request_supabase')
-    def test_dashboard_passes_user_object(self, mock_create_supabase, mock_get_service):
+    def test_dashboard_passes_user_object(self):
         """Test that dashboard receives full user object with access_token."""
-        from backend_app.backend.dashboard_aggregation_service import DashboardAggregationService
+        import sys
 
-        # Mock user with access_token
+        # _get_supabase imports create_request_supabase_async locally inside the method.
+        # We must patch it in the backend_app.core.dependencies namespace AND use asyncio.run
+        # because _get_supabase is async.
+        from backend_app.backend.dashboard_aggregation_service import DashboardAggregationService
+        from unittest.mock import patch, MagicMock
+
         mock_user = {
             "id": "test_user_123",
             "email": "test@example.com",
@@ -52,21 +55,17 @@ class TestDashboardAggregationService:
             "tenant_id": "test_user_123"
         }
 
-        # Mock dashboard service
-        mock_service = MagicMock()
-        mock_service.get_dashboard_data = AsyncMock(return_value={
-            "overview": {"total_value": 1000.0},
-            "strategies": {"total": 0, "items": []}
-        })
-        mock_get_service.return_value = mock_service
+        mock_sb = MagicMock()
 
-        service = DashboardAggregationService()
+        with patch('backend_app.core.dependencies.create_request_supabase_async',
+                   return_value=mock_sb) as mock_fn:
+            service = DashboardAggregationService()
 
-        # Call with user object
-        result = service._get_supabase(mock_user)
+            # _get_supabase is async — must await it
+            result = asyncio.run(service._get_supabase(mock_user))
 
-        # Should call create_request_supabase with access_token
-        mock_create_supabase.assert_called_once_with("valid_jwt_token")
+            # Should call create_request_supabase_async with the user's access_token
+            mock_fn.assert_called_once_with("valid_jwt_token")
 
 
 class TestDashboardEndpoint:
@@ -245,7 +244,7 @@ class TestPhase7CDuplicateQueryElimination:
         mock_sb.table.side_effect = table_side_effect
         return mock_sb
 
-    @patch('backend_app.core.dependencies.create_request_supabase')
+    @patch('backend_app.core.dependencies.create_request_supabase_async')
     def test_one_strategy_query_per_dashboard(self, mock_create_supabase):
         """Test that get_dashboard_data() calls get_strategies() exactly once."""
         from backend_app.backend.dashboard_aggregation_service import DashboardAggregationService
@@ -272,7 +271,7 @@ class TestPhase7CDuplicateQueryElimination:
         # Should be exactly 1 call
         assert call_count[0] == 1, f"Expected 1 get_strategies() call, got {call_count[0]}"
 
-    @patch('backend_app.core.dependencies.create_request_supabase')
+    @patch('backend_app.core.dependencies.create_request_supabase_async')
     def test_strategy_task_concurrent_with_gather(self, mock_create_supabase):
         """Test that strategies task starts concurrently with other operations."""
         from backend_app.backend.dashboard_aggregation_service import DashboardAggregationService
@@ -331,7 +330,7 @@ class TestPhase7CDuplicateQueryElimination:
         assert strategies_started.is_set()
         assert portfolio_started.is_set()
 
-    @patch('backend_app.core.dependencies.create_request_supabase')
+    @patch('backend_app.core.dependencies.create_request_supabase_async')
     def test_request_isolation_between_concurrent_users(self, mock_create_supabase):
         """Test that concurrent dashboard requests don't share strategy state."""
         from backend_app.backend.dashboard_aggregation_service import DashboardAggregationService
@@ -367,7 +366,7 @@ class TestPhase7CDuplicateQueryElimination:
         assert users_received.count("user_B") == 1
         assert len(users_received) == 2
 
-    @patch('backend_app.core.dependencies.create_request_supabase')
+    @patch('backend_app.core.dependencies.create_request_supabase_async')
     def test_exception_propagates_not_converted_to_empty_list(self, mock_create_supabase):
         """Test that get_strategies() exceptions are NOT converted to []."""
         from backend_app.backend.dashboard_aggregation_service import DashboardAggregationService
@@ -396,7 +395,7 @@ class TestPhase7CDuplicateQueryElimination:
 
         asyncio.run(test_dashboard())
 
-    @patch('backend_app.core.dependencies.create_request_supabase')
+    @patch('backend_app.core.dependencies.create_request_supabase_async')
     def test_standalone_get_strategy_insights_still_works(self, mock_create_supabase):
         """Test that standalone get_strategy_insights(user) still works without task."""
         from backend_app.backend.dashboard_aggregation_service import DashboardAggregationService
@@ -413,3 +412,4 @@ class TestPhase7CDuplicateQueryElimination:
         # Should work and return insights
         assert isinstance(insights, list)
         assert len(insights) > 0
+
