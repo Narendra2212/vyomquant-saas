@@ -19,7 +19,7 @@ from typing import Any, Dict, List
 import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 
-from backend_app.core.dependencies import (create_request_supabase,
+from backend_app.core.dependencies import (create_request_supabase_async,
                                            get_current_user, get_fleet,
                                            get_vault, get_ws_manager)
 from backend_app.core.subscription_dependencies import (
@@ -731,12 +731,12 @@ def extract_metrics(portfolio) -> Dict[str, Any]:
 
 # ── Import Schemas from core.models ─────────────────────────────────────────
 
-def _sb(user: dict):
+async def _sb(user: dict):
     """Get an RLS-scoped Supabase client for the authenticated request."""
     token = user.get("access_token")
     if not token:
         raise HTTPException(401, "Missing authenticated Supabase token.")
-    return create_request_supabase(token)
+    return await create_request_supabase_async(token)
 
 
 def _safe_uid(uid: str) -> str:
@@ -809,10 +809,9 @@ async def get_available_blocks():
 async def list_strategies(user: dict = Depends(get_current_user)):
     """Returns all strategies saved in Supabase for this user."""
     try:
-        sb = _sb(user)
+        sb = await _sb(user)
         if not sb:
             return []
-        import asyncio
         query = (
             sb
             .table("strategies")
@@ -820,7 +819,7 @@ async def list_strategies(user: dict = Depends(get_current_user)):
             .eq("user_id", user["id"])
             .order("created_at", desc=True)
         )
-        resp = await asyncio.to_thread(query.execute)
+        resp = await query.execute()
         
         results = resp.data
         for item in results:
@@ -930,8 +929,7 @@ async def create_strategy(
             pass  # Compilation errors handled earlier
     
     try:
-        import asyncio
-        sb = _sb(user)
+        sb = await _sb(user)
         if not sb:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -941,7 +939,7 @@ async def create_strategy(
                 ),
             )
         query = sb.table("strategies").insert(data)
-        resp = await asyncio.to_thread(query.execute)
+        resp = await query.execute()
         if resp.data:
             strategy_id = resp.data[0].get("id")
             logger.info(f"[STRATEGIES] Strategy created successfully: {strategy_id}")
@@ -972,10 +970,9 @@ async def get_strategy_route(
     strategy_id: str,
     user: dict = Depends(get_current_user),
 ):
-    sb = _sb(user)
+    sb = await _sb(user)
     if not sb:
         return {"id": strategy_id, "user_id": user["id"], "name": "Dev Strategy", "status": "stopped"}
-    import asyncio
     query = (
         sb
         .table("strategies")
@@ -983,7 +980,7 @@ async def get_strategy_route(
         .eq("id", strategy_id)
         .eq("user_id", user["id"])
     )
-    resp = await asyncio.to_thread(query.execute)
+    resp = await query.execute()
     
     if not resp.data:
         raise HTTPException(404, "Strategy not found.")
@@ -1010,7 +1007,7 @@ async def update_strategy(
     body: Dict[str, Any],
     user: dict = Depends(get_current_user),
 ):
-    sb = _sb(user)
+    sb = await _sb(user)
     if not sb:
         return {"id": strategy_id, "user_id": user["id"], "name": body.get("name", "Updated Dev Strategy")}
     
@@ -1027,7 +1024,7 @@ async def update_strategy(
         )
     
     try:
-        resp = (
+        resp = await (
             sb
             .table("strategies")
             .update(body)
@@ -1051,11 +1048,11 @@ async def delete_strategy(
     fleet=Depends(get_fleet),
 ):
     """Stops the bot first (if running) then deletes the blueprint."""
-    sb = _sb(user)
+    sb = await _sb(user)
     if not sb:
         return {"status": "deleted", "id": strategy_id}
     try:
-        resp = (
+        resp = await (
             sb
             .table("strategies")
             .select("symbol, status")
@@ -1070,7 +1067,7 @@ async def delete_strategy(
         await fleet.stop_bot(user["id"], resp.data[0]["symbol"])
 
     try:
-        sb.table("strategies").delete().eq("id", strategy_id).eq("user_id", user["id"]).execute()
+        await sb.table("strategies").delete().eq("id", strategy_id).eq("user_id", user["id"]).execute()
     except Exception as e:
         logger.error(f"[STRATEGIES] Failed to delete strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to delete strategy. Please try again later.")
@@ -1104,8 +1101,11 @@ async def deploy_bot(
     logger.info(f"[STRATEGIES] Deploying strategy {strategy_id} for user {user['id']}")
     
     try:
-        resp = (
-            _sb(user)
+        sb = await _sb(user)
+        if not sb:
+            raise HTTPException(404, "Strategy not found.")
+        resp = await (
+            sb
             .table("strategies")
             .select("*")
             .eq("id", strategy_id)
@@ -1163,9 +1163,11 @@ async def deploy_bot(
         )
 
     try:
-        _sb(user).table("strategies").update({"status": "running"}).eq(
-            "id", strategy_id
-        ).execute()
+        sb = await _sb(user)
+        if sb:
+            await sb.table("strategies").update({"status": "running"}).eq(
+                "id", strategy_id
+            ).execute()
     except Exception as e:
         logger.error(f"[STRATEGIES] Failed to update status for strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to update strategy status after deployment. Please try again later.")
@@ -1200,8 +1202,11 @@ async def stop_bot(
 ):
     """Stops the bot loop and cancels all open orders for that symbol."""
     # SECURITY: Verify strategy belongs to authenticated user
-    resp = (
-        _sb(user)
+    sb = await _sb(user)
+    if not sb:
+        raise HTTPException(404, "Strategy not found.")
+    resp = await (
+        sb
         .table("strategies")
         .select("symbol")
         .eq("id", strategy_id)
@@ -1256,9 +1261,11 @@ async def stop_bot(
     # Any direct call to ExecutionEngine.cancel_all() is FORBIDDEN and BLOCKED.
     logger.info(f"[STRATEGIES] Strategy {strategy_id} stopped. Order cleanup handled by BotRunner.")
 
-    _sb(user).table("strategies").update({"status": "stopped"}).eq(
-        "id", strategy_id
-    ).execute()
+    sb = await _sb(user)
+    if sb:
+        await sb.table("strategies").update({"status": "stopped"}).eq(
+            "id", strategy_id
+        ).execute()
 
     # Decrement bot usage
     await decrement_usage(Resource.BOTS.value, user)
@@ -1303,11 +1310,10 @@ async def train_ml_strategy(
             from ml_models import XGBoostStrategyBlock
 
             # Verify strategy belongs to user and fetch buy_logic for ML node updates
-            sb = _sb(user)
+            sb = await _sb(user)
             strategy_buy_logic = None
             if sb:
                 try:
-                    import asyncio
                     query = (
                         sb.table("strategies")
                         .select("id, name, buy_logic")
@@ -1315,7 +1321,7 @@ async def train_ml_strategy(
                         .eq("user_id", user["id"])
                         .single()
                     )
-                    resp = await asyncio.to_thread(query.execute)
+                    resp = await query.execute()
                     if not resp.data:
                         logger.error(f"[ML TRAINING] Strategy {strategy_id} not found for user {user['id']}")
                         await ws_mgr.broadcast_user(
@@ -1371,7 +1377,7 @@ async def train_ml_strategy(
                         .eq("id", strategy_id)
                         .eq("user_id", user["id"])
                     )
-                    await asyncio.to_thread(update_query.execute)
+                    await update_query.execute()
                     db_update_success = True
                     logger.info(f"[ML TRAINING] Updated ml_model_path for strategy {strategy_id}: {path}")
                     
@@ -1392,7 +1398,7 @@ async def train_ml_strategy(
                                 .eq("id", strategy_id)
                                 .eq("user_id", user["id"])
                             )
-                            await asyncio.to_thread(update_dag_query.execute)
+                            await update_dag_query.execute()
                             logger.info(f"[ML TRAINING] Updated ML nodes with model_id for strategy {strategy_id}")
                                 
                 except Exception as db_error:
@@ -1983,13 +1989,13 @@ async def clone_strategy(strategy_id: str, user: dict = Depends(get_current_user
     Preserves full DAG structure (nodes, edges, buy_logic, sell_logic, risk, indicators, ml_model_path)
     and re-validates the clone by recomputing dag_hash and execution_order via DAGCompiler.
     """
-    sb = _sb(user)
+    sb = await _sb(user)
     if sb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
         
     # SECURITY: Add ownership check to prevent tenant isolation bypass
     try:
-        res = sb.table("strategies").select("*").eq("id", strategy_id).eq("user_id", user["id"]).execute()
+        res = await sb.table("strategies").select("*").eq("id", strategy_id).eq("user_id", user["id"]).execute()
     except Exception as e:
         logger.error(f"[STRATEGIES] Failed to fetch strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to retrieve strategy for cloning. Please try again later.")
@@ -2029,7 +2035,7 @@ async def clone_strategy(strategy_id: str, user: dict = Depends(get_current_user
                 # Continue with clone even if validation fails - matches existing behavior
     
     try:
-        ins = sb.table("strategies").insert(cloned_payload).execute()
+        ins = await sb.table("strategies").insert(cloned_payload).execute()
         if not ins.data:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to insert cloned strategy record.")
         return {"status": "cloned", "strategy": ins.data[0]}
@@ -2360,12 +2366,12 @@ async def walk_forward_optimization(
 @router.post("/{strategy_id}/pause")
 async def pause_strategy(strategy_id: str, user: dict = Depends(get_current_user), fleet=Depends(get_fleet)):
     """Pause live execution bot for a strategy with strict state checks."""
-    sb = _sb(user)
+    sb = await _sb(user)
     if sb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
         
     try:
-        res = sb.table("strategies").select("symbol, is_active, status").eq("id", strategy_id).eq("user_id", user["id"]).execute()
+        res = await sb.table("strategies").select("symbol, is_active, status").eq("id", strategy_id).eq("user_id", user["id"]).execute()
     except Exception as e:
         logger.error(f"[STRATEGIES] Failed to fetch strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to retrieve strategy for pause. Please try again later.")
@@ -2382,7 +2388,7 @@ async def pause_strategy(strategy_id: str, user: dict = Depends(get_current_user
         bot_stopped, _ = await fleet.stop_bot(user["id"], symbol)
         
     try:
-        upd = sb.table("strategies").update({"is_active": False, "status": "paused"}).eq("id", strategy_id).execute()
+        upd = await sb.table("strategies").update({"is_active": False, "status": "paused"}).eq("id", strategy_id).execute()
     except Exception as e:
         logger.error(f"[STRATEGIES] Failed to update status for strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to update strategy status after pause. Please try again later.")
@@ -2394,12 +2400,12 @@ async def pause_strategy(strategy_id: str, user: dict = Depends(get_current_user
 @router.post("/{strategy_id}/resume")
 async def resume_strategy(strategy_id: str, user: dict = Depends(get_current_user), fleet=Depends(get_fleet)):
     """Resume live execution bot for a strategy with strict state checks."""
-    sb = _sb(user)
+    sb = await _sb(user)
     if sb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
         
     try:
-        res = sb.table("strategies").select("symbol, is_active, status, dag_config").eq("id", strategy_id).eq("user_id", user["id"]).execute()
+        res = await sb.table("strategies").select("symbol, is_active, status, dag_config").eq("id", strategy_id).eq("user_id", user["id"]).execute()
     except Exception as e:
         logger.error(f"[STRATEGIES] Failed to fetch strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to retrieve strategy for resume. Please try again later.")
@@ -2428,7 +2434,7 @@ async def resume_strategy(strategy_id: str, user: dict = Depends(get_current_use
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Fleet failed to resume strategy bot: {msg}")
             
     try:
-        upd = sb.table("strategies").update({"is_active": True, "status": "running"}).eq("id", strategy_id).execute()
+        upd = await sb.table("strategies").update({"is_active": True, "status": "running"}).eq("id", strategy_id).execute()
     except Exception as e:
         logger.error(f"[STRATEGIES] Failed to update status for strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to update strategy status after resume. Please try again later.")

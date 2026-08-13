@@ -61,7 +61,7 @@ class TestRiskSettingsAPI:
     def test_get_risk_settings_defaults(self, mock_sb):
         """Verify GET /api/risk/settings returns defaults when no settings exist."""
         def mock_user():
-            return {"id": "test_user_123", "access_token": "valid_token"}
+            return {"id": "test_user_defaults_456", "access_token": "valid_token"}
         
         mock_sb_instance = Mock()
         mock_sb_instance.table.return_value.select.return_value.eq.return_value.execute.return_value = Mock(data=[])

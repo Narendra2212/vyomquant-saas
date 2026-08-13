@@ -13,15 +13,15 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
-from backend_app.core.dependencies import create_request_supabase, get_current_user
+from backend_app.core.dependencies import create_request_supabase_async, get_current_user
 from backend_app.core.rate_limit import limiter
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _sb(user: dict):
-    return create_request_supabase(user.get("access_token"))
+async def _sb(user: dict):
+    return await create_request_supabase_async(user.get("access_token"))
 
 
 @router.get("/", status_code=status.HTTP_200_OK)
@@ -38,7 +38,9 @@ async def list_signal_traces(
     Search and filter signal execution traces.
     """
     try:
-        sb = _sb(user)
+        sb = await _sb(user)
+        if not sb:
+            return []
         query = sb.table("execution_records").select("*").eq("user_id", user["id"])
         
         if strategy_id:
@@ -50,7 +52,7 @@ async def list_signal_traces(
         if decision:
             query = query.eq("side", decision.lower())
             
-        res = query.order("created_at", desc=True).limit(limit).execute()
+        res = await query.order("created_at", desc=True).limit(limit).execute()
         records = res.data or []
         
         # Enrich records with full 17-field trace structure
@@ -111,8 +113,10 @@ async def get_signal_trace(
     Get detailed 17-field signal trace derived strictly from recorded execution logs.
     """
     try:
-        sb = _sb(user)
-        res = sb.table("execution_records").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
+        sb = await _sb(user)
+        if not sb:
+            raise HTTPException(status_code=404, detail=f"Signal trace '{signal_id}' not found for user")
+        res = await sb.table("execution_records").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
         if not res.data:
             raise HTTPException(status_code=404, detail=f"Signal trace '{signal_id}' not found for user")
         rec = res.data[0]
@@ -185,16 +189,16 @@ async def replay_signal_trace(
     signal consistency metrics across historical data.
     """
     try:
-        sb = _sb(user)
+        sb = await _sb(user)
         if sb is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Signal trace '{signal_id}' not found.")
         
         # Try to query from signals table (proper schema)
-        res = sb.table("signals").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
+        res = await sb.table("signals").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
         
         # Fallback to execution_records if signals table doesn't have the record
         if not res.data:
-            res = sb.table("execution_records").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
+            res = await sb.table("execution_records").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
             
         if not res.data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Signal trace '{signal_id}' not found.")
