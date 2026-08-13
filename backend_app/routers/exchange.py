@@ -174,6 +174,7 @@ async def list_exchanges(
     user: dict = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_request_supabase),
     redis_manager=Depends(get_redis_manager),
+    vault=Depends(get_vault),
 ):
     """
     List user's connected exchanges with full metadata.
@@ -203,10 +204,8 @@ async def list_exchanges(
 
         # Fetch user tier once (outside the loop)
         try:
-            from backend_app.backend.api_key_vault import APIKeyVault
-            vault = APIKeyVault()
             tier_info = vault.get_user_tier(user["id"])
-        except:
+        except Exception:
             tier_info = {"subscription_tier": "free", "max_api_slots": 1}
 
         # Fetch all deployed strategies for the user in a single query
