@@ -12,11 +12,12 @@ import asyncio
 import logging
 import re
 from datetime import datetime
+import inspect
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend_app.core.dependencies import (create_request_supabase, get_alert,
+from backend_app.core.dependencies import (create_request_supabase_async, get_alert,
                                            get_current_user, get_vault,
                                            get_ws_manager)
 from backend_app.core.background_tasks import fire_and_forget_task
@@ -30,11 +31,12 @@ logger = logging.getLogger("RiskRouter")
 RISK_SETTINGS_CACHE_TTL = 300
 
 
-def _sb(user: dict):
+async def _sb(user: dict):
     token = user.get("access_token")
     if not token:
         raise HTTPException(401, "Missing authenticated Supabase token.")
-    return create_request_supabase(token)
+    res = create_request_supabase_async(token)
+    return await res if inspect.isawaitable(res) else res
 
 
 def _safe_uid(uid: str) -> str:
@@ -59,7 +61,8 @@ async def get_risk_settings(user: dict = Depends(get_current_user)):
         logger.warning(f"Cache read failed for user {user['id']}: {e}")
 
     # Fallback to database
-    sb = _sb(user)
+    sb_res = _sb(user)
+    sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
     if not sb:
         return {
             "max_daily_loss": 500,
@@ -68,10 +71,11 @@ async def get_risk_settings(user: dict = Depends(get_current_user)):
             "kill_switches": [],
         }
     try:
-        resp = sb.table("risk_settings").select("*").eq("user_id", user["id"]).execute()
+        res = sb.table("risk_settings").select("*").eq("user_id", user["id"]).execute()
+        resp = await res if inspect.isawaitable(res) else res
         result = (
             resp.data[0]
-            if resp.data
+            if resp and resp.data
             else {
                 "max_daily_loss": 500,
                 "max_positions": 10,
@@ -112,7 +116,12 @@ async def update_risk_settings(
         "max_leverage": body.max_leverage,
         "kill_switches": [k.model_dump() for k in body.kill_switches],
     }
-    _sb(user).table("risk_settings").upsert(data, on_conflict="user_id").execute()
+    sb_res = _sb(user)
+    sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+    if sb:
+        res = sb.table("risk_settings").upsert(data, on_conflict="user_id").execute()
+        if inspect.isawaitable(res):
+            await res
 
     # Invalidate cache for this user
     try:
@@ -189,7 +198,7 @@ async def account_health(user: dict = Depends(get_current_user)):
         from backend_app.core.state import app_state
 
         query = (
-            "SELECT current_drawdown_pct, daily_pnl_pct, total_exposure "
+            "SELECT current_drawdown_pct, daily_pnl_pct, total_exposure_usdt AS total_exposure "
             "FROM account_health WHERE user_id = '" + safe_uid + "' LIMIT 1;"
         )
         result = await app_state.telemetry.execute_query(query)
@@ -239,10 +248,13 @@ async def get_strategy_limits(user: dict = Depends(get_current_user)):
     Get per-strategy risk limits configured by the user.
     """
     try:
-        resp = _sb(user).table("strategy_limits").select("*").eq("user_id", user["id"]).execute()
+        sb_res = _sb(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        res = sb.table("strategy_limits").select("*").eq("user_id", user["id"]).execute() if sb else None
+        resp = await res if inspect.isawaitable(res) else res
         
         limits = []
-        if resp.data:
+        if resp and resp.data:
             for row in resp.data:
                 limits.append({
                     "strategy_id": row.get("strategy_id"),
@@ -278,29 +290,32 @@ async def update_strategy_limits(
     Update per-strategy risk limits.
     """
     try:
-        sb = _sb(user)
+        sb_res = _sb(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         updated = []
         
-        for limit in body.limits:
-            data = {
-                "user_id": user["id"],
-                "strategy_id": limit.strategy_id,
-                "max_position_size": limit.max_position_size,
-                "max_daily_trades": limit.max_daily_trades,
-                "allowed_symbols": limit.allowed_symbols,
-                "max_drawdown_pct": limit.max_drawdown_pct,
-                "enabled": limit.enabled,
-                "updated_at": datetime.utcnow().isoformat(),
-            }
-            
-            # Upsert the limit
-            result = sb.table("strategy_limits").upsert(
-                data,
-                on_conflict="user_id,strategy_id"
-            ).execute()
-            
-            if result.data:
-                updated.append(limit.strategy_id)
+        if sb:
+            for limit in body.limits:
+                data = {
+                    "user_id": user["id"],
+                    "strategy_id": limit.strategy_id,
+                    "max_position_size": limit.max_position_size,
+                    "max_daily_trades": limit.max_daily_trades,
+                    "allowed_symbols": limit.allowed_symbols,
+                    "max_drawdown_pct": limit.max_drawdown_pct,
+                    "enabled": limit.enabled,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+                
+                # Upsert the limit
+                query_res = sb.table("strategy_limits").upsert(
+                    data,
+                    on_conflict="user_id,strategy_id"
+                ).execute()
+                result = await query_res if inspect.isawaitable(query_res) else query_res
+                
+                if result and result.data:
+                    updated.append(limit.strategy_id)
         
         return {
             "status": "ok",
@@ -323,7 +338,10 @@ async def update_single_strategy_limit(
     Update a single strategy-specific risk limit.
     """
     try:
-        sb = _sb(user)
+        sb_res = _sb(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        if not sb:
+            raise HTTPException(500, "Database client initialization failed.")
         
         if not body.limits or len(body.limits) == 0:
             raise HTTPException(400, "No limits provided in request body")
@@ -340,10 +358,11 @@ async def update_single_strategy_limit(
             "updated_at": datetime.utcnow().isoformat(),
         }
         
-        result = sb.table("strategy_limits").upsert(
+        query_res = sb.table("strategy_limits").upsert(
             data,
             on_conflict="user_id,strategy_id"
         ).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
         
         return {
             "status": "ok",
@@ -365,10 +384,20 @@ async def delete_strategy_limit(
     Delete a strategy-specific risk limit.
     """
     try:
-        sb = _sb(user)
-        result = sb.table("strategy_limits").delete().eq(
+        sb_res = _sb(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        if not sb:
+            raise HTTPException(500, "Database client initialization failed.")
+        query_res = sb.table("strategy_limits").delete().eq(
             "user_id", user["id"]
         ).eq("strategy_id", strategy_id).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
+        
+        return {
+            "status": "ok",
+            "deleted": strategy_id,
+            "affected": len(result.data) if result and result.data else 0
+        }
         
         return {
             "status": "ok",

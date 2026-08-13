@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 from uuid import UUID
 
+import inspect
 from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
                      HTTPException, Request)
 from backend_app.core.rate_limit import limiter
@@ -35,7 +36,8 @@ from backend_app.core.rate_limit import limiter
 from sqlalchemy.orm import Session
 
 from backend_app.core.cache import redis_manager
-from backend_app.core.dependencies import (get_current_user,
+from backend_app.core.dependencies import (create_request_supabase_async,
+                                           get_current_user,
                                            get_request_supabase,
                                            invalidate_profile_cache)
 from backend_app.core.database import get_db
@@ -63,11 +65,12 @@ def _validate_keys(provider: str) -> str:
         return key
 
 
-def _sb(user: dict):
+async def _sb(user: dict):
     token = user.get("access_token")
     if not token:
         raise HTTPException(401, "Missing authenticated Supabase token.")
-    return create_request_supabase(token)
+    res = create_request_supabase_async(token)
+    return await res if inspect.isawaitable(res) else res
 
 
 def _background_sb():
@@ -395,8 +398,11 @@ async def create_checkout_session(
 
     discount_applied = False
     try:
-        sb = _sb(user)
-        profile_res = sb.table("profiles").select("available_discounts").eq("id", user["id"]).execute()
+        sb_res = _sb(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        if sb:
+            query_res = sb.table("profiles").select("available_discounts").eq("id", user["id"]).execute()
+            profile_res = await query_res if inspect.isawaitable(query_res) else query_res
         if profile_res.data and profile_res.data[0].get("available_discounts", 0) > 0:
             discount_applied = True
             amount = int(amount * 0.9)

@@ -12,7 +12,8 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from backend_app.core.dependencies import create_request_supabase
+import inspect
+from backend_app.core.dependencies import create_request_supabase_async
 
 logger = logging.getLogger("SignalService")
 
@@ -48,17 +49,16 @@ class SignalService:
     - Exchange validation
     - Exchange response
     - Execution
-    - Trade
-    - PnL
-    - Archive
+    - PnL recording
     """
     
     def __init__(self):
         pass
     
-    def _get_supabase(self, user: dict):
+    async def _get_supabase(self, user: dict):
         """Get Supabase client for user."""
-        return create_request_supabase(user.get("access_token"))
+        res = create_request_supabase_async(user.get("access_token"))
+        return await res if inspect.isawaitable(res) else res
     
     async def create_signal(
         self,
@@ -95,7 +95,8 @@ class SignalService:
         Returns:
             Signal record
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         signal_id = str(uuid4())
         
@@ -117,7 +118,8 @@ class SignalService:
             "generated_at": datetime.now(timezone.utc).isoformat()
         }
         
-        result = sb.table("signals").insert(signal_data).execute()
+        query_res = sb.table("signals").insert(signal_data).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
         
         logger.info(f"Created signal {signal_id} for strategy {strategy_id}")
         
@@ -154,7 +156,8 @@ class SignalService:
         Returns:
             Updated signal record
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         update_data = {
             "risk_passed": risk_passed,
@@ -174,7 +177,8 @@ class SignalService:
         else:
             update_data["status"] = SignalStatus.ACCEPTED
         
-        result = sb.table("signals").update(update_data).eq("id", signal_id).eq("user_id", user["id"]).execute()
+        query_res = sb.table("signals").update(update_data).eq("id", signal_id).eq("user_id", user["id"]).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
         
         logger.info(f"Updated risk decision for signal {signal_id}: {risk_passed}")
         
@@ -215,7 +219,8 @@ class SignalService:
         Returns:
             Updated signal record
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         update_data = {
             "order_id": order_id,
@@ -239,7 +244,8 @@ class SignalService:
         elif order_status == "FAILED":
             update_data["status"] = SignalStatus.FAILED
         
-        result = sb.table("signals").update(update_data).eq("id", signal_id).eq("user_id", user["id"]).execute()
+        query_res = sb.table("signals").update(update_data).eq("id", signal_id).eq("user_id", user["id"]).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
         
         logger.info(f"Updated order for signal {signal_id}: {order_status}")
         
@@ -266,7 +272,8 @@ class SignalService:
         Returns:
             Updated signal record
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         update_data = {
             "trade_id": trade_id,
@@ -275,7 +282,8 @@ class SignalService:
             "executed_at": datetime.now(timezone.utc).isoformat()
         }
         
-        result = sb.table("signals").update(update_data).eq("id", signal_id).eq("user_id", user["id"]).execute()
+        query_res = sb.table("signals").update(update_data).eq("id", signal_id).eq("user_id", user["id"]).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
         
         logger.info(f"Updated execution for signal {signal_id}: pnl={pnl}")
         
@@ -296,9 +304,11 @@ class SignalService:
         Returns:
             Signal record with all details
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        result = sb.table("signals").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
+        query_res = sb.table("signals").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
         
         if not result.data:
             return None
@@ -344,7 +354,8 @@ class SignalService:
         Returns:
             List of signal records
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         query = sb.table("signals").select("*").eq("user_id", user["id"])
         
@@ -374,7 +385,8 @@ class SignalService:
         if search:
             query = query.ilike("id", f"%{search}%")
         
-        result = query.order("generated_at", desc=True).range(offset, offset + limit - 1).execute()
+        query_res = query.order("generated_at", desc=True).range(offset, offset + limit - 1).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
         
         return result.data or []
     

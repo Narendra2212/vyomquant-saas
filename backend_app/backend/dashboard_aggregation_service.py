@@ -11,6 +11,7 @@ Referral, Signal Trace, Support, Health
 """
 
 import asyncio
+import inspect
 import logging
 import re
 import time
@@ -86,10 +87,11 @@ class DashboardAggregationService:
             self._telemetry = get_telemetry()
         return self._telemetry
     
-    def _get_supabase(self, user: dict):
+    async def _get_supabase(self, user: dict):
         """Get Supabase client for user."""
-        from backend_app.core.dependencies import create_request_supabase
-        return create_request_supabase(user.get("access_token"))
+        from backend_app.core.dependencies import create_request_supabase_async
+        res = create_request_supabase_async(user.get("access_token"))
+        return await res if inspect.isawaitable(res) else res
     
     def _safe_uid(self, uid: str) -> str:
         """Validate user_id for safe SQL queries."""
@@ -109,11 +111,13 @@ class DashboardAggregationService:
             Subscription tier, usage metrics, billing status
         """
         try:
-            sb = self._get_supabase(user)
+            sb_res = self._get_supabase(user)
+            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
 
             # Get user profile with subscription info
-            res = sb.table("profiles").select("*").eq("id", user["id"]).execute()
-            profile = res.data[0] if res.data else {}
+            q1 = sb.table("profiles").select("*").eq("id", user["id"]).execute()
+            res = await q1 if inspect.isawaitable(q1) else q1
+            profile = res.data[0] if res and res.data else {}
 
             # Get subscription tier from profile
             subscription_tier = profile.get("subscription_tier", "free")
@@ -168,11 +172,13 @@ class DashboardAggregationService:
             Connected exchanges, connection status, latency metrics
         """
         try:
-            sb = self._get_supabase(user)
+            sb_res = self._get_supabase(user)
+            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
             
             # Get user's exchange connections
-            res = sb.table("exchange_connections").select("*").eq("user_id", user["id"]).execute()
-            connections = res.data or []
+            q1 = sb.table("exchange_connections").select("*").eq("user_id", user["id"]).execute()
+            res = await q1 if inspect.isawaitable(q1) else q1
+            connections = res.data or [] if res else []
             
             # Calculate exchange metrics
             connected_exchanges = [c for c in connections if c.get("is_active", False)]
@@ -213,22 +219,25 @@ class DashboardAggregationService:
             Unread count, recent notifications, notification categories
         """
         try:
-            sb = self._get_supabase(user)
+            sb_res = self._get_supabase(user)
+            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
             
             # Get unread count
-            res = sb.table("notifications").select("*").eq("user_id", user["id"]).eq("read", False).execute()
-            unread_count = len(res.data) if res.data else 0
+            q1 = sb.table("notifications").select("*").eq("user_id", user["id"]).eq("read", False).execute()
+            res = await q1 if inspect.isawaitable(q1) else q1
+            unread_count = len(res.data) if res and res.data else 0
             
             # Get recent notifications
-            recent_res = (sb.table("notifications")
+            q2 = (sb.table("notifications")
                          .select("*")
                          .eq("user_id", user["id"])
                          .order("created_at", desc=True)
                          .limit(10)
                          .execute())
+            recent_res = await q2 if inspect.isawaitable(q2) else q2
             
             recent_notifications = []
-            for notif in recent_res.data or []:
+            for notif in (recent_res.data if recent_res else []) or []:
                 recent_notifications.append({
                     "id": notif.get("id"),
                     "type": notif.get("type"),
@@ -269,17 +278,19 @@ class DashboardAggregationService:
             Referral code, referral count, earnings
         """
         try:
-            sb = self._get_supabase(user)
+            sb_res = self._get_supabase(user)
+            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
             
             # Get referral profile
-            res = sb.table("referral_profiles").select("*").eq("user_id", user["id"]).execute()
-            profile = res.data[0] if res.data else {}
+            q1 = sb.table("referral_profiles").select("*").eq("user_id", user["id"]).execute()
+            res = await q1 if inspect.isawaitable(q1) else q1
+            profile = res.data[0] if res and res.data else {}
             
-            if not profile:
+            if not profile and sb:
                 # Generate referral code if doesn't exist
                 import hashlib
                 referral_code = hashlib.md5(user["id"].encode()).hexdigest()[:8].upper()
-                sb.table("referral_profiles").insert({
+                q2 = sb.table("referral_profiles").insert({
                     "user_id": user["id"],
                     "referral_code": referral_code,
                     "total_referrals": 0,
@@ -289,6 +300,8 @@ class DashboardAggregationService:
                     "paid_earnings": 0.0,
                     "lifetime_earnings": 0.0
                 }).execute()
+                if inspect.isawaitable(q2):
+                    await q2
                 profile = {"referral_code": referral_code}
             
             return {
@@ -324,11 +337,13 @@ class DashboardAggregationService:
             Risk settings, current risk level, circuit breaker status
         """
         try:
-            sb = self._get_supabase(user)
+            sb_res = self._get_supabase(user)
+            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
 
             # Get risk settings
-            res = sb.table("risk_settings").select("*").eq("user_id", user["id"]).execute()
-            settings = res.data[0] if res.data else {}
+            q1 = sb.table("risk_settings").select("*").eq("user_id", user["id"]).execute()
+            res = await q1 if inspect.isawaitable(q1) else q1
+            settings = res.data[0] if res and res.data else {}
 
             # Get current risk metrics from portfolio (use provided portfolio if available)
             if portfolio is None:
@@ -376,15 +391,18 @@ class DashboardAggregationService:
             Available strategies, user's publications, subscription counts
         """
         try:
-            sb = self._get_supabase(user)
+            sb_res = self._get_supabase(user)
+            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
             
             # Get available marketplace strategies from library_strategies
-            res = sb.table("library_strategies").select("*").eq("is_active", True).in_("moderation_status", ["approved", "featured"]).execute()
-            available_strategies = res.data or []
+            q1 = sb.table("library_strategies").select("*").eq("is_active", True).in_("moderation_status", ["approved", "featured"]).execute()
+            res = await q1 if inspect.isawaitable(q1) else q1
+            available_strategies = res.data or [] if res else []
             
             # Get user's published strategies
-            user_res = sb.table("library_strategies").select("*").eq("author_id", user["id"]).execute()
-            user_publications = user_res.data or []
+            q2 = sb.table("library_strategies").select("*").eq("author_id", user["id"]).execute()
+            user_res = await q2 if inspect.isawaitable(q2) else q2
+            user_publications = user_res.data or [] if user_res else []
             
             # Calculate subscriber counts
             total_subscribers = 0
@@ -463,10 +481,12 @@ class DashboardAggregationService:
         Returns:
             List of strategies with status, health, PnL, etc.
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        res = sb.table("strategies").select("*").eq("user_id", user["id"]).execute()
-        strategies = res.data or []
+        q1 = sb.table("strategies").select("*").eq("user_id", user["id"]).execute()
+        res = await q1 if inspect.isawaitable(q1) else q1
+        strategies = res.data or [] if res else []
         
         # Calculate metrics in backend
         enriched = []
@@ -542,16 +562,18 @@ class DashboardAggregationService:
         Returns:
             List of signal objects with decision, asset, risk_result, etc.
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        res = (sb.table("execution_records")
+        q1 = (sb.table("execution_records")
                .select("*")
                .eq("user_id", user["id"])
                .order("created_at", desc=True)
                .limit(limit)
                .execute())
+        res = await q1 if inspect.isawaitable(q1) else q1
         
-        records = res.data or []
+        records = res.data or [] if res else []
         
         notifications = []
         for r in records:

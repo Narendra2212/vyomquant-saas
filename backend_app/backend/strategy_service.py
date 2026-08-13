@@ -9,6 +9,7 @@ A deployed Strategy IS the running trading bot.
 PHASE 2: Transform Strategies into operational command center
 """
 
+import inspect
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -17,7 +18,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
-from backend_app.core.dependencies import create_request_supabase, get_telemetry
+from backend_app.core.dependencies import create_request_supabase_async, get_telemetry
 
 logger = logging.getLogger("StrategyService")
 
@@ -40,9 +41,8 @@ class StrategyStatus(Enum):
 class StrategyEnvironment(Enum):
     """Strategy deployment environment."""
     PAPER = "paper"
+    SANDBOX = "sandbox"
     LIVE = "live"
-    CLOUD = "cloud"
-    LOCAL = "local"
 
 
 class StrategyHealth(Enum):
@@ -75,9 +75,10 @@ class StrategyService:
             self._telemetry = get_telemetry()
         return self._telemetry
     
-    def _get_supabase(self, user: dict):
+    async def _get_supabase(self, user: dict):
         """Get Supabase client for user."""
-        return create_request_supabase(user.get("access_token"))
+        res = create_request_supabase_async(user.get("access_token"))
+        return await res if inspect.isawaitable(res) else res
     
     async def create_strategy(
         self,
@@ -97,7 +98,8 @@ class StrategyService:
         Returns:
             Strategy record with initial version
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         strategy_id = str(uuid4())
         version_id = str(uuid4())
@@ -132,16 +134,18 @@ class StrategyService:
         }
         
         # Store strategy
-        strategy_result = sb.table("strategies").insert(strategy_data).execute()
+        q1 = sb.table("strategies").insert(strategy_data).execute()
+        strategy_result = await q1 if inspect.isawaitable(q1) else q1
         
         # Store version
-        version_result = sb.table("strategy_versions").insert(version_data).execute()
+        q2 = sb.table("strategy_versions").insert(version_data).execute()
+        version_result = await q2 if inspect.isawaitable(q2) else q2
         
         logger.info(f"Created strategy {strategy_id} v1.0 for user {user['id']}")
         
         return {
-            "strategy": strategy_result.data[0] if strategy_result.data else strategy_data,
-            "version": version_result.data[0] if version_result.data else version_data
+            "strategy": strategy_result.data[0] if strategy_result and strategy_result.data else strategy_data,
+            "version": version_result.data[0] if version_result and version_result.data else version_data
         }
     
     async def get_strategy(self, user: dict, strategy_id: str) -> Optional[Dict]:
@@ -151,43 +155,42 @@ class StrategyService:
         Returns:
             Strategy with version, deployments, and metrics
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         # Get strategy
-        strategy_res = sb.table("strategies").select("*").eq("id", strategy_id).eq("user_id", user["id"]).execute()
-        if not strategy_res.data:
+        q1 = sb.table("strategies").select("*").eq("id", strategy_id).eq("user_id", user["id"]).execute()
+        strategy_res = await q1 if inspect.isawaitable(q1) else q1
+        if not strategy_res or not strategy_res.data:
             return None
         
         strategy = strategy_res.data[0]
         
         # Get current version
-        version_res = (sb.table("strategy_versions")
+        q2 = (sb.table("strategy_versions")
                       .select("*")
                       .eq("strategy_id", strategy_id)
                       .eq("is_current", True)
                       .execute())
+        version_res = await q2 if inspect.isawaitable(q2) else q2
+        version = version_res.data[0] if version_res and version_res.data else None
         
-        current_version = version_res.data[0] if version_res.data else None
-        
-        # Get deployments
-        deployments_res = (sb.table("strategy_deployments")
+        # Get active deployments
+        q3 = (sb.table("strategy_deployments")
                           .select("*")
                           .eq("strategy_id", strategy_id)
-                          .order("created_at", desc=True)
                           .execute())
+        deployments_res = await q3 if inspect.isawaitable(q3) else q3
+        deployments = deployments_res.data if deployments_res else []
         
-        # Get backtests
-        backtests_res = (sb.table("strategy_backtests")
-                        .select("*")
-                        .eq("strategy_id", strategy_id)
-                        .order("created_at", desc=True)
-                        .execute())
+        # Get performance metrics
+        performance = await self._get_strategy_performance(user, strategy_id)
         
         return {
             "strategy": strategy,
-            "version": current_version,
-            "deployments": deployments_res.data or [],
-            "backtests": backtests_res.data or []
+            "version": version,
+            "deployments": deployments,
+            "performance": performance
         }
     
     async def list_strategies(
@@ -202,7 +205,8 @@ class StrategyService:
         Returns:
             List of strategies with summary metrics
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         query = sb.table("strategies").select("*").eq("user_id", user["id"])
         
@@ -211,21 +215,23 @@ class StrategyService:
         if environment_filter:
             query = query.eq("environment", environment_filter)
         
-        result = query.order("updated_at", desc=True).execute()
+        q1 = query.order("updated_at", desc=True).execute()
+        result = await q1 if inspect.isawaitable(q1) else q1
         
-        strategies = result.data or []
+        strategies = result.data or [] if result else []
         
         # Enrich with deployment and performance metrics
         enriched = []
         for strategy in strategies:
             # Get current deployment status
-            deployments_res = (sb.table("strategy_deployments")
-                              .select("*")
-                              .eq("strategy_id", strategy["id"])
-                              .eq("status", "running")
-                              .execute())
+            q2 = (sb.table("strategy_deployments")
+                               .select("*")
+                               .eq("strategy_id", strategy["id"])
+                               .eq("status", "running")
+                               .execute())
+            deployments_res = await q2 if inspect.isawaitable(q2) else q2
             
-            is_running = len(deployments_res.data or []) > 0
+            is_running = len(deployments_res.data or []) > 0 if deployments_res else False
             
             # Get performance metrics from Telemetry
             try:
@@ -237,7 +243,7 @@ class StrategyService:
             enriched.append({
                 **strategy,
                 "is_running": is_running,
-                "deployment_count": len(deployments_res.data or []),
+                "deployment_count": len(deployments_res.data or []) if deployments_res else 0,
                 "performance": performance
             })
         
@@ -270,7 +276,8 @@ class StrategyService:
         Returns:
             Updated strategy with new version if applicable
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         # Check if blueprint is being updated
         blueprint_changed = "blueprint" in updates
@@ -283,18 +290,20 @@ class StrategyService:
         if "blueprint" in strategy_updates:
             del strategy_updates["blueprint"]  # Handle separately
         
-        result = sb.table("strategies").update(strategy_updates).eq("id", strategy_id).eq("user_id", user_id).execute()
+        q1 = sb.table("strategies").update(strategy_updates).eq("id", strategy_id).eq("user_id", user["id"]).execute()
+        result = await q1 if inspect.isawaitable(q1) else q1
         
         new_version = None
-        if blueprint_changed:
+        if blueprint_changed and sb:
             # Create new version with updated blueprint
-            current_version_res = (sb.table("strategy_versions")
+            q2 = (sb.table("strategy_versions")
                                   .select("*")
                                   .eq("strategy_id", strategy_id)
                                   .eq("is_current", True)
                                   .execute())
+            current_version_res = await q2 if inspect.isawaitable(q2) else q2
             
-            if current_version_res.data:
+            if current_version_res and current_version_res.data:
                 current = current_version_res.data[0]
                 # Increment version
                 version_parts = current["version"].replace("v", "").split(".")
@@ -309,7 +318,9 @@ class StrategyService:
                 new_version_str = f"v{major}.{minor}"
                 
                 # Mark old version as not current
-                sb.table("strategy_versions").update({"is_current": False}).eq("id", current["id"]).execute()
+                q3 = sb.table("strategy_versions").update({"is_current": False}).eq("id", current["id"]).execute()
+                if inspect.isawaitable(q3):
+                    await q3
                 
                 # Create new version
                 new_version_data = {
@@ -322,14 +333,17 @@ class StrategyService:
                     "created_at": datetime.now(timezone.utc).isoformat()
                 }
                 
-                version_result = sb.table("strategy_versions").insert(new_version_data).execute()
-                new_version = version_result.data[0] if version_result.data else new_version_data
+                q4 = sb.table("strategy_versions").insert(new_version_data).execute()
+                version_result = await q4 if inspect.isawaitable(q4) else q4
+                new_version = version_result.data[0] if version_result and version_result.data else new_version_data
                 
                 # Update strategy current version
-                sb.table("strategies").update({"current_version": new_version_str}).eq("id", strategy_id).execute()
+                q5 = sb.table("strategies").update({"current_version": new_version_str}).eq("id", strategy_id).execute()
+                if inspect.isawaitable(q5):
+                    await q5
         
         return {
-            "strategy": result.data[0] if result.data else {},
+            "strategy": result.data[0] if result and result.data else {},
             "new_version": new_version
         }
     
@@ -344,15 +358,20 @@ class StrategyService:
         Returns:
             List of all versions with metadata
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        result = (sb.table("strategy_versions")
+        if not sb:
+            return []
+            
+        q1 = (sb.table("strategy_versions")
                  .select("*")
                  .eq("strategy_id", strategy_id)
                  .order("created_at", desc=True)
                  .execute())
+        result = await q1 if inspect.isawaitable(q1) else q1
         
-        return result.data or []
+        return result.data or [] if result else []
     
     async def compare_versions(
         self,
@@ -367,20 +386,26 @@ class StrategyService:
         Returns:
             Comparison of blueprints and metadata
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
+        if not sb:
+            return {}
+            
         # Get both versions
-        version_a_res = (sb.table("strategy_versions")
+        q1 = (sb.table("strategy_versions")
                        .select("*")
                        .eq("strategy_id", strategy_id)
                        .eq("version", version_a)
                        .execute())
+        version_a_res = await q1 if inspect.isawaitable(q1) else q1
         
-        version_b_res = (sb.table("strategy_versions")
+        q2 = (sb.table("strategy_versions")
                        .select("*")
                        .eq("strategy_id", strategy_id)
                        .eq("version", version_b)
                        .execute())
+        version_b_res = await q2 if inspect.isawaitable(q2) else q2
         
         if not version_a_res.data or not version_b_res.data:
             raise ValueError("One or both versions not found")
@@ -471,29 +496,37 @@ class StrategyService:
         Returns:
             New version record
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
+        if not sb:
+            return {}
+            
         # Get version to restore
-        version_res = (sb.table("strategy_versions")
+        q1 = (sb.table("strategy_versions")
                       .select("*")
                       .eq("strategy_id", strategy_id)
                       .eq("version", version)
                       .execute())
+        version_res = await q1 if inspect.isawaitable(q1) else q1
         
-        if not version_res.data:
+        if not version_res or not version_res.data:
             raise ValueError(f"Version {version} not found")
         
         restored_version = version_res.data[0]
         
         # Mark current version as not current
-        current_res = (sb.table("strategy_versions")
+        q2 = (sb.table("strategy_versions")
                       .select("*")
                       .eq("strategy_id", strategy_id)
                       .eq("is_current", True)
                       .execute())
+        current_res = await q2 if inspect.isawaitable(q2) else q2
         
-        if current_res.data:
-            sb.table("strategy_versions").update({"is_current": False}).eq("id", current_res.data[0]["id"]).execute()
+        if current_res and current_res.data:
+            q3 = sb.table("strategy_versions").update({"is_current": False}).eq("id", current_res.data[0]["id"]).execute()
+            if inspect.isawaitable(q3):
+                await q3
         
         # Get current version number to increment
         version_parts = version.replace("v", "").split(".")
@@ -513,14 +546,17 @@ class StrategyService:
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
-        version_result = sb.table("strategy_versions").insert(new_version_data).execute()
+        q4 = sb.table("strategy_versions").insert(new_version_data).execute()
+        version_result = await q4 if inspect.isawaitable(q4) else q4
         
         # Update strategy current version
-        sb.table("strategies").update({"current_version": new_version_str}).eq("id", strategy_id).execute()
+        q5 = sb.table("strategies").update({"current_version": new_version_str}).eq("id", strategy_id).execute()
+        if inspect.isawaitable(q5):
+            await q5
         
         logger.info(f"Restored version {version} as {new_version_str} for strategy {strategy_id}")
         
-        return version_result.data[0] if version_result.data else new_version_data
+        return version_result.data[0] if version_result and version_result.data else new_version_data
     
     async def deploy_version(
         self,
@@ -537,16 +573,21 @@ class StrategyService:
         Returns:
             Deployment record
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
+        if not sb:
+            return {}
+            
         # Get version
-        version_res = (sb.table("strategy_versions")
+        q1 = (sb.table("strategy_versions")
                       .select("*")
                       .eq("strategy_id", strategy_id)
                       .eq("version", version)
                       .execute())
+        version_res = await q1 if inspect.isawaitable(q1) else q1
         
-        if not version_res.data:
+        if not version_res or not version_res.data:
             raise ValueError(f"Version {version} not found")
         
         version_data = version_res.data[0]
@@ -566,44 +607,56 @@ class StrategyService:
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
-        deployment_result = sb.table("strategy_deployments").insert(deployment_data).execute()
+        q2 = sb.table("strategy_deployments").insert(deployment_data).execute()
+        deployment_result = await q2 if inspect.isawaitable(q2) else q2
         
         # Get strategy for exchange info
-        strategy_res = sb.table("strategies").select("*").eq("id", strategy_id).execute()
-        if strategy_res.data:
+        q3 = sb.table("strategies").select("*").eq("id", strategy_id).execute()
+        strategy_res = await q3 if inspect.isawaitable(q3) else q3
+        if strategy_res and strategy_res.data:
             deployment_data["exchange_id"] = strategy_res.data[0]["exchange"]
         
         # Update strategy status
-        sb.table("strategies").update({"status": StrategyStatus.DEPLOYING.value}).eq("id", strategy_id).execute()
+        q4 = sb.table("strategies").update({"status": StrategyStatus.DEPLOYING.value}).eq("id", strategy_id).execute()
+        if inspect.isawaitable(q4):
+            await q4
         
         # Trigger actual deployment via FleetManager
         from backend_app.core.state import app_state
         if hasattr(app_state, 'fleet'):
             success, message = await app_state.fleet.start_bot(
                 user_id=user["id"],
-                symbol=strategy_res.data[0]["symbol"] if strategy_res.data else "BTC/USDT",
+                symbol=strategy_res.data[0]["symbol"] if strategy_res and strategy_res.data else "BTC/USDT",
                 blueprint=version_data["blueprint"]
             )
             
             if success:
-                sb.table("strategy_deployments").update({
+                q5 = sb.table("strategy_deployments").update({
                     "status": "running",
                     "started_at": datetime.now(timezone.utc).isoformat()
                 }).eq("id", deployment_id).execute()
+                if inspect.isawaitable(q5):
+                    await q5
                 
-                sb.table("strategies").update({"status": StrategyStatus.RUNNING.value}).eq("id", strategy_id).execute()
+                q6 = sb.table("strategies").update({"status": StrategyStatus.RUNNING.value}).eq("id", strategy_id).execute()
+                if inspect.isawaitable(q6):
+                    await q6
             else:
-                sb.table("strategy_deployments").update({
+                q5 = sb.table("strategy_deployments").update({
                     "status": "failed",
                     "error_message": message
                 }).eq("id", deployment_id).execute()
+                if inspect.isawaitable(q5):
+                    await q5
                 
-                sb.table("strategies").update({"status": StrategyStatus.FAILED.value}).eq("id", strategy_id).execute()
+                q6 = sb.table("strategies").update({"status": StrategyStatus.FAILED.value}).eq("id", strategy_id).execute()
+                if inspect.isawaitable(q6):
+                    await q6
         
         logger.info(f"Deployed version {version} of strategy {strategy_id}")
         
         return {
-            "deployment": deployment_result.data[0] if deployment_result.data else deployment_data,
+            "deployment": deployment_result.data[0] if deployment_result and deployment_result.data else deployment_data,
             "success": success if 'success' in locals() else True,
             "message": message if 'message' in locals() else "Deployment started"
         }
@@ -618,13 +671,17 @@ class StrategyService:
         Returns:
             Success status
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
 
         # Stop all running deployments first
         await self.stop_all_deployments(user, strategy_id)
 
         # Delete strategy (cascade delete handled by database)
-        result = sb.table("strategies").delete().eq("id", strategy_id).eq("user_id", user["id"]).execute()
+        if sb:
+            q1 = sb.table("strategies").delete().eq("id", strategy_id).eq("user_id", user["id"]).execute()
+            if inspect.isawaitable(q1):
+                await q1
 
         logger.info(f"Deleted strategy {strategy_id} for user {user['id']}")
         return True
@@ -674,7 +731,8 @@ class StrategyService:
         Returns:
             Deployment record
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
 
         # Get strategy
         strategy = await self.get_strategy(user, strategy_id)
@@ -697,13 +755,14 @@ class StrategyService:
             )
         
         # Get specific version or current
-        if version:
-            version_res = (sb.table("strategy_versions")
+        if version and sb:
+            q1 = (sb.table("strategy_versions")
                           .select("*")
                           .eq("strategy_id", strategy_id)
                           .eq("version", version)
                           .execute())
-            version_data = version_res.data[0] if version_res.data else None
+            version_res = await q1 if inspect.isawaitable(q1) else q1
+            version_data = version_res.data[0] if version_res and version_res.data else None
         else:
             version_data = strategy["version"]
         
@@ -725,10 +784,14 @@ class StrategyService:
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
-        deployment_result = sb.table("strategy_deployments").insert(deployment_data).execute()
-        
-        # Update strategy status
-        sb.table("strategies").update({"status": StrategyStatus.DEPLOYING.value}).eq("id", strategy_id).execute()
+        if sb:
+            q2 = sb.table("strategy_deployments").insert(deployment_data).execute()
+            deployment_result = await q2 if inspect.isawaitable(q2) else q2
+            
+            # Update strategy status
+            q3 = sb.table("strategies").update({"status": StrategyStatus.DEPLOYING.value}).eq("id", strategy_id).execute()
+            if inspect.isawaitable(q3):
+                await q3
         
         # Trigger actual deployment via FleetManager
         # This will start the bot instance
@@ -740,28 +803,36 @@ class StrategyService:
                 blueprint=version_data["blueprint"]
             )
             
-            if success:
+            if success and sb:
                 # Update deployment status to running
-                sb.table("strategy_deployments").update({
+                q4 = sb.table("strategy_deployments").update({
                     "status": "running",
                     "started_at": datetime.now(timezone.utc).isoformat()
                 }).eq("id", deployment_id).execute()
+                if inspect.isawaitable(q4):
+                    await q4
                 
                 # Update strategy status
-                sb.table("strategies").update({"status": StrategyStatus.RUNNING.value}).eq("id", strategy_id).execute()
-            else:
+                q5 = sb.table("strategies").update({"status": StrategyStatus.RUNNING.value}).eq("id", strategy_id).execute()
+                if inspect.isawaitable(q5):
+                    await q5
+            elif sb:
                 # Deployment failed
-                sb.table("strategy_deployments").update({
+                q4 = sb.table("strategy_deployments").update({
                     "status": "failed",
                     "error_message": message
                 }).eq("id", deployment_id).execute()
+                if inspect.isawaitable(q4):
+                    await q4
                 
-                sb.table("strategies").update({"status": StrategyStatus.FAILED.value}).eq("id", strategy_id).execute()
+                q5 = sb.table("strategies").update({"status": StrategyStatus.FAILED.value}).eq("id", strategy_id).execute()
+                if inspect.isawaitable(q5):
+                    await q5
         
         logger.info(f"Deployed strategy {strategy_id} as deployment {deployment_id}")
         
         return {
-            "deployment": deployment_result.data[0] if deployment_result.data else deployment_data,
+            "deployment": deployment_result.data[0] if 'deployment_result' in locals() and deployment_result and deployment_result.data else deployment_data,
             "success": success if 'success' in locals() else True,
             "message": message if 'message' in locals() else "Deployment started"
         }
@@ -777,11 +848,16 @@ class StrategyService:
         Returns:
             Success status
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        
+        if not sb:
+            return False
 
         # Get deployment
-        deployment_res = sb.table("strategy_deployments").select("*").eq("id", deployment_id).eq("user_id", user["id"]).execute()
-        if not deployment_res.data:
+        q1 = sb.table("strategy_deployments").select("*").eq("id", deployment_id).eq("user_id", user["id"]).execute()
+        deployment_res = await q1 if inspect.isawaitable(q1) else q1
+        if not deployment_res or not deployment_res.data:
             return False
 
         deployment = deployment_res.data[0]
@@ -795,21 +871,26 @@ class StrategyService:
             )
         
         # Update deployment status
-        sb.table("strategy_deployments").update({
+        q2 = sb.table("strategy_deployments").update({
             "status": "stopped",
             "stopped_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", deployment_id).execute()
+        if inspect.isawaitable(q2):
+            await q2
         
         # Check if strategy has other running deployments
-        running_res = (sb.table("strategy_deployments")
+        q3 = (sb.table("strategy_deployments")
                         .select("*")
                         .eq("strategy_id", deployment["strategy_id"])
                         .eq("status", "running")
                         .execute())
+        running_res = await q3 if inspect.isawaitable(q3) else q3
         
-        if not running_res.data:
+        if running_res and not running_res.data:
             # No more running deployments, update strategy status
-            sb.table("strategies").update({"status": StrategyStatus.STOPPED.value}).eq("id", deployment["strategy_id"]).execute()
+            q4 = sb.table("strategies").update({"status": StrategyStatus.STOPPED.value}).eq("id", deployment["strategy_id"]).execute()
+            if inspect.isawaitable(q4):
+                await q4
         
         logger.info(f"Stopped deployment {deployment_id}")
         return True
@@ -821,17 +902,22 @@ class StrategyService:
         Returns:
             Number of deployments stopped
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        
+        if not sb:
+            return 0
 
         # Get all running deployments
-        running_res = (sb.table("strategy_deployments")
+        q1 = (sb.table("strategy_deployments")
                         .select("*")
                         .eq("strategy_id", strategy_id)
                         .eq("status", "running")
                         .execute())
+        running_res = await q1 if inspect.isawaitable(q1) else q1
 
         stopped_count = 0
-        for deployment in running_res.data or []:
+        for deployment in (running_res.data if running_res else []) or []:
             if await self.stop_deployment(user, deployment["id"]):
                 stopped_count += 1
 
@@ -844,13 +930,17 @@ class StrategyService:
         Returns:
             Success status
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
 
         # Stop all deployments
         await self.stop_all_deployments(user, strategy_id)
         
         # Update strategy status
-        sb.table("strategies").update({"status": StrategyStatus.PAUSED.value}).eq("id", strategy_id).execute()
+        if sb:
+            q1 = sb.table("strategies").update({"status": StrategyStatus.PAUSED.value}).eq("id", strategy_id).execute()
+            if inspect.isawaitable(q1):
+                await q1
         
         logger.info(f"Paused strategy {strategy_id}")
         return True
@@ -876,7 +966,8 @@ class StrategyService:
         Returns:
             All performance metrics from backend
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
 
         # Get strategy
         strategy = await self.get_strategy(user, strategy_id)
@@ -887,14 +978,18 @@ class StrategyService:
         performance = await self._get_strategy_performance(user, strategy_id)
         
         # Get deployment metrics
-        deployments_res = (sb.table("strategy_deployments")
-                          .select("*")
-                          .eq("strategy_id", strategy_id)
-                          .execute())
+        deployments = []
+        if sb:
+            q1 = (sb.table("strategy_deployments")
+                           .select("*")
+                           .eq("strategy_id", strategy_id)
+                           .execute())
+            deployments_res = await q1 if inspect.isawaitable(q1) else q1
+            deployments = deployments_res.data if deployments_res and deployments_res.data else []
         
         # Calculate backend metrics
-        total_deployments = len(deployments_res.data or [])
-        running_deployments = len([d for d in deployments_res.data or [] if d["status"] == "running"])
+        total_deployments = len(deployments)
+        running_deployments = len([d for d in deployments if d.get("status") == "running"])
         
         return {
             "strategy_id": strategy_id,

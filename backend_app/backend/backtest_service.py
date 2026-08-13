@@ -15,6 +15,7 @@ Provides:
 - Backtest metrics calculation
 """
 
+import inspect
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -22,7 +23,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from backend_app.core.dependencies import create_request_supabase
+from backend_app.core.dependencies import create_request_supabase_async
 
 logger = logging.getLogger("BacktestService")
 
@@ -38,9 +39,10 @@ class BacktestService:
     def __init__(self):
         pass
     
-    def _get_supabase(self, user: dict):
+    async def _get_supabase(self, user: dict):
         """Get Supabase client for user."""
-        return create_request_supabase(user.get("access_token"))
+        res = create_request_supabase_async(user.get("access_token"))
+        return await res if inspect.isawaitable(res) else res
     
     async def create_backtest(
         self,
@@ -75,7 +77,8 @@ class BacktestService:
         Returns:
             Backtest record
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         backtest_id = str(uuid4())
         
@@ -100,7 +103,8 @@ class BacktestService:
             logger.info(f"[DEV_MODE] Skipping Supabase backtest insertion for {backtest_id}")
             return backtest_data
         
-        result = sb.table("strategy_backtests").insert(backtest_data).execute()
+        query_res = sb.table("strategy_backtests").insert(backtest_data).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
         
         logger.info(f"Created backtest {backtest_id} for strategy {strategy_id}")
         
@@ -123,7 +127,8 @@ class BacktestService:
         Returns:
             Updated backtest record
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         update_data = {
             "status": "completed",
@@ -149,7 +154,8 @@ class BacktestService:
             logger.info(f"[DEV_MODE] Skipping Supabase backtest update for {backtest_id}")
             return update_data
         
-        result = sb.table("strategy_backtests").update(update_data).eq("id", backtest_id).execute()
+        query_res = sb.table("strategy_backtests").update(update_data).eq("id", backtest_id).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
         
         logger.info(f"Updated backtest {backtest_id} with results")
         
@@ -170,11 +176,13 @@ class BacktestService:
         Returns:
             Backtest record with results
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         if sb is None:
             return None
         
-        result = sb.table("strategy_backtests").select("*").eq("id", backtest_id).eq("user_id", user["id"]).execute()
+        query_res = sb.table("strategy_backtests").select("*").eq("id", backtest_id).eq("user_id", user["id"]).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
         
         if not result.data:
             return None
@@ -198,7 +206,8 @@ class BacktestService:
         Returns:
             List of backtest records
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         if sb is None:
             return []
         
@@ -207,7 +216,8 @@ class BacktestService:
         if strategy_id:
             query = query.eq("strategy_id", strategy_id)
         
-        result = query.order("created_at", desc=True).limit(limit).execute()
+        query_res = query.order("created_at", desc=True).limit(limit).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
         
         return result.data or []
     
@@ -229,16 +239,18 @@ class BacktestService:
         Returns:
             All backtests for strategy
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         if sb is None:
             return []
         
-        result = (sb.table("strategy_backtests")
+        query_res = (sb.table("strategy_backtests")
                  .select("*")
                  .eq("strategy_id", strategy_id)
                  .eq("user_id", user["id"])
                  .order("created_at", desc=True)
                  .execute())
+        result = await query_res if inspect.isawaitable(query_res) else query_res
         
         return result.data or []
     
@@ -257,13 +269,16 @@ class BacktestService:
         Returns:
             Comparison results
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
         backtests = []
-        for backtest_id in backtest_ids:
-            result = sb.table("strategy_backtests").select("*").eq("id", backtest_id).eq("user_id", user["id"]).execute()
-            if result.data:
-                backtests.append(result.data[0])
+        if sb:
+            for backtest_id in backtest_ids:
+                query_res = sb.table("strategy_backtests").select("*").eq("id", backtest_id).eq("user_id", user["id"]).execute()
+                result = await query_res if inspect.isawaitable(query_res) else query_res
+                if result.data:
+                    backtests.append(result.data[0])
         
         # Generate comparison
         comparison = {
@@ -297,9 +312,15 @@ class BacktestService:
         Returns:
             Success status
         """
-        sb = self._get_supabase(user)
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        result = sb.table("strategy_backtests").delete().eq("id", backtest_id).eq("user_id", user["id"]).execute()
+        if sb:
+            query_res = sb.table("strategy_backtests").delete().eq("id", backtest_id).eq("user_id", user["id"]).execute()
+            result = await query_res if inspect.isawaitable(query_res) else query_res
+        
+        logger.info(f"Deleted backtest {backtest_id}")
+        return True
         
         logger.info(f"Deleted backtest {backtest_id}")
         return True

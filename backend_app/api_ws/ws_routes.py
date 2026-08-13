@@ -18,6 +18,7 @@ PHASE 14: WebSocket optimization for Dashboard
   - Adds proper heartbeat, reconnection, and memory leak prevention
 """
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -1102,9 +1103,11 @@ async def ws_strategy(
         return
 
     # Verify user owns the strategy
-    from backend_app.core.dependencies import create_request_supabase
-    sb = create_request_supabase(token)
-    strategy_res = sb.table("strategies").select("user_id").eq("id", strategy_id).execute()
+    from backend_app.core.dependencies import create_request_supabase_async
+    sb_res = create_request_supabase_async(token)
+    sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+    query_res = sb.table("strategies").select("user_id").eq("id", strategy_id).execute()
+    strategy_res = await query_res if inspect.isawaitable(query_res) else query_res
     if not strategy_res.data or strategy_res.data[0]["user_id"] != user_id:
         await websocket.close(code=4003, reason="Forbidden")
         return
