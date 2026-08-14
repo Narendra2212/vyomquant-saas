@@ -184,8 +184,41 @@
         "startPeriod": 60
       },
       "stopTimeout": 30,
+      "dependsOn": [
+        {
+          "containerName": "questdb",
+          "condition": "START"
+        }
+      ],
       "linuxParameters": {
         "initProcessEnabled": true
+      }
+    },
+    {
+      "name": "questdb",
+      "image": "questdb/questdb:latest",
+      "essential": false,
+      "portMappings": [
+        {
+          "containerPort": 9000,
+          "hostPort": 9000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "QDB_TELEMETRY_ENABLED",
+          "value": "false"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/vyomquant-api",
+          "awslogs-region": "ap-southeast-1",
+          "awslogs-stream-prefix": "questdb",
+          "awslogs-create-group": "true"
+        }
       }
     }
   ]

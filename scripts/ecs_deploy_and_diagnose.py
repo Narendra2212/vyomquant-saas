@@ -105,7 +105,14 @@ def validate_critical_config(task_def: Dict) -> Tuple[bool, str]:
     if not task_def.get("containerDefinitions"):
         return False, "No container definitions found"
 
-    container = task_def["containerDefinitions"][0]
+    container = None
+    for c in task_def.get("containerDefinitions", []):
+        if c.get("name") in ("vyomquant-api", "api"):
+            container = c
+            break
+    if not container:
+        container = task_def["containerDefinitions"][0]
+
     env_vars = {env["name"]: env["value"] for env in container.get("environment", [])}
 
     # Validate REDIS_URL is production ElastiCache, not localhost
@@ -167,7 +174,10 @@ def register_task_definition(image_uri: str) -> Tuple[bool, str]:
 
     # Step 3: Update ONLY the container image
     if current_td.get("containerDefinitions"):
-        current_td["containerDefinitions"][0]["image"] = image_uri
+        for container in current_td["containerDefinitions"]:
+            if container.get("name") in ("vyomquant-api", "api"):
+                container["image"] = image_uri
+                break
 
     # Step 4: Strip fields not accepted by register-task-definition
     for key in ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes',

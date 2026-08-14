@@ -6,7 +6,8 @@
     "errors": [],
     "family": "vyomquant-api",
     "containers": [
-      "vyomquant-api"
+      "vyomquant-api",
+      "questdb"
     ]
   },
   "aws_live": {
