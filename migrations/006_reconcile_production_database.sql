@@ -39,9 +39,15 @@ END $$;
 -- ══════════════════════════════════════════════════════════════════════════
 
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS available_discounts INTEGER DEFAULT 0 NOT NULL;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS max_api_slots INTEGER DEFAULT 1 NOT NULL;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS full_name TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE public.strategies ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE NOT NULL;
 ALTER TABLE public.strategies ADD COLUMN IF NOT EXISTS dag_config JSONB;
 ALTER TABLE public.library_strategies ADD COLUMN IF NOT EXISTS subscriber_count INTEGER DEFAULT 0 NOT NULL;
+ALTER TABLE public.execution_records ADD COLUMN IF NOT EXISTS user_id UUID;
+UPDATE public.execution_records SET user_id = tenant_id WHERE user_id IS NULL;
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- PART 3: MARKETPLACE & SUBSCRIPTION TABLES
@@ -1003,6 +1009,13 @@ BEGIN
         CREATE POLICY "subscriptions_owner_access" ON public.subscriptions FOR SELECT TO authenticated USING (auth.uid()::text = user_id);
         CREATE POLICY "subscriptions_service_role" ON public.subscriptions FOR ALL TO service_role USING (true) WITH CHECK (true);
     END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'execution_records') THEN
+        DROP POLICY IF EXISTS "execution_records_user_access" ON public.execution_records;
+        DROP POLICY IF EXISTS "execution_records_service" ON public.execution_records;
+        CREATE POLICY "execution_records_user_access" ON public.execution_records FOR ALL TO authenticated USING (auth.uid() = user_id OR auth.uid() = tenant_id) WITH CHECK (auth.uid() = user_id OR auth.uid() = tenant_id);
+        CREATE POLICY "execution_records_service" ON public.execution_records FOR ALL TO service_role USING (true) WITH CHECK (true);
+    END IF;
 END $$;
 
 -- ══════════════════════════════════════════════════════════════════════════
@@ -1015,6 +1028,7 @@ CREATE INDEX IF NOT EXISTS idx_signals_strategy_generated ON public.signals(stra
 CREATE INDEX IF NOT EXISTS idx_profiles_id ON public.profiles(id);
 CREATE INDEX IF NOT EXISTS idx_exchange_keys_user_id ON public.exchange_keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_execution_records_tenant_created ON public.execution_records(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_execution_records_user_created ON public.execution_records(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_dag_tasks_tenant_status ON public.dag_tasks(tenant_id, status);
 
 COMMIT;
