@@ -231,7 +231,6 @@ async def list_strategies(request: Request,
         }
     except Exception as e:
         import traceback
-        import inspect
         
         # Safe diagnostic logging - no sensitive data
         exc_type = type(e).__name__
@@ -1216,7 +1215,6 @@ async def list_research_reports(request: Request,
     """
     List all research reports for a Strategy.
     """
-    import inspect
     try:
         from backend_app.core.dependencies import create_request_supabase_async
         
@@ -1253,7 +1251,6 @@ async def get_research_report(request: Request,
     """
     Get complete research report.
     """
-    import inspect
     try:
         from backend_app.core.dependencies import create_request_supabase_async
         
@@ -1306,7 +1303,6 @@ async def deploy_strategy(request: Request,
     
     Deployment executes ONLY the Strategy Package from compiler.
     """
-    import inspect
     try:
         # Get strategy to retrieve version info
         strategy_service = await get_strategy_service()
@@ -1429,7 +1425,6 @@ async def pause_deployment(request: Request,
     user: dict = Depends(get_current_user)
 ):
     """Pause a running deployment."""
-    import inspect
     try:
         deployment_manager = get_deployment_manager()
         deployment_state = await deployment_manager.pause_deployment(deployment_id)
@@ -1459,7 +1454,6 @@ async def resume_deployment(request: Request,
     user: dict = Depends(get_current_user)
 ):
     """Resume a paused deployment."""
-    import inspect
     try:
         deployment_manager = get_deployment_manager()
         deployment_state = await deployment_manager.resume_deployment(deployment_id)
@@ -1489,7 +1483,6 @@ async def restart_deployment(request: Request,
     user: dict = Depends(get_current_user)
 ):
     """Restart a deployment."""
-    import inspect
     try:
         deployment_manager = get_deployment_manager()
         deployment_state = await deployment_manager.restart_deployment(deployment_id)

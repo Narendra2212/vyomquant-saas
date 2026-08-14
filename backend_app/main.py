@@ -605,7 +605,7 @@ app.include_router(billing.router, prefix="/api/billing", tags=["Billing"])
 app.include_router(security.router, prefix="/api/security", tags=["Security"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
 app.include_router(distributed_execution.router, prefix="/api/distributed-execution", tags=["Distributed Execution"])
-app.include_router(health.router, prefix="/health", tags=["Health"])
+app.include_router(health.router, prefix="/api", tags=["Health"])
 app.include_router(health_websocket.router, prefix="/health", tags=["Health"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
 from backend_app.routers import signal_trace

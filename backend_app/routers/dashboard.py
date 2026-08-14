@@ -14,6 +14,7 @@ Enterprise-grade aggregation:
 - Comprehensive error handling and fallbacks
 """
 
+import inspect
 import logging
 from typing import Optional
 
@@ -75,7 +76,6 @@ async def get_dashboard(
         raise
     except Exception as e:
         import traceback
-        import inspect
         
         # Safe diagnostic logging - no sensitive data
         exc_type = type(e).__name__

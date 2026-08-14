@@ -432,7 +432,6 @@ async def get_referral_stats(
         raise
     except Exception as e:
         import traceback
-        import inspect
         
         # Safe diagnostic logging - no sensitive data
         exc_type = type(e).__name__

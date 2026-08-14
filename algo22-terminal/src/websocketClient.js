@@ -53,8 +53,11 @@ class WebSocketClient {
       return;
     }
 
-    this.url = `${WS_BASE}${path}`;
-    console.log(`Connecting to WebSocket: ${this.url}`);
+    const token = sessionStorage.getItem('token');
+    const hasQuery = path.includes('?');
+    const tokenParam = token ? `${hasQuery ? '&' : '?'}token=${encodeURIComponent(token)}` : '';
+    this.url = `${WS_BASE}${path}${tokenParam}`;
+    console.log(`Connecting to WebSocket: ${this.url.replace(/token=[^&]+/, 'token=[REDACTED]')}`);
 
     try {
       this.ws = new WebSocket(this.url);

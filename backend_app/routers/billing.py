@@ -306,7 +306,6 @@ async def get_entitlements(
         }
     except Exception as e:
         import traceback
-        import inspect
         
         # Safe diagnostic logging - no sensitive data
         exc_type = type(e).__name__
@@ -333,7 +332,22 @@ async def get_entitlements(
         # Log full traceback for debugging
         logger.error(f"[BILLING_ENTITLEMENTS_ENDPOINT] Full traceback:\n{traceback.format_exc()}")
         
-        raise HTTPException(status_code=500, detail="Failed to fetch billing entitlements")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "BILLING_ENTITLEMENTS_FAILED", "message": "Failed to fetch billing entitlements"}
+        )
+
+
+# ── GET /api/billing/plan ────────────────────────────────────────────────
+@router.get("/plan")
+@limiter.limit("60/minute")
+async def get_current_plan(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    supabase: Any = Depends(get_request_supabase),
+):
+    """Get user's current billing plan (alias for /api/billing/entitlements)."""
+    return await get_entitlements(request, user, supabase)
 
 
 # ── GET /api/billing/currency ───────────────────────────────────────────────

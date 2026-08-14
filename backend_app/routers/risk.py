@@ -208,7 +208,6 @@ async def account_health(user: dict = Depends(get_current_user)):
         return {"current_drawdown_pct": 0.0, "daily_pnl_pct": 0.0, "total_exposure": 0.0}
     except Exception as e:
         import traceback
-        import inspect
         
         # Safe diagnostic logging - no sensitive data
         exc_type = type(e).__name__
