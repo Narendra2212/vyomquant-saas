@@ -146,7 +146,7 @@ class SubscriptionEngine:
                 Resource.STRATEGIES.value: 100,
                 Resource.BOTS.value: 12,
                 Resource.ML_TRAININGS.value: 15,
-                Resource.MARKETPLACE_PUBLISHED.value: float("inf"),  # Unlimited
+                Resource.MARKETPLACE_PUBLISHED.value: -1,  # -1 represents Unlimited for JSON compliance
             },
             pricing={"USD": 2500, "INR": 249900},  # $25 / ₹2499
         ),
@@ -249,7 +249,7 @@ class SubscriptionEngine:
         limit = config.quotas.get(resource, 0)
         
         # Unlimited quota
-        if limit == float("inf"):
+        if limit == float("inf") or limit == -1:
             return True
         
         if current_usage >= limit:
@@ -283,7 +283,7 @@ class SubscriptionEngine:
         cache_key = f"quota:{user_id}:{resource}"
         
         # Unlimited quota
-        if limit == float("inf"):
+        if limit == float("inf") or limit == -1:
             new_usage = await redis_manager.incrby(cache_key, amount)
             await redis_manager.expire(cache_key, 86400)
             return True, new_usage, limit

@@ -5,9 +5,10 @@ Provides CRUD endpoints for user notifications with pagination and filtering.
 Integrates with WebSocket for real-time delivery.
 """
 
+import inspect
 import logging
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -118,10 +119,13 @@ async def create_notification(
         raise
 
 
+import inspect
+
 # ══════════════════════════════════════════════════════════════════════════
 # API ENDPOINTS
 # ══════════════════════════════════════════════════════════════════════════
 
+@router.get("")
 @router.get("/")
 async def list_notifications(
     limit: int = Query(50, ge=1, le=100),
@@ -129,7 +133,7 @@ async def list_notifications(
     unread_only: bool = Query(False),
     category: Optional[str] = Query(None),
     user: dict = Depends(get_current_user),
-    supabase: SupabaseClient = Depends(get_request_supabase),
+    supabase: Any = Depends(get_request_supabase),
 ):
     """
     List user notifications with pagination and filtering.
@@ -158,7 +162,8 @@ async def list_notifications(
         # Apply pagination
         query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
         
-        result = query.execute()
+        res = query.execute()
+        result = await res if inspect.isawaitable(res) else res
         
         items = result.data or []
         total = result.count or 0
@@ -167,7 +172,8 @@ async def list_notifications(
         unread_query = supabase.table("notifications").select("*", count="exact") \
             .eq("user_id", user["id"]) \
             .eq("read", False)
-        unread_result = unread_query.execute()
+        unread_res = unread_query.execute()
+        unread_result = await unread_res if inspect.isawaitable(unread_res) else unread_res
         unread_count = unread_result.count or 0
         
         return NotificationListResponse(
@@ -187,7 +193,7 @@ async def list_notifications(
 async def mark_notification_read(
     notification_id: str,
     user: dict = Depends(get_current_user),
-    supabase: SupabaseClient = Depends(get_request_supabase),
+    supabase: Any = Depends(get_request_supabase),
 ):
     """
     Mark a notification as read.
@@ -197,13 +203,16 @@ async def mark_notification_read(
     
     try:
         # Verify ownership
-        existing = supabase.table("notifications").select("*").eq("id", notification_id).eq("user_id", user["id"]).execute()
+        q1 = supabase.table("notifications").select("*").eq("id", notification_id).eq("user_id", user["id"]).execute()
+        existing = await q1 if inspect.isawaitable(q1) else q1
         
         if not existing.data:
             raise HTTPException(404, "Notification not found")
         
         # Update
-        supabase.table("notifications").update({"read": True}).eq("id", notification_id).execute()
+        q2 = supabase.table("notifications").update({"read": True}).eq("id", notification_id).execute()
+        if inspect.isawaitable(q2):
+            await q2
         
         return {"status": "ok"}
         
@@ -217,7 +226,7 @@ async def mark_notification_read(
 @router.put("/read-all")
 async def mark_all_notifications_read(
     user: dict = Depends(get_current_user),
-    supabase: SupabaseClient = Depends(get_request_supabase),
+    supabase: Any = Depends(get_request_supabase),
 ):
     """
     Mark all user notifications as read.
@@ -226,7 +235,9 @@ async def mark_all_notifications_read(
         return {"status": "ok"}
     
     try:
-        supabase.table("notifications").update({"read": True}).eq("user_id", user["id"]).execute()
+        q1 = supabase.table("notifications").update({"read": True}).eq("user_id", user["id"]).execute()
+        if inspect.isawaitable(q1):
+            await q1
         return {"status": "ok"}
         
     except Exception as e:
@@ -238,7 +249,7 @@ async def mark_all_notifications_read(
 async def delete_notification(
     notification_id: str,
     user: dict = Depends(get_current_user),
-    supabase: SupabaseClient = Depends(get_request_supabase),
+    supabase: Any = Depends(get_request_supabase),
 ):
     """
     Delete a notification.
@@ -248,13 +259,16 @@ async def delete_notification(
     
     try:
         # Verify ownership
-        existing = supabase.table("notifications").select("*").eq("id", notification_id).eq("user_id", user["id"]).execute()
+        q1 = supabase.table("notifications").select("*").eq("id", notification_id).eq("user_id", user["id"]).execute()
+        existing = await q1 if inspect.isawaitable(q1) else q1
         
         if not existing.data:
             raise HTTPException(404, "Notification not found")
         
         # Delete
-        supabase.table("notifications").delete().eq("id", notification_id).execute()
+        q2 = supabase.table("notifications").delete().eq("id", notification_id).execute()
+        if inspect.isawaitable(q2):
+            await q2
         
         return {"status": "ok"}
         
@@ -265,10 +279,11 @@ async def delete_notification(
         raise HTTPException(500, "Failed to delete notification")
 
 
+@router.delete("")
 @router.delete("/")
 async def delete_all_notifications(
     user: dict = Depends(get_current_user),
-    supabase: SupabaseClient = Depends(get_request_supabase),
+    supabase: Any = Depends(get_request_supabase),
 ):
     """
     Delete all user notifications.
@@ -277,7 +292,9 @@ async def delete_all_notifications(
         return {"status": "ok"}
     
     try:
-        supabase.table("notifications").delete().eq("user_id", user["id"]).execute()
+        q1 = supabase.table("notifications").delete().eq("user_id", user["id"]).execute()
+        if inspect.isawaitable(q1):
+            await q1
         return {"status": "ok"}
         
     except Exception as e:

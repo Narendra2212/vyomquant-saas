@@ -148,6 +148,7 @@ def _validate_ml_models_present(blueprint: Dict) -> None:
 # Type compatibility rules: source_type -> [allowed_target_types]
 TYPE_COMPATIBILITY: Dict[str, List[str]] = {
     NodeType.MARKET_DATA.value: [NodeType.INDICATOR.value, NodeType.FEATURE.value, NodeType.MATH.value, NodeType.VALIDATION.value],
+    "input": [NodeType.INDICATOR.value, NodeType.FEATURE.value, NodeType.MATH.value, NodeType.VALIDATION.value],
     NodeType.INDICATOR.value: [NodeType.FEATURE.value, NodeType.LOGIC.value, NodeType.ML.value, NodeType.DL.value, NodeType.MATH.value],
     NodeType.FEATURE.value: [NodeType.ML.value, NodeType.DL.value, NodeType.LOGIC.value, NodeType.MATH.value],
     NodeType.MATH.value: [NodeType.LOGIC.value, NodeType.SIGNAL.value, NodeType.FEATURE.value, NodeType.ML.value, NodeType.DL.value],
@@ -816,6 +817,7 @@ async def get_available_blocks():
     }
 
 
+@router.get("")
 @router.get("/")
 async def list_strategies(user: dict = Depends(get_current_user)):
     """Returns all strategies saved in Supabase for this user."""
@@ -856,6 +858,7 @@ async def list_strategies(user: dict = Depends(get_current_user)):
 
 
 # ── POST /api/strategies ─────────────────────────────────────────────────
+@router.post("")
 @router.post("/")
 @limiter.limit("20/minute")
 async def create_strategy(
@@ -930,12 +933,12 @@ async def create_strategy(
     buy_logic["_dag_hash"] = None
 
     
-    # Compute DAG hash for integrity
+    # Compute DAG hash for integrity and store in buy_logic (not top-level DB column)
     if nodes or edges:
         try:
             compiled = DAGCompiler.compile(nodes, edges)
-            data["dag_hash"] = compiled.compute_hash()
-            data["execution_order"] = compiled.execution_order
+            buy_logic["_dag_hash"] = compiled.compute_hash()
+            buy_logic["_execution_order"] = compiled.execution_order
         except Exception:
             pass  # Compilation errors handled earlier
     

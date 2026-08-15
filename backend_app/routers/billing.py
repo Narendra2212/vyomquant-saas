@@ -839,9 +839,11 @@ async def get_invoices(
         return []
     
     try:
-        resp = supabase.table("billing_invoices").select("*").eq("user_id", user["id"]).order("created_at", desc=True).execute()
+        res = supabase.table("billing_invoices").select("*").eq("user_id", user["id"]).order("created_at", desc=True).execute()
+        resp = await res if inspect.isawaitable(res) else res
         invoices = []
-        for inv in resp.data or []:
+        rows = resp.data if resp and hasattr(resp, "data") and resp.data else []
+        for inv in rows:
             invoices.append({
                 "id": inv.get("id"),
                 "date": inv.get("created_at"),

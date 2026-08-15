@@ -226,48 +226,59 @@ class TelemetryEngine:
             logger.warning(f"Failed to create QuestDB view live_user_pnl: {e}")
 
     # ══════════════════════════════════════════════════════════════════════
-    #  READ — SQL QUERY
+    #  READ — SQL QUERIES OVER REST
     # ══════════════════════════════════════════════════════════════════════
 
     async def execute_query(
-        self, sql_query: str, params: Optional[list] = None, max_retries: int = 3
+        self, sql_query: str, params: Optional[list] = None, max_retries: int = 1
     ) -> Optional[dict]:
         """
         Executes a SQL query against QuestDB REST API.
-        FIX TB-4: Catches asyncio.TimeoutError in addition to aiohttp.ClientError.
-        Returns the parsed JSON response, or None after all retries fail.
+        Includes fast-fail circuit breaker when QuestDB is unreachable to prevent
+        blocking user-facing REST dashboard endpoints.
         """
         if isinstance(params, int):
             max_retries = params
             params = None
 
-        session = await self._get_session()
+        now = time.time()
+        if now < self._unreachable_until:
+            return None
+
+        try:
+            session = await self._get_session()
+        except Exception:
+            self._unreachable_until = time.time() + 30.0
+            return None
 
         for attempt in range(max_retries):
             try:
                 async with session.get(
-                    self.query_url, params={"query": sql_query}
+                    self.query_url,
+                    params={"query": sql_query},
+                    timeout=aiohttp.ClientTimeout(total=0.5, connect=0.2)
                 ) as response:
                     response.raise_for_status()
+                    self._unreachable_until = 0.0
                     return await response.json()
 
+            except (aiohttp.ClientConnectorError, ConnectionRefusedError, OSError) as e:
+                logger.debug(f"QuestDB connection refused ({self.host}:{self.port}): {e}. Fast-failing query.")
+                self._unreachable_until = time.time() + 30.0
+                return None
+
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                # FIX TB-4: asyncio.TimeoutError is now caught
                 if attempt < max_retries - 1:
-                    wait = 2**attempt
-                    logger.warning(
-                        f"QuestDB query failed (attempt {attempt + 1}): {e}. "
-                        f"Retrying in {wait}s..."
-                    )
+                    wait = 0.05 * (attempt + 1)
                     await asyncio.sleep(wait)
                 else:
-                    logger.error(
-                        f"QuestDB query completely failed after {max_retries} attempts: {e}"
-                    )
+                    logger.debug(f"QuestDB query failed after {max_retries} attempts: {e}")
+                    self._unreachable_until = time.time() + 30.0
                     return None
 
             except Exception as e:
                 logger.error(f"Unexpected QuestDB query error: {e}")
+                self._unreachable_until = time.time() + 30.0
                 return None
 
         return None

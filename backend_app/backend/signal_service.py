@@ -357,7 +357,14 @@ class SignalService:
         sb_res = self._get_supabase(user)
         sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        query = sb.table("signals").select("*").eq("user_id", user["id"])
+        summary_columns = (
+            "id,user_id,strategy_id,strategy_version,deployment_id,exchange_id,symbol,"
+            "timeframe,worker_id,decision,status,risk_passed,risk_reason,position_size,"
+            "capital,exposure,expected_loss,expected_reward,order_id,order_status,"
+            "quantity,filled,remaining,average_price,fees,slippage,latency_ms,trade_id,"
+            "pnl,realized_pnl,generated_at,risk_evaluated_at,order_updated_at,executed_at"
+        )
+        query = sb.table("signals").select(summary_columns).eq("user_id", user["id"])
         
         if strategy_id:
             query = query.eq("strategy_id", strategy_id)

@@ -170,6 +170,7 @@ async def store_keys(
     return {"status": "ok", "message": "Exchange keys securely encrypted and stored in vault."}
 
 
+@router.get("")
 @router.get("/")
 async def list_exchanges(
     user: dict = Depends(get_current_user),
@@ -180,82 +181,92 @@ async def list_exchanges(
     """
     List user's connected exchanges with full metadata.
     Returns exchange status, permissions, bot count, strategy count, health metrics.
-    Cached in Redis for 30 seconds (metadata changes frequently but not instantly).
-
-    PERFORMANCE FIX: Eliminated N+1 query pattern by fetching user tier once
-    and all deployed strategies in a single query, then counting in memory.
-    Reduced from 1 + 2N database queries to 3 constant queries.
+    Cached in Redis for 30 seconds.
     """
     try:
         # Try cache first
         cache_key = f"exchanges:list:{user['id']}"
-        cached = await redis_manager.cache_get_json(cache_key) if redis_manager else None
+        if redis_manager:
+            cached = await redis_manager.cache_get_json(cache_key)
+            if cached is not None:
+                return cached
         
-        if cached:
-            logger.debug(f"Returning cached exchange list for user {user['id']}")
-            return cached
-        
-        # Fetch user's exchange keys
-        res_keys = (
-            supabase.table("exchange_keys")
-            .select("*")
-            .eq("user_id", user["id"])
-            .execute()
-        )
-        resp = await res_keys if inspect.isawaitable(res_keys) else res_keys
+        # Parallelize independent database queries
+        async def fetch_keys():
+            if not supabase:
+                return None
+            res = supabase.table("exchange_keys").select("*").eq("user_id", user["id"]).execute()
+            return await res if inspect.isawaitable(res) else res
 
-        # Fetch user tier once (outside the loop)
-        try:
-            tier_info = vault.get_user_tier(user["id"])
-        except Exception:
-            tier_info = {"subscription_tier": "free", "max_api_slots": 1}
+        async def fetch_strategies():
+            if not supabase:
+                return None
+            res = supabase.table("strategies").select("exchange_id").eq("user_id", user["id"]).eq("status", "deployed").execute()
+            return await res if inspect.isawaitable(res) else res
 
-        # Fetch all deployed strategies for the user in a single query
-        res_strats = (
-            supabase.table("strategies")
-            .select("exchange_id")
-            .eq("user_id", user["id"])
-            .eq("status", "deployed")
-            .execute()
+        async def fetch_profile():
+            if redis_manager:
+                cached_prof = await redis_manager.get_profile(user["id"])
+                if cached_prof:
+                    return cached_prof
+            if not supabase:
+                return {}
+            try:
+                res = supabase.table("profiles").select("subscription_tier,max_api_slots").eq("id", user["id"]).execute()
+                resp = await res if inspect.isawaitable(res) else res
+                if resp and hasattr(resp, "data") and resp.data:
+                    return resp.data[0]
+            except Exception:
+                pass
+            return {"subscription_tier": "free", "max_api_slots": 1}
+
+        keys_resp, all_strategies_resp, profile_data = await asyncio.gather(
+            fetch_keys(),
+            fetch_strategies(),
+            fetch_profile(),
+            return_exceptions=True
         )
-        all_strategies_resp = await res_strats if inspect.isawaitable(res_strats) else res_strats
 
         # Build a dictionary of bot counts by exchange_id
         bot_counts = {}
-        strat_rows = all_strategies_resp.data if all_strategies_resp and hasattr(all_strategies_resp, "data") and isinstance(all_strategies_resp.data, list) else []
-        for strategy_row in strat_rows:
-            exchange_id = strategy_row.get("exchange_id")
-            if exchange_id:
-                bot_counts[exchange_id] = bot_counts.get(exchange_id, 0) + 1
+        if not isinstance(all_strategies_resp, Exception) and all_strategies_resp and hasattr(all_strategies_resp, "data") and isinstance(all_strategies_resp.data, list):
+            for strategy_row in all_strategies_resp.data:
+                exchange_id = strategy_row.get("exchange_id")
+                if exchange_id:
+                    bot_counts[exchange_id] = bot_counts.get(exchange_id, 0) + 1
+
+        tier_info = profile_data if isinstance(profile_data, dict) else {"subscription_tier": "free", "max_api_slots": 1}
 
         # Build exchange list with metadata
         exchanges = []
-        rows = resp.data if resp and hasattr(resp, "data") and isinstance(resp.data, list) else []
-        for row in rows:
-            exchange_id = row["exchange_id"]
-            bot_count = bot_counts.get(exchange_id, 0)
+        if not isinstance(keys_resp, Exception) and keys_resp and hasattr(keys_resp, "data") and isinstance(keys_resp.data, list):
+            for row in keys_resp.data:
+                exchange_id = row.get("exchange_id", "")
+                bot_count = bot_counts.get(exchange_id, 0)
 
-            exchanges.append({
-                "id": row.get("id", f"{user['id']}_{exchange_id}"),
-                "exchange_id": exchange_id,
-                "name": exchange_id.upper(),
-                "masked_key": f"{exchange_id[:3].upper()}{'•' * 24}{exchange_id[-2:].upper() if len(exchange_id) > 2 else ''}",
-                "status": "CONNECTED",
-                "permissions": ["Spot Trading", "Read"],
-                "bot_count": bot_count,
-                "strategy_count": bot_count,
-                "account_type": "Spot",
-                "enabled_features": ["Trading", "Balance"],
-                "connected_at": row.get("created_at"),
-                "last_sync": row.get("updated_at", row.get("created_at")),
-                "subscription_tier": tier_info.get("subscription_tier", "free"),
-                "health": "healthy"
-            })
+                exchanges.append({
+                    "id": row.get("id", f"{user['id']}_{exchange_id}"),
+                    "exchange_id": exchange_id,
+                    "name": exchange_id.upper(),
+                    "masked_key": f"{exchange_id[:3].upper()}{'•' * 24}{exchange_id[-2:].upper() if len(exchange_id) > 2 else ''}",
+                    "status": "CONNECTED",
+                    "permissions": ["Spot Trading", "Read"],
+                    "bot_count": bot_count,
+                    "strategy_count": bot_count,
+                    "account_type": "Spot",
+                    "enabled_features": ["Trading", "Balance"],
+                    "connected_at": row.get("created_at"),
+                    "last_sync": row.get("updated_at", row.get("created_at")),
+                    "subscription_tier": tier_info.get("subscription_tier", "free"),
+                    "health": "healthy"
+                })
 
         # Cache for 30 seconds
         if redis_manager:
-            await redis_manager.cache_set_json(cache_key, exchanges, ttl=30)
-            logger.debug(f"Cached exchange list for user {user['id']} for 30 seconds")
+            try:
+                await redis_manager.cache_set_json(cache_key, exchanges, ttl=30)
+            except Exception:
+                pass
 
         return exchanges
     except Exception as e:

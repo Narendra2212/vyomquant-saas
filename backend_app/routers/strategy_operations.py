@@ -39,11 +39,11 @@ logger = logging.getLogger("StrategyOperationsRouter")
 class StrategyCreateRequest(BaseModel):
     """Request model for creating a Strategy."""
     name: str = Field(..., min_length=1, max_length=100)
-    description: str = Field(..., max_length=500)
-    blueprint: dict = Field(..., description="Strategy DAG blueprint")
-    exchange: str = Field(..., description="Exchange ID")
-    symbol: str = Field(..., description="Trading pair")
-    timeframe: str = Field(..., description="Timeframe")
+    description: Optional[str] = Field("", max_length=500)
+    blueprint: dict = Field(default_factory=dict, description="Strategy DAG blueprint")
+    exchange: Optional[str] = Field("binance", description="Exchange ID")
+    symbol: Optional[str] = Field("BTCUSDT", description="Trading pair")
+    timeframe: Optional[str] = Field("1h", description="Timeframe")
     tags: List[str] = Field(default_factory=list)
 
 

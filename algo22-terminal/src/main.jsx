@@ -23,9 +23,6 @@ if (!isDummySentry) {
     replaysSessionSampleRate: 0.1,
     replaysOnErrorSampleRate: 1.0,
   });
-  console.log("Sentry initialized with DSN:", sentryDsn);
-} else {
-  console.log("Sentry initialization skipped: DSN is empty or placeholder.");
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(
