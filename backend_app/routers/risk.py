@@ -71,8 +71,10 @@ async def get_risk_settings(user: dict = Depends(get_current_user)):
             "kill_switches": [],
         }
     try:
-        res = sb.table("risk_settings").select("*").eq("user_id", user["id"]).execute()
-        resp = await res if inspect.isawaitable(res) else res
+        def _fetch_settings():
+            return sb.table("risk_settings").select("max_daily_loss, max_positions, max_leverage, circuit_breaker_armed, circuit_breaker_breaches, kill_switches").eq("user_id", user["id"]).limit(1).execute()
+        
+        resp = await asyncio.to_thread(_fetch_settings)
         result = (
             resp.data[0]
             if resp and resp.data
@@ -109,21 +111,39 @@ async def update_risk_settings(
     body: RiskSettingsRequest,
     user: dict = Depends(get_current_user),
 ):
+    """
+    Update risk settings.
+    Invalidates cache after update.
+    """
+    sb_res = _sb(user)
+    sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+    if not sb:
+        raise HTTPException(500, "Database client initialization failed.")
+
     data = {
         "user_id": user["id"],
         "max_daily_loss": body.max_daily_loss,
         "max_positions": body.max_positions,
         "max_leverage": body.max_leverage,
-        "kill_switches": [k.model_dump() for k in body.kill_switches],
+        "circuit_breaker_armed": body.circuit_breaker_armed,
+        "kill_switches": body.kill_switches,
+        "updated_at": datetime.utcnow().isoformat(),
     }
-    sb_res = _sb(user)
-    sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
-    if sb:
-        res = sb.table("risk_settings").upsert(data, on_conflict="user_id").execute()
-        if inspect.isawaitable(res):
-            await res
 
-    # Invalidate cache for this user
+    try:
+        query_res = sb.table("risk_settings").upsert(
+            data,
+            on_conflict="user_id"
+        ).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
+    except Exception as e:
+        logger.error(f"Failed to update risk settings for user {user['id']}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to update risk settings. Please try again later."
+        )
+
+    # Invalidate cache
     try:
         from backend_app.core.cache.redis_manager import redis_manager
         redis_client = await redis_manager.get_client()
@@ -131,9 +151,9 @@ async def update_risk_settings(
             cache_key = f"risk_settings:{user['id']}"
             await redis_client.delete(cache_key)
     except Exception as e:
-        logger.warning(f"Failed to invalidate cache for user {user['id']}: {e}")
+        logger.warning(f"Cache invalidation failed for user {user['id']}: {e}")
 
-    return {"status": "ok"}
+    return {"status": "ok", "settings": data}
 
 
 @router.post("/kill-switch")
@@ -249,11 +269,16 @@ async def get_strategy_limits(user: dict = Depends(get_current_user)):
     try:
         sb_res = _sb(user)
         sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
-        res = sb.table("strategy_limits").select("*").eq("user_id", user["id"]).execute() if sb else None
-        resp = await res if inspect.isawaitable(res) else res
+        if not sb:
+            return {"limits": [], "count": 0, "user_id": user["id"]}
+        
+        def _fetch_limits():
+            return sb.table("strategy_limits").select("strategy_id, max_position_size, max_daily_trades, allowed_symbols, max_drawdown_pct, enabled").eq("user_id", user["id"]).execute()
+        
+        resp = await asyncio.to_thread(_fetch_limits)
         
         limits = []
-        if resp and resp.data:
+        if resp and hasattr(resp, "data") and resp.data:
             for row in resp.data:
                 limits.append({
                     "strategy_id": row.get("strategy_id"),

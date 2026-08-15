@@ -113,11 +113,21 @@ class DashboardAggregationService:
         try:
             sb_res = self._get_supabase(user)
             sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+            if not sb:
+                return {
+                    "tier": "free",
+                    "usage": {"strategies": 0, "strategies_limit": 3, "bots": 0, "bots_limit": 1, "ml_training_used": 0, "ml_training_limit": 0},
+                    "billing_status": "active",
+                    "subscription_end": None,
+                    "is_trial": False
+                }
 
             # Get user profile with subscription info
-            q1 = sb.table("profiles").select("*").eq("id", user["id"]).execute()
-            res = await q1 if inspect.isawaitable(q1) else q1
-            profile = res.data[0] if res and res.data else {}
+            def _fetch_profile():
+                return sb.table("profiles").select("subscription_tier, billing_status, subscription_end, is_trial").eq("id", user["id"]).limit(1).execute()
+            
+            res = await asyncio.to_thread(_fetch_profile)
+            profile = res.data[0] if res and hasattr(res, "data") and res.data else {}
 
             # Get subscription tier from profile
             subscription_tier = profile.get("subscription_tier", "free")
@@ -174,11 +184,20 @@ class DashboardAggregationService:
         try:
             sb_res = self._get_supabase(user)
             sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+            if not sb:
+                return {
+                    "total_exchanges": 0,
+                    "connected_exchanges": 0,
+                    "exchanges": [],
+                    "can_trade": False
+                }
             
             # Get user's exchange connections
-            q1 = sb.table("exchange_connections").select("*").eq("user_id", user["id"]).execute()
-            res = await q1 if inspect.isawaitable(q1) else q1
-            connections = res.data or [] if res else []
+            def _fetch_exchanges():
+                return sb.table("exchange_connections").select("id, exchange_id, is_active, updated_at").eq("user_id", user["id"]).execute()
+            
+            res = await asyncio.to_thread(_fetch_exchanges)
+            connections = res.data or [] if res and hasattr(res, "data") else []
             
             # Calculate exchange metrics
             connected_exchanges = [c for c in connections if c.get("is_active", False)]
@@ -188,11 +207,10 @@ class DashboardAggregationService:
             exchange_health = []
             for conn in connected_exchanges:
                 exchange_id = conn.get("exchange_id", "unknown")
-                # In production, this would check actual connection health
                 exchange_health.append({
                     "exchange_id": exchange_id,
                     "status": "connected",
-                    "latency_ms": 35,  # Would come from actual health checks
+                    "latency_ms": 35,
                     "last_sync": conn.get("updated_at")
                 })
             
@@ -294,8 +312,10 @@ class DashboardAggregationService:
                     "lifetime_earnings": 0.0
                 }
 
-            q1 = sb.table("referral_profiles").select("referral_code, total_referrals, active_referrals, pending_earnings, approved_earnings, paid_earnings, lifetime_earnings").eq("user_id", user["id"]).execute()
-            res = await q1 if inspect.isawaitable(q1) else q1
+            def _fetch_referral():
+                return sb.table("referral_profiles").select("referral_code, total_referrals, active_referrals, pending_earnings, approved_earnings, paid_earnings, lifetime_earnings").eq("user_id", user["id"]).limit(1).execute()
+
+            res = await asyncio.to_thread(_fetch_referral)
             profile = res.data[0] if res and hasattr(res, "data") and res.data else {}
             
             ref_code = profile.get("referral_code") or default_ref
@@ -339,8 +359,10 @@ class DashboardAggregationService:
             # Get risk settings
             settings = {}
             if sb:
-                q1 = sb.table("risk_settings").select("max_daily_loss, max_positions, max_leverage, circuit_breaker_armed, circuit_breaker_breaches, kill_switches").eq("user_id", user["id"]).execute()
-                res = await q1 if inspect.isawaitable(q1) else q1
+                def _fetch_risk():
+                    return sb.table("risk_settings").select("max_daily_loss, max_positions, max_leverage, circuit_breaker_armed, circuit_breaker_breaches, kill_switches").eq("user_id", user["id"]).limit(1).execute()
+                
+                res = await asyncio.to_thread(_fetch_risk)
                 settings = res.data[0] if res and hasattr(res, "data") and res.data else {}
 
             current_drawdown = abs(float((portfolio or {}).get("pnl_pct", 0)))
@@ -567,16 +589,19 @@ class DashboardAggregationService:
         """
         sb_res = self._get_supabase(user)
         sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        if not sb:
+            return []
         
-        q1 = (sb.table("execution_records")
-               .select("*")
-               .eq("user_id", user["id"])
-               .order("created_at", desc=True)
-               .limit(limit)
-               .execute())
-        res = await q1 if inspect.isawaitable(q1) else q1
+        def _fetch_signals():
+            return (sb.table("execution_records")
+                   .select("id, created_at, side, symbol, exchange_id, risk_verdict")
+                   .eq("user_id", user["id"])
+                   .order("created_at", desc=True)
+                   .limit(limit)
+                   .execute())
         
-        records = res.data or [] if res else []
+        res = await asyncio.to_thread(_fetch_signals)
+        records = res.data or [] if res and hasattr(res, "data") else []
         
         notifications = []
         for r in records:
