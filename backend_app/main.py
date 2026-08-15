@@ -437,16 +437,6 @@ async def lifespan(app: FastAPI):
     # Publish to module-level dict so /health/services can read it without request context
     _runtime_service_status.update(service_status)
 
-    # Pre-warm backend modules asynchronously in background
-    async def _async_warmup():
-        try:
-            from backend_app.backend.dashboard_aggregation_service import get_dashboard_service
-            await get_dashboard_service()
-            logger.info(" Background service pre-warm complete.")
-        except Exception as err:
-            logger.debug(f" Pre-warm notice: {err}")
-    asyncio.create_task(_async_warmup())
-
     yield  #  Server is live and accepting requests here
 
     #  Graceful shutdown 
