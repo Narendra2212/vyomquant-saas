@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-from __future__ import annotations
 """
 Authentication Router - Production + Fallback
 """
+from typing import Optional
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 
@@ -10,7 +11,6 @@ from backend_app.core.dependencies import get_current_user, get_supabase
 from backend_app.core.rate_limit import limiter
 from backend_app.core.supabase_connection import SupabaseConnection
 from supabase import Client as SupabaseClient
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,17 @@ class GoogleAuthRequest(BaseModel):
     id_token: str
 
 
+class UserCreate(BaseModel):
+    email: EmailStr
+    password: str
+    username: str
+    phone_number: Optional[str] = None
+    referral_code: Optional[str] = None
+
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
 
 
 # ----------------------------------
@@ -109,19 +120,6 @@ def get_current_user_profile(user: dict = Depends(get_current_user)):
 # ----------------------------------
 # REGISTER & LOGIN (Supabase)
 # ----------------------------------
-
-
-class UserCreate(BaseModel):
-    email: EmailStr
-    password: str
-    username: str
-    phone_number: str | None = None
-    referral_code: str | None = None
-
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
-
 @router.post("/register", status_code=201)
 @limiter.limit("5/minute")
 async def register(

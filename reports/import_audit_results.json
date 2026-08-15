@@ -125,6 +125,11 @@
       "name": "RiskEngine"
     },
     {
+      "file": "backend_app\\backend\\exchange_executor.py",
+      "line": 38,
+      "name": "OrderStatus"
+    },
+    {
       "file": "backend_app\\backend\\indicators_backend.py",
       "line": 9,
       "name": "annotations"
@@ -235,9 +240,19 @@
       "name": "UUID"
     },
     {
+      "file": "backend_app\\core\\database.py",
+      "line": 12,
+      "name": "backend_app.core.safety_config"
+    },
+    {
       "file": "backend_app\\core\\dependencies.py",
       "line": 48,
       "name": "SubscriptionEngine"
+    },
+    {
+      "file": "backend_app\\core\\distributed_idempotency.py",
+      "line": 30,
+      "name": "get_global_kill_switch"
     },
     {
       "file": "backend_app\\core\\entitlement_dependencies.py",
@@ -321,7 +336,7 @@
     },
     {
       "file": "backend_app\\routers\\dashboard.py",
-      "line": 18,
+      "line": 19,
       "name": "Optional"
     },
     {
@@ -348,16 +363,6 @@
       "file": "backend_app\\routers\\orders.py",
       "line": 71,
       "name": "asyncio"
-    },
-    {
-      "file": "backend_app\\routers\\referral.py",
-      "line": 28,
-      "name": "datetime"
-    },
-    {
-      "file": "backend_app\\routers\\referral.py",
-      "line": 32,
-      "name": "validator"
     },
     {
       "file": "backend_app\\routers\\risk.py",
@@ -426,7 +431,7 @@
     },
     {
       "file": "backend_app\\routers\\strategies.py",
-      "line": 2206,
+      "line": 2217,
       "name": "timedelta"
     },
     {
@@ -620,303 +625,323 @@
       "name": "DateTime"
     },
     {
+      "file": "backend_app\\core\\models\\execution_record.py",
+      "line": 2,
+      "name": "annotations"
+    },
+    {
+      "file": "backend_app\\core\\models\\execution_record.py",
+      "line": 13,
+      "name": "Tuple"
+    },
+    {
+      "file": "backend_app\\core\\models\\execution_record.py",
+      "line": 13,
+      "name": "List"
+    },
+    {
+      "file": "backend_app\\core\\models\\execution_record.py",
+      "line": 16,
+      "name": "field_validator"
+    },
+    {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 7,
+      "line": 8,
       "name": "PaymentMethodModel"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 9,
+      "line": 10,
       "name": "ExecutionRecordModel"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 9,
+      "line": 10,
       "name": "ExecutionRecordRepository"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 9,
+      "line": 10,
       "name": "ExecutionSide"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 9,
+      "line": 10,
       "name": "ExecutionStatus"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "AddCommentRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "AddPaymentMethodRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "BacktestRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "BacktestResponse"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "CancelAllRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "CancelOrderRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "CloseAllPositionsRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "ConditionModel"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "CreateTicketRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "DAGConfig"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "DAGEdge"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "DAGNode"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "DeployRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "ExchangeKeysRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "ExchangeResponse"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "ExecuteOrderRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "GlobalKillRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "KillSwitchConfig"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "KillSwitchRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "LogicBlock"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "LogicOperator"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "MagicLinkRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "NodeType"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "NotificationChannels"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "NotificationEvents"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "NotificationSettingsRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "OrderExecutionResponse"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "OrderSide"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "OrderType"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "PaymentMethod"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "RiskParameters"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "RiskSettingsRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "SignInRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "StopLossRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "StrategyBlueprint"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "StrategyLimit"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "StrategyLimitsRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "TakeProfitRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "TestConnectionRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "Ticket"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "TicketComment"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "TicketPriority"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "TicketStatus"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "TokenResponse"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "TrainModelRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "TwoFAVerifyRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 11,
+      "line": 12,
       "name": "UserStatusRequest"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 25,
+      "line": 26,
       "name": "MismatchSeverity"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 25,
+      "line": 26,
       "name": "MismatchStatus"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 25,
+      "line": 26,
       "name": "ReconciliationMismatchCreate"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 25,
+      "line": 26,
       "name": "ReconciliationMismatchModel"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 25,
+      "line": 26,
       "name": "ReconciliationMismatchRepository"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 25,
+      "line": 26,
       "name": "ReconciliationMismatchUpdate"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 25,
+      "line": 26,
       "name": "generate_mismatch_id"
     },
     {
       "file": "backend_app\\core\\models\\__init__.py",
-      "line": 25,
+      "line": 26,
       "name": "get_reconciliation_repository"
     }
   ],
@@ -941,6 +966,7 @@
       "contextlib",
       "typing",
       "sentry_sdk",
+      "fastapi",
       "fastapi",
       "fastapi",
       "fastapi",
@@ -988,6 +1014,7 @@
       "backend_app.core.safety_monitor",
       "backend_app.core.supabase_connection",
       "backend_app.core.state",
+      "backend_app.core.dependencies",
       "backend_app.routers",
       "backend_app.routers",
       "backend_app.routers",
@@ -1021,7 +1048,8 @@
       "backend_app.core.schemas",
       "traceback",
       "backend_app.core.schemas",
-      "backend_app.core.dependencies"
+      "backend_app.core.dependencies",
+      "backend_app.backend.dashboard_aggregation_service"
     ],
     "backend_app.test_auth": [
       "asyncio",
@@ -1496,6 +1524,7 @@
       "backend_app.core.tenant",
       "backend_app.core.tenant",
       "backend_app.core.worker_base",
+      "backend_app.core.subscription_middleware",
       "sqlalchemy",
       "sqlalchemy",
       "sqlalchemy",
@@ -1991,6 +2020,7 @@
       "abc",
       "abc",
       "joblib",
+      "pickle",
       "numpy",
       "backend_app.core.ml_safety",
       "backend_app.core.ml_safety",
@@ -2062,6 +2092,7 @@
       "dataclasses",
       "datetime",
       "datetime",
+      "decimal",
       "typing",
       "typing",
       "typing",
@@ -2073,6 +2104,7 @@
       "backend_app.backend.position_engine",
       "backend_app.core.models.execution_record",
       "backend_app.core.models.execution_record",
+      "decimal",
       "backend_app.backend.alert_system",
       "backend_app.core.state"
     ],
@@ -2366,9 +2398,15 @@
       "backend_app.core.dependencies",
       "backend_app.core.dependencies",
       "backend_app.backend.metrics_service",
+      "backend_app.core.subscription_engine",
+      "backend_app.core.subscription_engine",
+      "backend_app.core.subscription_engine",
+      "backend_app.core.subscription_dependencies",
       "backend_app.core.state",
       "backend_app.core.state",
-      "backend_app.core.state"
+      "backend_app.core.state",
+      "backend_app.core.subscription_engine",
+      "backend_app.core.subscription_engine"
     ],
     "backend_app.backend.subscription_service": [
       "logging"
@@ -2734,6 +2772,7 @@
     "backend_app.core.database": [
       "logging",
       "os",
+      "backend_app.core.safety_config",
       "backend_app.core.database_pool",
       "backend_app.core.database_pool",
       "backend_app.core.database_pool",
@@ -2838,8 +2877,10 @@
       "typing",
       "typing",
       "typing",
-      "backend_app.backend.redis_manager",
-      "backend_app.core.global_safety"
+      "backend_app.core.cache",
+      "backend_app.core.global_safety",
+      "uuid",
+      "uuid"
     ],
     "backend_app.core.distributed_rate_limiter": [
       "logging",
@@ -2877,6 +2918,7 @@
       "backend_app.core.tenant",
       "backend_app.core.tenant",
       "backend_app.core.tenant",
+      "backend_app.core.subscription_engine",
       "backend_app.core.state",
       "backend_app.core.state",
       "datetime"
@@ -3122,6 +3164,7 @@
     ],
     "backend_app.core.order_state_machine": [
       "logging",
+      "collections",
       "dataclasses",
       "datetime",
       "enum",
@@ -3207,7 +3250,8 @@
       "logging",
       "slowapi",
       "slowapi.util",
-      "backend_app.core.safety_config"
+      "backend_app.core.safety_config",
+      "redis"
     ],
     "backend_app.core.rate_limiter": [
       "asyncio",
@@ -3547,6 +3591,8 @@
       "backend_app.core.dependencies"
     ],
     "backend_app.routers.auth": [
+      "typing",
+      "logging",
       "fastapi",
       "fastapi",
       "fastapi",
@@ -3558,7 +3604,6 @@
       "backend_app.core.rate_limit",
       "backend_app.core.supabase_connection",
       "supabase",
-      "logging",
       "backend_app.core.supabase_connection"
     ],
     "backend_app.routers.billing": [
@@ -3570,6 +3615,7 @@
       "traceback",
       "datetime",
       "datetime",
+      "typing",
       "typing",
       "typing",
       "uuid",
@@ -3598,7 +3644,6 @@
       "backend_app.core.subscription_engine",
       "backend_app.core.subscription_dependencies",
       "traceback",
-      "inspect",
       "backend_app.core.pricing_service",
       "backend_app.core.pricing_service",
       "stripe",
@@ -3639,6 +3684,7 @@
       "backend_app.core.database"
     ],
     "backend_app.routers.dashboard": [
+      "inspect",
       "logging",
       "typing",
       "fastapi",
@@ -3649,8 +3695,7 @@
       "backend_app.backend.dashboard_aggregation_service",
       "backend_app.core.dependencies",
       "backend_app.core.rate_limit",
-      "traceback",
-      "inspect"
+      "traceback"
     ],
     "backend_app.routers.distributed_execution": [
       "logging",
@@ -3854,6 +3899,7 @@
       "logging",
       "os",
       "datetime",
+      "decimal",
       "typing",
       "fastapi",
       "fastapi",
@@ -3871,7 +3917,7 @@
       "secrets",
       "secrets",
       "traceback",
-      "inspect"
+      "backend_app.core.cache"
     ],
     "backend_app.routers.risk": [
       "asyncio",
@@ -3899,8 +3945,7 @@
       "backend_app.core.cache.redis_manager",
       "backend_app.core.state",
       "backend_app.core.state",
-      "traceback",
-      "inspect"
+      "traceback"
     ],
     "backend_app.routers.securit": [
       "fastapi"
@@ -3977,6 +4022,8 @@
       "backend_app.core.subscription_dependencies",
       "backend_app.core.subscription_dependencies",
       "backend_app.core.subscription_dependencies",
+      "backend_app.core.subscription_dependencies",
+      "backend_app.core.subscription_engine",
       "backend_app.core.subscription_engine",
       "backend_app.core.event_bus",
       "backend_app.core.event_bus",
@@ -4070,29 +4117,22 @@
       "backend_app.core.models.pydantic_models",
       "backend_app.core.models.pydantic_models",
       "traceback",
-      "inspect",
       "backend_app.backend.strategy_compiler",
       "backend_app.backend.strategy_compiler",
       "ccxt",
       "backend_app.backend.strategy_compiler",
       "backend_app.backend.strategy_compiler",
       "ccxt",
-      "inspect",
       "backend_app.core.dependencies",
-      "inspect",
       "backend_app.core.dependencies",
-      "inspect",
       "backend_app.core.dependencies",
       "backend_app.backend.strategy_compiler",
       "backend_app.backend.strategy_compiler",
       "backend_app.backend.deployment_manager",
       "backend_app.backend.deployment_manager",
       "ccxt",
-      "inspect",
       "backend_app.core.dependencies",
-      "inspect",
       "backend_app.core.dependencies",
-      "inspect",
       "backend_app.core.dependencies",
       "datetime",
       "datetime",
@@ -4184,7 +4224,8 @@
       "os",
       "backend_app.core.cache",
       "backend_app.core.state",
-      "backend_app.core.worker_base"
+      "backend_app.core.worker_base",
+      "backend_app.core.subscription_middleware"
     ],
     "backend_app.workers.__init__": [],
     "backend_app.alembic.versions.4ef23035a692_baseline": [
@@ -5431,13 +5472,10 @@
       "os",
       "typing",
       "typing",
+      "fnmatch",
       "time",
       "backend_app.backend.redis_manager",
-      "logging",
-      "logging",
-      "logging",
-      "logging",
-      "logging",
+      "backend_app.core.safety_config",
       "logging",
       "json",
       "logging",
@@ -5447,10 +5485,6 @@
       "logging",
       "logging",
       "sentry_sdk",
-      "logging",
-      "logging",
-      "logging",
-      "logging",
       "logging",
       "logging",
       "logging",
@@ -5506,6 +5540,7 @@
       "sqlalchemy"
     ],
     "backend_app.core.models.execution_record": [
+      "__future__",
       "hashlib",
       "logging",
       "datetime",
@@ -5513,7 +5548,10 @@
       "typing",
       "typing",
       "typing",
+      "typing",
+      "typing",
       "uuid",
+      "pydantic",
       "pydantic",
       "pydantic",
       "pydantic",

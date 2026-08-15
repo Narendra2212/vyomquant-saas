@@ -1,22 +1,9 @@
 {
-  "family": "vyomquant-api",
-  "networkMode": "awsvpc",
-  "requiresCompatibilities": [
-    "FARGATE"
-  ],
-  "cpu": "1024",
-  "memory": "2048",
-  "executionRoleArn": "arn:aws:iam::273709947018:role/VyomQuantEcsTaskExecutionRole-prod",
-  "taskRoleArn": "arn:aws:iam::273709947018:role/VyomQuantEcsTaskRole-prod",
-  "runtimePlatform": {
-    "cpuArchitecture": "X86_64",
-    "operatingSystemFamily": "LINUX"
-  },
   "containerDefinitions": [
     {
       "name": "vyomquant-api",
-      "image": "273709947018.dkr.ecr.ap-southeast-1.amazonaws.com/vyomquant-api:latest",
-      "essential": true,
+      "image": "273709947018.dkr.ecr.ap-southeast-1.amazonaws.com/vyomquant-api:8992f2eda7a2c7cadfa6c4e5d9f178d8ee20706f",
+      "cpu": 0,
       "portMappings": [
         {
           "containerPort": 8000,
@@ -24,7 +11,16 @@
           "protocol": "tcp"
         }
       ],
+      "essential": true,
       "environment": [
+        {
+          "name": "FEATURE_WEBSOCKET_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "FEATURE_TRADING_ENABLED",
+          "value": "true"
+        },
         {
           "name": "VYOMQUANT_MODE",
           "value": "paper"
@@ -34,56 +30,16 @@
           "value": "true"
         },
         {
-          "name": "ENV",
-          "value": "production"
-        },
-        {
-          "name": "LOG_LEVEL",
-          "value": "INFO"
-        },
-        {
-          "name": "LOG_FORMAT",
-          "value": "json"
-        },
-        {
-          "name": "PYTHONUNBUFFERED",
-          "value": "1"
-        },
-        {
-          "name": "PYTHONPATH",
-          "value": "/app"
-        },
-        {
-          "name": "PORT",
-          "value": "8000"
-        },
-        {
-          "name": "WORKERS",
-          "value": "2"
-        },
-        {
-          "name": "SUPABASE_URL",
-          "value": "https://wrkexcjqnidkdrayhlsi.supabase.co"
-        },
-        {
-          "name": "REDIS_URL",
-          "value": "redis://localhost:6379"
-        },
-        {
-          "name": "CORS_ORIGINS",
-          "value": "https://app.vyomquant.com,https://vyomquant.com"
-        },
-        {
-          "name": "DEFAULT_EXCHANGE",
-          "value": "binance"
-        },
-        {
-          "name": "QUESTDB_HOST",
-          "value": "127.0.0.1"
+          "name": "FEATURE_DEBUG_ENDPOINTS_ENABLED",
+          "value": "false"
         },
         {
           "name": "QUESTDB_PORT",
           "value": "9000"
+        },
+        {
+          "name": "ENV",
+          "value": "production"
         },
         {
           "name": "PRODUCTION_ROUTER_ENABLED",
@@ -94,6 +50,14 @@
           "value": "true"
         },
         {
+          "name": "FEATURE_ML_PREDICTIONS_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "SUPABASE_URL",
+          "value": "https://wrkexcjqnidkdrayhlsi.supabase.co"
+        },
+        {
           "name": "RATE_LIMIT_PER_MINUTE",
           "value": "60"
         },
@@ -102,11 +66,43 @@
           "value": "binance"
         },
         {
-          "name": "FEATURE_TRADING_ENABLED",
+          "name": "FEATURE_EMERGENCY_LIQUIDATION_ENABLED",
           "value": "true"
         },
         {
-          "name": "FEATURE_WEBSOCKET_ENABLED",
+          "name": "LOG_LEVEL",
+          "value": "INFO"
+        },
+        {
+          "name": "QUESTDB_HOST",
+          "value": "127.0.0.1"
+        },
+        {
+          "name": "PYTHONPATH",
+          "value": "/app"
+        },
+        {
+          "name": "PORT",
+          "value": "8000"
+        },
+        {
+          "name": "FEATURE_MOCK_EXCHANGE_ENABLED",
+          "value": "false"
+        },
+        {
+          "name": "WORKERS",
+          "value": "2"
+        },
+        {
+          "name": "DEFAULT_EXCHANGE",
+          "value": "binance"
+        },
+        {
+          "name": "CORS_ORIGINS",
+          "value": "https://app.vyomquant.com,https://vyomquant.com"
+        },
+        {
+          "name": "FEATURE_RISK_MANAGEMENT_ENABLED",
           "value": "true"
         },
         {
@@ -114,26 +110,23 @@
           "value": "true"
         },
         {
-          "name": "FEATURE_ML_PREDICTIONS_ENABLED",
-          "value": "true"
+          "name": "LOG_FORMAT",
+          "value": "json"
         },
         {
-          "name": "FEATURE_RISK_MANAGEMENT_ENABLED",
-          "value": "true"
+          "name": "PYTHONUNBUFFERED",
+          "value": "1"
         },
         {
-          "name": "FEATURE_EMERGENCY_LIQUIDATION_ENABLED",
-          "value": "true"
-        },
-        {
-          "name": "FEATURE_DEBUG_ENDPOINTS_ENABLED",
-          "value": "false"
-        },
-        {
-          "name": "FEATURE_MOCK_EXCHANGE_ENABLED",
-          "value": "false"
+          "name": "REDIS_URL",
+          "value": "rediss://master.vyomquant-redis-production-cmd.4lf97k.apse1.cache.amazonaws.com:6379"
         }
       ],
+      "mountPoints": [],
+      "volumesFrom": [],
+      "linuxParameters": {
+        "initProcessEnabled": true
+      },
       "secrets": [
         {
           "name": "SUPABASE_SERVICE_ROLE_KEY",
@@ -164,13 +157,20 @@
           "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/jwt_secret"
         }
       ],
+      "dependsOn": [
+        {
+          "containerName": "questdb",
+          "condition": "START"
+        }
+      ],
+      "stopTimeout": 30,
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
           "awslogs-group": "/ecs/vyomquant-api",
+          "awslogs-create-group": "true",
           "awslogs-region": "ap-southeast-1",
-          "awslogs-stream-prefix": "ecs",
-          "awslogs-create-group": "true"
+          "awslogs-stream-prefix": "ecs"
         }
       },
       "healthCheck": {
@@ -183,10 +183,53 @@
         "retries": 3,
         "startPeriod": 60
       },
-      "stopTimeout": 30,
-      "linuxParameters": {
-        "initProcessEnabled": true
-      }
+      "systemControls": []
+    },
+    {
+      "name": "questdb",
+      "image": "questdb/questdb:latest",
+      "cpu": 0,
+      "portMappings": [
+        {
+          "containerPort": 9000,
+          "hostPort": 9000,
+          "protocol": "tcp"
+        }
+      ],
+      "essential": false,
+      "environment": [
+        {
+          "name": "QDB_TELEMETRY_ENABLED",
+          "value": "false"
+        }
+      ],
+      "mountPoints": [],
+      "volumesFrom": [],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/vyomquant-api",
+          "awslogs-create-group": "true",
+          "awslogs-region": "ap-southeast-1",
+          "awslogs-stream-prefix": "questdb"
+        }
+      },
+      "systemControls": []
     }
-  ]
+  ],
+  "family": "vyomquant-api",
+  "taskRoleArn": "arn:aws:iam::273709947018:role/ecsTaskExecutionRole",
+  "executionRoleArn": "arn:aws:iam::273709947018:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "volumes": [],
+  "placementConstraints": [],
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "1024",
+  "memory": "2048"
 }
