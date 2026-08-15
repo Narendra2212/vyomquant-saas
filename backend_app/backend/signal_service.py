@@ -307,10 +307,12 @@ class SignalService:
         sb_res = self._get_supabase(user)
         sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        query_res = sb.table("signals").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
-        result = await query_res if inspect.isawaitable(query_res) else query_res
+        def _fetch():
+            return sb.table("signals").select("*").eq("id", signal_id).eq("user_id", user["id"]).execute()
         
-        if not result.data:
+        result = await asyncio.to_thread(_fetch)
+        
+        if not result or not hasattr(result, "data") or not result.data:
             return None
         
         return result.data[0]
@@ -389,11 +391,10 @@ class SignalService:
             query = query.gte("generated_at", date_from)
         if date_to:
             query = query.lte("generated_at", date_to)
-        if search:
-            query = query.ilike("id", f"%{search}%")
+        def _execute_query():
+            return query.order("generated_at", desc=True).range(offset, offset + limit - 1).execute()
         
-        query_res = query.order("generated_at", desc=True).range(offset, offset + limit - 1).execute()
-        result = await query_res if inspect.isawaitable(query_res) else query_res
+        result = await asyncio.to_thread(_execute_query)
         
         return result.data or []
     

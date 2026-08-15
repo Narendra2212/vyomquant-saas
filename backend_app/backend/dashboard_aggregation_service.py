@@ -242,15 +242,17 @@ class DashboardAggregationService:
             if not sb:
                 return {"unread_count": 0, "total_count": 0, "recent": [], "categories": {}}
 
-            async def fetch_unread():
-                q = sb.table("notifications").select("id", count="exact").eq("user_id", user["id"]).eq("read", False).execute()
-                return await q if inspect.isawaitable(q) else q
+            def _fetch_unread():
+                return sb.table("notifications").select("id", count="exact").eq("user_id", user["id"]).eq("read", False).execute()
 
-            async def fetch_recent():
-                q = sb.table("notifications").select("id, type, category, severity, title, message, read, created_at").eq("user_id", user["id"]).order("created_at", desc=True).limit(10).execute()
-                return await q if inspect.isawaitable(q) else q
+            def _fetch_recent():
+                return sb.table("notifications").select("id, type, category, severity, title, message, read, created_at").eq("user_id", user["id"]).order("created_at", desc=True).limit(10).execute()
 
-            res_unread, res_recent = await asyncio.gather(fetch_unread(), fetch_recent(), return_exceptions=True)
+            res_unread, res_recent = await asyncio.gather(
+                asyncio.to_thread(_fetch_unread),
+                asyncio.to_thread(_fetch_recent),
+                return_exceptions=True
+            )
 
             unread_count = res_unread.count if not isinstance(res_unread, Exception) and res_unread and hasattr(res_unread, "count") and res_unread.count is not None else 0
             
@@ -413,15 +415,17 @@ class DashboardAggregationService:
             if not sb:
                 return {"available_count": 0, "user_publications": 0, "total_subscribers": 0, "featured": []}
 
-            async def fetch_available():
-                q = sb.table("library_strategies").select("id, name, is_featured").eq("is_active", True).in_("moderation_status", ["approved", "featured"]).limit(10).execute()
-                return await q if inspect.isawaitable(q) else q
+            def _fetch_available():
+                return sb.table("library_strategies").select("id, name, is_featured").eq("is_active", True).in_("moderation_status", ["approved", "featured"]).limit(10).execute()
 
-            async def fetch_user_pubs():
-                q = sb.table("library_strategies").select("id, subscriber_count").eq("author_id", user["id"]).execute()
-                return await q if inspect.isawaitable(q) else q
+            def _fetch_user_pubs():
+                return sb.table("library_strategies").select("id, subscriber_count").eq("author_id", user["id"]).execute()
 
-            res_avail, res_pubs = await asyncio.gather(fetch_available(), fetch_user_pubs(), return_exceptions=True)
+            res_avail, res_pubs = await asyncio.gather(
+                asyncio.to_thread(_fetch_available),
+                asyncio.to_thread(_fetch_user_pubs),
+                return_exceptions=True
+            )
 
             available_strategies = res_avail.data if not isinstance(res_avail, Exception) and res_avail and hasattr(res_avail, "data") and res_avail.data else []
             user_publications = res_pubs.data if not isinstance(res_pubs, Exception) and res_pubs and hasattr(res_pubs, "data") and res_pubs.data else []
@@ -593,10 +597,10 @@ class DashboardAggregationService:
             return []
         
         def _fetch_signals():
-            return (sb.table("execution_records")
-                   .select("id, created_at, side, symbol, exchange_id, risk_verdict")
+            return (sb.table("signals")
+                   .select("id, generated_at, decision, symbol, exchange_id, risk_passed")
                    .eq("user_id", user["id"])
-                   .order("created_at", desc=True)
+                   .order("generated_at", desc=True)
                    .limit(limit)
                    .execute())
         
@@ -607,9 +611,9 @@ class DashboardAggregationService:
         for r in records:
             notifications.append({
                 "id": r.get("id"),
-                "time": r.get("created_at") or None,
-                "text": f"Signal {r.get('side', 'BUY').upper()}: {r.get('symbol')} on {r.get('exchange_id', 'binance').upper()} (Risk: {r.get('risk_verdict', 'APPROVED')})",
-                "type": "success" if r.get("risk_verdict") == "APPROVED" else "warning"
+                "time": r.get("generated_at") or None,
+                "text": f"Signal {r.get('decision', 'BUY').upper()}: {r.get('symbol')} on {r.get('exchange_id', 'binance').upper()} (Risk: {'APPROVED' if r.get('risk_passed') else 'REJECTED'})",
+                "type": "success" if r.get("risk_passed") else "warning"
             })
         
         return notifications
