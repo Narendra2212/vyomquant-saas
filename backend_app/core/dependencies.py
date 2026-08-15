@@ -62,9 +62,9 @@ except ImportError:
 #  DEV MODE DETECTION
 # ══════════════════════════════════════════════════════════════════════════
 
-_env = os.environ.get("ENV", "").lower()
+_env = (os.environ.get("ENV") or os.environ.get("ENVIRONMENT") or "").lower()
 DEV_MODE = (os.environ.get("DEV_MODE", "false").lower() == "true" or \
-           _env == "development") and _env != "production"
+           _env in ("development", "dev", "test", "testing", "local")) and _env != "production"
 
 logger = logging.getLogger("Dependencies")
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -494,6 +494,9 @@ async def _get_cached_profile(user_id: str, supabase_or_token: Any) -> dict:
             )
             resp = await res if asyncio.iscoroutine(res) else res
         except Exception as db_err:
+            if DEV_MODE:
+                logger.warning(f"DEV_MODE: profile query failed ({db_err}), returning fallback profile")
+                return {"subscription_tier": "free", "deployed_bots": 0, "ml_strategies_built": 0, "ml_addons_purchased": 0, "is_frozen": False}
             error_msg = f"Database query failed during profile retrieval for user {user_id}: {db_err}"
             logger.error(error_msg)
             raise RuntimeError(error_msg) from db_err

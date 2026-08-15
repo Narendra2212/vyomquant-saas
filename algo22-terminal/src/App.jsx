@@ -5,6 +5,7 @@ import { CopilotProvider } from './contexts/CopilotContext';
 import { AppStateProvider } from './AppState';
 import wsClient from './websocketClient';
 import { Lock } from "lucide-react";
+import { supabase } from './supabase';
 import ErrorBoundary from './components/ErrorBoundary';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
@@ -44,6 +45,8 @@ const RiskSettings        = lazy(() => import('./pages/RiskSettings'));
 const Billing             = lazy(() => import('./pages/Billing'));
 const Profile             = lazy(() => import('./pages/Profile'));
 const SecurityLogs        = lazy(() => import('./pages/SecurityLogs'));
+const Portfolio           = lazy(() => import('./pages/Portfolio'));
+const TradeHistory        = lazy(() => import('./pages/TradeHistory'));
 
 const PAGE_FALLBACK = <div style={{ background: '#080A0E', minHeight: '100vh' }} />;
 const TENANT_ID = "default";
@@ -107,35 +110,81 @@ function UpdatePasswordPage() {
   );
 }
 
+// Synchronously extracts auth token from sessionStorage or URL hash
+function getEffectiveToken() {
+  let token = sessionStorage.getItem("token");
+  if (!token && typeof window !== "undefined" && window.location.hash) {
+    const hash = window.location.hash;
+    if (hash.includes("access_token=")) {
+      const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
+      const hashToken = params.get("access_token");
+      if (hashToken) {
+        sessionStorage.setItem("token", hashToken);
+        token = hashToken;
+      }
+    }
+  }
+  return token;
+}
+
 // AUTH GUARDS
 function AuthGuard() {
-  const token = sessionStorage.getItem("token");
+  const token = getEffectiveToken();
   if (!token) return <Navigate to="/signin" replace />;
   return <Outlet />;
 }
 
 function GuestGuard() {
-  const token = sessionStorage.getItem("token");
+  const token = getEffectiveToken();
   if (token) return <Navigate to="/app/dashboard" replace />;
   return <Outlet />;
 }
 
-// Intercepts Supabase password-recovery hash on mount
+// Intercepts Supabase OAuth and password-recovery hashes on mount
 function PasswordRecoveryHandler() {
   const navigate = useNavigate();
   useEffect(() => {
     const hash = window.location.hash;
-    if (hash && hash.includes("type=recovery")) {
-      const params = new URLSearchParams(hash.substring(1));
-      const token = params.get("access_token");
-      if (token) {
-        sessionStorage.setItem("token", token);
-        window.history.replaceState(null, "", window.location.pathname);
-        navigate("/reset-password", { replace: true });
+    if (hash) {
+      if (hash.includes("type=recovery")) {
+        const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
+        const token = params.get("access_token");
+        if (token) {
+          sessionStorage.setItem("token", token);
+          window.history.replaceState(null, "", window.location.pathname);
+          navigate("/reset-password", { replace: true });
+        }
+      } else if (hash.includes("access_token=")) {
+        const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
+        const token = params.get("access_token");
+        if (token) {
+          sessionStorage.setItem("token", token);
+          window.history.replaceState(null, "", window.location.pathname);
+          if (window.location.pathname === "/signin" || window.location.pathname === "/signup" || window.location.pathname === "/") {
+            navigate("/app/dashboard", { replace: true });
+          }
+        }
       }
     }
+
+    // Subscribe to onAuthStateChange for live session events
+    if (supabase?.auth?.onAuthStateChange) {
+      const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+        if (session?.access_token) {
+          sessionStorage.setItem("token", session.access_token);
+          if (window.location.pathname === "/signin" || window.location.pathname === "/signup" || window.location.pathname === "/") {
+            navigate("/app/dashboard", { replace: true });
+          }
+        } else if (event === "SIGNED_OUT") {
+          sessionStorage.removeItem("token");
+        }
+      });
+      return () => {
+        authListener?.subscription?.unsubscribe?.();
+      };
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [navigate]);
   return null;
 }
 
@@ -263,6 +312,9 @@ export default function AppWrapper() {
                 <Route path="/app/billing" element={<Suspense fallback={PAGE_FALLBACK}><Billing /></Suspense>} />
                 <Route path="/app/profile" element={<Suspense fallback={PAGE_FALLBACK}><Profile /></Suspense>} />
                 <Route path="/app/security-logs" element={<Suspense fallback={PAGE_FALLBACK}><SecurityLogs /></Suspense>} />
+                <Route path="/app/portfolio" element={<Suspense fallback={PAGE_FALLBACK}><Portfolio /></Suspense>} />
+                <Route path="/app/trades" element={<Suspense fallback={PAGE_FALLBACK}><TradeHistory /></Suspense>} />
+                <Route path="/app/2fa" element={<Suspense fallback={PAGE_FALLBACK}><TwoFA /></Suspense>} />
                 <Route path="/app/support" element={<SupportCenter />} />
                 <Route path="/app/notifications" element={<NotificationCenter />} />
                 <Route path="/app/*" element={<Navigate to="/app/dashboard" replace />} />

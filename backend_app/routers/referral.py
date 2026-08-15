@@ -26,6 +26,7 @@ import inspect
 import logging
 import os
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -102,6 +103,18 @@ class CreatePayoutRequest(BaseModel):
     amount_usd: float = Field(..., gt=0)
     payment_method: str = Field(..., pattern="^(bank_transfer|paypal|upi)$")
     payment_details: dict = Field(..., description="Payment method specific details")
+
+    @validator("amount_usd", pre=True)
+    def validate_amount(cls, v):
+        if isinstance(v, bool) or not isinstance(v, (int, float, Decimal, str)):
+            raise ValueError("Amount must be a number")
+        try:
+            d = Decimal(str(v))
+            if d.is_nan() or d.is_infinite() or d <= 0:
+                raise ValueError("Amount must be a positive finite number")
+        except Exception:
+            raise ValueError("Amount must be a positive finite number")
+        return float(d)
 
 
 class ValidateReferralCodeRequest(BaseModel):
@@ -624,34 +637,68 @@ async def create_payout_request(
 ):
     """
     Create a payout request.
-    Validates sufficient balance and creates pending payout record.
+    Validates sufficient balance under distributed lock and deducts approved balance.
     """
     if not supabase:
         raise HTTPException(status_code=503, detail="Database connection unavailable")
     
+    from backend_app.core.cache import redis_manager
+    user_id = user["id"]
+    payout_lock_key = f"lock:referral_payout:{user_id}"
+    lock_acquired = False
+    
     try:
-        user_id = user["id"]
+        # Acquire short distributed lock (30s) to prevent concurrent double-spend
+        try:
+            lock_acquired = await redis_manager.set(payout_lock_key, "1", nx=True, ex=30)
+        except Exception as lock_err:
+            logger.warning(f"Redis lock attempt failed for payout {user_id}: {lock_err}")
+            lock_acquired = True  # Proceed if Redis is unavailable, fallback to DB check
+        
+        if not lock_acquired:
+            raise HTTPException(
+                status_code=409,
+                detail="A payout request is currently being processed. Please wait."
+            )
         
         # Get user's wallet
         wallet_resp = supabase.table("referral_wallets").select("*").eq("user_id", user_id).execute()
+        if inspect.isawaitable(wallet_resp):
+            wallet_resp = await wallet_resp
+        
         if not wallet_resp.data or len(wallet_resp.data) == 0:
             raise HTTPException(status_code=404, detail="Referral wallet not found")
         
         wallet = wallet_resp.data[0]
         approved_balance = float(wallet.get("approved_balance_usd", 0))
         
-        # Validate sufficient balance
-        if payout_request.amount_usd > approved_balance:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Insufficient approved balance. Available: ${approved_balance}, Requested: ${payout_request.amount_usd}"
-            )
-        
         # Validate minimum payout amount (e.g., $10)
         if payout_request.amount_usd < 10:
             raise HTTPException(
                 status_code=400,
                 detail="Minimum payout amount is $10"
+            )
+        
+        # Validate sufficient balance
+        if payout_request.amount_usd > approved_balance:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Insufficient approved balance. Available: ${approved_balance:.2f}, Requested: ${payout_request.amount_usd:.2f}"
+            )
+        
+        # Deduct approved balance immediately from wallet with optimistic concurrency guard
+        new_approved_balance = max(0.0, approved_balance - payout_request.amount_usd)
+        update_wallet_resp = supabase.table("referral_wallets").update({
+            "approved_balance_usd": new_approved_balance,
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("user_id", user_id).gte("approved_balance_usd", payout_request.amount_usd).execute()
+        if inspect.isawaitable(update_wallet_resp):
+            update_wallet_resp = await update_wallet_resp
+        
+        if not update_wallet_resp or not getattr(update_wallet_resp, "data", None):
+            raise HTTPException(
+                status_code=409,
+                detail="Concurrent wallet modification detected. Payout request aborted."
             )
         
         # Create payout record
@@ -662,8 +709,16 @@ async def create_payout_request(
             "payment_method": payout_request.payment_method,
             "payment_details": payout_request.payment_details
         }).execute()
+        if inspect.isawaitable(payout_resp):
+            payout_resp = await payout_resp
         
         if not payout_resp.data or len(payout_resp.data) == 0:
+            # Rollback wallet deduction on insert failure
+            rollback_resp = supabase.table("referral_wallets").update({
+                "approved_balance_usd": approved_balance
+            }).eq("user_id", user_id).execute()
+            if inspect.isawaitable(rollback_resp):
+                await rollback_resp
             raise HTTPException(status_code=500, detail="Failed to create payout request")
         
         logger.info(f"Payout request created for user {user_id}, amount: ${payout_request.amount_usd}")
@@ -680,3 +735,9 @@ async def create_payout_request(
     except Exception as e:
         logger.error(f"Error creating payout request for user {user['id']}: {e}")
         raise HTTPException(status_code=500, detail="Failed to create payout request")
+    finally:
+        if lock_acquired:
+            try:
+                await redis_manager.delete(payout_lock_key)
+            except Exception:
+                pass

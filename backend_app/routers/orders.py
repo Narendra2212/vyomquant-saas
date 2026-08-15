@@ -158,11 +158,13 @@ def validate_symbol(symbol: str) -> str:
     return normalized
 
 
-def validate_quantity(amount: Union[int, float, Decimal], order_type: str = "market") -> Decimal:
+def validate_quantity(amount: Union[int, float, Decimal, str], order_type: str = "market") -> Decimal:
     """
-    HARD VALIDATION: Quantity must be positive and within reasonable bounds.
+    HARD VALIDATION: Quantity must be positive, finite, and within reasonable bounds.
 
     Rules:
+        - amount cannot be boolean
+        - amount cannot be NaN or Infinite
         - amount > 0 (no zero or negative orders)
         - amount <= 1,000,000 (prevent fat-finger errors)
         - amount >= 0.000001 (minimum order size)
@@ -170,7 +172,7 @@ def validate_quantity(amount: Union[int, float, Decimal], order_type: str = "mar
     Raises:
         HTTPException: 400 if quantity is invalid
     """
-    if not isinstance(amount, (int, float, Decimal)):
+    if isinstance(amount, bool) or not isinstance(amount, (int, float, Decimal, str)):
         raise HTTPException(
             status_code=400,
             detail={
@@ -180,12 +182,24 @@ def validate_quantity(amount: Union[int, float, Decimal], order_type: str = "mar
             }
         )
 
+    # Convert to Decimal for precise comparison and check finite
+    try:
+        amount_dec = Decimal(str(amount))
+        if amount_dec.is_nan() or amount_dec.is_infinite():
+            raise ValueError("Quantity cannot be NaN or Infinite")
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "INVALID_QUANTITY",
+                "message": "Quantity must be a valid finite number",
+                "received": str(amount),
+            }
+        )
+
     # Hard bounds
     MIN_QUANTITY = Decimal("0.000001")  # 1 satoshi-like minimum
     MAX_QUANTITY = Decimal("1000000")  # 1 million maximum (fat-finger protection)
-
-    # Convert to Decimal for precise comparison
-    amount_dec = Decimal(str(amount))
 
     if amount_dec <= 0:
         raise HTTPException(
@@ -219,10 +233,10 @@ def validate_quantity(amount: Union[int, float, Decimal], order_type: str = "mar
             }
         )
 
-    return Decimal(str(amount))
+    return amount_dec
 
 
-def validate_price(price: Optional[float], order_type: str) -> Optional[float]:
+def validate_price(price: Optional[Union[float, int, Decimal, str]], order_type: str) -> Optional[Decimal]:
     """
     HARD VALIDATION: Price must be valid for the order type.
     
@@ -236,7 +250,7 @@ def validate_price(price: Optional[float], order_type: str) -> Optional[float]:
     Raises:
         HTTPException: 400 if price is invalid
     """
-    MAX_PRICE = 10_000_000  # $10M maximum (sanity check)
+    MAX_PRICE = Decimal("10000000")  # $10M maximum (sanity check)
     
     # Market orders don't need price
     if order_type.lower() == "market":
@@ -253,7 +267,7 @@ def validate_price(price: Optional[float], order_type: str) -> Optional[float]:
             }
         )
     
-    if not isinstance(price, (int, float)):
+    if isinstance(price, bool) or not isinstance(price, (int, float, Decimal, str)):
         raise HTTPException(
             status_code=400,
             detail={
@@ -262,29 +276,44 @@ def validate_price(price: Optional[float], order_type: str) -> Optional[float]:
                 "received": str(type(price)),
             }
         )
+
+    try:
+        price_dec = Decimal(str(price))
+        if price_dec.is_nan() or price_dec.is_infinite():
+            raise ValueError("Price cannot be NaN or Infinite")
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "INVALID_PRICE",
+                "message": "Price must be a valid finite number",
+                "received": str(price),
+            }
+        )
     
-    if price <= 0:
+    if price_dec <= 0:
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "INVALID_PRICE",
                 "message": "Price must be greater than 0 for limit/stop orders",
-                "received": price,
+                "received": str(price),
             }
         )
     
-    if price > MAX_PRICE:
+    if price_dec > MAX_PRICE:
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "PRICE_TOO_LARGE",
                 "message": f"Price exceeds maximum allowed ({MAX_PRICE}). Possible error.",
-                "received": price,
-                "maximum": MAX_PRICE,
+                "received": str(price),
+                "maximum": str(MAX_PRICE),
             }
         )
     
-    return float(price)
+    return price_dec
+
 
 
 def validate_side(side: str) -> str:

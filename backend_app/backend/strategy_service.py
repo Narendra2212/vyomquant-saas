@@ -592,6 +592,20 @@ class StrategyService:
         
         version_data = version_res.data[0]
         
+        # Check quota and entitlements
+        from backend_app.core.subscription_engine import SubscriptionEngine, Resource, Feature
+        from backend_app.core.subscription_dependencies import get_user_plan
+        plan_key = await get_user_plan(user["id"], sb)
+        
+        if environment == "live":
+            has_live = await SubscriptionEngine.check_feature_entitlement(user["id"], plan_key, Feature.LIVE_TRADING.value)
+            if not has_live:
+                raise ValueError("Live trading requires a paid subscription plan.")
+        
+        allowed, current_usage, limit = await SubscriptionEngine.reserve_quota(user["id"], plan_key, Resource.BOTS.value)
+        if not allowed:
+            raise ValueError(f"Quota exceeded for bots: {current_usage}/{limit}. Upgrade your plan to continue.")
+
         # Create deployment
         deployment_id = str(uuid4())
         deployment_data = {
@@ -642,6 +656,7 @@ class StrategyService:
                 if inspect.isawaitable(q6):
                     await q6
             else:
+                await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
                 q5 = sb.table("strategy_deployments").update({
                     "status": "failed",
                     "error_message": message
@@ -877,6 +892,11 @@ class StrategyService:
         }).eq("id", deployment_id).execute()
         if inspect.isawaitable(q2):
             await q2
+        
+        # Decrement quota if it was running
+        if deployment.get("status") == "running":
+            from backend_app.core.subscription_engine import SubscriptionEngine, Resource
+            await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
         
         # Check if strategy has other running deployments
         q3 = (sb.table("strategy_deployments")

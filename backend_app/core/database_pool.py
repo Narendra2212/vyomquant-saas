@@ -1,9 +1,9 @@
 """
-core/database_pool.py — DATABASE CONNECTION POOLING
+core/database_pool.py - DATABASE CONNECTION POOLING
 
 STEP 7: OPTIMIZE DB CONNECTIONS
 
-GOAL: Prevent DB connection exhaustion for 500 users (≈150 active)
+GOAL: Prevent DB connection exhaustion for 500 users (~150 active)
 
 CONFIGURATION:
   - Pool size: 20-50 connections
@@ -49,7 +49,6 @@ Base = declarative_base()
 # Async support
 try:
     import asyncpg
-#     from databases import Database
     ASYNC_AVAILABLE = True
 except ImportError:
     ASYNC_AVAILABLE = False
@@ -233,6 +232,25 @@ db_pool = DatabasePool()
 def get_db_pool() -> DatabasePool:
     """Get the global database pool instance."""
     return db_pool
+
+
+def get_db():
+    """FastAPI yield dependency for getting DB sessions from pool."""
+    db = db_pool.get_session()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@contextmanager
+def get_db_context():
+    """Context manager for direct 'with' statement usage from pool."""
+    db = db_pool.get_session()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def validate_pool_capacity(

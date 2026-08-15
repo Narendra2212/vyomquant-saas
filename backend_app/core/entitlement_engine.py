@@ -26,11 +26,25 @@ logger = logging.getLogger("EntitlementEngine")
 
 
 class BillingPlan(Enum):
-    """Billing plan names from payment providers."""
+    """Billing plan names from payment providers AND SubscriptionEngine canonical names.
+
+    BUG-FIX MC-01: Added all SubscriptionEngine plan names so that plan strings written
+    by BillingLifecycle (e.g. 'starter', 'pro', 'enterprise') are not silently
+    downgraded to TenantPlan.FREE by PlanMapper.billing_to_tenant().
+    """
     FREE = "free"
+    # Legacy payment-provider keys
     PRO_999 = "pro_999"
     ELITE_1999 = "elite_1999"
     ML_ADDON = "ml_addon"
+    # SubscriptionEngine canonical plan names (Plan enum values)
+    STARTER = "starter"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
+    # Additional legacy aliases
+    STARTER_499 = "starter_499"
+    BASIC = "basic"
+    PROFESSIONAL = "professional"
 
 
 class FeatureFlag(Enum):
@@ -73,30 +87,60 @@ class EntitlementDecision:
 
 
 class PlanMapper:
-    """Maps billing plan names to tenant plan names."""
-    
+    """Maps billing plan names to tenant plan names.
+
+    BUG-FIX MC-01: PlanMapper.billing_to_tenant() now uses
+    SubscriptionEngine.migrate_plan_key() as the canonical normalizer,
+    so there is a single source of truth for plan name aliases.
+    Direct BillingPlan enum lookup is retained for legacy payment-provider keys.
+    """
+
     BILLING_TO_TENANT = {
         BillingPlan.FREE: TenantPlan.FREE,
         BillingPlan.PRO_999: TenantPlan.PROFESSIONAL,
         BillingPlan.ELITE_1999: TenantPlan.ENTERPRISE,
+        BillingPlan.ML_ADDON: TenantPlan.PROFESSIONAL,
+        # SubscriptionEngine canonical names
+        BillingPlan.STARTER: TenantPlan.BASIC,
+        BillingPlan.STARTER_499: TenantPlan.BASIC,
+        BillingPlan.BASIC: TenantPlan.BASIC,
+        BillingPlan.PRO: TenantPlan.PROFESSIONAL,
+        BillingPlan.PROFESSIONAL: TenantPlan.PROFESSIONAL,
+        BillingPlan.ENTERPRISE: TenantPlan.ENTERPRISE,
     }
-    
+
     TENANT_TO_BILLING = {
         TenantPlan.FREE: BillingPlan.FREE,
-        TenantPlan.BASIC: BillingPlan.PRO_999,  # Map BASIC to PRO for backward compatibility
-        TenantPlan.PROFESSIONAL: BillingPlan.PRO_999,
-        TenantPlan.ENTERPRISE: BillingPlan.ELITE_1999,
+        TenantPlan.BASIC: BillingPlan.STARTER,
+        TenantPlan.PROFESSIONAL: BillingPlan.PRO,
+        TenantPlan.ENTERPRISE: BillingPlan.ENTERPRISE,
     }
-    
+
     @classmethod
     def billing_to_tenant(cls, billing_plan: str) -> TenantPlan:
-        """Convert billing plan name to tenant plan enum."""
+        """Convert billing plan name to tenant plan enum.
+
+        Uses SubscriptionEngine.migrate_plan_key() as canonical normalizer
+        before attempting BillingPlan enum lookup, ensuring all historical
+        and current plan name aliases resolve correctly.
+        """
+        from backend_app.core.subscription_engine import SubscriptionEngine
+        # Normalize via SubscriptionEngine (single source of truth for aliases)
+        normalized = SubscriptionEngine.migrate_plan_key(billing_plan)
         try:
-            billing_enum = BillingPlan(billing_plan)
+            billing_enum = BillingPlan(normalized)
             return cls.BILLING_TO_TENANT.get(billing_enum, TenantPlan.FREE)
         except ValueError:
-            logger.warning(f"Unknown billing plan: {billing_plan}, defaulting to FREE")
-            return TenantPlan.FREE
+            # Fall back to direct lookup with original key
+            try:
+                billing_enum = BillingPlan(billing_plan)
+                return cls.BILLING_TO_TENANT.get(billing_enum, TenantPlan.FREE)
+            except ValueError:
+                logger.warning(
+                    f"Unknown billing plan: {billing_plan!r} (normalized: {normalized!r}), "
+                    f"defaulting to FREE"
+                )
+                return TenantPlan.FREE
     
     @classmethod
     def tenant_to_billing(cls, tenant_plan: TenantPlan) -> str:
@@ -119,13 +163,18 @@ class FeatureEntitlements:
         FeatureFlag.LIVE_TRADING: {TenantPlan.BASIC, TenantPlan.PROFESSIONAL, TenantPlan.ENTERPRISE},
         
         # Advanced Features - Professional and above
-        FeatureFlag.ML_TRAINING: {TenantPlan.ENTERPRISE},
+        # BUG-FIX MC-22: ML_TRAINING now available on PROFESSIONAL (matching SubscriptionEngine
+        # PRO plan which also grants ml_training). Previous ENTERPRISE-only restriction
+        # contradicted SubscriptionEngine._PLANS["pro"].features.
+        FeatureFlag.ML_TRAINING: {TenantPlan.PROFESSIONAL, TenantPlan.ENTERPRISE},
         FeatureFlag.ALGORITHM_INDICATORS: {TenantPlan.PROFESSIONAL, TenantPlan.ENTERPRISE},
         FeatureFlag.TELEGRAM_ALERTS: {TenantPlan.PROFESSIONAL, TenantPlan.ENTERPRISE},
         FeatureFlag.EMAIL_ALERTS: {TenantPlan.PROFESSIONAL, TenantPlan.ENTERPRISE},
         
-        # Premium Features - Enterprise only
-        FeatureFlag.API_ACCESS: {TenantPlan.ENTERPRISE},
+        # Premium Features - Professional and Enterprise
+        # BUG-FIX IB-02: API_ACCESS was ENTERPRISE-only here, but SubscriptionEngine._PLANS["pro"]
+        # includes "api_access". Aligning with SubscriptionEngine as the single source of truth.
+        FeatureFlag.API_ACCESS: {TenantPlan.PROFESSIONAL, TenantPlan.ENTERPRISE},
         FeatureFlag.PRIORITY_SUPPORT: {TenantPlan.ENTERPRISE},
         FeatureFlag.ADVANCED_ANALYTICS: {TenantPlan.PROFESSIONAL, TenantPlan.ENTERPRISE},
         FeatureFlag.CUSTOM_STRATEGIES: {TenantPlan.ENTERPRISE},

@@ -9,6 +9,12 @@ from backend_app.core.backpressure_v2 import get_backpressure_v2, Priority
 
 logger = logging.getLogger("WorkerBase")
 
+# BUG-FIX MC-02: Subscription enforcement architectural note.
+# WorkerBase subclasses that execute user-scoped trading operations (bots, DAG tasks)
+# MUST set requires_subscription_check = True and implement check_subscription().
+# Without this, cancelled/expired users' background workers continue executing
+# trades because HTTP middleware entitlement gates are bypassed at the worker layer.
+
 class WorkerBase(ABC):
     """
     Base class for all background workers.
@@ -19,10 +25,20 @@ class WorkerBase(ABC):
     process_iteration() success/failure history, not just whether the loop
     is running. A worker that fails every iteration will report "unhealthy"
     after 3 consecutive failures, not "healthy".
+
+    BUG-FIX MC-02 — Subscription enforcement:
+    Subclasses that operate on behalf of a specific user (e.g., bot runners,
+    DAG task workers) MUST set `requires_subscription_check = True` and implement
+    `check_subscription()` to return False when the user's subscription is
+    cancelled, expired, or suspended.  The _run_loop() will skip process_iteration()
+    and log a warning when check_subscription() returns False.
     """
-    
+
     # Consecutive failure threshold before reporting "unhealthy"
     UNHEALTHY_THRESHOLD = 3
+
+    # BUG-FIX MC-02: Set True in user-scoped worker subclasses.
+    requires_subscription_check: bool = False
 
     def __init__(self, worker_name: str, poll_interval: float = 1.0, heartbeat_interval: float = 10.0, backpressure_priority: Priority = Priority.MEDIUM):
         self.worker_name = worker_name
@@ -87,6 +103,19 @@ class WorkerBase(ABC):
                     await asyncio.sleep(self.poll_interval * 2)
                     continue
 
+                # 1b. BUG-FIX MC-02: Subscription check for user-scoped workers.
+                # Prevents cancelled/expired users' bots from executing trades
+                # by bypassing the HTTP entitlement middleware.
+                if self.requires_subscription_check:
+                    sub_ok = await self.check_subscription()
+                    if not sub_ok:
+                        logger.warning(
+                            f"[{self.worker_name}] Subscription check failed — "
+                            f"skipping process_iteration() to enforce entitlement boundary."
+                        )
+                        await asyncio.sleep(self.poll_interval)
+                        continue
+
                 # 2. Main Processing
                 await self.process_iteration()
 
@@ -96,11 +125,11 @@ class WorkerBase(ABC):
                         f"[{self.worker_name}] Recovered after {self._consecutive_failures} consecutive failure(s)."
                     )
                 self._consecutive_failures = 0
-                
+
                 # 4. Rest interval
                 if self.poll_interval > 0:
                     await asyncio.sleep(self.poll_interval)
-                    
+
             except asyncio.CancelledError:
                 logger.info(f"[{self.worker_name}] Main loop cancelled.")
                 break
@@ -157,6 +186,26 @@ class WorkerBase(ABC):
         if hasattr(bp, 'can_accept'):
             return not bp.can_accept(self.backpressure_priority)
         return False
+
+    async def check_subscription(self) -> bool:
+        """
+        BUG-FIX MC-02: Subscription enforcement hook for user-scoped workers.
+
+        Override in subclasses where requires_subscription_check = True.
+        Should return True if the user's subscription is ACTIVE or TRIAL,
+        False if CANCELLED, EXPIRED, SUSPENDED, or PAST_DUE beyond grace period.
+
+        Default returns True (permissive) so non-user-scoped workers are unaffected.
+        Subclasses that handle trading on behalf of a user MUST override this method.
+
+        Example implementation:
+            async def check_subscription(self) -> bool:
+                from backend_app.core.billing_lifecycle import SubscriptionStatus
+                status = await get_user_subscription_status(self.user_id)
+                return status in (SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL,
+                                   SubscriptionStatus.GRACE_PERIOD)
+        """
+        return True
 
     async def report_health(self) -> None:
         """

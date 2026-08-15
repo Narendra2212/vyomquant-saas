@@ -102,14 +102,16 @@ class FillDeduplicationManager:
         Returns:
             SHA-256 hash hex string
         """
-        # Normalize fill data for hashing (exclude timestamp for stability)
+        # Normalize fill data for hashing
+        # When exchange_trade_id is present, it is the primary deterministic key
+        # When absent (e.g. simulated/paper or batched fills), timestamp differentiates distinct partial fills
         fill_data = {
             "order_id": order_id,
             "symbol": symbol,
             "side": side,
             "filled_quantity": str(filled_quantity),
             "fill_price": str(fill_price),
-            "exchange_trade_id": exchange_trade_id
+            "exchange_trade_id": exchange_trade_id if exchange_trade_id else f"time_{timestamp.isoformat()}"
         }
         
         # Sort keys for deterministic hashing
@@ -184,16 +186,7 @@ class FillDeduplicationManager:
         registry_key = f"{self._fill_registry_prefix}:{tenant_id}:{fill_record.fill_hash}"
         
         try:
-            # Check if already registered
-            exists = await self.redis.exists(registry_key)
-            if exists:
-                logger.warning(
-                    f"[FillDeduplicationManager] Duplicate fill detected: "
-                    f"fill_id={fill_record.fill_id}, fill_hash={fill_record.fill_hash}"
-                )
-                return False
-            
-            # Register fill with TTL
+            # Register fill with TTL atomically (only if not already registered)
             fill_data = {
                 "fill_id": fill_record.fill_id,
                 "order_id": fill_record.order_id,
@@ -207,11 +200,19 @@ class FillDeduplicationManager:
                 "registered_at": datetime.now(timezone.utc).isoformat()
             }
             
-            await self.redis.setex(
+            res = await self.redis.set(
                 registry_key,
-                self.fill_registry_ttl,
-                json.dumps(fill_data)
+                json.dumps(fill_data),
+                ex=self.fill_registry_ttl,
+                nx=True
             )
+            
+            if not res:
+                logger.warning(
+                    f"[FillDeduplicationManager] Duplicate fill detected (atomic NX): "
+                    f"fill_id={fill_record.fill_id}, fill_hash={fill_record.fill_hash}"
+                )
+                return False
             
             logger.info(
                 f"[FillDeduplicationManager] Fill registered: "
@@ -318,15 +319,15 @@ class FillDeduplicationManager:
         registered = await self.register_fill(tenant_id, fill_record)
         
         if not registered:
-            logger.error(
-                f"[FillDeduplicationManager] Failed to register fill: "
-                f"fill_id={fill_id}"
+            logger.warning(
+                f"[FillDeduplicationManager] Concurrent duplicate fill rejected on register: "
+                f"fill_id={fill_id}, fill_hash={fill_hash}"
             )
             return {
-                "status": "registration_failed",
+                "status": "duplicate_rejected",
                 "fill_id": fill_id,
                 "fill_hash": fill_hash,
-                "reason": "Failed to register fill in registry",
+                "reason": "Fill already processed (atomic registry deduplication)",
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
         

@@ -159,6 +159,27 @@ class DAGWorker(WorkerBase):
                 # Someone else claimed it - race condition
                 return None
             
+            # BUG-FIX WORKER-01 / UK-04: Verify tenant subscription before executing queued DAG task.
+            # Also block "unknown" — if subscription cache unavailable we fail closed.
+            try:
+                from backend_app.core.subscription_middleware import get_user_subscription
+                sub = await get_user_subscription(tenant_id)
+                sub_status = sub.get("status") if sub else "unknown"
+                BLOCKED_STATUSES = ("cancelled", "expired", "suspended", "unknown")
+                if sub_status in BLOCKED_STATUSES:
+                    logger.warning(f"TASK_REJECTED_SUBSCRIPTION: tenant={tenant_id} sub_status={sub_status}")
+                    db_task.status = DBTaskStatus.FAILED
+                    db_task.error_message = f"Subscription {sub_status}"
+                    db_session.commit()
+                    return None
+            except Exception as sub_err:
+                # BUG-FIX UK-04: subscription check error → fail closed, not pass-through
+                logger.warning(f"Subscription check error for tenant {tenant_id}: {sub_err} — rejecting task")
+                db_task.status = DBTaskStatus.FAILED
+                db_task.error_message = f"Subscription verification failed: {sub_err}"
+                db_session.commit()
+                return None
+            
             # Update status: pending → assigned → running
             # Set timestamps
             now = datetime.utcnow()

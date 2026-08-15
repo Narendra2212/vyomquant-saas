@@ -990,7 +990,7 @@ class StatePersistenceManager:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-router = APIRouter(prefix="/api/state", tags=["state-persistence"])
+router = APIRouter(prefix="", tags=["internal-state-persistence"])
 
 # Global persistence manager
 _persistence_manager: Optional[StatePersistenceManager] = None

@@ -1,5 +1,7 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
 """
-core/models/execution_record.py — Execution Record Models.
+core/models/execution_record.py - Execution Record Models.
 
 Pydantic and SQLAlchemy models for the execution_records table.
 Tracks individual strategy executions (orders/trades).
@@ -8,10 +10,10 @@ import hashlib
 import logging
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple, List
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, validator
 from sqlalchemy import JSON, Column, DateTime
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy import Index, String, bindparam, text
@@ -246,14 +248,12 @@ class ExecutionRecordModel(Base):
         Index('idx_execution_records_task_id', 'task_id'),
         Index('idx_execution_records_status', 'status'),
         Index('idx_execution_records_tenant_status', 'tenant_id', 'status'),
-        Index('idx_execution_records_created_at', created_at.desc()),
+        Index('idx_execution_records_created_at', 'created_at'),
         # STEP 3.2: New indexes for reconciliation
         Index('idx_execution_records_order_id', 'order_id'),
         Index('idx_execution_records_exchange_sync', 'last_exchange_sync'),
         Index('idx_execution_records_active', 'tenant_id', 'status', 
-              postgresql_where=(
-                  (status == 'pending') | (status == 'executing')
-              )),
+              postgresql_where=text("status IN ('pending', 'executing')")),
     )
 
 
@@ -542,15 +542,16 @@ class ExecutionRecordRepository:
         
         return results, total
     
-    def create(self, data: ExecutionRecordCreate) -> ExecutionRecordModel:
+    def create(self, data: ExecutionRecordCreate, auto_commit: bool = True) -> ExecutionRecordModel:
         """Create a new execution record."""
+        side_val = data.side.value if hasattr(data.side, 'value') else str(data.side)
         db_record = ExecutionRecordModel(
             execution_id=data.execution_id,
             tenant_id=data.tenant_id,
             task_id=data.task_id,
             strategy_id=data.strategy_id,
             symbol=data.symbol.upper(),
-            side=data.side.value,
+            side=side_val,
             size=data.size,
             price=data.price,
             status=data.status,
@@ -559,8 +560,11 @@ class ExecutionRecordRepository:
         )
         
         self.db.add(db_record)
-        self.db.commit()
-        self.db.refresh(db_record)
+        if auto_commit:
+            self.db.commit()
+            self.db.refresh(db_record)
+        else:
+            self.db.flush()
         
         return db_record
     
@@ -618,70 +622,73 @@ class ExecutionRecordRepository:
             ...     logger.info("Execution already claimed by another worker")
         """
         # Atomic UPDATE with status check (optimistic locking)
-        # Only update if status is 'pending' - prevents double execution
-        result = self.db.execute(
-            text("""
-                UPDATE execution_records
-                SET status = 'EXECUTING',
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE execution_id = :execution_id
-                AND tenant_id = :tenant_id
-                AND status = 'PENDING'
-                RETURNING *
-            """).bindparams(
-                bindparam("tenant_id", type_=PG_UUID(as_uuid=True))
-            ),
-            {
-                "execution_id": execution_id,
-                "tenant_id": tenant_id,
-            }
-        )
-        
-        updated_row = result.fetchone()
-        self.db.commit()
-        
-        if updated_row:
-            # Successfully claimed
-            logger.info(
-                f"EXECUTION_CLAIMED: execution_id={execution_id} status=executing",
-                extra={
-                    "event": "EXECUTION_CLAIMED",
-                    "execution_id": execution_id,
-                    "tenant_id": str(tenant_id),
-                    "old_status": "pending",
-                    "new_status": "executing",
-                }
+        dialect = self.db.bind.dialect.name if self.db and self.db.bind else "sqlite"
+        if dialect == "postgresql":
+            try:
+                result = self.db.execute(
+                    text("""
+                        UPDATE execution_records
+                        SET status = 'executing',
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE execution_id = :execution_id
+                        AND tenant_id = :tenant_id
+                        AND (status = 'PENDING' OR status = 'pending')
+                        RETURNING *
+                    """).bindparams(
+                        bindparam("tenant_id", type_=PG_UUID(as_uuid=True))
+                    ),
+                    {
+                        "execution_id": execution_id,
+                        "tenant_id": tenant_id,
+                    }
+                )
+                updated_row = result.fetchone()
+                self.db.commit()
+                
+                if updated_row:
+                    record = ExecutionRecordModel(
+                        execution_id=updated_row.execution_id,
+                        tenant_id=updated_row.tenant_id,
+                        task_id=updated_row.task_id,
+                        strategy_id=updated_row.strategy_id,
+                        symbol=updated_row.symbol,
+                        side=updated_row.side,
+                        size=updated_row.size,
+                        price=updated_row.price,
+                        status=ExecutionStatus.EXECUTING,
+                        order_id=updated_row.order_id,
+                        result=updated_row.result,
+                        created_at=updated_row.created_at,
+                        updated_at=updated_row.updated_at,
+                    )
+                    return (True, record)
+                return (False, None)
+            except Exception as e:
+                self.db.rollback()
+                logger.warning(f"PostgreSQL claim execution RETURNING failed, falling back: {e}")
+
+        # Dialect-agnostic atomic query UPDATE with rowcount (safe across SQLite, Postgres, MySQL)
+        try:
+            tenant_val = tenant_id if not isinstance(tenant_id, str) else UUID(tenant_id)
+            rows_updated = self.db.query(ExecutionRecordModel).filter(
+                ExecutionRecordModel.execution_id == execution_id,
+                ExecutionRecordModel.tenant_id == tenant_val,
+                ExecutionRecordModel.status.in_([ExecutionStatus.PENDING, "pending", "PENDING"])
+            ).update(
+                {
+                    ExecutionRecordModel.status: ExecutionStatus.EXECUTING,
+                    ExecutionRecordModel.updated_at: datetime.utcnow()
+                },
+                synchronize_session=False
             )
-            
-            # Reconstruct model from result
-            record = ExecutionRecordModel(
-                execution_id=updated_row.execution_id,
-                tenant_id=updated_row.tenant_id,
-                task_id=updated_row.task_id,
-                strategy_id=updated_row.strategy_id,
-                symbol=updated_row.symbol,
-                side=updated_row.side,
-                size=updated_row.size,
-                price=updated_row.price,
-                status=ExecutionStatus.EXECUTING,
-                order_id=updated_row.order_id,
-                result=updated_row.result,
-                created_at=updated_row.created_at,
-                updated_at=updated_row.updated_at,
-            )
-            
-            return (True, record)
-        else:
-            # Another worker already claimed or status changed
-            logger.warning(
-                f"EXECUTION_CLAIM_FAILED: execution_id={execution_id} already_executing_or_completed",
-                extra={
-                    "event": "EXECUTION_CLAIM_FAILED",
-                    "execution_id": execution_id,
-                    "tenant_id": str(tenant_id),
-                    "reason": "already_executing_or_completed",
-                }
-            )
+            self.db.commit()
+            if rows_updated > 0:
+                record = self.get_by_id(execution_id, tenant_id)
+                return (True, record)
+            return (False, None)
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error claiming execution {execution_id}: {e}")
             return (False, None)
     
     def update_status(

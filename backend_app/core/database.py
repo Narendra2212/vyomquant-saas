@@ -1,5 +1,5 @@
 """
-core/database.py — Database engine with connection pooling.
+core/database.py - Database engine with connection pooling.
 
 STEP 7: OPTIMIZE DB CONNECTIONS
 
@@ -9,6 +9,7 @@ See core/database_pool.py for full implementation details.
 
 import logging
 import os
+import backend_app.core.safety_config
 
 # Import from new pooling module
 try:
@@ -89,11 +90,18 @@ if not POOLING_AVAILABLE:
 if POOLING_AVAILABLE:
     from backend_app.core.database_pool import Base
 
-# Export engine for direct access
+# Export engine and SessionLocal for direct access
 if POOLING_AVAILABLE:
     from backend_app.core.database_pool import get_db_pool
-    engine = get_db_pool().engine
-    SessionLocal = get_db_pool().get_session
+
+    def SessionLocal():
+        """Get a DB session from the pool."""
+        return get_db_pool().get_session()
+
+    def __getattr__(name):
+        if name == "engine":
+            return get_db_pool().engine
+        raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 else:
     # Already defined above in fallback
     pass

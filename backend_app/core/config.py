@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Core Configuration Module
 
@@ -233,19 +234,19 @@ def print_config_status():
     print(" SYSTEM MODE:", status["mode"].upper())
     print("=" * 50)
     
-    # 🚨 DEV_MODE SAFETY CHECK
+    # [SECURITY] DEV_MODE SAFETY CHECK
     dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
     env = os.environ.get("ENV", "").lower()
     production_like_envs = {"production", "prod", "live", "staging"}
     
     if dev_mode and env in production_like_envs:
         logger.critical(
-            "🚨 CRITICAL: DEV_MODE=true is set in a production-like environment (ENV=%s). "
+            "[CRITICAL] DEV_MODE=true is set in a production-like environment (ENV=%s). "
             "This causes Redis and other backends to use in-memory mocks instead of real connections, "
             "silently bypassing durability guarantees. This is a dangerous misconfiguration.",
             env.upper()
         )
-        print(f" ⚠️  WARNING: DEV_MODE=true detected with ENV={env.upper()}")
+        print(f" [WARNING] DEV_MODE=true detected with ENV={env.upper()}")
         print(f"     This enables in-memory mocks for Redis and other backends.")
         print(f"     Expected ENV values for DEV_MODE: development, testing, dev")
         print(f"     Actual ENV value: {env.upper()}")

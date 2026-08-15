@@ -1,3 +1,9 @@
+# -*- coding: utf-8 -*-
+"""
+routers/dag_tasks.py - DAG Task Queue API Endpoints.
+
+API for submitting, monitoring, and managing DAG execution tasks.
+"""
 import asyncio
 import logging
 from datetime import datetime
@@ -15,11 +21,6 @@ from backend_app.core.dag_task_queue import TaskQueueKeyBuilder, dag_task_queue
 from backend_app.core.dependencies import get_admin_user, get_current_user
 
 logger = logging.getLogger(__name__)
-"""
-routers/dag_tasks.py — DAG Task Queue API Endpoints.
-
-API for submitting, monitoring, and managing DAG execution tasks.
-"""
 
 
 
@@ -424,10 +425,10 @@ class DeadLetterListResponse(BaseModel):
 
 @router.get("/recovery/stats", response_model=RecoveryStatsResponse)
 async def get_recovery_stats(
-    tenant: dict = Depends(get_current_user)
+    admin: dict = Depends(get_admin_user)
 ):
     """
-    Get recovery statistics.
+    Get recovery statistics (Admin only).
     
     Returns:
     - stuck tasks (stale heartbeat)
@@ -466,19 +467,19 @@ async def get_recovery_stats(
 
 @router.post("/recovery/trigger", response_model=RecoveryTriggerResponse)
 async def trigger_recovery(
-    tenant: dict = Depends(get_current_user)
+    admin: dict = Depends(get_admin_user)
 ):
     """
-    Manually trigger task recovery.
+    Manually trigger task recovery (Admin only).
     
     Detects and recovers stuck tasks from crashed workers.
     """
     try:
         logger.info(
-            f"MANUAL_RECOVERY_TRIGGERED: by={tenant['id']}",
+            f"MANUAL_RECOVERY_TRIGGERED: by={admin['id']}",
             extra={
                 "event": "MANUAL_RECOVERY_TRIGGERED",
-                "triggered_by": tenant["id"],
+                "triggered_by": admin["id"],
             }
         )
         
@@ -505,7 +506,7 @@ async def trigger_recovery(
 @router.get("/recovery/dead-letter", response_model=DeadLetterListResponse)
 async def get_dead_letter_tasks(
     limit: int = 100,
-    tenant: dict = Depends(get_current_user)
+    admin: dict = Depends(get_admin_user)
 ):
     """
     Inspect dead letter queue.

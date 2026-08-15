@@ -685,14 +685,19 @@ class PositionRepository:
         self,
         tenant_id: UUID
     ) -> Dict[str, Any]:
-        """Get summary of all positions for tenant."""
-        open_positions = self.list_open_positions(tenant_id)
+        """Get summary of all positions for tenant (including closed position realized PnL)."""
+        all_positions = self.db.query(PositionModel).filter(
+            PositionModel.tenant_id == tenant_id
+        ).all()
+        
+        open_positions = [p for p in all_positions if p.status == PositionStatus.OPEN]
         
         total_unrealized = sum(
             Decimal(p.unrealized_pnl) for p in open_positions
         )
+        # BUG-FIX PNL-02: Sum realized PnL across all tenant positions (both open and closed)
         total_realized = sum(
-            Decimal(p.realized_pnl) for p in open_positions
+            Decimal(p.realized_pnl) for p in all_positions
         )
         
         exposure_by_symbol = {}

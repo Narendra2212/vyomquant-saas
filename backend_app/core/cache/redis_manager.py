@@ -66,6 +66,26 @@ class MockRedisClient:
         self._store[key] = value
         return True
 
+    async def incr(self, key: str) -> int:
+        val = int(self._store.get(key, 0)) + 1
+        self._store[key] = str(val)
+        return val
+
+    async def decr(self, key: str) -> int:
+        val = int(self._store.get(key, 0)) - 1
+        self._store[key] = str(val)
+        return val
+
+    async def incrby(self, key: str, amount: int) -> int:
+        val = int(self._store.get(key, 0)) + amount
+        self._store[key] = str(val)
+        return val
+
+    async def decrby(self, key: str, amount: int) -> int:
+        val = int(self._store.get(key, 0)) - amount
+        self._store[key] = str(val)
+        return val
+
     async def sismember(self, key: str, member: Any) -> bool:
         s = self._store.get(key, set())
         if not isinstance(s, set):
@@ -81,6 +101,39 @@ class MockRedisClient:
                 self._store[key].add(m)
                 added += 1
         return added
+
+    async def srem(self, key: str, *members: Any) -> int:
+        s = self._store.get(key)
+        if not isinstance(s, set):
+            return 0
+        removed = 0
+        for m in members:
+            if m in s:
+                s.remove(m)
+                removed += 1
+        return removed
+
+    async def scard(self, key: str) -> int:
+        s = self._store.get(key)
+        return len(s) if isinstance(s, set) else 0
+
+    async def smembers(self, key: str) -> set:
+        s = self._store.get(key)
+        return set(s) if isinstance(s, set) else set()
+
+    async def lpush(self, key: str, *values: Any) -> int:
+        if key not in self._store or not isinstance(self._store[key], list):
+            self._store[key] = []
+        for v in values:
+            self._store[key].insert(0, str(v))
+        return len(self._store[key])
+
+    async def rpush(self, key: str, *values: Any) -> int:
+        if key not in self._store or not isinstance(self._store[key], list):
+            self._store[key] = []
+        for v in values:
+            self._store[key].append(str(v))
+        return len(self._store[key])
 
     async def hset(self, key: str, name: str = None, value: str = None, mapping: dict = None) -> int:
         if key not in self._store or not isinstance(self._store[key], dict):
@@ -103,6 +156,31 @@ class MockRedisClient:
         d = self._store.get(key, {})
         return dict(d) if isinstance(d, dict) else {}
 
+    async def lrange(self, key: str, start: int, end: int) -> list:
+        lst = self._store.get(key, [])
+        if not isinstance(lst, list):
+            return []
+        if end == -1:
+            return lst[start:]
+        return lst[start:end + 1]
+
+    async def llen(self, key: str) -> int:
+        lst = self._store.get(key, [])
+        return len(lst) if isinstance(lst, list) else 0
+
+    async def rpush(self, key: str, *values: Any) -> int:
+        if key not in self._store or not isinstance(self._store[key], list):
+            self._store[key] = []
+        for v in values:
+            self._store[key].append(str(v))
+        return len(self._store[key])
+
+    async def lpop(self, key: str) -> Optional[str]:
+        lst = self._store.get(key, [])
+        if isinstance(lst, list) and lst:
+            return lst.pop(0)
+        return None
+
     async def expire(self, key: str, seconds: int) -> bool:
         return True
     
@@ -120,7 +198,8 @@ class MockRedisClient:
         pass
     
     async def keys(self, pattern: str = "*") -> list:
-        return [k for k in self._store.keys() if pattern == "*" or pattern in k]
+        import fnmatch
+        return [k for k in self._store.keys() if pattern == "*" or fnmatch.fnmatch(k, pattern)]
     
     async def xadd(self, stream: str, data: dict, **kwargs):
         """Mock xadd for streams - stores in memory"""
@@ -157,8 +236,78 @@ class MockRedisClient:
         return []
     
     async def zadd(self, key: str, mapping: dict, *args, **kwargs) -> int:
-        """Mock zadd for sorted sets - returns 0"""
-        return 0
+        if key not in self._store or not isinstance(self._store[key], dict):
+            self._store[key] = {}
+        added = 0
+        for member, score in mapping.items():
+            if member not in self._store[key]:
+                added += 1
+            self._store[key][member] = float(score)
+        return added
+
+    async def zrem(self, key: str, *members: Any) -> int:
+        d = self._store.get(key)
+        if not isinstance(d, dict):
+            return 0
+        removed = 0
+        for m in members:
+            if m in d:
+                del d[m]
+                removed += 1
+        return removed
+
+    async def zcard(self, key: str) -> int:
+        d = self._store.get(key)
+        return len(d) if isinstance(d, dict) else 0
+
+    async def zrange(self, key: str, start: int, end: int, **kwargs) -> list:
+        d = self._store.get(key)
+        if not isinstance(d, dict):
+            return []
+        sorted_items = sorted(d.items(), key=lambda x: x[1])
+        keys = [item[0] for item in sorted_items]
+        if end == -1:
+            return keys[start:]
+        return keys[start:end + 1]
+
+    async def zrangebyscore(self, key: str, min: Any, max: Any, count: Optional[int] = None, **kwargs) -> list:
+        d = self._store.get(key)
+        if not isinstance(d, dict):
+            return []
+        matching = [
+            (k, v) for k, v in d.items()
+            if (min == '-inf' or v >= float(min)) and (max == '+inf' or v <= float(max))
+        ]
+        sorted_items = sorted(matching, key=lambda x: x[1])
+        keys = [item[0] for item in sorted_items]
+        if count is not None:
+            keys = keys[:count]
+        return keys
+
+    async def zremrangebyscore(self, key: str, min: Any, max: Any) -> int:
+        d = self._store.get(key)
+        if not isinstance(d, dict):
+            return 0
+        to_remove = [k for k, v in d.items() if (min == '-inf' or v >= float(min)) and (max == '+inf' or v <= float(max))]
+        for k in to_remove:
+            del d[k]
+        return len(to_remove)
+
+    async def incr(self, key: str, amount: int = 1) -> int:
+        val = int(self._store.get(key, 0)) + amount
+        self._store[key] = str(val)
+        return val
+
+    async def decr(self, key: str, amount: int = 1) -> int:
+        val = int(self._store.get(key, 0)) - amount
+        self._store[key] = str(val)
+        return val
+
+    async def incrbyfloat(self, key: str, amount: float) -> float:
+        val = float(self._store.get(key, 0.0)) + float(amount)
+        self._store[key] = str(val)
+        return val
+
 
 
 class MockRedisPubSub:
@@ -318,87 +467,199 @@ class SharedRedisManager:
             return bool(result)
         return False
 
+    async def _get_active_cache(self):
+        """Get active Redis cache client or mock client in non-production environments."""
+        if DEV_MODE and not getattr(self, '_dev_mode_bypass', False):
+            return self._mock_client
+        
+        await self._ensure_manager()
+        if self._redis_manager and getattr(self._redis_manager, "cache", None):
+            return self._redis_manager.cache
+        
+        from backend_app.core.safety_config import get_vyomquant_mode
+        if get_vyomquant_mode() != "production":
+            return self._mock_client
+        return None
+
     async def keys(self, pattern: str = "*") -> list:
         """Proxy to cache keys method."""
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            return await self._redis_manager.cache.keys(pattern)
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.keys(pattern)
+            except Exception as e:
+                logger.warning(f"Cache KEYS failed: {e}")
         return []
 
     async def get(self, key: str):
         """Proxy to cache get method."""
-        if DEV_MODE and not getattr(self, '_dev_mode_bypass', False):
-            return await self._mock_client.get(key)
-        
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
+        client = await self._get_active_cache()
+        if client:
             try:
-                return await self._redis_manager.cache.get(key)
+                return await client.get(key)
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Cache GET failed for '{key}': {e}")
-                return None
+                logger.warning(f"Cache GET failed for '{key}': {e}")
         return None
 
     async def set(self, key: str, value: Any, **kwargs):
         """Proxy to cache set method."""
-        if DEV_MODE and not getattr(self, '_dev_mode_bypass', False):
-            return await self._mock_client.set(key, value, **kwargs)
-        
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
+        client = await self._get_active_cache()
+        if client:
             try:
-                return await self._redis_manager.cache.set(key, value, **kwargs)
+                return await client.set(key, value, **kwargs)
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Cache SET failed for '{key}': {e}")
-                return False
+                logger.warning(f"Cache SET failed for '{key}': {e}")
         return False
 
     async def delete(self, *keys: str):
         """Proxy to cache delete method."""
-        if DEV_MODE and not getattr(self, '_dev_mode_bypass', False):
-            return await self._mock_client.delete(*keys)
-        
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
+        client = await self._get_active_cache()
+        if client:
             try:
-                return await self._redis_manager.cache.delete(*keys)
+                return await client.delete(*keys)
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Cache DELETE failed for '{keys}': {e}")
-                return 0
+                logger.warning(f"Cache DELETE failed for '{keys}': {e}")
         return 0
     
     async def sismember(self, key: str, member: Any) -> bool:
         """Proxy to sismember method."""
-        if DEV_MODE:
-            return await self._mock_client.sismember(key, member)
-        
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
+        client = await self._get_active_cache()
+        if client:
             try:
-                return await self._redis_manager.cache.sismember(key, member)
+                return await client.sismember(key, member)
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"SISMEMBER failed for '{key}': {e}")
-                return False
+                logger.warning(f"SISMEMBER failed for '{key}': {e}")
         return False
     
     async def sadd(self, key: str, *members: Any) -> int:
         """Proxy to sadd method."""
-        if DEV_MODE:
-            return await self._mock_client.sadd(key, *members)
-        
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
+        client = await self._get_active_cache()
+        if client:
             try:
-                return await self._redis_manager.cache.sadd(key, *members)
+                return await client.sadd(key, *members)
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"SADD failed for '{key}': {e}")
-                return 0
+                logger.warning(f"SADD failed for '{key}': {e}")
         return 0
+
+    async def scard(self, key: str) -> int:
+        """Proxy to scard method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.scard(key)
+            except Exception as e:
+                logger.warning(f"SCARD failed for '{key}': {e}")
+        return 0
+
+    async def smembers(self, key: str) -> set:
+        """Proxy to smembers method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.smembers(key)
+            except Exception as e:
+                logger.warning(f"SMEMBERS failed for '{key}': {e}")
+        return set()
+    
+    async def exists(self, key: str) -> bool:
+        """Proxy to exists method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.exists(key)
+            except Exception as e:
+                logger.warning(f"EXISTS failed for '{key}': {e}")
+        return False
+
+    async def setex(self, key: str, ttl: int, value: Any):
+        """Proxy to cache setex method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.setex(key, ttl, value)
+            except Exception as e:
+                logger.warning(f"SETEX failed for '{key}': {e}")
+        return None
+
+    async def incr(self, key: str) -> int:
+        """Proxy to cache incr method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.incr(key)
+            except Exception as e:
+                logger.warning(f"INCR failed for '{key}': {e}")
+        return 0
+
+    async def decr(self, key: str) -> int:
+        """Proxy to cache decr method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.decr(key)
+            except Exception as e:
+                logger.warning(f"DECR failed for '{key}': {e}")
+        return 0
+
+    async def incrby(self, key: str, amount: int) -> int:
+        """Proxy to cache incrby method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.incrby(key, amount)
+            except Exception as e:
+                logger.warning(f"INCRBY failed for '{key}': {e}")
+        return 0
+
+    async def decrby(self, key: str, amount: int) -> int:
+        """Proxy to cache decrby method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.decrby(key, amount)
+            except Exception as e:
+                logger.warning(f"DECRBY failed for '{key}': {e}")
+        return 0
+
+    async def lrange(self, key: str, start: int, end: int) -> list:
+        """Proxy to lrange method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.lrange(key, start, end)
+            except Exception as e:
+                logger.warning(f"LRANGE failed for '{key}': {e}")
+        return []
+
+    async def llen(self, key: str) -> int:
+        """Proxy to llen method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.llen(key)
+            except Exception as e:
+                logger.warning(f"LLEN failed for '{key}': {e}")
+        return 0
+
+    async def rpush(self, key: str, *values: Any) -> int:
+        """Proxy to rpush method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.rpush(key, *values)
+            except Exception as e:
+                logger.warning(f"RPUSH failed for '{key}': {e}")
+        return 0
+
+    async def lpop(self, key: str) -> Optional[str]:
+        """Proxy to lpop method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.lpop(key)
+            except Exception as e:
+                logger.warning(f"LPOP failed for '{key}': {e}")
+        return None
     
     async def expire(self, key: str, seconds: int) -> bool:
         """Proxy to expire method."""
@@ -509,58 +770,222 @@ class SharedRedisManager:
 
     async def setex(self, key: str, ttl: int, value: Any):
         """Proxy to cache setex method."""
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            return await self._redis_manager.cache.setex(key, ttl, value)
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.setex(key, ttl, value)
+            except Exception as e:
+                logger.warning(f"Cache SETEX failed for '{key}': {e}")
+        return None
+
+    async def lrange(self, key: str, start: int, end: int) -> list:
+        """Proxy to lrange method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.lrange(key, start, end)
+            except Exception as e:
+                logger.warning(f"LRANGE failed for '{key}': {e}")
+        return []
+
+    async def llen(self, key: str) -> int:
+        """Proxy to llen method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.llen(key)
+            except Exception as e:
+                logger.warning(f"LLEN failed for '{key}': {e}")
+        return 0
+
+    async def lpush(self, key: str, *values: Any) -> int:
+        """Proxy to lpush method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.lpush(key, *values)
+            except Exception as e:
+                logger.warning(f"LPUSH failed for '{key}': {e}")
+        return 0
+
+    async def rpush(self, key: str, *values: Any) -> int:
+        """Proxy to rpush method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.rpush(key, *values)
+            except Exception as e:
+                logger.warning(f"RPUSH failed for '{key}': {e}")
+        return 0
+
+    async def lpop(self, key: str) -> Optional[str]:
+        """Proxy to lpop method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.lpop(key)
+            except Exception as e:
+                logger.warning(f"LPOP failed for '{key}': {e}")
         return None
 
     async def zremrangebyscore(self, key: str, min: Any, max: Any) -> int:
         """Proxy to cache zremrangebyscore method."""
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            return await self._redis_manager.cache.zremrangebyscore(key, min, max)
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.zremrangebyscore(key, min, max)
+            except Exception as e:
+                logger.warning(f"ZREMRANGEBYSCORE failed for '{key}': {e}")
         return 0
 
     async def zcard(self, key: str) -> int:
         """Proxy to cache zcard method."""
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            return await self._redis_manager.cache.zcard(key)
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.zcard(key)
+            except Exception as e:
+                logger.warning(f"ZCARD failed for '{key}': {e}")
         return 0
 
     async def zrange(self, key: str, start: int, end: int, **kwargs) -> list:
         """Proxy to cache zrange method."""
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            return await self._redis_manager.cache.zrange(key, start, end, **kwargs)
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.zrange(key, start, end, **kwargs)
+            except Exception as e:
+                logger.warning(f"ZRANGE failed for '{key}': {e}")
         return []
 
     async def zadd(self, key: str, mapping: dict, *args, **kwargs) -> int:
         """Proxy to cache zadd method."""
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            return await self._redis_manager.cache.zadd(key, mapping, *args, **kwargs)
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.zadd(key, mapping, *args, **kwargs)
+            except Exception as e:
+                logger.warning(f"ZADD failed for '{key}': {e}")
         return 0
 
     async def expire(self, key: str, time: int, *args, **kwargs) -> bool:
         """Proxy to cache expire method."""
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            return await self._redis_manager.cache.expire(key, time, *args, **kwargs)
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.expire(key, time, *args, **kwargs)
+            except Exception as e:
+                logger.warning(f"EXPIRE failed for '{key}': {e}")
         return False
 
     async def incr(self, key: str, amount: int = 1) -> int:
         """Proxy to cache incr method."""
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            return await self._redis_manager.cache.incr(key, amount)
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.incr(key, amount)
+            except Exception as e:
+                logger.warning(f"INCR failed for '{key}': {e}")
         return 0
 
     async def decr(self, key: str, amount: int = 1) -> int:
         """Proxy to cache decr method."""
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            return await self._redis_manager.cache.decr(key, amount)
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.decr(key, amount)
+            except Exception as e:
+                logger.warning(f"DECR failed for '{key}': {e}")
+        return 0
+
+    async def incrbyfloat(self, key: str, amount: float) -> float:
+        """Proxy to cache incrbyfloat method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.incrbyfloat(key, amount)
+            except Exception as e:
+                logger.warning(f"INCRBYFLOAT failed for '{key}': {e}")
+        return 0.0
+
+    async def hset(self, key: str, name: str = None, value: str = None, mapping: dict = None) -> int:
+        """Proxy to cache hset method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.hset(key, name=name, value=value, mapping=mapping)
+            except Exception as e:
+                logger.warning(f"HSET failed for '{key}': {e}")
+        return 0
+
+    async def hget(self, key: str, name: str) -> Optional[str]:
+        """Proxy to cache hget method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.hget(key, name)
+            except Exception as e:
+                logger.warning(f"HGET failed for '{key}': {e}")
+        return None
+
+    async def hgetall(self, key: str) -> dict:
+        """Proxy to cache hgetall method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.hgetall(key)
+            except Exception as e:
+                logger.warning(f"HGETALL failed for '{key}': {e}")
+        return {}
+
+    async def hdel(self, key: str, *names: str) -> int:
+        """Proxy to cache hdel method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.hdel(key, *names)
+            except Exception as e:
+                logger.warning(f"HDEL failed for '{key}': {e}")
+        return 0
+
+    async def srem(self, key: str, *members: Any) -> int:
+        """Proxy to cache srem method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.srem(key, *members)
+            except Exception as e:
+                logger.warning(f"SREM failed for '{key}': {e}")
+        return 0
+
+    async def zrem(self, key: str, *members: Any) -> int:
+        """Proxy to cache zrem method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.zrem(key, *members)
+            except Exception as e:
+                logger.warning(f"ZREM failed for '{key}': {e}")
+        return 0
+
+    async def zrangebyscore(self, key: str, min: Any, max: Any, **kwargs) -> list:
+        """Proxy to zrangebyscore method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.zrangebyscore(key, min, max, **kwargs)
+            except Exception as e:
+                logger.warning(f"ZRANGEBYSCORE failed for '{key}': {e}")
+        return []
+
+    async def zremrangebyscore(self, key: str, min: Any, max: Any) -> int:
+        """Proxy to zremrangebyscore method."""
+        client = await self._get_active_cache()
+        if client:
+            try:
+                return await client.zremrangebyscore(key, min, max)
+            except Exception as e:
+                logger.warning(f"ZREMRANGEBYSCORE failed for '{key}': {e}")
         return 0
 
     @property
@@ -653,66 +1078,6 @@ class SharedRedisManager:
                 logging.getLogger(__name__).warning(f"Redis ZPOPMIN failed for '{key}': {e}")
                 return []
         return []
-
-    async def publish(self, channel: str, message: str):
-        """Publish to a Redis channel with fail-soft behavior."""
-        if DEV_MODE:
-            return await self._mock_client.publish(channel, message)
-        
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            try:
-                return await self._redis_manager.cache.publish(channel, message)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Redis PUBLISH failed for '{channel}': {e}")
-                return 0
-        return 0
-
-    async def publish(self, channel: str, message: str):
-        """Publish to a Redis channel with fail-soft behavior."""
-        if DEV_MODE:
-            return await self._mock_client.publish(channel, message)
-        
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            try:
-                return await self._redis_manager.cache.publish(channel, message)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Redis PUBLISH failed for '{channel}': {e}")
-                return 0
-        return 0
-
-    async def publish(self, channel: str, message: str):
-        """Publish to a Redis channel with fail-soft behavior."""
-        if DEV_MODE:
-            return await self._mock_client.publish(channel, message)
-        
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            try:
-                return await self._redis_manager.cache.publish(channel, message)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Redis PUBLISH failed for '{channel}': {e}")
-                return 0
-        return 0
-
-    async def publish(self, channel: str, message: str):
-        """Publish to a Redis channel with fail-soft behavior."""
-        if DEV_MODE:
-            return await self._mock_client.publish(channel, message)
-        
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            try:
-                return await self._redis_manager.cache.publish(channel, message)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Redis PUBLISH failed for '{channel}': {e}")
-                return 0
-        return 0
 
     async def publish(self, channel: str, message: str):
         """Publish to a Redis channel with fail-soft behavior."""

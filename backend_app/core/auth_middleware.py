@@ -97,9 +97,10 @@ def decode_token_local(token: str) -> dict:
         raise
     except Exception as e:
         # Narrowly-scoped test fallback for synthetic test tokens in non-production test mode
-        if os.environ.get("ENV") in ("testing", "test", "development", "dev"):
+        current_env = (os.environ.get("ENV") or getattr(settings, "ENV", "") or "").lower()
+        if current_env in ("testing", "test", "development", "dev", "local"):
             try:
-                unverified_payload = jwt.decode(token, options={"verify_signature": False})
+                unverified_payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256", "ES256"])
                 if unverified_payload.get("iss") == "algo22-test":
                     return _decode_test_hs256_token(token)
             except Exception:

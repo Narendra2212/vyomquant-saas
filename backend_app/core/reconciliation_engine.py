@@ -390,19 +390,41 @@ class ReconciliationEngine:
         # Check for missing fills (on exchange but not local)
         for trade_id, exchange_fill in exchange_fills_by_trade_id.items():
             if trade_id not in local_fills_by_trade_id:
+                # BUG-FIX UK-06: Reject fills with missing or zero quantity.
+                # Defaulting to "0" silently creates zero-quantity fills that corrupt
+                # the position ledger. A fill with no quantity is malformed data.
+                raw_qty = exchange_fill.get("quantity")
+                if raw_qty is None:
+                    logger.error(
+                        f"[ReconciliationEngine] Exchange fill {trade_id} has missing 'quantity' field. "
+                        f"Skipping to prevent zero-quantity ledger mutation. Raw fill: {exchange_fill}"
+                    )
+                    continue
+                exchange_qty = Decimal(str(raw_qty))
+                if exchange_qty <= Decimal("0"):
+                    logger.error(
+                        f"[ReconciliationEngine] Exchange fill {trade_id} has zero/negative quantity={exchange_qty}. "
+                        f"Skipping to prevent ledger corruption."
+                    )
+                    continue
+
+                raw_price = exchange_fill.get("price")
+                exchange_price = Decimal(str(raw_price)) if raw_price is not None else Decimal("0")
+
                 mismatches.append(FillMismatch(
                     mismatch_type="missing_fill",
                     fill_id=None,
                     order_id=exchange_fill.get("order_id"),
                     exchange_trade_id=trade_id,
                     local_quantity=None,
-                    exchange_quantity=Decimal(str(exchange_fill.get("quantity", "0"))),
+                    exchange_quantity=exchange_qty,
                     local_price=None,
-                    exchange_price=Decimal(str(exchange_fill.get("price", "0"))),
+                    exchange_price=exchange_price,
                     severity="critical",
                     detected_at=datetime.now(timezone.utc),
                     metadata={"exchange_fill": exchange_fill}
                 ))
+
         
         # Check for duplicate fills (on local but not exchange)
         for trade_id, local_fill in local_fills_by_trade_id.items():
@@ -464,7 +486,7 @@ class ReconciliationEngine:
     ) -> List[OrderMismatch]:
         """
         Reconcile orders between local and exchange state.
-        
+
         Detects:
         - Missing orders (on exchange but not local)
         - Ghost orders (on local but not exchange)
@@ -472,11 +494,29 @@ class ReconciliationEngine:
         - Quantity divergence
         """
         mismatches: List[OrderMismatch] = []
-        
+
+        # BUG-FIX UK-05: If the exchange returned zero orders but we have active local
+        # orders, this is almost certainly a transient API failure (timeout, 429, 500)
+        # that returned an empty list instead of raising. Treating every local order as
+        # a "ghost" and cancelling it would destroy the entire open-order book.
+        # Abort this reconciliation round rather than generating mass ghost-cancel actions.
+        non_terminal_local = [
+            o for o in local_orders
+            if o.get("status") not in ["filled", "cancelled", "rejected", "failed"]
+        ]
+        if len(exchange_orders) == 0 and len(non_terminal_local) > 0:
+            logger.warning(
+                f"[ReconciliationEngine] Exchange returned 0 orders but we have "
+                f"{len(non_terminal_local)} active local orders. "
+                f"Aborting order reconciliation to prevent mass ghost-cancel. "
+                f"This is likely a transient exchange API failure."
+            )
+            return mismatches  # Return empty — no actions generated
+
         # Index orders by order_id
         local_orders_by_id = {o.get("order_id"): o for o in local_orders if o.get("order_id")}
         exchange_orders_by_id = {o.get("order_id"): o for o in exchange_orders if o.get("order_id")}
-        
+
         # Check for missing orders (on exchange but not local)
         for order_id, exchange_order in exchange_orders_by_id.items():
             if order_id not in local_orders_by_id:
@@ -491,7 +531,7 @@ class ReconciliationEngine:
                     detected_at=datetime.now(timezone.utc),
                     metadata={"exchange_order": exchange_order}
                 ))
-        
+
         # Check for ghost orders (on local but not exchange)
         for order_id, local_order in local_orders_by_id.items():
             if order_id not in exchange_orders_by_id:
@@ -509,15 +549,15 @@ class ReconciliationEngine:
                         detected_at=datetime.now(timezone.utc),
                         metadata={"local_order": local_order}
                     ))
-        
+
         # Check for status and quantity divergence
         for order_id in set(local_orders_by_id.keys()) & set(exchange_orders_by_id.keys()):
             local_order = local_orders_by_id[order_id]
             exchange_order = exchange_orders_by_id[order_id]
-            
+
             local_status = local_order.get("status")
             exchange_status = exchange_order.get("status")
-            
+
             if local_status != exchange_status:
                 mismatches.append(OrderMismatch(
                     mismatch_type="status_divergence",
@@ -530,8 +570,9 @@ class ReconciliationEngine:
                     detected_at=datetime.now(timezone.utc),
                     metadata={"local_order": local_order, "exchange_order": exchange_order}
                 ))
-        
+
         return mismatches
+
     
     async def _reconcile_positions(
         self,

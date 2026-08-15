@@ -454,12 +454,30 @@ class ExecutionEngine:
                     size=size,
                     price=price if price > 0 else None
                 )
+                # Extract actual exchange fee from CCXT response if available.
+                # BUG-FIX MC-08: also capture fee_currency denomination so callers
+                # can normalize fees to quote currency before PnL accounting.
+                # Previous code discarded currency, causing 0.0001 BTC fee to be
+                # indistinguishable from 0.0001 USDT — a 50000× magnitude error
+                # at $50k/BTC.
+                actual_fee = Decimal("0")
+                actual_fee_currency = None
+                if isinstance(result.raw_response, dict):
+                    fee_obj = result.raw_response.get("fee")
+                    if not fee_obj and isinstance(result.raw_response.get("fees"), list) and len(result.raw_response["fees"]) > 0:
+                        fee_obj = result.raw_response["fees"][0]
+                    if isinstance(fee_obj, dict):
+                        raw_cost = fee_obj.get("cost", 0.0)
+                        actual_fee = Decimal(str(raw_cost or "0"))
+                        actual_fee_currency = fee_obj.get("currency")  # e.g. "BTC", "USDT", "BNB"
+
                 if result.success:
                     return True, {
                         'order_id': result.exchange_order_id,
                         'executed_price': float(result.avg_price or price),
                         'size': float(result.filled_size or size),
-                        'fee': 0.0, # Can be updated if CCXT returns fee
+                        'fee': str(actual_fee),
+                        'fee_currency': actual_fee_currency,  # MC-08: denomination preserved
                         'total_cost': 0.0,
                         'slippage_applied': False,
                         'status': (
@@ -476,27 +494,35 @@ class ExecutionEngine:
                 return False, f"Exchange executor exception: {str(e)}"
 
         # PAPER EXECUTION PATH
-        # Apply slippage to price
-        executed_price = self.apply_slippage(price, side)
-
-        # Calculate fees using Decimal
+        # Execute based on side - open_position and close_position handle single slippage internally
         fee_rate_dec = Decimal(str(self.fee_rate))
+        if side.lower() == 'buy':
+            success, message = self.open_position(symbol, price, size, side='long')
+            executed_price = self.positions[symbol].entry_price if success and symbol in self.positions else price
+        else:  # sell
+            if symbol not in self.positions:
+                success, message = False, f"No position found for {symbol}"
+                executed_price = price
+            else:
+                pnl, message = self.close_position(symbol, price, size)
+                success = True
+                executed_price = price
+
         fee = (size * executed_price * fee_rate_dec).quantize(Decimal("0.00000001"))
         total_cost = (size * executed_price + fee).quantize(Decimal("0.00000001"))
 
-        # Execute based on side
-        if side.lower() == 'buy':
-            success, message = self.open_position(symbol, executed_price, size, side='long')
-        else:  # sell
-            success, message = self.close_position(symbol, executed_price, size)
-
         if success:
+            # BUG-FIX MC-23: Return Decimal values as str() to preserve precision.
+            # Previous float() casts degraded accuracy for large BTC prices and
+            # sub-satoshi fee amounts (e.g. 0.00000001 BTC loses precision as float).
+            # Callers must use Decimal(result['fee']) not float(result['fee']).
             return True, {
-                'order_id': f"paper_{random.randint(100000, 999999)}",
-                'executed_price': float(executed_price),
-                'size': float(size),
-                'fee': float(fee),
-                'total_cost': float(total_cost),
+                'order_id': f"paper_{uuid.uuid4().hex[:12]}",
+                'executed_price': str(executed_price),
+                'size': str(size),
+                'fee': str(fee),
+                'fee_currency': None,  # paper trading: fee in quote currency by definition
+                'total_cost': str(total_cost),
                 'slippage_applied': executed_price != price,
             }
         else:
@@ -507,18 +533,36 @@ class ExecutionEngine:
     # ----------------------------------
     def apply_slippage(self, price: Decimal, side: str) -> Decimal:
         """
-        Apply random slippage to execution price.
+        Apply adverse slippage to execution price based on order side.
 
         Args:
             price: Original price (Decimal)
-            side: "buy" or "sell"
+            side: "buy", "sell", "long", or "short"
 
         Returns:
-            Price with slippage applied (Decimal)
+            Price with adverse slippage applied (Decimal)
         """
-        # Random slippage between -0.1% and +0.1%
-        slippage_factor = Decimal(str(random.uniform(-0.001, 0.001)))
-        executed_price = (price * (Decimal("1") + slippage_factor)).quantize(Decimal("0.00000001"))
+        raw_slip = getattr(self, 'slippage', 0.001)
+        if raw_slip is None:
+            max_slip = 0.001
+        else:
+            try:
+                max_slip = abs(float(raw_slip))
+            except (ValueError, TypeError):
+                max_slip = 0.001
+
+        if max_slip == 0.0:
+            return price
+
+        slip_mag = Decimal(str(random.uniform(0.5 * max_slip, max_slip)))
+        
+        if str(side).lower() in ("buy", "long"):
+            # Buy orders slip upwards (worse for buyer)
+            executed_price = (price * (Decimal("1") + slip_mag)).quantize(Decimal("0.00000001"))
+        else:
+            # Sell orders slip downwards (worse for seller)
+            executed_price = (price * (Decimal("1") - slip_mag)).quantize(Decimal("0.00000001"))
+            
         return executed_price
 
     # ----------------------------------
@@ -554,7 +598,8 @@ class ExecutionEngine:
         self.risk_manager.update_open_trades_count(len(self.positions))
 
         # Apply slippage to get execution price for guardrail check
-        execution_price = self.apply_slippage(price, "buy")
+        open_order_side = "sell" if side.lower() == "short" else "buy"
+        execution_price = self.apply_slippage(price, open_order_side)
         fee_rate_dec = Decimal(str(self.fee_rate))
         position_value = execution_price * size
         fee = (execution_price * size * fee_rate_dec).quantize(Decimal("0.00000001"))
@@ -637,12 +682,12 @@ class ExecutionEngine:
     # ----------------------------------
     def close_position(self, symbol: str, price: Decimal, size: Decimal = None) -> Tuple[Decimal, str]:
         """
-        Close an existing position with slippage and fees.
+        Close an existing position (fully or partially) with slippage and fees.
 
         Args:
             symbol: Trading pair symbol to close
             price: Exit price (slippage will be applied)
-            size: Size to close (currently ignores and closes all)
+            size: Size to close (if None or >= position size, closes entire position)
 
         Returns:
             Tuple of (pnl, message)
@@ -650,20 +695,25 @@ class ExecutionEngine:
         if symbol not in self.positions:
             return Decimal("0"), f"No position found for {symbol}"
 
-        pos = self.positions.pop(symbol)
+        pos = self.positions[symbol]
 
-        # Apply slippage (worse price for exit)
-        execution_price = self.apply_slippage(price, "sell")
+        # Determine if full or partial close
+        is_full_close = (size is None or size >= pos.size)
+        close_size = pos.size if is_full_close else size
+
+        # Apply slippage (worse price for exit: sell when long, buy when short)
+        exit_side = "sell" if pos.side == "long" else "buy"
+        execution_price = self.apply_slippage(price, exit_side)
 
         # Calculate gross PnL with executed price
         if pos.side == "long":
-            gross_pnl = (execution_price - pos.entry_price) * pos.size
+            gross_pnl = (execution_price - pos.entry_price) * close_size
         else:  # short
-            gross_pnl = (pos.entry_price - execution_price) * pos.size
+            gross_pnl = (pos.entry_price - execution_price) * close_size
 
         # Calculate fees using Decimal
         fee_rate_dec = Decimal(str(self.fee_rate))
-        exit_fee = (execution_price * pos.size * fee_rate_dec).quantize(Decimal("0.00000001"))
+        exit_fee = (execution_price * close_size * fee_rate_dec).quantize(Decimal("0.00000001"))
 
         # Log execution details
         print(f"[Executed price]: {execution_price}")
@@ -671,11 +721,7 @@ class ExecutionEngine:
 
         # Get entry fee from stored metadata
         self._position_meta = getattr(self, '_position_meta', {})
-        entry_fee_raw = self._position_meta.pop(symbol, {}).get("entry_fee")
-        if entry_fee_raw is None:
-            entry_fee = (pos.entry_price * pos.size * fee_rate_dec).quantize(Decimal("0.00000001"))
-        else:
-            entry_fee = entry_fee_raw if isinstance(entry_fee_raw, Decimal) else Decimal(str(entry_fee_raw))
+        entry_fee = (pos.entry_price * close_size * fee_rate_dec).quantize(Decimal("0.00000001"))
         total_fees = (entry_fee + exit_fee).quantize(Decimal("0.00000001"))
 
         # Net PnL after fees
@@ -683,9 +729,15 @@ class ExecutionEngine:
 
         # 🛡️ Update risk manager with PnL and record trade close
         self.risk_manager.update_equity(float(net_pnl))
-        self.risk_manager.record_trade_close()
+        if is_full_close:
+            self.risk_manager.record_trade_close()
+            self.positions.pop(symbol)
+            self._position_meta.pop(symbol, None)
+        else:
+            pos.size = (pos.size - close_size).quantize(Decimal("0.00000001"))
+            self.positions[symbol] = pos
 
-        # Update equity (entry_fee was already deducted on open, so we add net_pnl + entry_fee, which is gross_pnl - exit_fee)
+        # Update equity (entry_fee was already deducted on open, so we add net_pnl + entry_fee)
         self.current_equity += net_pnl + entry_fee
 
         # Update peak equity
@@ -693,7 +745,7 @@ class ExecutionEngine:
             self.peak_equity = self.current_equity
 
         # Calculate PnL percentage
-        invested = pos.entry_price * pos.size
+        invested = pos.entry_price * close_size
         pnl_pct = ((net_pnl / invested) * Decimal("100")).quantize(Decimal("0.00000001")) if invested > 0 else Decimal("0")
 
         # Log trade with fees
@@ -701,7 +753,7 @@ class ExecutionEngine:
             symbol=symbol,
             entry_price=pos.entry_price,
             exit_price=execution_price,
-            size=pos.size,
+            size=close_size,
             side=pos.side,
             entry_time=pos.entry_time,
             exit_time=datetime.now(),
@@ -711,7 +763,8 @@ class ExecutionEngine:
         )
         self.trade_log.append(trade)
 
-        return net_pnl, f"Closed {pos.side} position: {pos.size} {symbol} @ {execution_price} (PnL: {net_pnl}, {pnl_pct}%)"
+        status_prefix = "Closed" if is_full_close else "Partially closed"
+        return net_pnl, f"{status_prefix} {pos.side} position: {close_size} {symbol} @ {execution_price} (PnL: {net_pnl}, {pnl_pct}%)"
 
     # ----------------------------------
     # 🔴 STEP 5: PARTIAL FILL HANDLING
@@ -732,9 +785,9 @@ class ExecutionEngine:
         amount rather than waiting for the full order to complete.
 
         Args:
-            symbol: Trading pair symbol
-            filled_size: Size that was filled in this update
-            fill_price: Price at which the fill occurred
+            symbol: Trading pair
+            filled_size: Size filled in this event
+            fill_price: Price of this fill
             total_order_size: Total size of the original order
             side: "buy" or "sell"
             fee: Fee for this fill
@@ -745,42 +798,45 @@ class ExecutionEngine:
         remaining_size = (total_order_size - filled_size).quantize(Decimal("0.00000001"))
         is_complete = remaining_size <= Decimal("0.0001")  # Allow tiny tolerance
 
-        if side.lower() == 'buy':
-            # Opening / adding to position
-            if symbol in self.positions:
-                # Position exists - calculate new average price
-                existing = self.positions[symbol]
-                new_total_size = (existing.size + filled_size).quantize(Decimal("0.00000001"))
+        side_lower = side.lower()
+        if symbol not in self.positions:
+            # Opening new position (long on buy, short on sell)
+            pos_side = 'long' if side_lower == 'buy' else 'short'
+            self.positions[symbol] = Position(
+                symbol=symbol,
+                entry_price=fill_price,
+                size=filled_size,
+                side=pos_side
+            )
+            self.current_equity -= fee
+        else:
+            existing = self.positions[symbol]
+            # If side matches position side (buy for long, sell for short) -> Add to position
+            is_adding = (side_lower == 'buy' and existing.side == 'long') or (side_lower == 'sell' and existing.side == 'short')
+            
+            if is_adding:
+                new_total_size = existing.size + filled_size
                 new_avg_price = (
                     ((existing.entry_price * existing.size) + (fill_price * filled_size))
                     / new_total_size
-                ).quantize(Decimal("0.00000001"))
-
-                # Update position with new values
-                existing.entry_price = new_avg_price
-                existing.size = new_total_size
-            else:
-                # New position
-                self.positions[symbol] = Position(
-                    symbol=symbol,
-                    entry_price=fill_price,
-                    size=filled_size,
-                    side='long'
                 )
 
-            # Update equity
-            self.current_equity -= fee
-
-        else:  # sell
-            # Closing / reducing position
-            if symbol in self.positions:
-                existing = self.positions[symbol]
-
+                existing.entry_price = new_avg_price
+                existing.size = new_total_size
+                self.current_equity -= fee
+            else:
+                # Closing or reducing position (sell for long, buy for short)
                 if filled_size >= existing.size:
-                    # Complete close
-                    gross_pnl = ((fill_price - existing.entry_price) * existing.size).quantize(Decimal("0.00000001"))
-                    net_pnl = (gross_pnl - fee).quantize(Decimal("0.00000001"))
+                    # Complete close of existing position
+                    closing_size = existing.size
+                    if existing.side == 'long':
+                        gross_pnl = (fill_price - existing.entry_price) * closing_size
+                    else:  # short
+                        gross_pnl = (existing.entry_price - fill_price) * closing_size
+                    
+                    net_pnl = gross_pnl - fee
                     self.current_equity += net_pnl
+                    old_side = existing.side
                     self.positions.pop(symbol, None)
 
                     # Record trade
@@ -788,23 +844,39 @@ class ExecutionEngine:
                         symbol=symbol,
                         entry_price=existing.entry_price,
                         exit_price=fill_price,
-                        size=existing.size,
-                        side=existing.side,
+                        size=closing_size,
+                        side=old_side,
                         entry_time=existing.entry_time,
                         exit_time=datetime.now(),
                         pnl=net_pnl,
-                        pnl_pct=((net_pnl / (existing.entry_price * existing.size)) * Decimal("100")).quantize(Decimal("0.00000001")) if existing.size > 0 else Decimal("0"),
+                        pnl_pct=((net_pnl / (existing.entry_price * closing_size)) * Decimal("100")) if closing_size > 0 and existing.entry_price > 0 else Decimal("0"),
                         commission=fee
                     )
                     self.trade_log.append(trade)
+
+                    # Position flip: excess filled_size opens new opposite position
+                    flip_size = filled_size - closing_size
+                    if flip_size > Decimal("0"):
+                        new_opposite_side = 'short' if old_side == 'long' else 'long'
+                        self.positions[symbol] = Position(
+                            symbol=symbol,
+                            entry_price=fill_price,
+                            size=flip_size,
+                            side=new_opposite_side
+                        )
+                        print(f"[POSITION FLIP] Flipped {old_side} to {new_opposite_side}: {flip_size} {symbol} @ {fill_price}")
                 else:
                     # Partial close - reduce position
-                    closed_pnl = ((fill_price - existing.entry_price) * filled_size - fee).quantize(Decimal("0.00000001"))
+                    if existing.side == 'long':
+                        closed_pnl = (fill_price - existing.entry_price) * filled_size - fee
+                    else:  # short
+                        closed_pnl = (existing.entry_price - fill_price) * filled_size - fee
+                    
                     self.current_equity += closed_pnl
-                    existing.size = (existing.size - filled_size).quantize(Decimal("0.00000001"))
+                    existing.size = existing.size - filled_size
 
                     # Log partial close
-                    print(f"[PARTIAL CLOSE] Partial close: {filled_size} {symbol} @ {fill_price} (PnL: {closed_pnl})")
+                    print(f"[PARTIAL CLOSE] Partial close {existing.side}: {filled_size} {symbol} @ {fill_price} (PnL: {closed_pnl})")
 
         result = {
             'symbol': symbol,

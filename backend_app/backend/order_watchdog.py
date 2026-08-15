@@ -28,6 +28,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_, or_
@@ -210,24 +211,28 @@ class OrderWatchdog:
                     
                     # Check for discrepancies
                     if self._has_order_changed(order, result):
+                        order_status_val = order.status.value if hasattr(order.status, 'value') else str(order.status)
+                        res_status_val = result.status.value if hasattr(result.status, 'value') else str(result.status)
                         logger.info(
                             f"STEP 9: Order {order.execution_id} discrepancy detected: "
-                            f"DB status={order.status.value}, "
-                            f"Exchange status={result.status.value}, "
-                            f"DB filled={order.filled_amount}, "
-                            f"Exchange filled={result.filled_amount}"
+                            f"DB status={order_status_val}, "
+                            f"Exchange status={res_status_val}, "
+                            f"DB filled={order.filled_size}, "
+                            f"Exchange filled={result.filled_size}"
                         )
                         
                         # Update order from exchange status
                         await self._update_order_from_status(order, result)
                         
                         # Trigger alert for fill
-                        if result.filled_amount > (order.filled_amount or 0):
-                            fill_amount = result.filled_amount - (order.filled_amount or 0)
+                        res_filled_dec = Decimal(result.filled_size or "0")
+                        order_filled_dec = Decimal(order.filled_size or "0")
+                        if res_filled_dec > order_filled_dec:
+                            fill_amount = res_filled_dec - order_filled_dec
                             await self._trigger_alert(
                                 order,
                                 f"STEP 9: Order fill detected via reconciliation. "
-                                f"Filled {fill_amount} @ {result.average_price}"
+                                f"Filled {fill_amount} @ {result.avg_price}"
                             )
                         
                         discrepancy_count += 1
@@ -280,15 +285,17 @@ class OrderWatchdog:
         Returns True if there are discrepancies between local state and exchange.
         """
         # Check status change
-        if result.status != order.status:
+        order_status_str = order.status.value if hasattr(order.status, 'value') else str(order.status)
+        result_status_str = result.status.value if hasattr(result.status, 'value') else str(result.status)
+        if result_status_str.lower() != order_status_str.lower():
             return True
         
         # Check fill amount change
-        if result.filled_amount != order.filled_amount:
+        if str(result.filled_size) != str(order.filled_size):
             return True
         
         # Check remaining amount change
-        if result.remaining_amount != order.remaining_amount:
+        if str(result.remaining_size) != str(order.remaining_size):
             return True
         
         return False
@@ -429,10 +436,18 @@ class OrderWatchdog:
         order: ExecutionRecordModel,
         status: OrderStatusResult
     ):
-        """Update order record from exchange status."""
+        """Update order record from exchange status with idempotent position updates."""
         # Map exchange status to our status
         exchange_status = status.status.lower()
         
+        # BUG-FIX ORD-01: Calculate incremental fill delta before mutating order.filled_size
+        # Position engine expects the incremental fill delta, NOT the cumulative filled size.
+        # Passing cumulative size caused double/triple counting on multi-fills and repeated reconciliation.
+        from decimal import Decimal
+        prev_filled_dec = Decimal(order.filled_size or "0")
+        new_filled_dec = Decimal(status.filled_size or "0")
+        fill_delta = max(Decimal("0"), new_filled_dec - prev_filled_dec)
+
         if exchange_status in ["filled", "closed", "completed"]:
             order.status = ExecutionStatus.COMPLETED
             order.filled_size = status.filled_size
@@ -441,11 +456,12 @@ class OrderWatchdog:
             
             logger.info(
                 f"Order marked FILLED by watchdog: {order.execution_id} | "
-                f"filled={status.filled_size}"
+                f"filled={status.filled_size} (delta={fill_delta})"
             )
             
-            # Update position
-            await self._update_position(order)
+            # Update position only with newly filled delta
+            if fill_delta > 0:
+                await self._update_position(order, fill_delta=fill_delta)
             
         elif exchange_status in ["partially_filled", "partial"]:
             order.status = ExecutionStatus.EXECUTING
@@ -455,11 +471,12 @@ class OrderWatchdog:
             
             logger.info(
                 f"Order partial fill updated: {order.execution_id} | "
-                f"filled={status.filled_size}"
+                f"filled={status.filled_size} (delta={fill_delta})"
             )
             
-            # Update position
-            await self._update_position(order)
+            # Update position only with newly filled delta
+            if fill_delta > 0:
+                await self._update_position(order, fill_delta=fill_delta)
             
         elif exchange_status in ["canceled", "cancelled", "expired"]:
             order.status = ExecutionStatus.FAILED
@@ -480,20 +497,24 @@ class OrderWatchdog:
         
         self.db.commit()
     
-    async def _update_position(self, order: ExecutionRecordModel):
-        """Update position from order fill."""
+    async def _update_position(self, order: ExecutionRecordModel, fill_delta: Optional[Any] = None):
+        """Update position from order fill (idempotent with delta tracking)."""
         try:
             position_engine = get_position_engine(self.db)
             
+            size_to_apply = str(fill_delta) if fill_delta is not None else order.filled_size
+            if not size_to_apply or Decimal(size_to_apply) <= 0:
+                return
+                
             position = await position_engine.update_position_from_fill(
                 execution_record=order,
-                fill_size=order.filled_size,
+                fill_size=size_to_apply,
                 fill_price=order.avg_price
             )
             
             if position:
                 logger.info(
-                    f"Position updated by watchdog: {position.position_id}"
+                    f"Position updated by watchdog: {position.position_id} | delta={size_to_apply}"
                 )
                 
         except Exception as e:

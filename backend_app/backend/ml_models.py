@@ -22,7 +22,11 @@ import re
 import uuid
 from abc import ABC, abstractmethod
 
-import joblib
+try:
+    import joblib
+except ImportError:
+    import pickle as joblib
+
 import numpy as np
 
 logger = logging.getLogger("MLModels")

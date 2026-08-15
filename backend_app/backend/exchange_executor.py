@@ -779,13 +779,20 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             
             # Build result
             # STEP 6.4: Status is 'pending' - we wait for events for FILLED
+            filled_val = response.get("filled") if response.get("filled") is not None else 0
+            remaining_val = response.get("remaining") if response.get("remaining") is not None else normalized_size
+            avg_price_val = response.get("average") if response.get("average") is not None else None
+
+            raw_id = response.get("id")
+            order_id_str = str(raw_id) if raw_id is not None else None
+
             result = OrderResult(
-                success=True,
-                exchange_order_id=str(response.get("id")),
+                success=True if order_id_str else False,
+                exchange_order_id=order_id_str,
                 status="pending",  # STEP 6.4: NOT 'filled'
-                filled_size=str(response.get("filled", 0)),
-                remaining_size=str(response.get("remaining", normalized_size)),
-                avg_price=str(response.get("average")) if response.get("average") else None,
+                filled_size=str(filled_val),
+                remaining_size=str(remaining_val),
+                avg_price=str(avg_price_val) if avg_price_val is not None else None,
                 raw_response=response
             )
             
@@ -858,12 +865,18 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             
             response = await self._exchange.fetch_order(exchange_order_id, ccxt_symbol)
             
+            filled_val = response.get("filled") if response.get("filled") is not None else 0
+            remaining_val = response.get("remaining") if response.get("remaining") is not None else 0
+            avg_price_val = response.get("average") if response.get("average") is not None else None
+            raw_status = response.get("status")
+            status_str = str(raw_status).lower() if raw_status is not None else "unknown"
+
             return OrderStatusResult(
                 success=True,
-                status=response.get("status", "unknown"),
-                filled_size=str(response.get("filled", 0)),
-                remaining_size=str(response.get("remaining", 0)),
-                avg_price=str(response.get("average")) if response.get("average") else None
+                status=status_str,
+                filled_size=str(filled_val),
+                remaining_size=str(remaining_val),
+                avg_price=str(avg_price_val) if avg_price_val is not None else None
             )
             
         except Exception as e:
@@ -1031,16 +1044,17 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
         if not place_result.success or not place_result.exchange_order_id:
             logger.error(
                 f"STEP 2: Order placement failed for {symbol} {side}. "
-                f"Error: {place_result.error}"
+                f"Error: {place_result.error_message}"
             )
             # Return failed result - DO NOT assume anything
             return OrderResult(
                 success=False,
                 exchange_order_id=None,
-                status=OrderStatus.FAILED,
-                filled_amount=0.0,
-                remaining_amount=amount,
-                error=f"Order placement failed: {place_result.error}",
+                status="rejected",
+                filled_size="0",
+                remaining_size=str(amount),
+                avg_price=None,
+                error_message=f"Order placement failed: {place_result.error_message}",
                 raw_response=place_result.raw_response
             )
         
@@ -1068,10 +1082,11 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
                 return OrderResult(
                     success=False,  # Not confirmed = not successful
                     exchange_order_id=exchange_order_id,
-                    status=OrderStatus.UNKNOWN,  # CRITICAL: Unknown, not filled
-                    filled_amount=0.0,
-                    remaining_amount=amount,
-                    error=f"Order confirmation timeout after {max_wait_seconds}s",
+                    status="unknown",  # CRITICAL: Unknown, not filled
+                    filled_size="0",
+                    remaining_size=str(amount),
+                    avg_price=None,
+                    error_message=f"Order confirmation timeout after {max_wait_seconds}s",
                     raw_response=None
                 )
             
@@ -1083,99 +1098,105 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
                 )
                 
                 if status_result.success:
-                    order_status = status_result.status
+                    order_status = (status_result.status or "").lower()
                     
                     # STEP 2: MARKET ORDER - Wait for FILLED
                     if order_type.lower() == "market":
-                        if order_status == OrderStatus.FILLED:
+                        if order_status in ("filled", "closed"):
                             logger.info(
                                 f"STEP 2: MARKET order {exchange_order_id} CONFIRMED FILLED. "
-                                f"Filled amount: {status_result.filled_amount}"
+                                f"Filled amount: {status_result.filled_size}"
                             )
                             return OrderResult(
                                 success=True,
                                 exchange_order_id=exchange_order_id,
-                                status=OrderStatus.FILLED,
-                                filled_amount=status_result.filled_amount,
-                                remaining_amount=status_result.remaining_amount,
-                                error=None,
-                                raw_response=status_result.raw_response
+                                status="closed",
+                                filled_size=status_result.filled_size,
+                                remaining_size=status_result.remaining_size,
+                                avg_price=status_result.avg_price,
+                                error_message=None,
+                                raw_response=None
                             )
-                        elif order_status == OrderStatus.CANCELED:
+                        elif order_status in ("canceled", "cancelled", "expired"):
                             logger.error(
                                 f"STEP 2: MARKET order {exchange_order_id} was CANCELED by exchange"
                             )
                             return OrderResult(
                                 success=False,
                                 exchange_order_id=exchange_order_id,
-                                status=OrderStatus.CANCELED,
-                                filled_amount=status_result.filled_amount,
-                                remaining_amount=status_result.remaining_amount,
-                                error="Market order was canceled",
-                                raw_response=status_result.raw_response
+                                status="canceled",
+                                filled_size=status_result.filled_size,
+                                remaining_size=status_result.remaining_size,
+                                avg_price=status_result.avg_price,
+                                error_message="Market order was canceled",
+                                raw_response=None
                             )
-                        elif order_status == OrderStatus.REJECTED:
+                        elif order_status in ("rejected", "error"):
                             logger.error(
                                 f"STEP 2: MARKET order {exchange_order_id} was REJECTED by exchange"
                             )
                             return OrderResult(
                                 success=False,
                                 exchange_order_id=exchange_order_id,
-                                status=OrderStatus.REJECTED,
-                                filled_amount=0.0,
-                                remaining_amount=amount,
-                                error="Market order was rejected",
-                                raw_response=status_result.raw_response
+                                status="rejected",
+                                filled_size="0",
+                                remaining_size=str(amount),
+                                avg_price=None,
+                                error_message="Market order was rejected",
+                                raw_response=None
                             )
                     
                     # STEP 2: LIMIT ORDER - Wait for OPEN (or FILLED)
                     elif order_type.lower() == "limit":
-                        if order_status in (OrderStatus.OPEN, OrderStatus.FILLED):
+                        if order_status in ("open", "filled", "closed"):
                             logger.info(
-                                f"STEP 2: LIMIT order {exchange_order_id} CONFIRMED {order_status.value}. "
-                                f"Filled amount: {status_result.filled_amount}"
+                                f"STEP 2: LIMIT order {exchange_order_id} CONFIRMED {order_status}. "
+                                f"Filled amount: {status_result.filled_size}"
                             )
                             return OrderResult(
                                 success=True,
                                 exchange_order_id=exchange_order_id,
-                                status=order_status,  # OPEN or FILLED
-                                filled_amount=status_result.filled_amount,
-                                remaining_amount=status_result.remaining_amount,
-                                error=None,
-                                raw_response=status_result.raw_response
+                                status=order_status,  # open or closed
+                                filled_size=status_result.filled_size,
+                                remaining_size=status_result.remaining_size,
+                                avg_price=status_result.avg_price,
+                                error_message=None,
+                                raw_response=None
                             )
-                        elif order_status == OrderStatus.CANCELED:
+                        elif order_status in ("canceled", "cancelled", "expired"):
                             logger.error(
                                 f"STEP 2: LIMIT order {exchange_order_id} was CANCELED by exchange"
                             )
                             return OrderResult(
                                 success=False,
                                 exchange_order_id=exchange_order_id,
-                                status=OrderStatus.CANCELED,
-                                filled_amount=status_result.filled_amount,
-                                remaining_amount=status_result.remaining_amount,
-                                error="Limit order was canceled",
-                                raw_response=status_result.raw_response
+                                status="canceled",
+                                filled_size=status_result.filled_size,
+                                remaining_size=status_result.remaining_size,
+                                avg_price=status_result.avg_price,
+                                error_message="Limit order was canceled",
+                                raw_response=None
                             )
-                        elif order_status == OrderStatus.REJECTED:
+                        elif order_status in ("rejected", "error"):
                             logger.error(
                                 f"STEP 2: LIMIT order {exchange_order_id} was REJECTED by exchange"
                             )
                             return OrderResult(
                                 success=False,
                                 exchange_order_id=exchange_order_id,
-                                status=OrderStatus.REJECTED,
-                                filled_amount=0.0,
-                                remaining_amount=amount,
-                                error="Limit order was rejected",
-                                raw_response=status_result.raw_response
+                                status="rejected",
+                                filled_size="0",
+                                remaining_size=str(amount),
+                                avg_price=None,
+                                error_message="Limit order was rejected",
+                                raw_response=None
                             )
                 
                 else:
                     # Status check failed
                     logger.warning(
                         f"STEP 2: Status check failed for order {exchange_order_id}: "
-                        f"{status_result.error}"
+                        f"{status_result.error_message}"
                     )
                 
             except Exception as e:
@@ -1248,3 +1269,8 @@ def get_exchange_executor(
         )
     
     return _executors[key]
+
+
+# Alias for backward compatibility
+ExchangeExecutor = CCXTExchangeExecutor
+

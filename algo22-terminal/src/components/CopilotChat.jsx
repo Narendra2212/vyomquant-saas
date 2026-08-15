@@ -12,7 +12,7 @@ export default function CopilotChat() {
 
   // Auto-scroll to bottom
   useEffect(() => {
-    if (messagesEndRef.current) {
+    if (typeof messagesEndRef.current?.scrollIntoView === 'function') {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages, isStreaming, isOpen]);

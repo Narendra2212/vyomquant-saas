@@ -155,19 +155,32 @@ class SubscriptionEngine:
     # Legacy plan key mapping (old -> new)
     _PLAN_MIGRATION: Dict[str, str] = {
         "free": Plan.FREE.value,
-        "pro_999": Plan.PRO.value,
-        "elite_1999": Plan.ENTERPRISE.value,
+        "starter": Plan.STARTER.value,
+        "starter_499": Plan.STARTER.value,
+        "basic": Plan.STARTER.value,
+        "BASIC": Plan.STARTER.value,
         "pro": Plan.PRO.value,
-        "elite": Plan.ENTERPRISE.value,
-        "BASIC": Plan.FREE.value,
+        "pro_999": Plan.PRO.value,
+        # BUG-FIX IB-PLAN: "professional" (lowercase) was missing — only "PROFESSIONAL"
+        # was present. migrate_plan_key("professional") returned "free" instead of "pro".
+        "professional": Plan.PRO.value,
         "PROFESSIONAL": Plan.PRO.value,
+        "ml_addon": Plan.PRO.value,   # maps to PRO (PROFESSIONAL tier)
+        "elite": Plan.ENTERPRISE.value,
+        "elite_1999": Plan.ENTERPRISE.value,
         "ENTERPRISE": Plan.ENTERPRISE.value,
+        "enterprise": Plan.ENTERPRISE.value,
     }
     
     @classmethod
     def migrate_plan_key(cls, old_key: str) -> str:
         """Migrate old plan key to new plan key."""
-        return cls._PLAN_MIGRATION.get(old_key, Plan.FREE.value)
+        if not old_key:
+            return Plan.FREE.value
+        k = str(old_key).strip().lower()
+        if k in [p.value for p in Plan]:
+            return k
+        return cls._PLAN_MIGRATION.get(old_key, cls._PLAN_MIGRATION.get(k, Plan.FREE.value))
     
     @classmethod
     def get_plan_config(cls, plan_key: str) -> Optional[PlanConfig]:
@@ -247,46 +260,64 @@ class SubscriptionEngine:
             return False
         
         return True
-    
+
     @classmethod
-    async def get_user_entitlements(
+    async def reserve_quota(
         cls,
         user_id: str,
         plan_key: str,
-        usage: Optional[Dict[str, int]] = None,
-    ) -> UserEntitlements:
-        """Get user entitlements."""
+        resource: str,
+        amount: int = 1,
+    ) -> tuple[bool, int, int]:
+        """
+        Atomically reserve quota using Redis atomic INCRBY to prevent TOCTOU races.
+        
+        Returns:
+            Tuple of (is_allowed: bool, current_usage: int, limit: int)
+        """
         config = cls.get_plan_config(plan_key)
         if not config:
-            config = cls._PLANS[Plan.FREE.value]
+            return False, 0, 0
         
-        return UserEntitlements(
-            plan=config.id,
-            features=config.features,
-            quotas=config.quotas,
-            usage=usage or {},
-        )
+        limit = config.quotas.get(resource, 0)
+        cache_key = f"quota:{user_id}:{resource}"
+        
+        # Unlimited quota
+        if limit == float("inf"):
+            new_usage = await redis_manager.incrby(cache_key, amount)
+            await redis_manager.expire(cache_key, 86400)
+            return True, new_usage, limit
+        
+        if limit <= 0:
+            current = await cls.get_quota_usage(user_id, resource)
+            return False, current, limit
+            
+        new_usage = await redis_manager.incrby(cache_key, amount)
+        if new_usage == amount:
+            await redis_manager.expire(cache_key, 86400)
+            
+        if new_usage > limit:
+            # Over limit -> atomically revert the reservation
+            reverted = await redis_manager.decrby(cache_key, amount)
+            logger.warning(
+                f"Atomic quota exceeded for {resource}: {reverted}/{limit} "
+                f"user {user_id} plan {plan_key}"
+            )
+            return False, reverted, limit
+            
+        return True, new_usage, limit
     
     @classmethod
     async def increment_quota_usage(
         cls,
         user_id: str,
         resource: str,
+        amount: int = 1,
     ) -> int:
-        """Increment quota usage for user."""
+        """Atomically increment quota usage for user."""
         cache_key = f"quota:{user_id}:{resource}"
-        
-        # Get current usage
-        current = await redis_manager.get(cache_key)
-        if current is None:
-            current = 0
-        else:
-            current = int(current)
-        
-        # Increment
-        new_usage = current + 1
-        await redis_manager.setex(cache_key, 86400, str(new_usage))  # 24 hour TTL
-        
+        new_usage = await redis_manager.incrby(cache_key, amount)
+        await redis_manager.expire(cache_key, 86400)  # 24 hour TTL
         return new_usage
     
     @classmethod
@@ -294,19 +325,15 @@ class SubscriptionEngine:
         cls,
         user_id: str,
         resource: str,
+        amount: int = 1,
     ) -> int:
-        """Decrement quota usage for user."""
+        """Atomically decrement quota usage for user."""
         cache_key = f"quota:{user_id}:{resource}"
-        
-        # Get current usage
-        current = await redis_manager.get(cache_key)
-        if current is None:
-            return 0
-        
-        current = int(current)
-        new_usage = max(0, current - 1)
-        await redis_manager.setex(cache_key, 86400, str(new_usage))
-        
+        new_usage = await redis_manager.decrby(cache_key, amount)
+        if new_usage < 0:
+            await redis_manager.set(cache_key, "0")
+            new_usage = 0
+        await redis_manager.expire(cache_key, 86400)
         return new_usage
     
     @classmethod
@@ -316,7 +343,10 @@ class SubscriptionEngine:
         current = await redis_manager.get(cache_key)
         if current is None:
             return 0
-        return int(current)
+        try:
+            return max(0, int(current))
+        except (ValueError, TypeError):
+            return 0
     
     @classmethod
     async def reset_monthly_quotas(cls, user_id: str):

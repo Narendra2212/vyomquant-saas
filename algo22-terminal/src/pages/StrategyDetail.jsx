@@ -56,10 +56,14 @@ export default function StrategyDetail() {
       const res = await fetch(`${API_BASE}/api/strategies/${strategyId}`, {
         headers: { "Authorization": `Bearer ${token}` }
       });
+      if (!res.ok) {
+        throw new Error(`Strategy load failed (HTTP ${res.status})`);
+      }
       const data = await res.json();
       setStrategy(data);
     } catch (err) {
       console.error("Error loading strategy detail:", err);
+      setStrategy(null);
     } finally {
       setIsLoading(false);
     }

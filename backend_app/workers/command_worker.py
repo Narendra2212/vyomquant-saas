@@ -55,9 +55,23 @@ class CommandWorker(WorkerBase):
                         
                     payload = json.loads(payload_raw)
                     if action == "start_bot":
-                        await app_state.fleet.start_bot(
-                            payload["user_id"], payload["symbol"], payload["blueprint"]
-                        )
+                        user_id = payload.get("user_id")
+                        # BUG-FIX WORKER-01 / UK-04: Verify subscription before starting bot.
+                        # Also block "unknown" — if subscription cache is unavailable we must
+                        # fail closed rather than allowing unverified users to trade.
+                        from backend_app.core.subscription_middleware import get_user_subscription
+                        sub = await get_user_subscription(user_id) if user_id else None
+                        sub_status = sub.get("status") if sub else "unknown"
+                        BLOCKED_STATUSES = ("cancelled", "expired", "suspended", "unknown")
+                        if sub_status in BLOCKED_STATUSES:
+                            logger.warning(
+                                f"Rejecting start_bot for user {user_id}: "
+                                f"Subscription status is '{sub_status}' (blocked)"
+                            )
+                        else:
+                            await app_state.fleet.start_bot(
+                                payload["user_id"], payload["symbol"], payload["blueprint"]
+                            )
                     elif action == "stop_bot":
                         await app_state.fleet.stop_bot(
                             payload["user_id"], payload["symbol"]

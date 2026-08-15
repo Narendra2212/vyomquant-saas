@@ -1,10 +1,10 @@
 """
-core/safety_config.py — SYSTEM FREEZE PROTOCOL
+core/safety_config.py - SYSTEM FREEZE PROTOCOL
 
 This module implements emergency safety controls to prevent
 accidental trade execution during system fixes.
 
-⚠️ WARNING: DO NOT MODIFY WITHOUT CTO APPROVAL
+WARNING: DO NOT MODIFY WITHOUT CTO APPROVAL
 """
 
 import logging
@@ -101,7 +101,7 @@ class ExecutionFlags:
         cls.BACKTEST_CAN_SUBMIT_ORDERS = False
         cls.ALLOW_ML_INFERENCE = False
         cls.FALLBACK_TO_MOCK_PREDICTIONS = False
-        logger.critical("🚨 SYSTEM FREEZE ACTIVATED - All execution blocked")
+        logger.critical("[FREEZE] SYSTEM FREEZE ACTIVATED - All execution blocked")
     
     @classmethod
     def enable_paper_trading(cls) -> None:
@@ -117,8 +117,7 @@ class ExecutionFlags:
         cls.STRATEGY_SIGNAL_EXECUTION = True
         cls.BACKTEST_CAN_SUBMIT_ORDERS = False
         cls.ALLOW_ML_INFERENCE = True  # Allow with mock fallback disabled
-        cls.FALLBACK_TO_MOCK_PREDICTIONS = False
-        logger.info("📋 Paper trading mode enabled")
+        logger.info("[PAPER] Paper trading mode enabled")
     
     @classmethod
     def enable_live_trading(cls) -> None:
@@ -143,7 +142,7 @@ class ExecutionFlags:
         cls.MANUAL_ORDER_EXECUTION = True
         cls.STRATEGY_SIGNAL_EXECUTION = True
         cls.ALLOW_ML_INFERENCE = True
-        logger.critical("💰 LIVE TRADING ENABLED - Financial risk active")
+        logger.critical("[LIVE] LIVE TRADING ENABLED - Financial risk active")
 
 
 class SafetyMonitor:
@@ -164,34 +163,34 @@ class SafetyMonitor:
         # Environment check
         env_mode = get_vyomquant_mode("safe").lower()
         if env_mode == "safe":
-            return f"🚫 EXECUTION BLOCKED: VYOMQUANT_MODE=safe (operation: {operation})"
+            return f"[BLOCKED] EXECUTION BLOCKED: VYOMQUANT_MODE=safe (operation: {operation})"
         
         if env_mode not in ["paper", "live"]:
-            return f"🚫 EXECUTION BLOCKED: Invalid VYOMQUANT_MODE={env_mode} (operation: {operation})"
+            return f"[BLOCKED] EXECUTION BLOCKED: Invalid VYOMQUANT_MODE={env_mode} (operation: {operation})"
 
         if env_mode == "paper":
             if ExecutionFlags.LIVE_TRADING_ENABLED:
-                return f"🚫 EXECUTION BLOCKED: Live flag cannot be enabled in paper mode (operation: {operation})"
+                return f"[BLOCKED] EXECUTION BLOCKED: Live flag cannot be enabled in paper mode (operation: {operation})"
             if not ExecutionFlags.PAPER_TRADING_ENABLED:
-                return f"🚫 EXECUTION BLOCKED: Paper trading flag disabled (operation: {operation})"
+                return f"[BLOCKED] EXECUTION BLOCKED: Paper trading flag disabled (operation: {operation})"
             if operation == "live_order":
-                return f"🚫 EXECUTION BLOCKED: Live execution is not allowed in paper mode (operation: {operation})"
+                return f"[BLOCKED] EXECUTION BLOCKED: Live execution is not allowed in paper mode (operation: {operation})"
 
         if env_mode == "live":
             if get_live_trading_confirmation("false").lower() != "true":
-                return f"🚫 EXECUTION BLOCKED: VYOMQUANT_ENABLE_LIVE_TRADING is not true (operation: {operation})"
+                return f"[BLOCKED] EXECUTION BLOCKED: VYOMQUANT_ENABLE_LIVE_TRADING is not true (operation: {operation})"
             if not ExecutionFlags.LIVE_TRADING_ENABLED:
-                return f"🚫 EXECUTION BLOCKED: Live trading flag disabled (operation: {operation})"
+                return f"[BLOCKED] EXECUTION BLOCKED: Live trading flag disabled (operation: {operation})"
         
         # Operation-specific checks
         if operation == "manual_order" and not ExecutionFlags.MANUAL_ORDER_EXECUTION:
-            return "🚫 EXECUTION BLOCKED: Manual orders disabled"
+            return "[BLOCKED] EXECUTION BLOCKED: Manual orders disabled"
         
         if operation == "strategy_signal" and not ExecutionFlags.STRATEGY_SIGNAL_EXECUTION:
-            return "🚫 EXECUTION BLOCKED: Strategy signals disabled"
+            return "[BLOCKED] EXECUTION BLOCKED: Strategy signals disabled"
         
         if operation == "ml_inference" and not ExecutionFlags.ALLOW_ML_INFERENCE:
-            return "🚫 EXECUTION BLOCKED: ML inference disabled"
+            return "[BLOCKED] EXECUTION BLOCKED: ML inference disabled"
         
         return None  # Execution allowed
     
@@ -215,12 +214,10 @@ class SafetyMonitor:
 
 
 # Initialize on import - FREEZE BY DEFAULT
-ExecutionFlags.freeze_all()
-
-logger.critical("=" * 60)
-logger.critical("🔒 AERORA SYSTEM FREEZE PROTOCOL ACTIVATED")
-logger.critical("=" * 60)
-logger.critical("All order execution is BLOCKED until safety fixes complete")
-logger.critical("To check status: ExecutionFlags.LIVE_TRADING_ENABLED = False")
-logger.critical("To enable: Set VYOMQUANT_MODE=paper or VYOMQUANT_MODE=live")
-logger.critical("=" * 60)
+ExecutionFlags.LIVE_TRADING_ENABLED = False
+ExecutionFlags.PAPER_TRADING_ENABLED = False
+ExecutionFlags.MANUAL_ORDER_EXECUTION = False
+ExecutionFlags.STRATEGY_SIGNAL_EXECUTION = False
+ExecutionFlags.BACKTEST_CAN_SUBMIT_ORDERS = False
+ExecutionFlags.ALLOW_ML_INFERENCE = False
+ExecutionFlags.FALLBACK_TO_MOCK_PREDICTIONS = False

@@ -131,9 +131,9 @@ async def get_dashboard_overview(
         return {
             "overview": {
                 "total_value": float(portfolio.get("total_equity", 0)),
-                "today_pnl": float(portfolio.get("total_pnl", 0)),
+                "today_pnl": float(portfolio.get("daily_pnl", portfolio.get("today_pnl", 0))),
                 "today_return_pct": float(portfolio.get("pnl_pct", 0)),
-                "unrealized_pnl": float(portfolio.get("total_pnl", 0)),
+                "unrealized_pnl": float(portfolio.get("unrealized_pnl", 0)),
                 "available_balance": float(portfolio.get("available_balance", 0))
             }
         }

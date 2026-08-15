@@ -23,9 +23,11 @@ from backend_app.core.subscription_engine import (
 logger = logging.getLogger("SubscriptionDependencies")
 
 
-async def _get_user_plan(user_id: str, supabase: Any) -> str:
+async def get_user_plan(user_id: str, supabase: Any) -> str:
     """Get user's plan from Supabase."""
     try:
+        if not supabase:
+            return Plan.FREE.value
         res = (
             supabase.table("profiles")
             .select("subscription_tier")
@@ -41,6 +43,8 @@ async def _get_user_plan(user_id: str, supabase: Any) -> str:
     except Exception as e:
         logger.error(f"Failed to get user plan: {e}")
         return Plan.FREE.value
+
+_get_user_plan = get_user_plan
 
 
 async def require_feature(

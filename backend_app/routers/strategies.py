@@ -28,10 +28,11 @@ from backend_app.core.subscription_dependencies import (
     check_strategy_quota,
     decrement_usage,
     increment_usage,
+    get_user_plan,
     require_live_trading,
     require_ml_training,
 )
-from backend_app.core.subscription_engine import Resource
+from backend_app.core.subscription_engine import Resource, SubscriptionEngine
 from backend_app.core.event_bus import publish_command, PublishError
 from backend_app.core.rate_limit import limiter
 import ccxt
@@ -1073,8 +1074,12 @@ async def delete_strategy(
     except Exception as e:
         logger.error(f"[STRATEGIES] Failed to fetch strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to retrieve strategy for deletion. Please try again later.")
-    if resp.data and resp.data[0].get("status") == "running":
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Strategy not found.")
+
+    if resp.data[0].get("status") == "running":
         await fleet.stop_bot(user["id"], resp.data[0]["symbol"])
+        await decrement_usage(Resource.BOTS.value, user)
 
     try:
         await sb.table("strategies").delete().eq("id", strategy_id).eq("user_id", user["id"]).execute()
@@ -1129,6 +1134,9 @@ async def deploy_bot(
         logger.error(f"[STRATEGIES] Strategy not found for deploy: {strategy_id}")
         raise HTTPException(404, "Strategy not found.")
 
+    if resp.data[0].get("status") == "running":
+        raise HTTPException(400, "Strategy is already running. Stop it first before redeploying.")
+
     blueprint = resp.data[0]
     if "buy_logic" in blueprint and isinstance(blueprint["buy_logic"], dict):
         bl = blueprint["buy_logic"]
@@ -1149,6 +1157,15 @@ async def deploy_bot(
 
     symbol = blueprint.get("symbol", "BTC/USDT")
 
+    # SECURITY & CONCURRENCY: Atomically reserve bot quota to eliminate TOCTOU races
+    plan_key = await get_user_plan(user["id"], sb)
+    allowed, current_usage, limit = await SubscriptionEngine.reserve_quota(user["id"], plan_key, Resource.BOTS.value)
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Quota exceeded for {Resource.BOTS.value}: {current_usage}/{limit}. Upgrade your plan to continue."
+        )
+
     use_tee = os.environ.get("USE_TEE", "false").lower() == "true"
     
     try:
@@ -1163,14 +1180,19 @@ async def deploy_bot(
             success, message = await fleet.start_bot(user["id"], symbol, blueprint)
 
             if not success:
+                await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
                 logger.error(f"[STRATEGIES] Deploy failed for strategy {strategy_id}: {message}")
                 raise HTTPException(400, f"Deploy failed: {message}")
     except PublishError as e:
+        await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
         logger.error(f"[STRATEGIES] PublishError deploying strategy {strategy_id}: {e}")
         raise HTTPException(
             status_code=500,
             detail={"error": "DEPLOY_DISPATCH_FAILED", "message": str(e)}
         )
+    except Exception as e:
+        await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
+        raise
 
     try:
         sb = await _sb(user)
@@ -1179,11 +1201,14 @@ async def deploy_bot(
                 "id", strategy_id
             ).execute()
     except Exception as e:
+        if not use_tee and hasattr(fleet, "stop_bot"):
+            try:
+                await fleet.stop_bot(user["id"], symbol)
+            except Exception:
+                pass
+        await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
         logger.error(f"[STRATEGIES] Failed to update status for strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to update strategy status after deployment. Please try again later.")
-
-    # Increment bot usage
-    await increment_usage(Resource.BOTS.value, user)
 
     asyncio.create_task(
         ws_mgr.broadcast_user(
@@ -1218,7 +1243,7 @@ async def stop_bot(
     resp = await (
         sb
         .table("strategies")
-        .select("symbol")
+        .select("symbol, status")
         .eq("id", strategy_id)
         .eq("user_id", user["id"])
         .execute()
@@ -1226,6 +1251,10 @@ async def stop_bot(
     if not resp.data:
         logger.error(f"[STRATEGIES] Strategy not found for stop: {strategy_id}")
         raise HTTPException(404, "Strategy not found.")
+
+    if resp.data[0].get("status") != "running":
+        logger.info(f"[STRATEGIES] Strategy {strategy_id} is already stopped.")
+        return {"status": "already_stopped"}
 
     symbol = resp.data[0]["symbol"]
     
@@ -1243,13 +1272,6 @@ async def stop_bot(
             )
         else:
             logger.info("[STRATEGIES] Stopping bot locally (Legacy Mode)")
-            await publish_command(
-                "stop_bot",
-                {
-                    "user_id": user["id"],
-                    "symbol": symbol,
-                },
-            )
             await fleet.stop_bot(user["id"], symbol)
     except PublishError as e:
         logger.error(f"[STRATEGIES] PublishError stopping strategy {strategy_id}: {e}")
@@ -1258,17 +1280,6 @@ async def stop_bot(
             detail={"error": "STOP_DISPATCH_FAILED", "message": str(e)}
         )
 
-    # ═══════════════════════════════════════════════════════════════════
-    # CANCEL ALL ORDERS - REMOVED: ALGO-ONLY EXECUTION ENFORCED
-    # ═══════════════════════════════════════════════════════════════════
-    # CRITICAL FIX: Direct ExecutionEngine instantiation has been REMOVED.
-    # All execution must flow through:
-    # Strategy → DAG → Signal → BotRunner → UnifiedExecutionEngine → Exchange
-    # 
-    # Order cancellation on strategy stop is handled AUTOMATICALLY by the 
-    # BotRunner's cleanup process through the proper execution pipeline.
-    # 
-    # Any direct call to ExecutionEngine.cancel_all() is FORBIDDEN and BLOCKED.
     logger.info(f"[STRATEGIES] Strategy {strategy_id} stopped. Order cleanup handled by BotRunner.")
 
     sb = await _sb(user)
@@ -1277,7 +1288,7 @@ async def stop_bot(
             "id", strategy_id
         ).execute()
 
-    # Decrement bot usage
+    # Decrement bot usage only when transitioning from running -> stopped
     await decrement_usage(Resource.BOTS.value, user)
 
     asyncio.create_task(

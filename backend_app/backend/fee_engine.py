@@ -222,20 +222,37 @@ class FeeEngine:
         Returns:
             Created fee record
         """
+        # BUG-FIX FEE-01: Normalize fee to quote currency before calculating fee_pct and net_pnl.
+        # Symbols can be formatted as "BTC/USDT", "BTC-USDT", or "BTCUSDT".
+        sym_clean = symbol.upper().replace("-", "/").replace("_", "/")
+        if "/" in sym_clean:
+            base_asset, quote_asset = sym_clean.split("/", 1)
+        else:
+            # Common default quote asset assumption if no delimiter
+            quote_asset = "USDT"
+            base_asset = sym_clean.replace("USDT", "").replace("USD", "").replace("USDC", "")
+
+        fee_asset_upper = fee_asset.upper()
+        if fee_asset_upper == base_asset.upper():
+            # Fee paid in base asset (e.g. BTC): Value in quote currency is fee_amount * price
+            fee_cost_in_quote = (fee_amount * price).quantize(self.PRECISION, rounding=ROUND_HALF_UP)
+        else:
+            # Fee paid in quote asset (e.g. USDT) or third asset
+            fee_cost_in_quote = fee_amount
+
         # Calculate trade volume
         trade_volume = size * price
         
-        # Calculate fee percentage
+        # Calculate fee percentage relative to trade volume
         if trade_volume > 0:
-            fee_pct = (fee_amount / trade_volume).quantize(self.PRECISION)
+            fee_pct = (fee_cost_in_quote / trade_volume).quantize(self.PRECISION, rounding=ROUND_HALF_UP)
         else:
             fee_pct = Decimal('0')
         
-        # Calculate net PnL if gross provided
+        # Calculate net PnL if gross provided (deduct quote-denominated fee cost)
         net_pnl = None
         if gross_pnl is not None:
-            # Fee reduces PnL (unless it's a rebate/negative fee)
-            net_pnl = gross_pnl - fee_amount
+            net_pnl = (gross_pnl - fee_cost_in_quote).quantize(self.PRECISION, rounding=ROUND_HALF_UP)
         
         # Determine status
         status = FeeStatus.REBATED if fee_amount < 0 else FeeStatus.DEDUCTED

@@ -203,10 +203,19 @@ export default function AuthPage({ mode, go }) {
     clearStatus();
     setLoadingAction("google");
     try {
-      setError("Google authentication requires Supabase OAuth configuration. Please use email/password authentication.");
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/app/dashboard`,
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
+        },
+      });
+      if (error) throw error;
     } catch (err) {
       setError(err.message || "Google authentication failed.");
-    } finally {
       setLoadingAction("");
     }
   };

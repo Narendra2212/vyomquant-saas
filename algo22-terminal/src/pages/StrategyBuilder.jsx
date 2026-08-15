@@ -500,13 +500,13 @@ function StrategyBuilderCanvas({ initialStrategy, strategyProp, onBackProp, onBa
 
       let response;
       if (strategyIdState) {
-        response = await post('/api/strategies/' + strategyIdState, payload);
+        response = await strategiesApi.update(strategyIdState, payload);
       } else {
-        response = await post('/api/strategies', payload);
+        response = await strategiesApi.create(payload);
       }
 
-      if (response && response.strategy) {
-        setStrategyIdState(response.strategy.id);
+      if (response && (response.strategy || response.strategy_id || response.id)) {
+        setStrategyIdState(response.strategy?.id || response.strategy_id || response.id);
       }
       setSaveState("Saved");
     } catch (err) {

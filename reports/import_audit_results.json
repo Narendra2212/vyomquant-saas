@@ -76,17 +76,17 @@
     },
     {
       "file": "backend_app\\backend\\backtest_service.py",
-      "line": 18,
+      "line": 19,
       "name": "asyncio"
     },
     {
       "file": "backend_app\\backend\\backtest_service.py",
-      "line": 21,
+      "line": 22,
       "name": "Decimal"
     },
     {
       "file": "backend_app\\backend\\backtest_service.py",
-      "line": 22,
+      "line": 23,
       "name": "Any"
     },
     {
@@ -96,8 +96,8 @@
     },
     {
       "file": "backend_app\\backend\\dashboard_aggregation_service.py",
-      "line": 17,
-      "name": "Optional"
+      "line": 21,
+      "name": "create_request_supabase"
     },
     {
       "file": "backend_app\\backend\\dashboard_data_ingester.py",
@@ -216,27 +216,27 @@
     },
     {
       "file": "backend_app\\backend\\strategy_service.py",
-      "line": 12,
+      "line": 13,
       "name": "asyncio"
     },
     {
       "file": "backend_app\\backend\\strategy_service.py",
-      "line": 15,
+      "line": 16,
       "name": "Decimal"
     },
     {
       "file": "backend_app\\backend\\strategy_service.py",
-      "line": 17,
+      "line": 18,
       "name": "Any"
     },
     {
       "file": "backend_app\\backend\\strategy_service.py",
-      "line": 18,
+      "line": 19,
       "name": "UUID"
     },
     {
       "file": "backend_app\\core\\dependencies.py",
-      "line": 43,
+      "line": 48,
       "name": "SubscriptionEngine"
     },
     {
@@ -296,17 +296,17 @@
     },
     {
       "file": "backend_app\\core\\subscription_dependencies.py",
-      "line": 9,
+      "line": 10,
       "name": "Dict"
     },
     {
       "file": "backend_app\\core\\subscription_dependencies.py",
-      "line": 9,
+      "line": 10,
       "name": "Optional"
     },
     {
       "file": "backend_app\\core\\subscription_dependencies.py",
-      "line": 13,
+      "line": 14,
       "name": "redis_manager"
     },
     {
@@ -318,11 +318,6 @@
       "file": "backend_app\\routers\\admin.py",
       "line": 11,
       "name": "asyncio"
-    },
-    {
-      "file": "backend_app\\routers\\billing.py",
-      "line": 25,
-      "name": "traceback"
     },
     {
       "file": "backend_app\\routers\\dashboard.py",
@@ -356,12 +351,12 @@
     },
     {
       "file": "backend_app\\routers\\referral.py",
-      "line": 26,
+      "line": 28,
       "name": "datetime"
     },
     {
       "file": "backend_app\\routers\\referral.py",
-      "line": 30,
+      "line": 32,
       "name": "validator"
     },
     {
@@ -371,7 +366,7 @@
     },
     {
       "file": "backend_app\\routers\\risk.py",
-      "line": 15,
+      "line": 16,
       "name": "lru_cache"
     },
     {
@@ -431,37 +426,37 @@
     },
     {
       "file": "backend_app\\routers\\strategies.py",
-      "line": 1998,
+      "line": 2206,
       "name": "timedelta"
     },
     {
       "file": "backend_app\\routers\\strategy_operations.py",
-      "line": 19,
+      "line": 20,
       "name": "StrategyStatus"
     },
     {
       "file": "backend_app\\routers\\strategy_operations.py",
-      "line": 19,
+      "line": 20,
       "name": "StrategyEnvironment"
     },
     {
       "file": "backend_app\\routers\\strategy_operations.py",
-      "line": 26,
+      "line": 27,
       "name": "DeployConfig"
     },
     {
       "file": "backend_app\\routers\\user.py",
-      "line": 10,
+      "line": 11,
       "name": "os"
     },
     {
       "file": "backend_app\\routers\\user.py",
-      "line": 13,
+      "line": 14,
       "name": "Session"
     },
     {
       "file": "backend_app\\routers\\user.py",
-      "line": 15,
+      "line": 16,
       "name": "get_db"
     },
     {
@@ -1133,6 +1128,7 @@
     ],
     "backend_app.api_ws.ws_routes": [
       "asyncio",
+      "inspect",
       "json",
       "logging",
       "os",
@@ -1260,6 +1256,7 @@
       "backend_app.backend.backtest_service"
     ],
     "backend_app.backend.backtest_service": [
+      "inspect",
       "asyncio",
       "logging",
       "datetime",
@@ -1506,8 +1503,10 @@
     ],
     "backend_app.backend.dashboard_aggregation_service": [
       "asyncio",
+      "inspect",
       "logging",
       "re",
+      "time",
       "datetime",
       "typing",
       "typing",
@@ -2181,6 +2180,10 @@
       "typing",
       "typing",
       "redis.asyncio",
+      "urllib.parse",
+      "urllib.parse",
+      "urllib.parse",
+      "urllib.parse",
       "backend_app.backend.redis_manager"
     ],
     "backend_app.backend.replay_safe_transaction_guard": [
@@ -2211,6 +2214,7 @@
       "typing",
       "typing",
       "uuid",
+      "inspect",
       "backend_app.core.dependencies",
       "csv",
       "io",
@@ -2345,6 +2349,7 @@
       "collections"
     ],
     "backend_app.backend.strategy_service": [
+      "inspect",
       "asyncio",
       "logging",
       "datetime",
@@ -2788,12 +2793,16 @@
       "typing"
     ],
     "backend_app.core.dependencies": [
+      "asyncio",
       "json",
       "logging",
       "os",
       "threading",
       "typing",
       "typing",
+      "httpx",
+      "postgrest",
+      "postgrest.constants",
       "fastapi",
       "fastapi",
       "fastapi",
@@ -3385,6 +3394,7 @@
       "backend_app.api_ws.ws_manager"
     ],
     "backend_app.core.subscription_dependencies": [
+      "inspect",
       "logging",
       "typing",
       "typing",
@@ -3563,6 +3573,7 @@
       "typing",
       "typing",
       "uuid",
+      "inspect",
       "fastapi",
       "fastapi",
       "fastapi",
@@ -3575,6 +3586,7 @@
       "backend_app.core.dependencies",
       "backend_app.core.dependencies",
       "backend_app.core.dependencies",
+      "backend_app.core.dependencies",
       "backend_app.core.database",
       "backend_app.core.realtime_sync",
       "backend_app.core.models",
@@ -3583,7 +3595,10 @@
       "supabase",
       "backend_app.core.subscription_engine",
       "backend_app.core.subscription_engine",
+      "backend_app.core.subscription_engine",
       "backend_app.core.subscription_dependencies",
+      "traceback",
+      "inspect",
       "backend_app.core.pricing_service",
       "backend_app.core.pricing_service",
       "stripe",
@@ -3633,7 +3648,9 @@
       "fastapi",
       "backend_app.backend.dashboard_aggregation_service",
       "backend_app.core.dependencies",
-      "backend_app.core.rate_limit"
+      "backend_app.core.rate_limit",
+      "traceback",
+      "inspect"
     ],
     "backend_app.routers.distributed_execution": [
       "logging",
@@ -3656,6 +3673,7 @@
       "backend_app.core.dependencies"
     ],
     "backend_app.routers.exchange": [
+      "inspect",
       "logging",
       "fastapi",
       "fastapi",
@@ -3672,7 +3690,6 @@
       "supabase",
       "backend_app.core.cache",
       "ccxt",
-      "backend_app.backend.api_key_vault",
       "ccxt"
     ],
     "backend_app.routers.health": [
@@ -3738,7 +3755,8 @@
       "backend_app.backend.connection_engine",
       "backend_app.backend.data_seeking_engine",
       "backend_app.core.dependencies",
-      "backend_app.core.dependencies"
+      "backend_app.core.dependencies",
+      "ccxt"
     ],
     "backend_app.routers.metrics": [
       "logging",
@@ -3831,6 +3849,8 @@
       "backend_app.core.cache.redis_manager"
     ],
     "backend_app.routers.referral": [
+      "asyncio",
+      "inspect",
       "logging",
       "os",
       "datetime",
@@ -3849,13 +3869,16 @@
       "backend_app.core.dependencies",
       "supabase",
       "secrets",
-      "secrets"
+      "secrets",
+      "traceback",
+      "inspect"
     ],
     "backend_app.routers.risk": [
       "asyncio",
       "logging",
       "re",
       "datetime",
+      "inspect",
       "functools",
       "fastapi",
       "fastapi",
@@ -3869,13 +3892,15 @@
       "backend_app.core.models",
       "backend_app.core.models",
       "backend_app.core.models",
-      "backend_app.core.state",
+      "backend_app.core.cache.redis_manager",
       "json",
-      "backend_app.core.state",
+      "backend_app.core.cache.redis_manager",
       "json",
+      "backend_app.core.cache.redis_manager",
       "backend_app.core.state",
       "backend_app.core.state",
-      "backend_app.core.state"
+      "traceback",
+      "inspect"
     ],
     "backend_app.routers.securit": [
       "fastapi"
@@ -3962,13 +3987,14 @@
       "backend_app.backend.optimization_engine",
       "backend_app.backend.optimization_engine",
       "backend_app.backend.backtest_runtime",
+      "inspect",
       "hashlib",
       "json",
-      "asyncio",
+      "backend_app.backend.indicators_backend",
+      "backend_app.backend.ml_models",
+      "backend_app.backend.ml_models",
       "traceback",
       "datetime",
-      "asyncio",
-      "asyncio",
       "backend_app.backend.connection_engine",
       "data_seeking_engine",
       "ml_models",
@@ -4010,6 +4036,7 @@
       "json"
     ],
     "backend_app.routers.strategy_operations": [
+      "inspect",
       "logging",
       "typing",
       "typing",
@@ -4042,26 +4069,37 @@
       "backend_app.core.rate_limit",
       "backend_app.core.models.pydantic_models",
       "backend_app.core.models.pydantic_models",
+      "traceback",
+      "inspect",
       "backend_app.backend.strategy_compiler",
       "backend_app.backend.strategy_compiler",
       "ccxt",
       "backend_app.backend.strategy_compiler",
       "backend_app.backend.strategy_compiler",
       "ccxt",
+      "inspect",
       "backend_app.core.dependencies",
+      "inspect",
       "backend_app.core.dependencies",
+      "inspect",
       "backend_app.core.dependencies",
       "backend_app.backend.strategy_compiler",
       "backend_app.backend.strategy_compiler",
       "backend_app.backend.deployment_manager",
       "backend_app.backend.deployment_manager",
       "ccxt",
+      "inspect",
       "backend_app.core.dependencies",
+      "inspect",
       "backend_app.core.dependencies",
+      "inspect",
       "backend_app.core.dependencies",
+      "datetime",
+      "datetime",
       "backend_app.core.dependencies"
     ],
     "backend_app.routers.support": [
+      "inspect",
       "logging",
       "datetime",
       "typing",
@@ -4077,6 +4115,7 @@
       "supabase"
     ],
     "backend_app.routers.user": [
+      "inspect",
       "logging",
       "os",
       "fastapi",

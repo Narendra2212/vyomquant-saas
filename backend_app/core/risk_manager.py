@@ -152,8 +152,15 @@ class InstitutionalRiskManager:
         # Subscription tier limits
         self.tier_limits = {
             "free": {"max_trade": 1_000, "max_exposure": 5_000},
-            "pro_999": {"max_trade": 25_000, "max_exposure": 100_000},
-            "elite_1999": {"max_trade": 250_000, "max_exposure": 1_000_000},
+            "starter": {"max_trade": 10_000, "max_exposure": 25_000},
+            "starter_499": {"max_trade": 10_000, "max_exposure": 25_000},
+            "basic": {"max_trade": 10_000, "max_exposure": 25_000},
+            "pro": {"max_trade": 50_000, "max_exposure": 200_000},
+            "pro_999": {"max_trade": 50_000, "max_exposure": 200_000},
+            "professional": {"max_trade": 50_000, "max_exposure": 200_000},
+            "enterprise": {"max_trade": 500_000, "max_exposure": 2_000_000},
+            "elite": {"max_trade": 500_000, "max_exposure": 2_000_000},
+            "elite_1999": {"max_trade": 500_000, "max_exposure": 2_000_000},
         }
 
         # Centralized Capital Allocator
@@ -510,7 +517,8 @@ class InstitutionalRiskManager:
                 )
 
             # 7. Tier limits
-            tier = self.tier_limits.get(request.user_tier, self.tier_limits["free"])
+            tier_key = str(request.user_tier or "free").lower().strip()
+            tier = self.tier_limits.get(tier_key, self.tier_limits["free"])
             if notional > tier["max_trade"]:
                 return (
                     RiskVerdict.REJECT_TIER_LIMIT,

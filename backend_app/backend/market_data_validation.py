@@ -990,7 +990,7 @@ class ValidatedDataFeed:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-router = APIRouter(prefix="/api/market/validation", tags=["market-data-validation"])
+router = APIRouter(prefix="", tags=["internal-market-data-validation"])
 
 # Global validator instance
 _validator: Optional[MarketDataValidator] = None

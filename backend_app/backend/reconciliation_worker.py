@@ -536,9 +536,17 @@ class ReconciliationWorker(WorkerBase):
             raise RuntimeError(f"Local reconciliation state service is unavailable: {e}") from e
     async def _fetch_local_positions(self, user_id: str) -> Dict[str, Any]:
         """Fetch local positions from StateService."""
-        raise RuntimeError(
-            "Local position reconciliation is unavailable: StateService has no position-listing method"
-        )
+        if not STATE_SERVICE_AVAILABLE:
+            raise RuntimeError("Local reconciliation state service is unavailable")
+
+        try:
+            if hasattr(state_service, "get_user_positions"):
+                positions = await state_service.get_user_positions(user_id)
+                return {pos.symbol: pos for pos in positions}
+            return {}
+        except Exception as e:
+            logger.error(f"Failed to fetch local positions: {e}")
+            return {}
     def _compare_orders(
         self,
         user_id: str,

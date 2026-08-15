@@ -98,7 +98,7 @@ class SubscriptionMiddleware(BaseHTTPMiddleware):
                 # Fetch from database
                 from backend_app.core.dependencies import get_request_supabase
                 supabase = get_request_supabase(user.get("access_token"))
-                
+
                 if supabase:
                     resp = (
                         supabase.table("profiles")
@@ -106,29 +106,47 @@ class SubscriptionMiddleware(BaseHTTPMiddleware):
                         .eq("id", user_id)
                         .execute()
                     )
-                    
+
                     if resp.data:
-                        subscription_status = resp.data[0].get("subscription_status", "active")
+                        subscription_status = resp.data[0].get("subscription_status") or "unknown"
                         await redis_manager.setex(cache_key, 300, subscription_status)  # 5 min TTL
+                    else:
+                        # Profile row missing — treat as unknown, not active
+                        subscription_status = "unknown"
                 else:
-                    subscription_status = "active"
-            
-            # Block expired/cancelled subscriptions from accessing paid features
-            if subscription_status in ["cancelled", "expired"]:
-                # Allow access to billing page only
-                if not path.startswith("/api/billing"):
-                    logger.warning(f"Expired subscription attempt: user {user_id} path {path}")
+                    # BUG-FIX UK-02: DB client unavailable → status is UNKNOWN, not active.
+                    # Defaulting to "active" would grant free access to paid features
+                    # whenever the Supabase connection is down.
+                    subscription_status = "unknown"
+
+            # Block expired/cancelled/unknown subscriptions from paid features
+            if subscription_status in ["cancelled", "expired"] or subscription_status not in ["active", "trialing", "past_due"]:
+                # Always allow billing and auth paths so users can renew
+                if not path.startswith("/api/billing") and not path.startswith("/api/auth"):
+                    logger.warning(
+                        f"Subscription gate blocked: user={user_id} status={subscription_status} path={path}"
+                    )
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Subscription expired. Please renew to access this feature.",
+                        detail=(
+                            "Subscription expired or unavailable. Please renew to access this feature."
+                            if subscription_status in ["cancelled", "expired"]
+                            else "Subscription status could not be verified. Please try again."
+                        ),
                     )
-            
+
         except HTTPException:
             raise
         except Exception as e:
+            # BUG-FIX UK-03: NEVER silently pass on subscription errors for paid features.
+            # Bare `pass` previously let every request through on any DB/Redis failure,
+            # effectively granting paid access to all users whenever middleware errored.
             logger.error(f"Subscription middleware error: {e}")
-            # Don't block requests on middleware errors
-            pass
+            if not path.startswith("/api/billing") and not path.startswith("/api/auth") and not path.startswith("/api/health"):
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Subscription verification temporarily unavailable. Please retry.",
+                )
         
         return await call_next(request)
 
@@ -208,6 +226,28 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         except Exception as e:
             logger.error(f"Rate limit middleware error: {e}")
             # Don't block requests on middleware errors
-            pass
-        
         return await call_next(request)
+
+
+async def get_user_subscription(user_id: str) -> dict:
+    """Get subscription status for user from Redis cache or profile.
+
+    Returns the cached subscription state. If the cache is unavailable or
+    unpopulated, returns status='unknown' — callers MUST treat unknown as
+    NOT confirmed-active and fail closed (do not permit trading).
+    """
+    if not user_id:
+        # BUG-FIX UK-04: empty user_id → unknown, not active.
+        return {"status": "unknown", "tier": "free"}
+    try:
+        cache_key = f"subscription:status:{user_id}"
+        sub_status = await redis_manager.get(cache_key)
+        if sub_status:
+            return {"status": sub_status, "user_id": user_id}
+    except Exception as e:
+        logger.warning(f"Failed to fetch subscription cache for {user_id}: {e}")
+    # BUG-FIX UK-04: Redis miss or exception → return unknown, not active.
+    # Returning "active" here previously allowed cancelled subscribers to keep
+    # trading whenever Redis was down or the cache had expired.
+    return {"status": "unknown", "user_id": user_id}
+

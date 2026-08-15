@@ -165,7 +165,7 @@ export default function Dashboard() {
       try {
         // Exchange connections
         const exchanges = await exchangeApi.list();
-        setExchangeConnections(exchanges || []);
+        setExchangeConnections(Array.isArray(exchanges) ? exchanges : exchanges?.exchanges || []);
       } catch (err) {
         console.error("Failed to load exchange connections:", err);
         setExchangeConnections([]);
@@ -664,7 +664,7 @@ export default function Dashboard() {
                 Exchange Status
               </h3>
             </div>
-            {exchangeConnections.length === 0 ? (
+            {!Array.isArray(exchangeConnections) || exchangeConnections.length === 0 ? (
               <div style={{ padding: "1rem", background: "#020617", borderRadius: 8, textAlign: "center" }}>
                 <p style={{ fontSize: "0.75rem", color: "#64748b", margin: 0 }}>
                   No exchanges connected

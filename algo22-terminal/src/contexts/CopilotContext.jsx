@@ -16,7 +16,7 @@ export const CopilotProvider = ({ children, apiBaseUrl = "/api/v1/copilot" }) =>
   const abortRef = useRef(null);
 
   const getAuthHeaders = () => {
-    const token = localStorage.getItem("supabase_access_token") || "";
+    const token = sessionStorage.getItem("token") || localStorage.getItem("supabase_access_token") || "";
     return { "Content-Type": "application/json", authorization: `Bearer ${token}` };
   };
 

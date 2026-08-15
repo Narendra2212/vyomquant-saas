@@ -1,8 +1,7 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
 """
 Authentication Router - Production + Fallback
-
-Handles user signup and signin using Supabase when available.
-Falls back to dev tokens if Supabase not configured.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
@@ -38,7 +37,7 @@ def signout(token: str):
     """
     Sign out user by revoking their session.
     """
-    vault = SecurityVault()
+    vault = SupabaseConnection()
     client = vault.get_client()
     
     if client:
@@ -63,7 +62,7 @@ def google_auth(data: GoogleAuthRequest):
     """
     Authenticate user using Google OAuth token.
     """
-    vault = SecurityVault()
+    vault = SupabaseConnection()
     client = vault.get_client()
     
     if not client:

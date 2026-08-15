@@ -1,5 +1,6 @@
+# -*- coding: utf-8 -*-
 """
-core/models/ — Pydantic models package
+core/models/ - Pydantic models package
 
 All Pydantic request/response models for the application.
 """

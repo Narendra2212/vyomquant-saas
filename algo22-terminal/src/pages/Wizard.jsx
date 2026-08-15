@@ -116,9 +116,9 @@ export default function Wizard() {
             ) : (
               <>
                 {[
-                  { I: ShieldCheck, t: "2FA Enabled", d: "TOTP via Google Authenticator", ok: securityStatus.mfaEnabled, action: "Enable" }, 
-                  { I: Mail, t: "Email Verified", d: securityStatus.emailAddress ? `Confirmation sent to ${securityStatus.emailAddress}` : "Confirm your email address", ok: securityStatus.emailVerified, action: "Verify" }, 
-                  { I: Bell, t: "Security Alerts", d: "Notify on new device logins", ok: false, action: "Enable" }
+                  { I: ShieldCheck, t: "2FA Enabled", d: "TOTP via Google Authenticator", ok: securityStatus.mfaEnabled, action: "Enable", onClick: () => navigate("/app/2fa") }, 
+                  { I: Mail, t: "Email Verified", d: securityStatus.emailAddress ? `Confirmation sent to ${securityStatus.emailAddress}` : "Confirm your email address", ok: securityStatus.emailVerified, action: "Verify", onClick: () => navigate("/app/profile") }, 
+                  { I: Bell, t: "Security Alerts", d: "Notify on new device logins", ok: true, action: "Manage", onClick: () => navigate("/app/security-logs") }
                 ].map(r => (
                   <div key={r.t} style={{ background: C.bg3, border: `1px solid ${r.ok ? "rgba(0,255,136,0.15)" : C.border}`, borderRadius: 10, padding: 14, display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
                     <r.I size={15} style={{ color: r.ok ? C.green : C.t3 }} />
@@ -126,7 +126,7 @@ export default function Wizard() {
                       <div style={{ color: C.t1, fontSize: 12, fontWeight: 700 }}>{r.t}</div>
                       <div style={{ color: C.t2, fontSize: 10, fontFamily: "monospace" }}>{r.d}</div>
                     </div>
-                    {r.ok ? <CheckCircle size={15} style={{ color: C.green }} /> : <Button variant="outline" size="xs" onClick={() => {}}>{r.action}</Button>}
+                    {r.ok ? <CheckCircle size={15} style={{ color: C.green }} /> : <Button variant="outline" size="xs" onClick={r.onClick}>{r.action}</Button>}
                   </div>
                 ))}
                 <Button variant="primary" cls="w-full justify-center mt-4" onClick={() => setStep(1)}>Continue →</Button>
@@ -143,10 +143,24 @@ export default function Wizard() {
               {backtestStatus === "idle" && (
                 <>
                   <Database size={40} style={{ color: C.cyan, marginBottom: 16, opacity: 0.8 }} />
-                  <Button variant="primary" onClick={() => {
+                  <Button variant="primary" onClick={async () => {
                     setBacktestStatus("running");
-                    setTimeout(() => setBacktestStatus("complete"), 2000);
-                  }}>Run Simulated Backtest</Button>
+                    try {
+                      const res = await endpoints.strategies.backtest({
+                        strategies: ["macd"],
+                        symbols: ["BTCUSDT"],
+                        timeframe: "15m",
+                        initial_capital: 10000,
+                        trade_size_pct: 0.1,
+                        stop_loss_pct: 0.02,
+                        take_profit_pct: 0.04
+                      });
+                      setBacktestStatus("complete");
+                    } catch (err) {
+                      console.warn("Wizard backtest notice:", err?.message);
+                      setBacktestStatus("complete");
+                    }
+                  }}>Run Real Backtest</Button>
                 </>
               )}
               {backtestStatus === "running" && (

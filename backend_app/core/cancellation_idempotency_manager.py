@@ -158,17 +158,7 @@ class CancellationIdempotencyManager:
         registry_key = f"{self._cancellation_registry_prefix}:{tenant_id}:{cancellation_record.idempotency_key}"
         
         try:
-            # Check if already registered
-            exists = await self.redis.exists(registry_key)
-            if exists:
-                logger.warning(
-                    f"[CancellationIdempotencyManager] Duplicate cancellation detected: "
-                    f"cancellation_id={cancellation_record.cancellation_id}, "
-                    f"idempotency_key={cancellation_record.idempotency_key}"
-                )
-                return False
-            
-            # Register cancellation with TTL
+            # Register cancellation with TTL atomically (only if not already registered)
             cancellation_data = {
                 "cancellation_id": cancellation_record.cancellation_id,
                 "order_id": cancellation_record.order_id,
@@ -180,11 +170,20 @@ class CancellationIdempotencyManager:
                 "registered_at": datetime.now(timezone.utc).isoformat()
             }
             
-            await self.redis.setex(
+            res = await self.redis.set(
                 registry_key,
-                self.cancellation_registry_ttl,
-                json.dumps(cancellation_data)
+                json.dumps(cancellation_data),
+                ex=self.cancellation_registry_ttl,
+                nx=True
             )
+            
+            if not res:
+                logger.warning(
+                    f"[CancellationIdempotencyManager] Duplicate cancellation detected (atomic NX): "
+                    f"cancellation_id={cancellation_record.cancellation_id}, "
+                    f"idempotency_key={cancellation_record.idempotency_key}"
+                )
+                return False
             
             logger.info(
                 f"[CancellationIdempotencyManager] Cancellation registered: "
@@ -254,13 +253,15 @@ class CancellationIdempotencyManager:
         tenant_id: str,
         order_id: str,
         reason: str = "",
-        metadata: Dict[str, Any] = None
+        metadata: Dict[str, Any] = None,
+        idempotency_key: Optional[str] = None,
+        timestamp: Optional[datetime] = None
     ) -> Dict[str, Any]:
         """
         Process cancellation with idempotency check.
         
         This is the main entry point for cancellation processing. It:
-        1. Generates idempotency key
+        1. Generates or validates idempotency key
         2. Checks for duplicate
         3. Registers cancellation if not duplicate
         4. Returns result indicating if cancellation was processed or rejected
@@ -270,6 +271,8 @@ class CancellationIdempotencyManager:
             order_id: Order identifier
             reason: Cancellation reason
             metadata: Additional metadata
+            idempotency_key: Optional deterministic idempotency key
+            timestamp: Optional cancellation request timestamp
             
         Returns:
             Dict with status and cancellation record if processed
@@ -288,9 +291,13 @@ class CancellationIdempotencyManager:
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
         
-        # Generate idempotency key
-        timestamp = datetime.now(timezone.utc)
-        idempotency_key = self.generate_idempotency_key(order_id, tenant_id, timestamp)
+        # Generate or use idempotency key
+        ts = timestamp or datetime.now(timezone.utc)
+        if not idempotency_key:
+            if timestamp is not None:
+                idempotency_key = self.generate_idempotency_key(order_id, tenant_id, timestamp)
+            else:
+                idempotency_key = f"cancel:{tenant_id}:{order_id}"
         
         # Check for duplicate
         is_duplicate = await self.is_duplicate_cancellation(tenant_id, idempotency_key)
@@ -321,7 +328,7 @@ class CancellationIdempotencyManager:
             order_id=order_id,
             tenant_id=tenant_id,
             idempotency_key=idempotency_key,
-            timestamp=timestamp,
+            timestamp=ts,
             status="pending",
             reason=reason,
             metadata=metadata or {}
@@ -331,15 +338,17 @@ class CancellationIdempotencyManager:
         registered = await self.register_cancellation(tenant_id, cancellation_record)
         
         if not registered:
-            logger.error(
-                f"[CancellationIdempotencyManager] Failed to register cancellation: "
-                f"cancellation_id={cancellation_id}"
+            logger.warning(
+                f"[CancellationIdempotencyManager] Concurrent duplicate cancellation rejected on register: "
+                f"cancellation_id={cancellation_id}, idempotency_key={idempotency_key}"
             )
+            existing_record = await self.get_cancellation_record(tenant_id, idempotency_key)
             return {
-                "status": "registration_failed",
+                "status": "duplicate_rejected",
                 "cancellation_id": cancellation_id,
                 "idempotency_key": idempotency_key,
-                "reason": "Failed to register cancellation in registry",
+                "existing_status": existing_record.get("status") if existing_record else "pending",
+                "reason": "Cancellation already processed (atomic registry deduplication)",
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
         

@@ -236,8 +236,12 @@ class ExchangeReconciliationService:
             return normalized
             
         except Exception as e:
+            # BUG-FIX UK-01: NEVER return [] on exchange API error.
+            # An empty list causes reconcile_open_orders() to treat every DB-active
+            # order as absent from the exchange and cancel all of them.
+            # Transient errors (timeout, 429, 500) must propagate so the caller aborts.
             logger.error(f"Failed to fetch exchange orders: {e}")
-            return []
+            raise
     
     def _fetch_db_active_orders(
         self,
@@ -330,15 +334,107 @@ class ExchangeReconciliationService:
         db_order: ExecutionRecordModel
     ) -> ReconciliationResult:
         """
-        CASE 2: DB has order, exchange missing → Mark FILLED or CANCELLED.
+        CASE 2: DB has order, missing from open_orders → Query specific order or reconcile.
         
-        Order no longer exists on exchange. Could be:
-        - FILLED (fully executed)
+        Order no longer exists in open_orders list. Could be:
+        - FILLED (instant market fill or completed limit)
         - CANCELLED (user or system cancelled)
+        - EXPIRED/REJECTED
         """
-        # Check if partially filled → FILLED (assume completed)
+        # BUG-FIX ORD-03: Query authoritative order status from exchange first if supported
+        if self.exchange and hasattr(self.exchange, "fetch_order") and db_order.order_id:
+            try:
+                raw_order = await self.exchange.fetch_order(db_order.order_id, db_order.symbol)
+                if isinstance(raw_order, dict):
+                    raw_status = str(raw_order.get("status", "")).lower()
+                    filled_val = float(raw_order.get("filled", 0) or 0)
+                    avg_p = float(raw_order.get("average", 0) or raw_order.get("price", 0) or 0)
+                    
+                    if raw_status in ["closed", "filled"] or filled_val >= float(db_order.size or 0) * 0.99999:
+                        transition_to_filled(
+                            execution_id=db_order.execution_id,
+                            filled_size=filled_val,
+                            avg_price=avg_p,
+                            exchange_order_id=db_order.order_id,
+                            reason="Reconciled via fetch_order: Order confirmed filled on exchange"
+                        )
+                        db_order.status = ExecutionStatus.COMPLETED
+                        db_order.filled_size = str(filled_val)
+                        db_order.avg_price = str(avg_p)
+                        db_order.filled_at = datetime.utcnow()
+                        self.db.commit()
+                        
+                        return ReconciliationResult(
+                            execution_id=db_order.execution_id,
+                            action=ReconciliationAction.MARK_FILLED,
+                            old_state=db_order.status,
+                            new_state="filled",
+                            exchange_order_id=db_order.order_id,
+                            filled_size=filled_val,
+                            avg_price=avg_p,
+                            discrepancy="Order closed on exchange (verified via fetch_order)"
+                        )
+                    elif raw_status in ["canceled", "cancelled", "expired"]:
+                        transition_to_cancelled(
+                            execution_id=db_order.execution_id,
+                            cancelled_by="exchange",
+                            reason="Reconciled via fetch_order: Order cancelled on exchange"
+                        )
+                        db_order.status = ExecutionStatus.FAILED
+                        self.db.commit()
+                        
+                        return ReconciliationResult(
+                            execution_id=db_order.execution_id,
+                            action=ReconciliationAction.MARK_CANCELLED,
+                            old_state=db_order.status,
+                            new_state="cancelled",
+                            exchange_order_id=db_order.order_id,
+                            filled_size=filled_val,
+                            avg_price=avg_p if avg_p > 0 else None,
+                            discrepancy="Order cancelled on exchange (verified via fetch_order)"
+                        )
+                    else:
+                        # Unrecognized or missing status in response -> preserve state for retry
+                        logger.warning(f"Unrecognized status '{raw_status}' from fetch_order for {db_order.execution_id}; preserving state")
+                        return ReconciliationResult(
+                            execution_id=db_order.execution_id,
+                            action=ReconciliationAction.NO_ACTION,
+                            old_state=db_order.status,
+                            new_state=db_order.status,
+                            exchange_order_id=db_order.order_id,
+                            filled_size=float(db_order.filled_size or 0),
+                            avg_price=float(db_order.avg_price or 0) if db_order.avg_price else None,
+                            discrepancy=f"Unrecognized status '{raw_status}' from fetch_order; state preserved for retry"
+                        )
+                else:
+                    # fetch_order returned non-dict (e.g. None) -> preserve state for retry
+                    logger.warning(f"fetch_order returned non-dict response for {db_order.execution_id}; preserving state")
+                    return ReconciliationResult(
+                        execution_id=db_order.execution_id,
+                        action=ReconciliationAction.NO_ACTION,
+                        old_state=db_order.status,
+                        new_state=db_order.status,
+                        exchange_order_id=db_order.order_id,
+                        filled_size=float(db_order.filled_size or 0),
+                        avg_price=float(db_order.avg_price or 0) if db_order.avg_price else None,
+                        discrepancy="fetch_order returned non-dict response; state preserved for retry"
+                    )
+            except Exception as e:
+                # BUG-FIX REC-01: Network timeout or transient exchange error must NOT destroy local state
+                logger.warning(f"Failed to fetch individual order status for {db_order.execution_id} due to transient error: {e}")
+                return ReconciliationResult(
+                    execution_id=db_order.execution_id,
+                    action=ReconciliationAction.NO_ACTION,
+                    old_state=db_order.status,
+                    new_state=db_order.status,
+                    exchange_order_id=db_order.order_id,
+                    filled_size=float(db_order.filled_size or 0),
+                    avg_price=float(db_order.avg_price or 0) if db_order.avg_price else None,
+                    discrepancy=f"Exchange status uncertain due to transient error ({e}); state preserved for next reconciliation cycle"
+                )
+
+        # Fallback when fetch_order unavailable or order does not exist
         filled_size = float(db_order.filled_size or 0)
-        float(db_order.size or 0)
         
         if filled_size > 0:
             # Assume FILLED (conservative - better than leaving hanging)
@@ -366,14 +462,14 @@ class ExchangeReconciliationService:
                 discrepancy="Order not found on exchange"
             )
         else:
-            # No fill → CANCELLED
+            # No fill recorded -> CANCELLED
             transition_to_cancelled(
                 execution_id=db_order.execution_id,
                 cancelled_by="reconciliation",
                 reason="Reconciled: Order not found on exchange, assumed cancelled"
             )
             
-            # Update DB (use REJECTED for this case)
+            # Update DB (use FAILED status for cancellation)
             db_order.status = ExecutionStatus.FAILED
             self.db.commit()
             

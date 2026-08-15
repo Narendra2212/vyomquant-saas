@@ -741,7 +741,8 @@ class OrderStateEngine:
         )
         # Simulated cancel
         await asyncio.sleep(0.1)
-        self.cancel_order(lifecycle.order_id, "Auto-cancelled due to timeout")
+        # BUG-FIX ORD-02: Await cancel_order (it is an async method)
+        await self.cancel_order(lifecycle.order_id, "Auto-cancelled due to timeout")
     
     async def _timeout_monitor(self):
         """Monitor orders for timeouts."""

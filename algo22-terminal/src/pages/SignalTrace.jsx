@@ -8,6 +8,7 @@ import {
 import { C, Tag2, StatusDot, ProgressBar } from "../components/ui-legacy/primitives";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
+import { get } from "../apiClient";
 
 /**
  * Signal Trace - Professional Execution Audit Console
@@ -35,9 +36,6 @@ export default function SignalTrace() {
   const [pagination, setPagination] = useState({ limit: 50, offset: 0, total: 0 });
   const [expandedRows, setExpandedRows] = useState({});
 
-  const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
-  const token = sessionStorage.getItem("token");
-
   useEffect(() => {
     loadSignals();
   }, [filters, pagination.offset]);
@@ -52,12 +50,9 @@ export default function SignalTrace() {
       params.append("limit", pagination.limit);
       params.append("offset", pagination.offset);
 
-      const res = await fetch(`${API_BASE}/api/signal-trace/signals?${params}`, {
-        headers: { "Authorization": `Bearer ${token}` }
-      });
-      const data = await res.json();
-      setSignals(data.signals || []);
-      setPagination(prev => ({ ...prev, total: data.total || 0 }));
+      const data = await get(`/api/signal-trace/signals?${params}`);
+      setSignals(data?.signals || []);
+      setPagination(prev => ({ ...prev, total: data?.total || 0 }));
     } catch (err) {
       console.error("Error loading signals:", err);
     } finally {
@@ -67,12 +62,9 @@ export default function SignalTrace() {
 
   const loadSignalDetail = async (signalId) => {
     try {
-      const res = await fetch(`${API_BASE}/api/signal-trace/signals/${signalId}`, {
-        headers: { "Authorization": `Bearer ${token}` }
-      });
-      const data = await res.json();
-      setSelectedSignal(data.signal);
-      setTimeline(data.timeline || []);
+      const data = await get(`/api/signal-trace/signals/${signalId}`);
+      setSelectedSignal(data?.signal || null);
+      setTimeline(data?.timeline || []);
     } catch (err) {
       console.error("Error loading signal detail:", err);
     }
@@ -96,9 +88,12 @@ export default function SignalTrace() {
       });
       params.append("format", format);
 
+      const token = sessionStorage.getItem("token");
+      const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
       const res = await fetch(`${API_BASE}/api/signal-trace/signals/export?${params}`, {
-        headers: { "Authorization": `Bearer ${token}` }
+        headers: token ? { "Authorization": `Bearer ${token}` } : {}
       });
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`);
       
       if (format === "csv") {
         const blob = await res.blob();

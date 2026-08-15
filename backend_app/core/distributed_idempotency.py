@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Optional
 
-from backend_app.backend.redis_manager import redis_manager
+from backend_app.core.cache import redis_manager
 from backend_app.core.global_safety import get_global_kill_switch
 
 logger = logging.getLogger("DistributedIdempotency")
@@ -95,14 +95,22 @@ class DistributedIdempotencyLayer:
     MAX_RETRY_ATTEMPTS = 10  # Max attempts to check processing state
     RETRY_DELAY = 0.5        # Seconds between retries
     
-    def _generate_key(self, tenant_id: str, client_order_id: str) -> str:
+    def _generate_key(
+        self, 
+        tenant_id: str, 
+        client_order_id: str, 
+        exchange_id: Optional[str] = None
+    ) -> str:
         """Generate the Redis key for idempotency."""
+        if exchange_id:
+            return f"{self.KEY_PREFIX}:{tenant_id}:{exchange_id}:{client_order_id}"
         return f"{self.KEY_PREFIX}:{tenant_id}:{client_order_id}"
     
     async def check_idempotency(
         self, 
         tenant_id: str, 
-        client_order_id: str
+        client_order_id: str,
+        exchange_id: Optional[str] = None
     ) -> IdempotencyResult:
         """
         Check if this request has already been processed.
@@ -110,6 +118,7 @@ class DistributedIdempotencyLayer:
         Args:
             tenant_id: Tenant identifier
             client_order_id: Client-provided unique order ID
+            exchange_id: Optional exchange identifier
             
         Returns:
             IdempotencyResult indicating duplicate status
@@ -126,7 +135,7 @@ class DistributedIdempotencyLayer:
                 "RULE VIOLATION: ALL orders must have client_order_id"
             )
         
-        key = self._generate_key(tenant_id, client_order_id)
+        key = self._generate_key(tenant_id, client_order_id, exchange_id)
         
         try:
             # Check if key exists in Redis
@@ -143,10 +152,10 @@ class DistributedIdempotencyLayer:
                 )
             
             # Key exists - decode value
-            value_str = existing_value.decode() if isinstance(existing_value, bytes) else existing_value
+            value_str = existing_value.decode() if isinstance(existing_value, bytes) else str(existing_value)
             
-            if value_str == "processing":
-                # Another pod is currently processing this request
+            if value_str == "processing" or value_str.startswith("processing:"):
+                # Another pod/worker is currently processing this request
                 logger.info(f"STEP 2: Request {key} is being processed by another pod")
                 return IdempotencyResult(
                     is_duplicate=False,
@@ -155,9 +164,20 @@ class DistributedIdempotencyLayer:
                     key=key
                 )
             
-            # Request already completed - return cached result
+            # Request already completed - return cached result with integrity validation
             try:
                 cached_result = json.loads(value_str)
+                if isinstance(cached_result, dict):
+                    # Verify tenant isolation and order matching within cached payload
+                    cached_tenant = cached_result.get("tenant_id")
+                    cached_order = cached_result.get("client_order_id")
+                    if cached_tenant and cached_tenant != tenant_id:
+                        logger.critical(f"STEP 2: Tenant mismatch in cached result for {key}")
+                        return IdempotencyResult(is_duplicate=False, is_processing=False, cached_result=None, key=key)
+                    if cached_order and cached_order != client_order_id:
+                        logger.critical(f"STEP 2: client_order_id mismatch in cached result for {key}")
+                        return IdempotencyResult(is_duplicate=False, is_processing=False, cached_result=None, key=key)
+                
                 logger.info(f"STEP 2: Duplicate request detected {key} - returning cached result")
                 return IdempotencyResult(
                     is_duplicate=True,
@@ -177,8 +197,6 @@ class DistributedIdempotencyLayer:
                 
         except Exception as e:
             logger.error(f"STEP 2: Idempotency check failed for {key}: {e}")
-            # Fail-safe: assume not duplicate if check fails
-            # But log critically for investigation
             return IdempotencyResult(
                 is_duplicate=False,
                 is_processing=False,
@@ -189,36 +207,74 @@ class DistributedIdempotencyLayer:
     async def start_processing(
         self, 
         tenant_id: str, 
-        client_order_id: str
-    ) -> str:
+        client_order_id: str,
+        owner_token: Optional[str] = None,
+        exchange_id: Optional[str] = None
+    ) -> tuple[bool, str]:
         """
-        Mark this request as being processed.
-        
-        Sets key to "processing" with 60s TTL.
+        Atomically mark this request as being processed using Redis SET NX with owner token.
         
         Args:
             tenant_id: Tenant identifier
             client_order_id: Client-provided unique order ID
+            owner_token: Optional unique lock owner token
+            exchange_id: Optional exchange identifier
             
         Returns:
-            The Redis key that was set
+            Tuple of (acquired: bool, owner_token: str)
         """
-        key = self._generate_key(tenant_id, client_order_id)
+        from uuid import uuid4
+        token = owner_token or str(uuid4())
+        key = self._generate_key(tenant_id, client_order_id, exchange_id)
+        lock_payload = f"processing:{token}"
         
         try:
-            await redis_manager.set(key, "processing", ex=self.PROCESSING_TTL)
-            logger.debug(f"STEP 2: Marked {key} as processing (TTL={self.PROCESSING_TTL}s)")
-            return key
+            res = await redis_manager.set(key, lock_payload, ex=self.PROCESSING_TTL, nx=True)
+            acquired = bool(res)
+            if acquired:
+                logger.debug(f"STEP 2: Atomically acquired processing lock for {key} with owner {token} (TTL={self.PROCESSING_TTL}s)")
+            else:
+                logger.info(f"STEP 2: Failed to acquire processing lock for {key} - key already exists")
+            return acquired, token
         except Exception as e:
             logger.error(f"STEP 2: Failed to mark processing for {key}: {e}")
-            # Continue anyway - idempotency is best-effort if Redis fails
-            return key
+            return False, token
+
+    async def release_processing_lock(
+        self,
+        tenant_id: str,
+        client_order_id: str,
+        owner_token: str,
+        exchange_id: Optional[str] = None
+    ) -> bool:
+        """
+        Owner-safe lock release using compare-and-delete.
+        Only deletes the key if current value matches owner_token to prevent
+        unintentionally deleting another worker's new lock if TTL expired.
+        """
+        key = self._generate_key(tenant_id, client_order_id, exchange_id)
+        expected_val = f"processing:{owner_token}"
+        try:
+            curr_val = await redis_manager.get(key)
+            if curr_val is None:
+                return True
+            curr_str = curr_val.decode() if isinstance(curr_val, bytes) else str(curr_val)
+            if curr_str == expected_val or curr_str == "processing":
+                await redis_manager.delete(key)
+                logger.debug(f"STEP 2: Owner-safe released lock for {key}")
+                return True
+            logger.warning(f"STEP 2: Lock release skipped for {key} - owner mismatch (held by: {curr_str})")
+            return False
+        except Exception as e:
+            logger.error(f"STEP 2: Error releasing lock for {key}: {e}")
+            return False
     
     async def store_result(
         self, 
         tenant_id: str, 
         client_order_id: str, 
-        result: Any
+        result: Any,
+        exchange_id: Optional[str] = None
     ) -> str:
         """
         Store the execution result for future duplicate detection.
@@ -229,18 +285,20 @@ class DistributedIdempotencyLayer:
             tenant_id: Tenant identifier
             client_order_id: Client-provided unique order ID
             result: Execution result to cache (must be JSON serializable)
+            exchange_id: Optional exchange identifier
             
         Returns:
             The Redis key that was set
         """
-        key = self._generate_key(tenant_id, client_order_id)
+        key = self._generate_key(tenant_id, client_order_id, exchange_id)
         
         try:
             result_json = json.dumps({
                 "result": result,
                 "timestamp": datetime.utcnow().isoformat(),
                 "tenant_id": tenant_id,
-                "client_order_id": client_order_id
+                "client_order_id": client_order_id,
+                "exchange_id": exchange_id
             })
             await redis_manager.set(key, result_json, ex=self.RESULT_TTL)
             logger.debug(f"STEP 2: Stored result for {key} (TTL={self.RESULT_TTL}s)")
@@ -255,100 +313,85 @@ class DistributedIdempotencyLayer:
         client_order_id: str,
         operation: Callable,
         *args,
+        exchange_id: Optional[str] = None,
         **kwargs
     ) -> Any:
         """
         Execute an operation with distributed idempotency guarantees.
         
         This is the MAIN ENTRY POINT for idempotent operations.
-        
-        FLOW:
-            1. Check idempotency (raises if duplicate)
-            2. If processing, wait and retry
-            3. Mark as "processing" in Redis
-            4. Execute operation
-            5. Store result in Redis
-            6. Return result
-        
-        Args:
-            tenant_id: Tenant identifier
-            client_order_id: Client-provided unique order ID
-            operation: Async function to execute
-            *args, **kwargs: Arguments to pass to operation
-            
-        Returns:
-            Operation result (cached or fresh)
-            
-        Raises:
-            MissingClientOrderIdError: If client_order_id is missing
-            DuplicateOrderError: If critical duplicate detected
         """
-        # Check idempotency
-        idempotency_result = await self.check_idempotency(tenant_id, client_order_id)
+        # RULE: ALL orders must have client_order_id
+        if not client_order_id:
+            logger.error(
+                f"🔴 STEP 2: Order rejected - missing client_order_id for tenant {tenant_id}"
+            )
+            raise MissingClientOrderIdError(
+                "RULE VIOLATION: ALL orders must have client_order_id"
+            )
         
-        # Handle duplicate (already completed)
-        if idempotency_result.is_duplicate:
+        # Check idempotency initially
+        idempotency_result = await self.check_idempotency(tenant_id, client_order_id, exchange_id)
+        if idempotency_result.is_duplicate and idempotency_result.cached_result:
             logger.info(
                 f"STEP 2: Returning cached result for duplicate request "
                 f"{idempotency_result.key}"
             )
-            return idempotency_result.cached_result["result"]
+            return idempotency_result.cached_result.get("result")
         
-        # Handle processing (another pod is working on it)
-        if idempotency_result.is_processing:
+        # Atomically acquire lock with unique owner token
+        from uuid import uuid4
+        owner_token = str(uuid4())
+        lock_acquired, lock_token = await self.start_processing(
+            tenant_id, client_order_id, owner_token=owner_token, exchange_id=exchange_id
+        )
+        
+        if not lock_acquired:
             logger.info(
-                f"STEP 2: Waiting for processing request {idempotency_result.key}"
+                f"STEP 2: Waiting for concurrent request {idempotency_result.key}"
             )
             
-            # Wait and retry
+            # Wait and retry to fetch completed duplicate result
             for attempt in range(self.MAX_RETRY_ATTEMPTS):
                 await asyncio.sleep(self.RETRY_DELAY)
                 
-                recheck = await self.check_idempotency(tenant_id, client_order_id)
+                recheck = await self.check_idempotency(tenant_id, client_order_id, exchange_id)
                 
-                if recheck.is_duplicate:
-                    # Processing completed - return result
-                    return recheck.cached_result["result"]
+                if recheck.is_duplicate and recheck.cached_result:
+                    # Processing completed by peer pod - return cached result safely
+                    return recheck.cached_result.get("result")
                 
                 if not recheck.is_processing:
-                    # No longer processing - we can take over
-                    break
-            else:
-                # Max retries exceeded - potential stuck processing
+                    # No longer processing - attempt to acquire lock again
+                    lock_acquired, lock_token = await self.start_processing(
+                        tenant_id, client_order_id, owner_token=owner_token, exchange_id=exchange_id
+                    )
+                    if lock_acquired:
+                        break
+            
+            if not lock_acquired:
+                # Max retries exceeded or duplicate rejected
                 logger.critical(
-                    f"🔴 STEP 2: Processing stuck for {idempotency_result.key} "
-                    f"after {self.MAX_RETRY_ATTEMPTS} retries"
-                )
-                # Trigger kill switch for investigation
-                kill_switch = get_global_kill_switch()
-                await kill_switch.trigger_on_reconciliation_mismatch(
-                    client_order_id,
-                    {"status": "stuck_processing"},
-                    {"retries": self.MAX_RETRY_ATTEMPTS}
+                    f"🔴 STEP 2: Duplicate concurrent execution blocked for {client_order_id}"
                 )
                 raise DuplicateOrderError(
-                    f"Processing stuck for request {client_order_id}"
+                    f"Duplicate order execution blocked for request {client_order_id}"
                 )
-        
-        # Mark as processing
-        await self.start_processing(tenant_id, client_order_id)
         
         try:
             # Execute the operation
             result = await operation(*args, **kwargs)
             
             # Store result
-            await self.store_result(tenant_id, client_order_id, result)
+            await self.store_result(tenant_id, client_order_id, result, exchange_id=exchange_id)
             
             return result
             
         except Exception:
-            # Clear processing state on failure
-            key = self._generate_key(tenant_id, client_order_id)
-            try:
-                await redis_manager.delete(key)
-            except Exception:
-                pass
+            # Owner-safe release of processing state on failure
+            await self.release_processing_lock(
+                tenant_id, client_order_id, owner_token=lock_token, exchange_id=exchange_id
+            )
             
             # Re-raise the original exception
             raise

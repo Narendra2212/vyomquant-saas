@@ -37,7 +37,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 import sentry_sdk
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 #  Global exception handler 
@@ -93,6 +93,7 @@ from backend_app.core.safety_config import ExecutionFlags, SafetyMonitor
 from backend_app.core.safety_monitor import log_blocked_execution
 from backend_app.core.supabase_connection import SupabaseConnection
 from backend_app.core.state import app_state
+from backend_app.core.dependencies import get_admin_user
 #  Router imports 
 from backend_app.routers import (admin, analytics, auth, billing, dashboard, distributed_execution,
                                  exchange, health, health_websocket, library, market, metrics, notifications,
@@ -647,12 +648,10 @@ else:
             "safe_alternative": "/api/orders/* (verified safe with idempotency)"
         }
     )
-#  Mount Portfolio Management router 
-app.include_router(portfolio_mgmt_router)
-#  Mount Market Data Validation router 
-app.include_router(validation_router)
-#  Mount State Persistence router 
-app.include_router(persistence_router)
+#  Mount Internal Administrative routers (Protected by Admin Auth)
+app.include_router(portfolio_mgmt_router, prefix="/api/internal/portfolio-mgmt", dependencies=[Depends(get_admin_user)], tags=["Internal Portfolio Mgmt"])
+app.include_router(validation_router, prefix="/api/internal/market-validation", dependencies=[Depends(get_admin_user)], tags=["Internal Market Validation"])
+app.include_router(persistence_router, prefix="/api/internal/persistence", dependencies=[Depends(get_admin_user)], tags=["Internal Persistence"])
 #  Mount DAG Task Queue router 
 app.include_router(dag_tasks_router)
 #  Mount WebSocket router 
@@ -827,21 +826,35 @@ async def health_ready():
 #  Stats endpoint 
 @app.get("/api/stats", tags=["Stats"])
 async def get_stats():
-    """Get user trading statistics (mock data in DEV_MODE)"""
-    
-    
-    # In production, fetch from database
-    # For now, return empty structure
-    return {
-        "total_trades": 0,
-        "total_pnl": 0.0,
-        "win_rate": 0.0,
-        "active_bots": 0,
-        "total_strategies": 0,
-        "daily_pnl": 0.0,
-        "weekly_pnl": 0.0,
-        "monthly_pnl": 0.0,
-    }
+    """Get system trading statistics calculated from live database records."""
+    try:
+        from backend_app.backend.dashboard_aggregation_service import get_dashboard_service
+        svc = await get_dashboard_service()
+        data = await svc.get_dashboard_data(user={"id": "public"}, equity_days=30)
+        overview = data.get("overview", {})
+        bots = data.get("bots", {})
+        return {
+            "total_trades": overview.get("total_trades", 0),
+            "total_pnl": float(overview.get("today_pnl", 0.0)),
+            "win_rate": float(overview.get("win_rate", 0.0)),
+            "active_bots": int(bots.get("running", 0)),
+            "total_strategies": int(bots.get("total", 0)),
+            "daily_pnl": float(overview.get("today_pnl", 0.0)),
+            "weekly_pnl": float(overview.get("today_pnl", 0.0)),
+            "monthly_pnl": float(overview.get("today_pnl", 0.0)),
+        }
+    except Exception as e:
+        logger.warning(f"Error fetching stats from dashboard service: {e}")
+        return {
+            "total_trades": 0,
+            "total_pnl": 0.0,
+            "win_rate": 0.0,
+            "active_bots": 0,
+            "total_strategies": 0,
+            "daily_pnl": 0.0,
+            "weekly_pnl": 0.0,
+            "monthly_pnl": 0.0,
+        }
 
 
 # NOTE: Auth routes (/api/auth/register, /api/auth/login) are registered via

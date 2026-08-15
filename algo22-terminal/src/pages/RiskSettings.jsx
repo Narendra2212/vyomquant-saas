@@ -40,24 +40,26 @@ export default function RiskSettings() {
         ]);
 
         // 1. Process Base Config & Kill Switches
-        if (riskRes.status === 'fulfilled' && riskRes.value.data) {
-          const cfg = riskRes.value.data;
-          setMaxLoss(cfg.max_daily_loss ?? 500);
-          setMaxPos(cfg.max_positions ?? 10);
-          setLeverage(cfg.max_leverage ?? 3);
+        if (riskRes.status === 'fulfilled' && riskRes.value) {
+          const cfg = riskRes.value?.data ?? riskRes.value;
+          if (cfg && typeof cfg === 'object') {
+            setMaxLoss(cfg.max_daily_loss ?? 500);
+            setMaxPos(cfg.max_positions ?? 10);
+            setLeverage(cfg.max_leverage ?? 3);
 
-          if (cfg.kill_switches) {
-            setKillSwitches(prev => prev.map(ks => ({
-              ...ks,
-              active: cfg.kill_switches[ks.key] ?? ks.active
-            })));
+            if (cfg.kill_switches) {
+              setKillSwitches(prev => prev.map(ks => ({
+                ...ks,
+                active: cfg.kill_switches[ks.key] ?? ks.active
+              })));
+            }
           }
         }
 
         // 2. Process Strategy Capital Limits
-        if (limitsRes.status === 'fulfilled' && limitsRes.value.data) {
-          const limitsData = limitsRes.value.data;
-          const limits = Array.isArray(limitsData.limits) ? limitsData.limits : [];
+        if (limitsRes.status === 'fulfilled' && limitsRes.value) {
+          const limitsData = limitsRes.value?.data ?? limitsRes.value;
+          const limits = Array.isArray(limitsData?.limits) ? limitsData.limits : (Array.isArray(limitsData) ? limitsData : []);
           setStrategyLimits(limits.map((s, i) => ({
             id: s.strategy_id ?? i + 1,
             name: s.strategy_name ?? `Strategy #${i + 1}`,
@@ -70,13 +72,15 @@ export default function RiskSettings() {
         }
 
         // 3. Process Live Margin Health
-        if (marginRes.status === 'fulfilled' && marginRes.value.data) {
-          const m = marginRes.value.data;
-          setMarginData([
-            { label: "Margin Ratio", value: Number(m.margin_ratio ?? 0), max: 100, color: C.green, key: "margin_ratio" },
-            { label: "Free Margin", value: Number(m.free_margin ?? 0), max: 100, color: C.cyan, key: "free_margin" },
-            { label: "Risk Score", value: Number(m.risk_score ?? 0), max: 100, color: C.orange, key: "risk_score" },
-          ]);
+        if (marginRes.status === 'fulfilled' && marginRes.value) {
+          const m = marginRes.value?.data ?? marginRes.value;
+          if (m && typeof m === 'object') {
+            setMarginData([
+              { label: "Margin Ratio", value: Number(m.margin_ratio ?? 0), max: 100, color: C.green, key: "margin_ratio" },
+              { label: "Free Margin", value: Number(m.free_margin ?? 0), max: 100, color: C.cyan, key: "free_margin" },
+              { label: "Risk Score", value: Number(m.risk_score ?? 0), max: 100, color: C.orange, key: "risk_score" },
+            ]);
+          }
         }
       } catch (err) {
         console.error("Risk data load error:", err);

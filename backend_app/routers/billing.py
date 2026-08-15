@@ -24,7 +24,7 @@ import logging
 import os
 import traceback
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from uuid import UUID
 
 import inspect
@@ -148,7 +148,7 @@ async def _apply_marketplace_entitlement(user_id: str, library_id: str, subscrip
             detail="Failed to activate marketplace subscription"
         )
 
-async def _apply_billing_entitlement(user_id: str, item_key: str, discount_applied: bool = False) -> None:
+async def _apply_billing_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: Optional[dict] = None) -> None:
     """
     F-20: Writes billing state ONLY to Supabase profiles table.
     SQLite SubscriptionModel / InvoiceModel storage is retired.
@@ -528,16 +528,6 @@ async def stripe_webhook(
 
     payload = await request.body()
     
-    # Idempotency check: Use event ID to prevent duplicate processing
-    event_id = request.headers.get("stripe-event-id")
-    if event_id:
-        idempotency_key = f"webhook:stripe:{event_id}"
-        existing = await redis_manager.get(idempotency_key)
-        if existing:
-            logger.info(f"Stripe webhook {event_id} already processed, skipping")
-            return {"status": "duplicate"}
-        await redis_manager.setex(idempotency_key, 86400, "1")  # 24 hour TTL
-    
     try:
         secret = webhook_secret or "whsec_dummy"
         event = stripe.Webhook.construct_event(
@@ -547,142 +537,167 @@ async def stripe_webhook(
         logger.warning(f"Stripe webhook signature failure: {e}")
         raise HTTPException(400, f"Webhook Error: {e}")
     
-    # Log webhook event for audit trail
-    logger.info(f"Stripe webhook event: {event['type']}")
+    # BUG-FIX BILL-01 / BUG-IB-04: Crash-safe two-phase idempotency.
+    # 1. Acquire short-lived processing lock (60s TTL). If crash occurs, key expires in 60s instead of blocking retries for 24h.
+    # 2. On DB commit / successful handling, transition key to "completed" with 86400s TTL.
+    # 3. On failure / exception before DB commit, release key immediately so retries can execute.
+    event_id = event.get("id") or request.headers.get("stripe-event-id")
+    idempotency_key = f"webhook:stripe:{event_id}" if event_id else None
+    if idempotency_key:
+        cached_val = await redis_manager.get(idempotency_key)
+        if cached_val in ("completed", "1", "processing"):
+            logger.info(f"Stripe webhook {event_id} already processed or in-flight, skipping")
+            return {"status": "duplicate"}
+        acquired = await redis_manager.set(idempotency_key, "processing", nx=True, ex=60)
+        if not acquired:
+            logger.info(f"Stripe webhook {event_id} lock collision, skipping")
+            return {"status": "duplicate"}
 
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
-        user_id = session.get("client_reference_id")
-        metadata = session.get("metadata", {})
+    try:
+        # Log webhook event for audit trail
+        logger.info(f"Stripe webhook event: {event['type']}")
 
-        # F-19 FIX: Missing item_key returns HTTP 400 — never default to a paid tier.
-        # Previously: metadata.get("item_key", "elite_1999") silently upgraded users
-        # to the highest paid tier when Stripe metadata was absent or malformed.
-        item_key = metadata.get("item_key")
-        if not item_key:
-            logger.error(
-                f"Stripe webhook: missing item_key in session metadata "
-                f"for client_reference_id={user_id}. Metadata received: {metadata}"
-            )
-            raise HTTPException(
-                status_code=400,
-                detail="Missing item_key in Stripe session metadata. Cannot process entitlement.",
-            )
+        if event["type"] == "checkout.session.completed":
+            session = event["data"]["object"]
+            user_id = session.get("client_reference_id")
+            metadata = session.get("metadata", {})
 
-        if not user_id:
-            logger.error("Stripe webhook: missing client_reference_id")
-            raise HTTPException(
-                status_code=400,
-                detail="Missing client_reference_id in Stripe session"
-            )
+            # F-19 FIX: Missing item_key returns HTTP 400 — never default to a paid tier.
+            item_key = metadata.get("item_key")
+            if not item_key:
+                logger.error(
+                    f"Stripe webhook: missing item_key in session metadata "
+                    f"for client_reference_id={user_id}. Metadata received: {metadata}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Missing item_key in Stripe session metadata. Cannot process entitlement.",
+                )
 
-        discount_applied = metadata.get("discount_applied") == "true"
-        try:
-            await _process_stripe_entitlement(user_id, item_key, discount_applied, metadata)
-            
-            # Process referral commission on successful payment
-            payment_id = session.get("payment_intent") or session.get("id")
-            payment_amount = session.get("amount_total", 0) / 100.0  # Convert from cents to USD
-            
-            if payment_amount > 0:
+            if not user_id:
+                logger.error("Stripe webhook: missing client_reference_id")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Missing client_reference_id in Stripe session"
+                )
+
+            discount_applied = metadata.get("discount_applied") == "true"
+            try:
+                await _process_stripe_entitlement(user_id, item_key, discount_applied, metadata)
+                
+                # Process referral commission on successful payment
+                payment_id = session.get("payment_intent") or session.get("id")
+                payment_amount = session.get("amount_total", 0) / 100.0  # Convert from cents to USD
+                
+                if payment_amount > 0:
+                    try:
+                        sb = _background_sb()
+                        sb.rpc("process_referral_commission", {
+                            "p_referred_id": user_id,
+                            "p_payment_id": payment_id,
+                            "p_subscription_tier": item_key,
+                            "p_payment_amount_usd": payment_amount
+                        }).execute()
+                        logger.info(f"Referral commission processed for Stripe payment {payment_id}")
+                    except Exception as ref_err:
+                        logger.error(f"Failed to process referral commission for payment {payment_id}: {ref_err}")
+                        # Don't fail the webhook if commission processing fails
+            except Exception as e:
+                logger.error(f"Stripe entitlement processing failed: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Entitlement update failed: {e}"
+                )
+
+        elif event["type"] in ("customer.subscription.deleted", "customer.subscription.updated"):
+            sub_obj = event["data"]["object"]
+            user_id = sub_obj.get("metadata", {}).get("user_id")
+
+            if not user_id:
+                cust_id = sub_obj.get("customer")
+                cust = stripe.Customer.retrieve(cust_id)
+                user_id = cust.get("metadata", {}).get("user_id")
+
+            if not user_id:
+                logger.error(f"Stripe subscription event {event['type']} missing user_id reference.")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Missing user_id in Stripe subscription event metadata"
+                )
+
+            if event["type"] == "customer.subscription.deleted":
+                try:
+                    await _process_stripe_entitlement(user_id, "free")
+                    logger.info(f"Stripe: Processed cancellation (free) for user {user_id}")
+                except Exception as e:
+                    logger.error(f"Stripe subscription deletion handler failed: {e}")
+                    raise HTTPException(500, f"Subscription deletion failed: {e}")
+            else:
+                # updated: check updated item_key
+                item_key = sub_obj.get("metadata", {}).get("item_key")
+                if not item_key:
+                    items = sub_obj.get("items", {}).get("data", [])
+                    if items:
+                        price_id = items[0].get("price", {}).get("id")
+                        logger.warning(f"No item_key in subscription update metadata. Resolving by price_id: {price_id}")
+                if item_key:
+                    try:
+                        await _process_stripe_entitlement(user_id, item_key)
+                        logger.info(f"Stripe: Processed update ({item_key}) for user {user_id}")
+                    except Exception as e:
+                        logger.error(f"Stripe subscription update handler failed: {e}")
+                        raise HTTPException(500, f"Subscription update failed: {e}")
+
+        elif event["type"] == "invoice.payment_failed":
+            invoice_obj = event["data"]["object"]
+            sub_id = invoice_obj.get("subscription")
+            user_id = None
+            if sub_id:
+                sub = stripe.Subscription.retrieve(sub_id)
+                user_id = sub.get("metadata", {}).get("user_id")
+            if not user_id:
+                cust_id = invoice_obj.get("customer")
+                cust = stripe.Customer.retrieve(cust_id)
+                user_id = cust.get("metadata", {}).get("user_id")
+
+            if user_id:
                 try:
                     sb = _background_sb()
-                    sb.rpc("process_referral_commission", {
-                        "p_referred_id": user_id,
-                        "p_payment_id": payment_id,
-                        "p_subscription_tier": item_key,
-                        "p_payment_amount_usd": payment_amount
-                    }).execute()
-                    logger.info(f"Referral commission processed for Stripe payment {payment_id}")
-                except Exception as ref_err:
-                    logger.error(f"Failed to process referral commission for payment {payment_id}: {ref_err}")
-                    # Don't fail the webhook if commission processing fails
-        except Exception as e:
-            logger.error(f"Stripe entitlement processing failed: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Entitlement update failed: {e}"
-            )
-
-    elif event["type"] in ("customer.subscription.deleted", "customer.subscription.updated"):
-        sub_obj = event["data"]["object"]
-        user_id = sub_obj.get("metadata", {}).get("user_id")
-
-        if not user_id:
-            cust_id = sub_obj.get("customer")
-            cust = stripe.Customer.retrieve(cust_id)
-            user_id = cust.get("metadata", {}).get("user_id")
-
-        if not user_id:
-            logger.error(f"Stripe subscription event {event['type']} missing user_id reference.")
-            raise HTTPException(
-                status_code=400,
-                detail="Missing user_id in Stripe subscription event metadata"
-            )
-
-        if event["type"] == "customer.subscription.deleted":
-            try:
-                await _process_stripe_entitlement(user_id, "free")
-                logger.info(f"Stripe: Processed cancellation (free) for user {user_id}")
-            except Exception as e:
-                logger.error(f"Stripe subscription deletion handler failed: {e}")
-                raise HTTPException(500, f"Subscription deletion failed: {e}")
-        else:
-            # updated: check updated item_key
-            item_key = sub_obj.get("metadata", {}).get("item_key")
-            if not item_key:
-                items = sub_obj.get("items", {}).get("data", [])
-                if items:
-                    price_id = items[0].get("price", {}).get("id")
-                    logger.warning(f"No item_key in subscription update metadata. Resolving by price_id: {price_id}")
-            if item_key:
-                try:
-                    await _process_stripe_entitlement(user_id, item_key)
-                    logger.info(f"Stripe: Processed update ({item_key}) for user {user_id}")
+                    sb.table("profiles").update({"is_frozen": True}).eq("id", user_id).execute()
+                    await invalidate_profile_cache(user_id)
+                    logger.info(f"User {user_id} account frozen due to invoice payment failure.")
                 except Exception as e:
-                    logger.error(f"Stripe subscription update handler failed: {e}")
-                    raise HTTPException(500, f"Subscription update failed: {e}")
+                    logger.error(f"Stripe payment failure handler failed to freeze account: {e}")
+                    raise HTTPException(500, f"Payment failure handler failed: {e}")
 
-    elif event["type"] == "invoice.payment_failed":
-        invoice_obj = event["data"]["object"]
-        sub_id = invoice_obj.get("subscription")
-        user_id = None
-        if sub_id:
-            sub = stripe.Subscription.retrieve(sub_id)
-            user_id = sub.get("metadata", {}).get("user_id")
-        if not user_id:
-            cust_id = invoice_obj.get("customer")
-            cust = stripe.Customer.retrieve(cust_id)
-            user_id = cust.get("metadata", {}).get("user_id")
+        elif event["type"] in ("charge.refunded", "charge.refund.updated"):
+            # Handle refunds and chargebacks - reverse referral commission
+            charge_obj = event["data"]["object"]
+            payment_id = charge_obj.get("id")
+            
+            if payment_id:
+                try:
+                    sb = _background_sb()
+                    sb.rpc("reverse_referral_commission", {
+                        "p_payment_id": payment_id,
+                        "p_reversal_reason": event["type"]
+                    }).execute()
+                    logger.info(f"Referral commission reversed for Stripe payment {payment_id} due to {event['type']}")
+                except Exception as ref_err:
+                    logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
+                    # Don't fail the webhook if commission reversal fails
 
-        if user_id:
-            try:
-                sb = _background_sb()
-                sb.table("profiles").update({"is_frozen": True}).eq("id", user_id).execute()
-                await invalidate_profile_cache(user_id)
-                logger.info(f"User {user_id} account frozen due to invoice payment failure.")
-            except Exception as e:
-                logger.error(f"Stripe payment failure handler failed to freeze account: {e}")
-                raise HTTPException(500, f"Payment failure handler failed: {e}")
+        # Successfully completed — store completed status with 24h TTL
+        if idempotency_key:
+            await redis_manager.set(idempotency_key, "completed", ex=86400)
 
-    elif event["type"] in ("charge.refunded", "charge.refund.updated"):
-        # Handle refunds and chargebacks - reverse referral commission
-        charge_obj = event["data"]["object"]
-        payment_id = charge_obj.get("id")
-        
-        if payment_id:
-            try:
-                sb = _background_sb()
-                sb.rpc("reverse_referral_commission", {
-                    "p_payment_id": payment_id,
-                    "p_reversal_reason": event["type"]
-                }).execute()
-                logger.info(f"Referral commission reversed for Stripe payment {payment_id} due to {event['type']}")
-            except Exception as ref_err:
-                logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
-                # Don't fail the webhook if commission reversal fails
+        return {"status": "success"}
 
-    return {"status": "success"}
+    except Exception:
+        # On failure or rollback, release processing lock so retry can proceed
+        if idempotency_key:
+            await redis_manager.delete(idempotency_key)
+        raise
 
 
 # ── POST /api/billing/webhook/razorpay ──────────────────────────────────
@@ -697,21 +712,24 @@ async def razorpay_webhook(
     if not webhook_secret or webhook_secret == "dummy_webhook_secret":
         raise HTTPException(500, "Razorpay production webhook secret is missing or invalid.")
             
-    raw_body = await request.body()
-    
-    # Idempotency check: Use Razorpay event ID to prevent duplicate processing
+    event_id = None
     try:
         payload = json.loads(raw_body)
         event_id = payload.get("event_id") or payload.get("payload", {}).get("payment", {}).get("entity", {}).get("id")
-        if event_id:
-            idempotency_key = f"webhook:razorpay:{event_id}"
-            existing = await redis_manager.get(idempotency_key)
-            if existing:
-                logger.info(f"Razorpay webhook {event_id} already processed, skipping")
-                return {"status": "duplicate"}
-            await redis_manager.setex(idempotency_key, 86400, "1")  # 24 hour TTL
     except Exception as e:
         logger.warning(f"Failed to extract Razorpay event id for idempotency: {e}")
+
+    # BUG-FIX IB-01 / BUG-IB-04: Crash-safe two-phase idempotency.
+    idempotency_key = f"webhook:razorpay:{event_id}" if event_id else None
+    if idempotency_key:
+        cached_val = await redis_manager.get(idempotency_key)
+        if cached_val in ("completed", "1", "processing"):
+            logger.info(f"Razorpay webhook {event_id} already processed or in-flight, skipping")
+            return {"status": "duplicate"}
+        acquired = await redis_manager.set(idempotency_key, "processing", nx=True, ex=60)
+        if not acquired:
+            logger.info(f"Razorpay webhook {event_id} lock collision, skipping")
+            return {"status": "duplicate"}
 
     secret = webhook_secret or "dummy_webhook_secret"
     expected_sig = hmac.new(
@@ -721,77 +739,92 @@ async def razorpay_webhook(
     ).hexdigest()
 
     if not hmac.compare_digest(expected_sig, x_razorpay_signature or ""):
+        if idempotency_key:
+            await redis_manager.delete(idempotency_key)
         logger.warning("Razorpay webhook: invalid signature")
         raise HTTPException(400, "Invalid Razorpay signature")
 
     try:
         payload = json.loads(raw_body)
     except Exception:
+        if idempotency_key:
+            await redis_manager.delete(idempotency_key)
         raise HTTPException(400, "Invalid JSON body")
     
-    # Log webhook event for audit trail
-    event_type = payload.get("event", "unknown")
-    logger.info(f"Razorpay webhook event: {event_type}")
+    try:
+        # Log webhook event for audit trail
+        event_type = payload.get("event", "unknown")
+        logger.info(f"Razorpay webhook event: {event_type}")
 
-    if payload.get("event") == "payment.captured":
-        payment = payload["payload"]["payment"]["entity"]
-        notes = payment.get("notes", {})
-        user_id = notes.get("user_id")
-        item_key = notes.get("item") or notes.get("item_key")  # Support both keys for compatibility
+        if payload.get("event") == "payment.captured":
+            payment = payload["payload"]["payment"]["entity"]
+            notes = payment.get("notes", {})
+            user_id = notes.get("user_id")
+            item_key = notes.get("item") or notes.get("item_key")  # Support both keys for compatibility
 
-        if not user_id or not item_key:
-            logger.error("Razorpay webhook: missing user_id or item in notes")
-            raise HTTPException(
-                status_code=400,
-                detail="Missing user_id or item in Razorpay payment notes"
-            )
+            if not user_id or not item_key:
+                logger.error("Razorpay webhook: missing user_id or item in notes")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Missing user_id or item in Razorpay payment notes"
+                )
 
-        discount_applied = notes.get("discount_applied") == "true"
-        try:
-            await _process_razorpay_entitlement(user_id, item_key, discount_applied, notes)
+            discount_applied = notes.get("discount_applied") == "true"
+            try:
+                await _process_razorpay_entitlement(user_id, item_key, discount_applied, notes)
+                
+                # Process referral commission on successful payment
+                payment_id = payment.get("id")
+                payment_amount = payment.get("amount", 0) / 100.0  # Convert from paise to INR
+                
+                if payment_amount > 0:
+                    try:
+                        sb = _background_sb()
+                        sb.rpc("process_referral_commission", {
+                            "p_referred_id": user_id,
+                            "p_payment_id": payment_id,
+                            "p_subscription_tier": item_key,
+                            "p_payment_amount_usd": payment_amount  # Note: This is INR, not USD
+                        }).execute()
+                        logger.info(f"Referral commission processed for Razorpay payment {payment_id}")
+                    except Exception as ref_err:
+                        logger.error(f"Failed to process referral commission for payment {payment_id}: {ref_err}")
+                        # Don't fail the webhook if commission processing fails
+            except Exception as e:
+                logger.error(f"Razorpay entitlement processing failed: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Entitlement update failed: {e}"
+                )
+
+        elif payload.get("event") in ("refund.processed", "refund.failed"):
+            # Handle Razorpay refunds - reverse referral commission
+            refund = payload.get("payload", {}).get("refund", {}).get("entity", {})
+            payment_id = refund.get("payment_id")
             
-            # Process referral commission on successful payment
-            payment_id = payment.get("id")
-            payment_amount = payment.get("amount", 0) / 100.0  # Convert from paise to INR
-            
-            if payment_amount > 0:
+            if payment_id:
                 try:
                     sb = _background_sb()
-                    sb.rpc("process_referral_commission", {
-                        "p_referred_id": user_id,
+                    sb.rpc("reverse_referral_commission", {
                         "p_payment_id": payment_id,
-                        "p_subscription_tier": item_key,
-                        "p_payment_amount_usd": payment_amount  # Note: This is INR, not USD
+                        "p_reversal_reason": payload.get("event")
                     }).execute()
-                    logger.info(f"Referral commission processed for Razorpay payment {payment_id}")
+                    logger.info(f"Referral commission reversed for Razorpay payment {payment_id} due to {payload.get('event')}")
                 except Exception as ref_err:
-                    logger.error(f"Failed to process referral commission for payment {payment_id}: {ref_err}")
-                    # Don't fail the webhook if commission processing fails
-        except Exception as e:
-            logger.error(f"Razorpay entitlement processing failed: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Entitlement update failed: {e}"
-            )
+                    logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
+                    # Don't fail the webhook if commission reversal fails
 
-    elif payload.get("event") in ("refund.processed", "refund.failed"):
-        # Handle Razorpay refunds - reverse referral commission
-        refund = payload.get("payload", {}).get("refund", {}).get("entity", {})
-        payment_id = refund.get("payment_id")
-        
-        if payment_id:
-            try:
-                sb = _background_sb()
-                sb.rpc("reverse_referral_commission", {
-                    "p_payment_id": payment_id,
-                    "p_reversal_reason": payload.get("event")
-                }).execute()
-                logger.info(f"Referral commission reversed for Razorpay payment {payment_id} due to {payload.get('event')}")
-            except Exception as ref_err:
-                logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
-                # Don't fail the webhook if commission reversal fails
+        # Successfully completed — store completed status with 24h TTL
+        if idempotency_key:
+            await redis_manager.set(idempotency_key, "completed", ex=86400)
 
-    return {"status": "success"}
+        return {"status": "success"}
+
+    except Exception:
+        # On failure or rollback, release processing lock so retry can proceed
+        if idempotency_key:
+            await redis_manager.delete(idempotency_key)
+        raise
 
 
 @router.get("/invoices")

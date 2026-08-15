@@ -1,5 +1,6 @@
+# -*- coding: utf-8 -*-
 """
-core/metrics.py — Application metrics and monitoring utilities.
+core/metrics.py - Application metrics and monitoring utilities.
 
 Provides:
 - Prometheus Request/response metrics

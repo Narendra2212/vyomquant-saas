@@ -140,9 +140,11 @@ class OrderEventHandler(EventHandler):
         """STEP 5.4: Handle ORDER_FILLED - ONLY mark FILLED after exchange confirms."""
         data = event.data
         
+        prev_filled = Decimal(str(execution.filled_size or "0"))
         # Extract fill data
         filled_size = Decimal(str(data.get('filled_size', data.get('z', 0))))  # Binance: 'z' = filled
         fill_price = Decimal(str(data.get('price', data.get('L', 0))))      # Binance: 'L' = last price
+        fill_delta = max(Decimal("0"), filled_size - prev_filled)
         
         # Update execution record
         execution.filled_size = str(filled_size)
@@ -165,21 +167,24 @@ class OrderEventHandler(EventHandler):
         logger.info(
             f"ORDER FILLED (exchange confirmed): {execution.execution_id} | "
             f"order={event.order_id} | "
-            f"size={filled_size} @ {fill_price}"
+            f"size={filled_size} @ {fill_price} | delta={fill_delta}"
         )
         
-        # STEP 5.6: Trigger position update
-        await self._update_position(execution)
+        # STEP 5.6: Trigger position update only with newly filled delta
+        if fill_delta > 0:
+            await self._update_position(execution, fill_delta=fill_delta)
     
     async def _handle_partial(self, event: ExchangeEvent, execution: ExecutionRecordModel):
         """STEP 5.4: Handle ORDER_PARTIAL - Update incremental fill."""
         data = event.data
+        prev_filled = Decimal(str(execution.filled_size or "0"))
         
         # Extract fill data
         filled_size = Decimal(str(data.get('filled_size', data.get('z', 0))))
         total_size = Decimal(str(execution.size))
         remaining_size = total_size - filled_size
         fill_price = Decimal(str(data.get('price', data.get('L', 0))))
+        fill_delta = max(Decimal("0"), filled_size - prev_filled)
         
         # Update execution record
         execution.filled_size = str(filled_size)
@@ -201,11 +206,12 @@ class OrderEventHandler(EventHandler):
         
         logger.info(
             f"ORDER PARTIAL (exchange confirmed): {execution.execution_id} | "
-            f"filled={filled_size}/{total_size} @ {fill_price}"
+            f"filled={filled_size}/{total_size} @ {fill_price} | delta={fill_delta}"
         )
         
-        # STEP 5.6: Trigger position update
-        await self._update_position(execution)
+        # STEP 5.6: Trigger position update only with newly filled delta
+        if fill_delta > 0:
+            await self._update_position(execution, fill_delta=fill_delta)
     
     async def _handle_cancelled(self, event: ExchangeEvent, execution: ExecutionRecordModel):
         """Handle ORDER_CANCELLED."""
@@ -245,20 +251,24 @@ class OrderEventHandler(EventHandler):
         
         logger.error(f"ORDER REJECTED: {execution.execution_id} | reason={rejection_reason}")
     
-    async def _update_position(self, execution: ExecutionRecordModel):
-        """STEP 5.6: Update position from execution fill."""
+    async def _update_position(self, execution: ExecutionRecordModel, fill_delta: Optional[Any] = None):
+        """STEP 5.6: Update position from execution fill (idempotent with delta tracking)."""
         position_engine = get_position_engine(self.db)
         
+        size_to_apply = str(fill_delta) if fill_delta is not None else execution.filled_size
+        if not size_to_apply or Decimal(size_to_apply) <= 0:
+            return
+            
         position = await position_engine.update_position_from_fill(
             execution_record=execution,
-            fill_size=execution.filled_size,
+            fill_size=size_to_apply,
             fill_price=execution.avg_price
         )
         
         if position:
             logger.info(
                 f"POSITION UPDATED from event: {position.position_id} | "
-                f"size={position.size} | "
+                f"size={position.size} | delta={size_to_apply} | "
                 f"execution={execution.execution_id}"
             )
 

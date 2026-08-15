@@ -97,29 +97,29 @@ async def create_strategy(request: Request,
         # Compile blueprint before creating strategy
         from backend_app.core.models.pydantic_models import DAGConfig
         dag_config = DAGConfig(
-            nodes=request.blueprint.get("nodes", []),
-            edges=request.blueprint.get("edges", []),
-            symbols=request.blueprint.get("symbols", [request.symbol]),
-            timeframe=request.timeframe
+            nodes=body.blueprint.get("nodes", []),
+            edges=body.blueprint.get("edges", []),
+            symbols=body.blueprint.get("symbols", [body.symbol]),
+            timeframe=body.timeframe
         )
         
         package = compiler.compile(
             dag_config=dag_config,
             strategy_id=str(uuid4()),  # Generate unique ID
             version="v1.0",
-            metadata={"name": request.name}
+            metadata={"name": body.name}
         )
         
         result = await service.create_strategy(
             user=user,
-            name=request.name,
-            description=request.description,
-            blueprint=request.blueprint,
+            name=body.name,
+            description=body.description,
+            blueprint=body.blueprint,
             execution_graph=package.execution_graph.to_dict(),
-            exchange=request.exchange,
-            symbol=request.symbol,
-            timeframe=request.timeframe,
-            tags=request.tags
+            exchange=body.exchange,
+            symbol=body.symbol,
+            timeframe=body.timeframe,
+            tags=body.tags
         )
         
         return {
@@ -165,17 +165,17 @@ async def compile_strategy(request: Request,
         
         from backend_app.core.models.pydantic_models import DAGConfig
         dag_config = DAGConfig(
-            nodes=request.blueprint.get("nodes", []),
-            edges=request.blueprint.get("edges", []),
-            symbols=request.blueprint.get("symbols", []),
-            timeframe=request.blueprint.get("timeframe")
+            nodes=body.blueprint.get("nodes", []),
+            edges=body.blueprint.get("edges", []),
+            symbols=body.blueprint.get("symbols", []),
+            timeframe=body.blueprint.get("timeframe")
         )
         
         package = compiler.compile(
             dag_config=dag_config,
             strategy_id=str(uuid4()),  # Generate unique ID
-            version=request.version,
-            metadata=request.metadata or {}
+            version=body.version,
+            metadata=body.metadata or {}
         )
         
         return {
@@ -381,7 +381,7 @@ async def clone_strategy(request: Request,
     try:
         service = await get_strategy_service()
         
-        result = await service.clone_strategy(user=user, strategy_id=strategy_id, new_name=request.new_name)
+        result = await service.clone_strategy(user=user, strategy_id=strategy_id, new_name=body.new_name)
         
         return {
             "status": "cloned",
@@ -419,12 +419,20 @@ async def deploy_strategy(request: Request,
         result = await service.deploy_strategy(
             user=user,
             strategy_id=strategy_id,
-            version=request.version,
-            environment=request.environment,
-            exchange_id=request.exchange_id
+            version=body.version,
+            environment=body.environment,
+            exchange_id=body.exchange_id
         )
         
         return result
+    except ValueError as e:
+        err_msg = str(e)
+        logger.warning(f"Validation/quota error deploying strategy {strategy_id}: {err_msg}")
+        status_code = 403 if "quota" in err_msg.lower() or "subscription" in err_msg.lower() else 400
+        raise HTTPException(
+            status_code=status_code,
+            detail={"error": "STRATEGY_DEPLOY_FAILED", "message": err_msg}
+        )
     except Exception as e:
         logger.error(f"Error deploying strategy {strategy_id} for user {user['id']}: {e}")
         raise HTTPException(
@@ -847,15 +855,15 @@ async def create_backtest(request: Request,
         backtest = await backtest_service.create_backtest(
             user=user,
             strategy_id=strategy_id,
-            version_id=request.version_id,
-            version=request.version,
-            blueprint=request.blueprint,
-            dataset=request.dataset,
-            start_date=request.start_date,
-            end_date=request.end_date,
-            initial_capital=request.initial_capital,
-            commission=request.commission,
-            slippage=request.slippage
+            version_id=body.version_id,
+            version=body.version,
+            blueprint=body.blueprint,
+            dataset=body.dataset,
+            start_date=body.start_date,
+            end_date=body.end_date,
+            initial_capital=body.initial_capital,
+            commission=body.commission,
+            slippage=body.slippage
         )
         
         return {
@@ -907,12 +915,12 @@ async def execute_backtest(request: Request,
         from backend_app.backend.strategy_compiler import StrategyPackage, ExecutionGraph
         
         execution_graph = ExecutionGraph(
-            id=request.execution_graph.get("id", str(uuid4())),
-            version=request.execution_graph.get("version", "v1.0"),
-            nodes=request.execution_graph.get("nodes", []),
-            edges=request.execution_graph.get("edges", []),
-            execution_order=request.execution_graph.get("execution_order", []),
-            metadata=request.execution_graph.get("metadata", {})
+            id=body.execution_graph.get("id", str(uuid4())),
+            version=body.execution_graph.get("version", "v1.0"),
+            nodes=body.execution_graph.get("nodes", []),
+            edges=body.execution_graph.get("edges", []),
+            execution_order=body.execution_graph.get("execution_order", []),
+            metadata=body.execution_graph.get("metadata", {})
         )
         
         strategy_package = StrategyPackage(
@@ -921,7 +929,7 @@ async def execute_backtest(request: Request,
             version=strategy["version"]["version"] if strategy["version"] else "v1.0",
             execution_graph=execution_graph,
             metadata=execution_graph.metadata,
-            dependencies=request.execution_graph.get("dependencies", {})
+            dependencies=body.execution_graph.get("dependencies", {})
         )
         
         # Get backtest runtime
@@ -939,8 +947,8 @@ async def execute_backtest(request: Request,
             strategy_id=strategy_id,
             version_id=strategy["version"]["id"] if strategy["version"] else None,
             version=strategy["version"]["version"] if strategy["version"] else "v1.0",
-            start_date=request.start_date,
-            end_date=request.end_date,
+            start_date=body.start_date,
+            end_date=body.end_date,
             exchange_instance=exchange_instance
         )
         
@@ -1095,12 +1103,12 @@ async def run_optimization(request: Request,
         from backend_app.backend.strategy_compiler import StrategyPackage, ExecutionGraph
         
         execution_graph = ExecutionGraph(
-            id=request.execution_graph.get("id", str(uuid4())),
-            version=request.execution_graph.get("version", "v1.0"),
-            nodes=request.execution_graph.get("nodes", []),
-            edges=request.execution_graph.get("edges", []),
-            execution_order=request.execution_graph.get("execution_order", []),
-            metadata=request.execution_graph.get("metadata", {})
+            id=body.execution_graph.get("id", str(uuid4())),
+            version=body.execution_graph.get("version", "v1.0"),
+            nodes=body.execution_graph.get("nodes", []),
+            edges=body.execution_graph.get("edges", []),
+            execution_order=body.execution_graph.get("execution_order", []),
+            metadata=body.execution_graph.get("metadata", {})
         )
         
         strategy_package = StrategyPackage(
@@ -1109,7 +1117,7 @@ async def run_optimization(request: Request,
             version=strategy["version"]["version"] if strategy["version"] else "v1.0",
             execution_graph=execution_graph,
             metadata=execution_graph.metadata,
-            dependencies=request.execution_graph.get("dependencies", {})
+            dependencies=body.execution_graph.get("dependencies", {})
         )
         
         # Get optimization engine
@@ -1125,25 +1133,25 @@ async def run_optimization(request: Request,
         
         # Create optimization config
         config = OptimizationConfig(
-            method=OptimizationMethod(request.optimization_method),
-            validation_method=ValidationMethod(request.validation_method),
-            parameters=request.parameters,
-            n_iterations=request.n_iterations,
-            n_trials=request.n_trials,
-            training_window_days=request.training_window_days,
-            validation_window_days=request.validation_window_days,
-            test_window_days=request.test_window_days,
-            initial_capital=request.initial_capital,
-            commission=request.commission,
-            slippage=request.slippage,
-            risk_per_trade=request.risk_per_trade,
-            max_drawdown=request.max_drawdown,
-            daily_loss_limit=request.daily_loss_limit
+            method=OptimizationMethod(body.optimization_method),
+            validation_method=ValidationMethod(body.validation_method),
+            parameters=body.parameters,
+            n_iterations=body.n_iterations,
+            n_trials=body.n_trials,
+            training_window_days=body.training_window_days,
+            validation_window_days=body.validation_window_days,
+            test_window_days=body.test_window_days,
+            initial_capital=body.initial_capital,
+            commission=body.commission,
+            slippage=body.slippage,
+            risk_per_trade=body.risk_per_trade,
+            max_drawdown=body.max_drawdown,
+            daily_loss_limit=body.daily_loss_limit
         )
         
         # Add date range to parameters
-        config.parameters["start_date"] = request.start_date
-        config.parameters["end_date"] = request.end_date
+        config.parameters["start_date"] = body.start_date
+        config.parameters["end_date"] = body.end_date
         
         # Generate research report
         research_report = await optimization_engine.generate_research_report(
@@ -1168,9 +1176,9 @@ async def run_optimization(request: Request,
             "user_id": user["id"],
             "version_id": strategy["version"]["id"] if strategy["version"] else None,
             "version": strategy["version"]["version"] if strategy["version"] else "v1.0",
-            "optimization_method": request.optimization_method,
-            "validation_method": request.validation_method,
-            "n_iterations": request.n_iterations,
+            "optimization_method": body.optimization_method,
+            "validation_method": body.validation_method,
+            "n_iterations": body.n_iterations,
             "optimization_results": research_report.optimization_results,
             "best_parameters": research_report.best_parameters,
             "walk_forward_results": research_report.walk_forward_results,
@@ -1278,18 +1286,18 @@ async def get_research_report(request: Request,
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# DEPLOYMENT OPERATIONS
+# DEPLOYMENT OPERATIONS (PIPELINE ENGINE)
 # ══════════════════════════════════════════════════════════════════════════
 
-@router.post("/strategies/{strategy_id}/deploy")
+@router.post("/strategies/{strategy_id}/deploy-pipeline")
 @limiter.limit("10/minute")
-async def deploy_strategy(request: Request, 
+async def deploy_strategy_pipeline(request: Request, 
     strategy_id: str,
     body: DeploymentRequest,
     user: dict = Depends(get_current_user)
 ):
     """
-    Deploy a strategy to live trading.
+    Deploy a strategy to live trading pipeline.
     
     PHASE Deployment Engine: Deploys validated strategy using Strategy Package.
     
@@ -1340,12 +1348,12 @@ async def deploy_strategy(request: Request,
         from backend_app.backend.deployment_manager import StrategyDeploymentConfig, DeploymentEnvironment
         
         execution_graph = ExecutionGraph(
-            id=request.execution_graph.get("id", str(uuid4())),
-            version=request.execution_graph.get("version", "v1.0"),
-            nodes=request.execution_graph.get("nodes", []),
-            edges=request.execution_graph.get("edges", []),
-            execution_order=request.execution_graph.get("execution_order", []),
-            metadata=request.execution_graph.get("metadata", {})
+            id=body.execution_graph.get("id", str(uuid4())),
+            version=body.execution_graph.get("version", "v1.0"),
+            nodes=body.execution_graph.get("nodes", []),
+            edges=body.execution_graph.get("edges", []),
+            execution_order=body.execution_graph.get("execution_order", []),
+            metadata=body.execution_graph.get("metadata", {})
         )
         
         # Create deployment config
@@ -1356,14 +1364,14 @@ async def deploy_strategy(request: Request,
             version_id=strategy["version"]["id"] if strategy["version"] else None,
             version=strategy["version"]["version"] if strategy["version"] else "v1.0",
             execution_graph=execution_graph,
-            environment=DeploymentEnvironment(request.environment),
-            exchange_id=request.exchange_id,
-            exchange_symbol=request.exchange_symbol,
-            worker_region=request.worker_region,
-            initial_capital=request.initial_capital,
-            risk_per_trade=request.risk_per_trade,
-            max_drawdown=request.max_drawdown,
-            daily_loss_limit=request.daily_loss_limit
+            environment=DeploymentEnvironment(body.environment),
+            exchange_id=body.exchange_id,
+            exchange_symbol=body.exchange_symbol,
+            worker_region=body.worker_region,
+            initial_capital=body.initial_capital,
+            risk_per_trade=body.risk_per_trade,
+            max_drawdown=body.max_drawdown,
+            daily_loss_limit=body.daily_loss_limit
         )
         
         # Get deployment manager
@@ -1385,13 +1393,13 @@ async def deploy_strategy(request: Request,
             "strategy_id": strategy_id,
             "user_id": user["id"],
             "version_id": deployment_config.version_id,
-            "environment": request.environment,
+            "environment": body.environment,
             "status": deployment_state.status.value,
             "worker_id": deployment_state.worker.worker_id if deployment_state.worker else None,
-            "exchange_id": request.exchange_id,
-            "exchange_symbol": request.exchange_symbol,
-            "worker_region": request.worker_region,
-            "initial_capital": request.initial_capital,
+            "exchange_id": body.exchange_id,
+            "exchange_symbol": body.exchange_symbol,
+            "worker_region": body.worker_region,
+            "initial_capital": body.initial_capital,
             "started_at": deployment_state.started_at,
             "created_at": datetime.now(timezone.utc).isoformat()
         }

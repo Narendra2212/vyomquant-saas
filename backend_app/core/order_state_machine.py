@@ -22,6 +22,7 @@ Any state can transition to: FAILED, CANCELLED, REJECTED
 """
 
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -154,10 +155,13 @@ class OrderStateMachine:
         OrderState.REJECTED: set()
     }
     
-    def __init__(self):
-        """Initialize state machine with transition hooks."""
-        self._transition_history: Dict[str, List[StateTransition]] = {}
-        self._current_states: Dict[str, OrderState] = {}
+    MAX_HISTORY_ENTRIES = 1000
+
+    def __init__(self, max_history_entries: int = 1000):
+        """Initialize state machine with transition hooks and bounded memory."""
+        self.max_history_entries = max_history_entries
+        self._transition_history: OrderedDict[str, List[StateTransition]] = OrderedDict()
+        self._current_states: OrderedDict[str, OrderState] = OrderedDict()
         self._pre_transition_hooks: List[Callable] = []
         self._post_transition_hooks: List[Callable] = []
         
@@ -247,13 +251,22 @@ class OrderStateMachine:
             metadata=metadata
         )
         
-        # Update state
+        # Update state with LRU ordering
+        if execution_id in self._current_states:
+            self._current_states.move_to_end(execution_id)
         self._current_states[execution_id] = to_state
         
-        # Add to history
-        if execution_id not in self._transition_history:
+        # Add to history with LRU ordering
+        if execution_id in self._transition_history:
+            self._transition_history.move_to_end(execution_id)
+        else:
             self._transition_history[execution_id] = []
         self._transition_history[execution_id].append(transition_record)
+
+        # Enforce memory bounds
+        while len(self._current_states) > self.max_history_entries:
+            oldest_id, _ = self._current_states.popitem(last=False)
+            self._transition_history.pop(oldest_id, None)
         
         # STEP 3.9: Log all state transitions
         self._log_transition(transition_record)

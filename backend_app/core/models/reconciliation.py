@@ -1,5 +1,6 @@
+# -*- coding: utf-8 -*-
 """
-core/models/reconciliation.py — Reconciliation Mismatch Persistence
+core/models/reconciliation.py - Reconciliation Mismatch Persistence
 
 Stores every divergence detected between local execution-record state
 and exchange-reported order state so that:

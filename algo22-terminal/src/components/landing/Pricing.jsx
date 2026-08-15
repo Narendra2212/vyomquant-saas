@@ -13,7 +13,7 @@ export default function Pricing() {
     const loadPlans = async () => {
       try {
         const data = await api.billing.getPlans()
-        setPlans(data.plans || [])
+        setPlans(data?.plans || (Array.isArray(data) ? data : []))
       } catch (err) {
         console.error('Failed to load plans:', err)
       } finally {

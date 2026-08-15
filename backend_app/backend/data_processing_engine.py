@@ -17,7 +17,15 @@ import logging
 import threading
 
 import numpy as np
-from numba import njit
+try:
+    from numba import njit
+except ImportError:
+    def njit(*args, **kwargs):
+        def decorator(func):
+            return func
+        if len(args) == 1 and callable(args[0]):
+            return args[0]
+        return decorator
 
 logger = logging.getLogger("DataProcessorEngine")
 

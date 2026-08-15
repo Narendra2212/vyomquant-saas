@@ -31,13 +31,13 @@ export default function SecurityLogs() {
     return () => controller.abort();
   }, []);
 
-  const filteredLogs = logs.filter(log => {
-    const term = searchTerm.toLowerCase();
+  const filteredLogs = (Array.isArray(logs) ? logs : []).filter(log => {
+    const term = (searchTerm || "").toLowerCase();
     return (
-      log.event.toLowerCase().includes(term) ||
-      log.ip.toLowerCase().includes(term) ||
-      log.loc.toLowerCase().includes(term) ||
-      log.device.toLowerCase().includes(term)
+      (log.event || "").toLowerCase().includes(term) ||
+      (log.ip || "").toLowerCase().includes(term) ||
+      (log.loc || "").toLowerCase().includes(term) ||
+      (log.device || "").toLowerCase().includes(term)
     );
   });
 

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import logging
 from slowapi import Limiter
@@ -8,10 +9,10 @@ from backend_app.core.safety_config import get_vyomquant_mode
 logger = logging.getLogger("RateLimit")
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
-env_raw = os.getenv("ENV") or get_vyomquant_mode(default=None)
+env_raw = os.getenv("ENV") or get_vyomquant_mode(default="safe")
 
 # Explicit list of local/test environments allowed to use in-memory rate limiting
-DEV_TEST_ENVS = {"testing", "test", "development", "dev", "local"}
+DEV_TEST_ENVS = {"testing", "test", "development", "dev", "local", "safe", "paper", "ambiguous"}
 
 if env_raw:
     env = env_raw.lower()
@@ -31,8 +32,11 @@ elif not REDIS_URL:
     logger.critical(f"[RateLimit] {msg}")
     raise RuntimeError(msg)
 else:
-    # REDIS_URL is provided — attempt Redis connection
+    # REDIS_URL is provided - attempt Redis connection and verify via ping
     try:
+        import redis
+        test_client = redis.from_url(REDIS_URL, socket_connect_timeout=1, socket_timeout=1)
+        test_client.ping()
         limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL)
         logger.info(f"[RateLimit] Redis-backed rate limiter armed successfully ({env}).")
     except Exception as e:

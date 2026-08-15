@@ -21,6 +21,7 @@ import axios from 'axios';
 import * as Sentry from "@sentry/react";
 import { CONFIG } from './config.js';
 import { supabase } from './supabase.js';
+import { resetGlobalDedupCache } from './utils/eventDedupCache.js';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -550,6 +551,23 @@ startCleanupInterval();
  */
 
 /**
+ * Clear all in-memory API cache, pending requests, and session keys.
+ * Must be called on logout / user switch to prevent cross-tenant data leaks.
+ */
+export const clearApiCache = () => {
+  cache.clear();
+  pendingRequests.clear();
+  idempotencyKeys.clear();
+  circuitBreakers.clear();
+  sessionStorage.removeItem('api_session_id');
+  try {
+    resetGlobalDedupCache();
+  } catch (e) {
+    // Suppress if not initialized
+  }
+};
+
+/**
  * Logout utility - clears token and triggers app-wide logout
  * Can be called manually from UI components
  */
@@ -560,6 +578,7 @@ export const logout = async () => {
     console.error("Error signing out of Supabase:", e);
   }
   sessionStorage.removeItem("token");
+  clearApiCache();
   window.dispatchEvent(new CustomEvent('auth-logout'));
 
   // Clear websocket session state if it exists
@@ -585,6 +604,7 @@ supabase.auth.onAuthStateChange((event, session) => {
     }
   } else if (event === 'SIGNED_OUT') {
     sessionStorage.removeItem("token");
+    clearApiCache();
     window.dispatchEvent(new CustomEvent('auth-logout'));
   }
 });
@@ -716,15 +736,12 @@ client.interceptors.response.use(
     if (error.response) {
       const status = error.response.status;
 
-      // Authentication errors - trigger logout and clear token
-      if (status === 401 || status === 403) {
-        console.error(`🔒 Auth error ${status}:`, error.response.data);
-        // Do not force logout during launch to allow professional recovery states in UI
-        // logout();
-        // window.dispatchEvent(new CustomEvent('auth-expired'));
-        // setTimeout(() => {
-        //   window.location.href = "/login";
-        // }, 100);
+      // Authentication errors - trigger logout, clear cache, and notify app
+      if (status === 401) {
+        console.error(`🔒 Auth error 401 Unauthorized:`, error.response.data);
+        sessionStorage.removeItem("token");
+        clearApiCache();
+        window.dispatchEvent(new CustomEvent('auth-expired'));
       }
 
       // Server errors - log to error tracking in production

@@ -119,8 +119,17 @@ class HardQuotaEnforcer:
         # Log to dedicated audit channel
         try:
             audit_key = f"audit:quota_violations:{ctx.tenant.user_id}"
-            redis_manager.lpush(audit_key, violation_data)
-            redis_manager.expire(audit_key, 86400 * 30)  # 30 days
+            async def _push_audit():
+                try:
+                    await redis_manager.lpush(audit_key, violation_data)
+                    await redis_manager.expire(audit_key, 86400 * 30)
+                except Exception as audit_err:
+                    logger.error(f"Failed to log to audit: {audit_err}")
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_push_audit())
+            except RuntimeError:
+                pass
         except Exception as e:
             logger.error(f"Failed to log to audit: {e}")
         
@@ -445,12 +454,16 @@ class HardQuotaEnforcer:
         tenant: TenantContext,
         delta: float
     ):
-        """Update allocated capital tracking."""
+        """Update allocated capital tracking atomically."""
         key = f"user:{tenant.user_id}:portfolio:total_allocated"
-        current = float(await redis_manager.get(key) or 0)
-        new_total = max(0, current + delta)
-        await redis_manager.set(key, new_total)
-        logger.debug(f"Updated capital allocation for {tenant.user_id}: ${new_total:,.2f}")
+        try:
+            new_total = float(await redis_manager.incrbyfloat(key, delta))
+            if new_total < 0:
+                await redis_manager.set(key, 0.0)
+                new_total = 0.0
+            logger.debug(f"Updated capital allocation for {tenant.user_id}: ${new_total:,.2f}")
+        except Exception as e:
+            logger.error(f"Failed to update capital allocation for {tenant.user_id}: {e}")
     
     async def enforce_leverage_limit(
         self,

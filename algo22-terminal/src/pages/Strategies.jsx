@@ -122,6 +122,9 @@ export default function Strategies() {
         body: JSON.stringify({ environment: "paper" })
       });
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.detail || `Deploy failed (HTTP ${res.status})`);
+      }
       console.log("📊 DEPLOY RESPONSE:", data);
     } catch (err) {
       console.error("📊 DEPLOY ERROR:", err.message);
@@ -148,6 +151,9 @@ export default function Strategies() {
         }
       });
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.detail || `Pause failed (HTTP ${res.status})`);
+      }
       console.log("📊 PAUSE RESPONSE:", data);
     } catch (err) {
       console.error("📊 PAUSE ERROR:", err.message);
@@ -173,6 +179,9 @@ export default function Strategies() {
         }
       });
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.detail || `Delete failed (HTTP ${res.status})`);
+      }
       console.log("📊 DELETE RESPONSE:", data);
     } catch (err) {
       console.error("📊 DELETE ERROR:", err.message);
@@ -200,6 +209,9 @@ export default function Strategies() {
         body: JSON.stringify({ new_name: `${strategy.name} (Copy)` })
       });
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.detail || `Clone failed (HTTP ${res.status})`);
+      }
       console.log("📊 CLONE RESPONSE:", data);
       // Reload strategies
       const controller = new AbortController();
@@ -376,7 +388,7 @@ export default function Strategies() {
                 <div style={{ display: "flex", gap: 4, marginTop: 10 }}>
                   <Button variant="ghost" size="xs" icon={Edit2} onClick={e => { e.stopPropagation(); setEditingStrategy(s); setView("builder"); }} disabled={!!isProcessing[s.id]}>Edit</Button>
                   <Button variant="ghost" size="xs" icon={Copy} onClick={e => { e.stopPropagation(); handleCloneStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Clone</Button>
-                  <Button variant="ghost" size="xs" icon={BarChart2} onClick={e => e.stopPropagation()} disabled={!!isProcessing[s.id]}>Backtest</Button>
+                  <Button variant="ghost" size="xs" icon={BarChart2} onClick={e => { e.stopPropagation(); navigate("/app/backtest", { state: { strategy: s } }); }} disabled={!!isProcessing[s.id]}>Backtest</Button>
                   {s.status === "running"
                     ? <Button variant="ghost" size="xs" icon={Pause} onClick={e => { e.stopPropagation(); handlePauseStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Pause</Button>
                     : <Button variant="success" size="xs" icon={Play} onClick={e => { e.stopPropagation(); handleDeployStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Deploy</Button>}

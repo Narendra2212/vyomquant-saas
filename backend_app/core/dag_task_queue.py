@@ -186,6 +186,21 @@ class DAGTask:
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "DAGTask":
+        raw_status = data.get("status", "PENDING")
+        if isinstance(raw_status, TaskStatus):
+            task_status = raw_status
+        else:
+            try:
+                task_status = TaskStatus(raw_status)
+            except ValueError:
+                try:
+                    task_status = TaskStatus(str(raw_status).upper())
+                except ValueError:
+                    try:
+                        task_status = TaskStatus(str(raw_status).lower())
+                    except ValueError:
+                        task_status = TaskStatus.PENDING
+
         return cls(
             task_id=data["task_id"],
             tenant_id=data["tenant_id"],
@@ -193,7 +208,7 @@ class DAGTask:
             priority=data.get("priority", 5),
             created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.utcnow(),
             scheduled_for=datetime.fromisoformat(data["scheduled_for"]) if data.get("scheduled_for") else None,
-            status=TaskStatus(data.get("status", "pending")),
+            status=task_status,
             worker_id=data.get("worker_id"),
             started_at=datetime.fromisoformat(data["started_at"]) if data.get("started_at") else None,
             completed_at=datetime.fromisoformat(data["completed_at"]) if data.get("completed_at") else None,
@@ -683,10 +698,9 @@ class DAGTaskQueueManager:
         if not queue_keys:
             return None
         
-        # Round-robin: find tenant with tasks and lowest active count
-        best_tenant = None
-        best_task = None
-        best_load = float('inf')
+        # Round-robin: find candidate tenants with minimal active load
+        candidate_tenants = []
+        min_load = float('inf')
         
         for queue_key in queue_keys:
             # Extract tenant_id from key
@@ -704,14 +718,21 @@ class DAGTaskQueueManager:
                     TaskQueueKeyBuilder.active_tasks(tenant_id)
                 )
                 
-                # Prefer tenants with lower active load
-                if active_count < best_load:
-                    best_load = active_count
-                    best_tenant = tenant_id
-                    best_task = task_ids[0]
+                # Collect tenants with tied lowest active load
+                if active_count < min_load:
+                    min_load = active_count
+                    candidate_tenants = [(tenant_id, task_ids[0])]
+                elif active_count == min_load:
+                    candidate_tenants.append((tenant_id, task_ids[0]))
         
-        if not best_tenant or not best_task:
+        if not candidate_tenants:
             return None
+        
+        # Fair round-robin selection among equal-load tenants
+        self._fair_cursor = getattr(self, '_fair_cursor', 0)
+        selected_idx = self._fair_cursor % len(candidate_tenants)
+        self._fair_cursor = (self._fair_cursor + 1) % len(candidate_tenants)
+        best_tenant, best_task = candidate_tenants[selected_idx]
         
         # Remove from queue
         key = TaskQueueKeyBuilder.task_queue(best_tenant)
@@ -822,6 +843,7 @@ class DAGTaskQueueManager:
             task.status = TaskStatus.PENDING
             
             await self._update_task_status(task)
+            await self._cleanup_active_task(task)
             await self._add_to_scheduled_queue(task)
             
             logger.warning(

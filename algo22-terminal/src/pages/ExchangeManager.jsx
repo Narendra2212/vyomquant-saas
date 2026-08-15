@@ -47,8 +47,11 @@ export default function ExchangeManager() {
       setAuthSchema(schema);
       // Initialize credential values with empty strings
       const initialValues = {};
-      schema.fields.forEach(field => {
-        initialValues[field.name] = "";
+      const fields = Array.isArray(schema?.fields) ? schema.fields : [];
+      fields.forEach(field => {
+        if (field?.name) {
+          initialValues[field.name] = "";
+        }
       });
       setCredentialValues(initialValues);
     } catch (err) {
@@ -585,7 +588,7 @@ export default function ExchangeManager() {
                   </div>
                 </div>
 
-                {authSchema.fields.map(field => (
+                {(Array.isArray(authSchema?.fields) ? authSchema.fields : []).map(field => (
                   <div key={field.name}>
                     <label style={{ color: "#64748b", fontSize: 11, marginBottom: 6, display: "block" }}>
                       {field.label}

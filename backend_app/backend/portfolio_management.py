@@ -2419,7 +2419,7 @@ class PortfolioManager:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-router = APIRouter(prefix="/api/portfolio", tags=["portfolio-management"])
+router = APIRouter(prefix="", tags=["internal-portfolio-management"])
 
 # Global portfolio manager
 _portfolio_manager: Optional[PortfolioManager] = None

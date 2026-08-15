@@ -738,6 +738,39 @@ class StateService:
         
         return None
     
+    async def get_user_positions(self, user_id: str) -> List[Position]:
+        """BUG-FIX ORD-04: Get all positions for a user from database or cache."""
+        positions = []
+        if self._session_factory:
+            try:
+                async with self._session_factory() as session:
+                    query = select(PositionModel).where(PositionModel.user_id == user_id)
+                    result = await session.execute(query)
+                    models = result.scalars().all()
+                    
+                    for model in models:
+                        positions.append(Position(
+                            position_id=model.position_id,
+                            user_id=model.user_id,
+                            symbol=model.symbol,
+                            side=PositionSide(model.side),
+                            quantity=model.quantity,
+                            available_quantity=model.available_quantity,
+                            locked_quantity=model.locked_quantity,
+                            entry_price=model.entry_price,
+                            mark_price=model.mark_price,
+                            liquidation_price=model.liquidation_price,
+                            unrealized_pnl=model.unrealized_pnl,
+                            realized_pnl=model.realized_pnl,
+                            opened_at=model.opened_at,
+                            updated_at=model.updated_at,
+                            metadata=model.metadata_json or {},
+                            version=model.version,
+                        ))
+            except Exception as e:
+                logger.error(f"[StateService] Failed to get user positions for {user_id}: {e}")
+        return positions
+    
     async def update_position(
         self,
         position_id: str,

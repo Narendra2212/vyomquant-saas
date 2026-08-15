@@ -48,6 +48,10 @@ class WebSocketClient {
    * @param {string} path - WebSocket endpoint path (default: /ws/telemetry)
    */
   connect(path = '/ws/telemetry') {
+    // Re-enable reconnection whenever connect is explicitly called
+    this.reconnectEnabled = true;
+    this.reconnectAttempts = 0;
+
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       console.log('WebSocket already connected');
       return;

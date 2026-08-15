@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Filter, Download } from "lucide-react";
 import { api } from "../api";
-import { C, SectionH } from "../components/ui-legacy/primitives";
+import { C, SectionH, Tag2 } from "../components/ui-legacy/primitives";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 export default function TradeHistory() {

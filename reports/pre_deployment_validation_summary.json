@@ -1,5 +1,5 @@
 {
-  "status": "PASS",
+  "status": "FAIL",
   "steps": {
     "import_audit": {
       "status": "PASS",
@@ -12,12 +12,12 @@
       "error": ""
     },
     "fastapi_startup": {
-      "status": "PASS",
-      "message": "FastAPI app instance verified: title=ALGO22 Quantitative Trading API, version=2.4.0"
+      "status": "FAIL",
+      "message": "FastAPI startup simulation failed: class must define a '_type_' attribute"
     },
     "docker_validation": {
       "status": "PASS",
-      "output": "[13:31:48] === AUTOMATED FAST DOCKER VALIDATION (CI/CD PRE-FLIGHT) ===\n[13:31:48] [docker_val] ENTER: Static Dockerfile Structure & Directive Audit\n[13:31:49] [docker_val] EXIT: Static Dockerfile Audit completed in 0.033s (valid=True)\n[13:31:49] [docker_val] Checking Docker CLI & Daemon connectivity...\n[13:31:49] [docker_val] Docker Daemon NOT AVAILABLE (0.0s)\n\n--- DOCKER VALIDATION SUMMARY ---\nStatic Dockerfile Inspection: PASS\nDocker Daemon Connectivity: WARN (Daemon unavailable)\n[13:31:49] === TOTAL FAST DOCKER VALIDATION TIME: 0.033s ===\n",
+      "output": "[08:43:55] === AUTOMATED FAST DOCKER VALIDATION (CI/CD PRE-FLIGHT) ===\n[08:43:55] [docker_val] ENTER: Static Dockerfile Structure & Directive Audit\n[08:43:55] [docker_val] EXIT: Static Dockerfile Audit completed in 0.008s (valid=True)\n[08:43:55] [docker_val] Checking Docker CLI & Daemon connectivity...\n[08:43:55] [docker_val] Docker Daemon NOT AVAILABLE (0.005s)\n\n--- DOCKER VALIDATION SUMMARY ---\nStatic Dockerfile Inspection: PASS\nDocker Daemon Connectivity: WARN (Daemon unavailable)\n[08:43:55] === TOTAL FAST DOCKER VALIDATION TIME: 0.013s ===\n",
       "error": ""
     },
     "aws_validation": {

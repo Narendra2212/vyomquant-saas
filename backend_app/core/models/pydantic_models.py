@@ -1,5 +1,6 @@
+# -*- coding: utf-8 -*-
 """
-core/models.py — All Pydantic request/response models.
+core/models.py - All Pydantic request/response models.
 
 FIXES:
   MDL-1: UserStatusRequest.status uses Literal — rejects invalid states
