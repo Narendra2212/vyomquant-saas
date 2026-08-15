@@ -33,10 +33,10 @@ jobs:
         run: mkdir -p reports
 
       - name: Run Bandit Scan
-        run: bandit -r backend_app -f json -o reports/bandit-report.json || true
+        run: bandit -r backend_app -ll -f json -o reports/bandit-report.json
 
       - name: Run Safety Check
-        run: safety check --json --output reports/safety-report.json || true
+        run: safety check --json --output reports/safety-report.json || echo "Safety advisory logged"
 
       - name: Upload Security Reports
         uses: actions/upload-artifact@v4
@@ -68,6 +68,6 @@ jobs:
         with:
           image-ref: 'trading-platform:scan'
           format: 'table'
-          exit-code: '0'
+          exit-code: '1'
           ignore-unfixed: true
-          severity: 'CRITICAL,HIGH'
+          severity: 'CRITICAL'

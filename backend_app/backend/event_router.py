@@ -35,7 +35,7 @@ import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
 from decimal import Decimal
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 

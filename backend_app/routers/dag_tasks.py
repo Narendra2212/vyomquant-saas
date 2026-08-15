@@ -572,7 +572,7 @@ async def get_dead_letter_tasks(
                 "event": "DEAD_LETTER_INSPECTED",
                 "count": len(dead_letter_tasks),
                 "limit": limit,
-                "requested_by": tenant["id"],
+                "requested_by": admin["id"],
             }
         )
         

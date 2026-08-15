@@ -718,7 +718,9 @@ async def razorpay_webhook(
     webhook_secret = os.environ.get("RAZORPAY_WEBHOOK_SECRET")
     if not webhook_secret or webhook_secret == "dummy_webhook_secret":
         raise HTTPException(500, "Razorpay production webhook secret is missing or invalid.")
-            
+
+    raw_body = await request.body()
+
     event_id = None
     try:
         payload = json.loads(raw_body)

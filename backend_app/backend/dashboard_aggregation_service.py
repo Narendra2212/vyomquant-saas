@@ -297,7 +297,7 @@ class DashboardAggregationService:
         """
         try:
             import hashlib
-            default_ref = hashlib.md5(user["id"].encode()).hexdigest()[:8].upper()
+            default_ref = hashlib.sha256(user["id"].encode()).hexdigest()[:8].upper()
             
             sb_res = self._get_supabase(user)
             sb = await sb_res if inspect.isawaitable(sb_res) else sb_res

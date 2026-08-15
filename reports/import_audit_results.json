@@ -20,11 +20,6 @@
       "name": "PositionModel"
     },
     {
-      "file": "backend_app\\main.py",
-      "line": 94,
-      "name": "SupabaseConnection"
-    },
-    {
       "file": "backend_app\\test_exchange_management.py",
       "line": 13,
       "name": "traceback"
@@ -240,6 +235,16 @@
       "name": "UUID"
     },
     {
+      "file": "backend_app\\backend\\task_recovery.py",
+      "line": 15,
+      "name": "redis_manager"
+    },
+    {
+      "file": "backend_app\\core\\audit_trail.py",
+      "line": 526,
+      "name": "get_db_context"
+    },
+    {
       "file": "backend_app\\core\\database.py",
       "line": 12,
       "name": "backend_app.core.safety_config"
@@ -340,6 +345,21 @@
       "name": "Optional"
     },
     {
+      "file": "backend_app\\routers\\exchange.py",
+      "line": 12,
+      "name": "Dict"
+    },
+    {
+      "file": "backend_app\\routers\\exchange.py",
+      "line": 12,
+      "name": "List"
+    },
+    {
+      "file": "backend_app\\routers\\exchange.py",
+      "line": 12,
+      "name": "Optional"
+    },
+    {
       "file": "backend_app\\routers\\library.py",
       "line": 35,
       "name": "BackgroundTasks"
@@ -351,12 +371,12 @@
     },
     {
       "file": "backend_app\\routers\\notifications.py",
-      "line": 11,
+      "line": 13,
       "name": "UUID"
     },
     {
       "file": "backend_app\\routers\\notifications.py",
-      "line": 16,
+      "line": 18,
       "name": "get_ws_manager"
     },
     {
@@ -366,37 +386,32 @@
     },
     {
       "file": "backend_app\\routers\\risk.py",
-      "line": 11,
-      "name": "asyncio"
-    },
-    {
-      "file": "backend_app\\routers\\risk.py",
       "line": 16,
       "name": "lru_cache"
     },
     {
       "file": "backend_app\\routers\\signals.py",
-      "line": 11,
+      "line": 12,
       "name": "Any"
     },
     {
       "file": "backend_app\\routers\\signals.py",
-      "line": 11,
+      "line": 12,
       "name": "Dict"
     },
     {
       "file": "backend_app\\routers\\signals.py",
-      "line": 11,
+      "line": 12,
       "name": "List"
     },
     {
       "file": "backend_app\\routers\\signals.py",
-      "line": 12,
+      "line": 13,
       "name": "UUID"
     },
     {
       "file": "backend_app\\routers\\signals.py",
-      "line": 17,
+      "line": 18,
       "name": "limiter"
     },
     {
@@ -431,22 +446,22 @@
     },
     {
       "file": "backend_app\\routers\\strategies.py",
-      "line": 2217,
+      "line": 2219,
       "name": "timedelta"
     },
     {
       "file": "backend_app\\routers\\strategy_operations.py",
-      "line": 20,
+      "line": 21,
       "name": "StrategyStatus"
     },
     {
       "file": "backend_app\\routers\\strategy_operations.py",
-      "line": 20,
+      "line": 21,
       "name": "StrategyEnvironment"
     },
     {
       "file": "backend_app\\routers\\strategy_operations.py",
-      "line": 27,
+      "line": 28,
       "name": "DeployConfig"
     },
     {
@@ -1661,6 +1676,7 @@
       "typing",
       "typing",
       "typing",
+      "typing",
       "sqlalchemy.orm",
       "backend_app.backend.event_listener",
       "backend_app.backend.event_listener",
@@ -1786,6 +1802,7 @@
     ],
     "backend_app.backend.execution_guard": [
       "asyncio",
+      "json",
       "logging",
       "dataclasses",
       "dataclasses",
@@ -1803,6 +1820,7 @@
       "datetime",
       "datetime",
       "datetime",
+      "ast",
       "json",
       "json",
       "backend_app.core.cache.redis_manager"
@@ -2426,7 +2444,8 @@
       "backend_app.core.dag_task_queue",
       "backend_app.core.dag_task_queue",
       "backend_app.core.database",
-      "backend_app.core.models.dag_task"
+      "backend_app.core.models.dag_task",
+      "backend_app.core.cache"
     ],
     "backend_app.backend.telemetry_engine": [
       "asyncio",
@@ -2608,10 +2627,7 @@
       "typing",
       "typing",
       "backend_app.backend.redis_manager",
-      "backend_app.backend.database",
-      "backend_app.backend.models",
-      "backend_app.backend.database",
-      "backend_app.backend.models"
+      "backend_app.core.database"
     ],
     "backend_app.core.auth_middleware": [
       "logging",
@@ -3225,7 +3241,10 @@
       "backend_app.core.database"
     ],
     "backend_app.core.pricing_service": [
+      "asyncio",
+      "inspect",
       "logging",
+      "typing",
       "typing",
       "fastapi"
     ],
@@ -3718,8 +3737,13 @@
       "backend_app.core.dependencies"
     ],
     "backend_app.routers.exchange": [
+      "asyncio",
       "inspect",
       "logging",
+      "typing",
+      "typing",
+      "typing",
+      "typing",
       "fastapi",
       "fastapi",
       "fastapi",
@@ -3812,9 +3836,12 @@
       "prometheus_client"
     ],
     "backend_app.routers.notifications": [
+      "asyncio",
+      "inspect",
       "logging",
       "datetime",
       "datetime",
+      "typing",
       "typing",
       "typing",
       "uuid",
@@ -3827,7 +3854,8 @@
       "backend_app.core.dependencies",
       "backend_app.core.dependencies",
       "backend_app.core.dependencies",
-      "supabase"
+      "supabase",
+      "inspect"
     ],
     "backend_app.routers.orders": [
       "asyncio",
@@ -3951,6 +3979,7 @@
       "fastapi"
     ],
     "backend_app.routers.signals": [
+      "asyncio",
       "json",
       "logging",
       "datetime",
@@ -4040,7 +4069,6 @@
       "backend_app.backend.indicators_backend",
       "backend_app.backend.ml_models",
       "backend_app.backend.ml_models",
-      "traceback",
       "datetime",
       "backend_app.backend.connection_engine",
       "data_seeking_engine",
@@ -4083,6 +4111,8 @@
       "json"
     ],
     "backend_app.routers.strategy_operations": [
+      "datetime",
+      "datetime",
       "inspect",
       "logging",
       "typing",
@@ -4398,6 +4428,7 @@
       "typing",
       "typing",
       "typing",
+      "uuid",
       "backend_app.backend.exchange_telemetry",
       "queue_manager",
       "queue_manager",

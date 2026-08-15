@@ -425,8 +425,6 @@ async def _stream_ticker(data_engine, symbol, manager):
     - If data_age > 30s: DROP DATA, MARK CONNECTION UNHEALTHY
     - If no data for 60s: FORCE RECONNECT
     """
-    global _connection_health
-    
     connection_id = f"ticker_{symbol}"
     now = datetime.now(timezone.utc)
     

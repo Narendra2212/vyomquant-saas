@@ -465,7 +465,7 @@ class ExchangeRateLimitEngine:
             raise ValueError(f"Unknown exchange: {exchange}")
         
         # Create request
-        request_id = f"req_{exchange}_{int(time.time() * 1000)}_{hashlib.md5(str(params).encode()).hexdigest()[:8]}"
+        request_id = f"req_{exchange}_{int(time.time() * 1000)}_{hashlib.sha256(str(params).encode()).hexdigest()[:8]}"
         
         future = asyncio.Future()
         

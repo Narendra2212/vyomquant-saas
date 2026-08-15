@@ -291,8 +291,8 @@ async def lifespan(app: FastAPI):
     
     # Check Supabase
     try:
-        vault = SecurityVault()
-        if vault.is_available():
+        supabase_conn = SupabaseConnection()
+        if supabase_conn.is_configured:
             service_status["supabase"] = "connected"
             logger.info(" Supabase: Connected")
         else:

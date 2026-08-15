@@ -34,6 +34,7 @@ Goal: Single centralized safety system - no trade passes without validation.
 """
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -1375,7 +1376,11 @@ class ExecutionGuard:
             status = await self.redis.get(risk_key)
             
             if status:
-                status_data = eval(status.decode())
+                try:
+                    status_data = json.loads(status.decode())
+                except Exception:
+                    import ast
+                    status_data = ast.literal_eval(status.decode())
                 if not status_data.get("operational", True):
                     return ValidationResult(
                         check_name="risk_engine",

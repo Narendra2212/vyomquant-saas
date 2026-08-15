@@ -18,7 +18,7 @@ jobs:
   pre-deployment-validation:
     name: Pre-Deployment Validation Gate
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || github.event_name == 'workflow_dispatch' }}
 
     steps:
       - name: Checkout code
@@ -88,6 +88,20 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Verify ECR Immutable Artifact Exists for Commit SHA
+        env:
+          ECR_REPOSITORY: vyomquant-api
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          echo "=== Verifying ECR Image for Commit SHA: $IMAGE_TAG ==="
+          DIGEST=$(aws ecr describe-images --repository-name $ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || echo "")
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+            echo "❌ CRITICAL: No ECR image artifact found for commit SHA: $IMAGE_TAG"
+            echo "Deployment FAIL-CLOSED: Refusing to deploy untested or missing build artifact."
+            exit 1
+          fi
+          echo "✅ Verified ECR Image Artifact: $ECR_REPOSITORY:$IMAGE_TAG (Digest: $DIGEST)"
 
       - name: Execute Automated Deployment & Self-Healing Diagnostic Engine
         env:

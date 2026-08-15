@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, Optional
+from uuid import UUID
 
 from backend_app.backend.exchange_telemetry import exchange_telemetry
 
