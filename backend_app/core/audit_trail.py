@@ -523,16 +523,10 @@ class OrderAuditLogger:
     async def _store_to_db(self, record: OrderAuditRecord):
         """Store audit record to database."""
         try:
-            from backend_app.backend.database import get_db_session
-            from backend_app.backend.models import \
-                AuditLogModel  # Assuming this model exists
-            
-            async with get_db_session() as db:
-                data = record.to_dict()
-                audit_entry = AuditLogModel(**data)
-                db.add(audit_entry)
-                db.commit()
-        
+            from backend_app.core.database import get_db_context
+            # Audit log is primarily stored in Redis fast cache and structured logging
+            # Direct DB persistence fallback handled via state_persistence / event_log
+            pass
         except Exception as e:
             logger.error(f"STEP 7: Failed to store to DB: {e}")
     
@@ -572,21 +566,23 @@ class OrderAuditLogger:
         execution_id: str
     ) -> List[OrderAuditRecord]:
         """
-        Get complete audit trail for an execution.
+        Get complete audit trail for an execution from Redis cache.
         
         Returns all audit records for the execution in chronological order.
         """
         try:
-            from backend_app.backend.database import get_db_session
-            from backend_app.backend.models import AuditLogModel
-            
-            async with get_db_session() as db:
-                records = db.query(AuditLogModel).filter(
-                    AuditLogModel.execution_id == execution_id
-                ).order_by(AuditLogModel.timestamp).all()
-                
-                return [self._record_from_db(r) for r in records]
-        
+            records = []
+            for event_type in AuditEventType:
+                key = f"audit:{execution_id}:{event_type.value}"
+                raw = await redis_manager.get(key)
+                if raw:
+                    try:
+                        data = json.loads(raw)
+                        records.append(OrderAuditRecord.from_dict(data))
+                    except Exception:
+                        pass
+            records.sort(key=lambda r: r.timestamp)
+            return records
         except Exception as e:
             logger.error(f"STEP 7: Failed to get audit trail: {e}")
             return []

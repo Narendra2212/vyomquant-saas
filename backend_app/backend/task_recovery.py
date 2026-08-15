@@ -37,13 +37,21 @@ class TaskRecoveryService:
         self,
         stale_threshold_seconds: float = 30.0,
         enable_auto_retry: bool = True,
-        max_recovery_attempts: int = 3
+        max_recovery_attempts: int = 3,
+        redis_client: Optional[Any] = None
     ):
         self.stale_threshold_seconds = stale_threshold_seconds
         self.enable_auto_retry = enable_auto_retry
         self.max_recovery_attempts = max_recovery_attempts
+        self.redis = redis_client
         self._running = False
         self._recovery_task: Optional[asyncio.Task] = None
+
+    def _get_redis(self):
+        if self.redis is not None:
+            return self.redis
+        import backend_app.core.cache as cache
+        return cache.redis_manager
     
     async def start(self, interval_seconds: float = 30.0):
         """Start the recovery service loop."""
@@ -295,13 +303,20 @@ class TaskRecoveryService:
         db_session.commit()
         
         # Re-add to Redis queue
+        r = self._get_redis()
         queue_key = TaskQueueKeyBuilder.task_queue(tenant_id)
         score = task.priority * 1_000_000_000_000 + int(datetime.utcnow().timestamp() * 1000)
-        await redis_manager.zadd(queue_key, {task_id: score})
+        await r.zadd(queue_key, {task_id: score})
         
         # Update Redis status
         status_key = TaskQueueKeyBuilder.task_status(task_id)
-        await redis_manager.set(status_key, TaskStatus.PENDING.value)
+        await r.set(status_key, TaskStatus.PENDING.value)
+        
+        # Remove from active set so execution slots are not leaked on retry
+        await r.srem(
+            TaskQueueKeyBuilder.active_tasks(tenant_id),
+            task_id
+        )
         
         # LOG: TASK_RETRY
         logger.info(
@@ -361,17 +376,18 @@ class TaskRecoveryService:
         db_session.commit()
         
         # Update Redis status
+        r = self._get_redis()
         status_key = TaskQueueKeyBuilder.task_status(task_id)
-        await redis_manager.set(status_key, TaskStatus.FAILED.value)
+        await r.set(status_key, TaskStatus.FAILED.value)
         
         # Move to DEAD LETTER queue
-        await redis_manager.lpush(
+        await r.lpush(
             TaskQueueKeyBuilder.dead_letter_queue(),
             task_id
         )
         
         # Remove from active set
-        await redis_manager.srem(
+        await r.srem(
             TaskQueueKeyBuilder.active_tasks(tenant_id),
             task_id
         )

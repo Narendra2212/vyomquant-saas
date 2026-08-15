@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import time
+import os
 
 scripts = [
     ("API Boundary Destruction", "scripts/attack_api_boundary_destruction.py"),
@@ -18,25 +19,41 @@ scripts = [
     ("Cross Boundary Full", "scripts/attack_cross_boundary_full.py"),
     ("Money Control v2", "scripts/attack_money_control_v2.py"),
     ("Runtime Soak & Process Destruction", "scripts/attack_runtime_soak_process_destruction.py"),
+    ("Database Integrity & Concurrency", "scripts/attack_database_integrity_destruction.py"),
 ]
 
 print("=" * 70)
-print("RUNNING COMPLETE 15-SUITE REGRESSION BATTERY")
+print("RUNNING COMPLETE 16-SUITE REGRESSION BATTERY")
 print("=" * 70)
+
+env = os.environ.copy()
+env["PYTHONIOENCODING"] = "utf-8"
 
 all_passed = True
 for name, script_path in scripts:
     t0 = time.time()
-    res = subprocess.run([sys.executable, script_path], capture_output=True, text=True, encoding="utf-8")
+    res = subprocess.run(
+        [sys.executable, "-X", "utf8", script_path],
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
     dur = time.time() - t0
     status = "PASS" if res.returncode == 0 else "FAIL"
     print(f"[{status}] {name:<42} ({dur:.2f}s)")
     if res.returncode != 0:
         all_passed = False
-        print("  Error output:")
-        print("  " + "\n  ".join(res.stdout.splitlines()[-10:]))
-        print("  " + "\n  ".join(res.stderr.splitlines()[-10:]))
+        stdout_lines = (res.stdout or "").splitlines()
+        stderr_lines = (res.stderr or "").splitlines()
+        if stdout_lines:
+            print("  Stdout (last 10):")
+            print("  " + "\n  ".join(stdout_lines[-10:]))
+        if stderr_lines:
+            print("  Stderr (last 10):")
+            print("  " + "\n  ".join(stderr_lines[-10:]))
 
 print("=" * 70)
 print(f"OVERALL RESULT: {'ALL PASS' if all_passed else 'FAILURES DETECTED'}")
 print("=" * 70)
+sys.exit(0 if all_passed else 1)

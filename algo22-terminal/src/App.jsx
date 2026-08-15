@@ -301,6 +301,7 @@ export default function AppWrapper() {
               <Route element={<LoadingProvider><AppShell /></LoadingProvider>}>
                 <Route path="/app" element={<Navigate to="/app/dashboard" replace />} />
                 <Route path="/app/dashboard" element={<Suspense fallback={PAGE_FALLBACK}><Dashboard /></Suspense>} />
+                <Route path="/app/live-trading" element={<Suspense fallback={PAGE_FALLBACK}><Dashboard /></Suspense>} />
                 <Route path="/app/strategies" element={<Suspense fallback={PAGE_FALLBACK}><Strategies /></Suspense>} />
                 <Route path="/app/strategies/:strategyId" element={<Suspense fallback={PAGE_FALLBACK}><StrategyDetail /></Suspense>} />
                 <Route path="/app/signal-trace" element={<Suspense fallback={PAGE_FALLBACK}><SignalTrace /></Suspense>} />

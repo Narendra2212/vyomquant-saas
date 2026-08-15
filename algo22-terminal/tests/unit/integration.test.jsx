@@ -95,37 +95,39 @@ describe('Integration Tests', () => {
 
   describe('Dashboard Load', () => {
     it('should load dashboard data on mount', async () => {
+      const Dashboard = (await import('../../src/pages/Dashboard')).default;
       mockGet.mockResolvedValue({
-        total_trades: 100,
-        total_pnl: 5000,
-        win_rate: 65,
-        active_bots: 3
+        overview: { total_value: 10000, today_pnl: 250 },
+        strategies: { items: [] },
+        recent_activity: { signals: [], insights: [] },
+        equity_curve: []
       });
 
       render(
-        <MemoryRouter initialEntries={['/app/dashboard']}>
-          <App />
+        <MemoryRouter>
+          <Dashboard />
         </MemoryRouter>
       );
 
       await waitFor(() => {
         expect(mockGet).toHaveBeenCalled();
-      }, { timeout: 10000 });
-    }, 15000);
+      }, { timeout: 5000 });
+    });
 
     it('should handle API errors gracefully', async () => {
+      const Dashboard = (await import('../../src/pages/Dashboard')).default;
       mockGet.mockResolvedValue(null);
 
       render(
-        <MemoryRouter initialEntries={['/app/dashboard']}>
-          <App />
+        <MemoryRouter>
+          <Dashboard />
         </MemoryRouter>
       );
 
       await waitFor(() => {
         expect(mockGet).toHaveBeenCalled();
-      }, { timeout: 10000 });
-    }, 15000);
+      }, { timeout: 5000 });
+    });
   });
 
   describe('Backtest Trigger', () => {

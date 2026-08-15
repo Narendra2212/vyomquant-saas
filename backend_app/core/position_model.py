@@ -250,7 +250,7 @@ class PositionStateMachine:
 
 class PositionBase(BaseModel):
     """Base position model."""
-    position_id: str = Field(..., description="Unique position identifier")
+    position_id: Optional[str] = Field(default=None, description="Unique position identifier")
     tenant_id: UUID = Field(..., description="Tenant UUID")
     strategy_id: str = Field(..., description="Strategy identifier")
     exchange_id: Optional[str] = Field(default=None, description="Exchange identifier")
@@ -594,7 +594,7 @@ class PositionRepository:
         
         return results, total
     
-    def create(self, data: PositionCreate) -> PositionModel:
+    def create(self, data: PositionCreate, auto_commit: bool = True) -> PositionModel:
         """Create a new position."""
         position = PositionModel(
             position_id=data.position_id or f"pos_{uuid4().hex[:16]}",
@@ -610,8 +610,11 @@ class PositionRepository:
         )
         
         self.db.add(position)
-        self.db.commit()
-        self.db.refresh(position)
+        if auto_commit:
+            self.db.commit()
+            self.db.refresh(position)
+        else:
+            self.db.flush()
         
         logger.info(
             f"POSITION CREATED: {position.position_id} | "
@@ -625,7 +628,8 @@ class PositionRepository:
         self,
         position_id: str,
         tenant_id: UUID,
-        data: PositionUpdate
+        data: PositionUpdate,
+        auto_commit: bool = True
     ) -> Optional[PositionModel]:
         """Update a position."""
         position = self.get_by_id(position_id, tenant_id)
@@ -641,8 +645,11 @@ class PositionRepository:
         
         position.updated_at = datetime.utcnow()
         
-        self.db.commit()
-        self.db.refresh(position)
+        if auto_commit:
+            self.db.commit()
+            self.db.refresh(position)
+        else:
+            self.db.flush()
         
         logger.info(
             f"POSITION UPDATED: {position.position_id} | "
@@ -657,7 +664,8 @@ class PositionRepository:
         self,
         position_id: str,
         tenant_id: UUID,
-        final_realized_pnl: str
+        final_realized_pnl: str,
+        auto_commit: bool = True
     ) -> Optional[PositionModel]:
         """Close a position."""
         position = self.get_by_id(position_id, tenant_id)
@@ -671,8 +679,11 @@ class PositionRepository:
         position.closed_at = datetime.utcnow()
         position.updated_at = datetime.utcnow()
         
-        self.db.commit()
-        self.db.refresh(position)
+        if auto_commit:
+            self.db.commit()
+            self.db.refresh(position)
+        else:
+            self.db.flush()
         
         logger.info(
             f"POSITION CLOSED: {position.position_id} | "

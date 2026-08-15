@@ -281,40 +281,43 @@ class DAGTaskRepository:
     def __init__(self, session: Session):
         self.session = session
     
-    def create(self, task: DAGTaskCreate, tenant_id: UUID) -> DAGTaskModel:
+    def create(self, task: DAGTaskCreate, tenant_id: UUID, auto_commit: bool = True) -> DAGTaskModel:
         """Create a new DAG task."""
         db_task = DAGTaskModel(
-            task_id=uuid4(),
-            tenant_id=tenant_id,
+            task_id=str(uuid4()),
+            tenant_id=str(tenant_id),
             status=TaskStatus.PENDING,
             priority=task.priority,
             dag_config=task.dag_config.model_dump(),
             max_retries=task.max_retries,
         )
         self.session.add(db_task)
-        self.session.commit()
-        self.session.refresh(db_task)
+        if auto_commit:
+            self.session.commit()
+            self.session.refresh(db_task)
+        else:
+            self.session.flush()
         return db_task
     
-    def get_by_id(self, task_id: UUID, tenant_id: UUID) -> Optional[DAGTaskModel]:
+    def get_by_id(self, task_id: UUID | str, tenant_id: UUID | str) -> Optional[DAGTaskModel]:
         """Get task by ID with tenant isolation."""
         return self.session.query(DAGTaskModel).filter(
             and_(
-                DAGTaskModel.task_id == task_id,
-                DAGTaskModel.tenant_id == tenant_id
+                DAGTaskModel.task_id == str(task_id),
+                DAGTaskModel.tenant_id == str(tenant_id)
             )
         ).first()
     
     def get_by_tenant(
         self, 
-        tenant_id: UUID, 
+        tenant_id: UUID | str, 
         status: Optional[TaskStatus] = None,
         limit: int = 100,
         offset: int = 0
     ) -> List[DAGTaskModel]:
         """Get tasks for tenant with optional status filter."""
         query = self.session.query(DAGTaskModel).filter(
-            DAGTaskModel.tenant_id == tenant_id
+            DAGTaskModel.tenant_id == str(tenant_id)
         )
         
         if status:
@@ -388,11 +391,11 @@ class DAGTaskRepository:
         self.session.commit()
         return True
     
-    def get_pending_tasks(self, tenant_id: UUID, limit: int = 10) -> List[DAGTaskModel]:
+    def get_pending_tasks(self, tenant_id: UUID | str, limit: int = 10) -> List[DAGTaskModel]:
         """Get pending tasks for processing."""
         return self.session.query(DAGTaskModel).filter(
             and_(
-                DAGTaskModel.tenant_id == tenant_id,
+                DAGTaskModel.tenant_id == str(tenant_id),
                 DAGTaskModel.status == TaskStatus.PENDING
             )
         ).order_by(
@@ -411,7 +414,7 @@ class DAGTaskRepository:
             )
         ).all()
     
-    def get_stats(self, tenant_id: UUID) -> DAGTaskStats:
+    def get_stats(self, tenant_id: UUID | str) -> DAGTaskStats:
         """Get task statistics for tenant."""
         from sqlalchemy import func
         
@@ -427,11 +430,11 @@ class DAGTaskRepository:
                 .filter(DAGTaskModel.status == TaskStatus.COMPLETED).label('avg_execution'),
             func.max(DAGTaskModel.created_at).label('last_created')
         ).filter(
-            DAGTaskModel.tenant_id == tenant_id
+            DAGTaskModel.tenant_id == str(tenant_id)
         ).first()
         
         return DAGTaskStats(
-            tenant_id=tenant_id,
+            tenant_id=UUID(str(tenant_id)) if isinstance(tenant_id, (str, UUID)) else tenant_id,
             pending_count=result.pending or 0,
             assigned_count=result.assigned or 0,
             running_count=result.running or 0,
@@ -443,13 +446,13 @@ class DAGTaskRepository:
             last_task_created=result.last_created
         )
     
-    def cleanup_old_tasks(self, tenant_id: UUID, days: int = 30) -> int:
+    def cleanup_old_tasks(self, tenant_id: UUID | str, days: int = 30) -> int:
         """Delete old completed/failed/cancelled tasks."""
         cutoff = datetime.utcnow() - timedelta(days=days)
         
         result = self.session.query(DAGTaskModel).filter(
             and_(
-                DAGTaskModel.tenant_id == tenant_id,
+                DAGTaskModel.tenant_id == str(tenant_id),
                 DAGTaskModel.status.in_([TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]),
                 DAGTaskModel.completed_at < cutoff
             )

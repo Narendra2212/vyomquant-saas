@@ -564,8 +564,6 @@ class StateService:
                                 version=order.version,
                             )
                             session.add(model)
-                        
-                        await session.commit()
             except Exception as e:
                 logger.error(f"[StateService] Database write failed: {e}")
                 # Continue - Redis has the data
@@ -862,8 +860,6 @@ class StateService:
                         
                         model.version = current.version
                         model.updated_at = current.updated_at
-                        
-                        await session.commit()
             except Exception as e:
                 logger.error(f"[StateService] Position DB update failed: {e}")
                 raise
@@ -926,7 +922,6 @@ class StateService:
                                 version=PositionModel.version + 1
                             )
                         )
-                        await session.commit()
         else:
             # Partial close
             position.quantity -= close_quantity

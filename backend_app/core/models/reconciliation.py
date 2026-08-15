@@ -292,17 +292,26 @@ class ReconciliationMismatchRepository:
             updated_at=datetime.utcnow(),
         )
 
-        self.db.add(record)
-        self.db.commit()
-        self.db.refresh(record)
+        try:
+            self.db.add(record)
+            self.db.commit()
+            self.db.refresh(record)
 
-        logger.warning(
-            f"[ReconciliationRepo] NEW MISMATCH RECORDED | "
-            f"mismatch_id={mismatch_id} | execution_id={data.execution_id} | "
-            f"field={data.field} | local={data.local_value} | "
-            f"exchange={data.exchange_value} | severity={data.severity.value}"
-        )
-        return record
+            logger.warning(
+                f"[ReconciliationRepo] NEW MISMATCH RECORDED | "
+                f"mismatch_id={mismatch_id} | execution_id={data.execution_id} | "
+                f"field={data.field} | local={data.local_value} | "
+                f"exchange={data.exchange_value} | severity={data.severity.value}"
+            )
+            return record
+        except Exception as e:
+            self.db.rollback()
+            existing = self.db.query(ReconciliationMismatchModel).filter(
+                ReconciliationMismatchModel.mismatch_id == mismatch_id
+            ).first()
+            if existing:
+                return existing
+            raise e
 
     # ── Queries ───────────────────────────────────────────────────────────────
 

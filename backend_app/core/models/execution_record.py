@@ -491,15 +491,31 @@ class ExecutionRecordRepository:
             updated_at=datetime.utcnow(),
         )
         
-        self.db.add(new_record)
-        self.db.commit()
-        self.db.refresh(new_record)
-        
-        return (
-            execution_id,
-            "execute",
-            None
-        )
+        try:
+            self.db.add(new_record)
+            self.db.commit()
+            self.db.refresh(new_record)
+            return (
+                execution_id,
+                "execute",
+                None
+            )
+        except Exception as e:
+            self.db.rollback()
+            # Concurrency race: Another worker inserted this record simultaneously
+            existing = self.get_by_id(execution_id, tenant_id)
+            if existing:
+                if existing.status == ExecutionStatus.COMPLETED:
+                    return (execution_id, "skip_return_result", existing.result)
+                elif existing.status == ExecutionStatus.EXECUTING:
+                    return (execution_id, "skip_already_running", None)
+                elif existing.status == ExecutionStatus.PENDING:
+                    return (execution_id, "allow_retry", None)
+                elif existing.status == ExecutionStatus.FAILED:
+                    if allow_failed_retry:
+                        return (execution_id, "allow_retry", None)
+                    return (execution_id, "skip_failed_no_retry", existing.result)
+            raise e
     
     def get_by_id(self, execution_id: str, tenant_id: UUID) -> Optional[ExecutionRecordModel]:
         """Get execution record by ID and tenant."""

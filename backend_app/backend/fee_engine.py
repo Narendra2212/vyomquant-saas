@@ -108,7 +108,7 @@ class FeeRecordModel(Base):
     
     # Relationships
     tenant_id = Column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    execution_id = Column(String, ForeignKey("execution_records.execution_id"), nullable=False)
+    execution_id = Column(String, ForeignKey("execution_records.execution_id"), nullable=True)
     order_id = Column(String, nullable=False, index=True)
     position_id = Column(String, ForeignKey("positions.position_id"), nullable=True)
     
@@ -222,20 +222,46 @@ class FeeEngine:
         Returns:
             Created fee record
         """
-        # BUG-FIX FEE-01: Normalize fee to quote currency before calculating fee_pct and net_pnl.
-        # Symbols can be formatted as "BTC/USDT", "BTC-USDT", or "BTCUSDT".
-        sym_clean = symbol.upper().replace("-", "/").replace("_", "/")
-        if "/" in sym_clean:
-            base_asset, quote_asset = sym_clean.split("/", 1)
-        else:
-            # Common default quote asset assumption if no delimiter
-            quote_asset = "USDT"
-            base_asset = sym_clean.replace("USDT", "").replace("USD", "").replace("USDC", "")
+        return await self.record_fee(
+            execution_id=execution_id,
+            order_id=order_id,
+            symbol=symbol,
+            side=side,
+            size=size,
+            price=price,
+            fee_amount=fee_amount,
+            fee_asset=fee_asset,
+            fee_type=fee_type,
+            exchange_id=exchange_id,
+            position_id=position_id,
+            gross_pnl=gross_pnl
+        )
 
-        fee_asset_upper = fee_asset.upper()
-        if fee_asset_upper == base_asset.upper():
-            # Fee paid in base asset (e.g. BTC): Value in quote currency is fee_amount * price
-            fee_cost_in_quote = (fee_amount * price).quantize(self.PRECISION, rounding=ROUND_HALF_UP)
+    async def record_fee(
+        self,
+        execution_id: str,
+        order_id: str,
+        symbol: str,
+        side: str,
+        size: Decimal,
+        price: Decimal,
+        fee_amount: Decimal,
+        fee_asset: str,
+        fee_type: FeeType = FeeType.MAKER,
+        position_id: Optional[str] = None,
+        gross_pnl: Optional[Decimal] = None,
+        exchange_id: str = "binance",
+        auto_commit: bool = True
+    ) -> FeeRecordModel:
+        """
+        Record a fee for an execution with proper quote-asset valuation.
+        """
+        # Determine fee cost in quote currency for PnL calculation
+        base_asset, quote_asset = self._parse_symbol(symbol)
+        
+        if fee_asset.upper() == base_asset.upper():
+            # Fee paid in base asset (e.g. BNB or BTC) — convert to quote value
+            fee_cost_in_quote = fee_amount * price
         else:
             # Fee paid in quote asset (e.g. USDT) or third asset
             fee_cost_in_quote = fee_amount
@@ -278,7 +304,16 @@ class FeeEngine:
         )
         
         self.db.add(fee_record)
-        self.db.commit()
+        if auto_commit:
+            self.db.commit()
+            if hasattr(self.db, "refresh"):
+                try:
+                    self.db.refresh(fee_record)
+                except Exception:
+                    pass
+        else:
+            if hasattr(self.db, "flush"):
+                self.db.flush()
         
         logger.info(
             f"FEE RECORDED: {fee_record.fee_id} | "
@@ -297,7 +332,8 @@ class FeeEngine:
         fee_amount: Decimal,
         fee_asset: str,
         exchange_id: str,
-        funding_period: str  # e.g., "2026-05-02-0800"
+        funding_period: str,  # e.g., "2026-05-02-0800"
+        auto_commit: bool = True
     ) -> FeeRecordModel:
         """
         Record a funding fee for perpetual futures.
@@ -322,7 +358,16 @@ class FeeEngine:
         )
         
         self.db.add(fee_record)
-        self.db.commit()
+        if auto_commit:
+            self.db.commit()
+            if hasattr(self.db, "refresh"):
+                try:
+                    self.db.refresh(fee_record)
+                except Exception:
+                    pass
+        else:
+            if hasattr(self.db, "flush"):
+                self.db.flush()
         
         direction = "paid" if fee_amount > 0 else "received"
         logger.info(
@@ -446,6 +491,18 @@ class FeeEngine:
         ).first()
         
         return record.tenant_id if record else UUID(int=0)
+
+    @staticmethod
+    def _parse_symbol(symbol: str) -> tuple[str, str]:
+        """Parse trading symbol into base and quote assets."""
+        sym_clean = symbol.upper().replace("-", "/").replace("_", "/")
+        if "/" in sym_clean:
+            base_asset, quote_asset = sym_clean.split("/", 1)
+            return base_asset, quote_asset
+        for quote in ["USDT", "USDC", "BUSD", "USD", "EUR", "BTC", "ETH"]:
+            if sym_clean.endswith(quote) and len(sym_clean) > len(quote):
+                return sym_clean[:-len(quote)], quote
+        return sym_clean, "USDT"
 
 
 # Global instance

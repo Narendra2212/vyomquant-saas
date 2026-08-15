@@ -43,6 +43,10 @@ export default function Dashboard() {
   const [tradingInsights, setTradingInsights] = useState([]);
   const [notifications, setNotifications] = useState([]);
 
+  // Equity curve state
+  const [equityCurve, setEquityCurve] = useState([]);
+  const [equityLoading, setEquityLoading] = useState(false);
+
   // New widget states
   const [exchangeConnections, setExchangeConnections] = useState([]);
   const [riskHealth, setRiskHealth] = useState(null);
@@ -50,83 +54,80 @@ export default function Dashboard() {
   const [billingEntitlements, setBillingEntitlements] = useState(null);
   const [systemHealth, setSystemHealth] = useState(null);
 
-  useEffect(() => {
-    async function loadDashboardData() {
-      setIsLoading(true);
-      setLoadError(null);
-      try {
-        // PHASE 12: Use single aggregation API endpoint instead of multiple calls
-        const dashboardRes = await dashboardApi.getDashboard();
+  const loadDashboardData = async () => {
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      // PHASE 12: Use single aggregation API endpoint instead of multiple calls
+      const dashboardRes = await dashboardApi.getDashboard();
 
-        if (dashboardRes) {
-          // Map portfolio data from aggregation response
-          const overview = dashboardRes.overview || {};
-          setPortfolioData({
-            totalValue: floatVal(overview.total_value || 0.00),
-            todayPnl: floatVal(overview.today_pnl || 0.00),
-            todayReturnPct: floatVal(overview.today_return_pct || 0.00),
-            unrealizedPnl: floatVal(overview.unrealized_pnl || 0.00),
-            availableBalance: floatVal(overview.available_balance || 0.00)
-          });
+      if (dashboardRes) {
+        // Map portfolio data from aggregation response
+        const overview = dashboardRes.overview || {};
+        setPortfolioData({
+          totalValue: floatVal(overview.total_value || 0.00),
+          todayPnl: floatVal(overview.today_pnl || 0.00),
+          todayReturnPct: floatVal(overview.today_return_pct || 0.00),
+          unrealizedPnl: floatVal(overview.unrealized_pnl || 0.00),
+          availableBalance: floatVal(overview.available_balance || 0.00)
+        });
 
-          // Map strategies data from aggregation response
-          const strategiesData = dashboardRes.strategies || {};
-          const strategiesItems = strategiesData.items || [];
-          const mappedStrats = strategiesItems.map(s => ({
-            id: s.id,
-            name: s.name || "Strategy",
-            pair: s.pair || s.symbol || "BTC/USDT",
-            status: s.status || "paused",
-            health: s.health || "idle",
-            todayPnl: floatVal(s.today_pnl || 0.00),
-            todayReturnPct: floatVal(s.today_return_pct || 0.00),
-            lastSignalTime: s.last_signal_time ? new Date(s.last_signal_time).toLocaleTimeString() : "No signals yet"
-          }));
-          setStrategies(mappedStrats);
+        // Map strategies data from aggregation response
+        const strategiesData = dashboardRes.strategies || {};
+        const strategiesItems = strategiesData.items || [];
+        const mappedStrats = strategiesItems.map(s => ({
+          id: s.id,
+          name: s.name || "Strategy",
+          pair: s.pair || s.symbol || "BTC/USDT",
+          status: s.status || "paused",
+          health: s.health || "idle",
+          todayPnl: floatVal(s.today_pnl || 0.00),
+          todayReturnPct: floatVal(s.today_return_pct || 0.00),
+          lastSignalTime: s.last_signal_time ? new Date(s.last_signal_time).toLocaleTimeString() : "No signals yet"
+        }));
+        setStrategies(mappedStrats);
 
-          // Use insights from aggregation response (calculated in backend)
-          const insightsData = dashboardRes.recent_activity?.insights || [];
-          setTradingInsights(insightsData.slice(0, 3));
+        // Use insights from aggregation response (calculated in backend)
+        const insightsData = dashboardRes.recent_activity?.insights || [];
+        setTradingInsights(insightsData.slice(0, 3));
 
-          // Map notifications from aggregation response
-          const signalsData = dashboardRes.recent_activity?.signals || [];
-          const notifs = signalsData.slice(0, 5).map(sig => ({
-            id: sig.id,
-            time: sig.time ? new Date(sig.time).toLocaleTimeString() : "Recent",
-            text: sig.text || "Signal update",
-            type: sig.type || "info"
-          }));
-          setNotifications(notifs);
+        // Map notifications from aggregation response
+        const signalsData = dashboardRes.recent_activity?.signals || [];
+        const notifs = signalsData.slice(0, 5).map(sig => ({
+          id: sig.id,
+          time: sig.time ? new Date(sig.time).toLocaleTimeString() : "Recent",
+          text: sig.text || "Signal update",
+          type: sig.type || "info"
+        }));
+        setNotifications(notifs);
 
-          // Store equity curve from aggregation response
-          if (dashboardRes.equity_curve && Array.isArray(dashboardRes.equity_curve)) {
-            setEquityCurve(
-              dashboardRes.equity_curve.map(row => ({
-                d: row.timestamp
-                  ? new Date(row.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-                  : "",
-                v: parseFloat(row.equity ?? row.value ?? 0)
-              }))
-            );
-          }
+        // Store equity curve from aggregation response
+        if (dashboardRes.equity_curve && Array.isArray(dashboardRes.equity_curve)) {
+          setEquityCurve(
+            dashboardRes.equity_curve.map(row => ({
+              d: row.timestamp
+                ? new Date(row.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                : "",
+              v: parseFloat(row.equity ?? row.value ?? 0)
+            }))
+          );
         }
-      } catch (err) {
-        console.error("Error loading dashboard data from aggregation API:", err);
-        setLoadError("Failed to load dashboard data");
-      } finally {
-        setIsLoading(false);
       }
+    } catch (err) {
+      console.error("Error loading dashboard data from aggregation API:", err);
+      setLoadError("Failed to load dashboard data");
+    } finally {
+      setIsLoading(false);
     }
+  };
+
+  useEffect(() => {
     loadDashboardData();
   }, []);
 
   const handleRetry = () => {
     loadDashboardData();
   };
-
-  // Real equity curve data — now fetched from aggregation API /api/dashboard
-  const [equityCurve, setEquityCurve] = useState([]);
-  const [equityLoading, setEquityLoading] = useState(false);
 
   useEffect(() => {
     async function loadEquityCurve() {
@@ -215,7 +216,7 @@ export default function Dashboard() {
 
 
   const handleToggleStrategy = (id) => {
-    setRunningStrategies(prev => prev.map(s => {
+    setStrategies(prev => prev.map(s => {
       if (s.id === id) {
         const newStatus = s.status === "active" ? "paused" : "active";
         return {
