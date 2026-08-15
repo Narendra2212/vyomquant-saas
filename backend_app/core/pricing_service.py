@@ -9,6 +9,7 @@ Determines the appropriate currency and pricing for a user based on:
 5. USD fallback (default)
 """
 
+import asyncio
 import inspect
 import logging
 from typing import Any, Optional
@@ -101,42 +102,30 @@ class PricingService:
         4. Browser locale
         5. USD fallback
         """
-        # Priority 1: User preference from profile
-        if supabase:
+        # Priority 1 & 2: User and Billing preference from profile (single query)
+        if supabase and user_id:
             try:
-                res = (
-                    supabase.table("profiles")
-                    .select("preferred_currency")
-                    .eq("id", user_id)
-                    .execute()
-                )
-                resp = await res if inspect.isawaitable(res) else res
+                def _fetch_profile():
+                    return (
+                        supabase.table("profiles")
+                        .select("preferred_currency, billing_currency")
+                        .eq("id", user_id)
+                        .limit(1)
+                        .execute()
+                    )
+                
+                resp = await asyncio.to_thread(_fetch_profile)
                 
                 if resp and hasattr(resp, "data") and resp.data:
-                    preferred_currency = resp.data[0].get("preferred_currency")
-                    if preferred_currency in [Currency.USD, Currency.INR]:
-                        logger.debug(f"Using user preferred currency: {preferred_currency}")
-                        return preferred_currency
+                    row = resp.data[0]
+                    pref = row.get("preferred_currency")
+                    if pref in [Currency.USD, Currency.INR]:
+                        return pref
+                    bill = row.get("billing_currency")
+                    if bill in [Currency.USD, Currency.INR]:
+                        return bill
             except Exception as e:
                 logger.warning(f"Failed to fetch user currency preference: {e}")
-        
-            # Priority 2: Billing preference from profile
-            try:
-                res = (
-                    supabase.table("profiles")
-                    .select("billing_currency")
-                    .eq("id", user_id)
-                    .execute()
-                )
-                resp = await res if inspect.isawaitable(res) else res
-                
-                if resp and hasattr(resp, "data") and resp.data:
-                    billing_currency = resp.data[0].get("billing_currency")
-                    if billing_currency in [Currency.USD, Currency.INR]:
-                        logger.debug(f"Using billing currency: {billing_currency}")
-                        return billing_currency
-            except Exception as e:
-                logger.warning(f"Failed to fetch billing currency: {e}")
         
         # Priority 3: GeoIP detection
         if request:

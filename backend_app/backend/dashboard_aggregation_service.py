@@ -482,9 +482,13 @@ class DashboardAggregationService:
         """
         sb_res = self._get_supabase(user)
         sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        if not sb:
+            return []
         
-        q1 = sb.table("strategies").select("*").eq("user_id", user["id"]).execute()
-        res = await q1 if inspect.isawaitable(q1) else q1
+        def _fetch():
+            return sb.table("strategies").select("id, name, symbol, is_active, created_at").eq("user_id", user["id"]).execute()
+        
+        res = await asyncio.to_thread(_fetch)
         strategies = res.data or [] if res else []
         
         # Calculate metrics in backend

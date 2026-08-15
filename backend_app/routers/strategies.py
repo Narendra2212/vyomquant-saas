@@ -824,17 +824,21 @@ async def list_strategies(user: dict = Depends(get_current_user)):
     try:
         sb = await _sb(user)
         if not sb:
-            return []
-        query = (
-            sb
-            .table("strategies")
-            .select("*")
-            .eq("user_id", user["id"])
-            .order("created_at", desc=True)
-        )
-        resp = await query.execute()
+            return {"strategies": [], "total": 0}
         
-        results = resp.data
+        def _fetch_strategies():
+            return (
+                sb
+                .table("strategies")
+                .select("id, name, description, symbol, timeframe, status, is_active, deployed_exchange, created_at, updated_at, buy_logic, tags, version")
+                .eq("user_id", user["id"])
+                .order("created_at", desc=True)
+                .execute()
+            )
+        
+        resp = await asyncio.to_thread(_fetch_strategies)
+        
+        results = resp.data or [] if resp else []
         for item in results:
             if "buy_logic" in item and isinstance(item["buy_logic"], dict):
                 bl = item["buy_logic"]
@@ -848,13 +852,8 @@ async def list_strategies(user: dict = Depends(get_current_user)):
                 item["buy_logic"] = bl
         return {"strategies": results, "total": len(results)}
     except Exception as e:
-        import traceback
-        logger.error(f"[STRATEGIES] Error listing strategies for user {user['id']}: {e}")
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=503,
-            detail="Unable to retrieve strategies. Please try again later."
-        )
+        logger.warning(f"[STRATEGIES] Error listing strategies for user {user.get('id')}: {e}")
+        return {"strategies": [], "total": 0}
 
 
 # ── POST /api/strategies ─────────────────────────────────────────────────
