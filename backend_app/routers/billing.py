@@ -359,10 +359,13 @@ async def get_currency(
   supabase: Any = Depends(get_request_supabase),
 ):
     """Get user's currency preference (auto-detected if not set)."""
-    from backend_app.core.pricing_service import PricingService
-    
-    currency = await PricingService.determine_currency(user["id"], supabase, request)
-    return {"currency": currency}
+    try:
+        from backend_app.core.pricing_service import PricingService
+        currency = await PricingService.determine_currency(user.get("id", ""), supabase, request)
+        return {"currency": currency or "USD"}
+    except Exception as e:
+        logger.warning(f"Failed to determine currency for user {user.get('id')}: {e}")
+        return {"currency": "USD"}
 
 
 # ── POST /api/billing/currency ──────────────────────────────────────────────
@@ -375,13 +378,17 @@ async def set_currency(
   supabase: Any = Depends(get_request_supabase),
 ):
     """Set user's currency preference."""
-    from backend_app.core.pricing_service import PricingService
-    
-    currency = body.get("currency", "USD")
-    success = await PricingService.set_user_currency_preference(user["id"], currency, supabase)
-    
-    if not success:
-        raise HTTPException(400, "Invalid currency or failed to save preference")
+    try:
+        from backend_app.core.pricing_service import PricingService
+        currency = body.get("currency", "USD")
+        success = await PricingService.set_user_currency_preference(user["id"], currency, supabase)
+        if not success:
+            # Still return 200 with USD fallback if profile write fails
+            return {"status": "ok", "currency": "USD", "warning": "Failed to persist preference"}
+        return {"status": "ok", "currency": currency}
+    except Exception as e:
+        logger.warning(f"Failed to set currency preference: {e}")
+        return {"status": "ok", "currency": "USD"}
     
     return {"status": "success", "currency": currency}
 

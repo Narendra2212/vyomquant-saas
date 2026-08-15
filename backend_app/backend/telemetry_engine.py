@@ -258,27 +258,26 @@ class TelemetryEngine:
                     params={"query": sql_query},
                     timeout=aiohttp.ClientTimeout(total=0.5, connect=0.2)
                 ) as response:
-                    response.raise_for_status()
+                    if response.status >= 400:
+                        logger.debug(f"QuestDB returned HTTP {response.status} for query. Fast-failing.")
+                        self._unreachable_until = time.time() + 60.0
+                        return None
                     self._unreachable_until = 0.0
                     return await response.json()
 
             except (aiohttp.ClientConnectorError, ConnectionRefusedError, OSError) as e:
                 logger.debug(f"QuestDB connection refused ({self.host}:{self.port}): {e}. Fast-failing query.")
-                self._unreachable_until = time.time() + 30.0
+                self._unreachable_until = time.time() + 60.0
                 return None
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                if attempt < max_retries - 1:
-                    wait = 0.05 * (attempt + 1)
-                    await asyncio.sleep(wait)
-                else:
-                    logger.debug(f"QuestDB query failed after {max_retries} attempts: {e}")
-                    self._unreachable_until = time.time() + 30.0
-                    return None
+                logger.debug(f"QuestDB query failed: {e}")
+                self._unreachable_until = time.time() + 60.0
+                return None
 
             except Exception as e:
                 logger.error(f"Unexpected QuestDB query error: {e}")
-                self._unreachable_until = time.time() + 30.0
+                self._unreachable_until = time.time() + 60.0
                 return None
 
         return None
