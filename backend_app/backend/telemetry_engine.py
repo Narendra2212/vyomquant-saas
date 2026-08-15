@@ -108,6 +108,7 @@ class TelemetryEngine:
         
         # Connection status
         self.is_connected = False
+        self._unreachable_until: float = 0.0
 
         self._session: Optional[aiohttp.ClientSession] = None
         self._lock = asyncio.Lock()

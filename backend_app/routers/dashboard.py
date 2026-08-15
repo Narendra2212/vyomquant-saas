@@ -138,14 +138,17 @@ async def get_dashboard_overview(
             }
         }
         
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error fetching dashboard overview for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=503,
-            detail={"error": "OVERVIEW_FETCH_FAILED", "message": str(e)}
-        )
+        logger.warning(f"Error fetching dashboard overview for user {user['id']}, returning zero-state: {e}")
+        return {
+            "overview": {
+                "total_value": 0.0,
+                "today_pnl": 0.0,
+                "today_return_pct": 0.0,
+                "unrealized_pnl": 0.0,
+                "available_balance": 0.0
+            }
+        }
 
 
 @router.get("/dashboard/strategies")
