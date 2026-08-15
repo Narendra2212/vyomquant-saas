@@ -257,7 +257,7 @@ class TelemetryEngine:
                 async with session.get(
                     self.query_url,
                     params={"query": sql_query},
-                    timeout=aiohttp.ClientTimeout(total=0.5, connect=0.2)
+                    timeout=aiohttp.ClientTimeout(total=0.1, connect=0.05)
                 ) as response:
                     if response.status >= 400:
                         logger.debug(f"QuestDB returned HTTP {response.status} for query. Fast-failing.")
