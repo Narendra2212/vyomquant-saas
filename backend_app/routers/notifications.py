@@ -5,6 +5,7 @@ Provides CRUD endpoints for user notifications with pagination and filtering.
 Integrates with WebSocket for real-time delivery.
 """
 
+import asyncio
 import inspect
 import logging
 from datetime import datetime, timezone

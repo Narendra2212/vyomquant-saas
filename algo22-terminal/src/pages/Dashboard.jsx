@@ -112,6 +112,23 @@ export default function Dashboard() {
             }))
           );
         }
+
+        // Map widgets directly from single aggregation response (zero duplicate HTTP requests)
+        if (dashboardRes.exchange) {
+          setExchangeConnections(Array.isArray(dashboardRes.exchange.exchanges) ? dashboardRes.exchange.exchanges : []);
+        }
+        if (dashboardRes.risk) {
+          setRiskHealth(dashboardRes.risk);
+        }
+        if (dashboardRes.referrals) {
+          setReferralStats(dashboardRes.referrals);
+        }
+        if (dashboardRes.subscription) {
+          setBillingEntitlements(dashboardRes.subscription);
+        }
+        if (dashboardRes.health) {
+          setSystemHealth(dashboardRes.health);
+        }
       }
     } catch (err) {
       console.error("Error loading dashboard data from aggregation API:", err);
@@ -129,13 +146,18 @@ export default function Dashboard() {
     loadDashboardData();
   };
 
+  // Only refetch equity curve if timeframe is changed by the user away from default 1M
+  const isFirstRender = React.useRef(true);
   useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
     async function loadEquityCurve() {
       setEquityLoading(true);
       const dayMap = { "1D": 1, "1W": 7, "1M": 30, "3M": 90, "ALL": 365 };
       const days = dayMap[timeframe] || 30;
       try {
-        // PHASE 11: Use aggregation API with timeframe parameter - no duplicate calls
         const data = await dashboardApi.getDashboard({ equity_days: days });
         if (data?.equity_curve && Array.isArray(data.equity_curve) && data.equity_curve.length > 0) {
           setEquityCurve(
@@ -147,7 +169,6 @@ export default function Dashboard() {
             }))
           );
         } else {
-          // No data yet — render flat empty state; never fabricate performance
           setEquityCurve([]);
         }
       } catch (err) {
@@ -159,57 +180,6 @@ export default function Dashboard() {
     }
     loadEquityCurve();
   }, [timeframe]);
-
-  // Load new widget data
-  useEffect(() => {
-    async function loadWidgetData() {
-      try {
-        // Exchange connections
-        const exchanges = await exchangeApi.list();
-        setExchangeConnections(Array.isArray(exchanges) ? exchanges : exchanges?.exchanges || []);
-      } catch (err) {
-        console.error("Failed to load exchange connections:", err);
-        setExchangeConnections([]);
-      }
-
-      try {
-        // Risk health
-        const health = await riskApi.getAccountHealth();
-        setRiskHealth(health);
-      } catch (err) {
-        console.error("Failed to load risk health:", err);
-        setRiskHealth(null);
-      }
-
-      try {
-        // Referral/marketplace earnings
-        const stats = await referralApi.getStats();
-        setReferralStats(stats);
-      } catch (err) {
-        console.error("Failed to load referral stats:", err);
-        setReferralStats(null);
-      }
-
-      try {
-        // Billing/subscription
-        const entitlements = await billingApi.getEntitlements();
-        setBillingEntitlements(entitlements);
-      } catch (err) {
-        console.error("Failed to load billing entitlements:", err);
-        setBillingEntitlements(null);
-      }
-
-      try {
-        // System health
-        const health = await healthApi.getHealth();
-        setSystemHealth(health);
-      } catch (err) {
-        console.error("Failed to load system health:", err);
-        setSystemHealth(null);
-      }
-    }
-    loadWidgetData();
-  }, []);
 
 
 

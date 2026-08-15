@@ -6,6 +6,7 @@ FIXES:
   EXCH-3: delete_connection() now evicts the stale entry from the exchange pool
 """
 
+import asyncio
 import inspect
 import logging
 from typing import Any, Dict, List, Optional
