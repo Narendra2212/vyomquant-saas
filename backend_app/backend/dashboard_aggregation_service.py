@@ -221,38 +221,38 @@ class DashboardAggregationService:
         try:
             sb_res = self._get_supabase(user)
             sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
-            
-            # Get unread count
-            q1 = sb.table("notifications").select("*").eq("user_id", user["id"]).eq("read", False).execute()
-            res = await q1 if inspect.isawaitable(q1) else q1
-            unread_count = len(res.data) if res and res.data else 0
-            
-            # Get recent notifications
-            q2 = (sb.table("notifications")
-                         .select("*")
-                         .eq("user_id", user["id"])
-                         .order("created_at", desc=True)
-                         .limit(10)
-                         .execute())
-            recent_res = await q2 if inspect.isawaitable(q2) else q2
+            if not sb:
+                return {"unread_count": 0, "total_count": 0, "recent": [], "categories": {}}
+
+            async def fetch_unread():
+                q = sb.table("notifications").select("id", count="exact").eq("user_id", user["id"]).eq("read", False).execute()
+                return await q if inspect.isawaitable(q) else q
+
+            async def fetch_recent():
+                q = sb.table("notifications").select("id, type, category, severity, title, message, read, created_at").eq("user_id", user["id"]).order("created_at", desc=True).limit(10).execute()
+                return await q if inspect.isawaitable(q) else q
+
+            res_unread, res_recent = await asyncio.gather(fetch_unread(), fetch_recent(), return_exceptions=True)
+
+            unread_count = res_unread.count if not isinstance(res_unread, Exception) and res_unread and hasattr(res_unread, "count") and res_unread.count is not None else 0
             
             recent_notifications = []
-            for notif in (recent_res.data if recent_res else []) or []:
-                recent_notifications.append({
-                    "id": notif.get("id"),
-                    "type": notif.get("type"),
-                    "category": notif.get("category"),
-                    "severity": notif.get("severity"),
-                    "title": notif.get("title"),
-                    "message": notif.get("message"),
-                    "read": notif.get("read", False),
-                    "created_at": notif.get("created_at")
-                })
+            if not isinstance(res_recent, Exception) and res_recent and hasattr(res_recent, "data") and res_recent.data:
+                for notif in res_recent.data:
+                    recent_notifications.append({
+                        "id": notif.get("id"),
+                        "type": notif.get("type"),
+                        "category": notif.get("category"),
+                        "severity": notif.get("severity"),
+                        "title": notif.get("title"),
+                        "message": notif.get("message"),
+                        "read": notif.get("read", False),
+                        "created_at": notif.get("created_at")
+                    })
             
-            # Categorize notifications
             categories = {}
             for notif in recent_notifications:
-                cat = notif["category"]
+                cat = notif.get("category", "system")
                 categories[cat] = categories.get(cat, 0) + 1
             
             return {
@@ -278,35 +278,31 @@ class DashboardAggregationService:
             Referral code, referral count, earnings
         """
         try:
+            import hashlib
+            default_ref = hashlib.md5(user["id"].encode()).hexdigest()[:8].upper()
+            
             sb_res = self._get_supabase(user)
             sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
-            
-            # Get referral profile
-            q1 = sb.table("referral_profiles").select("*").eq("user_id", user["id"]).execute()
-            res = await q1 if inspect.isawaitable(q1) else q1
-            profile = res.data[0] if res and res.data else {}
-            
-            if not profile and sb:
-                # Generate referral code if doesn't exist
-                import hashlib
-                referral_code = hashlib.md5(user["id"].encode()).hexdigest()[:8].upper()
-                q2 = sb.table("referral_profiles").insert({
-                    "user_id": user["id"],
-                    "referral_code": referral_code,
+            if not sb:
+                return {
+                    "referral_code": default_ref,
+                    "referral_link": f"https://vyomquant.com/ref/{default_ref}",
                     "total_referrals": 0,
                     "active_referrals": 0,
                     "pending_earnings": 0.0,
                     "approved_earnings": 0.0,
-                    "paid_earnings": 0.0,
                     "lifetime_earnings": 0.0
-                }).execute()
-                if inspect.isawaitable(q2):
-                    await q2
-                profile = {"referral_code": referral_code}
+                }
+
+            q1 = sb.table("referral_profiles").select("referral_code, total_referrals, active_referrals, pending_earnings, approved_earnings, paid_earnings, lifetime_earnings").eq("user_id", user["id"]).execute()
+            res = await q1 if inspect.isawaitable(q1) else q1
+            profile = res.data[0] if res and hasattr(res, "data") and res.data else {}
+            
+            ref_code = profile.get("referral_code") or default_ref
             
             return {
-                "referral_code": profile.get("referral_code", ""),
-                "referral_link": f"https://vyomquant.com/ref/{profile.get('referral_code', '')}",
+                "referral_code": ref_code,
+                "referral_link": f"https://vyomquant.com/ref/{ref_code}",
                 "total_referrals": profile.get("total_referrals", 0),
                 "active_referrals": profile.get("active_referrals", 0),
                 "pending_earnings": float(profile.get("pending_earnings", 0.0)),
@@ -341,14 +337,13 @@ class DashboardAggregationService:
             sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
 
             # Get risk settings
-            q1 = sb.table("risk_settings").select("*").eq("user_id", user["id"]).execute()
-            res = await q1 if inspect.isawaitable(q1) else q1
-            settings = res.data[0] if res and res.data else {}
+            settings = {}
+            if sb:
+                q1 = sb.table("risk_settings").select("max_daily_loss, max_positions, max_leverage, circuit_breaker_armed, circuit_breaker_breaches, kill_switches").eq("user_id", user["id"]).execute()
+                res = await q1 if inspect.isawaitable(q1) else q1
+                settings = res.data[0] if res and hasattr(res, "data") and res.data else {}
 
-            # Get current risk metrics from portfolio (use provided portfolio if available)
-            if portfolio is None:
-                portfolio = await self.get_portfolio_overview(user)
-            current_drawdown = abs(float(portfolio.get("pnl_pct", 0)))
+            current_drawdown = abs(float((portfolio or {}).get("pnl_pct", 0)))
             
             # Determine risk level
             max_daily_loss = float(settings.get("max_daily_loss", 500))
@@ -393,18 +388,22 @@ class DashboardAggregationService:
         try:
             sb_res = self._get_supabase(user)
             sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+            if not sb:
+                return {"available_count": 0, "user_publications": 0, "total_subscribers": 0, "featured": []}
+
+            async def fetch_available():
+                q = sb.table("library_strategies").select("id, name, is_featured").eq("is_active", True).in_("moderation_status", ["approved", "featured"]).limit(10).execute()
+                return await q if inspect.isawaitable(q) else q
+
+            async def fetch_user_pubs():
+                q = sb.table("library_strategies").select("id, subscriber_count").eq("author_id", user["id"]).execute()
+                return await q if inspect.isawaitable(q) else q
+
+            res_avail, res_pubs = await asyncio.gather(fetch_available(), fetch_user_pubs(), return_exceptions=True)
+
+            available_strategies = res_avail.data if not isinstance(res_avail, Exception) and res_avail and hasattr(res_avail, "data") and res_avail.data else []
+            user_publications = res_pubs.data if not isinstance(res_pubs, Exception) and res_pubs and hasattr(res_pubs, "data") and res_pubs.data else []
             
-            # Get available marketplace strategies from library_strategies
-            q1 = sb.table("library_strategies").select("*").eq("is_active", True).in_("moderation_status", ["approved", "featured"]).execute()
-            res = await q1 if inspect.isawaitable(q1) else q1
-            available_strategies = res.data or [] if res else []
-            
-            # Get user's published strategies
-            q2 = sb.table("library_strategies").select("*").eq("author_id", user["id"]).execute()
-            user_res = await q2 if inspect.isawaitable(q2) else q2
-            user_publications = user_res.data or [] if user_res else []
-            
-            # Calculate subscriber counts
             total_subscribers = 0
             for pub in user_publications:
                 total_subscribers += pub.get("subscriber_count", 0)
@@ -413,7 +412,7 @@ class DashboardAggregationService:
                 "available_count": len(available_strategies),
                 "user_publications": len(user_publications),
                 "total_subscribers": total_subscribers,
-                "featured": [s for s in available_strategies if s.get("is_featured")][:3]  # Top 3 featured strategies
+                "featured": [s for s in available_strategies if s.get("is_featured")][:3]
             }
         except Exception as e:
             logger.error(f"Failed to fetch marketplace data for user {user['id']}: {e}")
@@ -649,6 +648,7 @@ class DashboardAggregationService:
                 self._timed_operation("get_notification_data", self.get_notification_data(user)),
                 self._timed_operation("get_referral_data", self.get_referral_data(user)),
                 self._timed_operation("get_marketplace_data", self.get_marketplace_data(user)),
+                self._timed_operation("get_risk_data", self.get_risk_data(user)),
                 return_exceptions=True
             )
             gather_duration_ms = (time.perf_counter() - gather_start) * 1000
@@ -661,7 +661,7 @@ class DashboardAggregationService:
             )
 
             # Unpack results with error handling
-            portfolio, equity, insights, signals, health, subscription, exchange, notifications, referral, marketplace = results
+            portfolio, equity, insights, signals, health, subscription, exchange, notifications, referral, marketplace, risk = results
 
             # Await the shared strategies task to get the result and log timing
             strategies = await strategies_task
@@ -671,18 +671,6 @@ class DashboardAggregationService:
                 extra={
                     "operation": "get_strategies",
                     "duration_ms": round(strategies_duration_ms, 2),
-                },
-            )
-
-            # Get risk data with the already-fetched portfolio (to avoid duplicate query)
-            risk_start = time.perf_counter()
-            risk = await self.get_risk_data(user, portfolio)
-            risk_duration_ms = (time.perf_counter() - risk_start) * 1000
-            logger.info(
-                f"dashboard_operation_timing",
-                extra={
-                    "operation": "get_risk_data",
-                    "duration_ms": round(risk_duration_ms, 2),
                 },
             )
 

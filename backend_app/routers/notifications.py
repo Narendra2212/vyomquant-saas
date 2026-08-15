@@ -148,33 +148,26 @@ async def list_notifications(
         )
     
     try:
-        query = supabase.table("notifications").select("*", count="exact")
-        
-        # Apply filters
-        query = query.eq("user_id", user["id"])
+        columns = "id, user_id, type, category, severity, title, message, read, created_at, metadata"
+        query = supabase.table("notifications").select(columns, count="exact").eq("user_id", user["id"])
         
         if unread_only:
             query = query.eq("read", False)
-        
         if category:
             query = query.eq("category", category)
-        
-        # Apply pagination
         query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
         
-        res = query.execute()
-        result = await res if inspect.isawaitable(res) else res
+        unread_query = supabase.table("notifications").select("id", count="exact").eq("user_id", user["id"]).eq("read", False)
+
+        async def exec_q(q):
+            r = q.execute()
+            return await r if inspect.isawaitable(r) else r
+
+        result, unread_result = await asyncio.gather(exec_q(query), exec_q(unread_query))
         
-        items = result.data or []
-        total = result.count or 0
-        
-        # Get unread count
-        unread_query = supabase.table("notifications").select("*", count="exact") \
-            .eq("user_id", user["id"]) \
-            .eq("read", False)
-        unread_res = unread_query.execute()
-        unread_result = await unread_res if inspect.isawaitable(unread_res) else unread_res
-        unread_count = unread_result.count or 0
+        items = result.data or [] if result else []
+        total = result.count or len(items) if result else 0
+        unread_count = unread_result.count or 0 if unread_result else 0
         
         return NotificationListResponse(
             items=items,
