@@ -184,18 +184,18 @@ async def list_exchanges(
     Returns exchange status, permissions, bot count, strategy count, health metrics.
     """
     try:
-        # Fetch keys safely
         keys = []
         if supabase:
+            def fetch_keys():
+                q1 = supabase.table("exchange_keys").select("id, exchange_id, created_at").eq("user_id", user["id"]).execute()
+                return q1.data if q1 and hasattr(q1, "data") and isinstance(q1.data, list) else []
+            
             try:
-                q1 = supabase.table("exchange_keys").select("*").eq("user_id", user["id"]).execute()
-                res = await q1 if inspect.isawaitable(q1) else q1
-                if res and hasattr(res, "data") and isinstance(res.data, list):
-                    keys = res.data
+                keys = await asyncio.to_thread(fetch_keys)
             except Exception as e:
                 logger.warning(f"Failed to fetch exchange keys: {e}")
+                keys = []
         
-        # Build exchange list
         exchanges = []
         for row in keys:
             exchange_id = row.get("exchange_id", "unknown")

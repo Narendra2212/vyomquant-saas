@@ -148,26 +148,27 @@ async def list_notifications(
         )
     
     try:
-        columns = "id, user_id, type, category, severity, title, message, read, created_at, metadata"
-        query = supabase.table("notifications").select(columns, count="exact").eq("user_id", user["id"])
-        
-        if unread_only:
-            query = query.eq("read", False)
-        if category:
-            query = query.eq("category", category)
-        query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
-        
-        unread_query = supabase.table("notifications").select("id", count="exact").eq("user_id", user["id"]).eq("read", False)
+        def fetch_notifications():
+            columns = "id, user_id, type, category, severity, title, message, read, created_at, metadata"
+            query = supabase.table("notifications").select(columns, count="exact").eq("user_id", user["id"])
+            
+            if unread_only:
+                query = query.eq("read", False)
+            if category:
+                query = query.eq("category", category)
+            query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
+            
+            res = query.execute()
+            
+            unread_query = supabase.table("notifications").select("id", count="exact").eq("user_id", user["id"]).eq("read", False)
+            unread_res = unread_query.execute()
+            
+            return res, unread_res
 
-        async def exec_q(q):
-            r = q.execute()
-            return await r if inspect.isawaitable(r) else r
-
-        result, unread_result = await asyncio.gather(exec_q(query), exec_q(unread_query))
-        
-        items = result.data or [] if result else []
-        total = result.count or len(items) if result else 0
-        unread_count = unread_result.count or 0 if unread_result else 0
+        res, unread_res = await asyncio.to_thread(fetch_notifications)
+        items = res.data or [] if res and hasattr(res, "data") else []
+        total = res.count if res and hasattr(res, "count") and res.count is not None else len(items)
+        unread_count = unread_res.count if unread_res and hasattr(unread_res, "count") and unread_res.count is not None else 0
         
         return NotificationListResponse(
             items=items,
@@ -179,7 +180,13 @@ async def list_notifications(
         
     except Exception as e:
         logger.error(f"Failed to list notifications: {e}")
-        raise HTTPException(500, "Failed to retrieve notifications")
+        return NotificationListResponse(
+            items=[],
+            total=0,
+            unread_count=0,
+            limit=limit,
+            offset=offset
+        )
 
 
 @router.put("/{notification_id}/read")
