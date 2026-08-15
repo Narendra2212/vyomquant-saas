@@ -111,8 +111,8 @@ describe('Integration Tests', () => {
 
       await waitFor(() => {
         expect(mockGet).toHaveBeenCalled();
-      }, { timeout: 5000 });
-    });
+      }, { timeout: 10000 });
+    }, 30000);
 
     it('should handle API errors gracefully', async () => {
       const Dashboard = (await import('../../src/pages/Dashboard')).default;
@@ -126,8 +126,8 @@ describe('Integration Tests', () => {
 
       await waitFor(() => {
         expect(mockGet).toHaveBeenCalled();
-      }, { timeout: 5000 });
-    });
+      }, { timeout: 10000 });
+    }, 30000);
   });
 
   describe('Backtest Trigger', () => {

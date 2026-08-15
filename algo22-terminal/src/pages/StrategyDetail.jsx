@@ -7,6 +7,7 @@ import {
   AlertTriangle, FileText, TrendingUp, Target, PieChart, Edit2
 } from "lucide-react";
 import { C, Tag2, StatusDot, ProgressBar } from "../components/ui-legacy/primitives";
+import { CONFIG } from "../config";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import ResearchConsole from "../components/ResearchConsole";
@@ -43,7 +44,7 @@ export default function StrategyDetail() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState({});
   
-  const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+  const API_BASE = CONFIG.apiBaseUrl;
   const token = sessionStorage.getItem("token");
 
   useEffect(() => {
@@ -332,7 +333,7 @@ function BacktestsTab({ backtests, strategyId }) {
 
 function VersionsTab({ strategyId }) {
   const [versions, setVersions] = useState([]);
-  const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+  const API_BASE = CONFIG.apiBaseUrl;
   const token = sessionStorage.getItem("token");
 
   useEffect(() => {
@@ -390,7 +391,7 @@ function VersionsTab({ strategyId }) {
 function MetricsTab({ strategyId }) {
   const [metrics, setMetrics] = useState(null);
   const [timeRange, setTimeRange] = useState("1d");
-  const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+  const API_BASE = CONFIG.apiBaseUrl;
   const token = sessionStorage.getItem("token");
 
   useEffect(() => {
@@ -457,7 +458,7 @@ function MetricsTab({ strategyId }) {
 
 function RiskTab({ strategyId }) {
   const [risk, setRisk] = useState(null);
-  const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+  const API_BASE = CONFIG.apiBaseUrl;
   const token = sessionStorage.getItem("token");
 
   useEffect(() => {

@@ -6,6 +6,7 @@ import {
   Activity, Zap, Globe, Server, Clock, Shield
 } from "lucide-react";
 import { endpoints } from "../api";
+import { CONFIG } from "../config";
 import {
   C, Tag2, StatusDot, ProgressBar
 } from "../components/ui-legacy/primitives";
@@ -29,7 +30,7 @@ export default function Strategies() {
 
   useEffect(() => {
     const controller = new AbortController();
-    const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+    const API_BASE = CONFIG.apiBaseUrl;
 
     const toNumber = (v, fallback = 0) => {
       const n = Number(v);
@@ -99,7 +100,7 @@ export default function Strategies() {
       return statusMatch && envMatch;
     });
   }, [strategies, filterStatus, filterEnvironment]);
-  const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+  const API_BASE = CONFIG.apiBaseUrl;
 
   const setProcessingFor = (id, value) =>
     setIsProcessing((prev) => ({ ...prev, [id]: value }));
@@ -111,7 +112,7 @@ export default function Strategies() {
     setStrategies((prev) => Array.isArray(prev) ? prev.map((s) => (s.id === id ? { ...s, status: "running" } : s)) : prev);
     try {
       // PHASE 2: Use new Strategy Operations API
-      const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+      const API_BASE = CONFIG.apiBaseUrl;
       const token = sessionStorage.getItem("token");
       const res = await fetch(`${API_BASE}/api/strategies/${id}/deploy`, {
         method: "POST",
@@ -141,7 +142,7 @@ export default function Strategies() {
     setStrategies((prev) => Array.isArray(prev) ? prev.map((s) => (s.id === id ? { ...s, status: "paused" } : s)) : prev);
     try {
       // PHASE 2: Use new Strategy Operations API
-      const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+      const API_BASE = CONFIG.apiBaseUrl;
       const token = sessionStorage.getItem("token");
       const res = await fetch(`${API_BASE}/api/strategies/${id}/pause`, {
         method: "POST",
@@ -170,7 +171,7 @@ export default function Strategies() {
     setStrategies((prev) => prev.filter((s) => s.id !== id));
     try {
       // PHASE 2: Use new Strategy Operations API
-      const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+      const API_BASE = CONFIG.apiBaseUrl;
       const token = sessionStorage.getItem("token");
       const res = await fetch(`${API_BASE}/api/strategies/${id}`, {
         method: "DELETE",
@@ -197,7 +198,7 @@ export default function Strategies() {
     setProcessingFor(id, true);
     try {
       // PHASE 2: Use new Strategy Operations API
-      const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://api.algo22.io";
+      const API_BASE = CONFIG.apiBaseUrl;
       const token = sessionStorage.getItem("token");
       const strategy = strategies.find(s => s.id === id);
       const res = await fetch(`${API_BASE}/api/strategies/${id}/clone`, {

@@ -349,6 +349,34 @@ class SubscriptionEngine:
             return 0
     
     @classmethod
+    async def get_user_entitlements(
+        cls,
+        user_id: str,
+        plan_key: str,
+        usage: Dict[str, int],
+    ) -> "UserEntitlements":
+        """
+        Build and return a UserEntitlements object for the given user.
+
+        Called by subscription_dependencies.get_user_entitlements() after
+        collecting per-resource usage from Redis.
+        """
+        config = cls.get_plan_config(plan_key)
+        if not config:
+            logger.warning(
+                f"get_user_entitlements: unknown plan_key={plan_key!r} "
+                f"for user {user_id}, falling back to FREE"
+            )
+            config = cls.get_plan_config(Plan.FREE.value)
+
+        return UserEntitlements(
+            plan=config.id,
+            features=list(config.features),
+            quotas=dict(config.quotas),
+            usage=dict(usage),
+        )
+
+    @classmethod
     async def reset_monthly_quotas(cls, user_id: str):
         """Reset monthly quotas for user."""
         resources = [
