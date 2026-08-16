@@ -187,6 +187,19 @@ async def list_signals(request: Request,
     - Search (signal_id)
     """
     try:
+        # Check fast Redis cache (10 second TTL for instant sub-50ms repeat response)
+        cache_key = f"signals:{user['id']}:{strategy_id}:{exchange_id}:{symbol}:{decision}:{status}:{ml_type}:{limit}:{offset}"
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            redis_client = await redis_manager.get_client()
+            if redis_client:
+                cached = await redis_client.get(cache_key)
+                if cached:
+                    import json
+                    return json.loads(cached)
+        except Exception as cache_err:
+            logger.debug(f"Signals cache read error: {cache_err}")
+
         service = await get_signal_service()
         
         signals = await service.list_signals(
@@ -206,12 +219,24 @@ async def list_signals(request: Request,
             offset=offset
         )
         
-        return {
+        response_data = {
             "signals": signals,
             "total": len(signals),
             "limit": limit,
             "offset": offset
         }
+
+        # Write to fast cache
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            redis_client = await redis_manager.get_client()
+            if redis_client:
+                import json
+                await redis_client.setex(cache_key, 10, json.dumps(response_data))
+        except Exception as cache_write_err:
+            logger.debug(f"Signals cache write error: {cache_write_err}")
+
+        return response_data
     except Exception as e:
         logger.error(f"Error listing signals for user {user['id']}: {e}")
         raise HTTPException(
