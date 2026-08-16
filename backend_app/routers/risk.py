@@ -67,21 +67,32 @@ async def get_risk_settings(user: dict = Depends(get_current_user)):
             "max_daily_loss": 500,
             "max_positions": 10,
             "max_leverage": 3,
+            "circuit_breaker_armed": True,
+            "circuit_breaker_breaches": 0,
             "kill_switches": [],
         }
     try:
-        query_res = sb.table("risk_settings").select("max_daily_loss, max_positions, max_leverage, circuit_breaker_armed, circuit_breaker_breaches, kill_switches").eq("user_id", user["id"]).limit(1).execute()
+        query_res = sb.table("risk_settings").select("max_daily_loss, max_positions, max_leverage, kill_switches").eq("user_id", user["id"]).limit(1).execute()
         resp = await query_res if inspect.isawaitable(query_res) else query_res
-        result = (
-            resp.data[0]
-            if resp and hasattr(resp, "data") and resp.data
-            else {
+        if resp and hasattr(resp, "data") and resp.data:
+            raw = resp.data[0]
+            result = {
+                "max_daily_loss": raw.get("max_daily_loss", 500),
+                "max_positions": raw.get("max_positions", 10),
+                "max_leverage": raw.get("max_leverage", 3),
+                "circuit_breaker_armed": raw.get("circuit_breaker_armed", True),
+                "circuit_breaker_breaches": raw.get("circuit_breaker_breaches", 0),
+                "kill_switches": raw.get("kill_switches", []),
+            }
+        else:
+            result = {
                 "max_daily_loss": 500,
                 "max_positions": 10,
                 "max_leverage": 3,
+                "circuit_breaker_armed": True,
+                "circuit_breaker_breaches": 0,
                 "kill_switches": [],
             }
-        )
     except Exception as e:
         logger.error(f"Failed to fetch risk settings for user {user['id']}: {e}")
         raise HTTPException(
@@ -121,8 +132,7 @@ async def update_risk_settings(
         "max_daily_loss": body.max_daily_loss,
         "max_positions": body.max_positions,
         "max_leverage": body.max_leverage,
-        "circuit_breaker_armed": body.circuit_breaker_armed,
-        "kill_switches": body.kill_switches,
+        "kill_switches": [ks.dict() if hasattr(ks, "dict") else ks for ks in body.kill_switches],
         "updated_at": datetime.utcnow().isoformat(),
     }
 

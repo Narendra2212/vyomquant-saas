@@ -349,7 +349,7 @@ class DashboardAggregationService:
             # Get risk settings
             settings = {}
             if sb:
-                query_res = sb.table("risk_settings").select("max_daily_loss, max_positions, max_leverage, circuit_breaker_armed, circuit_breaker_breaches, kill_switches").eq("user_id", user["id"]).limit(1).execute()
+                query_res = sb.table("risk_settings").select("max_daily_loss, max_positions, max_leverage, kill_switches").eq("user_id", user["id"]).limit(1).execute()
                 res = await query_res if inspect.isawaitable(query_res) else query_res
                 settings = res.data[0] if res and hasattr(res, "data") and res.data else {}
 
