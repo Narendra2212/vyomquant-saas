@@ -460,7 +460,7 @@ class DashboardAggregationService:
         safe_uid = self._safe_uid(user["id"])
         
         result = await telemetry.execute_query(
-            f"SELECT * FROM live_user_pnl WHERE user_id = '{safe_uid}' LIMIT 1;"
+            f"SELECT * FROM live_user_pnl WHERE user_id = '{safe_uid}' LIMIT 1;"  # nosec: B608
         )
         
         if result and result.get("dataset"):
@@ -490,7 +490,7 @@ class DashboardAggregationService:
         result = await telemetry.execute_query(
             f"SELECT timestamp, equity FROM equity_curve "
             f"WHERE user_id = '{safe_uid}' "
-            f"ORDER BY timestamp ASC LIMIT -{limit};"
+            f"ORDER BY timestamp ASC LIMIT -{limit};"  # nosec: B608
         )
         
         if result and result.get("dataset"):

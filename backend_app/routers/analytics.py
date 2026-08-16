@@ -34,7 +34,7 @@ async def get_performance(
         
         # Query executions for the period
         query = (
-            "SELECT "
+            "SELECT "  # nosec: B608
             "COUNT(*) as total_trades, "
             "SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as winning_trades, "
             "SUM(pnl) as total_pnl, "
@@ -43,7 +43,7 @@ async def get_performance(
             "FROM executions "
             "WHERE user_id = '" + safe_uid + "' "
             "AND timestamp > dateadd('D', -" + str(int(days)) + ", now());"
-        )
+        )  # nosec: B608
         
         result = await telemetry.execute_query(query)
         

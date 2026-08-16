@@ -1,8 +1,8 @@
 import asyncio
 import hashlib
+import io
 import json
 import logging
-import pickle
 import threading
 import zlib
 from dataclasses import dataclass
@@ -259,19 +259,15 @@ class StateCompressor:
     @staticmethod
     def compress_dataframe(df: pd.DataFrame, level: int = 6) -> bytes:
         """Compress DataFrame to bytes."""
-        # Convert to pickle
-        pickled = pickle.dumps(df)
-        # Compress
-        compressed = zlib.compress(pickled, level=level)
+        json_bytes = df.to_json(orient="split").encode("utf-8")
+        compressed = zlib.compress(json_bytes, level=level)
         return compressed
     
     @staticmethod
     def decompress_dataframe(compressed: bytes) -> pd.DataFrame:
         """Decompress bytes to DataFrame."""
-        # Decompress
-        pickled = zlib.decompress(compressed)
-        # Unpickle
-        df = pickle.loads(pickled)
+        decompressed_bytes = zlib.decompress(compressed)
+        df = pd.read_json(io.BytesIO(decompressed_bytes), orient="split")
         return df
     
     @staticmethod

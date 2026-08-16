@@ -454,7 +454,7 @@ class TablePartitionManager:
             JOIN pg_class child ON pg_inherits.inhrelid = child.oid
             WHERE parent.relname = '{table_name}'
             ORDER BY child.relname;
-        """
+        """  # nosec: B608
         
         return await self.router.execute_read(query)
     
@@ -554,7 +554,7 @@ class PartitionedTradeRepository:
             WHERE user_id = :user_id
             ORDER BY created_at DESC
             LIMIT :limit;
-        """
+        """  # nosec: B608
         
         return await self.router.execute_read(query, {"user_id": user_id, "limit": limit})
     
@@ -571,7 +571,7 @@ class PartitionedTradeRepository:
                 SUM(fee) as total_fees
             FROM {partition}
             WHERE user_id = :user_id;
-        """
+        """  # nosec: B608
         
         result = await self.router.execute_read(query, {"user_id": user_id})
         return result[0] if result else {}

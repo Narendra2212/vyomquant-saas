@@ -33,6 +33,7 @@ Overrides:
 Goal: Single centralized safety system - no trade passes without validation.
 """
 
+import ast
 import asyncio
 import json
 import logging
@@ -851,7 +852,7 @@ class ExecutionGuard:
             
             if existing:
                 # Order already exists - BLOCK to prevent duplicate
-                order_data = eval(existing.decode())
+                order_data = ast.literal_eval(existing.decode())
                 return ValidationResult(
                     check_name="duplicate_order",
                     passed=False,
@@ -1209,7 +1210,7 @@ class ExecutionGuard:
             cb_status = await self.redis.get(cb_key)
             
             if cb_status:
-                status_data = eval(cb_status.decode())
+                status_data = ast.literal_eval(cb_status.decode())
                 if status_data.get("tripped", False):
                     return ValidationResult(
                         check_name="circuit_breakers",
@@ -1315,7 +1316,7 @@ class ExecutionGuard:
             
             if snapshot_data:
                 from datetime import datetime, timezone
-                snapshot = eval(snapshot_data.decode())
+                snapshot = ast.literal_eval(snapshot_data.decode())
                 snapshot_time_str = snapshot.get("timestamp", "")
                 
                 if snapshot_time_str:

@@ -7,6 +7,7 @@ in the strict algo trading platform.
 Author: Principal Institutional Validation Engineer
 """
 
+import ast
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -164,7 +165,7 @@ class SandboxExecutionRunner:
             for key in keys[:limit]:
                 record = await self.redis.get(key)
                 if record:
-                    history.append(eval(record))
+                    history.append(ast.literal_eval(record))
             
             return history
             

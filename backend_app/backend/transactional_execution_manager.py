@@ -19,6 +19,7 @@ Author: Principal Institutional Execution Consistency Engineer
 
 import logging
 import json
+import re
 import uuid
 import hashlib
 from typing import Dict, List, Optional, Any
@@ -31,6 +32,14 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger("TransactionalExecutionManager")
+
+
+def _validate_table_name(table_name: str) -> str:
+    """Validate table name to prevent SQL injection in DDL/DML templates."""
+    s = str(table_name)
+    if re.match(r"^[a-zA-Z0-9_]{1,64}$", s):
+        return s
+    raise ValueError(f"Invalid table name: {s}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -399,12 +408,13 @@ class ReplaySafeTransaction:
             primary_key = data.get("id") or data.get("order_id") or data.get("execution_id")
             
             if primary_key:
+                tbl = _validate_table_name(table_name)
                 # Query current state for update/delete operations
                 result = self.db.execute(
                     text(f"""
-                        SELECT * FROM {table_name}
+                        SELECT * FROM {tbl}
                         WHERE id = :primary_key AND tenant_id = :tenant_id
-                    """),
+                    """),  # nosec: B608
                     {"primary_key": primary_key, "tenant_id": str(self.tenant_id)}
                 ).fetchone()
                 
@@ -423,12 +433,13 @@ class ReplaySafeTransaction:
             primary_key = data.get("id") or data.get("order_id") or data.get("execution_id")
             
             if primary_key:
+                tbl = _validate_table_name(table_name)
                 # Query current state after operation
                 result = self.db.execute(
                     text(f"""
-                        SELECT * FROM {table_name}
+                        SELECT * FROM {tbl}
                         WHERE id = :primary_key AND tenant_id = :tenant_id
-                    """),
+                    """),  # nosec: B608
                     {"primary_key": primary_key, "tenant_id": str(self.tenant_id)}
                 ).fetchone()
                 
@@ -492,16 +503,17 @@ class ReplaySafeTransaction:
     
     async def _execute_operation_impl(self, operation: TransactionOperation) -> Dict[str, Any]:
         """Execute operation implementation."""
+        tbl = _validate_table_name(operation.table_name)
         # Execute operation based on type
         if operation.operation_type == "insert":
             record_id = operation.data.get("id") or str(uuid4())
             result = self.db.execute(
                 text(f"""
-                    INSERT INTO {operation.table_name}
+                    INSERT INTO {tbl}
                     (id, data, tenant_id, created_at)
                     VALUES (:id, :data, :tenant_id, :created_at)
                     RETURNING *
-                """),
+                """),  # nosec: B608
                 {
                     "id": record_id,
                     "data": json.dumps(operation.data),
@@ -519,11 +531,11 @@ class ReplaySafeTransaction:
             
             result = self.db.execute(
                 text(f"""
-                    UPDATE {operation.table_name}
+                    UPDATE {tbl}
                     SET data = :data, updated_at = :updated_at
                     WHERE id = :primary_key AND tenant_id = :tenant_id
                     RETURNING *
-                """),
+                """),  # nosec: B608
                 {
                     "data": json.dumps(operation.data),
                     "tenant_id": str(self.tenant_id),
@@ -541,10 +553,10 @@ class ReplaySafeTransaction:
             
             result = self.db.execute(
                 text(f"""
-                    DELETE FROM {operation.table_name}
+                    DELETE FROM {tbl}
                     WHERE id = :primary_key AND tenant_id = :tenant_id
                     RETURNING *
-                """),
+                """),  # nosec: B608
                 {
                     "tenant_id": str(self.tenant_id),
                     "primary_key": primary_key

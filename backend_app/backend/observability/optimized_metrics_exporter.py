@@ -502,7 +502,7 @@ class OptimizedMetricsCollector:
             runner = web.AppRunner(app)
             await runner.setup()
             
-            site = web.TCPSite(runner, '0.0.0.0', port)
+            site = web.TCPSite(runner, '0.0.0.0', port)  # nosec: B104 - container metrics exporter binding
             await site.start()
             
             self.server_started = True

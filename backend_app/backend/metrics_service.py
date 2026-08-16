@@ -16,6 +16,7 @@ Provides:
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -23,6 +24,14 @@ from typing import Any, Dict, List, Optional
 from backend_app.core.dependencies import get_telemetry
 
 logger = logging.getLogger("MetricsService")
+
+
+def _safe_id(val: str) -> str:
+    """Validate strategy_id or user_id before QuestDB query formatting."""
+    s = str(val)
+    if re.match(r"^[a-zA-Z0-9\-_]{1,128}$", s):
+        return s
+    raise ValueError(f"Invalid identifier: {s}")
 
 
 class MetricsService:
@@ -76,6 +85,7 @@ class MetricsService:
             delta = time_range_map.get(time_range, timedelta(days=1))
             start_time = datetime.now(timezone.utc) - delta
             
+            safe_sid = _safe_id(strategy_id)
             # Query performance data from QuestDB
             query = f"""
             SELECT
@@ -100,11 +110,11 @@ class MetricsService:
                 avg_loss,
                 win_rate
             FROM strategy_performance
-            WHERE strategy_id = '{strategy_id}'
+            WHERE strategy_id = '{safe_sid}'
             AND timestamp >= '{start_time.isoformat()}'
             ORDER BY timestamp DESC
             LIMIT 1000
-            """
+            """  # nosec: B608
             
             result = await telemetry.execute_query(query)
             
@@ -176,6 +186,7 @@ class MetricsService:
         try:
             telemetry = self._get_telemetry()
             
+            safe_sid = _safe_id(strategy_id)
             # Query realtime metrics
             query = f"""
             SELECT
@@ -189,10 +200,10 @@ class MetricsService:
                 execution_count,
                 error_count
             FROM strategy_realtime
-            WHERE strategy_id = '{strategy_id}'
+            WHERE strategy_id = '{safe_sid}'
             ORDER BY timestamp DESC
             LIMIT 1
-            """
+            """  # nosec: B608
             
             result = await telemetry.execute_query(query)
             
@@ -257,6 +268,7 @@ class MetricsService:
         try:
             telemetry = self._get_telemetry()
             
+            safe_sid = _safe_id(strategy_id)
             start_time = datetime.now(timezone.utc) - timedelta(days=days)
             
             query = f"""
@@ -265,10 +277,10 @@ class MetricsService:
                 total_equity,
                 total_pnl
             FROM strategy_performance
-            WHERE strategy_id = '{strategy_id}'
+            WHERE strategy_id = '{safe_sid}'
             AND timestamp >= '{start_time.isoformat()}'
             ORDER BY timestamp ASC
-            """
+            """  # nosec: B608
             
             result = await telemetry.execute_query(query)
             
@@ -302,6 +314,7 @@ class MetricsService:
         try:
             telemetry = self._get_telemetry()
             
+            safe_sid = _safe_id(strategy_id)
             query = f"""
             SELECT
                 to_char(timestamp, 'YYYY-MM') as month,
@@ -309,10 +322,10 @@ class MetricsService:
                 last(total_equity) as end_equity,
                 (last(total_equity) - first(total_equity)) / first(total_equity) * 100 as return_pct
             FROM strategy_performance
-            WHERE strategy_id = '{strategy_id}'
+            WHERE strategy_id = '{safe_sid}'
             SAMPLE BY 1 MONTH
             ORDER BY month ASC
-            """
+            """  # nosec: B608
             
             result = await telemetry.execute_query(query)
             
@@ -348,6 +361,7 @@ class MetricsService:
         try:
             telemetry = self._get_telemetry()
             
+            safe_sid = _safe_id(strategy_id)
             start_time = datetime.now(timezone.utc) - timedelta(days=days)
             
             query = f"""
@@ -357,11 +371,11 @@ class MetricsService:
                 last(total_equity) as end_equity,
                 (last(total_equity) - first(total_equity)) / first(total_equity) * 100 as return_pct
             FROM strategy_performance
-            WHERE strategy_id = '{strategy_id}'
+            WHERE strategy_id = '{safe_sid}'
             AND timestamp >= '{start_time.isoformat()}'
             SAMPLE BY 1 DAY
             ORDER BY day ASC
-            """
+            """  # nosec: B608
             
             result = await telemetry.execute_query(query)
             
@@ -407,6 +421,7 @@ class MetricsService:
             delta = time_range_map.get(time_range, timedelta(days=1))
             start_time = datetime.now(timezone.utc) - delta
             
+            safe_sid = _safe_id(strategy_id)
             query = f"""
             SELECT
                 COUNT(*) as total_orders,
@@ -416,9 +431,9 @@ class MetricsService:
                 SUM(fees) as total_fees,
                 SUM(filled_amount) as total_filled
             FROM executions
-            WHERE strategy_id = '{strategy_id}'
+            WHERE strategy_id = '{safe_sid}'
             AND timestamp >= '{start_time.isoformat()}'
-            """
+            """  # nosec: B608
             
             result = await telemetry.execute_query(query)
             
@@ -452,6 +467,7 @@ class MetricsService:
         try:
             telemetry = self._get_telemetry()
             
+            safe_sid = _safe_id(strategy_id)
             query = f"""
             SELECT
                 max_drawdown,
@@ -463,10 +479,10 @@ class MetricsService:
                 circuit_breaker_triggered,
                 last_circuit_breaker_time
             FROM strategy_risk
-            WHERE strategy_id = '{strategy_id}'
+            WHERE strategy_id = '{safe_sid}'
             ORDER BY timestamp DESC
             LIMIT 1
-            """
+            """  # nosec: B608
             
             result = await telemetry.execute_query(query)
             

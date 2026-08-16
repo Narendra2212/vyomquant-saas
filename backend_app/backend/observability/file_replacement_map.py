@@ -316,67 +316,29 @@ class ObservabilityFileReplacementMap:
         if not replacement:
             return f"# No replacement found for module: {module_name}"
         
-        script = f"""#!/bin/bash
-# Replacement Script: {module_name} -> {target_mode}
-# Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}
-
-set -e
-
-echo "Starting replacement: {module_name} -> {target_mode}"
-
-# Backup original file
-if [ -f "{replacement.original_file}" ]; then
-    echo "Backing up original file..."
-    cp "{replacement.original_file}" "{replacement.original_file}.backup.$(date +%Y%m%d_%H%M%S)"
-fi
-
-# Apply replacement based on type
-case "{replacement.replacement_type.value}" in
-    "direct_replace")
-        echo "Direct file replacement..."
-        if [ -f "{replacement.optimized_file}" ]; then
-            cp "{replacement.optimized_file}" "{replacement.original_file}"
-            echo "File replaced successfully"
-        else
-            echo "Optimized file not found: {replacement.optimized_file}"
-            exit 1
-        fi
-        ;;
-    "import_alias")
-        echo "Import alias replacement..."
-        echo "Update import statements in application code"
-        echo "Manual code changes required:"
-        for change in {replacement.import_changes}:
-            echo "  $change"
-        ;;
-    "conditional_import")
-        echo "Conditional import replacement..."
-        echo "Environment-based import switching"
-        echo "Set OBSERVABILITY_MODE={target_mode}"
-        ;;
-esac
-
-# Update imports if needed
-if [ "{replacement.replacement_type.value}" = "import_alias" ] || [ "{replacement.replacement_type.value}" = "conditional_import" ]; then
-    echo "Updating import statements..."
-    # This would be handled by the application's import system
-    echo "Import changes applied"
-fi
-
-# Verify replacement
-echo "Verifying replacement..."
-if [ -f "{replacement.original_file}" ]; then
-    echo "Replacement completed successfully"
-    echo "Risk level: {replacement.risk_level}"
-    echo "Notes: {replacement.notes}"
-else
-    echo "Replacement verification failed"
-    exit 1
-fi
-
-echo "Replacement completed for {module_name}"
-"""
-        return script
+        rep_type = str(replacement.replacement_type.value)
+        orig_file = str(replacement.original_file)
+        opt_file = str(replacement.optimized_file)
+        
+        parts = [
+            "#!/bin/bash",
+            f"# Replacement: {module_name} -> {target_mode}",
+            "set -e",
+            f'echo "Starting replacement: {module_name}"',
+            f'if [ -f "{orig_file}" ]; then',
+            '    echo "Backing up..."',
+            f'    cp "{orig_file}" "{orig_file}.backup.$(date +%Y%m%d_%H%M%S)"',
+            "fi",
+            f'case "{rep_type}" in',
+            '    "direct_replace")',
+            f'        if [ -f "{opt_file}" ]; then',
+            f'            cp "{opt_file}" "{orig_file}"',
+            '        fi',
+            '        ;;',
+            'esac',
+            f'echo "Done: {module_name}"'
+        ]
+        return "\n".join(parts)
     
     def generate_rollback_script(self, module_name: str) -> str:
         """Generate rollback script for a specific module."""

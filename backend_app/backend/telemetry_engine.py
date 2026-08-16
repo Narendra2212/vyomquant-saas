@@ -390,7 +390,7 @@ class TelemetryEngine:
               We validate the input strictly to prevent injection.
         """
         safe_uid = _safe_uuid(user_id)  # FIX TB-1: raises ValueError on injection
-        query = "SELECT * FROM live_user_pnl WHERE user_id = '" + safe_uid + "';"
+        query = "SELECT * FROM live_user_pnl WHERE user_id = '" + safe_uid + "';"  # nosec: B608
         return await self.execute_query(query)
 
     async def get_chart_candles(self, symbol: str, limit: int = 100) -> Optional[dict]:
@@ -401,7 +401,7 @@ class TelemetryEngine:
         safe_sym = _safe_symbol(symbol)  # FIX TB-2: raises ValueError on injection
         limit = max(1, min(int(limit), 10_000))
         query = (
-            "SELECT * FROM kline_1m WHERE symbol = '"
+            "SELECT * FROM kline_1m WHERE symbol = '"  # nosec: B608
             + safe_sym
             + "' LIMIT -"
             + str(limit)
@@ -424,7 +424,7 @@ class TelemetryEngine:
         """
         safe_uid = _safe_uuid(user_id)
         query = (
-            "SELECT current_drawdown_pct, daily_pnl_pct, total_exposure_usdt "
+            "SELECT current_drawdown_pct, daily_pnl_pct, total_exposure_usdt "  # nosec: B608
             "FROM account_health WHERE user_id = '"
             + safe_uid
             + "' LATEST ON timestamp PARTITION BY user_id;"
@@ -457,7 +457,7 @@ class TelemetryEngine:
         safe_uid = _safe_uuid(user_id)
         limit = max(1, min(int(days) * 96, 100_000))  # 96 × 15-min bars per day
         query = (
-            "SELECT timestamp, equity FROM equity_curve "
+            "SELECT timestamp, equity FROM equity_curve "  # nosec: B608
             "WHERE user_id = '"
             + safe_uid
             + "' ORDER BY timestamp ASC LIMIT -"
@@ -488,7 +488,7 @@ class TelemetryEngine:
             sym_filter = " AND symbol = '" + safe_sym + "'"
 
         query = (
-            "SELECT * FROM executions WHERE user_id = '"
+            "SELECT * FROM executions WHERE user_id = '"  # nosec: B608
             + safe_uid
             + "'"
             + sym_filter
@@ -510,7 +510,7 @@ class TelemetryEngine:
         """
         safe_uid = _safe_uuid(user_id)
         query = (
-            "SELECT asset, value_usd, pct FROM portfolio_allocation "
+            "SELECT asset, value_usd, pct FROM portfolio_allocation "  # nosec: B608
             "WHERE user_id = '" + safe_uid + "' ORDER BY pct DESC;"
         )
         result = await self.execute_query(query)
@@ -528,7 +528,7 @@ class TelemetryEngine:
         safe_uid = _safe_uuid(user_id)
         months = max(1, min(int(months), 24))
         query = (
-            "SELECT trunc(timestamp, 'd') AS date, sum(pnl) AS pnl_usd "
+            "SELECT trunc(timestamp, 'd') AS date, sum(pnl) AS pnl_usd "  # nosec: B608
             "FROM executions WHERE user_id = '"
             + safe_uid
             + "' AND timestamp > dateadd('M', -"
@@ -546,7 +546,7 @@ class TelemetryEngine:
         """Returns server CPU/RAM/latency time series for the admin health dashboard."""
         hours = max(1, min(int(hours), 168))  # cap at 1 week
         query = (
-            "SELECT timestamp, cpu, ram, lat FROM system_metrics "
+            "SELECT timestamp, cpu, ram, lat FROM system_metrics "  # nosec: B608
             "WHERE timestamp > dateadd('h', -"
             + str(hours)
             + ", now()) ORDER BY timestamp ASC;"

@@ -218,7 +218,7 @@ async def account_health(user: dict = Depends(get_current_user)):
         from backend_app.core.state import app_state
 
         query = (
-            "SELECT current_drawdown_pct, daily_pnl_pct, total_exposure_usdt AS total_exposure "
+            "SELECT current_drawdown_pct, daily_pnl_pct, total_exposure_usdt AS total_exposure "  # nosec: B608
             "FROM account_health WHERE user_id = '" + safe_uid + "' LIMIT 1;"
         )
         result = await app_state.telemetry.execute_query(query)

@@ -15,6 +15,7 @@ Key Features:
 Author: Principal Institutional Algo Execution Validation Engineer
 """
 
+import ast
 import hashlib
 import logging
 from datetime import datetime, timezone
@@ -301,7 +302,7 @@ class ExecutionDeduplicator:
             for key in keys:
                 state_data = await self.redis.get(key)
                 if state_data:
-                    state = eval(state_data)
+                    state = ast.literal_eval(state_data)
                     
                     if state.get("state") == ExecutionState.SUBMITTED.value:
                         # Check if execution has timed out

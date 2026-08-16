@@ -111,7 +111,7 @@ async def portfolio_summary(
     safe_uid = _safe_uid(user["id"])
     # QuestDB does not support parameterized queries - use validated string concatenation
     result = await telemetry.execute_query(
-        f"SELECT * FROM live_user_pnl WHERE user_id = '{safe_uid}' LIMIT 1;"
+        f"SELECT * FROM live_user_pnl WHERE user_id = '{safe_uid}' LIMIT 1;"  # nosec: B608
     )
     if result and result.get("dataset"):
         cols = [c["name"] for c in result["columns"]]
@@ -138,7 +138,7 @@ async def equity_curve(
         result = await telemetry.execute_query(
             f"SELECT timestamp, equity FROM equity_curve "
             f"WHERE user_id = '{safe_uid}' "
-            f"ORDER BY timestamp ASC LIMIT -{limit};"
+            f"ORDER BY timestamp ASC LIMIT -{limit};"  # nosec: B608
         )
         if result and result.get("dataset"):
             cols = [c["name"] for c in result["columns"]]
@@ -163,7 +163,7 @@ async def allocation(
     # CRITICAL FIX C3: Parameterized query (no string concatenation)
     result = await telemetry.execute_query(
         "SELECT asset, value_usd, pct FROM portfolio_allocation "
-        f"WHERE user_id = '{safe_uid}' ORDER BY pct DESC;"
+        f"WHERE user_id = '{safe_uid}' ORDER BY pct DESC;"  # nosec: B608
     )
     if result and result.get("dataset"):
         cols = [c["name"] for c in result["columns"]]
@@ -183,7 +183,7 @@ async def pnl_heatmap(
         "SELECT trunc(timestamp, 'd') AS date, sum(pnl) AS pnl_usd "
         f"FROM executions WHERE user_id = '{safe_uid}' "
         f"AND timestamp > dateadd('M', -{int(months)}, now()) "
-        "GROUP BY 1 ORDER BY 1;"
+        "GROUP BY 1 ORDER BY 1;"  # nosec: B608
     )
     if result and result.get("dataset"):
         cols = [c["name"] for c in result["columns"]]

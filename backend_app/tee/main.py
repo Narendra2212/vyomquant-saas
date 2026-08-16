@@ -244,7 +244,7 @@ async def start_health_server():
     app.router.add_get('/health', health_check)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    site = web.TCPSite(runner, '0.0.0.0', 8080)  # nosec: B104 - microservice internal health endpoint
     await site.start()
     logger.info("Health server listening on port 8080")
 

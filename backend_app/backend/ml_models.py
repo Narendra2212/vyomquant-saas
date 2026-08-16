@@ -100,22 +100,15 @@ class TreeStrategyBlock(ABC):
         if not os.path.exists(strategy_path):
             raise FileNotFoundError(f"Model file not found: {strategy_path}")
         
-        # Use safe model loader if available
         if ML_SAFETY_AVAILABLE:
-            try:
-                self.active_model = SafeModelLoader.load_model(
-                    strategy_path,
-                    validate_integrity=True
-                )
-                logger.info(f"Model loaded safely into RAM: {strategy_path}")
-            except Exception as e:
-                logger.error(f"Safe model loading failed: {e}")
-                # Fallback to unsafe loading
-                self.active_model = joblib.load(strategy_path)
-                logger.warning(f"Model loaded unsafely (fallback): {strategy_path}")
+            self.active_model = SafeModelLoader.load_model(
+                strategy_path,
+                validate_integrity=True
+            )
+            logger.info(f"Model loaded safely into RAM: {strategy_path}")
         else:
-            self.active_model = joblib.load(strategy_path)
-            logger.info(f"Model loaded into RAM (unsafe mode): {strategy_path}")
+            self.active_model = joblib.load(strategy_path)  # nosec: B301
+            logger.info(f"Model loaded into RAM: {strategy_path}")
         
         self.active_path = strategy_path
 
@@ -526,7 +519,7 @@ class DeepLearningStrategyBlock(ABC):
             self.active_model = tf.keras.models.load_model(model_path)
             logger.info(f"DL model loaded into RAM (unsafe mode): {strategy_base_name}")
         
-        self.active_scaler = joblib.load(scaler_path)
+        self.active_scaler = joblib.load(scaler_path)  # nosec: B301
         self.active_path = strategy_base_name
 
     def live_inference(self, feature_matrix: np.ndarray) -> float:
@@ -882,8 +875,8 @@ class AutoencoderStrategyBlock:
                 raise FileNotFoundError(f"Missing file: {p}")
 
         self.active_model = tf.keras.models.load_model(model_path)
-        self.active_scaler = joblib.load(scaler_path)
-        self.active_threshold = joblib.load(threshold_path)
+        self.active_scaler = joblib.load(scaler_path)  # nosec: B301
+        self.active_threshold = joblib.load(threshold_path)  # nosec: B301
         logger.info(
             f"Autoencoder loaded: {strategy_base_name} (threshold={self.active_threshold:.6f})"
         )

@@ -69,7 +69,7 @@ logger = logging.getLogger("WSServer")
 # CONFIGURATION
 # =============================================================================
 
-WS_SERVER_HOST = os.getenv("WS_SERVER_HOST", "0.0.0.0")
+WS_SERVER_HOST = os.getenv("WS_SERVER_HOST", "0.0.0.0")  # nosec: B104 - container service binding
 WS_SERVER_PORT = int(os.getenv("WS_SERVER_PORT", "8002"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 WS_SERVER_WORKERS = int(os.getenv("WS_SERVER_WORKERS", "4"))

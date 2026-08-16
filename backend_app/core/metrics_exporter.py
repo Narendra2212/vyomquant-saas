@@ -41,7 +41,7 @@ logger = logging.getLogger("MetricsExporter")
 class MetricsExporterConfig:
     """Configuration for metrics exporter."""
     port: int = 8000
-    host: str = "0.0.0.0"
+    host: str = "0.0.0.0"  # nosec: B104 - container metrics exporter binding
     update_interval: float = 15.0  # Update metrics every 15s
     enable_websocket_metrics: bool = True
     enable_queue_metrics: bool = True

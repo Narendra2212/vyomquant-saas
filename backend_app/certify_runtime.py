@@ -32,7 +32,7 @@ async def run_certification():
     env["PYTHONUNBUFFERED"] = "1"
 
     proc = subprocess.Popen(
-        ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"],
+        ["python", "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
