@@ -186,11 +186,6 @@
     },
     {
       "file": "backend_app\\backend\\signal_service.py",
-      "line": 8,
-      "name": "asyncio"
-    },
-    {
-      "file": "backend_app\\backend\\signal_service.py",
       "line": 11,
       "name": "Decimal"
     },

@@ -18,7 +18,7 @@ try:
     os.environ["ENV"] = "test"
     os.environ["DEV_MODE"] = "true"
     os.environ["VYOMQUANT_MODE"] = "paper"
-    DATABASE_URL = "postgresql://postgres.wrkexcjqnidkdrayhlsi:Narendra%40221203221203@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
+    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
     os.environ["DATABASE_URL"] = DATABASE_URL
     sys.path.insert(0, os.getcwd())
 

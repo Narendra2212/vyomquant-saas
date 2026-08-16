@@ -1,6 +1,6 @@
 import psycopg2
 
-db_url = 'postgresql://postgres.wrkexcjqnidkdrayhlsi:Narendra%40221203221203@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres'
+db_url = os.getenv("DATABASE_URL", "sqlite:///./test.db")
 conn = psycopg2.connect(db_url, connect_timeout=10)
 conn.autocommit = True
 cur = conn.cursor()

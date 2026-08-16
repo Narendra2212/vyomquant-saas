@@ -10,7 +10,7 @@ public_tables = {t[1]: t for t in live_meta['tables'] if t[0] == 'public'}
 
 # Check alembic_version in live DB
 import psycopg2
-db_url = 'postgresql://postgres.wrkexcjqnidkdrayhlsi:Narendra%40221203221203@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres'
+db_url = os.getenv("DATABASE_URL", "sqlite:///./test.db")
 conn = psycopg2.connect(db_url)
 cur = conn.cursor()
 cur.execute("SELECT version_num FROM alembic_version;")

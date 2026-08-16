@@ -4,7 +4,7 @@ import json
 import psycopg2
 from urllib.parse import urlparse
 
-DATABASE_URL = "postgresql://postgres.wrkexcjqnidkdrayhlsi:Narendra%40221203221203@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
 
 def run_strict_audit():
     print("================================================================================")

@@ -1,8 +1,9 @@
+import os
 import psycopg2
 import uuid
 import sys
 
-db_url = 'postgresql://postgres.wrkexcjqnidkdrayhlsi:Narendra%40221203221203@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres'
+db_url = os.getenv("DATABASE_URL", "sqlite:///./test.db")
 
 def test_tenant_isolation_and_rpcs():
     print("=== LIVE TENANT ISOLATION & RPC VERIFICATION ===")

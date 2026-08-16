@@ -2,7 +2,7 @@
   "containerDefinitions": [
     {
       "name": "vyomquant-api",
-      "image": "273709947018.dkr.ecr.ap-southeast-1.amazonaws.com/vyomquant-api:8992f2eda7a2c7cadfa6c4e5d9f178d8ee20706f",
+      "image": "273709947018.dkr.ecr.ap-southeast-1.amazonaws.com/vyomquant-api:3afa7a3227edde88fa3c55e5e643f4a875d47cb9",
       "cpu": 0,
       "portMappings": [
         {
