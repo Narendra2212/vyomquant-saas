@@ -16,7 +16,7 @@ import logging
 import re
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from backend_app.core.dependencies import get_telemetry, create_request_supabase
 
@@ -99,20 +99,22 @@ class DashboardAggregationService:
             return str(uid)
         raise ValueError(f"Unsafe user_id: '{uid}'")
     
-    async def get_subscription_data(self, user: dict, strategies_task: Optional['asyncio.Task'] = None) -> Dict:
+    async def get_subscription_data(self, user: dict, strategies_task: Optional['asyncio.Task'] = None, sb: Optional[Any] = None) -> Dict:
         """
         Get subscription and billing data.
 
         Args:
             user: User dict
             strategies_task: Optional request-local task for strategies fetch. If provided, will await it instead of fetching.
+            sb: Optional shared Supabase client
 
         Returns:
             Subscription tier, usage metrics, billing status
         """
         try:
-            sb_res = self._get_supabase(user)
-            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+            if sb is None:
+                sb_res = self._get_supabase(user)
+                sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
             if not sb:
                 return {
                     "tier": "free",
@@ -134,7 +136,7 @@ class DashboardAggregationService:
             if strategies_task is not None:
                 strategies = await strategies_task
             else:
-                strategies = await self.get_strategies(user)
+                strategies = await self.get_strategies(user, sb=sb)
             strategies_used = len(strategies)
             active_bots = len([s for s in strategies if s["status"] == "active"])
             
@@ -172,7 +174,7 @@ class DashboardAggregationService:
                 "is_trial": False
             }
     
-    async def get_exchange_data(self, user: dict) -> Dict:
+    async def get_exchange_data(self, user: dict, sb: Optional[Any] = None) -> Dict:
         """
         Get exchange connection data.
         
@@ -180,8 +182,9 @@ class DashboardAggregationService:
             Connected exchanges, connection status, latency metrics
         """
         try:
-            sb_res = self._get_supabase(user)
-            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+            if sb is None:
+                sb_res = self._get_supabase(user)
+                sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
             if not sb:
                 return {
                     "total_exchanges": 0,
@@ -229,7 +232,7 @@ class DashboardAggregationService:
                 "can_trade": False
             }
     
-    async def get_notification_data(self, user: dict) -> Dict:
+    async def get_notification_data(self, user: dict, sb: Optional[Any] = None) -> Dict:
         """
         Get notification data.
         
@@ -237,8 +240,9 @@ class DashboardAggregationService:
             Unread count, recent notifications, notification categories
         """
         try:
-            sb_res = self._get_supabase(user)
-            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+            if sb is None:
+                sb_res = self._get_supabase(user)
+                sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
             if not sb:
                 return {"unread_count": 0, "total_count": 0, "recent": [], "categories": {}}
 
@@ -282,7 +286,7 @@ class DashboardAggregationService:
             logger.error(f"Failed to fetch notification data for user {user['id']}: {e}")
             return {"unread_count": 0, "total_count": 0, "recent": [], "categories": {}}
     
-    async def get_referral_data(self, user: dict) -> Dict:
+    async def get_referral_data(self, user: dict, sb: Optional[Any] = None) -> Dict:
         """
         Get referral program data.
         
@@ -291,8 +295,9 @@ class DashboardAggregationService:
         """
         try:
             default_ref = user["id"][:8].upper()
-            sb_res = self._get_supabase(user)
-            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+            if sb is None:
+                sb_res = self._get_supabase(user)
+                sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
             if not sb:
                 return {
                     "referral_code": default_ref,
@@ -331,20 +336,22 @@ class DashboardAggregationService:
                 "lifetime_earnings": 0.0
             }
     
-    async def get_risk_data(self, user: dict, portfolio: Optional[Dict] = None) -> Dict:
+    async def get_risk_data(self, user: dict, portfolio: Optional[Dict] = None, sb: Optional[Any] = None) -> Dict:
         """
         Get risk management data.
         
         Args:
             user: User dict
             portfolio: Optional portfolio data (to avoid duplicate query if already fetched)
+            sb: Optional shared Supabase client
 
         Returns:
             Risk settings, current risk level, circuit breaker status
         """
         try:
-            sb_res = self._get_supabase(user)
-            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+            if sb is None:
+                sb_res = self._get_supabase(user)
+                sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
 
             # Get risk settings
             settings = {}
@@ -388,7 +395,7 @@ class DashboardAggregationService:
                 "kill_switches": []
             }
     
-    async def get_marketplace_data(self, user: dict) -> Dict:
+    async def get_marketplace_data(self, user: dict, sb: Optional[Any] = None) -> Dict:
         """
         Get marketplace data from library_strategies.
         
@@ -396,8 +403,9 @@ class DashboardAggregationService:
             Available strategies, user's publications, subscription counts
         """
         try:
-            sb_res = self._get_supabase(user)
-            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+            if sb is None:
+                sb_res = self._get_supabase(user)
+                sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
             if not sb:
                 return {"available_count": 0, "user_publications": 0, "total_subscribers": 0, "featured": []}
 
@@ -510,15 +518,16 @@ class DashboardAggregationService:
         
         return []
     
-    async def get_strategies(self, user: dict) -> List[Dict]:
+    async def get_strategies(self, user: dict, sb: Optional[Any] = None) -> List[Dict]:
         """
         Get strategies with calculated metrics.
         
         Returns:
             List of strategies with status, health, PnL, etc.
         """
-        sb_res = self._get_supabase(user)
-        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        if sb is None:
+            sb_res = self._get_supabase(user)
+            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         if not sb:
             return []
         
@@ -593,15 +602,16 @@ class DashboardAggregationService:
         
         return insights[:3]
     
-    async def get_recent_signals(self, user: dict, limit: int = 5) -> List[Dict]:
+    async def get_recent_signals(self, user: dict, limit: int = 5, sb: Optional[Any] = None) -> List[Dict]:
         """
         Get recent signal traces for notifications.
         
         Returns:
             List of signal objects with decision, asset, risk_result, etc.
         """
-        sb_res = self._get_supabase(user)
-        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        if sb is None:
+            sb_res = self._get_supabase(user)
+            sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         if not sb:
             return []
         
@@ -669,26 +679,29 @@ class DashboardAggregationService:
         """
         dashboard_start = time.perf_counter()
         try:
+            # Initialize shared Supabase client once for request lifecycle
+            sb = await self._get_supabase(user)
+
             # Create request-local shared task for strategies fetch
             # This task starts executing immediately but doesn't block gather
             strategies_start = time.perf_counter()
-            strategies_task = asyncio.create_task(self.get_strategies(user))
+            strategies_task = asyncio.create_task(self.get_strategies(user, sb=sb))
 
             # Parallel data fetching from all modules with timing wrappers
-            # Pass the shared task to insights and subscription to avoid duplicate queries
+            # Pass the shared task and shared client to subroutines to maximize connection reuse
             gather_start = time.perf_counter()
             results = await asyncio.gather(
                 self._timed_operation("get_portfolio_overview", self.get_portfolio_overview(user)),
                 self._timed_operation("get_equity_curve", self.get_equity_curve(user, equity_days)),
                 self._timed_operation("get_strategy_insights", self.get_strategy_insights(user, strategies_task)),
-                self._timed_operation("get_recent_signals", self.get_recent_signals(user)),
+                self._timed_operation("get_recent_signals", self.get_recent_signals(user, sb=sb)),
                 self._timed_operation("get_health_status", self.get_health_status(user)),
-                self._timed_operation("get_subscription_data", self.get_subscription_data(user, strategies_task)),
-                self._timed_operation("get_exchange_data", self.get_exchange_data(user)),
-                self._timed_operation("get_notification_data", self.get_notification_data(user)),
-                self._timed_operation("get_referral_data", self.get_referral_data(user)),
-                self._timed_operation("get_marketplace_data", self.get_marketplace_data(user)),
-                self._timed_operation("get_risk_data", self.get_risk_data(user)),
+                self._timed_operation("get_subscription_data", self.get_subscription_data(user, strategies_task, sb=sb)),
+                self._timed_operation("get_exchange_data", self.get_exchange_data(user, sb=sb)),
+                self._timed_operation("get_notification_data", self.get_notification_data(user, sb=sb)),
+                self._timed_operation("get_referral_data", self.get_referral_data(user, sb=sb)),
+                self._timed_operation("get_marketplace_data", self.get_marketplace_data(user, sb=sb)),
+                self._timed_operation("get_risk_data", self.get_risk_data(user, sb=sb)),
                 return_exceptions=True
             )
             gather_duration_ms = (time.perf_counter() - gather_start) * 1000
