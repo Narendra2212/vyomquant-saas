@@ -61,6 +61,19 @@ async def get_dashboard(
     Rate limited: 100 requests per minute per user.
     """
     try:
+        # Check fast Redis cache (10 second TTL for instant sub-50ms repeat response)
+        cache_key = f"dashboard:{user['id']}:{equity_days}"
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            redis_client = await redis_manager.get_client()
+            if redis_client:
+                cached = await redis_client.get(cache_key)
+                if cached:
+                    import json
+                    return json.loads(cached)
+        except Exception as cache_err:
+            logger.debug(f"Dashboard cache read error: {cache_err}")
+
         dashboard_service = await get_dashboard_service()
         
         # Get complete dashboard data from aggregation service
@@ -69,6 +82,16 @@ async def get_dashboard(
             equity_days=equity_days
         )
         
+        # Write to fast cache
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            redis_client = await redis_manager.get_client()
+            if redis_client:
+                import json
+                await redis_client.setex(cache_key, 10, json.dumps(dashboard_data))
+        except Exception as cache_write_err:
+            logger.debug(f"Dashboard cache write error: {cache_write_err}")
+
         logger.info(f"Dashboard data fetched successfully for user {user['id']}")
         return dashboard_data
         
