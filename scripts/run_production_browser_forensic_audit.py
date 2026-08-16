@@ -148,16 +148,23 @@ async def run_forensic_audit():
             localStorage.setItem('auth_token', '{token}');
         }}""")
 
-        # 3. Navigate across all routes
+        # 3. Navigate across all actual defined routes
         routes = [
-            "/app",
+            "/app/dashboard",
             "/app/strategies",
             "/app/signal-trace",
+            "/app/builder",
+            "/app/backtest",
+            "/app/marketplace",
+            "/app/exchange",
             "/app/risk",
-            "/app/exchanges",
             "/app/billing",
-            "/app/notifications",
-            "/app/terminal"
+            "/app/profile",
+            "/app/security-logs",
+            "/app/portfolio",
+            "/app/trades",
+            "/app/support",
+            "/app/notifications"
         ]
 
         route_results = {}

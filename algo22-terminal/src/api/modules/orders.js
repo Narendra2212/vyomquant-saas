@@ -97,6 +97,11 @@ export const ordersApi = {
     return get(`/api/orders/history?${params}`);
   },
 
+  getHistory: async (filters = {}) => {
+    const params = new URLSearchParams(filters);
+    return get(`/api/orders/history?${params}`);
+  },
+
   /**
    * Get open orders
    * @param {string} [symbol] - Filter by symbol

@@ -30,7 +30,7 @@ export default function Profile() {
         setLoading(true);
         setError(null);
 
-        const [profileData, billingData, referralData, statsData, securityData, notifData] = await Promise.allSettle([
+        const [profileData, billingData, referralData, statsData, securityData, notifData] = await Promise.allSettled([
           api.user.getProfile(),
           api.user.getBillingPlan(),
           api.referral.getStats(),

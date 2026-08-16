@@ -1022,7 +1022,7 @@ async def cancel_all(
 async def get_history(
     symbol: Optional[str] = None,
     limit: int = Query(100, ge=1, le=500),
-    exchange_id: str = Query(..., description="Exchange ID (e.g., binance, coinbase)"),
+    exchange_id: Optional[str] = Query(None, description="Optional Exchange ID (e.g., binance, coinbase)"),
     user: dict = Depends(get_current_user),
     vault=Depends(get_vault),
     telemetry=Depends(get_telemetry),
@@ -1053,18 +1053,25 @@ async def get_history(
     # ═══════════════════════════════════════════════════════════════════
     # DATA QUERIES USE EXCHANGE DIRECTLY (NO EXECUTION RISK)
     # ═══════════════════════════════════════════════════════════════════
-    keys = vault.load_decrypted_keys(
-        user["id"],
-        exchange_id,
-        access_token=user.get("access_token"),
-    )
-    exchange = await get_or_create_exchange(
-        user_id=user["id"],
-        exchange_id=exchange_id,
-        api_key=keys["api_key"],
-        secret_key=keys["secret_key"],
-        password=keys.get("password"),
-    )
-    
-    sym = symbol.replace("-", "/") if symbol else None
-    return await DataEngine(exchange).fetch_my_historical_trades(sym, limit=limit)
+    if not exchange_id:
+        return []
+
+    try:
+        keys = vault.load_decrypted_keys(
+            user["id"],
+            exchange_id,
+            access_token=user.get("access_token"),
+        )
+        exchange = await get_or_create_exchange(
+            user_id=user["id"],
+            exchange_id=exchange_id,
+            api_key=keys["api_key"],
+            secret_key=keys["secret_key"],
+            password=keys.get("password"),
+        )
+        
+        sym = symbol.replace("-", "/") if symbol else None
+        return await DataEngine(exchange).fetch_my_historical_trades(sym, limit=limit)
+    except Exception as e:
+        logger.warning(f"Exchange history fetch failed: {e}")
+        return []
