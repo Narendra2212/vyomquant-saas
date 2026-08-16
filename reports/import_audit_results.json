@@ -141,17 +141,17 @@
     },
     {
       "file": "backend_app\\backend\\metrics_service.py",
-      "line": 20,
+      "line": 21,
       "name": "Decimal"
     },
     {
       "file": "backend_app\\backend\\metrics_service.py",
-      "line": 21,
+      "line": 22,
       "name": "Any"
     },
     {
       "file": "backend_app\\backend\\metrics_service.py",
-      "line": 21,
+      "line": 22,
       "name": "Optional"
     },
     {
@@ -1796,6 +1796,7 @@
       "backend_app.backend.exchange_reconciliation"
     ],
     "backend_app.backend.execution_guard": [
+      "ast",
       "asyncio",
       "json",
       "logging",
@@ -1997,6 +1998,7 @@
     "backend_app.backend.metrics_service": [
       "asyncio",
       "logging",
+      "re",
       "datetime",
       "datetime",
       "datetime",
@@ -2308,9 +2310,9 @@
     "backend_app.backend.state_persistence": [
       "asyncio",
       "hashlib",
+      "io",
       "json",
       "logging",
-      "pickle",
       "threading",
       "zlib",
       "dataclasses",
@@ -2469,6 +2471,7 @@
     "backend_app.backend.transactional_execution_manager": [
       "logging",
       "json",
+      "re",
       "uuid",
       "hashlib",
       "typing",
@@ -4400,6 +4403,7 @@
       "worker_topology_architecture"
     ],
     "backend_app.backend.distributed_execution.execution_deduplication": [
+      "ast",
       "hashlib",
       "logging",
       "datetime",
@@ -4983,6 +4987,7 @@
       "backend_app.core.cache.redis_manager"
     ],
     "backend_app.backend.exchange_validation.sandbox_execution_runner": [
+      "ast",
       "logging",
       "datetime",
       "datetime",

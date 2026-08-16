@@ -17,7 +17,7 @@
     },
     "docker_validation": {
       "status": "PASS",
-      "output": "[08:19:09] === AUTOMATED FAST DOCKER VALIDATION (CI/CD PRE-FLIGHT) ===\n[08:19:09] [docker_val] ENTER: Static Dockerfile Structure & Directive Audit\n[08:19:10] [docker_val] EXIT: Static Dockerfile Audit completed in 0.286s (valid=True)\n[08:19:10] [docker_val] Checking Docker CLI & Daemon connectivity...\n[08:19:10] [docker_val] Docker Daemon NOT AVAILABLE (0.0s)\n\n--- DOCKER VALIDATION SUMMARY ---\nStatic Dockerfile Inspection: PASS\nDocker Daemon Connectivity: WARN (Daemon unavailable)\n[08:19:10] === TOTAL FAST DOCKER VALIDATION TIME: 0.286s ===\n",
+      "output": "[08:57:37] === AUTOMATED FAST DOCKER VALIDATION (CI/CD PRE-FLIGHT) ===\n[08:57:37] [docker_val] ENTER: Static Dockerfile Structure & Directive Audit\n[08:57:37] [docker_val] EXIT: Static Dockerfile Audit completed in 0.007s (valid=True)\n[08:57:37] [docker_val] Checking Docker CLI & Daemon connectivity...\n[08:57:37] [docker_val] Docker Daemon NOT AVAILABLE (0.0s)\n\n--- DOCKER VALIDATION SUMMARY ---\nStatic Dockerfile Inspection: PASS\nDocker Daemon Connectivity: WARN (Daemon unavailable)\n[08:57:37] === TOTAL FAST DOCKER VALIDATION TIME: 0.007s ===\n",
       "error": ""
     },
     "aws_validation": {

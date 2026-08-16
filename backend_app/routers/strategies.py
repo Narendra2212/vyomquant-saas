@@ -826,19 +826,17 @@ async def list_strategies(user: dict = Depends(get_current_user)):
         if not sb:
             return {"strategies": [], "total": 0}
         
-        def _fetch_strategies():
-            return (
-                sb
-                .table("strategies")
-                .select("id, name, description, symbol, timeframe, status, is_active, deployed_exchange, created_at, updated_at, buy_logic, tags, version")
-                .eq("user_id", user["id"])
-                .order("created_at", desc=True)
-                .execute()
-            )
+        query_res = (
+            sb
+            .table("strategies")
+            .select("id, name, description, symbol, timeframe, status, is_active, deployed_exchange, created_at, updated_at, buy_logic, tags, version")
+            .eq("user_id", user["id"])
+            .order("created_at", desc=True)
+            .execute()
+        )
+        resp = await query_res if inspect.isawaitable(query_res) else query_res
         
-        resp = await asyncio.to_thread(_fetch_strategies)
-        
-        results = resp.data or [] if resp else []
+        results = resp.data or [] if resp and hasattr(resp, "data") else []
         for item in results:
             if "buy_logic" in item and isinstance(item["buy_logic"], dict):
                 bl = item["buy_logic"]
@@ -2018,7 +2016,8 @@ async def clone_strategy(strategy_id: str, user: dict = Depends(get_current_user
         
     # SECURITY: Add ownership check to prevent tenant isolation bypass
     try:
-        res = await sb.table("strategies").select("*").eq("id", strategy_id).eq("user_id", user["id"]).execute()
+        query_res = sb.table("strategies").select("*").eq("id", strategy_id).eq("user_id", user["id"]).execute()
+        res = await query_res if inspect.isawaitable(query_res) else query_res
     except Exception as e:
         logger.error(f"[STRATEGIES] Failed to fetch strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to retrieve strategy for cloning. Please try again later.")
@@ -2058,7 +2057,8 @@ async def clone_strategy(strategy_id: str, user: dict = Depends(get_current_user
                 # Continue with clone even if validation fails - matches existing behavior
     
     try:
-        ins = await sb.table("strategies").insert(cloned_payload).execute()
+        ins_query = sb.table("strategies").insert(cloned_payload).execute()
+        ins = await ins_query if inspect.isawaitable(ins_query) else ins_query
         if not ins.data:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to insert cloned strategy record.")
         return {"status": "cloned", "strategy": ins.data[0]}

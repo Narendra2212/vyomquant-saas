@@ -311,6 +311,7 @@ class RiskSettingsRequest(BaseModel):
     max_daily_loss: float = Field(500.0, gt=0)
     max_positions: int = Field(10, gt=0, le=50)
     max_leverage: int = Field(3, gt=0, le=20)
+    circuit_breaker_armed: bool = Field(True, description="Whether risk circuit breakers are armed")
     kill_switches: List[KillSwitchConfig] = Field(default_factory=list)
 
 

@@ -105,16 +105,14 @@ class PricingService:
         # Priority 1 & 2: User and Billing preference from profile (single query)
         if supabase and user_id:
             try:
-                def _fetch_profile():
-                    return (
-                        supabase.table("profiles")
-                        .select("preferred_currency, billing_currency")
-                        .eq("id", user_id)
-                        .limit(1)
-                        .execute()
-                    )
-                
-                resp = await asyncio.to_thread(_fetch_profile)
+                query_res = (
+                    supabase.table("profiles")
+                    .select("preferred_currency, billing_currency")
+                    .eq("id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                resp = await query_res if inspect.isawaitable(query_res) else query_res
                 
                 if resp and hasattr(resp, "data") and resp.data:
                     row = resp.data[0]

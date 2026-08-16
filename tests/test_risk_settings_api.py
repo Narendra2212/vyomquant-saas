@@ -38,13 +38,13 @@ class TestRiskSettingsAPI:
             return {"id": "test_user_123", "access_token": "valid_token"}
         
         mock_sb_instance = Mock()
-        mock_sb_instance.table.return_value.select.return_value.eq.return_value.execute.return_value = Mock(data=[{
+        mock_sb_instance.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = Mock(data=[{
             "max_daily_loss": 1000,
             "max_positions": 15,
             "max_leverage": 5,
             "kill_switches": [{"label": "loss", "enabled": True}]
         }])
-        mock_sb.return_value = mock_sb_instance
+        mock_sb.side_effect = AsyncMock(return_value=mock_sb_instance)
 
         app.dependency_overrides[get_current_user] = mock_user
         try:
@@ -64,8 +64,8 @@ class TestRiskSettingsAPI:
             return {"id": "test_user_defaults_456", "access_token": "valid_token"}
         
         mock_sb_instance = Mock()
-        mock_sb_instance.table.return_value.select.return_value.eq.return_value.execute.return_value = Mock(data=[])
-        mock_sb.return_value = mock_sb_instance
+        mock_sb_instance.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = Mock(data=[])
+        mock_sb.side_effect = AsyncMock(return_value=mock_sb_instance)
 
         app.dependency_overrides[get_current_user] = mock_user
         try:
@@ -86,7 +86,7 @@ class TestRiskSettingsAPI:
         
         mock_sb_instance = Mock()
         mock_sb_instance.table.return_value.upsert.return_value.execute.return_value = Mock(data=[{"status": "ok"}])
-        mock_sb.return_value = mock_sb_instance
+        mock_sb.side_effect = AsyncMock(return_value=mock_sb_instance)
 
         payload = {
             "max_daily_loss": 2000,
@@ -337,10 +337,10 @@ class TestRiskSettingsSecurity:
         mock_sb_instance = Mock()
         # Verify that user_id is passed to query
         mock_sb_instance.table.return_value.select.return_value.eq.side_effect = lambda field, value: (
-            Mock(execute=Mock(return_value=Mock(data=[]))) if value == user1["id"] else
-            Mock(execute=Mock(return_value=Mock(data=[])))
+            Mock(limit=Mock(return_value=Mock(execute=Mock(return_value=Mock(data=[]))))) if value == user1["id"] else
+            Mock(limit=Mock(return_value=Mock(execute=Mock(return_value=Mock(data=[])))))
         )
-        mock_sb.return_value = mock_sb_instance
+        mock_sb.side_effect = AsyncMock(return_value=mock_sb_instance)
 
         app.dependency_overrides[get_current_user] = lambda: user1
         try:

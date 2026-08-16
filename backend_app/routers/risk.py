@@ -61,8 +61,7 @@ async def get_risk_settings(user: dict = Depends(get_current_user)):
         logger.warning(f"Cache read failed for user {user['id']}: {e}")
 
     # Fallback to database
-    sb_res = _sb(user)
-    sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+    sb = await _sb(user)
     if not sb:
         return {
             "max_daily_loss": 500,
@@ -71,13 +70,11 @@ async def get_risk_settings(user: dict = Depends(get_current_user)):
             "kill_switches": [],
         }
     try:
-        def _fetch_settings():
-            return sb.table("risk_settings").select("max_daily_loss, max_positions, max_leverage, circuit_breaker_armed, circuit_breaker_breaches, kill_switches").eq("user_id", user["id"]).limit(1).execute()
-        
-        resp = await asyncio.to_thread(_fetch_settings)
+        query_res = sb.table("risk_settings").select("max_daily_loss, max_positions, max_leverage, circuit_breaker_armed, circuit_breaker_breaches, kill_switches").eq("user_id", user["id"]).limit(1).execute()
+        resp = await query_res if inspect.isawaitable(query_res) else query_res
         result = (
             resp.data[0]
-            if resp and resp.data
+            if resp and hasattr(resp, "data") and resp.data
             else {
                 "max_daily_loss": 500,
                 "max_positions": 10,
@@ -115,8 +112,7 @@ async def update_risk_settings(
     Update risk settings.
     Invalidates cache after update.
     """
-    sb_res = _sb(user)
-    sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+    sb = await _sb(user)
     if not sb:
         raise HTTPException(500, "Database client initialization failed.")
 
@@ -153,7 +149,7 @@ async def update_risk_settings(
     except Exception as e:
         logger.warning(f"Cache invalidation failed for user {user['id']}: {e}")
 
-    return {"status": "ok", "settings": data}
+    return result.data[0] if result and hasattr(result, "data") and result.data else data
 
 
 @router.post("/kill-switch")
@@ -267,15 +263,12 @@ async def get_strategy_limits(user: dict = Depends(get_current_user)):
     Get per-strategy risk limits configured by the user.
     """
     try:
-        sb_res = _sb(user)
-        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        sb = await _sb(user)
         if not sb:
             return {"limits": [], "count": 0, "user_id": user["id"]}
         
-        def _fetch_limits():
-            return sb.table("strategy_limits").select("strategy_id, max_position_size, max_daily_trades, allowed_symbols, max_drawdown_pct, enabled").eq("user_id", user["id"]).execute()
-        
-        resp = await asyncio.to_thread(_fetch_limits)
+        query_res = sb.table("strategy_limits").select("strategy_id, max_position_size, max_daily_trades, allowed_symbols, max_drawdown_pct, enabled").eq("user_id", user["id"]).execute()
+        resp = await query_res if inspect.isawaitable(query_res) else query_res
         
         limits = []
         if resp and hasattr(resp, "data") and resp.data:
@@ -314,8 +307,7 @@ async def update_strategy_limits(
     Update per-strategy risk limits.
     """
     try:
-        sb_res = _sb(user)
-        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        sb = await _sb(user)
         updated = []
         
         if sb:
@@ -362,8 +354,7 @@ async def update_single_strategy_limit(
     Update a single strategy-specific risk limit.
     """
     try:
-        sb_res = _sb(user)
-        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        sb = await _sb(user)
         if not sb:
             raise HTTPException(500, "Database client initialization failed.")
         
@@ -408,8 +399,7 @@ async def delete_strategy_limit(
     Delete a strategy-specific risk limit.
     """
     try:
-        sb_res = _sb(user)
-        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        sb = await _sb(user)
         if not sb:
             raise HTTPException(500, "Database client initialization failed.")
         query_res = sb.table("strategy_limits").delete().eq(
@@ -421,12 +411,6 @@ async def delete_strategy_limit(
             "status": "ok",
             "deleted": strategy_id,
             "affected": len(result.data) if result and result.data else 0
-        }
-        
-        return {
-            "status": "ok",
-            "deleted": strategy_id,
-            "affected": len(result.data) if result.data else 0
         }
     except Exception as e:
         logger.error(f"Error deleting strategy limit for {user['id']}: {e}")

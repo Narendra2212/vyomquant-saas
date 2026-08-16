@@ -75,12 +75,10 @@ class TestStrategyCloneTenantIsolation:
     @pytest.fixture
     def mock_supabase(self):
         """Mock Supabase client for testing."""
-        with patch('backend_app.routers.strategies._sb') as mock_sb, \
-             patch('backend_app.routers.strategies.create_request_supabase') as mock:
+        with patch('backend_app.routers.strategies._sb') as mock_sb:
             mock_client = MagicMock()
             mock_client.table = MagicMock()
-            mock.return_value = mock_client
-            mock_sb.return_value = mock_client
+            mock_sb.side_effect = AsyncMock(return_value=mock_client)
             yield mock_client
 
     def test_clone_own_strategy_succeeds(self, client, user_a_token, mock_supabase):

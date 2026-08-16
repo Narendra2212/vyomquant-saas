@@ -147,26 +147,23 @@ async def list_notifications(
             limit=limit,
             offset=offset
         )
-    
     try:
-        def fetch_notifications():
-            columns = "id, user_id, type, category, severity, title, message, read, created_at, metadata"
-            query = supabase.table("notifications").select(columns, count="exact").eq("user_id", user["id"])
-            
-            if unread_only:
-                query = query.eq("read", False)
-            if category:
-                query = query.eq("category", category)
-            query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
-            
-            res = query.execute()
-            
-            unread_query = supabase.table("notifications").select("id", count="exact").eq("user_id", user["id"]).eq("read", False)
-            unread_res = unread_query.execute()
-            
-            return res, unread_res
-
-        res, unread_res = await asyncio.to_thread(fetch_notifications)
+        columns = "id, user_id, type, category, severity, title, message, read, created_at, metadata"
+        query = supabase.table("notifications").select(columns, count="exact").eq("user_id", user["id"])
+        
+        if unread_only:
+            query = query.eq("read", False)
+        if category:
+            query = query.eq("category", category)
+        query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
+        
+        query_res = query.execute()
+        res = await query_res if inspect.isawaitable(query_res) else query_res
+        
+        unread_query = supabase.table("notifications").select("id", count="exact").eq("user_id", user["id"]).eq("read", False)
+        unread_query_res = unread_query.execute()
+        unread_res = await unread_query_res if inspect.isawaitable(unread_query_res) else unread_query_res
+        
         items = res.data or [] if res and hasattr(res, "data") else []
         total = res.count if res and hasattr(res, "count") and res.count is not None else len(items)
         unread_count = unread_res.count if unread_res and hasattr(unread_res, "count") and unread_res.count is not None else 0

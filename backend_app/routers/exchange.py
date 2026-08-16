@@ -187,12 +187,10 @@ async def list_exchanges(
     try:
         keys = []
         if supabase:
-            def fetch_keys():
-                q1 = supabase.table("exchange_keys").select("id, exchange_id, created_at").eq("user_id", user["id"]).execute()
-                return q1.data if q1 and hasattr(q1, "data") and isinstance(q1.data, list) else []
-            
             try:
-                keys = await asyncio.to_thread(fetch_keys)
+                q1_res = supabase.table("exchange_keys").select("id, exchange_id, created_at").eq("user_id", user["id"]).execute()
+                q1 = await q1_res if inspect.isawaitable(q1_res) else q1_res
+                keys = q1.data if q1 and hasattr(q1, "data") and isinstance(q1.data, list) else []
             except Exception as e:
                 logger.warning(f"Failed to fetch exchange keys: {e}")
                 keys = []
