@@ -831,14 +831,7 @@ const logError = (type, data) => {
  * Log successful request for observability
  */
 const logSuccess = (url, duration, method = 'GET') => {
-  if (import.meta.env.PROD && duration > 1000) {
-    logError('SLOW_API_REQUEST', {
-      url,
-      method,
-      duration,
-      threshold: 1000
-    });
-  }
+  // Duration recorded in response interceptor and endpoint metrics
 };
 
 /**
@@ -1092,15 +1085,6 @@ export const post = (url, data = {}, config = {}) => {
       recordCircuitSuccess(endpoint);
 
       logSuccess(url, latency, 'POST');
-
-      if (import.meta.env.PROD && latency > 1000) {
-        logError('SLOW_API_REQUEST', {
-          url,
-          method: 'POST',
-          duration: latency,
-          requestId
-        });
-      }
 
       // Invalidate cache after successful mutation
       invalidateCache(url.split('/').slice(0, -1).join('/'));
