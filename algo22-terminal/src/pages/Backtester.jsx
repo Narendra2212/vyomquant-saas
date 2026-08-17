@@ -254,8 +254,8 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
         </div>
         <Card className="p-4 flex-1 flex flex-col">
           <PanelTitle title="Equity Curve" sub={results ? `Simulated performance over ${lookbackDays} days` : "Awaiting backtest execution..."} />
-          <div style={{ flex: 1, minHeight: 260, position: "relative" }}>
-            <ResponsiveContainer width="100%" height="100%" minHeight={260}>
+          <div style={{ width: "100%", height: 280, minHeight: 280, position: "relative" }}>
+            <ResponsiveContainer width="100%" height={280} minWidth={100} minHeight={280}>
               <AreaChart data={equityData}>
                 <defs>
                   <linearGradient id="btEq" x1="0" y1="0" x2="0" y2="1">
