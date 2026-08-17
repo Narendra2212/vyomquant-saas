@@ -130,6 +130,16 @@ async def get_security_logs(
     user: dict = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_request_supabase),
 ):
+    from backend_app.core.cache.redis_manager import redis_manager
+    cache_key = f"user:security_logs:{user['id']}:{limit}"
+    try:
+        cached = await redis_manager.get(cache_key)
+        if cached:
+            import json
+            return json.loads(cached)
+    except Exception:
+        pass
+
     if not supabase:
         return []
     try:
@@ -142,7 +152,13 @@ async def get_security_logs(
             .execute()
         )
         resp = await res if inspect.isawaitable(res) else res
-        return resp.data if resp and hasattr(resp, "data") and resp.data else []
+        rows = resp.data if resp and hasattr(resp, "data") and resp.data else []
+        try:
+            import json
+            await redis_manager.set(cache_key, json.dumps(rows), ex=10)
+        except Exception:
+            pass
+        return rows
     except Exception as e:
         logger.error(f"Failed to fetch security logs for user {user['id']}: {e}")
         raise HTTPException(

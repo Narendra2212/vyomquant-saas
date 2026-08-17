@@ -361,10 +361,27 @@ async def get_currency(
   supabase: Any = Depends(get_request_supabase),
 ):
     """Get user's currency preference (auto-detected if not set)."""
+    cache_key = f"billing:currency:{user.get('id', '')}"
+    try:
+        from backend_app.core.cache.redis_manager import redis_manager
+        cached = await redis_manager.get(cache_key)
+        if cached:
+            import json
+            return json.loads(cached)
+    except Exception:
+        pass
+
     try:
         from backend_app.core.pricing_service import PricingService
         currency = await PricingService.determine_currency(user.get("id", ""), supabase, request)
-        return {"currency": currency or "USD"}
+        res = {"currency": currency or "USD"}
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            import json
+            await redis_manager.set(cache_key, json.dumps(res), ex=10)
+        except Exception:
+            pass
+        return res
     except Exception as e:
         logger.warning(f"Failed to determine currency for user {user.get('id')}: {e}")
         return {"currency": "USD"}
@@ -384,8 +401,13 @@ async def set_currency(
         from backend_app.core.pricing_service import PricingService
         currency = body.get("currency", "USD")
         success = await PricingService.set_user_currency_preference(user["id"], currency, supabase)
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            import json
+            await redis_manager.set(f"billing:currency:{user['id']}", json.dumps({"currency": currency}), ex=10)
+        except Exception:
+            pass
         if not success:
-            # Still return 200 with USD fallback if profile write fails
             return {"status": "ok", "currency": "USD", "warning": "Failed to persist preference"}
         return {"status": "ok", "currency": currency}
     except Exception as e:
@@ -393,6 +415,92 @@ async def set_currency(
         return {"status": "ok", "currency": "USD"}
     
     return {"status": "success", "currency": currency}
+
+
+# ── GET /api/billing/invoices ───────────────────────────────────────────────
+@router.get("/invoices")
+@limiter.limit("60/minute")
+async def get_invoices(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    supabase: Any = Depends(get_request_supabase),
+):
+    """Get invoice history from Supabase."""
+    cache_key = f"billing:invoices:{user['id']}"
+    try:
+        from backend_app.core.cache.redis_manager import redis_manager
+        cached = await redis_manager.get(cache_key)
+        if cached:
+            import json
+            return json.loads(cached)
+    except Exception:
+        pass
+
+    if not supabase:
+        return []
+    
+    try:
+        res = supabase.table("billing_invoices").select("*").eq("user_id", user["id"]).order("created_at", desc=True).execute()
+        resp = await res if inspect.isawaitable(res) else res
+        invoices = []
+        rows = resp.data if resp and hasattr(resp, "data") and resp.data else []
+        for inv in rows:
+            invoices.append({
+                "id": inv.get("id"),
+                "date": inv.get("created_at"),
+                "amtUSD": inv.get("amount_usd", 0),
+                "amtINR": inv.get("amount_inr", 0),
+                "status": inv.get("status", "unknown"),
+                "currency": inv.get("currency", "USD"),
+            })
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            import json
+            await redis_manager.set(cache_key, json.dumps(invoices), ex=10)
+        except Exception:
+            pass
+        return invoices
+    except Exception as e:
+        logger.warning(f"Failed to fetch invoices for user {user['id']}: {e}")
+        return []
+
+
+@router.get("/payment-methods")
+@limiter.limit("60/minute")
+async def get_payment_methods(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    cache_key = f"billing:payment_methods:{user['id']}"
+    try:
+        from backend_app.core.cache.redis_manager import redis_manager
+        cached = await redis_manager.get(cache_key)
+        if cached:
+            import json
+            return json.loads(cached)
+    except Exception:
+        pass
+
+    methods = db.query(PaymentMethodModel).filter(PaymentMethodModel.user_id == user["id"]).all()
+    res = []
+    for m in methods:
+        res.append({
+            "id": m.id,
+            "type": "card",
+            "brand": m.brand,
+            "last4": m.last4,
+            "expiry_month": m.expiry_month,
+            "expiry_year": m.expiry_year,
+            "is_default": m.is_default
+        })
+    try:
+        from backend_app.core.cache.redis_manager import redis_manager
+        import json
+        await redis_manager.set(cache_key, json.dumps(res), ex=10)
+    except Exception:
+        pass
+    return res
 
 @router.post("/checkout")
 @limiter.limit("10/minute")
@@ -838,57 +946,7 @@ async def razorpay_webhook(
         raise
 
 
-@router.get("/invoices")
-@limiter.limit("60/minute")
-async def get_invoices(
-    request: Request,
-    user: dict = Depends(get_current_user),
-    supabase: Any = Depends(get_request_supabase),
-):
-    """Get invoice history from Supabase."""
-    if not supabase:
-        return []
-    
-    try:
-        res = supabase.table("billing_invoices").select("*").eq("user_id", user["id"]).order("created_at", desc=True).execute()
-        resp = await res if inspect.isawaitable(res) else res
-        invoices = []
-        rows = resp.data if resp and hasattr(resp, "data") and resp.data else []
-        for inv in rows:
-            invoices.append({
-                "id": inv.get("id"),
-                "date": inv.get("created_at"),
-                "amtUSD": inv.get("amount_usd", 0),
-                "amtINR": inv.get("amount_inr", 0),
-                "status": inv.get("status", "unknown"),
-                "currency": inv.get("currency", "USD"),
-            })
-        return invoices
-    except Exception as e:
-        logger.warning(f"Failed to fetch invoices for user {user['id']}: {e}")
-        return []
 
-
-@router.get("/payment-methods")
-@limiter.limit("60/minute")
-async def get_payment_methods(
-    request: Request,
-    user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    methods = db.query(PaymentMethodModel).filter(PaymentMethodModel.user_id == user["id"]).all()
-    res = []
-    for m in methods:
-        res.append({
-            "id": m.id,
-            "type": "card",
-            "brand": m.brand,
-            "last4": m.last4,
-            "expiry_month": m.expiry_month,
-            "expiry_year": m.expiry_year,
-            "is_default": m.is_default
-        })
-    return res
 
 
 @router.post("/payment-methods")
