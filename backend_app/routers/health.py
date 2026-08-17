@@ -27,7 +27,7 @@ import os
 from typing import Any, Dict
 
 import redis.asyncio as redis
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from backend_app.core.rate_limit import limiter  # BE-CRITICAL-005 FIX
 
@@ -63,7 +63,7 @@ async def check_redis_health(url: str, timeout: float = 2.0) -> Dict[str, Any]:
 
 @router.get("/health")
 @limiter.limit("100/minute")  # BE-CRITICAL-005 FIX: Add rate limiting to prevent abuse
-async def health_check():
+async def health_check(request: Request):
     """
     Comprehensive health check.
     Returns:
@@ -102,7 +102,7 @@ async def health_check():
 
 @router.get("/health/ready")
 @limiter.limit("100/minute")  # BE-CRITICAL-005 FIX: Add rate limiting
-async def readiness_check():
+async def readiness_check(request: Request):
     """
     Readiness probe for Kubernetes / ECS.
     Returns 200 when ready to accept traffic.
@@ -119,7 +119,7 @@ async def readiness_check():
 
 @router.get("/health/live")
 @limiter.limit("100/minute")  # BE-CRITICAL-005 FIX: Add rate limiting
-async def liveness_check():
+async def liveness_check(request: Request):
     """
     Liveness probe for Kubernetes / ECS.
     Returns 200 if process is alive.
@@ -136,7 +136,7 @@ async def liveness_check():
 
 @router.get("/health/redis")
 @limiter.limit("100/minute")  # BE-CRITICAL-005 FIX: Add rate limiting
-async def redis_health_detailed():
+async def redis_health_detailed(request: Request):
     """
     Detailed Redis health check including replication status.
     """

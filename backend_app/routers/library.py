@@ -930,8 +930,8 @@ async def my_library(user: dict = Depends(get_current_user)):
 @limiter.limit("100/minute")  # BE-CRITICAL-007 FIX: Add rate limiting
 async def get_library_detail(
     library_id: str,
-    user: dict = Depends(get_current_user),  # BE-CRITICAL-007 FIX: Require authentication
     request: Request,
+    user: dict = Depends(get_current_user),  # BE-CRITICAL-007 FIX: Require authentication
 ):
     """
     Returns full strategy detail including equity curve snapshot and

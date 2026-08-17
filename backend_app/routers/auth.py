@@ -75,7 +75,7 @@ def signout(
 # ----------------------------------
 @router.post("/google")
 @limiter.limit("10/minute")  # BE-CRITICAL-002 FIX: Add rate limiting to prevent account enumeration
-def google_auth(data: GoogleAuthRequest, request: Request):
+def google_auth(request: Request, data: GoogleAuthRequest):
     """
     Authenticate user using Google OAuth token.
     """

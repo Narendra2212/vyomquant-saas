@@ -107,7 +107,7 @@ async def get_funding_rate(
 
 @router.get("/symbols")
 @limiter.limit("60/minute")  # BE-CRITICAL-003 FIX: Add rate limiting
-async def get_symbols(user: dict = Depends(get_current_user), request: Request):  # BE-CRITICAL-003 FIX: Require authentication
+async def get_symbols(request: Request, user: dict = Depends(get_current_user)):  # BE-CRITICAL-003 FIX: Require authentication
     """
     Get available trading symbols from CCXT
     

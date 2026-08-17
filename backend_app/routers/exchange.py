@@ -32,7 +32,7 @@ _CACHED_SUPPORTED_EXCHANGES = None
 
 @router.get("/supported")
 @limiter.limit("60/minute")  # BE-CRITICAL-004 FIX: Add rate limiting
-async def get_supported_exchanges(user: dict = Depends(get_current_user), request: Request):  # BE-CRITICAL-004 FIX: Require authentication
+async def get_supported_exchanges(request: Request, user: dict = Depends(get_current_user)):  # BE-CRITICAL-004 FIX: Require authentication
     """
     Returns list of all CCXT-supported exchanges with full metadata.
     Includes: id, display name, spot/futures/margin support, sandbox support,
