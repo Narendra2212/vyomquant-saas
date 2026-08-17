@@ -87,6 +87,14 @@ class DashboardAggregationService:
             self._telemetry = get_telemetry()
         return self._telemetry
     
+    async def _execute_sb_query(self, query):
+        """Execute a Supabase PostgREST query in a background thread to prevent blocking asyncio loop."""
+        if inspect.isawaitable(query):
+            return await query
+        if hasattr(query, "execute"):
+            return await asyncio.to_thread(query.execute)
+        return query
+
     async def _get_supabase(self, user: dict):
         """Get Supabase client for user."""
         from backend_app.core.dependencies import create_request_supabase_async
@@ -125,8 +133,7 @@ class DashboardAggregationService:
                 }
 
             # Get user profile with subscription info
-            query_res = sb.table("profiles").select("subscription_tier, updated_at").eq("id", user["id"]).limit(1).execute()
-            res = await query_res if inspect.isawaitable(query_res) else query_res
+            res = await self._execute_sb_query(sb.table("profiles").select("subscription_tier, updated_at").eq("id", user["id"]).limit(1))
             profile = res.data[0] if res and hasattr(res, "data") and res.data else {}
 
             # Get subscription tier from profile
@@ -195,8 +202,7 @@ class DashboardAggregationService:
             
             # Get user's exchange connections from exchange_keys
             try:
-                q1_res = sb.table("exchange_keys").select("exchange_id, updated_at").eq("user_id", user["id"]).execute()
-                res = await q1_res if inspect.isawaitable(q1_res) else q1_res
+                res = await self._execute_sb_query(sb.table("exchange_keys").select("exchange_id, updated_at").eq("user_id", user["id"]))
                 connections = res.data or [] if res and hasattr(res, "data") else []
             except Exception as e:
                 logger.warning(f"Failed to fetch exchange_keys in dashboard: {e}")
@@ -243,15 +249,9 @@ class DashboardAggregationService:
             if sb is None:
                 sb_res = self._get_supabase(user)
                 sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
-            if not sb:
-                return {"unread_count": 0, "total_count": 0, "recent": [], "categories": {}}
-
-            unread_query_res = sb.table("notifications").select("id", count="exact").eq("user_id", user["id"]).eq("read", False).execute()
-            recent_query_res = sb.table("notifications").select("id, type, category, severity, title, message, read, created_at").eq("user_id", user["id"]).order("created_at", desc=True).limit(10).execute()
-
             res_unread, res_recent = await asyncio.gather(
-                unread_query_res if inspect.isawaitable(unread_query_res) else asyncio.sleep(0, result=unread_query_res),
-                recent_query_res if inspect.isawaitable(recent_query_res) else asyncio.sleep(0, result=recent_query_res),
+                self._execute_sb_query(sb.table("notifications").select("id", count="exact").eq("user_id", user["id"]).eq("read", False)),
+                self._execute_sb_query(sb.table("notifications").select("id, type, category, severity, title, message, read, created_at").eq("user_id", user["id"]).order("created_at", desc=True).limit(10)),
                 return_exceptions=True
             )
 
@@ -309,8 +309,7 @@ class DashboardAggregationService:
                     "lifetime_earnings": 0.0
                 }
 
-            query_res = sb.table("referral_profiles").select("referral_code, total_referrals, active_referrals, pending_earnings, approved_earnings, paid_earnings, lifetime_earnings").eq("user_id", user["id"]).limit(1).execute()
-            res = await query_res if inspect.isawaitable(query_res) else query_res
+            res = await self._execute_sb_query(sb.table("referral_profiles").select("referral_code, total_referrals, active_referrals, pending_earnings, approved_earnings, paid_earnings, lifetime_earnings").eq("user_id", user["id"]).limit(1))
             profile = res.data[0] if res and hasattr(res, "data") and res.data else {}
             
             ref_code = profile.get("referral_code") or default_ref
@@ -356,8 +355,7 @@ class DashboardAggregationService:
             # Get risk settings
             settings = {}
             if sb:
-                query_res = sb.table("risk_settings").select("max_daily_loss, max_positions, max_leverage, kill_switches").eq("user_id", user["id"]).limit(1).execute()
-                res = await query_res if inspect.isawaitable(query_res) else query_res
+                res = await self._execute_sb_query(sb.table("risk_settings").select("max_daily_loss, max_positions, max_leverage, kill_switches").eq("user_id", user["id"]).limit(1))
                 settings = res.data[0] if res and hasattr(res, "data") and res.data else {}
 
             current_drawdown = abs(float((portfolio or {}).get("pnl_pct", 0)))
@@ -409,12 +407,9 @@ class DashboardAggregationService:
             if not sb:
                 return {"available_count": 0, "user_publications": 0, "total_subscribers": 0, "featured": []}
 
-            avail_query_res = sb.table("library_strategies").select("id, name, is_featured").eq("is_active", True).in_("moderation_status", ["approved", "featured"]).limit(10).execute()
-            pubs_query_res = sb.table("library_strategies").select("id, subscriber_count").eq("author_id", user["id"]).execute()
-
             res_avail, res_pubs = await asyncio.gather(
-                avail_query_res if inspect.isawaitable(avail_query_res) else asyncio.sleep(0, result=avail_query_res),
-                pubs_query_res if inspect.isawaitable(pubs_query_res) else asyncio.sleep(0, result=pubs_query_res),
+                self._execute_sb_query(sb.table("library_strategies").select("id, name, is_featured").eq("is_active", True).in_("moderation_status", ["approved", "featured"]).limit(10)),
+                self._execute_sb_query(sb.table("library_strategies").select("id, subscriber_count").eq("author_id", user["id"])),
                 return_exceptions=True
             )
 
@@ -531,8 +526,7 @@ class DashboardAggregationService:
         if not sb:
             return []
         
-        query_res = sb.table("strategies").select("id, name, symbol, is_active, created_at").eq("user_id", user["id"]).execute()
-        res = await query_res if inspect.isawaitable(query_res) else query_res
+        res = await self._execute_sb_query(sb.table("strategies").select("id, name, symbol, is_active, created_at").eq("user_id", user["id"]))
         strategies = res.data or [] if res and hasattr(res, "data") else []
         
         # Calculate metrics in backend
@@ -612,16 +606,13 @@ class DashboardAggregationService:
         if sb is None:
             sb_res = self._get_supabase(user)
             sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
-        if not sb:
-            return []
-        
-        query_res = (sb.table("signals")
-               .select("id, generated_at, decision, symbol, exchange_id, risk_passed")
-               .eq("user_id", user["id"])
-               .order("generated_at", desc=True)
-               .limit(limit)
-               .execute())
-        res = await query_res if inspect.isawaitable(query_res) else query_res
+        res = await self._execute_sb_query(
+            sb.table("signals")
+            .select("id, generated_at, decision, symbol, exchange_id, risk_passed")
+            .eq("user_id", user["id"])
+            .order("generated_at", desc=True)
+            .limit(limit)
+        )
         records = res.data or [] if res and hasattr(res, "data") else []
         
         notifications = []
