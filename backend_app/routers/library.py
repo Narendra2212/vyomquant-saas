@@ -48,16 +48,12 @@ from backend_app.core.subscription_dependencies import (
 from backend_app.core.rate_limit import limiter
 from supabase import create_client
 from backend_app.api_ws.ws_manager import manager as ws_manager
-
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-try:
-    redis_client = redis.from_url(REDIS_URL)
-except Exception:
-    redis_client = None
+from backend_app.core.cache.redis_manager import redis_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+_CACHED_CATEGORIES = None
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Service-role Supabase client (cross-user reads, metric updates)
@@ -379,55 +375,54 @@ async def get_featured_strategies(
     
     # Check cache (10 minute TTL for featured)
     cache_key = f"library:featured:{limit}"
-    if redis_client:
-        try:
-            cached_data = redis_client.get(cache_key)
-            if cached_data:
-                response_data = json.loads(cached_data)
-                
-                # Enrichment if authenticated
-                user_id = None
-                if credentials:
+    try:
+        cached_data = await redis_manager.get(cache_key)
+        if cached_data:
+            response_data = json.loads(cached_data)
+            
+            # Enrichment if authenticated
+            user_id = None
+            if credentials:
+                try:
+                    payload = decode_token_local(credentials.credentials)
+                    user_id = payload.get("sub")
+                except Exception:
+                    pass
+            
+            if user_id:
+                items = response_data.get("items", [])
+                library_ids = [item["id"] for item in items]
+                if library_ids:
                     try:
-                        payload = decode_token_local(credentials.credentials)
-                        user_id = payload.get("sub")
-                    except Exception:
-                        pass
-                
-                if user_id:
-                    items = response_data.get("items", [])
-                    library_ids = [item["id"] for item in items]
-                    if library_ids:
-                        try:
-                            clones_resp = (
-                                svc.table("library_strategies")
-                                .select("id, source_library_id")
-                                .eq("author_id", user_id)
-                                .in_("source_library_id", library_ids)
-                                .execute()
-                            )
-                            cloned_map = {r["source_library_id"]: r["id"] for r in (clones_resp.data or [])}
-                            
-                            rating_resp = (
-                                svc.table("library_ratings")
-                                .select("library_id, rating")
-                                .eq("user_id", user_id)
-                                .in_("library_id", library_ids)
-                                .execute()
-                            )
-                            rating_map = {r["library_id"]: r["rating"] for r in (rating_resp.data or [])}
-                            
-                            for item in items:
-                                item["user_has_cloned"] = item["id"] in cloned_map
-                                item["user_rating"] = rating_map.get(item["id"])
-                                if item["user_has_cloned"]:
-                                    item["cloned_strategy_id"] = cloned_map[item["id"]]
-                        except Exception as exc:
-                            logger.warning(f"Failed to enrich featured with user context: {exc}")
-                
-                return response_data
-        except Exception as e:
-            logger.warning(f"Redis cache read failed for featured: {e}")
+                        clones_resp = (
+                            svc.table("library_strategies")
+                            .select("id, source_library_id")
+                            .eq("author_id", user_id)
+                            .in_("source_library_id", library_ids)
+                            .execute()
+                        )
+                        cloned_map = {r["source_library_id"]: r["id"] for r in (clones_resp.data or [])}
+                        
+                        rating_resp = (
+                            svc.table("library_ratings")
+                            .select("library_id, rating")
+                            .eq("user_id", user_id)
+                            .in_("library_id", library_ids)
+                            .execute()
+                        )
+                        rating_map = {r["library_id"]: r["rating"] for r in (rating_resp.data or [])}
+                        
+                        for item in items:
+                            item["user_has_cloned"] = item["id"] in cloned_map
+                            item["user_rating"] = rating_map.get(item["id"])
+                            if item["user_has_cloned"]:
+                                item["cloned_strategy_id"] = cloned_map[item["id"]]
+                    except Exception as exc:
+                        logger.warning(f"Failed to enrich featured with user context: {exc}")
+            
+            return response_data
+    except Exception as e:
+        logger.warning(f"Redis cache read failed for featured: {e}")
     
     if not svc:
         return {"items": []}
@@ -463,14 +458,13 @@ async def get_featured_strategies(
     response_data = {"items": items}
     
     # Save to cache
-    if redis_client:
-        try:
-            cache_payload = {
-                "items": items
-            }
-            redis_client.setex(cache_key, 600, json.dumps(cache_payload))
-        except Exception as e:
-            logger.warning(f"Redis cache write failed for featured: {e}")
+    try:
+        cache_payload = {
+            "items": items
+        }
+        await redis_manager.set(cache_key, json.dumps(cache_payload), ex=600)
+    except Exception as e:
+        logger.warning(f"Redis cache write failed for featured: {e}")
     
     # Enrich with user context if authenticated (after cache save)
     user_id = None
@@ -571,6 +565,19 @@ async def get_trending_strategies(
 @router.get("/categories")
 async def get_categories():
     """Returns available strategy categories with counts."""
+    global _CACHED_CATEGORIES
+    if _CACHED_CATEGORIES is not None:
+        return _CACHED_CATEGORIES
+
+    cache_key = "library:categories"
+    try:
+        cached = await redis_manager.get(cache_key)
+        if cached:
+            _CACHED_CATEGORIES = json.loads(cached)
+            return _CACHED_CATEGORIES
+    except Exception as e:
+        logger.warning(f"Redis cache read failed for categories: {e}")
+
     svc = _build_service_client()
     
     if not svc:
@@ -600,7 +607,14 @@ async def get_categories():
         for cat, count in sorted(category_counts.items(), key=lambda x: x[1], reverse=True)
     ]
     
-    return {"categories": categories}
+    result = {"categories": categories}
+    _CACHED_CATEGORIES = result
+    try:
+        await redis_manager.set(cache_key, json.dumps(result), ex=600)
+    except Exception as e:
+        logger.warning(f"Redis cache write failed for categories: {e}")
+
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -856,24 +870,24 @@ async def browse_library(
     }
 
     # Save to cache
-    if redis_client:
-        try:
-            cache_payload = {
-                "items": items,
-                "total": count,
-                "page": page,
-                "limit": limit,
-                "pages": response_data["pages"]
-            }
-            # Strip auth-sensitive keys for generic cache
-            for item in cache_payload["items"]:
+    try:
+        cache_payload = {
+            "items": items,
+            "total": count,
+            "page": page,
+            "limit": limit,
+            "pages": response_data["pages"]
+        }
+        # Strip auth-sensitive keys for generic cache
+        for item in cache_payload["items"]:
+            if isinstance(item, dict):
                 item.pop("user_has_cloned", None)
                 item.pop("user_rating", None)
                 item.pop("cloned_strategy_id", None)
-            
-            redis_client.setex(cache_key, 300, json.dumps(cache_payload))
-        except Exception as e:
-            logger.warning(f"Redis cache write failed: {e}")
+        
+        await redis_manager.set(cache_key, json.dumps(cache_payload), ex=300)
+    except Exception as e:
+        logger.warning(f"Redis cache write failed: {e}")
 
     return response_data
 

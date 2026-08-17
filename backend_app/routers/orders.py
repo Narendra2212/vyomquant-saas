@@ -1027,6 +1027,15 @@ async def get_history(
     vault=Depends(get_vault),
     telemetry=Depends(get_telemetry),
 ):
+    from backend_app.core.cache.redis_manager import redis_manager
+    cache_key = f"orders:history:{user['id']}:{symbol}:{limit}:{exchange_id}"
+    try:
+        cached = await redis_manager.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+
     try:
         # STRICT symbol validation to prevent injection
         if symbol:
@@ -1046,7 +1055,12 @@ async def get_history(
         
         if result and result.get("dataset"):
             cols = [c["name"] for c in result["columns"]]
-            return [dict(zip(cols, row)) for row in result["dataset"]]
+            history_rows = [dict(zip(cols, row)) for row in result["dataset"]]
+            try:
+                await redis_manager.set(cache_key, json.dumps(history_rows), ex=5)
+            except Exception:
+                pass
+            return history_rows
     except Exception as e:
         logger.warning(f"QuestDB history failed, falling back to CCXT: {e}")
 
@@ -1054,6 +1068,10 @@ async def get_history(
     # DATA QUERIES USE EXCHANGE DIRECTLY (NO EXECUTION RISK)
     # ═══════════════════════════════════════════════════════════════════
     if not exchange_id:
+        try:
+            await redis_manager.set(cache_key, json.dumps([]), ex=5)
+        except Exception:
+            pass
         return []
 
     try:

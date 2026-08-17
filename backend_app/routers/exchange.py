@@ -26,25 +26,31 @@ router = APIRouter()
 logger = logging.getLogger("ExchangeRouter")
 
 
+_CACHED_SUPPORTED_EXCHANGES = None
+
 @router.get("/supported")
 async def get_supported_exchanges():
     """
     Returns list of all CCXT-supported exchanges with full metadata.
     Includes: id, display name, spot/futures/margin support, sandbox support,
     required auth fields, passphrase requirement, subaccount requirement, status.
-    Cached in Redis for 1 hour (exchanges list rarely changes).
+    Cached in memory and Redis for 1 hour (exchanges list rarely changes).
     
     PUBLIC ENDPOINT - No authentication required (CCXT public data)
     """
+    global _CACHED_SUPPORTED_EXCHANGES
+    if _CACHED_SUPPORTED_EXCHANGES is not None:
+        return _CACHED_SUPPORTED_EXCHANGES
+
     try:
-        # Try cache first (optional)
-        from backend_app.core.cache import redis_manager
+        # Try cache first
+        from backend_app.core.cache.redis_manager import redis_manager
         cache_key = "supported_exchanges:metadata"
         try:
-            cached = await redis_manager.cache_get_json(cache_key)
-            if cached:
-                logger.debug("Returning cached supported exchanges with metadata")
-                return cached
+            cached_str = await redis_manager.get(cache_key)
+            if cached_str:
+                _CACHED_SUPPORTED_EXCHANGES = json.loads(cached_str)
+                return _CACHED_SUPPORTED_EXCHANGES
         except Exception as e:
             logger.warning(f"Redis cache lookup failed: {e}, fetching from CCXT")
         
@@ -72,44 +78,42 @@ async def get_supported_exchanges():
                     required_fields.append('uid')
                 
                 # Check for passphrase/password requirement dynamically
-                # Some exchanges call it 'password' in CCXT but it's actually a passphrase
                 requires_passphrase = has.get('password')
                 
                 # Check for subaccount support dynamically via exchange options
                 requires_subaccount = False
                 try:
                     if hasattr(exchange_instance, 'options') and 'defaultType' in exchange_instance.options:
-                        # Exchanges with multiple account types may support subaccounts
                         requires_subaccount = True
-                except:
+                except Exception:
                     pass
                 
                 exchanges.append({
                     "id": exchange_id,
                     "display_name": exchange_instance.name or exchange_id.upper(),
-                    "logo": f"/logos/{exchange_id.lower()}.png",  # Placeholder for logo URL
-                    "spot_support": has.get('createOrder', False),
-                    "futures_support": has.get('createFuturesOrder', False) or has.get('futures', False),
-                    "margin_support": has.get('createMarginOrder', False) or has.get('margin', False),
-                    "sandbox_support": has.get('sandbox', False),
+                    "logo": f"/logos/{exchange_id.lower()}.png",
+                    "spot_support": bool(has.get('createOrder', False)),
+                    "futures_support": bool(has.get('createFuturesOrder', False) or has.get('futures', False)),
+                    "margin_support": bool(has.get('createMarginOrder', False) or has.get('margin', False)),
+                    "sandbox_support": bool(has.get('sandbox', False)),
                     "required_fields": required_fields,
-                    "requires_passphrase": requires_passphrase,
-                    "requires_subaccount": requires_subaccount,
-                    "status": "available"  # Exchange is supported by CCXT, not necessarily operational
+                    "requires_passphrase": bool(requires_passphrase),
+                    "requires_subaccount": bool(requires_subaccount),
+                    "status": "available"
                 })
             except Exception as e:
                 logger.warning(f"Failed to load metadata for {exchange_id}: {e}")
-                # Skip exchanges that fail to instantiate - don't return partial data
                 continue
         
         # Sort by display name
         exchanges.sort(key=lambda x: x['display_name'])
         
         result = {"exchanges": exchanges, "total": len(exchanges)}
+        _CACHED_SUPPORTED_EXCHANGES = result
         
-        # Cache for 1 hour (3600 seconds) - optional
+        # Cache for 1 hour (3600 seconds)
         try:
-            await redis_manager.cache_set_json(cache_key, result, ttl=3600)
+            await redis_manager.set(cache_key, json.dumps(result), ex=3600)
             logger.debug("Cached supported exchanges with metadata for 1 hour")
         except Exception as e:
             logger.warning(f"Redis cache set failed: {e}")
