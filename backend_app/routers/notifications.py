@@ -148,6 +148,17 @@ async def list_notifications(
             offset=offset
         )
     try:
+        cache_key = f"notifications:{user['id']}:{limit}:{offset}:{unread_only}:{category}"
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            cached = await redis_manager.get(cache_key)
+            if cached:
+                import json
+                cached_data = json.loads(cached)
+                return NotificationListResponse(**cached_data)
+        except Exception as cache_err:
+            logger.debug(f"Notifications cache read error: {cache_err}")
+
         columns = "id, user_id, type, category, severity, title, message, read, created_at, metadata"
         query = supabase.table("notifications").select(columns, count="exact").eq("user_id", user["id"])
         
@@ -157,24 +168,37 @@ async def list_notifications(
             query = query.eq("category", category)
         query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
         
-        query_res = query.execute()
-        res = await query_res if inspect.isawaitable(query_res) else query_res
-        
         unread_query = supabase.table("notifications").select("id", count="exact").eq("user_id", user["id"]).eq("read", False)
-        unread_query_res = unread_query.execute()
-        unread_res = await unread_query_res if inspect.isawaitable(unread_query_res) else unread_query_res
-        
-        items = res.data or [] if res and hasattr(res, "data") else []
-        total = res.count if res and hasattr(res, "count") and res.count is not None else len(items)
-        unread_count = unread_res.count if unread_res and hasattr(unread_res, "count") and unread_res.count is not None else 0
-        
-        return NotificationListResponse(
-            items=items,
-            total=total,
-            unread_count=unread_count,
-            limit=limit,
-            offset=offset
+
+        q1_exec = query.execute()
+        q2_exec = unread_query.execute()
+
+        res, unread_res = await asyncio.gather(
+            q1_exec if inspect.isawaitable(q1_exec) else asyncio.sleep(0, result=q1_exec),
+            q2_exec if inspect.isawaitable(q2_exec) else asyncio.sleep(0, result=q2_exec),
+            return_exceptions=True
         )
+
+        items = res.data or [] if not isinstance(res, Exception) and res and hasattr(res, "data") else []
+        total = res.count if not isinstance(res, Exception) and res and hasattr(res, "count") and res.count is not None else len(items)
+        unread_count = unread_res.count if not isinstance(unread_res, Exception) and unread_res and hasattr(unread_res, "count") and unread_res.count is not None else 0
+        
+        resp_dict = {
+            "items": items,
+            "total": total,
+            "unread_count": unread_count,
+            "limit": limit,
+            "offset": offset
+        }
+
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            import json
+            await redis_manager.set(cache_key, json.dumps(resp_dict), ex=5)
+        except Exception as cache_write_err:
+            logger.debug(f"Notifications cache write error: {cache_write_err}")
+
+        return NotificationListResponse(**resp_dict)
         
     except Exception as e:
         logger.error(f"Failed to list notifications: {e}")

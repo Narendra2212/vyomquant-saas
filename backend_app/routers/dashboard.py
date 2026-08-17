@@ -65,12 +65,10 @@ async def get_dashboard(
         cache_key = f"dashboard:{user['id']}:{equity_days}"
         try:
             from backend_app.core.cache.redis_manager import redis_manager
-            redis_client = await redis_manager.get_client()
-            if redis_client:
-                cached = await redis_client.get(cache_key)
-                if cached:
-                    import json
-                    return json.loads(cached)
+            cached = await redis_manager.get(cache_key)
+            if cached:
+                import json
+                return json.loads(cached)
         except Exception as cache_err:
             logger.debug(f"Dashboard cache read error: {cache_err}")
 
@@ -85,10 +83,8 @@ async def get_dashboard(
         # Write to fast cache
         try:
             from backend_app.core.cache.redis_manager import redis_manager
-            redis_client = await redis_manager.get_client()
-            if redis_client:
-                import json
-                await redis_client.setex(cache_key, 10, json.dumps(dashboard_data))
+            import json
+            await redis_manager.set(cache_key, json.dumps(dashboard_data), ex=10)
         except Exception as cache_write_err:
             logger.debug(f"Dashboard cache write error: {cache_write_err}")
 

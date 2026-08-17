@@ -188,7 +188,7 @@ async def list_exchanges(
         keys = []
         if supabase:
             try:
-                q1_res = supabase.table("exchange_keys").select("id, exchange_id, created_at").eq("user_id", user["id"]).execute()
+                q1_res = supabase.table("exchange_keys").select("exchange_id, updated_at").eq("user_id", user["id"]).execute()
                 q1 = await q1_res if inspect.isawaitable(q1_res) else q1_res
                 keys = q1.data if q1 and hasattr(q1, "data") and isinstance(q1.data, list) else []
             except Exception as e:
@@ -199,7 +199,7 @@ async def list_exchanges(
         for row in keys:
             exchange_id = row.get("exchange_id", "unknown")
             exchanges.append({
-                "id": str(row.get("id") or f"{user['id']}_{exchange_id}"),
+                "id": f"{user['id']}_{exchange_id}",
                 "exchange_id": exchange_id,
                 "name": exchange_id.upper(),
                 "masked_key": f"{exchange_id[:3].upper()}{'•' * 24}{exchange_id[-2:].upper() if len(exchange_id) > 2 else ''}",
@@ -209,8 +209,8 @@ async def list_exchanges(
                 "strategy_count": 0,
                 "account_type": "Spot",
                 "enabled_features": ["Trading", "Balance"],
-                "connected_at": row.get("created_at"),
-                "last_sync": row.get("created_at"),
+                "connected_at": row.get("updated_at"),
+                "last_sync": row.get("updated_at"),
                 "subscription_tier": "free",
                 "health": "healthy"
             })

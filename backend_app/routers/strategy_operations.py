@@ -218,6 +218,16 @@ async def list_strategies(request: Request,
     Returns strategies with deployment status and performance metrics.
     """
     try:
+        cache_key = f"strategies:{user['id']}:{status}:{environment}"
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            cached = await redis_manager.get(cache_key)
+            if cached:
+                import json
+                return json.loads(cached)
+        except Exception as cache_err:
+            logger.debug(f"Strategies cache read error: {cache_err}")
+
         service = await get_strategy_service()
         
         strategies = await service.list_strategies(
@@ -226,10 +236,19 @@ async def list_strategies(request: Request,
             environment_filter=environment
         )
         
-        return {
+        resp_data = {
             "strategies": strategies,
             "total": len(strategies)
         }
+
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            import json
+            await redis_manager.set(cache_key, json.dumps(resp_data), ex=10)
+        except Exception as cache_write_err:
+            logger.debug(f"Strategies cache write error: {cache_write_err}")
+
+        return resp_data
     except Exception as e:
         import traceback
         

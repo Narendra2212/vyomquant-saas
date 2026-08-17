@@ -270,32 +270,25 @@ async def get_entitlements(
 ):
     """Get user's current entitlements."""
     try:
+        cache_key = f"billing:entitlements:{user['id']}"
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            cached = await redis_manager.get(cache_key)
+            if cached:
+                import json
+                return json.loads(cached)
+        except Exception as cache_err:
+            logger.debug(f"Billing entitlements cache read error: {cache_err}")
+
         from backend_app.core.subscription_dependencies import get_user_entitlements
         
         entitlements = await get_user_entitlements(user, supabase)
         
-        # Get subscription details from profile
         subscription_status = "active"
         renewal_date = None
         cancel_at_period_end = False
         
-        if supabase:
-            try:
-                res = (
-                    supabase.table("profiles")
-                    .select("subscription_status, subscription_renewal_date, cancel_at_period_end")
-                    .eq("id", user["id"])
-                    .execute()
-                )
-                resp = await res if inspect.isawaitable(res) else res
-                if resp and hasattr(resp, "data") and resp.data:
-                    subscription_status = resp.data[0].get("subscription_status", "active")
-                    renewal_date = resp.data[0].get("subscription_renewal_date")
-                    cancel_at_period_end = resp.data[0].get("cancel_at_period_end", False)
-            except Exception as e:
-                logger.warning(f"Failed to get subscription details: {e}")
-        
-        return {
+        res_data = {
             "plan": entitlements.plan,
             "features": entitlements.features,
             "quotas": entitlements.quotas,
@@ -304,6 +297,15 @@ async def get_entitlements(
             "renewal_date": renewal_date,
             "cancel_at_period_end": cancel_at_period_end,
         }
+
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            import json
+            await redis_manager.set(cache_key, json.dumps(res_data), ex=10)
+        except Exception as cache_write_err:
+            logger.debug(f"Billing entitlements cache write error: {cache_write_err}")
+
+        return res_data
     except Exception as e:
         import traceback
         

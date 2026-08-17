@@ -143,7 +143,7 @@ class TestDashboardEndpoint:
         })
         mock_get_service.return_value = mock_service
 
-        app.dependency_overrides[get_current_user] = lambda: self._user()
+        app.dependency_overrides[get_current_user] = lambda: {**self._user(), "id": "user_preserves_all_fields"}
 
         try:
             client = TestClient(app)
@@ -173,10 +173,9 @@ class TestDashboardEndpoint:
         # This should NOT raise TypeError
         try:
             telemetry = service._get_telemetry()
-            # Success - no TypeError
-            assert True
+            assert telemetry is not None
         except TypeError as e:
-            if "can't be used in 'await' expression" in str(e):
+            if "can't be used in 'await' expression" in str(e) or "object is not awaitable" in str(e):
                 pytest.fail(f"_get_telemetry() still tries to await a sync function: {e}")
             else:
                 raise
@@ -259,9 +258,9 @@ class TestPhase7CDuplicateQueryElimination:
         original_get_strategies = service.get_strategies
         call_count = [0]
 
-        async def counted_get_strategies(u):
+        async def counted_get_strategies(u, *args, **kwargs):
             call_count[0] += 1
-            return await original_get_strategies(u)
+            return await original_get_strategies(u, *args, **kwargs)
 
         service.get_strategies = counted_get_strategies
 
@@ -288,11 +287,11 @@ class TestPhase7CDuplicateQueryElimination:
 
         original_get_strategies = service.get_strategies
 
-        async def tracked_get_strategies(u):
+        async def tracked_get_strategies(u, *args, **kwargs):
             strategies_started.set()
             # Wait a bit to ensure other operations can start
-            await asyncio.sleep(0.1)
-            result = await original_get_strategies(u)
+            await asyncio.sleep(0.01)
+            result = await original_get_strategies(u, *args, **kwargs)
             strategies_ready.set()
             return result
 
@@ -303,9 +302,9 @@ class TestPhase7CDuplicateQueryElimination:
 
         original_get_portfolio = service.get_portfolio_overview
 
-        async def tracked_get_portfolio(u):
+        async def tracked_get_portfolio(u, *args, **kwargs):
             portfolio_started.set()
-            result = await original_get_portfolio(u)
+            result = await original_get_portfolio(u, *args, **kwargs)
             return result
 
         service.get_portfolio_overview = tracked_get_portfolio
@@ -348,9 +347,9 @@ class TestPhase7CDuplicateQueryElimination:
 
         original_get_strategies = service.get_strategies
 
-        async def tracked_get_strategies(u):
+        async def tracked_get_strategies(u, *args, **kwargs):
             users_received.append(u["id"])
-            return await original_get_strategies(u)
+            return await original_get_strategies(u, *args, **kwargs)
 
         service.get_strategies = tracked_get_strategies
 
@@ -380,7 +379,7 @@ class TestPhase7CDuplicateQueryElimination:
         # Make get_strategies raise an exception
         original_get_strategies = service.get_strategies
 
-        async def failing_get_strategies(u):
+        async def failing_get_strategies(u, *args, **kwargs):
             raise ValueError("Database connection failed")
 
         service.get_strategies = failing_get_strategies

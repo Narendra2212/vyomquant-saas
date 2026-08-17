@@ -125,7 +125,7 @@ class DashboardAggregationService:
                 }
 
             # Get user profile with subscription info
-            query_res = sb.table("profiles").select("subscription_tier, billing_status, subscription_end, is_trial").eq("id", user["id"]).limit(1).execute()
+            query_res = sb.table("profiles").select("subscription_tier, updated_at").eq("id", user["id"]).limit(1).execute()
             res = await query_res if inspect.isawaitable(query_res) else query_res
             profile = res.data[0] if res and hasattr(res, "data") and res.data else {}
 
@@ -160,9 +160,9 @@ class DashboardAggregationService:
                     "ml_training_used": 0,  # Would come from ML training tracking
                     "ml_training_limit": limits["ml_training"]
                 },
-                "billing_status": profile.get("billing_status", "active"),
-                "subscription_end": profile.get("subscription_end"),
-                "is_trial": profile.get("is_trial", False)
+                "billing_status": "active",
+                "subscription_end": None,
+                "is_trial": False
             }
         except Exception as e:
             logger.error(f"Failed to fetch subscription data for user {user['id']}: {e}")
@@ -195,7 +195,7 @@ class DashboardAggregationService:
             
             # Get user's exchange connections from exchange_keys
             try:
-                q1_res = sb.table("exchange_keys").select("id, exchange_id, created_at").eq("user_id", user["id"]).execute()
+                q1_res = sb.table("exchange_keys").select("exchange_id, updated_at").eq("user_id", user["id"]).execute()
                 res = await q1_res if inspect.isawaitable(q1_res) else q1_res
                 connections = res.data or [] if res and hasattr(res, "data") else []
             except Exception as e:
@@ -214,7 +214,7 @@ class DashboardAggregationService:
                     "exchange_id": exchange_id,
                     "status": "connected",
                     "latency_ms": 35,
-                    "last_sync": conn.get("created_at")
+                    "last_sync": conn.get("updated_at")
                 })
             
             return {

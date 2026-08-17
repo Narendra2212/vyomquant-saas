@@ -191,12 +191,10 @@ async def list_signals(request: Request,
         cache_key = f"signals:{user['id']}:{strategy_id}:{exchange_id}:{symbol}:{decision}:{status}:{ml_type}:{limit}:{offset}"
         try:
             from backend_app.core.cache.redis_manager import redis_manager
-            redis_client = await redis_manager.get_client()
-            if redis_client:
-                cached = await redis_client.get(cache_key)
-                if cached:
-                    import json
-                    return json.loads(cached)
+            cached = await redis_manager.get(cache_key)
+            if cached:
+                import json
+                return json.loads(cached)
         except Exception as cache_err:
             logger.debug(f"Signals cache read error: {cache_err}")
 
@@ -229,10 +227,8 @@ async def list_signals(request: Request,
         # Write to fast cache
         try:
             from backend_app.core.cache.redis_manager import redis_manager
-            redis_client = await redis_manager.get_client()
-            if redis_client:
-                import json
-                await redis_client.setex(cache_key, 10, json.dumps(response_data))
+            import json
+            await redis_manager.set(cache_key, json.dumps(response_data), ex=10)
         except Exception as cache_write_err:
             logger.debug(f"Signals cache write error: {cache_write_err}")
 
