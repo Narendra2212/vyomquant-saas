@@ -85,5 +85,9 @@ export default defineConfig(async () => ({
       },
     },
   },
+  test: {
+    include: ['src/**/*.{test,spec}.{js,jsx,ts,tsx}', 'tests/**/*.{test,spec}.{js,jsx,ts,tsx}'],
+    exclude: ['**/node_modules/**', '**/dist/**', '**/archive/**'],
+  },
 }));
 

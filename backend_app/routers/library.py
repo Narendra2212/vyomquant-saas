@@ -699,53 +699,52 @@ async def browse_library(
     
     # Check cache - Use shorter TTL for browse queries (5 minutes) to keep data fresh
     cache_key = f"library:browse:{page}:{limit}:{sort}:{category}:{difficulty}:{has_ml}:{min_sharpe}:{min_return}:{tags}:{q}"
-    if redis_client:
-        try:
-            cached_data = redis_client.get(cache_key)
-            if cached_data:
-                response_data = json.loads(cached_data)
+    try:
+        cached_data = await redis_manager.get(cache_key)
+        if cached_data:
+            response_data = json.loads(cached_data)
+            
+            # --- Enrichment (if authenticated) ---
+            user_id = None
+            if credentials:
+                try:
+                    payload = decode_token_local(credentials.credentials)
+                    user_id = payload.get("sub")
+                except Exception:
+                    pass
+            
+            if user_id:
+                strategies = response_data.get("strategies", [])
+                strat_ids = [s["id"] for s in strategies]
                 
-                # --- Enrichment (if authenticated) ---
-                user_id = None
-                if credentials:
-                    try:
-                        payload = decode_token_local(credentials.credentials)
-                        user_id = payload.get("sub")
-                    except Exception:
-                        pass
-                
-                if user_id:
-                    strategies = response_data.get("strategies", [])
-                    strat_ids = [s["id"] for s in strategies]
+                if strat_ids:
+                    enrich_resp = (
+                        svc.table("library_strategies")
+                        .select("id, source_strategy_id")
+                        .eq("author_id", user_id)
+                        .in_("source_library_id", strat_ids)
+                        .execute()
+                    )
+                    cloned_map = {r["source_library_id"]: r["source_strategy_id"] for r in (enrich_resp.data or [])}
                     
-                    if strat_ids:
-                        enrich_resp = (
-                            svc.table("library_strategies")
-                            .select("id, source_strategy_id")
-                            .eq("author_id", user_id)
-                            .in_("source_library_id", strat_ids)
-                            .execute()
-                        )
-                        cloned_map = {r["source_library_id"]: r["source_strategy_id"] for r in (enrich_resp.data or [])}
-                        
-                        rating_resp = (
-                            svc.table("library_ratings")
-                            .select("library_id, rating")
-                            .eq("user_id", user_id)
-                            .in_("library_id", strat_ids)
-                            .execute()
-                        )
-                        rating_map = {r["library_id"]: r["rating"] for r in (rating_resp.data or [])}
-                        
-                        for s in strategies:
-                            s["user_has_cloned"] = s["id"] in cloned_map
-                            s["user_rating"] = rating_map.get(s["id"])
-                            if s["user_has_cloned"]:
-                                s["cloned_strategy_id"] = cloned_map[s["id"]]
-                                
-                return response_data
-        except Exception as e:
-            logger.warning(f"Redis cache read failed: {e}")
+                    rating_resp = (
+                        svc.table("library_ratings")
+                        .select("library_id, rating")
+                        .eq("user_id", user_id)
+                        .in_("library_id", strat_ids)
+                        .execute()
+                    )
+                    rating_map = {r["library_id"]: r["rating"] for r in (rating_resp.data or [])}
+                    
+                    for s in strategies:
+                        s["user_has_cloned"] = s["id"] in cloned_map
+                        s["user_rating"] = rating_map.get(s["id"])
+                        if s["user_has_cloned"]:
+                            s["cloned_strategy_id"] = cloned_map[s["id"]]
+            
+            return response_data
+    except Exception as e:
+        logger.warning(f"Redis cache read failed: {e}")
 
     # --- Build query ---
     if not svc:
@@ -1246,12 +1245,13 @@ async def publish_strategy(
         )
 
     # 7. Invalidate cache
-    if redis_client:
-        try:
-            for key in redis_client.scan_iter("library:browse:*"):
-                redis_client.delete(key)
-        except Exception as e:
-            logger.warning(f"Redis cache invalidation failed: {e}")
+    try:
+        r_client = await redis_manager.get_client()
+        if r_client:
+            for key in r_client.scan_iter("library:browse:*"):
+                await r_client.delete(key)
+    except Exception as e:
+        logger.warning(f"Redis cache invalidation failed: {e}")
 
     library_id = insert_resp.data[0]["id"]
     logger.info(f"Strategy published: library_id={library_id} by user={user_id}")
@@ -1542,12 +1542,13 @@ async def clone_strategy(
     )
 
     # 8. Invalidate cache
-    if redis_client:
-        try:
-            for key in redis_client.scan_iter("library:browse:*"):
-                redis_client.delete(key)
-        except Exception as e:
-            logger.warning(f"Redis cache invalidation failed: {e}")
+    try:
+        r_client = await redis_manager.get_client()
+        if r_client:
+            for key in r_client.scan_iter("library:browse:*"):
+                await r_client.delete(key)
+    except Exception as e:
+        logger.warning(f"Redis cache invalidation failed: {e}")
 
     return {
         "new_strategy_id": new_strategy_id,
@@ -1666,12 +1667,13 @@ async def rate_strategy(
         logger.warning(f"Failed to broadcast marketplace event: {e}")
 
     # Invalidate cache
-    if redis_client:
-        try:
-            for key in redis_client.scan_iter("library:browse:*"):
-                redis_client.delete(key)
-        except Exception as e:
-            logger.warning(f"Redis cache invalidation failed: {e}")
+    try:
+        r_client = await redis_manager.get_client()
+        if r_client:
+            for key in r_client.scan_iter("library:browse:*"):
+                await r_client.delete(key)
+    except Exception as e:
+        logger.warning(f"Redis cache invalidation failed: {e}")
 
     return {
         "library_id": lib_id,
