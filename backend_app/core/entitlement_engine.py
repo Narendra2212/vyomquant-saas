@@ -433,10 +433,41 @@ class EntitlementEngine:
         return int(await redis_manager.get(key) or 0)
     
     async def invalidate_entitlement_cache(self, user_id: str):
-        """Invalidate cached entitlement decisions for a user."""
-        # Invalidate profile cache (from dependencies.py)
-        await redis_manager.delete(f"profile_limits:{user_id}")
-        logger.info(f"Entitlement cache invalidated for user {user_id}")
+        """
+        Invalidate all cached entitlement decisions for a user.
+        
+        This prevents cache staleness when entitlements change (e.g., plan upgrade,
+        quota changes, feature flag changes).
+        
+        Args:
+            user_id: User ID to invalidate entitlements for
+        """
+        cache_keys_to_invalidate = [
+            f"profile_limits:{user_id}",
+            f"entitlement_check:{user_id}:*",
+            f"feature_entitlement:{user_id}:*",
+            f"quota_entitlement:{user_id}:*",
+            f"user_plan:{user_id}",
+            f"user_permissions:{user_id}"
+        ]
+        
+        for key_pattern in cache_keys_to_invalidate:
+            try:
+                if "*" in key_pattern:
+                    # Handle pattern-based invalidation
+                    keys = await redis_manager.keys(key_pattern)
+                    if keys:
+                        for key in keys:
+                            await redis_manager.delete(key)
+                        logger.info(f"Invalidated {len(keys)} cache keys matching pattern {key_pattern}")
+                else:
+                    # Handle single key invalidation
+                    await redis_manager.delete(key_pattern)
+                    logger.debug(f"Invalidated cache key {key_pattern}")
+            except Exception as e:
+                logger.error(f"Failed to invalidate cache key {key_pattern}: {e}")
+        
+        logger.info(f"Entitlement cache fully invalidated for user {user_id}")
 
 
 # Global singleton instance

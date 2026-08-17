@@ -96,13 +96,26 @@ def decode_token_local(token: str) -> dict:
     except (ExpiredSignatureError, InvalidAudienceError):
         raise
     except Exception as e:
-        # Narrowly-scoped test fallback for synthetic test tokens in non-production test mode
+        # SECURITY: No test fallback with verify_signature=False - prevents algorithm confusion attacks
+        # Test tokens must be properly signed with the test secret
         current_env = (os.environ.get("ENV") or getattr(settings, "ENV", "") or "").lower()
         if current_env in ("testing", "test", "development", "dev", "local"):
+            # Narrowly-scoped test fallback for properly signed test tokens only in non-production
             try:
-                unverified_payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256", "ES256"])
+                unverified_payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["ES256"])
                 if unverified_payload.get("iss") == "algo22-test":
-                    return _decode_test_hs256_token(token)
+                    # Use proper test secret for test tokens - must be properly signed
+                    test_secret = os.environ.get("SUPABASE_JWT_SECRET") or settings.JWT_SECRET
+                    if not test_secret or "dev-secret" in test_secret.lower():
+                        raise InvalidTokenError("Test mode requires proper test secret")
+                    # Verify the token is actually signed with the test secret (no signature bypass)
+                    return jwt.decode(
+                        token,
+                        test_secret,
+                        algorithms=["HS256"],
+                        audience="authenticated",
+                        options={"verify_exp": True, "verify_signature": True},
+                    )
             except Exception:
                 pass
         raise InvalidTokenError("Invalid token signature or algorithm") from e
@@ -110,7 +123,17 @@ def decode_token_local(token: str) -> dict:
 
 def _decode_test_hs256_token(token: str) -> dict:
     """Explicit, separate helper for test suite tokens with iss='algo22-test'."""
-    secret = os.environ.get("SUPABASE_JWT_SECRET") or settings.JWT_SECRET or "dev-secret-change-in-production"
+    secret = os.environ.get("SUPABASE_JWT_SECRET") or settings.JWT_SECRET
+    
+    # SECURITY: No default secrets - fail-closed if secret not available
+    if not secret or "dev-secret" in secret.lower():
+        raise InvalidTokenError("Test mode requires proper test secret - no default allowed")
+    
+    # SECURITY: Only allow in non-production environments
+    current_env = (os.environ.get("ENV") or getattr(settings, "ENV", "") or "").lower()
+    if current_env not in ("testing", "test", "development", "dev", "local"):
+        raise InvalidTokenError("Test mode not allowed in production environment")
+    
     return jwt.decode(
         token,
         secret,

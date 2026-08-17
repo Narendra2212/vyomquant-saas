@@ -15,6 +15,7 @@ Features:
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -33,6 +34,11 @@ from backend_app.core.quota_errors import (CapitalQuotaExceededError,
 from backend_app.core.tenant import TenantContext, TenantKeyBuilder
 
 logger = logging.getLogger("HardQuotaEnforcer")
+
+
+def _is_production() -> bool:
+    """Check if running in production environment."""
+    return os.getenv("ENV", "development").lower() == "production"
 
 
 @dataclass
@@ -74,6 +80,13 @@ class HardQuotaEnforcer:
             return int(count) if count else 0
         except Exception as e:
             logger.error(f"Failed to get count for {key}: {e}")
+            # FAIL-CLOSED: In production, Redis failure should prevent quota bypass
+            if _is_production():
+                raise RuntimeError(
+                    f"CRITICAL: Redis unavailable during quota enforcement. "
+                    f"Operation blocked to prevent quota bypass in production."
+                )
+            # In development, return 0 to allow operation
             return 0
     
     async def _increment_count(self, key: str, ttl: Optional[int] = None) -> int:
@@ -85,6 +98,13 @@ class HardQuotaEnforcer:
             return new_count
         except Exception as e:
             logger.error(f"Failed to increment count for {key}: {e}")
+            # FAIL-CLOSED: In production, Redis failure should prevent quota bypass
+            if _is_production():
+                raise RuntimeError(
+                    f"CRITICAL: Redis unavailable during quota enforcement. "
+                    f"Operation blocked to prevent quota bypass in production."
+                )
+            # In development, return 0 to allow operation
             return 0
     
     async def _set_count(self, key: str, count: int, ttl: Optional[int] = None):

@@ -509,6 +509,12 @@ class DashboardAggregationService:
         telemetry = self._get_telemetry()
         safe_uid = self._safe_uid(user["id"])
         
+        # Note: QuestDB doesn't support parameterized queries in the same way as PostgreSQL
+        # The _safe_uid function provides comprehensive validation to prevent SQL injection:
+        # - Strict format validation (alphanumeric, hyphens, underscores only)
+        # - Length validation (max 128 characters)
+        # - SQL injection pattern detection (quotes, comments, etc.)
+        # - Unicode character validation
         result = await telemetry.execute_query(
             f"SELECT * FROM live_user_pnl WHERE user_id = '{safe_uid}' LIMIT 1;"  # nosec: B608
         )

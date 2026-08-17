@@ -19,6 +19,47 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
+def validate_production_config() -> None:
+    """
+    Validate that production configuration is properly set.
+    
+    FAIL-CLOSED: Application will fail startup if critical configuration is missing in production.
+    """
+    env = os.getenv("ENV", "development").lower()
+    
+    if env == "production":
+        critical_vars = {
+            "SUPABASE_URL": os.getenv("SUPABASE_URL"),
+            "SUPABASE_ANON_KEY": os.getenv("SUPABASE_ANON_KEY"),
+            "SUPABASE_SERVICE_ROLE_KEY": os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
+            "SUPABASE_JWT_SECRET": os.getenv("SUPABASE_JWT_SECRET"),
+            "JWT_SECRET": os.getenv("JWT_SECRET"),
+        }
+        
+        missing_vars = [var for var, value in critical_vars.items() if not value]
+        
+        if missing_vars:
+            raise ValueError(
+                f"CRITICAL: Production environment requires all configuration variables. "
+                f"Missing: {', '.join(missing_vars)}. "
+                f"Application cannot start in production mode without secure configuration."
+            )
+        
+        # Validate JWT_SECRET is not a weak default
+        jwt_secret = os.getenv("JWT_SECRET")
+        weak_secrets = ["dev-secret-change-in-production", "dummy", "test", "secret"]
+        if jwt_secret and any(weak in jwt_secret.lower() for weak in weak_secrets):
+            raise ValueError(
+                f"CRITICAL: JWT_SECRET appears to be a weak development secret. "
+                f"Production requires a cryptographically strong secret. "
+                f"Current value contains: {jwt_secret[:10]}..."
+            )
+        
+        logger.info("[CONFIG] Production configuration validated successfully")
+    else:
+        logger.info(f"[CONFIG] Development environment detected ({env}), skipping strict validation")
+
+
 class Environment(Enum):
     """Application environment types"""
     DEVELOPMENT = "development"
@@ -44,10 +85,7 @@ class Settings:
     SUPABASE_URL: Optional[str] = os.getenv("SUPABASE_URL")
     SUPABASE_ANON_KEY: Optional[str] = os.getenv("SUPABASE_ANON_KEY")
     SUPABASE_SERVICE_ROLE_KEY: Optional[str] = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    SUPABASE_JWT_SECRET: Optional[str] = os.getenv(
-        "SUPABASE_JWT_SECRET",
-        "dummy-supabase-jwt-secret-dev" if os.getenv("DEV_MODE", "false").lower() in ("true", "1", "yes") or os.getenv("ENV", "").lower() in ("test", "testing") else None
-    )
+    SUPABASE_JWT_SECRET: Optional[str] = os.getenv("SUPABASE_JWT_SECRET")  # FAIL-CLOSED: No dummy defaults
     
     # ==========================================
     # QUESTDB CONFIGURATION
@@ -67,9 +105,34 @@ class Settings:
     # ==========================================
     # SECURITY
     # ==========================================
-    JWT_SECRET: str = os.getenv("JWT_SECRET", "dev-secret-change-in-production")
+    JWT_SECRET: str = os.getenv("JWT_SECRET")  # FAIL-CLOSED: No default for production
     JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
-    JWT_EXPIRATION_HOURS: int = int(os.getenv("JWT_EXPIRATION_HOURS", 24))
+    JWT_EXPIRATION_HOURS: int = int(os.getenv("JWT_EXPIRATION_HOURS", "24"))
+    
+    def __post_init__(self):
+        """Validate critical configuration after initialization."""
+        # Production validation for critical security settings
+        if self.ENV.lower() == "production":
+            # JWT_SECRET must be set and meet minimum requirements
+            if not self.JWT_SECRET:
+                raise ValueError(
+                    "CRITICAL: JWT_SECRET must be set in production environment. "
+                    "This is a fail-closed security mechanism to prevent "
+                    "unsafe operation without proper JWT signing."
+                )
+            if len(self.JWT_SECRET) < 32:
+                raise ValueError(
+                    f"CRITICAL: JWT_SECRET must be at least 32 characters in production. "
+                    f"Current length: {len(self.JWT_SECRET)}. "
+                    "Short secrets are vulnerable to brute force attacks."
+                )
+            # Check for default/weak secrets
+            weak_patterns = ["dev-secret", "test-secret", "default", "password", "secret"]
+            if any(pattern in self.JWT_SECRET.lower() for pattern in weak_patterns):
+                raise ValueError(
+                    "CRITICAL: JWT_SECRET contains default or weak pattern. "
+                    "Use a cryptographically secure random secret in production."
+                )
     
     # ==========================================
     # API CONFIGURATION

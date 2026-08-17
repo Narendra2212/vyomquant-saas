@@ -3,10 +3,13 @@ core/subscription_dependencies.py — FastAPI Dependencies for Subscription Engi
 
 Provides FastAPI dependency injection functions for subscription checks.
 All entitlement checks should use these dependencies.
+
+SECURITY: FAIL-CLOSED behavior on dependency failures to prevent unauthorized access.
 """
 
 import inspect
 import logging
+import os
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, HTTPException, status
@@ -23,10 +26,20 @@ from backend_app.core.subscription_engine import (
 logger = logging.getLogger("SubscriptionDependencies")
 
 
+def _is_production() -> bool:
+    """Check if running in production environment."""
+    return os.getenv("ENV", "development").lower() == "production"
+
+
 async def get_user_plan(user_id: str, supabase: Any) -> str:
     """Get user's plan from Supabase."""
     try:
         if not supabase:
+            if _is_production():
+                raise RuntimeError(
+                    "CRITICAL: Supabase unavailable in production. "
+                    "Subscription verification failed to prevent unauthorized access."
+                )
             return Plan.FREE.value
         res = (
             supabase.table("profiles")
@@ -42,6 +55,11 @@ async def get_user_plan(user_id: str, supabase: Any) -> str:
         return Plan.FREE.value
     except Exception as e:
         logger.error(f"Failed to get user plan: {e}")
+        if _is_production():
+            raise RuntimeError(
+                f"CRITICAL: Subscription verification failed: {e}. "
+                "Operation blocked to prevent unauthorized access in production."
+            )
         return Plan.FREE.value
 
 _get_user_plan = get_user_plan

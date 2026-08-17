@@ -33,6 +33,7 @@ from backend_app.backend.strategy_compiler import StrategyPackage, ExecutionGrap
 from backend_app.backend.dag_engine import DAGEngine
 from backend_app.core.risk_engine import RiskEngine
 from backend_app.core.deployment_config import DeploymentConfig, get_deployment_config
+from backend_app.core.cache.redis_manager import redis_manager
 
 logger = logging.getLogger("DeploymentManager")
 
@@ -170,6 +171,66 @@ class DeploymentManager:
         
         logger.info("[DEPLOYMENT_MANAGER] Initialized")
     
+    async def _check_deployment_idempotency(
+        self,
+        deployment_id: str,
+        user_id: str,
+        strategy_id: str
+    ) -> Optional[DeploymentState]:
+        """
+        Check for existing deployment to prevent duplicate execution.
+        
+        Uses Redis for durable idempotency that survives process restarts.
+        Returns existing deployment state if found, None otherwise.
+        """
+        try:
+            redis_client = await redis_manager.get_client()
+            
+            # Check Redis for existing deployment
+            idempotency_key = f"deployment_idempotency:{user_id}:{strategy_id}:{deployment_id}"
+            existing_deployment = await redis_client.get(idempotency_key)
+            
+            if existing_deployment:
+                logger.info(f"[DEPLOY] Found existing deployment {deployment_id} via idempotency check")
+                import json
+                return json.loads(existing_deployment)
+            
+            return None
+        except Exception as e:
+            logger.error(f"[DEPLOY] Idempotency check failed: {e}")
+            # FAIL-CLOSED: If Redis check fails, don't proceed to prevent duplicate deployment
+            raise RuntimeError(f"Idempotency check failed: {e}")
+    
+    async def _set_deployment_idempotency(
+        self,
+        deployment_id: str,
+        user_id: str,
+        strategy_id: str,
+        deployment_state: DeploymentState
+    ) -> None:
+        """
+        Set deployment idempotency marker in Redis.
+        
+        Ensures duplicate deployment requests are prevented across process restarts.
+        """
+        try:
+            redis_client = await redis_manager.get_client()
+            
+            idempotency_key = f"deployment_idempotency:{user_id}:{strategy_id}:{deployment_id}"
+            import json
+            deployment_json = json.dumps({
+                "deployment_id": deployment_state.deployment_id,
+                "status": deployment_state.status.value,
+                "started_at": deployment_state.started_at
+            })
+            
+            # Set with 24 hour TTL to prevent permanent blocking
+            await redis_client.set(idempotency_key, deployment_json, ex=86400)
+            logger.info(f"[DEPLOY] Set idempotency marker for deployment {deployment_id}")
+        except Exception as e:
+            logger.error(f"[DEPLOY] Failed to set idempotency marker: {e}")
+            # Continue with deployment but log the failure
+    
     async def deploy_strategy(
         self,
         deployment_config: StrategyDeploymentConfig,
@@ -180,8 +241,37 @@ class DeploymentManager:
         
         PHASE A: Deploy
         Allocates worker, initializes runtime, starts execution.
+        
+        IDEMPOTENCY: Checks for existing deployment to prevent duplicate execution.
         """
         logger.info(f"[DEPLOY] Deploying strategy {deployment_config.strategy_id}")
+        
+        # IDEMPOTENCY CHECK: Prevent duplicate deployment
+        existing_deployment = await self._check_deployment_idempotency(
+            deployment_config.deployment_id,
+            deployment_config.user_id,
+            deployment_config.strategy_id
+        )
+        
+        if existing_deployment:
+            logger.warning(f"[DEPLOY] Deployment {deployment_config.deployment_id} already exists, returning existing state")
+            # Return existing deployment state to prevent duplicate execution
+            return DeploymentState(
+                deployment_id=existing_deployment["deployment_id"],
+                status=DeploymentStatus(existing_deployment["status"]),
+                config=deployment_config,
+                worker=None,
+                health=HealthMetrics(
+                    cpu_percent=0.0,
+                    memory_percent=0.0,
+                    latency_ms=0.0,
+                    runtime_errors=0,
+                    exchange_errors=0,
+                    last_heartbeat=datetime.now(timezone.utc).isoformat(),
+                    uptime_seconds=0.0
+                ),
+                started_at=existing_deployment["started_at"]
+            )
         
         # Create deployment state
         deployment_state = DeploymentState(
@@ -202,6 +292,14 @@ class DeploymentManager:
         )
         
         self._deployments[deployment_config.deployment_id] = deployment_state
+        
+        # IDEMPOTENCY: Set idempotency marker after creating deployment state
+        await self._set_deployment_idempotency(
+            deployment_config.deployment_id,
+            deployment_config.user_id,
+            deployment_config.strategy_id,
+            deployment_state
+        )
         
         # PHASE B: Allocate worker
         worker_id = await self._allocate_worker(deployment_config.deployment_id)

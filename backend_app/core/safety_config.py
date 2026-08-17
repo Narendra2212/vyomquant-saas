@@ -15,6 +15,46 @@ from typing import Optional
 logger = logging.getLogger("SafetyConfig")
 
 
+def validate_safety_config_integrity() -> None:
+    """
+    Validate safety configuration integrity.
+    
+    FAIL-CLOSED: Validates that safety controls cannot be manipulated via environment variables.
+    """
+    env = os.getenv("ENV", "development").lower()
+    
+    if env == "production":
+        # In production, enforce strict safety validation
+        unsafe_mode = os.getenv("VYOMQUANT_MODE", "").lower()
+        legacy_mode = os.getenv("AERORA_MODE", "").lower()
+        
+        if unsafe_mode == "live_trading" or legacy_mode == "live_trading":
+            # Allow live trading only if explicitly enabled via proper secure mechanism
+            # This check ensures environment variable manipulation doesn't bypass safety
+            enable_trading = os.getenv("VYOMQUANT_ENABLE_LIVE_TRADING", "false").lower()
+            legacy_enable = os.getenv("AERORA_ENABLE_LIVE_TRADING", "false").lower()
+            
+            if enable_trading != "true" and legacy_enable != "true":
+                raise ValueError(
+                    "CRITICAL: Safety configuration violation. "
+                    "Live trading mode set without proper authorization. "
+                    "Environment variable manipulation detected."
+                )
+        
+        # Validate PRODUCTION_ROUTER_ENABLED cannot be accidentally disabled
+        production_router = os.getenv("PRODUCTION_ROUTER_ENABLED", "true").lower()
+        if production_router != "true":
+            raise ValueError(
+                "CRITICAL: Production router disabled. "
+                "This may indicate environment variable manipulation. "
+                "Production requires PRODUCTION_ROUTER_ENABLED=true"
+            )
+        
+        logger.info("[SAFETY_CONFIG] Production safety configuration validated")
+    else:
+        logger.info(f"[SAFETY_CONFIG] Development environment detected ({env}), safety validation relaxed")
+
+
 def get_vyomquant_mode(default: str = "safe") -> str:
     """
     Retrieves the operating mode of the application.
@@ -92,12 +132,28 @@ class ExecutionFlags:
 
     
     @classmethod
-    def freeze_all(cls) -> None:
-        """Emergency freeze - block all execution."""
+    def freeze_all(cls, authorized: bool = False) -> None:
+        """
+        Emergency freeze - block all execution.
+        
+        Args:
+            authorized: Authorization flag. In production, this must be explicitly authorized.
+        
+        SECURITY: In production, requires explicit authorization to prevent unauthorized shutdowns.
+        """
+        env = os.getenv("ENV", "development").lower()
+        
+        if env == "production" and not authorized:
+            raise PermissionError(
+                "CRITICAL: Unauthorized attempt to freeze all execution. "
+                "Production requires explicit authorization for safety control operations."
+            )
+        
         cls.LIVE_TRADING_ENABLED = False
         cls.PAPER_TRADING_ENABLED = False
         cls.MANUAL_ORDER_EXECUTION = False
         cls.STRATEGY_SIGNAL_EXECUTION = False
+        logger.warning("[SAFETY_CONFIG] Emergency freeze activated")
         cls.BACKTEST_CAN_SUBMIT_ORDERS = False
         cls.ALLOW_ML_INFERENCE = False
         cls.FALLBACK_TO_MOCK_PREDICTIONS = False

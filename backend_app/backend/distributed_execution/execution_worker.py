@@ -11,6 +11,7 @@ import asyncio
 import logging
 import time
 import uuid
+import os
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
@@ -32,6 +33,11 @@ except ImportError:
     WORKER_RESTART_RECOVERY_AVAILABLE = False
 
 logger = logging.getLogger("execution_worker")
+
+
+def _is_production() -> bool:
+    """Check if running in production environment."""
+    return os.getenv("ENV", "development").lower() == "production"
 
 
 class WorkerState(Enum):
@@ -307,7 +313,7 @@ class ExecutionWorker:
         logger.info(f"Worker {self.worker_id} job processing loop stopped")
     
     async def _process_job(self, job: ExecutionJob):
-        """Process a single execution job."""
+        """Process a single execution job with robust failure handling."""
         job_id = job.job_id
         logger.info(f"Worker {self.worker_id} processing job {job_id}")
         
@@ -331,18 +337,54 @@ class ExecutionWorker:
                 await self._fail_job(job, f"Exchange gateway not found: {job.exchange}")
                 return
             
-            # Execute order
-            result = await gateway.execute_order(job)
-            
-            # Store result for idempotency
-            if job.idempotency_key:
-                await self.idempotency_manager.mark_processed(job.idempotency_key, result)
-            
-            # Complete job
-            await self._complete_job_with_result(job, result)
+            # Execute order with failure handling
+            try:
+                result = await gateway.execute_order(job)
+                
+                # Store result for idempotency
+                if job.idempotency_key:
+                    await self.idempotency_manager.mark_processed(job.idempotency_key, result)
+                
+                # Complete job
+                await self._complete_job_with_result(job, result)
+                
+            except Exception as execution_error:
+                logger.error(f"Execution failed for job {job_id}: {execution_error}")
+                
+                # CRITICAL: In production, trigger alert for execution failures
+                if _is_production():
+                    logger.critical(
+                        f"PRODUCTION ALERT: Execution failure for job {job_id}. "
+                        f"Exchange: {job.exchange}, Symbol: {job.symbol}. "
+                        f"Error: {execution_error}. Manual intervention may be required."
+                    )
+                    # In production, execution failures should trigger immediate alert
+                    # and potentially halt trading for that strategy
+                else:
+                    logger.warning(
+                        f"DEV MODE: Execution failure for job {job_id}. "
+                        f"Alert would be triggered in production."
+                    )
+                
+                # Fail job with detailed error
+                await self._fail_job(job, f"Execution failure: {str(execution_error)}")
             
         except Exception as e:
             logger.error(f"Failed to process job {job_id}: {e}")
+            
+            # CRITICAL: In production, trigger alert for worker failures
+            if _is_production():
+                logger.critical(
+                    f"PRODUCTION ALERT: Worker failure processing job {job_id}. "
+                    f"Worker {self.worker_id}, Error: {e}. "
+                    f"Worker may need restart or intervention."
+                )
+            else:
+                logger.warning(
+                    f"DEV MODE: Worker failure processing job {job_id}. "
+                    f"Alert would be triggered in production."
+                )
+            
             await self._fail_job(job, str(e))
         
         finally:

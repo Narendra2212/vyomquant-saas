@@ -852,7 +852,14 @@ class ExecutionGuard:
             
             if existing:
                 # Order already exists - BLOCK to prevent duplicate
-                order_data = ast.literal_eval(existing.decode())
+                # SECURITY: Use json.loads instead of ast.literal_eval for safer deserialization
+                # Fallback to ast.literal_eval for backward compatibility during migration
+                try:
+                    order_data = json.loads(existing.decode())
+                except (json.JSONDecodeError, ValueError):
+                    # During migration, some data may still be stored as Python literals
+                    # This fallback will be removed once all data is migrated to JSON
+                    order_data = ast.literal_eval(existing.decode())
                 return ValidationResult(
                     check_name="duplicate_order",
                     passed=False,
@@ -1210,7 +1217,14 @@ class ExecutionGuard:
             cb_status = await self.redis.get(cb_key)
             
             if cb_status:
-                status_data = ast.literal_eval(cb_status.decode())
+                # SECURITY: Use json.loads instead of ast.literal_eval for safer deserialization
+                # Fallback to ast.literal_eval for backward compatibility during migration
+                try:
+                    status_data = json.loads(cb_status.decode())
+                except (json.JSONDecodeError, ValueError):
+                    # During migration, some data may still be stored as Python literals
+                    # This fallback will be removed once all data is migrated to JSON
+                    status_data = ast.literal_eval(cb_status.decode())
                 if status_data.get("tripped", False):
                     return ValidationResult(
                         check_name="circuit_breakers",
@@ -1316,7 +1330,14 @@ class ExecutionGuard:
             
             if snapshot_data:
                 from datetime import datetime, timezone
-                snapshot = ast.literal_eval(snapshot_data.decode())
+                # SECURITY: Use json.loads instead of ast.literal_eval for safer deserialization
+                # Fallback to ast.literal_eval for backward compatibility during migration
+                try:
+                    snapshot = json.loads(snapshot_data.decode())
+                except (json.JSONDecodeError, ValueError):
+                    # During migration, some data may still be stored as Python literals
+                    # This fallback will be removed once all data is migrated to JSON
+                    snapshot = ast.literal_eval(snapshot_data.decode())
                 snapshot_time_str = snapshot.get("timestamp", "")
                 
                 if snapshot_time_str:
@@ -1377,10 +1398,13 @@ class ExecutionGuard:
             status = await self.redis.get(risk_key)
             
             if status:
+                # SECURITY: Use json.loads instead of ast.literal_eval for safer deserialization
+                # Fallback to ast.literal_eval for backward compatibility during migration
                 try:
                     status_data = json.loads(status.decode())
-                except Exception:
-                    import ast
+                except (json.JSONDecodeError, ValueError):
+                    # During migration, some data may still be stored as Python literals
+                    # This fallback will be removed once all data is migrated to JSON
                     status_data = ast.literal_eval(status.decode())
                 if not status_data.get("operational", True):
                     return ValidationResult(

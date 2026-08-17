@@ -17,6 +17,7 @@ FEATURES:
   - Async connection pooling for asyncpg
   - Health checks and monitoring
   - Automatic connection recycling
+  - Connection pool monitoring and alerts
 
 USAGE:
     from backend_app.core.database_pool import get_db_pool, get_async_db_pool
@@ -36,7 +37,7 @@ import time
 import random
 import asyncio
 from contextlib import asynccontextmanager, contextmanager
-from typing import Optional
+from typing import Optional, Dict
 from backend_app.core.safety_config import get_vyomquant_mode
 
 from sqlalchemy import Engine, create_engine
@@ -55,6 +56,59 @@ except ImportError:
 
 logger = logging.getLogger("DatabasePool")
 
+
+class ConnectionPoolMonitor:
+    """Monitor connection pool health and detect exhaustion risks."""
+    
+    def __init__(self):
+        self._stats: Dict[str, any] = {
+            "pool_size": POOL_SIZE,
+            "max_overflow": MAX_OVERFLOW,
+            "total_capacity": POOL_SIZE + MAX_OVERFLOW,
+            "current_usage": 0,
+            "peak_usage": 0,
+            "exhaustion_count": 0,
+            "last_exhaustion_time": None
+        }
+        self._alert_threshold = 0.8  # Alert at 80% capacity
+        self._is_production = os.getenv("ENV", "development").lower() == "production"
+    
+    def record_pool_status(self, pool_size: int, checked_out: int, overflow: int, checkin: int):
+        """Record current pool status."""
+        total_usage = checked_out + overflow
+        self._stats["current_usage"] = total_usage
+        self._stats["peak_usage"] = max(self._stats["peak_usage"], total_usage)
+        
+        # Check for exhaustion risk
+        usage_ratio = total_usage / self._stats["total_capacity"]
+        if usage_ratio >= self._alert_threshold:
+            if self._is_production:
+                logger.critical(
+                    f"DB POOL ALERT: Connection pool at {usage_ratio:.1%} capacity "
+                    f"({total_usage}/{self._stats['total_capacity']}). "
+                    f"Risk of connection exhaustion."
+                )
+            else:
+                logger.warning(
+                    f"DB POOL WARNING: Connection pool at {usage_ratio:.1%} capacity "
+                    f"({total_usage}/{self._stats['total_capacity']}). "
+                    f"Alert would be triggered in production."
+                )
+        
+        # Check for actual exhaustion
+        if total_usage >= self._stats["total_capacity"]:
+            self._stats["exhaustion_count"] += 1
+            self._stats["last_exhaustion_time"] = time.time()
+            logger.critical(
+                f"DB POOL EXHAUSTION: Connection pool exhausted! "
+                f"Total capacity: {self._stats['total_capacity']}, Current usage: {total_usage}"
+            )
+    
+    def get_stats(self) -> Dict[str, any]:
+        """Get current pool statistics."""
+        return self._stats.copy()
+
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -69,6 +123,10 @@ MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "3"))
 POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))
 POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))  # 1 hour
 POOL_PRE_PING = os.getenv("DB_POOL_PRE_PING", "true").lower() == "true"
+
+
+# Global pool monitor instance
+_pool_monitor = ConnectionPoolMonitor()
 
 # Database URL - default to SQLite for development
 _env_mode = get_vyomquant_mode("safe").lower()
@@ -164,19 +222,54 @@ class DatabasePool:
                 pool_pre_ping=True,
                 pool_recycle=3600,
                 pool_timeout=30,
+                pool_events={
+                    "connect": self._on_connect,
+                    "checkout": self._on_checkout,
+                    "checkin": self._on_checkin
+                }
             )
             logger.info(
                 f"[DB Pool] Engine created: size={POOL_SIZE}, "
-                f"overflow={MAX_OVERFLOW}"
+                f"overflow={MAX_OVERFLOW}, monitoring enabled"
             )
             
-        # FIN-CRITICAL-001 FIX: Set SERIALIZABLE isolation level for financial transactions
-        # This prevents race conditions and ensures consistency for money-critical operations
+        # FIN-CRITICAL-001 FIX: Create session factory
+        # Note: Isolation level is set on the engine, not session factory
+        # Financial transactions should use SERIALIZABLE via transaction-level isolation
         self._session_factory = sessionmaker(
             bind=self._engine,
-            isolation_level="SERIALIZABLE"
+            autocommit=False,
+            autoflush=False
         )
         self._initialized = True
+    
+    def _on_connect(self, dbapi_connection, connection_record):
+        """Handle connection pool connect events."""
+        logger.debug(f"[DB Pool] New connection established")
+    
+    def _on_checkout(self, dbapi_connection, connection_record, connection_proxy_context):
+        """Handle connection pool checkout events for monitoring."""
+        pool = connection_record.pool
+        _pool_monitor.record_pool_status(
+            pool.size(),
+            pool.checkedout(),
+            pool.overflow(),
+            pool.checkedin()
+        )
+    
+    def _on_checkin(self, dbapi_connection, connection_record):
+        """Handle connection pool checkin events for monitoring."""
+        pool = connection_record.pool
+        _pool_monitor.record_pool_status(
+            pool.size(),
+            pool.checkedout(),
+            pool.overflow(),
+            pool.checkedin()
+        )
+    
+    def get_pool_stats(self) -> Dict[str, any]:
+        """Get current connection pool statistics."""
+        return _pool_monitor.get_stats()
     
     def close(self):
         """Close all connections in the pool."""
@@ -198,6 +291,31 @@ class DatabasePool:
             self.initialize()
         
         return self._session_factory()
+    
+    def get_transactional_session(self, isolation_level: str = "SERIALIZABLE"):
+        """
+        Get a database session with specific isolation level for financial transactions.
+        
+        Args:
+            isolation_level: The isolation level (default: SERIALIZABLE for financial ops)
+        
+        Returns:
+            Session with the specified isolation level
+        """
+        if not self._initialized:
+            self.initialize()
+        
+        # Create a session with transaction-level isolation
+        session = self._session_factory()
+        
+        # Set isolation level at the transaction level
+        if "sqlite" not in str(self._engine.url):
+            try:
+                session.execute(f"SET TRANSACTION ISOLATION LEVEL {isolation_level}")
+            except Exception as e:
+                logger.warning(f"Failed to set isolation level {isolation_level}: {e}")
+        
+        return session
     
     @contextmanager
     def connection(self):

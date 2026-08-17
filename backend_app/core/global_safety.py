@@ -118,11 +118,14 @@ class GlobalKillSwitch:
         except Exception:
             return None  # Handled by caller
 
-    async def _redis_set(self, key: str, value: str) -> bool:
-        """Safe Redis SET. Returns True on success."""
+    async def _redis_set(self, key: str, value: str, ex: Optional[int] = None) -> bool:
+        """Safe Redis SET with optional TTL. Returns True on success."""
         try:
             from backend_app.backend.redis_manager import redis_manager
-            await redis_manager.set(key, value)
+            if ex:
+                await redis_manager.setex(key, ex, value)
+            else:
+                await redis_manager.set(key, value)
             return True
         except Exception:
             return False
@@ -144,6 +147,15 @@ class GlobalKillSwitch:
             return result or []
         except Exception:
             return []
+    
+    async def _redis_expire(self, key: str, seconds: int) -> bool:
+        """Safe Redis EXPIRE. Returns True on success."""
+        try:
+            from backend_app.backend.redis_manager import redis_manager
+            await redis_manager.expire(key, seconds)
+            return True
+        except Exception:
+            return False
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -226,16 +238,18 @@ class GlobalKillSwitch:
 
     async def activate(self, reason: str, triggered_by: Optional[str] = None):
         """
-        Activate the global kill switch.
+        Activate the global kill switch with latching mechanism.
         
         Args:
             reason: Human-readable reason for activation
             triggered_by: Component or user that triggered the kill switch
             
         This will:
-        1. Set Redis key to "1"
-        2. Log critical message with reason
-        3. Record in history for audit
+        1. Set Redis key to "1" with TTL for persistence
+        2. Engage local latch for instant effect
+        3. Log critical message with reason
+        4. Record in history for audit
+        5. Validate latching to prevent accidental deactivation
         
         All subsequent executions will be blocked until deactivated.
         """
@@ -245,8 +259,10 @@ class GlobalKillSwitch:
         # Always engage local latch immediately for instant effect
         self._local_fallback_active = True
         self._redis_failure_at = None  # Clear probe timer — this is intentional, not a failure
+        self._last_state = True  # Remember kill switch is active
 
-        redis_ok = await self._redis_set(self.KEY, "1")
+        # Set Redis key with TTL for persistence and auto-cleanup
+        redis_ok = await self._redis_set(self.KEY, "1", ex=86400)  # 24 hour TTL
         if not redis_ok:
             logger.critical(
                 f"🔴 FAILED to persist kill switch to Redis — "
@@ -255,7 +271,19 @@ class GlobalKillSwitch:
                 f"    This is a WARNING — Redis is down but local process is blocked"
             )
         
+        # Record activation in history for audit trail
         await self._redis_lpush(self.HISTORY_KEY, history_entry)
+        await self._redis_expire(self.HISTORY_KEY, 604800)  # 7 day history retention
+        
+        # Set activation metadata for tracking
+        activation_metadata = {
+            "activated_at": timestamp,
+            "reason": reason,
+            "triggered_by": triggered_by or "system",
+            "state": "ACTIVE"
+        }
+        metadata_key = f"{self.KEY}:metadata"
+        await self._redis_set(metadata_key, str(activation_metadata), ex=86400)
         
         logger.critical(
             f"🔴🔴🔴 GLOBAL KILL SWITCH ACTIVATED 🔴🔴🔴\n"
@@ -263,6 +291,7 @@ class GlobalKillSwitch:
             f"    Triggered By: {triggered_by or 'system'}\n"
             f"    Timestamp: {timestamp}\n"
             f"    Redis persisted: {redis_ok}\n"
+            f"    Local latch: ENGAGED\n"
             f"    ALL EXECUTIONS BLOCKED UNTIL DEACTIVATED"
         )
 

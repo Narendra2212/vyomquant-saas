@@ -22,6 +22,7 @@ EXPECTED RESULT:
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -30,6 +31,11 @@ from backend_app.core.cache import redis_manager
 from backend_app.core.global_safety import get_global_kill_switch
 
 logger = logging.getLogger("DistributedIdempotency")
+
+
+def _is_production() -> bool:
+    """Check if running in production environment."""
+    return os.getenv("ENV", "development").lower() == "production"
 
 
 class DuplicateOrderError(Exception):
@@ -197,6 +203,19 @@ class DistributedIdempotencyLayer:
                 
         except Exception as e:
             logger.error(f"STEP 2: Idempotency check failed for {key}: {e}")
+            # FAIL-CLOSED: In production, Redis failure should prevent duplicate execution risk
+            if _is_production():
+                raise RuntimeError(
+                    f"CRITICAL: Redis unavailable during idempotency check. "
+                    f"Operation blocked to prevent duplicate execution in production."
+                )
+            # In development, allow operation but log the failure
+            return IdempotencyResult(
+                is_duplicate=False,
+                is_processing=False,
+                cached_result=None,
+                key=key
+            )
             return IdempotencyResult(
                 is_duplicate=False,
                 is_processing=False,
@@ -319,6 +338,12 @@ class DistributedIdempotencyLayer:
             return acquired, token
         except Exception as e:
             logger.error(f"STEP 2: Failed to mark processing for {key}: {e}")
+            # FAIL-CLOSED: In production, Redis failure should prevent duplicate execution risk
+            if _is_production():
+                raise RuntimeError(
+                    f"CRITICAL: Redis unavailable during processing lock acquisition. "
+                    f"Operation blocked to prevent duplicate execution in production."
+                )
             return False, token
 
     async def release_processing_lock(
@@ -386,6 +411,12 @@ class DistributedIdempotencyLayer:
             return key
         except Exception as e:
             logger.error(f"STEP 2: Failed to store result for {key}: {e}")
+            # FAIL-CLOSED: In production, Redis failure should prevent duplicate execution risk
+            if _is_production():
+                raise RuntimeError(
+                    f"CRITICAL: Redis unavailable during result storage. "
+                    f"Operation blocked to prevent duplicate execution in production."
+                )
             return key
     
     async def execute_with_idempotency(

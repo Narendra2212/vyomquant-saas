@@ -32,20 +32,23 @@ async def get_performance(
     try:
         safe_uid = _safe_uid(user["id"])
         
-        # Query executions for the period
+        # Use parameterized query to prevent SQL injection
+        # Note: QuestDB parameterization may have limitations, but we validate the input
         query = (
-            "SELECT "  # nosec: B608
+            "SELECT "
             "COUNT(*) as total_trades, "
             "SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as winning_trades, "
             "SUM(pnl) as total_pnl, "
             "AVG(pnl) as avg_pnl, "
             "STDDEV(pnl) as pnl_stddev "
             "FROM executions "
-            "WHERE user_id = '" + safe_uid + "' "
-            "AND timestamp > dateadd('D', -" + str(int(days)) + ", now());"
-        )  # nosec: B608
+            "WHERE user_id = ? "
+            "AND timestamp > dateadd('D', -?, now());"
+        )
         
-        result = await telemetry.execute_query(query)
+        # Use parameterized query with validated inputs
+        params = [safe_uid, int(days)]
+        result = await telemetry.execute_query(query, params)
         
         if result and result.get("dataset"):
             cols = [c["name"] for c in result["columns"]]

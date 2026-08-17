@@ -4,6 +4,8 @@ backend_app/core/risk_manager.py
 Consolidated Institutional Risk Manager.
 Combines institutional circuit-breaker checks, multi-tenant rate limits,
 capital allocations, correlation cluster controls, and paper-trading risk status helpers.
+
+SECURITY: Service role key usage is strictly controlled with audit logging and validation.
 """
 
 import asyncio
@@ -11,11 +13,74 @@ from dataclasses import dataclass, field
 from datetime import date
 import logging
 import time
+import os
 from collections import defaultdict, deque
 from enum import Enum
 from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger("RiskManager")
+
+
+def _validate_service_role_security() -> None:
+    """
+    SECURITY: Validate that service role key is properly secured.
+    
+    Raises RuntimeError if service role key security requirements are not met.
+    """
+    env = os.environ.get("ENV", "development").lower()
+    if env == "production":
+        service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        if not service_role_key:
+            raise RuntimeError(
+                "CRITICAL: SUPABASE_SERVICE_ROLE_KEY not configured in production. "
+                "Risk manager requires service role access for backend operations."
+            )
+        
+        # Validate service role key format
+        if not service_role_key.startswith("eyJ"):
+            logger.warning("Service role key may not be properly formatted")
+        
+        # Log service role key usage for audit
+        logger.info("Service role key validated for risk manager operations")
+
+
+def _log_service_role_access(user_id: str, operation: str) -> None:
+    """
+    SECURITY: Audit log all service role key usage.
+    
+    Args:
+        user_id: User ID being accessed
+        operation: Operation being performed
+    """
+    logger.info(
+        f"AUDIT: Service role key access - user_id={user_id}, operation={operation}, "
+        f"timestamp={time.time()}"
+    )
+
+
+def _validate_user_id_isolation(user_id: str) -> None:
+    """
+    SECURITY: Validate user_id format to prevent injection attacks.
+    
+    Args:
+        user_id: User ID to validate
+    
+    Raises ValueError if user_id is invalid.
+    """
+    if not user_id or not isinstance(user_id, str):
+        raise ValueError("Invalid user_id: must be non-empty string")
+    
+    # Check for potential injection patterns
+    dangerous_patterns = ["'", ";", "--", "/*", "*/", "xp_", "sp_"]
+    for pattern in dangerous_patterns:
+        if pattern in user_id:
+            raise ValueError(f"Invalid user_id: contains dangerous pattern '{pattern}'")
+    
+    # UUID format validation (Supabase uses UUIDs)
+    import re
+    uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    if not re.match(uuid_pattern, user_id.lower()):
+        logger.warning(f"User ID {user_id} does not match UUID format")
 
 
 def _load_user_risk_settings(user_id: str) -> Optional[Dict[str, Any]]:
@@ -25,10 +90,24 @@ def _load_user_risk_settings(user_id: str) -> Optional[Dict[str, Any]]:
     SECURITY NOTE: Uses SERVICE_ROLE_KEY to bypass RLS for backend-only access.
     This is intentional - the risk engine needs to read user settings during trade validation
     without requiring the user's session token. Access is still restricted by user_id filtering.
+    
+    SECURITY ENHANCEMENTS:
+    - Service role key validation
+    - Audit logging for all access
+    - User ID injection validation
+    - Strict user_id filtering
     """
     try:
+        # SECURITY: Validate service role key before use
+        _validate_service_role_security()
+        
+        # SECURITY: Validate user_id format
+        _validate_user_id_isolation(user_id)
+        
+        # SECURITY: Audit log service role access
+        _log_service_role_access(user_id, "load_user_risk_settings")
+        
         from supabase import create_client
-        import os
         
         supabase_url = os.environ.get("SUPABASE_URL")
         supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -38,10 +117,20 @@ def _load_user_risk_settings(user_id: str) -> Optional[Dict[str, Any]]:
             return None
             
         sb = create_client(supabase_url, supabase_key)
+        
+        # SECURITY: Strict user_id filtering to prevent cross-tenant access
         resp = sb.table("risk_settings").select("*").eq("user_id", user_id).execute()
         
         if resp.data:
             settings = resp.data[0]
+            # SECURITY: Verify returned data belongs to requested user
+            if settings.get("user_id") != user_id:
+                logger.critical(
+                    f"SECURITY VIOLATION: User ID mismatch in risk settings response. "
+                    f"Requested: {user_id}, Received: {settings.get('user_id')}"
+                )
+                raise RuntimeError("Security violation: User ID mismatch in risk settings")
+            
             return {
                 "max_daily_loss": settings.get("max_daily_loss", 500.0),
                 "max_positions": settings.get("max_positions", 10),

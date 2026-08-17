@@ -60,11 +60,26 @@ except ImportError:
 
 # ══════════════════════════════════════════════════════════════════════════
 #  DEV MODE DETECTION
+# SECURITY: DEV_MODE cannot be enabled in production under any circumstances
 # ══════════════════════════════════════════════════════════════════════════
+
+def _is_production_safe() -> bool:
+    """Check if production safety constraints are met."""
+    env = (os.environ.get("ENV") or os.environ.get("ENVIRONMENT") or "").lower()
+    if env == "production":
+        # In production, DEV_MODE must be explicitly false
+        dev_mode = os.environ.get("DEV_MODE", "false").lower()
+        if dev_mode in ("true", "1", "yes"):
+            raise RuntimeError(
+                "CRITICAL: DEV_MODE enabled in production. "
+                "This is a security violation. Mock Supabase cannot be used in production."
+            )
+        return True
+    return False
 
 _env = (os.environ.get("ENV") or os.environ.get("ENVIRONMENT") or "").lower()
 DEV_MODE = (os.environ.get("DEV_MODE", "false").lower() == "true" or \
-           _env in ("development", "dev", "test", "testing", "local")) and _env != "production"
+           _env in ("development", "dev", "test", "testing", "local")) and not _is_production_safe()
 
 logger = logging.getLogger("Dependencies")
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -92,6 +107,8 @@ def get_supabase():
     Lazily initialised with double-checked locking: the outer check avoids
     lock contention in the steady-state case; the inner check prevents
     duplicate construction by concurrent cold-start callers.
+    
+    SECURITY: FAIL-CLOSED in production if Supabase is unavailable.
     """
     global _supabase_client
     if _supabase_client is None:
@@ -104,6 +121,13 @@ def get_supabase():
                     if DEV_MODE:
                         logger.warning("SUPABASE_URL / SUPABASE_ANON_KEY missing in DEV_MODE, using None")
                         return None
+                    # FAIL-CLOSED: In production, require Supabase
+                    if _is_production_safe():
+                        raise RuntimeError(
+                            "CRITICAL: Supabase credentials required in production. "
+                            "Set SUPABASE_URL and SUPABASE_ANON_KEY. "
+                            "Operation blocked to prevent security bypass."
+                        )
                     logger.error("SUPABASE_URL and SUPABASE_ANON_KEY not set")
                     raise RuntimeError("Supabase request credentials required. Set SUPABASE_URL and SUPABASE_ANON_KEY.")
 

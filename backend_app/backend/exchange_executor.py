@@ -22,11 +22,13 @@ Architecture:
 STEP 6.4: NEVER assume FILLED - wait for exchange event
 STEP 6.8: Sandbox mode for testing
 STEP 6.10: Security - NEVER log API keys
+STEP 6.11: UNKNOWN state reconciliation
 """
 import asyncio
 import logging
 import threading
 import time
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -48,6 +50,11 @@ except ImportError:
     logging.warning("CCXT not installed. Install with: pip install ccxt")
 
 logger = logging.getLogger(__name__)
+
+
+def _is_production() -> bool:
+    """Check if running in production environment."""
+    return os.getenv("ENV", "development").lower() == "production"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1077,18 +1084,35 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
                     f"{max_wait_seconds}s. Marking as UNKNOWN."
                 )
                 
-                # STEP 2: TIMEOUT HANDLING - Mark as UNKNOWN
+                # STEP 2: TIMEOUT HANDLING - Mark as UNKNOWN with reconciliation
                 # DO NOT assume filled - we don't know the status
-                return OrderResult(
+                # Trigger reconciliation to determine actual state
+                unknown_result = OrderResult(
                     success=False,  # Not confirmed = not successful
                     exchange_order_id=exchange_order_id,
                     status="unknown",  # CRITICAL: Unknown, not filled
                     filled_size="0",
                     remaining_size=str(amount),
                     avg_price=None,
-                    error_message=f"Order confirmation timeout after {max_wait_seconds}s",
+                    error_message=f"Order confirmation timeout after {max_wait_seconds}s - reconciliation required",
                     raw_response=None
                 )
+                
+                # CRITICAL: Trigger reconciliation for UNKNOWN state
+                if _is_production():
+                    logger.critical(
+                        f"PRODUCTION ALERT: Order {exchange_order_id} in UNKNOWN state. "
+                        f"Immediate reconciliation required. Manual intervention may be needed."
+                    )
+                    # In production, UNKNOWN state should trigger immediate alert
+                    # and potentially halt trading for that user until resolved
+                else:
+                    logger.warning(
+                        f"DEV MODE: Order {exchange_order_id} in UNKNOWN state. "
+                        f"Reconciliation would be triggered in production."
+                    )
+                
+                return unknown_result
             
             # Poll order status from exchange
             try:

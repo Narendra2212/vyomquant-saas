@@ -3,14 +3,25 @@ Safety Monitor
 
 Tracks and logs all execution attempts, especially blocked unsafe executions.
 Used for security auditing and compliance.
+
+PERSISTENCE: Stores safety events in Redis for durability across process restarts.
 """
 
 import logging
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from backend_app.core.cache import redis_manager
+
 logger = logging.getLogger(__name__)
+
+
+def _is_production() -> bool:
+    """Check if running in production environment."""
+    return os.getenv("ENV", "development").lower() == "production"
 
 
 @dataclass
@@ -47,11 +58,28 @@ class SafetyMonitor:
     - Security auditing
     - Compliance reporting
     - Debugging blocked paths
+    
+    PERSISTENCE: Uses Redis for durable event storage across process restarts.
     """
     
     def __init__(self):
         self._blocked_events: list = []
         self._max_events = 10000  # Prevent memory leak
+        self._redis_key_prefix = "safety_monitor"
+        self._retention_seconds = 86400  # 24 hours
+    
+    async def _persist_blocked_event(self, event: BlockedExecutionEvent) -> None:
+        """Persist blocked event to Redis for durability."""
+        try:
+            redis_client = await redis_manager.get_client()
+            if redis_client:
+                event_key = f"{self._redis_key_prefix}:blocked:{event.timestamp.timestamp()}"
+                event_data = json.dumps(event.to_dict())
+                await redis_client.set(event_key, event_data, ex=self._retention_seconds)
+                logger.debug(f"Persisted blocked execution event to Redis: {event_key}")
+        except Exception as e:
+            logger.error(f"Failed to persist blocked event to Redis: {e}")
+            # Continue with in-memory storage if Redis fails
     
     def log_blocked_execution(
         self,
@@ -89,6 +117,10 @@ class SafetyMonitor:
         
         # Store in memory (for real-time monitoring)
         self._blocked_events.append(event)
+        
+        # Persist to Redis for durability
+        import asyncio
+        asyncio.create_task(self._persist_blocked_event(event))
         
         # Prevent unbounded growth
         if len(self._blocked_events) > self._max_events:

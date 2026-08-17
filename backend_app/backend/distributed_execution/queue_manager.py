@@ -9,6 +9,7 @@ Author: Principal Distributed Trading Systems Architect
 import json
 import logging
 import uuid
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -19,6 +20,11 @@ from typing import Any, Dict, Optional
 from backend_app.core.cache.redis_manager import redis_manager
 
 logger = logging.getLogger("distributed_execution")
+
+
+def _is_production() -> bool:
+    """Check if running in production environment."""
+    return os.getenv("ENV", "development").lower() == "production"
 
 # Import Redis manager
 
@@ -197,9 +203,24 @@ class RedisQueueBackend(QueueBackend):
         }
     
     async def publish(self, queue_type: QueueType, job: ExecutionJob) -> bool:
-        """Publish job to Redis Stream."""
+        """Publish job to Redis Stream with deduplication."""
         try:
             stream_name = self.stream_names[queue_type]
+            
+            # DEDUPLICATION: Check if job with same idempotency key already exists
+            if job.idempotency_key:
+                deduplication_key = f"queue_deduplication:{queue_type.value}:{job.idempotency_key}"
+                existing_job = await self.redis.get(deduplication_key)
+                
+                if existing_job:
+                    logger.info(
+                        f"Job with idempotency key {job.idempotency_key} already exists, "
+                        f"skipping duplicate publish for job {job.job_id}"
+                    )
+                    return True  # Return success as if published (idempotent)
+                
+                # Set deduplication marker with TTL (24 hours)
+                await self.redis.set(deduplication_key, job.job_id, ex=86400)
             
             # Use priority for stream ordering (higher priority = lower score)
             1000 - (job.priority.value * 100)
@@ -208,7 +229,8 @@ class RedisQueueBackend(QueueBackend):
                 "job_data": json.dumps(job.to_dict()),
                 "priority": str(job.priority.value),
                 "tenant_id": job.tenant_id,
-                "created_at": job.created_at.isoformat()
+                "created_at": job.created_at.isoformat(),
+                "idempotency_key": job.idempotency_key or ""
             }
             
             # Add to stream
@@ -224,6 +246,20 @@ class RedisQueueBackend(QueueBackend):
             
         except Exception as e:
             logger.error(f"Failed to publish job {job.job_id} to {queue_type.value}: {e}")
+            
+            # CRITICAL: In production, queue failures should trigger alerts
+            if _is_production():
+                logger.critical(
+                    f"PRODUCTION ALERT: Queue publish failure for job {job.job_id}. "
+                    f"Queue: {queue_type.value}, Error: {e}. "
+                    f"Message delivery may be compromised."
+                )
+            else:
+                logger.warning(
+                    f"DEV MODE: Queue publish failure for job {job.job_id}. "
+                    f"Alert would be triggered in production."
+                )
+            
             return False
     
     async def consume(self, queue_type: QueueType, consumer_group: str, consumer_id: str) -> Optional[ExecutionJob]:

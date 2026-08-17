@@ -1,11 +1,18 @@
 """
 Production-grade Risk Engine for Trading System
 Controls capital risk, prevents overexposure, and enforces safety rules
+
+FINANCIAL PRECISION: Uses Decimal for all financial calculations to prevent
+precision loss and rounding errors in critical financial operations.
 """
 
 from typing import Tuple
+from decimal import Decimal, getcontext
 
 import pandas as pd
+
+# Set high precision for financial calculations
+getcontext().prec = 28  # 28 decimal places for financial precision
 
 
 class RiskEngine:
@@ -37,16 +44,17 @@ class RiskEngine:
             daily_loss_limit: Maximum daily loss as fraction of initial capital (default: 0.05 = 5%)
             atr_multiplier: Multiplier for ATR-based stop distance (default: 2.0)
         """
-        self.initial_capital = initial_capital
-        self.current_equity = initial_capital
+        # Convert to Decimal for financial precision
+        self.initial_capital = Decimal(str(initial_capital))
+        self.current_equity = Decimal(str(initial_capital))
         
-        self.risk_per_trade = risk_per_trade
-        self.max_drawdown = max_drawdown
-        self.daily_loss_limit = daily_loss_limit
-        self.atr_multiplier = atr_multiplier
+        self.risk_per_trade = Decimal(str(risk_per_trade))
+        self.max_drawdown = Decimal(str(max_drawdown))
+        self.daily_loss_limit = Decimal(str(daily_loss_limit))
+        self.atr_multiplier = Decimal(str(atr_multiplier))
         
-        self.peak_equity = initial_capital
-        self.daily_loss = 0.0
+        self.peak_equity = Decimal(str(initial_capital))
+        self.daily_loss = Decimal('0.0')
     
     # ----------------------------------
     # CALCULATE ATR
@@ -87,16 +95,22 @@ class RiskEngine:
             atr: Current ATR value
             
         Returns:
-            Position size (quantity) to trade
+            Position size (quantity) to trade (as float for API compatibility)
         """
+        # Convert to Decimal for precision
+        price_decimal = Decimal(str(price))
+        atr_decimal = Decimal(str(atr))
+        
         risk_amount = self.current_equity * self.risk_per_trade
-        stop_distance = atr * self.atr_multiplier
+        stop_distance = atr_decimal * self.atr_multiplier
         
         if stop_distance == 0:
-            return 0
+            return 0.0
         
         position_size = risk_amount / stop_distance
-        return position_size
+        
+        # Convert back to float for API compatibility
+        return float(position_size)
     
     # ----------------------------------
     # UPDATE EQUITY AFTER TRADE

@@ -22,8 +22,23 @@ if _backend_path not in sys.path:
 
 
 # ── DEV MODE: Detect if we should use mock engines
-DEV_MODE = os.environ.get("DEV_MODE", "false").lower() == "true" or \
-           os.environ.get("ENV", "").lower() == "development"
+# SECURITY: DEV_MODE cannot be enabled in production
+def _is_production_safe() -> bool:
+    """Check if production safety constraints are met."""
+    env = os.environ.get("ENV", "development").lower()
+    if env == "production":
+        # In production, DEV_MODE must be explicitly false
+        dev_mode = os.environ.get("DEV_MODE", "false").lower()
+        if dev_mode in ("true", "1", "yes"):
+            raise RuntimeError(
+                "CRITICAL: DEV_MODE enabled in production. "
+                "This is a security violation. Mock engines cannot be used in production."
+            )
+        return True
+    return False
+
+DEV_MODE = (os.environ.get("DEV_MODE", "false").lower() == "true" or 
+           os.environ.get("ENV", "").lower() == "development") and not _is_production_safe()
 
 # ── Safe Engine imports (fail gracefully) ────────────────────────────────
 

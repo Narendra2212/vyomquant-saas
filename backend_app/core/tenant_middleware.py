@@ -117,6 +117,15 @@ class TenantMiddleware(BaseHTTPMiddleware):
                 user_agent=request.headers.get("user-agent"),
             )
             
+            # TENANT ISOLATION: Validate tenant_id matches user_id unless explicitly separated
+            # This prevents cross-tenant access attempts
+            requested_tenant_id = request.query_params.get("tenant_id") or request.headers.get("X-Tenant-ID")
+            if requested_tenant_id and requested_tenant_id != tenant.tenant_id:
+                logger.critical(
+                    f"TENANT ISOLATION VIOLATION: User {tenant.user_id} attempted to access tenant {requested_tenant_id}"
+                )
+                raise HTTPException(403, "Cross-tenant access denied")
+            
             return tenant
             
         except Exception as e:

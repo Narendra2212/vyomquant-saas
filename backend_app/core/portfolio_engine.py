@@ -1,9 +1,16 @@
 """
 Production-grade Portfolio Engine for Trading System
 Allocates capital across multiple symbols while enforcing risk limits
+
+FINANCIAL PRECISION: Uses Decimal for all financial calculations to prevent
+precision loss and rounding errors in critical financial operations.
 """
 
 from typing import Dict, Optional, Tuple
+from decimal import Decimal, getcontext
+
+# Set high precision for financial calculations
+getcontext().prec = 28  # 28 decimal places for financial precision
 
 
 class PortfolioEngine:
@@ -30,11 +37,12 @@ class PortfolioEngine:
             max_positions: Maximum number of positions to hold (default: 5)
             max_allocation_per_asset: Maximum fraction of capital per asset (default: 0.3 = 30%)
         """
-        self.total_capital = total_capital
+        # Convert to Decimal for financial precision
+        self.total_capital = Decimal(str(total_capital))
         self.max_positions = max_positions
-        self.max_allocation_per_asset = max_allocation_per_asset
+        self.max_allocation_per_asset = Decimal(str(max_allocation_per_asset))
         
-        self.current_allocations: Dict[str, float] = {}
+        self.current_allocations: Dict[str, Decimal] = {}
         self.active_positions: Dict[str, dict] = {}
     
     # ----------------------------------
@@ -49,14 +57,17 @@ class PortfolioEngine:
                      Example: {"BTCUSDT": 1.0, "ETHUSDT": 0.8, "SOLUSDT": 0.5}
         
         Returns:
-            Dictionary mapping symbol to allocated capital amount
+            Dictionary mapping symbol to allocated capital amount (as float for API compatibility)
         """
         if not signals:
             return {}
         
+        # Convert signals to Decimal for precision
+        decimal_signals = {k: Decimal(str(v)) for k, v in signals.items()}
+        
         # Sort by signal strength (descending)
         sorted_assets = sorted(
-            signals.items(),
+            decimal_signals.items(),
             key=lambda x: x[1],
             reverse=True
         )
@@ -71,7 +82,7 @@ class PortfolioEngine:
         
         for symbol, strength in selected:
             # Weight proportional to signal strength
-            weight = strength / total_signal if total_signal > 0 else 0
+            weight = strength / total_signal if total_signal > 0 else Decimal('0')
             
             # Calculate raw capital allocation
             capital = weight * self.total_capital
@@ -85,7 +96,8 @@ class PortfolioEngine:
         # Update current allocations
         self.current_allocations = allocation.copy()
         
-        return allocation
+        # Convert back to float for API compatibility
+        return {k: float(v) for k, v in allocation.items()}
     
     # ----------------------------------
     # REBALANCE
@@ -175,27 +187,27 @@ class PortfolioEngine:
     # ----------------------------------
     # GET TOTAL EXPOSED
     # ----------------------------------
-    def get_total_exposed(self) -> float:
+    def get_total_exposed(self) -> Decimal:
         """
         Get total capital currently allocated to positions.
         
         Returns:
-            Sum of all position values
+            Sum of all position values as Decimal
         """
         return sum(
-            pos.get("value", 0) 
+            Decimal(str(pos.get("value", 0))) 
             for pos in self.active_positions.values()
         )
     
     # ----------------------------------
     # GET AVAILABLE CAPITAL
     # ----------------------------------
-    def get_available_capital(self) -> float:
+    def get_available_capital(self) -> Decimal:
         """
         Get remaining unallocated capital.
         
         Returns:
-            Available capital amount
+            Available capital amount as Decimal
         """
         return self.total_capital - self.get_total_exposed()
     
@@ -216,7 +228,7 @@ class PortfolioEngine:
             "total_capital": self.total_capital,
             "exposed_capital": exposed,
             "available_capital": available,
-            "exposure_pct": exposed / self.total_capital if self.total_capital > 0 else 0,
+            "exposure_pct": float(exposed / self.total_capital) if self.total_capital > 0 else 0.0,
             "position_count": len(self.active_positions),
             "max_positions": self.max_positions,
             "max_allocation_per_asset": self.max_allocation_per_asset,
@@ -268,13 +280,13 @@ class PortfolioEngine:
         Calculates aggregated portfolio metrics including valuation, exposure, and unrealized PnL.
         """
         prices = current_prices or {}
-        total_positions_val = 0.0
-        total_unrealized_pnl = 0.0
+        total_positions_val = Decimal("0.0")
+        total_unrealized_pnl = Decimal("0.0")
 
         for symbol, pos in self.active_positions.items():
-            price = prices.get(symbol, pos.get("entry_price", 0.0))
-            size = pos.get("size", 0.0)
-            entry_price = pos.get("entry_price", 0.0)
+            price = Decimal(str(prices.get(symbol, pos.get("entry_price", 0.0))))
+            size = Decimal(str(pos.get("size", 0.0)))
+            entry_price = Decimal(str(pos.get("entry_price", 0.0)))
             val = size * price
             pnl = (price - entry_price) * size
             total_positions_val += val
@@ -289,7 +301,7 @@ class PortfolioEngine:
             "cash_balance": available_cash,
             "positions_value": total_positions_val,
             "unrealized_pnl": total_unrealized_pnl,
-            "exposure_pct": (total_positions_val / self.total_capital * 100) if self.total_capital > 0 else 0.0,
+            "exposure_pct": float(total_positions_val / self.total_capital * 100) if self.total_capital > 0 else 0.0,
             "open_positions_count": len(self.active_positions),
         }
 
@@ -300,16 +312,17 @@ class PortfolioEngine:
         prices = current_prices or {}
         exposures = {}
         for symbol, pos in self.active_positions.items():
-            price = prices.get(symbol, pos.get("entry_price", 0.0))
-            size = pos.get("size", 0.0)
+            price = Decimal(str(prices.get(symbol, pos.get("entry_price", 0.0))))
+            size = Decimal(str(pos.get("size", 0.0)))
+            entry_price = Decimal(str(pos.get("entry_price", 0.0)))
             notional = size * price
             exposures[symbol] = {
                 "symbol": symbol,
-                "size": size,
-                "entry_price": pos.get("entry_price", 0.0),
-                "current_price": price,
-                "notional_value": notional,
-                "unrealized_pnl": (price - pos.get("entry_price", 0.0)) * size,
+                "size": float(size),
+                "entry_price": float(entry_price),
+                "current_price": float(price),
+                "notional_value": float(notional),
+                "unrealized_pnl": float((price - entry_price) * size),
             }
         return exposures
 
@@ -317,7 +330,7 @@ class PortfolioEngine:
         """
         Evaluates portfolio health and constraint compliance.
         """
-        exposed_pct = self.get_total_exposed() / self.total_capital if self.total_capital > 0 else 0.0
+        exposed_pct = float(self.get_total_exposed() / self.total_capital) if self.total_capital > 0 else 0.0
         status = "healthy"
         issues = []
         if exposed_pct > 0.90:

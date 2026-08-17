@@ -5,11 +5,17 @@ STEP 7: OPTIMIZE DB CONNECTIONS
 
 Updated to use connection pooling for better performance under load.
 See core/database_pool.py for full implementation details.
+
+STEP 8: TRANSACTION ISOLATION LEVEL STRATEGY
+- SERIALIZABLE for financial transactions (money-critical operations)
+- READ COMMITTED for general operations (better performance)
+- Transaction type-based isolation level selection
 """
 
 import logging
 import os
 import backend_app.core.safety_config
+from enum import Enum
 
 # Import from new pooling module
 try:
@@ -24,6 +30,34 @@ try:
 except ImportError:
     POOLING_AVAILABLE = False
     logging.warning("[Database] Connection pooling not available, using fallback")
+
+
+class TransactionType(Enum):
+    """Transaction types for isolation level selection."""
+    FINANCIAL = "financial"  # SERIALIZABLE - money-critical operations
+    GENERAL = "general"      # READ COMMITTED - general operations
+    READ_ONLY = "read_only"   # READ COMMITTED - read operations
+
+
+def get_isolation_level(transaction_type: TransactionType = TransactionType.GENERAL) -> str:
+    """
+    Get appropriate isolation level based on transaction type.
+    
+    Args:
+        transaction_type: Type of transaction
+        
+    Returns:
+        Isolation level string for SQLAlchemy
+    """
+    if transaction_type == TransactionType.FINANCIAL:
+        # SERIALIZABLE for financial transactions - maximum consistency
+        return "SERIALIZABLE"
+    elif transaction_type == TransactionType.READ_ONLY:
+        # READ COMMITTED for read operations - better performance
+        return "READ COMMITTED"
+    else:
+        # READ COMMITTED for general operations - balance of consistency and performance
+        return "READ COMMITTED"
 
 # Fallback for compatibility (if pooling module fails)
 if not POOLING_AVAILABLE:
@@ -65,28 +99,57 @@ if not POOLING_AVAILABLE:
             f"overflow={MAX_OVERFLOW}, timeout={POOL_TIMEOUT}s"
         )
     
-    # FIN-CRITICAL-001 FIX: Set SERIALIZABLE isolation level for financial transactions
-    # This prevents race conditions and ensures consistency for money-critical operations
+    # FIN-CRITICAL-001 FIX: Set isolation level based on transaction type
+    # SERIALIZABLE for financial transactions, READ COMMITTED for general operations
+    # This prevents race conditions for money-critical operations while maintaining performance
     SessionLocal = sessionmaker(
         autocommit=False, 
         autoflush=False, 
         bind=engine,
-        isolation_level="SERIALIZABLE"
+        isolation_level=get_isolation_level(TransactionType.GENERAL)  # Default to READ COMMITTED
     )
+    
+    # Create separate session factories for different transaction types
+    SessionLocalFinancial = sessionmaker(
+        autocommit=False, 
+        autoflush=False, 
+        bind=engine,
+        isolation_level=get_isolation_level(TransactionType.FINANCIAL)  # SERIALIZABLE
+    )
+    
+    SessionLocalReadOnly = sessionmaker(
+        autocommit=False, 
+        autoflush=False, 
+        bind=engine,
+        isolation_level=get_isolation_level(TransactionType.READ_ONLY)  # READ COMMITTED
+    )
+    
     Base = declarative_base()
     
-    def get_db():
-        """FastAPI yield dependency for getting DB sessions."""
-        db = SessionLocal()
+    def get_db(transaction_type: TransactionType = TransactionType.GENERAL):
+        """FastAPI yield dependency for getting DB sessions with configurable isolation level."""
+        if transaction_type == TransactionType.FINANCIAL:
+            db = SessionLocalFinancial()
+        elif transaction_type == TransactionType.READ_ONLY:
+            db = SessionLocalReadOnly()
+        else:
+            db = SessionLocal()
+        
         try:
             yield db
         finally:
             db.close()
 
     @contextmanager
-    def get_db_context():
-        """Context manager for direct 'with' statement usage."""
-        db = SessionLocal()
+    def get_db_context(transaction_type: TransactionType = TransactionType.GENERAL):
+        """Context manager for direct 'with' statement usage with configurable isolation level."""
+        if transaction_type == TransactionType.FINANCIAL:
+            db = SessionLocalFinancial()
+        elif transaction_type == TransactionType.READ_ONLY:
+            db = SessionLocalReadOnly()
+        else:
+            db = SessionLocal()
+        
         try:
             yield db
         finally:

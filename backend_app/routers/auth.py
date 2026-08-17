@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 Authentication Router - Production + Fallback
+
+SECURITY: Fallback mode removed for production safety.
+All authentication must go through Supabase.
 """
 from typing import Optional
 import logging
+import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 
@@ -16,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# In-memory user store for fallback mode
-_fallback_users = {}
+# Fallback mode removed for production safety
+# _fallback_users removed to prevent authentication bypass
 
 
 # ----------------------------------
@@ -52,22 +56,25 @@ def signout(
     Sign out user by revoking their session.
     
     BE-CRITICAL-001 FIX: Now requires authentication to prevent unauthorized signout.
+    SECURITY: No fallback mode - must use Supabase authentication.
     """
     vault = SupabaseConnection()
     client = vault.get_client()
     
-    if client:
-        try:
-            client.auth.sign_out()
-            return {"message": "Signed out successfully"}
-        except Exception as e:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Signout failed: {str(e)}"
-            )
-    else:
-        # Fallback: Nothing to do
-        return {"message": "Signed out (fallback mode)"}
+    if not client:
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase authentication required. Configure SUPABASE_URL and SUPABASE_ANON_KEY."
+        )
+    
+    try:
+        client.auth.sign_out()
+        return {"message": "Signed out successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Signout failed: {str(e)}"
+        )
 
 
 # ----------------------------------
@@ -115,7 +122,7 @@ def get_current_user_profile(user: dict = Depends(get_current_user)):
     Get current authenticated user's profile.
     Fast (<50ms) - uses JWT token claims, no Supabase network call.
     """
-    print(" USER PROFILE FETCHED:", user.get("email"))
+    logger.debug(f"User profile fetched: {user.get('email')}")
     return {
         "id": user.get("sub") or user.get("id"),
         "email": user.get("email"),

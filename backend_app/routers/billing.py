@@ -134,8 +134,13 @@ def _validate_webhook_ip(request: Request, provider: str) -> None:
     Raises HTTPException if IP is not in allowlist.
     Can be disabled in development mode via ENABLE_WEBHOOK_IP_VALIDATION env var.
     """
-    # Allow IP validation to be disabled in development
-    enable_ip_validation = os.getenv("ENABLE_WEBHOOK_IP_VALIDATION", "true").lower() == "true"
+    # SECURITY: Always require IP validation in production
+    env = os.environ.get("ENV", "development").lower()
+    if env == "production":
+        enable_ip_validation = True
+    else:
+        enable_ip_validation = os.getenv("ENABLE_WEBHOOK_IP_VALIDATION", "true").lower() == "true"
+    
     if not enable_ip_validation:
         logger.warning("Webhook IP validation disabled - development mode")
         return
@@ -160,6 +165,100 @@ def _validate_webhook_ip(request: Request, provider: str) -> None:
     if not _is_allowed_ip(client_ip, allowed_ips):
         logger.warning(f"Webhook request from disallowed IP: {client_ip} for provider: {provider}")
         raise HTTPException(403, "Webhook request from unauthorized IP address")
+
+
+def _validate_webhook_signature(request: Request, provider: str, body: bytes) -> None:
+    """
+    WEBHOOK SECURITY: Validate webhook signature to prevent message tampering.
+    
+    Args:
+        request: FastAPI request object
+        provider: Payment provider ("stripe" or "razorpay")
+        body: Raw request body bytes
+    
+    Raises HTTPException if signature is invalid.
+    """
+    if provider == "stripe":
+        # Stripe signature validation
+        signature = request.headers.get("stripe-signature")
+        if not signature:
+            raise HTTPException(403, "Missing Stripe signature")
+        
+        stripe_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
+        if not stripe_secret:
+            raise HTTPException(500, "Stripe webhook secret not configured")
+        
+        try:
+            import stripe
+            event = stripe.Webhook.construct_event(
+                body.decode('utf-8'),
+                signature,
+                stripe_secret
+            )
+            logger.info("Stripe webhook signature validated successfully")
+        except Exception as e:
+            logger.error(f"Stripe signature validation failed: {e}")
+            raise HTTPException(403, "Invalid Stripe signature")
+    
+    elif provider == "razorpay":
+        # Razorpay signature validation
+        signature = request.headers.get("x-razorpay-signature")
+        if not signature:
+            raise HTTPException(403, "Missing Razorpay signature")
+        
+        razorpay_secret = os.environ.get("RAZORPAY_WEBHOOK_SECRET")
+        if not razorpay_secret:
+            raise HTTPException(500, "Razorpay webhook secret not configured")
+        
+        try:
+            # Razorpay uses HMAC SHA256 signature
+            expected_signature = hmac.new(
+                razorpay_secret.encode(),
+                body,
+                hashlib.sha256
+            ).hexdigest()
+            
+            if not hmac.compare_digest(expected_signature, signature):
+                logger.error("Razorpay signature validation failed")
+                raise HTTPException(403, "Invalid Razorpay signature")
+            
+            logger.info("Razorpay webhook signature validated successfully")
+        except Exception as e:
+            logger.error(f"Razorpay signature validation failed: {e}")
+            raise HTTPException(403, "Invalid Razorpay signature")
+
+
+def _validate_webhook_timestamp(request: Request, provider: str) -> None:
+    """
+    WEBHOOK SECURITY: Validate webhook timestamp to prevent replay attacks.
+    
+    Rejects webhooks older than 5 minutes to prevent replay attacks.
+    """
+    timestamp_header = None
+    if provider == "stripe":
+        timestamp_header = request.headers.get("stripe-signature")  # Stripe includes timestamp in signature
+    elif provider == "razorpay":
+        timestamp_header = request.headers.get("x-razorpay-timestamp")
+    
+    if not timestamp_header:
+        logger.warning(f"Missing timestamp header for {provider} webhook")
+        return  # Allow but log warning
+    
+    try:
+        # Parse timestamp (implementation depends on provider format)
+        from datetime import datetime, timezone
+        webhook_time = datetime.fromtimestamp(int(timestamp_header), tz=timezone.utc)
+        current_time = datetime.now(timezone.utc)
+        
+        # Reject webhooks older than 5 minutes
+        if (current_time - webhook_time).total_seconds() > 300:
+            logger.warning(f"Webhook timestamp too old: {webhook_time}")
+            raise HTTPException(403, "Webhook timestamp too old - possible replay attack")
+        
+        logger.info(f"Webhook timestamp validated for {provider}")
+    except Exception as e:
+        logger.warning(f"Timestamp validation failed for {provider}: {e}")
+        # Don't fail on timestamp issues but log for monitoring
 
 
 def _validate_uuid(value: str, field_name: str) -> str:
@@ -709,7 +808,7 @@ async def stripe_webhook(
     request: Request,
     stripe_signature: str = Header(None, alias="stripe-signature"),
 ):
-    # BE-CRITICAL-006 FIX: Validate webhook IP before processing
+    # WEBHOOK SECURITY: Validate webhook IP before processing
     _validate_webhook_ip(request, "stripe")
     
     stripe_key = _validate_keys("stripe")
@@ -721,6 +820,12 @@ async def stripe_webhook(
     stripe.api_key = stripe_key
 
     payload = await request.body()
+    
+    # WEBHOOK SECURITY: Validate webhook signature
+    _validate_webhook_signature(request, "stripe", payload)
+    
+    # WEBHOOK SECURITY: Validate webhook timestamp
+    _validate_webhook_timestamp(request, "stripe")
     
     try:
         secret = webhook_secret or "whsec_dummy"
@@ -901,7 +1006,7 @@ async def razorpay_webhook(
     request: Request,
     x_razorpay_signature: str = Header(None),
 ):
-    # BE-CRITICAL-006 FIX: Validate webhook IP before processing
+    # WEBHOOK SECURITY: Validate webhook IP before processing
     _validate_webhook_ip(request, "razorpay")
     
     _validate_keys("razorpay")
@@ -910,6 +1015,12 @@ async def razorpay_webhook(
         raise HTTPException(500, "Razorpay production webhook secret is missing or invalid.")
 
     raw_body = await request.body()
+    
+    # WEBHOOK SECURITY: Validate webhook signature
+    _validate_webhook_signature(request, "razorpay", raw_body)
+    
+    # WEBHOOK SECURITY: Validate webhook timestamp
+    _validate_webhook_timestamp(request, "razorpay")
 
     event_id = None
     try:

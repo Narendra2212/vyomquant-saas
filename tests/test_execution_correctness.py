@@ -43,6 +43,14 @@ class MockRedis:
         self.data[key] = value
         print(f"  MockRedis.setex({key}, ttl={ttl})")
     
+    async def set(self, key, value, ex=None, nx=False):
+        import json
+        if nx and key in self.data:
+            return None
+        self.data[key] = value
+        print(f"  MockRedis.set({key}, ex={ex}, nx={nx})")
+        return True
+    
     async def get(self, key):
         result = self.data.get(key)
         print(f"  MockRedis.get({key}) = {result is not None}")

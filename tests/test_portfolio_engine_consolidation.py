@@ -34,19 +34,19 @@ def test_position_tracking_and_metrics():
     pe.update_position("ETH/USDT", size=2.0, entry_price=3000.0)   # Value: $6,000
 
     exposed = pe.get_total_exposed()
-    assert exposed == 31000.0
+    assert float(exposed) == 31000.0
 
     available = pe.get_available_capital()
-    assert available == 69000.0
+    assert float(available) == 69000.0
 
     # Test metrics with current prices
     current_prices = {"BTC/USDT": 52000.0, "ETH/USDT": 3100.0}
     metrics = pe.get_portfolio_metrics(current_prices)
 
-    assert metrics["total_capital"] == 100000.0
+    assert float(metrics["total_capital"]) == 100000.0
     assert metrics["open_positions_count"] == 2
     # Unrealized PnL: BTC +$1000, ETH +$200 = +$1200
-    assert metrics["unrealized_pnl"] == 1200.0
+    assert float(metrics["unrealized_pnl"]) == 1200.0
 
     # Test symbol exposure breakdown
     exposures = pe.get_exposure_by_symbol(current_prices)

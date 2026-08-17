@@ -430,6 +430,7 @@ class SharedRedisManager:
         Get the shared Redis client (cache database by default).
         
         DEV_MODE: Returns MockRedisClient if Redis unavailable or in DEV_MODE.
+        PRODUCTION: FAIL-CLOSED if Redis unavailable for critical operations.
         
         Returns:
             Redis client from shared pool or mock client in DEV_MODE
@@ -443,16 +444,51 @@ class SharedRedisManager:
             return self._mock_client
         
         await self._ensure_manager()
+        
+        # FAIL-CLOSED: Check if Redis is available in production
+        if self._redis_manager is None or self._redis_manager.cache is None:
+            env = os.environ.get("ENV", "development").lower()
+            if env == "production":
+                raise RuntimeError(
+                    "CRITICAL: Redis unavailable in production. "
+                    "This is a fail-closed safety mechanism to prevent "
+                    "unsafe operation without critical infrastructure."
+                )
+            else:
+                logger.warning("Redis unavailable in development, continuing with degraded behavior")
+        
         return self._redis_manager.cache if self._redis_manager else None
     
     async def get_queue_client(self) -> Optional[object]:
         """Get queue database client (DB 1)."""
         await self._ensure_manager()
+        
+        # FAIL-CLOSED: Check if Redis is available in production
+        if self._redis_manager is None or self._redis_manager.queue is None:
+            env = os.environ.get("ENV", "development").lower()
+            if env == "production":
+                raise RuntimeError(
+                    "CRITICAL: Redis queue unavailable in production. "
+                    "This is a fail-closed safety mechanism to prevent "
+                    "unsafe operation without critical infrastructure."
+                )
+        
         return self._redis_manager.queue if self._redis_manager else None
     
     async def get_events_client(self) -> Optional[object]:
         """Get events database client (DB 2)."""
         await self._ensure_manager()
+        
+        # FAIL-CLOSED: Check if Redis is available in production
+        if self._redis_manager is None or self._redis_manager.events is None:
+            env = os.environ.get("ENV", "development").lower()
+            if env == "production":
+                raise RuntimeError(
+                    "CRITICAL: Redis events unavailable in production. "
+                    "This is a fail-closed safety mechanism to prevent "
+                    "unsafe operation without critical infrastructure."
+                )
+        
         return self._redis_manager.events if self._redis_manager else None
     
     def get_client_sync(self) -> Optional[object]:
@@ -507,6 +543,47 @@ class SharedRedisManager:
             result = await self._redis_manager.cache.ping()
             return bool(result)
         return False
+    
+    async def eval_lua(self, script: str, keys: list, args: list) -> list:
+        """
+        Execute Redis Lua script atomically.
+        
+        This method provides Lua script execution for atomic operations.
+        In DEV_MODE, it uses the mock client's implementation.
+        In production, it delegates to the real Redis client.
+        """
+        client = await self._get_active_cache()
+        if client is None:
+            raise RuntimeError("Redis client not available for eval_lua")
+        
+        # Try to use the standard eval method first
+        if hasattr(client, 'eval'):
+            return await client.eval(script, len(keys), *keys, *args)
+        # Fallback to eval_lua if available (for mock client)
+        elif hasattr(client, 'eval_lua'):
+            return await client.eval_lua(script, keys, args)
+        else:
+            raise AttributeError(f"Redis client {type(client)} does not support Lua script execution")
+    
+    async def eval(self, script: str, num_keys: int, *keys_and_args) -> list:
+        """
+        Standard Redis EVAL interface.
+        
+        This provides the standard Redis EVAL interface that matches the aioredis API.
+        """
+        client = await self._get_active_cache()
+        if client is None:
+            raise RuntimeError("Redis client not available for eval")
+        
+        if hasattr(client, 'eval'):
+            return await client.eval(script, num_keys, *keys_and_args)
+        elif hasattr(client, 'eval_lua'):
+            # Convert to eval_lua format for mock client
+            keys = list(keys_and_args[:num_keys]) if num_keys > 0 else []
+            args = list(keys_and_args[num_keys:]) if num_keys > 0 else list(keys_and_args)
+            return await client.eval_lua(script, keys, args)
+        else:
+            raise AttributeError(f"Redis client {type(client)} does not support Lua script execution")
 
     async def _get_active_cache(self):
         """Get active Redis cache client or mock client in non-production environments."""
