@@ -170,7 +170,12 @@ class DatabasePool:
                 f"overflow={MAX_OVERFLOW}"
             )
             
-        self._session_factory = sessionmaker(bind=self._engine)
+        # FIN-CRITICAL-001 FIX: Set SERIALIZABLE isolation level for financial transactions
+        # This prevents race conditions and ensures consistency for money-critical operations
+        self._session_factory = sessionmaker(
+            bind=self._engine,
+            isolation_level="SERIALIZABLE"
+        )
         self._initialized = True
     
     def close(self):

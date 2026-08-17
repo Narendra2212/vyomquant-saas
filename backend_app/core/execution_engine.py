@@ -2,7 +2,7 @@ import logging
 import random
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_EVEN
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
 from uuid import UUID
@@ -126,7 +126,10 @@ class ExecutionEngine:
         
         self.positions: Dict[str, Position] = {}
         self.trade_log: List[Trade] = []
-        self.fee_rate = fee_rate
+        
+        # FIN-CRITICAL-003 FIX: Store fee_rate as Decimal to prevent precision loss
+        # Convert immediately to Decimal to avoid float conversion precision issues
+        self.fee_rate = Decimal(str(fee_rate))
         self.slippage = slippage
         self.initial_capital: Decimal = total_equity
         self.current_equity: Decimal = total_equity
@@ -508,8 +511,10 @@ class ExecutionEngine:
                 success = True
                 executed_price = price
 
-        fee = (size * executed_price * fee_rate_dec).quantize(Decimal("0.00000001"))
-        total_cost = (size * executed_price + fee).quantize(Decimal("0.00000001"))
+        # FIN-CRITICAL-003 FIX: Use higher precision (12 decimal places) and banker's rounding
+        # This prevents precision loss for high-value assets like BTC
+        fee = (size * executed_price * fee_rate_dec).quantize(Decimal("0.000000000001"), rounding=ROUND_HALF_EVEN)
+        total_cost = (size * executed_price + fee).quantize(Decimal("0.000000000001"), rounding=ROUND_HALF_EVEN)
 
         if success:
             # BUG-FIX MC-23: Return Decimal values as str() to preserve precision.
@@ -602,8 +607,9 @@ class ExecutionEngine:
         execution_price = self.apply_slippage(price, open_order_side)
         fee_rate_dec = Decimal(str(self.fee_rate))
         position_value = execution_price * size
-        fee = (execution_price * size * fee_rate_dec).quantize(Decimal("0.00000001"))
-        total_cost = (position_value + fee).quantize(Decimal("0.00000001"))
+        # FIN-CRITICAL-003 FIX: Use higher precision (12 decimal places) and banker's rounding
+        fee = (execution_price * size * fee_rate_dec).quantize(Decimal("0.000000000001"), rounding=ROUND_HALF_EVEN)
+        total_cost = (position_value + fee).quantize(Decimal("0.000000000001"), rounding=ROUND_HALF_EVEN)
 
         # Check ALL guardrails
         allowed, reason = self.risk_manager.can_open_position(
@@ -713,7 +719,8 @@ class ExecutionEngine:
 
         # Calculate fees using Decimal
         fee_rate_dec = Decimal(str(self.fee_rate))
-        exit_fee = (execution_price * close_size * fee_rate_dec).quantize(Decimal("0.00000001"))
+        # FIN-CRITICAL-003 FIX: Use higher precision (12 decimal places) and banker's rounding
+        exit_fee = (execution_price * close_size * fee_rate_dec).quantize(Decimal("0.000000000001"), rounding=ROUND_HALF_EVEN)
 
         # Log execution details
         print(f"[Executed price]: {execution_price}")
@@ -721,11 +728,11 @@ class ExecutionEngine:
 
         # Get entry fee from stored metadata
         self._position_meta = getattr(self, '_position_meta', {})
-        entry_fee = (pos.entry_price * close_size * fee_rate_dec).quantize(Decimal("0.00000001"))
-        total_fees = (entry_fee + exit_fee).quantize(Decimal("0.00000001"))
+        entry_fee = (pos.entry_price * close_size * fee_rate_dec).quantize(Decimal("0.000000000001"), rounding=ROUND_HALF_EVEN)
+        total_fees = (entry_fee + exit_fee).quantize(Decimal("0.000000000001"), rounding=ROUND_HALF_EVEN)
 
         # Net PnL after fees
-        net_pnl = (gross_pnl - total_fees).quantize(Decimal("0.00000001"))
+        net_pnl = (gross_pnl - total_fees).quantize(Decimal("0.000000000001"), rounding=ROUND_HALF_EVEN)
 
         # 🛡️ Update risk manager with PnL and record trade close
         self.risk_manager.update_equity(float(net_pnl))

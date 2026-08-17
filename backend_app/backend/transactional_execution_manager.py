@@ -836,7 +836,11 @@ class TransactionalExecutionManager:
                     await transaction.commit()
                     return existing
             
-            # Query existing order
+            # FIN-CRITICAL-005 FIX: Use atomic UPDATE with WHERE clause including status check
+            # This prevents race condition where concurrent cancellation attempts could both proceed
+            # Update with WHERE clause: only update if status is NOT already cancelled
+            
+            # First, query existing order to get current data
             existing_order_row = self.db.execute(
                 text("SELECT data FROM orders WHERE id = :order_id AND tenant_id = :tenant_id"),
                 {"order_id": order_id, "tenant_id": str(self.tenant_id)}
@@ -853,6 +857,27 @@ class TransactionalExecutionManager:
             order_data["status"] = "cancelled"
             order_data["id"] = order_id
             order_data["tenant_id"] = str(self.tenant_id)
+            
+            # Atomic UPDATE with status check in WHERE clause
+            update_result = self.db.execute(
+                text("""
+                    UPDATE orders 
+                    SET data = :data, updated_at = NOW() 
+                    WHERE id = :order_id 
+                      AND tenant_id = :tenant_id 
+                      AND (data->>'status') IS DISTINCT FROM 'cancelled'
+                """),
+                {
+                    "data": json.dumps(order_data),
+                    "order_id": order_id,
+                    "tenant_id": str(self.tenant_id)
+                }
+            )
+            
+            # Check if any row was updated
+            if update_result.rowcount == 0:
+                # Another transaction already cancelled the order
+                raise ValueError(f"Order cancellation failed - concurrent cancellation detected for {order_id}")
             
             # Add order update operation
             await transaction.add_operation(

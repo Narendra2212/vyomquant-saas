@@ -84,8 +84,8 @@ class TestListSignalTracesExceptionSwallow:
         import backend_app.routers.signals as sig_module
 
         crashing = _crashing_supabase("QuestDB unreachable")
-        original = sig_module.create_request_supabase
-        sig_module.create_request_supabase = lambda token: crashing
+        original = sig_module.create_request_supabase_async
+        sig_module.create_request_supabase_async = lambda token: crashing
 
         try:
             client = TestClient(app, raise_server_exceptions=False)
@@ -96,7 +96,7 @@ class TestListSignalTracesExceptionSwallow:
             # Error code is in top-level "error" field
             assert r.json()["error"] == "SIGNAL_FETCH_FAILED"
         finally:
-            sig_module.create_request_supabase = original
+            sig_module.create_request_supabase_async = original
             app.dependency_overrides.clear()
 
 
@@ -177,8 +177,8 @@ class TestGetStrategyLimitsExceptionSwallow:
         import backend_app.routers.risk as risk_module
 
         crashing = _crashing_supabase("Supabase timeout")
-        original = risk_module.create_request_supabase
-        risk_module.create_request_supabase = lambda token: crashing
+        original = risk_module.create_request_supabase_async
+        risk_module.create_request_supabase_async = lambda token: crashing
 
         app.dependency_overrides[get_current_user] = lambda: _user()
 
@@ -190,5 +190,5 @@ class TestGetStrategyLimitsExceptionSwallow:
             )
             assert r.json()["error"] == "STRATEGY_LIMITS_FETCH_FAILED"
         finally:
-            risk_module.create_request_supabase = original
+            risk_module.create_request_supabase_async = original
             app.dependency_overrides.clear()

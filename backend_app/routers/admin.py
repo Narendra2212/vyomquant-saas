@@ -127,7 +127,7 @@ async def list_users(
     )
     if search:
         query = query.ilike("username", f"%{search}%")
-    resp = query.order("created_at", desc=True).execute()
+    resp = await query.order("created_at", desc=True).execute()
     return resp.data
 
 

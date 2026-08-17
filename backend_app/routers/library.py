@@ -927,14 +927,17 @@ async def my_library(user: dict = Depends(get_current_user)):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/{library_id}")
+@limiter.limit("100/minute")  # BE-CRITICAL-007 FIX: Add rate limiting
 async def get_library_detail(
     library_id: str,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    user: dict = Depends(get_current_user),  # BE-CRITICAL-007 FIX: Require authentication
+    request: Request,
 ):
     """
     Returns full strategy detail including equity curve snapshot and
-    recent ratings. Auth is optional; enriches user_has_cloned / user_rating
-    if authenticated.
+    recent ratings. Authentication is now required.
+    
+    BE-CRITICAL-007 FIX: Authentication is now required to prevent unauthorized access.
     """
     lib_id = _safe_uuid(library_id, "library_id")
     svc = _build_service_client()
@@ -984,13 +987,7 @@ async def get_library_detail(
         detail["recent_ratings"] = []
 
     # User context enrichment
-    user_id = None
-    if credentials:
-        try:
-            payload = decode_token_local(credentials.credentials)
-            user_id = payload.get("sub")
-        except Exception:
-            pass
+    user_id = user.get("id") if user else None
 
     detail["user_has_cloned"] = False
     detail["user_rating"] = None

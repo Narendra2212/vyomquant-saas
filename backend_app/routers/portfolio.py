@@ -26,9 +26,46 @@ logger = logging.getLogger("PortfolioRouter")
 
 
 def _safe_uid(uid: str) -> str:
-    if re.match(r"^[a-zA-Z0-9\-_]{1,128}$", str(uid)):
-        return str(uid)
-    raise ValueError(f"Unsafe user_id: '{uid}'")
+    """
+    DB-CRITICAL-001 FIX: Enhanced validation to prevent SQL injection.
+    
+    This function validates user_id with multiple checks:
+    1. Format validation (alphanumeric, hyphens, underscores only)
+    2. Length validation (max 128 characters)
+    3. Unicode character validation
+    4. Pattern matching to prevent injection attempts
+    """
+    uid_str = str(uid)
+    
+    # Length validation
+    if len(uid_str) > 128:
+        raise ValueError(f"Unsafe user_id: exceeds maximum length of 128 characters")
+    
+    # Format validation - strict pattern for UUIDs and similar identifiers
+    if not re.match(r"^[a-zA-Z0-9\-_]{1,128}$", uid_str):
+        raise ValueError(f"Unsafe user_id: contains invalid characters")
+    
+    # Additional SQL injection pattern checks
+    dangerous_patterns = [
+        r"'",  # Single quote
+        r";",  # Statement separator
+        r"--", # SQL comment
+        r"/\*", # SQL comment start
+        r"\*/", # SQL comment end
+        r"\bUNION\b", # UNION operator
+        r"\bSELECT\b", # SELECT keyword
+        r"\bINSERT\b", # INSERT keyword
+        r"\bUPDATE\b", # UPDATE keyword
+        r"\bDELETE\b", # DELETE keyword
+        r"\bDROP\b", # DROP keyword
+        r"\bEXEC\b", # EXECUTE keyword
+    ]
+    
+    for pattern in dangerous_patterns:
+        if re.search(pattern, uid_str, re.IGNORECASE):
+            raise ValueError(f"Unsafe user_id: contains potentially dangerous pattern")
+    
+    return uid_str
 
 
 async def _get_portfolio_state(user_id: str, exchange_id: str, vault) -> dict:

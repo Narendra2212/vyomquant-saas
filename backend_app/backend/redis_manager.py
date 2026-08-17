@@ -249,6 +249,20 @@ class RedisManager:
             logger.error(f"[Cache] Get error for {key}: {e}")
             return None
     
+    async def cache_eval_lua(self, script: str, keys: list, args: list) -> list:
+        """
+        FIN-CRITICAL-004 FIX: Execute Redis Lua script atomically on cache DB.
+        
+        This method provides Lua script execution for atomic operations.
+        Uses actual Redis EVAL command in production.
+        """
+        try:
+            result = await self.cache.eval(script, len(keys), *keys, *args)
+            return result
+        except Exception as e:
+            logger.error(f"[Cache] Lua script error: {e}")
+            return [0, False]
+    
     async def cache_set(
         self,
         key: str,

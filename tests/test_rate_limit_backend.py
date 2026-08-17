@@ -43,24 +43,34 @@ class TestRateLimitBackendSelection:
             importlib.reload(rate_limit_module)
         assert "REDIS_URL environment variable is missing" in str(exc_info.value)
 
-    def test_ambiguous_environment_without_redis_raises_runtime_error(self, monkeypatch):
+    def test_ambiguous_environment_without_redis_falls_back_to_safe(self, monkeypatch):
+        """When no ENV/VYOMQUANT_MODE/AERORA_MODE is set, get_vyomquant_mode returns 'safe'
+        which is in DEV_TEST_ENVS — so in-memory limiter is used without raising."""
         monkeypatch.delenv("ENV", raising=False)
         monkeypatch.delenv("VYOMQUANT_MODE", raising=False)
         monkeypatch.delenv("AERORA_MODE", raising=False)
         monkeypatch.delenv("REDIS_URL", raising=False)
         
         rate_limit_module = importlib.import_module("backend_app.core.rate_limit")
-        with pytest.raises(RuntimeError) as exc_info:
-            importlib.reload(rate_limit_module)
-        assert "REDIS_URL environment variable is missing" in str(exc_info.value)
+        mod = importlib.reload(rate_limit_module)
+        # 'safe' default is in DEV_TEST_ENVS so in-memory limiter is used
+        assert mod.limiter is not None
+        assert mod.limiter._storage_uri == "memory://"
 
     def test_production_environment_with_redis_url_arms_redis(self, monkeypatch):
+        """Production env with valid REDIS_URL arms Redis limiter (mocking the ping to avoid live server)."""
         monkeypatch.setenv("ENV", "production")
-        monkeypatch.setenv("REDIS_URL", "memory://")
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
         
-        rate_limit_module = importlib.import_module("backend_app.core.rate_limit")
-        mod = importlib.reload(rate_limit_module)
-        assert mod.limiter is not None
+        with patch("redis.from_url") as mock_redis:
+            mock_client = MagicMock()
+            mock_redis.return_value = mock_client
+            mock_client.ping.return_value = True
+            
+            rate_limit_module = importlib.import_module("backend_app.core.rate_limit")
+            mod = importlib.reload(rate_limit_module)
+            assert mod.limiter is not None
+            mock_client.ping.assert_called_once()
 
     def test_production_environment_redis_init_failure_raises_runtime_error(self, monkeypatch):
         monkeypatch.setenv("ENV", "production")

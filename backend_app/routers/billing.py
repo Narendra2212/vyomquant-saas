@@ -24,8 +24,9 @@ import logging
 import os
 import traceback
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from uuid import UUID
+import ipaddress
 
 import inspect
 from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
@@ -86,6 +87,79 @@ def _background_sb():
 from backend_app.core.subscription_engine import Plan, SubscriptionEngine
 
 VALID_ITEM_KEYS = {Plan.FREE.value, Plan.STARTER.value, Plan.PRO.value, Plan.ENTERPRISE.value, "ml_addon"}
+
+
+# BE-CRITICAL-006 FIX: Payment provider IP allowlists
+# These are the official IP ranges for Stripe and Razorpay webhooks
+STRIPE_WEBHOOK_IPS = [
+    # Stripe webhook IPs (can be updated from https://stripe.com/docs/ips)
+    "54.187.174.169",
+    "54.187.205.235",
+    "54.187.216.72",
+    "54.241.31.127",
+    "54.241.31.135",
+    "54.241.34.82",
+]
+
+RAZORPAY_WEBHOOK_IPS = [
+    # Razorpay webhook IPs (can be updated from Razorpay documentation)
+    "13.232.22.250",
+    "13.232.118.80",
+    "52.66.201.93",
+    "52.66.207.93",
+]
+
+
+def _is_allowed_ip(client_ip: str, allowed_ips: List[str]) -> bool:
+    """
+    BE-CRITICAL-006 FIX: Check if client IP is in allowlist.
+    
+    Returns True if IP is in the allowed list, False otherwise.
+    """
+    try:
+        ip_obj = ipaddress.ip_address(client_ip)
+        for allowed in allowed_ips:
+            if ip_obj == ipaddress.ip_address(allowed):
+                return True
+        return False
+    except Exception as e:
+        logger.error(f"IP validation error: {e}")
+        return False
+
+
+def _validate_webhook_ip(request: Request, provider: str) -> None:
+    """
+    BE-CRITICAL-006 FIX: Validate webhook request comes from allowed payment provider IP.
+    
+    Raises HTTPException if IP is not in allowlist.
+    Can be disabled in development mode via ENABLE_WEBHOOK_IP_VALIDATION env var.
+    """
+    # Allow IP validation to be disabled in development
+    enable_ip_validation = os.getenv("ENABLE_WEBHOOK_IP_VALIDATION", "true").lower() == "true"
+    if not enable_ip_validation:
+        logger.warning("Webhook IP validation disabled - development mode")
+        return
+    
+    # Get client IP from request
+    # Check X-Forwarded-For header first (for proxies/load balancers)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        client_ip = forwarded_for.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else "unknown"
+    
+    # Select appropriate allowlist based on provider
+    if provider == "stripe":
+        allowed_ips = STRIPE_WEBHOOK_IPS
+    elif provider == "razorpay":
+        allowed_ips = RAZORPAY_WEBHOOK_IPS
+    else:
+        raise HTTPException(500, f"Unknown payment provider: {provider}")
+    
+    # Check if IP is allowed
+    if not _is_allowed_ip(client_ip, allowed_ips):
+        logger.warning(f"Webhook request from disallowed IP: {client_ip} for provider: {provider}")
+        raise HTTPException(403, "Webhook request from unauthorized IP address")
 
 
 def _validate_uuid(value: str, field_name: str) -> str:
@@ -635,6 +709,9 @@ async def stripe_webhook(
     request: Request,
     stripe_signature: str = Header(None, alias="stripe-signature"),
 ):
+    # BE-CRITICAL-006 FIX: Validate webhook IP before processing
+    _validate_webhook_ip(request, "stripe")
+    
     stripe_key = _validate_keys("stripe")
     webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
     if not webhook_secret or webhook_secret == "whsec_dummy" or not webhook_secret.startswith("whsec_"):
@@ -824,6 +901,9 @@ async def razorpay_webhook(
     request: Request,
     x_razorpay_signature: str = Header(None),
 ):
+    # BE-CRITICAL-006 FIX: Validate webhook IP before processing
+    _validate_webhook_ip(request, "razorpay")
+    
     _validate_keys("razorpay")
     webhook_secret = os.environ.get("RAZORPAY_WEBHOOK_SECRET")
     if not webhook_secret or webhook_secret == "dummy_webhook_secret":

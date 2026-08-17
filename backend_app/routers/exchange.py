@@ -8,10 +8,11 @@ FIXES:
 
 import asyncio
 import inspect
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend_app.backend.connection_engine import (ConnectionEngine,
                                                    release_exchange)
@@ -20,6 +21,7 @@ from backend_app.core.dependencies import (get_current_user,
                                            get_request_supabase, get_vault)
 from backend_app.core.models import ExchangeKeysRequest, TestConnectionRequest
 from backend_app.backend.redis_manager import get_redis_manager
+from backend_app.core.rate_limit import limiter  # BE-CRITICAL-004 FIX
 from supabase import Client as SupabaseClient
 
 router = APIRouter()
@@ -29,14 +31,15 @@ logger = logging.getLogger("ExchangeRouter")
 _CACHED_SUPPORTED_EXCHANGES = None
 
 @router.get("/supported")
-async def get_supported_exchanges():
+@limiter.limit("60/minute")  # BE-CRITICAL-004 FIX: Add rate limiting
+async def get_supported_exchanges(user: dict = Depends(get_current_user), request: Request):  # BE-CRITICAL-004 FIX: Require authentication
     """
     Returns list of all CCXT-supported exchanges with full metadata.
     Includes: id, display name, spot/futures/margin support, sandbox support,
     required auth fields, passphrase requirement, subaccount requirement, status.
     Cached in memory and Redis for 1 hour (exchanges list rarely changes).
     
-    PUBLIC ENDPOINT - No authentication required (CCXT public data)
+    BE-CRITICAL-004 FIX: Now requires authentication and rate limiting to prevent abuse.
     """
     global _CACHED_SUPPORTED_EXCHANGES
     if _CACHED_SUPPORTED_EXCHANGES is not None:

@@ -204,6 +204,87 @@ class DistributedIdempotencyLayer:
                 key=key
             )
     
+    async def _atomic_check_and_set(
+        self,
+        tenant_id: str,
+        client_order_id: str,
+        owner_token: str,
+        exchange_id: Optional[str] = None
+    ) -> tuple[Optional[dict], bool]:
+        """
+        FIN-CRITICAL-004 FIX: Atomic check-and-set using Redis Lua script.
+        
+        This method combines idempotency check and lock acquisition into a single
+        atomic operation to prevent race conditions where duplicate requests could
+        both proceed when the first worker's store_result fails after lock release.
+        
+        Args:
+            tenant_id: Tenant identifier
+            client_order_id: Client-provided unique order ID
+            owner_token: Unique lock owner token
+            exchange_id: Optional exchange identifier
+            
+        Returns:
+            Tuple of (cached_result: Optional[dict], lock_acquired: bool)
+        """
+        key = self._generate_key(tenant_id, client_order_id, exchange_id)
+        lock_payload = f"processing:{owner_token}"
+        
+        # Redis Lua script for atomic check-and-set
+        lua_script = """
+        local key = KEYS[1]
+        local lock_payload = ARGV[1]
+        local processing_ttl = ARGV[2]
+        
+        -- Check if key exists
+        local current_value = redis.call('GET', key)
+        
+        -- If key exists and is a completed result, return it
+        if current_value and string.sub(current_value, 1, 7) ~= 'processing' then
+            return {1, current_value}  -- Return cached result
+        end
+        
+        -- If key doesn't exist or is expired, set processing lock
+        if not current_value then
+            redis.call('SET', key, lock_payload, 'EX', processing_ttl, 'NX')
+            return {0, lock_payload}  -- Lock acquired
+        end
+        
+        -- Key exists and is processing - lock not acquired
+        return {0, false}
+        """
+        
+        try:
+            result = await redis_manager.eval_lua(
+                lua_script,
+                keys=[key],
+                args=[lock_payload, str(self.PROCESSING_TTL)]
+            )
+            
+            # Parse Lua script result
+            # Format: [status, value] where status 1 = cached result, 0 = lock status
+            status, value = result
+            
+            if status == 1:
+                # Cached result exists
+                try:
+                    cached_data = json.loads(value)
+                    return cached_data, False
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid cached value in atomic check-and-set for {key}")
+                    return None, False
+            else:
+                # No cached result, lock status in value
+                if value == lock_payload:
+                    return None, True  # Lock acquired
+                else:
+                    return None, False  # Lock not acquired
+                    
+        except Exception as e:
+            logger.error(f"Atomic check-and-set failed for {key}: {e}")
+            # Fallback to non-atomic behavior if Lua script fails
+            return None, False
+
     async def start_processing(
         self, 
         tenant_id: str, 
@@ -330,25 +411,31 @@ class DistributedIdempotencyLayer:
                 "RULE VIOLATION: ALL orders must have client_order_id"
             )
         
-        # Check idempotency initially
-        idempotency_result = await self.check_idempotency(tenant_id, client_order_id, exchange_id)
-        if idempotency_result.is_duplicate and idempotency_result.cached_result:
-            logger.info(
-                f"STEP 2: Returning cached result for duplicate request "
-                f"{idempotency_result.key}"
-            )
-            return idempotency_result.cached_result.get("result")
-        
-        # Atomically acquire lock with unique owner token
+        # FIN-CRITICAL-004 FIX: Use atomic check-and-set with Redis Lua script
+        # This prevents race condition between idempotency check and lock acquisition
         from uuid import uuid4
         owner_token = str(uuid4())
-        lock_acquired, lock_token = await self.start_processing(
-            tenant_id, client_order_id, owner_token=owner_token, exchange_id=exchange_id
+        
+        # Atomic check-and-set operation
+        cached_result, lock_acquired = await self._atomic_check_and_set(
+            tenant_id, client_order_id, owner_token, exchange_id
         )
+        
+        if cached_result:
+            logger.info(
+                f"STEP 2: Returning cached result for duplicate request "
+                f"(atomic check-and-set)"
+            )
+            return cached_result.get("result")
         
         if not lock_acquired:
             logger.info(
-                f"STEP 2: Waiting for concurrent request {idempotency_result.key}"
+                f"STEP 2: Failed to acquire lock atomically - request already processing"
+            )
+        
+        if not lock_acquired:
+            logger.info(
+                f"STEP 2: Waiting for concurrent request {client_order_id}"
             )
             
             # Wait and retry to fetch completed duplicate result

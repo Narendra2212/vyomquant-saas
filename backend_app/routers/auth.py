@@ -44,9 +44,14 @@ class UserLogin(BaseModel):
 # SIGNOUT
 # ----------------------------------
 @router.post("/signout")
-def signout(token: str):
+def signout(
+    token: str,
+    current_user: dict = Depends(get_current_user)  # BE-CRITICAL-001 FIX: Require authentication
+):
     """
     Sign out user by revoking their session.
+    
+    BE-CRITICAL-001 FIX: Now requires authentication to prevent unauthorized signout.
     """
     vault = SupabaseConnection()
     client = vault.get_client()
@@ -69,7 +74,8 @@ def signout(token: str):
 # GOOGLE OAUTH
 # ----------------------------------
 @router.post("/google")
-def google_auth(data: GoogleAuthRequest):
+@limiter.limit("10/minute")  # BE-CRITICAL-002 FIX: Add rate limiting to prevent account enumeration
+def google_auth(data: GoogleAuthRequest, request: Request):
     """
     Authenticate user using Google OAuth token.
     """

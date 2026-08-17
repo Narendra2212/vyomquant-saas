@@ -171,8 +171,10 @@ class TestPerformanceFetchError:
                 service.get_strategy = AsyncMock(return_value={"strategy": {"id": "strat_123"}})
                 
                 import asyncio
+                # _get_strategy_performance expects a user dict with "id" key, not a raw string
+                user_dict = {"id": "user_123", "email": "test@test.com"}
                 with pytest.raises(RuntimeError):
-                    asyncio.run(service._get_strategy_performance("user_123", "strat_123"))
+                    asyncio.run(service._get_strategy_performance(user_dict, "strat_123"))
             except Exception as e:
                 pytest.fail(f"Should raise RuntimeError, got: {e}")
 

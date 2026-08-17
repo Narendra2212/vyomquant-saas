@@ -121,6 +121,47 @@ class MockRedisClient:
         s = self._store.get(key)
         return set(s) if isinstance(s, set) else set()
 
+    async def eval_lua(self, script: str, keys: list, args: list) -> list:
+        """
+        FIN-CRITICAL-004 FIX: Execute Redis Lua script atomically.
+        
+        This method provides Lua script execution for atomic operations.
+        In DEV_MODE, it provides a simplified implementation.
+        """
+        # Simplified implementation for DEV_MODE mock
+        # In production, this would use actual Redis EVAL command
+        key = keys[0] if keys else None
+        lock_payload = args[0] if args else None
+        
+        if not key:
+            return [0, False]
+        
+        current_value = self._store.get(key)
+        
+        # Check if key exists and is a completed result
+        if current_value and not str(current_value).startswith('processing'):
+            return [1, current_value]  # Return cached result
+        
+        # If key doesn't exist, set processing lock
+        if not current_value:
+            self._store[key] = lock_payload
+            return [0, lock_payload]  # Lock acquired
+        
+        # Key exists and is processing - lock not acquired
+        return [0, False]
+
+    async def eval(self, script: str, num_keys: int, *keys_and_args) -> list:
+        """
+        FIN-CRITICAL-004 FIX: Standard Redis EVAL interface.
+        
+        This provides the standard Redis EVAL interface that matches the aioredis API.
+        """
+        # Convert keys_and_args to proper format
+        keys = list(keys_and_args[:num_keys]) if num_keys > 0 else []
+        args = list(keys_and_args[num_keys:]) if num_keys > 0 else list(keys_and_args)
+        
+        return await self.eval_lua(script, keys, args)
+
     async def lpush(self, key: str, *values: Any) -> int:
         if key not in self._store or not isinstance(self._store[key], list):
             self._store[key] = []

@@ -65,7 +65,14 @@ if not POOLING_AVAILABLE:
             f"overflow={MAX_OVERFLOW}, timeout={POOL_TIMEOUT}s"
         )
     
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    # FIN-CRITICAL-001 FIX: Set SERIALIZABLE isolation level for financial transactions
+    # This prevents race conditions and ensures consistency for money-critical operations
+    SessionLocal = sessionmaker(
+        autocommit=False, 
+        autoflush=False, 
+        bind=engine,
+        isolation_level="SERIALIZABLE"
+    )
     Base = declarative_base()
     
     def get_db():

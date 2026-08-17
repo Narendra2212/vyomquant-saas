@@ -11,12 +11,13 @@ FIXES APPLIED:
 import logging
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from backend_app.backend.connection_engine import (ConnectionEngine,
                                                    get_or_create_exchange)
 from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.core.dependencies import get_current_user, get_vault
+from backend_app.core.rate_limit import limiter  # BE-CRITICAL-003 FIX
 
 router = APIRouter()
 logger = logging.getLogger("MarketRouter")
@@ -105,8 +106,13 @@ async def get_funding_rate(
 
 
 @router.get("/symbols")
-async def get_symbols():
-    """Get available trading symbols from CCXT"""
+@limiter.limit("60/minute")  # BE-CRITICAL-003 FIX: Add rate limiting
+async def get_symbols(user: dict = Depends(get_current_user), request: Request):  # BE-CRITICAL-003 FIX: Require authentication
+    """
+    Get available trading symbols from CCXT
+    
+    BE-CRITICAL-003 FIX: Now requires authentication and rate limiting to prevent abuse.
+    """
     try:
         import ccxt as ccxt_base
         # Get symbols from Binance as the default exchange
