@@ -1,4 +1,4 @@
-"""
+﻿"""
 Safety Monitor
 
 Tracks and logs all execution attempts, especially blocked unsafe executions.
@@ -109,7 +109,7 @@ class SafetyMonitor:
         
         # Log to system logger (critical level)
         logger.critical(
-            f"🚫 BLOCKED EXECUTION: {source} | Context: {context} | "
+            f"ðŸš« BLOCKED EXECUTION: {source} | Context: {context} | "
             f"Tenant: {tenant_id} | Strategy: {strategy_id} | "
             f"Symbol: {symbol} | Action: {action} | "
             f"Details: {details}"
@@ -118,9 +118,14 @@ class SafetyMonitor:
         # Store in memory (for real-time monitoring)
         self._blocked_events.append(event)
         
-        # Persist to Redis for durability
+        # Persist to Redis for durability (safe if no event loop yet)
         import asyncio
-        asyncio.create_task(self._persist_blocked_event(event))
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._persist_blocked_event(event))
+        except RuntimeError:
+            # No running event loop (e.g. module-level call during import)
+            pass
         
         # Prevent unbounded growth
         if len(self._blocked_events) > self._max_events:
@@ -140,7 +145,7 @@ class SafetyMonitor:
         Used for verifying safe paths are working.
         """
         logger.info(
-            f"✅ ALLOWED EXECUTION: {source} | Context: {context} | "
+            f"âœ… ALLOWED EXECUTION: {source} | Context: {context} | "
             f"Tenant: {tenant_id} | ExecutionID: {execution_id}"
         )
     
