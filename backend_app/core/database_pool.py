@@ -40,7 +40,7 @@ from contextlib import asynccontextmanager, contextmanager
 from typing import Optional, Dict
 from backend_app.core.safety_config import get_vyomquant_mode
 
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.pool import QueuePool
 
@@ -221,13 +221,14 @@ class DatabasePool:
                 max_overflow=MAX_OVERFLOW,
                 pool_pre_ping=True,
                 pool_recycle=3600,
-                pool_timeout=30,
-                pool_events=[
-                    ("connect", self._on_connect),
-                    ("checkout", self._on_checkout),
-                    ("checkin", self._on_checkin)
-                ]
+                pool_timeout=30
             )
+            
+            # Register pool events using SQLAlchemy 2.0 event API
+            event.listen(self._engine.pool, "connect", self._on_connect)
+            event.listen(self._engine.pool, "checkout", self._on_checkout)
+            event.listen(self._engine.pool, "checkin", self._on_checkin)
+            
             logger.info(
                 f"[DB Pool] Engine created: size={POOL_SIZE}, "
                 f"overflow={MAX_OVERFLOW}, monitoring enabled"
