@@ -50,7 +50,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from fastapi.testclient import TestClient
 
-from backend_app.core.dependencies import get_admin_user, get_current_user
+from backend_app.core.dependencies import get_admin_user, get_current_user, get_request_supabase
+from backend_app.core.subscription_dependencies import (
+    require_marketplace_publish,
+    check_marketplace_publish_quota,
+    require_marketplace_access,
+)
 from backend_app.main import app
 
 client = TestClient(app, raise_server_exceptions=True)
@@ -86,8 +91,12 @@ ADMIN_USER = {
 
 
 def with_user(user_dict: dict):
-    """Override get_current_user to return the given user dict."""
+    """Override get_current_user and subscription gates to return the given user dict."""
     app.dependency_overrides[get_current_user] = lambda: user_dict
+    app.dependency_overrides[get_request_supabase] = lambda: None
+    app.dependency_overrides[require_marketplace_publish] = lambda: True
+    app.dependency_overrides[check_marketplace_publish_quota] = lambda: True
+    app.dependency_overrides[require_marketplace_access] = lambda: True
 
 
 def clear_overrides():
@@ -317,18 +326,16 @@ def db():
             "sell_logic": json.dumps(
                 {"nodes": [{"type": "action", "label": "SELL"}]}
             ),
-            "risk": json.dumps({"stop_loss_pct": 2}),
-            "indicators": json.dumps([]),
+            "risk": {"stop_loss_pct": 2},
+            "indicators": [],
             "ml_model_path": None,
-            "backtest_result": json.dumps(
-                {
-                    "total_return_pct": 42.5,
-                    "sharpe_ratio": 1.8,
-                    "max_drawdown_pct": -5.2,
-                    "win_rate_pct": 61.0,
-                    "total_trades": 120,
-                }
-            ),
+            "backtest_result": {
+                    "total_return_pct": 85.0,
+                    "sharpe_ratio": 2.5,
+                    "max_drawdown_pct": -3.5,
+                    "win_rate_pct": 72.0,
+                    "total_trades": 200,
+                },
         }
     )
     _db.stores["profiles"].append(

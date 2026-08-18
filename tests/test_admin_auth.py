@@ -1,4 +1,4 @@
-"""
+﻿"""
 tests/test_admin_auth.py
 
 Unit and integration tests for get_admin_user authorization dependency and admin endpoints.
@@ -14,7 +14,7 @@ WHAT IS TESTED
 
 import asyncio
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -93,9 +93,8 @@ class TestAdminEndpointsIntegration:
         mock_query = MagicMock()
         mock_query.limit.return_value = mock_query
         mock_query.ilike.return_value = mock_query
-        mock_query.order.return_value.execute.return_value.data = [
-            {"id": "admin-uuid-100", "email": "admin@vyomquant.io", "subscription_tier": "admin", "is_frozen": False}
-        ]
+        mock_query.order.return_value.execute = AsyncMock(return_value=MagicMock(data=[
+            {"id": "admin-uuid-100", "email": "admin@vyomquant.io", "subscription_tier": "admin", "is_frozen": False}]))
         mock_supabase.table.return_value.select.return_value = mock_query
 
         # Override get_current_user and get_request_supabase
@@ -149,4 +148,3 @@ class TestAdminEndpointsIntegration:
                 assert res_user.status_code == 403
         finally:
             app.dependency_overrides.clear()
-

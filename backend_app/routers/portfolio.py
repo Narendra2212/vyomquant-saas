@@ -52,13 +52,16 @@ def _safe_uid(uid: str) -> str:
         r"--", # SQL comment
         r"/\*", # SQL comment start
         r"\*/", # SQL comment end
-        r"\bUNION\b", # UNION operator
-        r"\bSELECT\b", # SELECT keyword
-        r"\bINSERT\b", # INSERT keyword
-        r"\bUPDATE\b", # UPDATE keyword
-        r"\bDELETE\b", # DELETE keyword
-        r"\bDROP\b", # DROP keyword
-        r"\bEXEC\b", # EXECUTE keyword
+        r"UNION", # UNION operator
+        r"SELECT", # SELECT keyword
+        r"INSERT", # INSERT keyword
+        r"UPDATE", # UPDATE keyword
+        r"DELETE", # DELETE keyword
+        r"DROP", # DROP keyword
+        r"EXEC", # EXECUTE keyword
+        r"WHERE", # WHERE keyword
+        r"JOIN", # JOIN keyword
+        r"CREATE", # CREATE keyword
     ]
     
     for pattern in dangerous_patterns:

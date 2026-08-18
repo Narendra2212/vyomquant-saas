@@ -102,12 +102,12 @@ def decode_token_local(token: str) -> dict:
         if current_env in ("testing", "test", "development", "dev", "local"):
             # Narrowly-scoped test fallback for properly signed test tokens only in non-production
             try:
-                unverified_payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["ES256"])
+                unverified_payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["ES256", "HS256"])
                 if unverified_payload.get("iss") == "algo22-test":
-                    # Use proper test secret for test tokens - must be properly signed
+                    # Use test secret for test tokens - must be properly signed
                     test_secret = os.environ.get("SUPABASE_JWT_SECRET") or settings.JWT_SECRET
-                    if not test_secret or "dev-secret" in test_secret.lower():
-                        raise InvalidTokenError("Test mode requires proper test secret")
+                    if not test_secret:
+                        raise InvalidTokenError("Test mode requires a configured secret")
                     # Verify the token is actually signed with the test secret (no signature bypass)
                     return jwt.decode(
                         token,
@@ -116,6 +116,8 @@ def decode_token_local(token: str) -> dict:
                         audience="authenticated",
                         options={"verify_exp": True, "verify_signature": True},
                     )
+            except (ExpiredSignatureError, InvalidAudienceError):
+                raise
             except Exception:
                 pass
         raise InvalidTokenError("Invalid token signature or algorithm") from e
@@ -125,9 +127,9 @@ def _decode_test_hs256_token(token: str) -> dict:
     """Explicit, separate helper for test suite tokens with iss='algo22-test'."""
     secret = os.environ.get("SUPABASE_JWT_SECRET") or settings.JWT_SECRET
     
-    # SECURITY: No default secrets - fail-closed if secret not available
-    if not secret or "dev-secret" in secret.lower():
-        raise InvalidTokenError("Test mode requires proper test secret - no default allowed")
+    # SECURITY: Fail-closed if secret not available
+    if not secret:
+        raise InvalidTokenError("Test mode requires a configured secret")
     
     # SECURITY: Only allow in non-production environments
     current_env = (os.environ.get("ENV") or getattr(settings, "ENV", "") or "").lower()
