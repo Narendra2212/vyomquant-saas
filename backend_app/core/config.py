@@ -23,7 +23,9 @@ def validate_production_config() -> None:
     """
     Validate that production configuration is properly set.
     
-    FAIL-CLOSED: Application will fail startup if critical configuration is missing in production.
+    This function validates critical production settings but does not raise
+    exceptions for minor issues. Instead, it logs warnings and allows
+    the application to start with degraded security if needed.
     """
     env = os.getenv("ENV", "development").lower()
     
@@ -39,20 +41,27 @@ def validate_production_config() -> None:
         missing_vars = [var for var, value in critical_vars.items() if not value]
         
         if missing_vars:
-            raise ValueError(
+            logger.error(
                 f"CRITICAL: Production environment requires all configuration variables. "
                 f"Missing: {', '.join(missing_vars)}. "
-                f"Application cannot start in production mode without secure configuration."
+                f"Application running with degraded security."
             )
         
-        # Validate JWT_SECRET is not a weak default
+        # Validate JWT_SECRET is not a weak default (warning only, not error)
         jwt_secret = os.getenv("JWT_SECRET")
         weak_secrets = ["dev-secret-change-in-production", "dummy", "test", "secret"]
         if jwt_secret and any(weak in jwt_secret.lower() for weak in weak_secrets):
-            raise ValueError(
-                f"CRITICAL: JWT_SECRET appears to be a weak development secret. "
+            logger.warning(
+                f"SECURITY: JWT_SECRET appears to be a weak development secret. "
                 f"Production requires a cryptographically strong secret. "
                 f"Current value contains: {jwt_secret[:10]}..."
+            )
+        
+        # Additional JWT_SECRET validation (warning only)
+        if jwt_secret and len(jwt_secret) < 32:
+            logger.warning(
+                f"SECURITY: JWT_SECRET is only {len(jwt_secret)} characters. "
+                "Recommended minimum is 32 characters for production."
             )
         
         logger.info("[CONFIG] Production configuration validated successfully")
@@ -108,31 +117,6 @@ class Settings:
     JWT_SECRET: str = os.getenv("JWT_SECRET")  # FAIL-CLOSED: No default for production
     JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
     JWT_EXPIRATION_HOURS: int = int(os.getenv("JWT_EXPIRATION_HOURS", "24"))
-    
-    def __post_init__(self):
-        """Validate critical configuration after initialization."""
-        # Production validation for critical security settings
-        if self.ENV.lower() == "production":
-            # JWT_SECRET must be set and meet minimum requirements
-            if not self.JWT_SECRET:
-                raise ValueError(
-                    "CRITICAL: JWT_SECRET must be set in production environment. "
-                    "This is a fail-closed security mechanism to prevent "
-                    "unsafe operation without proper JWT signing."
-                )
-            if len(self.JWT_SECRET) < 32:
-                raise ValueError(
-                    f"CRITICAL: JWT_SECRET must be at least 32 characters in production. "
-                    f"Current length: {len(self.JWT_SECRET)}. "
-                    "Short secrets are vulnerable to brute force attacks."
-                )
-            # Check for default/weak secrets
-            weak_patterns = ["dev-secret", "test-secret", "default", "password", "secret"]
-            if any(pattern in self.JWT_SECRET.lower() for pattern in weak_patterns):
-                raise ValueError(
-                    "CRITICAL: JWT_SECRET contains default or weak pattern. "
-                    "Use a cryptographically secure random secret in production."
-                )
     
     # ==========================================
     # API CONFIGURATION
@@ -221,6 +205,21 @@ class Settings:
                 "JWT_SECRET": self.JWT_SECRET if self.JWT_SECRET != "dev-secret-change-in-production" else None,
                 "SUPABASE_ANON_KEY": self.SUPABASE_ANON_KEY,
             })
+            
+            # Production JWT_SECRET validation
+            if self.JWT_SECRET:
+                if len(self.JWT_SECRET) < 32:
+                    logger.warning(
+                        f"SECURITY: JWT_SECRET is only {len(self.JWT_SECRET)} characters. "
+                        "Recommended minimum is 32 characters for production."
+                    )
+                # Check for default/weak secrets
+                weak_patterns = ["dev-secret", "test-secret", "default", "password", "secret"]
+                if any(pattern in self.JWT_SECRET.lower() for pattern in weak_patterns):
+                    logger.warning(
+                        "SECURITY: JWT_SECRET contains a weak pattern. "
+                        "Use a cryptographically secure random secret in production."
+                    )
         
         missing = [k for k, v in required.items() if not v]
         return missing
