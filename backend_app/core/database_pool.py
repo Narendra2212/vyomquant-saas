@@ -225,9 +225,10 @@ class DatabasePool:
             )
             
             # Register pool events using SQLAlchemy 2.0 event API
-            event.listen(self._engine.pool, "connect", self._on_connect)
-            event.listen(self._engine.pool, "checkout", self._on_checkout)
-            event.listen(self._engine.pool, "checkin", self._on_checkin)
+            # Register on engine, but the callbacks receive connection_record which has .pool
+            event.listen(self._engine, "connect", self._on_connect)
+            event.listen(self._engine, "checkout", self._on_checkout)
+            event.listen(self._engine, "checkin", self._on_checkin)
             
             logger.info(
                 f"[DB Pool] Engine created: size={POOL_SIZE}, "
