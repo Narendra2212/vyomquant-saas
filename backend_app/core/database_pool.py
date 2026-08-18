@@ -222,11 +222,11 @@ class DatabasePool:
                 pool_pre_ping=True,
                 pool_recycle=3600,
                 pool_timeout=30,
-                pool_events={
-                    "connect": self._on_connect,
-                    "checkout": self._on_checkout,
-                    "checkin": self._on_checkin
-                }
+                pool_events=[
+                    ("connect", self._on_connect),
+                    ("checkout", self._on_checkout),
+                    ("checkin", self._on_checkin)
+                ]
             )
             logger.info(
                 f"[DB Pool] Engine created: size={POOL_SIZE}, "
