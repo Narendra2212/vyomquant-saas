@@ -102,26 +102,24 @@ if not POOLING_AVAILABLE:
     # FIN-CRITICAL-001 FIX: Set isolation level based on transaction type
     # SERIALIZABLE for financial transactions, READ COMMITTED for general operations
     # This prevents race conditions for money-critical operations while maintaining performance
+    # Note: isolation_level is set at transaction level via get_transactional_session()
     SessionLocal = sessionmaker(
         autocommit=False, 
         autoflush=False, 
-        bind=engine,
-        isolation_level=get_isolation_level(TransactionType.GENERAL)  # Default to READ COMMITTED
+        bind=engine
     )
     
     # Create separate session factories for different transaction types
     SessionLocalFinancial = sessionmaker(
         autocommit=False, 
         autoflush=False, 
-        bind=engine,
-        isolation_level=get_isolation_level(TransactionType.FINANCIAL)  # SERIALIZABLE
+        bind=engine
     )
     
     SessionLocalReadOnly = sessionmaker(
         autocommit=False, 
         autoflush=False, 
-        bind=engine,
-        isolation_level=get_isolation_level(TransactionType.READ_ONLY)  # READ COMMITTED
+        bind=engine
     )
     
     Base = declarative_base()
@@ -136,6 +134,12 @@ if not POOLING_AVAILABLE:
             db = SessionLocal()
         
         try:
+            # Set isolation level at transaction level for financial operations
+            if transaction_type == TransactionType.FINANCIAL and "sqlite" not in str(engine.url):
+                try:
+                    db.execute(f"SET TRANSACTION ISOLATION LEVEL {get_isolation_level(TransactionType.FINANCIAL)}")
+                except Exception as e:
+                    logger.warning(f"Failed to set isolation level: {e}")
             yield db
         finally:
             db.close()
@@ -151,6 +155,12 @@ if not POOLING_AVAILABLE:
             db = SessionLocal()
         
         try:
+            # Set isolation level at transaction level for financial operations
+            if transaction_type == TransactionType.FINANCIAL and "sqlite" not in str(engine.url):
+                try:
+                    db.execute(f"SET TRANSACTION ISOLATION LEVEL {get_isolation_level(TransactionType.FINANCIAL)}")
+                except Exception as e:
+                    logger.warning(f"Failed to set isolation level: {e}")
             yield db
         finally:
             db.close()
