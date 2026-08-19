@@ -251,23 +251,30 @@ class DatabasePool:
     
     def _on_checkout(self, dbapi_connection, connection_record, connection_proxy_context):
         """Handle connection pool checkout events for monitoring."""
-        pool = connection_record.pool
-        _pool_monitor.record_pool_status(
-            pool.size(),
-            pool.checkedout(),
-            pool.overflow(),
-            pool.checkedin()
-        )
-    
+        try:
+            pool = self._engine.pool
+            _pool_monitor.record_pool_status(
+                pool.size(),
+                pool.checkedout(),
+                pool.overflow(),
+                pool.checkedin()
+            )
+        except Exception:
+            pass
+
     def _on_checkin(self, dbapi_connection, connection_record):
         """Handle connection pool checkin events for monitoring."""
-        pool = connection_record.pool
-        _pool_monitor.record_pool_status(
-            pool.size(),
-            pool.checkedout(),
-            pool.overflow(),
-            pool.checkedin()
-        )
+        try:
+            pool = self._engine.pool
+            _pool_monitor.record_pool_status(
+                pool.size(),
+                pool.checkedout(),
+                pool.overflow(),
+                pool.checkedin()
+            )
+        except Exception:
+            pass
+
     
     def get_pool_stats(self) -> Dict[str, any]:
         """Get current connection pool statistics."""
