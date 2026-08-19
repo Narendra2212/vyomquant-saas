@@ -46,11 +46,12 @@
   </script>
 
   <script>
-    // Safe global fallbacks for E2E testing
-    window.TEST_USER = window.TEST_USER || {
-      id: 'dev_user',
-      email: 'test@test.com'
-    };
+    // Local-development detection. Gates development-only telemetry shims so
+    // they never emit console output in production builds.
+    window.__VQ_LOCAL__ = (function () {
+      var h = location.hostname;
+      return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h.slice(-6) === ".local";
+    })();
   </script>
   
   <!-- Native Lightweight Telemetry for Beta -->
@@ -77,10 +78,12 @@
         };
         document.head.appendChild(script);
       } else {
-        window.onerror = function(msg, url, lineNo, columnNo, error) {
-          console.error("[DEV Telemetry Captured Error] ", msg, url, lineNo, columnNo, error);
-          return false;
-        };
+        if (window.__VQ_LOCAL__) {
+          window.onerror = function (msg, url, lineNo, columnNo, error) {
+            console.error("[DEV Telemetry] ", msg, url, lineNo, columnNo, error);
+            return false;
+          };
+        }
       }
     })();
   </script>
@@ -109,7 +112,7 @@
         window.gtag('config', gaId);
       } else {
         window.gtag = function () {
-          console.log("[DEV/TEST] Google Analytics Event:", arguments);
+          if (window.__VQ_LOCAL__) console.log("[DEV] GA Event:", arguments);
         };
       }
 
@@ -121,7 +124,7 @@
         })(window, document, "clarity", "script", clarityId);
       } else {
         window.clarity = function () {
-          console.log("[DEV/TEST] Microsoft Clarity Event:", arguments);
+          if (window.__VQ_LOCAL__) console.log("[DEV] Clarity Event:", arguments);
         };
       }
     })();
