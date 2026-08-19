@@ -131,7 +131,7 @@ class DashboardDataIngester:
                 unrealized_pnl += float(pos.get("unrealized_pnl", 0))
             
             # Write equity curve point
-            await self._write_equity_curve(user_id, total_equity)
+            await self._write_equity_curve(user_id, total_equity, total_exposure)
             
             # Write account health metrics
             await self._write_account_health(
@@ -149,21 +149,30 @@ class DashboardDataIngester:
         except Exception as e:
             logger.error(f"❌ Failed to ingest data for {user_id}:{exchange_id}: {e}")
     
-    async def _write_equity_curve(self, user_id: str, equity: float):
+    async def _write_equity_curve(
+        self, user_id: str, equity: float, total_exposure_usdt: float = 0.0
+    ):
         """
         Write an equity curve point to QuestDB.
         
         Args:
             user_id: User identifier
             equity: Current portfolio equity value
+            total_exposure_usdt: Total exposure in USDT at this timestamp
         """
         from backend_app.core.state import app_state
         
         timestamp = datetime.utcnow().isoformat()
         
-        # Use ILP format for high-speed write
-        # Format: equity_curve,user_id=xxx equity=xxx timestamp
-        line = f"equity_curve,user_id={user_id} equity={equity} {int(datetime.utcnow().timestamp() * 1_000_000_000)}"
+        # Use ILP format for high-speed write.
+        # total_exposure_usdt is written here as well as to account_health
+        # because the live_user_pnl view reads it from equity_curve; without
+        # it the view creation fails with "Invalid column".
+        line = (
+            f"equity_curve,user_id={user_id} "
+            f"equity={equity},total_exposure_usdt={total_exposure_usdt} "
+            f"{int(datetime.utcnow().timestamp() * 1_000_000_000)}"
+        )
         
         try:
             session = await app_state.telemetry._get_session()

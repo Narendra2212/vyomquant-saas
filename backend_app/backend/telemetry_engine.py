@@ -160,71 +160,145 @@ class TelemetryEngine:
                 logger.info("TelemetryEngine disconnected from QuestDB.")
             self._session = None  # FIX TB-3: null the reference
 
+    async def _execute_ddl(self, sql: str, label: str) -> bool:
+        """
+        Execute a schema (DDL) statement against QuestDB.
+
+        Deliberately separate from execute_query():
+
+        * execute_query() is the user-facing read path. It uses a 100 ms
+          budget and returns None on every failure, so a caller cannot tell
+          "no rows" from "query failed". Using it for DDL made
+          _ensure_dashboard_tables() log success for tables it never created,
+          because the QuestDB sidecar is often still booting at this point.
+        * DDL needs a realistic budget and an unambiguous result.
+        * A DDL failure must not trip the read-path circuit breaker, and a
+          read-path outage must not silently skip schema creation.
+
+        Returns True only when QuestDB confirms the statement (HTTP < 400).
+        Never raises: QuestDB is an optional sidecar, so a schema failure is
+        logged loudly but must not abort application startup.
+        """
+        timeout_s = float(os.environ.get("QUESTDB_DDL_TIMEOUT_SECONDS", "10.0"))
+        try:
+            session = await self._get_session()
+        except Exception as e:
+            logger.error(f"[QuestDB DDL] {label}: cannot open session: {e}")
+            return False
+
+        try:
+            async with session.get(
+                self.query_url,
+                params={"query": sql},
+                timeout=aiohttp.ClientTimeout(total=timeout_s),
+            ) as response:
+                if response.status >= 400:
+                    body = (await response.text())[:500]
+                    logger.error(
+                        f"[QuestDB DDL] {label}: HTTP {response.status}: {body}"
+                    )
+                    return False
+                return True
+        except asyncio.TimeoutError:
+            logger.error(f"[QuestDB DDL] {label}: timed out after {timeout_s}s")
+            return False
+        except Exception as e:
+            logger.error(f"[QuestDB DDL] {label}: {type(e).__name__}: {e}")
+            return False
+
     async def _ensure_dashboard_tables(self):
         """
-        Create QuestDB tables required for Dashboard widgets.
-        This is called during TelemetryEngine.connect() to ensure tables exist.
+        Create the QuestDB tables and view the dashboard/risk endpoints read.
+
+        Uses _execute_ddl so failures are detected rather than swallowed.
+        Startup is never aborted: each failure is logged at ERROR and the
+        summary states exactly which objects are missing.
         """
         tables = [
-            # executions table - stores trade execution logs
-            """
-            CREATE TABLE IF NOT EXISTS executions (
-                timestamp TIMESTAMP,
-                user_id SYMBOL,
-                symbol SYMBOL,
-                side SYMBOL,
-                status SYMBOL,
-                amount DOUBLE,
-                price DOUBLE
-            ) TIMESTAMP(timestamp) PARTITION BY DAY;
-            """,
-            # equity_curve table - stores portfolio equity history
-            """
-            CREATE TABLE IF NOT EXISTS equity_curve (
-                timestamp TIMESTAMP,
-                user_id SYMBOL,
-                equity DOUBLE
-            ) TIMESTAMP(timestamp) PARTITION BY DAY;
-            """,
-            # account_health table - stores risk metrics
-            """
-            CREATE TABLE IF NOT EXISTS account_health (
-                timestamp TIMESTAMP,
-                user_id SYMBOL,
-                current_drawdown_pct DOUBLE,
-                daily_pnl_pct DOUBLE,
-                total_exposure_usdt DOUBLE
-            ) TIMESTAMP(timestamp) PARTITION BY DAY;
-            """,
+            (
+                "executions",
+                """
+                CREATE TABLE IF NOT EXISTS executions (
+                    timestamp TIMESTAMP,
+                    user_id SYMBOL,
+                    symbol SYMBOL,
+                    side SYMBOL,
+                    status SYMBOL,
+                    amount DOUBLE,
+                    price DOUBLE
+                ) TIMESTAMP(timestamp) PARTITION BY DAY;
+                """,
+            ),
+            (
+                "equity_curve",
+                """
+                CREATE TABLE IF NOT EXISTS equity_curve (
+                    timestamp TIMESTAMP,
+                    user_id SYMBOL,
+                    equity DOUBLE,
+                    total_exposure_usdt DOUBLE
+                ) TIMESTAMP(timestamp) PARTITION BY DAY;
+                """,
+            ),
+            (
+                "account_health",
+                """
+                CREATE TABLE IF NOT EXISTS account_health (
+                    timestamp TIMESTAMP,
+                    user_id SYMBOL,
+                    current_drawdown_pct DOUBLE,
+                    daily_pnl_pct DOUBLE,
+                    total_exposure_usdt DOUBLE
+                ) TIMESTAMP(timestamp) PARTITION BY DAY;
+                """,
+            ),
         ]
 
-        for i, table_sql in enumerate(tables, 1):
-            try:
-                await self.execute_query(table_sql)
-                logger.info(f"QuestDB table {i}/{len(tables)} ensured")
-            except Exception as e:
-                logger.warning(f"Failed to create QuestDB table {i}/{len(tables)}: {e}")
+        created = []
+        failed = []
+        for name, ddl in tables:
+            if await self._execute_ddl(ddl, f"table {name}"):
+                created.append(name)
+            else:
+                failed.append(name)
 
-        # Create live_user_pnl view - aggregates current portfolio state
-        try:
-            view_sql = """
-            CREATE VIEW IF NOT EXISTS live_user_pnl AS
-            SELECT
-                user_id,
-                last(equity) as total_equity,
-                last(equity) - first(equity) as total_pnl,
-                CASE 
-                    WHEN first(equity) = 0 THEN 0
-                    ELSE (last(equity) - first(equity)) / first(equity) * 100
-                END as pnl_pct,
-                last(total_exposure_usdt) as total_exposure
-            FROM equity_curve
-            LATEST ON timestamp PARTITION BY user_id;
-            """
-            await self.execute_query(view_sql)
-            logger.info("QuestDB view live_user_pnl ensured")
-        except Exception as e:
-            logger.warning(f"Failed to create QuestDB view live_user_pnl: {e}")
+        # live_user_pnl must expose total_exposure: both
+        # routers/portfolio.py::live_pnl and
+        # dashboard_aggregation_service.py::get_live_pnl read it via SELECT *
+        # and their empty-state fallbacks include that key.
+        # It reads total_exposure_usdt from equity_curve (added above).
+        # Previously it selected that column FROM equity_curve while the
+        # column existed only on account_health, so QuestDB rejected the
+        # statement with "Invalid column: total_exposure_usdt" and the view
+        # was never created.
+        view_sql = """
+        CREATE VIEW IF NOT EXISTS live_user_pnl AS
+        SELECT
+            user_id,
+            last(equity) as total_equity,
+            last(equity) - first(equity) as total_pnl,
+            CASE
+                WHEN first(equity) = 0 THEN 0
+                ELSE (last(equity) - first(equity)) / first(equity) * 100
+            END as pnl_pct,
+            last(total_exposure_usdt) as total_exposure
+        FROM equity_curve
+        LATEST ON timestamp PARTITION BY user_id;
+        """
+        if await self._execute_ddl(view_sql, "view live_user_pnl"):
+            created.append("live_user_pnl")
+        else:
+            failed.append("live_user_pnl")
+
+        if failed:
+            logger.error(
+                "[QuestDB DDL] schema INCOMPLETE - created=%s failed=%s. "
+                "Endpoints reading the failed objects will return empty data.",
+                created,
+                failed,
+            )
+        else:
+            logger.info("[QuestDB DDL] schema ensured: %s", created)
 
     # ══════════════════════════════════════════════════════════════════════
     #  READ — SQL QUERIES OVER REST
