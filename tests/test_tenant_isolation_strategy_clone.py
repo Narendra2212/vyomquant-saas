@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_tenant_isolation_strategy_clone.py â€” Tenant Isolation Test for Strategy Clone
 
 Tests that users cannot clone strategies belonging to other tenants.

@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_tenant_isolation_fixes.py
 
 Tests for tenant isolation fixes in strategy_operations.py and signal_trace.py.

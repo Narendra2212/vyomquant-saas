@@ -1,4 +1,4 @@
-﻿"""
+"""
 Safety Monitor
 
 Tracks and logs all execution attempts, especially blocked unsafe executions.

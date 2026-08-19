@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_cors_configuration.py
 
 Unit tests verifying strict environment-driven CORS configuration and removal of hardcoded legacy production origins.

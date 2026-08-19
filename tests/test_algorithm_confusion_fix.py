@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_algorithm_confusion_fix.py
 
 Unit tests verifying CWE-347 Algorithm Confusion fix in backend_app.core.auth_middleware.

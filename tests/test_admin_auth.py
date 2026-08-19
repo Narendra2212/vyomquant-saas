@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_admin_auth.py
 
 Unit and integration tests for get_admin_user authorization dependency and admin endpoints.

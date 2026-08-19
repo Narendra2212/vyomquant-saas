@@ -1,4 +1,4 @@
-﻿"""
+"""
 UNKNOWN STATE -> DEFINITIVE STATE HOSTILE ATTACK SUITE
 BUG-UK-01: fetch_open_orders exception returns [] -> ALL orders cancelled
 BUG-UK-02: DB unavailable -> subscription defaults to "active" (fail-open)

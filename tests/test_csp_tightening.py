@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_csp_tightening.py
 
 Unit tests verifying tightened Content-Security-Policy headers.
