@@ -30,7 +30,7 @@ import ipaddress
 
 import inspect
 from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
-                     HTTPException, Request)
+                     HTTPException, Request, Query)
 from backend_app.core.rate_limit import limiter
 # F-20: get_db retained ONLY for PaymentMethodModel display endpoints.
 # Subscription tiers and invoice state are stored exclusively in Supabase.
@@ -387,6 +387,20 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
         }
     )
 
+    try:
+        from backend_app.core.notification_dispatcher import dispatch_user_notification
+        await dispatch_user_notification(
+            user_id=user_id,
+            event_type="subscription_updated",
+            category="billing",
+            severity="info",
+            title=f"Plan Updated: {item_key.upper()}",
+            message=f"Your subscription plan has been upgraded to {item_key.upper()}.",
+            metadata={"item_key": item_key, "previous_plan": previous_plan, "idempotency_key": f"billing_plan:{user_id}:{item_key}"},
+        )
+    except Exception as notif_err:
+        logger.debug(f"[BILLING] Notification dispatch error: {notif_err}")
+
 
 async def _process_stripe_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: dict = None) -> None:
     await _apply_billing_entitlement(user_id, item_key, discount_applied, metadata or {})
@@ -405,26 +419,24 @@ async def _process_razorpay_entitlement(user_id: str, item_key: str, discount_ap
 
 # ── GET /api/billing/plans ───────────────────────────────────────────────
 @router.get("/plans")
-async def get_plans():
-    """Get all available plans. No rate limiting - public endpoint."""
-    from backend_app.core.subscription_engine import SubscriptionEngine
+async def get_plans(
+    request: Request,
+    currency: Optional[str] = Query(None, description="Optional manual currency code override (e.g. USD, INR, EUR, GBP, JPY)")
+):
+    """
+    Get all available plans with server-authoritative country detection and FX-localized pricing.
+    No rate limiting - public endpoint.
+    """
+    from backend_app.core.pricing_service import PricingService
     
-    plans = SubscriptionEngine.get_all_plans()
+    pricing_context = await PricingService.determine_pricing_context(
+        user_id=None,
+        supabase=None,
+        request=request,
+        currency_override=currency,
+    )
     
-    # Transform to frontend-expected format
-    frontend_plans = []
-    for plan in plans:
-        frontend_plans.append({
-            "id": plan.id,
-            "name": plan.name,
-            "description": plan.description,
-            "features": plan.features,
-            "usd": plan.pricing.get("USD", 0) // 100,  # Convert cents to dollars
-            "inr": plan.pricing.get("INR", 0) // 100,  # Convert paise to rupees
-            "recommended": plan.id == "pro"  # Pro is the recommended mid-tier plan
-        })
-    
-    return {"plans": frontend_plans}
+    return await PricingService.get_localized_plans(pricing_context)
 
 # ── GET /api/billing/test ───────────────────────────────────────────────
 @router.get("/test")
@@ -457,9 +469,23 @@ async def get_entitlements(
         
         entitlements = await get_user_entitlements(user, supabase)
         
+        # ── Fetch real subscription lifecycle state from Supabase profiles ──
         subscription_status = "active"
         renewal_date = None
         cancel_at_period_end = False
+        try:
+            if supabase:
+                profile_res = supabase.table("profiles").select(
+                    "subscription_status,next_billing_date,cancel_at_period_end"
+                ).eq("id", user["id"]).execute()
+                profile_resp = await profile_res if inspect.isawaitable(profile_res) else profile_res
+                if profile_resp and profile_resp.data:
+                    row = profile_resp.data[0]
+                    subscription_status = row.get("subscription_status") or "active"
+                    renewal_date = row.get("next_billing_date")
+                    cancel_at_period_end = bool(row.get("cancel_at_period_end", False))
+        except Exception as _profile_err:
+            logger.debug(f"Could not read lifecycle profile fields for {user['id']}: {_profile_err}")
         
         res_data = {
             "plan": entitlements.plan,
@@ -525,7 +551,7 @@ async def get_current_plan(
     return await get_entitlements(request, user, supabase)
 
 
-# ── GET /api/billing/currency ───────────────────────────────────────────────
+# ── GET /api/billing/currency ────────────────────────────────────────────
 @router.get("/currency")
 @limiter.limit("60/minute")
 async def get_currency(
@@ -533,8 +559,8 @@ async def get_currency(
   user: dict = Depends(get_current_user),
   supabase: Any = Depends(get_request_supabase),
 ):
-    """Get user's currency preference (auto-detected if not set)."""
-    cache_key = f"billing:currency:{user.get('id', '')}"
+    """Get user's complete currency & country context (auto-detected from trusted IP or saved preference)."""
+    cache_key = f"billing:currency_ctx:{user.get('id', '')}"
     try:
         from backend_app.core.cache.redis_manager import redis_manager
         cached = await redis_manager.get(cache_key)
@@ -546,8 +572,22 @@ async def get_currency(
 
     try:
         from backend_app.core.pricing_service import PricingService
-        currency = await PricingService.determine_currency(user.get("id", ""), supabase, request)
-        res = {"currency": currency or "USD"}
+        ctx = await PricingService.determine_pricing_context(user.get("id", ""), supabase, request)
+        res = {
+            "country": ctx["country"],
+            "country_name": ctx["country_name"],
+            "currency": ctx["currency"],
+            "currency_symbol": ctx["currency_symbol"],
+            "currency_source": ctx["currency_source"],
+            "checkout_currency": ctx["checkout_currency"],
+            "checkout_currency_symbol": ctx["checkout_currency_symbol"],
+            "checkout_provider": ctx["checkout_provider"],
+            "is_direct_checkout": ctx["is_direct_checkout"],
+            "fx_rate": ctx["fx_rate"],
+            "fx_rate_timestamp": ctx["fx_rate_timestamp"],
+            "is_fallback": ctx["is_fallback"],
+            "supported_currencies": PricingService.get_localized_plans.__globals__["FXService"].get_supported_display_currencies(),
+        }
         try:
             from backend_app.core.cache.redis_manager import redis_manager
             import json
@@ -556,8 +596,23 @@ async def get_currency(
             pass
         return res
     except Exception as e:
-        logger.warning(f"Failed to determine currency for user {user.get('id')}: {e}")
-        return {"currency": "USD"}
+        logger.warning(f"Failed to determine currency context for user {user.get('id')}: {e}")
+        from datetime import datetime, timezone
+        return {
+            "country": "US",
+            "country_name": "United States",
+            "currency": "USD",
+            "currency_symbol": "$",
+            "currency_source": "fallback",
+            "checkout_currency": "USD",
+            "checkout_currency_symbol": "$",
+            "checkout_provider": "stripe",
+            "is_direct_checkout": True,
+            "fx_rate": 1.0,
+            "fx_rate_timestamp": datetime.now(timezone.utc).isoformat(),
+            "is_fallback": True,
+            "supported_currencies": [],
+        }
 
 
 # ── POST /api/billing/currency ──────────────────────────────────────────────
@@ -569,15 +624,15 @@ async def set_currency(
   user: dict = Depends(get_current_user),
   supabase: Any = Depends(get_request_supabase),
 ):
-    """Set user's currency preference."""
+    """Set user's manual currency preference."""
     try:
         from backend_app.core.pricing_service import PricingService
         currency = body.get("currency", "USD")
         success = await PricingService.set_user_currency_preference(user["id"], currency, supabase)
         try:
             from backend_app.core.cache.redis_manager import redis_manager
-            import json
-            await redis_manager.set(f"billing:currency:{user['id']}", json.dumps({"currency": currency}), ex=10)
+            await redis_manager.delete(f"billing:currency_ctx:{user['id']}")
+            await redis_manager.delete(f"billing:currency:{user['id']}")
         except Exception:
             pass
         if not success:
@@ -682,76 +737,119 @@ async def create_checkout_session(
   body: CheckoutRequest,
   background_tasks: BackgroundTasks,
   user: dict = Depends(get_current_user),
+  supabase: Any = Depends(get_request_supabase),
 ):
-    """Generates a payment link. INR → Razorpay. USD → Stripe."""
+    """
+    Generates a server-authoritative payment link with FX conversion and gateway routing.
+    Server calculates the exact minor units and validates gateway capability.
+    INR → Razorpay. All other supported currencies (USD, EUR, GBP, JPY, CAD, etc.) → Stripe.
+    """
+    from backend_app.core.fx_service import FXService
+    from backend_app.core.pricing_service import PricingService
+
     item_key = "ml_addon" if body.is_addon else body.tier.value
-    
-    # Get pricing from SubscriptionEngine instead of deprecated PRICES dict
+
+    # Step 1: Resolve currency from body or user context
+    requested_currency = (body.currency or "USD").strip().upper()
+
+    # Step 2: Resolve base USD price from canonical SubscriptionEngine
     if body.is_addon:
-        # ML addon pricing (hardcoded for now, could be moved to SubscriptionEngine)
-        amount = {"INR": 19900, "USD": 300}.get(body.currency)
+        base_usd = 3.00  # $3.00 USD for ML Addon
     else:
         plan_config = SubscriptionEngine.get_plan_config(item_key)
         if not plan_config:
-            raise HTTPException(400, "Invalid tier")
-        # Pricing in SubscriptionEngine is in dollars/rupees, convert to cents/paise for payment gateways
-        base_amount = plan_config.pricing.get(body.currency, 0)
-        amount = int(base_amount * 100)  # Convert to cents (USD) or paise (INR)
+            raise HTTPException(400, f"Invalid subscription tier: {item_key}")
+        # Pricing in SubscriptionEngine is stored in cents/paise
+        base_usd = plan_config.pricing.get("USD", 0) / 100.0
 
-    if not amount:
-        raise HTTPException(400, "Invalid tier or currency combination.")
+    # Free plan cannot be checked out
+    if base_usd <= 0 and not body.is_addon:
+        raise HTTPException(400, "Cannot checkout for free tier.")
 
+    # Step 3: Server-Authoritative FX Localization & Minor Unit Calculation
+    localized = await FXService.localize_price(base_usd, requested_currency)
+    checkout_currency = localized.checkout_currency
+    provider = localized.checkout_provider
+    amount = localized.checkout_amount_minor
+
+    # Step 4: Check and apply discounts
     discount_applied = False
     try:
-        sb_res = _sb(user)
-        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
-        if sb:
-            query_res = sb.table("profiles").select("available_discounts").eq("id", user["id"]).execute()
+        if supabase:
+            query_res = supabase.table("profiles").select("available_discounts").eq("id", user["id"]).execute()
             profile_res = await query_res if inspect.isawaitable(query_res) else query_res
-        if profile_res.data and profile_res.data[0].get("available_discounts", 0) > 0:
-            discount_applied = True
-            amount = int(amount * 0.9)
+            if profile_res.data and profile_res.data[0].get("available_discounts", 0) > 0:
+                discount_applied = True
+                amount = int(round(amount * 0.9))
     except Exception as e:
         logger.warning(f"Could not fetch available discounts for {user['id']}: {e}")
 
+    if amount <= 0:
+        raise HTTPException(400, "Calculated checkout amount must be greater than zero.")
+
     try:
-        if body.currency == "USD":
+        if provider == "stripe":
             stripe_key = _validate_keys("stripe")
             import stripe
             stripe.api_key = stripe_key
 
-            session = stripe.checkout.Session.create(
-                payment_method_types=["card"],
-                line_items=[
+            session_params = {
+                "payment_method_types": ["card"],
+                "line_items": [
                     {
                         "price_data": {
-                            "currency": "usd",
+                            "currency": checkout_currency.lower(),
                             "product_data": {
                                 "name": f"Aerora Dynamics — {item_key.upper()}"
                             },
                             "unit_amount": amount,
+                            # Add recurring interval for subscription mode
+                            **({
+                                "recurring": {"interval": "month"}
+                            } if not body.is_addon else {}),
                         },
                         "quantity": 1,
                     }
                 ],
-                mode="payment" if body.is_addon else "subscription",
-                success_url=(
+                "mode": "payment" if body.is_addon else "subscription",
+                "success_url": (
                     f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}"
-                    "/dashboard?payment=success"
+                    "/app/billing?payment=success"
                 ),
-                cancel_url=(
-                    f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/pricing"
+                "cancel_url": (
+                    f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/app/billing"
                 ),
-                client_reference_id=user["id"],
-                metadata={
-                    "user_id": user["id"], 
+                "client_reference_id": user["id"],
+                "metadata": {
+                    "user_id": user["id"],
                     "item_key": item_key,
-                    "discount_applied": "true" if discount_applied else "false"
+                    "currency": checkout_currency,
+                    "fx_rate": str(localized.fx_rate),
+                    "discount_applied": "true" if discount_applied else "false",
                 },
-            )
-            return {"checkoutUrl": session.url, "checkout_url": session.url, "provider": "stripe"}
+            }
+            # For subscription mode: attach metadata to the Stripe Subscription object
+            # so that customer.subscription.* webhooks can resolve item_key and currency
+            if not body.is_addon:
+                session_params["subscription_data"] = {
+                    "metadata": {
+                        "user_id": user["id"],
+                        "item_key": item_key,
+                        "currency": checkout_currency,
+                        "fx_rate": str(localized.fx_rate),
+                        "discount_applied": "true" if discount_applied else "false",
+                    }
+                }
+            session = stripe.checkout.Session.create(**session_params)
+            return {
+                "checkoutUrl": session.url,
+                "checkout_url": session.url,
+                "provider": "stripe",
+                "currency": checkout_currency,
+                "amount": amount,
+            }
 
-        elif body.currency == "INR":
+        elif provider == "razorpay":
             rzp_key = _validate_keys("razorpay")
             import razorpay
             rzp = razorpay.Client(
@@ -768,6 +866,8 @@ async def create_checkout_session(
                     "notes": {
                         "user_id": user["id"], 
                         "item": item_key,
+                        "currency": "INR",
+                        "fx_rate": str(localized.fx_rate),
                         "discount_applied": "true" if discount_applied else "false"
                     },
                 }
@@ -777,24 +877,35 @@ async def create_checkout_session(
                     "amount": amount,
                     "currency": "INR",
                     "reference_id": order["id"],
-                    "description": f"Aerora Beta - {item_key.upper()}",
+                    "description": f"Aerora Dynamics - {item_key.upper()}",
                     "customer": {
-                        "email": user.get("email", "beta_user@aerora.io")
+                        "email": user.get("email", "user@aerora.io")
                     },
                     "notes": {
                         "user_id": user["id"], 
                         "item": item_key,
+                        "currency": "INR",
+                        "fx_rate": str(localized.fx_rate),
                         "discount_applied": "true" if discount_applied else "false"
                     },
-                    "callback_url": f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/dashboard?payment=success",
+                    "callback_url": f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/app/billing?payment=success",
                     "callback_method": "get"
                 })
                 checkout_url = link["short_url"]
             except Exception as le:
                 logger.warning(f"Failed to create Razorpay hosted payment link: {le}. Falling back to default success URL.")
-                checkout_url = f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/dashboard?payment=success"
+                checkout_url = f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/app/billing?payment=success"
 
-            return {"checkoutUrl": checkout_url, "checkout_url": checkout_url, "order_id": order["id"], "provider": "razorpay", "amount": amount}
+            return {
+                "checkoutUrl": checkout_url,
+                "checkout_url": checkout_url,
+                "order_id": order["id"],
+                "provider": "razorpay",
+                "currency": "INR",
+                "amount": amount,
+            }
+        else:
+            raise HTTPException(500, f"Unsupported payment provider for currency: {checkout_currency}")
 
     except Exception as e:
         logger.error(f"Checkout creation failed for {user['id']}: {e}")
@@ -888,6 +999,38 @@ async def stripe_webhook(
                 payment_id = session.get("payment_intent") or session.get("id")
                 payment_amount = session.get("amount_total", 0) / 100.0  # Convert from cents to USD
                 
+                # ── Insert billing_invoices record ──
+                try:
+                    sb_inv = _background_sb()
+                    sb_inv.table("billing_invoices").insert({
+                        "user_id": user_id,
+                        "provider": "stripe",
+                        "provider_payment_id": payment_id or "",
+                        "amount_usd": round(payment_amount, 2),
+                        "amount_inr": 0,
+                        "currency": "USD",
+                        "status": "paid",
+                        "plan": item_key,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }).execute()
+                except Exception as inv_err:
+                    logger.warning(f"[BILLING] Could not insert billing_invoices (Stripe): {inv_err}")
+
+                # ── Dispatch payment_succeeded notification ──
+                try:
+                    from backend_app.core.notification_dispatcher import dispatch_user_notification
+                    await dispatch_user_notification(
+                        user_id=user_id,
+                        event_type="payment_succeeded",
+                        category="billing",
+                        severity="info",
+                        title="Payment Successful",
+                        message=f"Your payment of ${payment_amount:.2f} USD was successful. Plan: {item_key.upper()}.",
+                        metadata={"item_key": item_key, "payment_id": payment_id, "provider": "stripe"},
+                    )
+                except Exception as notif_err:
+                    logger.debug(f"[BILLING] payment_succeeded notification error: {notif_err}")
+
                 if payment_amount > 0:
                     try:
                         sb = _background_sb()
@@ -947,6 +1090,61 @@ async def stripe_webhook(
                         logger.error(f"Stripe subscription update handler failed: {e}")
                         raise HTTPException(500, f"Subscription update failed: {e}")
 
+        elif event["type"] == "invoice.payment_succeeded":
+            # ── Subscription renewal: mark active and extend billing period ──
+            invoice_obj = event["data"]["object"]
+            sub_id = invoice_obj.get("subscription")
+            if sub_id:
+                renewal_user_id = None
+                try:
+                    sub = stripe.Subscription.retrieve(sub_id)
+                    renewal_user_id = sub.get("metadata", {}).get("user_id")
+                    if not renewal_user_id:
+                        cust_id = invoice_obj.get("customer")
+                        cust = stripe.Customer.retrieve(cust_id)
+                        renewal_user_id = cust.get("metadata", {}).get("user_id")
+                    if renewal_user_id:
+                        renewal_item_key = sub.get("metadata", {}).get("item_key", "")
+                        from backend_app.core.billing_lifecycle import BillingLifecycle
+                        sb_renew = _background_sb()
+                        await BillingLifecycle.renew_subscription(renewal_user_id, sb_renew)
+                        await invalidate_profile_cache(renewal_user_id)
+                        # Insert billing_invoices record for renewal
+                        renewal_amount = invoice_obj.get("amount_paid", 0) / 100.0
+                        renewal_payment_id = invoice_obj.get("payment_intent") or invoice_obj.get("id", "")
+                        try:
+                            sb_inv = _background_sb()
+                            sb_inv.table("billing_invoices").insert({
+                                "user_id": renewal_user_id,
+                                "provider": "stripe",
+                                "provider_payment_id": renewal_payment_id,
+                                "amount_usd": round(renewal_amount, 2),
+                                "amount_inr": 0,
+                                "currency": "USD",
+                                "status": "paid",
+                                "plan": renewal_item_key or "unknown",
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                            }).execute()
+                        except Exception as inv_err:
+                            logger.warning(f"[BILLING] Could not insert billing_invoices (Stripe renewal): {inv_err}")
+                        # Dispatch renewal notification
+                        try:
+                            from backend_app.core.notification_dispatcher import dispatch_user_notification
+                            await dispatch_user_notification(
+                                user_id=renewal_user_id,
+                                event_type="subscription_renewed",
+                                category="billing",
+                                severity="info",
+                                title="Subscription Renewed",
+                                message=f"Your subscription has been renewed successfully. Amount: ${renewal_amount:.2f} USD.",
+                                metadata={"item_key": renewal_item_key, "payment_id": renewal_payment_id, "provider": "stripe"},
+                            )
+                        except Exception as notif_err:
+                            logger.debug(f"[BILLING] subscription_renewed notification error: {notif_err}")
+                        logger.info(f"Stripe: Renewal processed for user {renewal_user_id}")
+                except Exception as renew_err:
+                    logger.error(f"Stripe renewal processing error for sub {sub_id}: {renew_err}")
+
         elif event["type"] == "invoice.payment_failed":
             invoice_obj = event["data"]["object"]
             sub_id = invoice_obj.get("subscription")
@@ -962,9 +1160,31 @@ async def stripe_webhook(
             if user_id:
                 try:
                     sb = _background_sb()
-                    sb.table("profiles").update({"is_frozen": True}).eq("id", user_id).execute()
+                    sb.table("profiles").update({
+                        "is_frozen": True,
+                        "subscription_status": "past_due",
+                    }).eq("id", user_id).execute()
                     await invalidate_profile_cache(user_id)
                     logger.info(f"User {user_id} account frozen due to invoice payment failure.")
+                    # Dispatch payment_failed notification
+                    try:
+                        from backend_app.core.notification_dispatcher import dispatch_user_notification
+                        await dispatch_user_notification(
+                            user_id=user_id,
+                            event_type="payment_failed",
+                            category="billing",
+                            severity="critical",
+                            title="Payment Failed — Action Required",
+                            message="Your subscription payment failed. Please update your payment method to restore access.",
+                            metadata={"provider": "stripe", "action_url": "/app/billing"},
+                        )
+                    except Exception as notif_err:
+                        logger.debug(f"[BILLING] payment_failed notification error: {notif_err}")
+                    # Broadcast via WebSocket for immediate UI refresh
+                    await RealtimeSync.sync_subscription_change(
+                        user_id, "payment_failed",
+                        {"subscription_status": "past_due", "action": "update_payment_method"}
+                    )
                 except Exception as e:
                     logger.error(f"Stripe payment failure handler failed to freeze account: {e}")
                     raise HTTPException(500, f"Payment failure handler failed: {e}")
@@ -1083,10 +1303,41 @@ async def razorpay_webhook(
             try:
                 await _process_razorpay_entitlement(user_id, item_key, discount_applied, notes)
                 
-                # Process referral commission on successful payment
                 payment_id = payment.get("id")
                 payment_amount = payment.get("amount", 0) / 100.0  # Convert from paise to INR
-                
+
+                # ── Insert billing_invoices record ──
+                try:
+                    sb_inv = _background_sb()
+                    sb_inv.table("billing_invoices").insert({
+                        "user_id": user_id,
+                        "provider": "razorpay",
+                        "provider_payment_id": payment_id or "",
+                        "amount_usd": 0,
+                        "amount_inr": round(payment_amount, 2),
+                        "currency": "INR",
+                        "status": "paid",
+                        "plan": item_key,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }).execute()
+                except Exception as inv_err:
+                    logger.warning(f"[BILLING] Could not insert billing_invoices (Razorpay): {inv_err}")
+
+                # ── Dispatch payment_succeeded notification ──
+                try:
+                    from backend_app.core.notification_dispatcher import dispatch_user_notification
+                    await dispatch_user_notification(
+                        user_id=user_id,
+                        event_type="payment_succeeded",
+                        category="billing",
+                        severity="info",
+                        title="Payment Successful",
+                        message=f"Your payment of ₹{payment_amount:.2f} INR was successful. Plan: {item_key.upper()}.",
+                        metadata={"item_key": item_key, "payment_id": payment_id, "provider": "razorpay"},
+                    )
+                except Exception as notif_err:
+                    logger.debug(f"[BILLING] payment_succeeded notification error: {notif_err}")
+
                 if payment_amount > 0:
                     try:
                         sb = _background_sb()
@@ -1220,9 +1471,12 @@ async def delete_payment_method(
 
 
 @router.post("/portal")
+@limiter.limit("5/minute")
 async def create_portal_session(
+    request: Request,
     user: dict = Depends(get_current_user)
 ):
+    """Create Stripe Billing Portal session for payment management."""
     stripe_key = _validate_keys("stripe")
     import stripe
     stripe.api_key = stripe_key
@@ -1245,9 +1499,102 @@ async def create_portal_session(
 
         session = stripe.billing_portal.Session.create(
             customer=customer_id,
-            return_url=f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/dashboard"
+            return_url=f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/app/billing"
         )
         return {"url": session.url}
     except Exception as e:
         logger.error(f"Failed to create Stripe portal session for {user['id']}: {e}")
         raise HTTPException(500, f"Billing portal error: {str(e)}")
+
+
+# ── POST /api/billing/cancel ─────────────────────────────────────────────────
+@router.post("/cancel")
+@limiter.limit("5/minute")
+async def cancel_subscription(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    supabase: Any = Depends(get_request_supabase),
+):
+    """
+    Cancel the user's active subscription at period end.
+    Subscription remains active until next_billing_date.
+    Server-authoritative: updates profiles.cancel_at_period_end and subscription_status.
+    """
+    user_id = user["id"]
+    try:
+        from backend_app.core.billing_lifecycle import BillingLifecycle
+        sb = _background_sb()
+        result = await BillingLifecycle.cancel_subscription(
+            user_id=user_id,
+            cancel_at_period_end=True,
+            supabase=sb,
+        )
+        await invalidate_profile_cache(user_id)
+        # Broadcast via WebSocket
+        await RealtimeSync.sync_subscription_change(
+            user_id, "subscription_cancelled",
+            {"cancel_at_period_end": True, "status": "cancelled"}
+        )
+        # Dispatch cancellation notification
+        try:
+            from backend_app.core.notification_dispatcher import dispatch_user_notification
+            await dispatch_user_notification(
+                user_id=user_id,
+                event_type="subscription_cancelled",
+                category="billing",
+                severity="warning",
+                title="Subscription Cancellation Scheduled",
+                message="Your subscription will be cancelled at the end of the current billing period. You can resume anytime.",
+                metadata={"action_url": "/app/billing"},
+            )
+        except Exception as notif_err:
+            logger.debug(f"[BILLING] cancellation notification error: {notif_err}")
+        return {"status": "ok", "detail": result.get("message", "Cancellation scheduled"), "cancel_at_period_end": True}
+    except Exception as e:
+        logger.error(f"Failed to cancel subscription for user {user_id}: {e}")
+        raise HTTPException(500, f"Cancellation failed: {str(e)}")
+
+
+# ── POST /api/billing/resume ──────────────────────────────────────────────────
+@router.post("/resume")
+@limiter.limit("5/minute")
+async def resume_subscription(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    supabase: Any = Depends(get_request_supabase),
+):
+    """
+    Reverse a pending cancellation: restore subscription_status to active.
+    Server-authoritative: clears cancel_at_period_end and restores active status.
+    """
+    user_id = user["id"]
+    try:
+        sb = _background_sb()
+        sb.table("profiles").update({
+            "cancel_at_period_end": False,
+            "subscription_status": "active",
+        }).eq("id", user_id).execute()
+        await invalidate_profile_cache(user_id)
+        # Broadcast via WebSocket
+        await RealtimeSync.sync_subscription_change(
+            user_id, "cancellation_reversed",
+            {"cancel_at_period_end": False, "status": "active"}
+        )
+        # Dispatch resumption notification
+        try:
+            from backend_app.core.notification_dispatcher import dispatch_user_notification
+            await dispatch_user_notification(
+                user_id=user_id,
+                event_type="cancellation_reversed",
+                category="billing",
+                severity="info",
+                title="Subscription Resumed",
+                message="Your subscription cancellation has been reversed. Your plan will renew as usual.",
+                metadata={"action_url": "/app/billing"},
+            )
+        except Exception as notif_err:
+            logger.debug(f"[BILLING] resume notification error: {notif_err}")
+        return {"status": "ok", "detail": "Subscription cancellation reversed. Plan is now active.", "cancel_at_period_end": False}
+    except Exception as e:
+        logger.error(f"Failed to resume subscription for user {user_id}: {e}")
+        raise HTTPException(500, f"Resume failed: {str(e)}")

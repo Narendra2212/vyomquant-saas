@@ -235,8 +235,14 @@ const SignalTraceVisualization = ({
   // ═══════════════════════════════════════════════════════════════════
 
   const renderPipelineStage = (stage, index, totalStages) => {
-    const config = PIPELINE_STAGES[stage.stage];
-    const Icon = config.icon;
+    const rawStageKey = stage?.stage || 'UNKNOWN';
+    const config = PIPELINE_STAGES[rawStageKey] || PIPELINE_STAGES[String(rawStageKey).toUpperCase()] || {
+      id: rawStageKey,
+      label: rawStageKey,
+      icon: Activity,
+      color: '#00BCD4'
+    };
+    const Icon = config.icon || Activity;
     const isCompleted = stage.status === 'completed';
     const isFailed = stage.status === 'failed' || stage.status === 'rejected';
     const isLast = index === totalStages - 1;

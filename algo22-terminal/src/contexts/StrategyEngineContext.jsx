@@ -43,15 +43,53 @@ export const StrategyEngineProvider = ({ children }) => {
     }
 
     const sourceNode = sourceNodes[0];
-    const dataSource = sourceNode ? {
-      nodeId: sourceNode.id,
-      type: 'ccxt',
-      symbol: sourceNode.data?.params?.symbol || 'BTC/USDT',
-      timeframe: sourceNode.data?.params?.timeframe || '1h',
-      exchange: sourceNode.data?.params?.exchange || 'binance',
-      startDate: sourceNode.data?.params?.start_date,
-      endDate: sourceNode.data?.params?.end_date
-    } : null;
+
+    /**
+     * The market a plan trades is read from the source node's own params, and a missing one is
+     * an error naming the field (SB-06, Requirements 12.3 and 12.4).
+     *
+     * This used to read `symbol || 'BTC/USDT'`, `timeframe || '1h'` and `exchange ||
+     * 'binance'` — the same silent-default defect task 3.9 removed from the save path and task
+     * 7.3 removed from the selectors, left behind on this legacy plan builder. Three separate
+     * problems with it: an unset symbol produced a plan trading a market nobody chose; an unset
+     * timeframe produced a plan reading bars nobody chose; and `exchange` is not a strategy
+     * property at all — the DATA descriptor publishes no exchange parameter, and exchange
+     * identity is a deployment binding (Requirements 12.1, 12.2). All three are gone; nothing
+     * substitutes for them.
+     */
+    let dataSource = null;
+    if (sourceNode) {
+      const params = sourceNode.data?.params || {};
+      const symbol = typeof params.symbol === 'string' && params.symbol.trim() !== '' ? params.symbol : null;
+      const timeframe =
+        typeof params.timeframe === 'string' && params.timeframe.trim() !== '' ? params.timeframe : null;
+
+      if (symbol === null) {
+        errors.push({
+          type: 'source',
+          field: 'symbol',
+          nodeId: sourceNode.id,
+          message: 'The data source block names no symbol, so this plan trades no market. Choose one.',
+        });
+      }
+      if (timeframe === null) {
+        errors.push({
+          type: 'source',
+          field: 'timeframe',
+          nodeId: sourceNode.id,
+          message: 'The data source block names no timeframe, so this plan reads no bar interval. Choose one.',
+        });
+      }
+
+      dataSource = {
+        nodeId: sourceNode.id,
+        type: 'ccxt',
+        symbol,
+        timeframe,
+        startDate: params.start_date,
+        endDate: params.end_date
+      };
+    }
 
     // Build adjacency list for edge traversal
     const adjacency = {};

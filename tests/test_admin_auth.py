@@ -6,7 +6,7 @@ Unit and integration tests for get_admin_user authorization dependency and admin
 WHAT IS TESTED
 -------------
 1. get_admin_user allows access for real Supabase JWT shape: top-level role="authenticated", app_metadata={"role": "admin"}.
-2. get_admin_user allows access for user_metadata={"role": "admin"}.
+2. get_admin_user rejects user_metadata={"role": "admin"} with 403 (Phase 7B F-02 fix).
 3. get_admin_user rejects non-admin users with top-level role="authenticated" and app_metadata={} with 403.
 4. get_admin_user rejects users with missing app_metadata key gracefully (no KeyError/AttributeError) with 403.
 5. Admin endpoints (GET /api/admin/users, GET /api/library/admin/pending) return authorized response for admins and 403 for non-admins.
@@ -14,7 +14,7 @@ WHAT IS TESTED
 
 import asyncio
 import pytest
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -38,16 +38,19 @@ class TestGetAdminUserDependency:
         assert result == user
         assert result["id"] == "admin-uuid-1234"
 
-    def test_admin_user_with_user_metadata(self):
+    def test_admin_user_with_user_metadata_rejected(self):
+        # Phase 7B F-02: user_metadata is user-editable; role in user_metadata MUST NOT grant admin access
         user = {
-            "id": "admin-uuid-5678",
-            "email": "admin2@vyomquant.io",
+            "id": "attacker-uuid-5678",
+            "email": "attacker@vyomquant.io",
             "role": "authenticated",
             "app_metadata": {},
             "user_metadata": {"role": "admin"}
         }
-        result = asyncio.run(get_admin_user(user))
-        assert result == user
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(get_admin_user(user))
+        assert exc_info.value.status_code == 403
+        assert "Admin role required" in exc_info.value.detail
 
     def test_non_admin_user_rejected(self):
         user = {
@@ -116,7 +119,6 @@ class TestAdminEndpointsIntegration:
             app.dependency_overrides.clear()
 
     def test_library_admin_pending_endpoint(self):
-        from unittest.mock import patch
         admin_user = {
             "id": "admin-uuid-100",
             "email": "admin@vyomquant.io",

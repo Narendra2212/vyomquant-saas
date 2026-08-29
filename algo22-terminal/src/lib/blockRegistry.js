@@ -1,645 +1,124 @@
 /**
- * Block Registry - Central block definitions for Strategy Builder
- * 
- * PHASE B: Dynamic block loading system
- * Builder must NEVER hardcode blocks - all blocks loaded from registry
+ * blockRegistry.js — palette *presentation* only (closes SB-03 and SB-04).
+ *
+ * What this file used to be
+ * -------------------------
+ * A hand-maintained catalogue of 33 block definitions: names, descriptions, ports,
+ * parameter lists with defaults and ranges, and per-block validators. That catalogue was a
+ * second source of truth competing with the engine, and it drifted, exactly as a duplicated
+ * fact always does:
+ *
+ * * SB-03 — `BlockCategories.FEATURE_ENGINEERING` was declared and rendered as a palette
+ *   section, but not one block was ever authored into it. The section was permanently empty
+ *   while `feature_engineering.py` computed dozens of features.
+ * * SB-04 — the catalogue offered seven indicators and six models. `wma`, `hma`, `catboost`
+ *   and `autoencoder` are implemented in the engine and were unselectable in the UI.
+ *
+ * What this file is now
+ * ---------------------
+ * Presentation, and nothing a strategy's meaning can depend on:
+ *
+ * * `StreamTypes` — the port-type vocabulary, *generated* from `PORT_TYPES` in
+ *   `canonicalGraph.js`, which is the frontend's single mirror of the backend `PortType`
+ *   enum (`backend_app/backend/strategy_dag/schema.py`). Generated rather than retyped: a
+ *   second hand-written list here would be the same drift defect in miniature. The live
+ *   vocabulary served with the registry is available from
+ *   `registryClient.getPortTypes()`, and the backend remains authoritative over both.
+ * * `BlockCategories` — the seven canonical category ids, generated from
+ *   `BLOCK_CATEGORIES` in `canonicalGraph.js`. These are the ids the registry serves in
+ *   `categories[].id`, so a presentation lookup keyed on them cannot miss a served
+ *   category. Note this replaced a legacy eight-key lowercase vocabulary
+ *   (`indicators`, `ml`, `dl`, …) whose shape is what made the SB-04 category mapping
+ *   possible in the first place.
+ * * A category → icon/colour map, plus the two lookups the canvas and palette call.
+ *
+ * Where blocks come from now
+ * --------------------------
+ * `registryClient.js`, from `GET /api/strategy-operations/registry/blocks`. This module
+ * exports **zero block definitions** and must never gain one again: a local block list is
+ * the drift mechanism behind SB-03 and SB-04, and a local list used as a *fallback* when
+ * the registry is unreachable is that same defect wearing a helpful face. The palette fails
+ * closed instead (Requirement 4.12).
+ *
+ * Transitional shims: gone
+ * ------------------------
+ * `BlockRegistry`, `getBlockByType`, `getBlocksByCategory` and `getAllBlocks` existed as
+ * empty, fail-closed stubs only so `StrategyBuilder.jsx` kept building while its palette was
+ * still reading them. Task 3.6 re-pointed that palette at `registryClient.js` and deleted the
+ * stubs with their last call sites, so there is no longer a name in this module that a caller
+ * could mistake for a block catalogue. `LEGACY_CATEGORY_ALIASES` went with them: the only
+ * response that spoke the lowercase `indicators` / `ml` / `dl` vocabulary was the deprecated
+ * `GET /api/strategies/blocks`, and nothing calls it any more.
  */
 
-import { Radio, Activity, Brain, GitBranch, Check, AlertTriangle, Database, Cpu, TrendingUp, Zap, Target, Settings } from 'lucide-react';
+import { Activity, Brain, Check, Cpu, Database, GitBranch, Settings } from 'lucide-react';
 import { C } from '../components/ui-legacy/primitives';
+import { BLOCK_CATEGORIES, PORT_TYPES } from './canonicalGraph';
 
-// Stream types for strongly typed connections
-export const StreamTypes = {
-  MARKET_DATA: 'market_data',
-  OHLCV: 'ohlcv',
-  INDICATOR: 'indicator',
-  FEATURE: 'feature',
-  PREDICTION: 'prediction',
-  BOOLEAN: 'boolean',
-  NUMBER: 'number',
-  SIGNAL: 'signal',
-  TRADING_INTENT: 'trading_intent'
+/** Identity map over a frozen list of ids: `{ SIGNAL: 'SIGNAL', … }`. */
+const identityMap = (ids) =>
+  Object.freeze(
+    ids.reduce((map, id) => {
+      map[id] = id;
+      return map;
+    }, {}),
+  );
+
+/**
+ * The port-type vocabulary, generated from the frontend's mirror of the backend `PortType`
+ * enum. Keys and values are identical, so `StreamTypes.SIGNAL === 'SIGNAL'` is the same
+ * string the registry, the validator and the compiler all speak.
+ */
+export const StreamTypes = identityMap(PORT_TYPES);
+
+/** The seven canonical category ids, as served in `categories[].id`. */
+export const BlockCategories = identityMap(BLOCK_CATEGORIES);
+
+/**
+ * Category → icon and colour. Presentation only: no ports, no parameters, no defaults,
+ * nothing that could change what a strategy does.
+ */
+export const CATEGORY_PRESENTATION = Object.freeze({
+  DATA: Object.freeze({ icon: Database, color: C.t2 }),
+  INDICATOR: Object.freeze({ icon: Activity, color: C.accent }),
+  MATH: Object.freeze({ icon: GitBranch, color: C.gold }),
+  LOGIC: Object.freeze({ icon: Settings, color: C.gold }),
+  FEATURE_ENGINEERING: Object.freeze({ icon: Cpu, color: C.cyan }),
+  ML_DL: Object.freeze({ icon: Brain, color: C.purple }),
+  ACTION: Object.freeze({ icon: Check, color: C.green }),
+});
+
+/** Neutral presentation for an id this map does not know. Never a thrown error: an unknown
+ * category is a display question, and refusing to draw an icon would hide a block that the
+ * backend says exists. */
+const FALLBACK_PRESENTATION = Object.freeze({ icon: Activity, color: C.t2 });
+
+/**
+ * Canonical category id for `category`, or null when it names no known category.
+ *
+ * Only the seven ids the registry serves in `categories[].id` resolve. The legacy lowercase
+ * spellings (`indicators`, `ml`, `dl`, …) deliberately do not: that eight-key vocabulary is what
+ * made the SB-04 category mapping possible, and nothing in the frontend speaks it now.
+ */
+export const normalizeCategoryId = (category) => {
+  if (typeof category !== 'string' || category.trim() === '') return null;
+  const upper = category.trim().toUpperCase();
+  return Object.prototype.hasOwnProperty.call(CATEGORY_PRESENTATION, upper) ? upper : null;
 };
 
-// Block categories
-export const BlockCategories = {
-  DATA: 'data',
-  INDICATORS: 'indicators',
-  FEATURE_ENGINEERING: 'feature_engineering',
-  MATH: 'math',
-  LOGIC: 'logic',
-  ML: 'ml',
-  DL: 'dl',
-  ACTION: 'action'
+/** `{ icon, color }` for a served category id. */
+export const getCategoryPresentation = (category) => {
+  const id = normalizeCategoryId(category);
+  return id === null ? FALLBACK_PRESENTATION : CATEGORY_PRESENTATION[id];
 };
 
-// Block registry
-export const BlockRegistry = {
-  // ══════════════════════════════════════════════════════════════════════════
-  // DATA BLOCKS
-  // ══════════════════════════════════════════════════════════════════════════
-  'ccxt_asset_feed': {
-    category: BlockCategories.DATA,
-    name: 'CCXT Asset Feed',
-    description: 'Fetch historical OHLCV data from exchange',
-    icon: Database,
-    color: C.t2,
-    inputs: [],
-    outputs: [StreamTypes.OHLCV],
-    parameters: [
-      { key: 'symbol', label: 'Symbol', type: 'select', options: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT'], default: 'BTC/USDT' },
-      { key: 'timeframe', label: 'Timeframe', type: 'select', options: ['1m', '5m', '15m', '1h', '4h', '1d'], default: '15m' },
-      { key: 'start_date', label: 'Start Date', type: 'date', default: null },
-      { key: 'end_date', label: 'End Date', type: 'date', default: null }
-    ],
-    backendType: 'source',
-    validation: (params) => {
-      if (!params.symbol) return { valid: false, error: 'Symbol is required' };
-      if (!params.timeframe) return { valid: false, error: 'Timeframe is required' };
-      return { valid: true };
-    }
-  },
-  
-  'orderbook_imbalance': {
-    category: BlockCategories.DATA,
-    name: 'Orderbook Imbalance',
-    description: 'Calculate orderbook flow imbalance',
-    icon: Activity,
-    color: C.purple,
-    inputs: [StreamTypes.MARKET_DATA],
-    outputs: [StreamTypes.NUMBER],
-    parameters: [
-      { key: 'depth', label: 'Depth Levels', type: 'number', default: 10, min: 1, max: 50 }
-    ],
-    backendType: 'orderbook',
-    validation: (params) => {
-      if (params.depth < 1 || params.depth > 50) return { valid: false, error: 'Depth must be between 1 and 50' };
-      return { valid: true };
-    }
-  },
-  
-  'live_ticker': {
-    category: BlockCategories.DATA,
-    name: 'Live Ticker',
-    description: 'Real-time price ticker stream',
-    icon: Zap,
-    color: C.accent,
-    inputs: [],
-    outputs: [StreamTypes.MARKET_DATA],
-    parameters: [
-      { key: 'symbol', label: 'Symbol', type: 'select', options: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'], default: 'BTC/USDT' },
-      { key: 'mode', label: 'Mode', type: 'select', options: ['live', 'backtest'], default: 'backtest' }
-    ],
-    backendType: 'liveticker',
-    validation: (params) => {
-      if (!params.symbol) return { valid: false, error: 'Symbol is required' };
-      return { valid: true };
-    }
-  },
+/** The lucide icon component for a category. */
+export const getCategoryIcon = (category) => getCategoryPresentation(category).icon;
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // INDICATOR BLOCKS
-  // ══════════════════════════════════════════════════════════════════════════
-  'sma': {
-    category: BlockCategories.INDICATORS,
-    name: 'SMA',
-    description: 'Simple Moving Average',
-    icon: TrendingUp,
-    color: C.accent,
-    inputs: [StreamTypes.OHLCV],
-    outputs: [StreamTypes.INDICATOR],
-    parameters: [
-      { key: 'window', label: 'Period', type: 'number', default: 20, min: 1, max: 500 }
-    ],
-    backendType: 'indicator',
-    validation: (params) => {
-      if (params.window < 1 || params.window > 500) return { valid: false, error: 'Period must be between 1 and 500' };
-      return { valid: true };
-    }
-  },
-  
-  'ema': {
-    category: BlockCategories.INDICATORS,
-    name: 'EMA',
-    description: 'Exponential Moving Average',
-    icon: TrendingUp,
-    color: C.accent,
-    inputs: [StreamTypes.OHLCV],
-    outputs: [StreamTypes.INDICATOR],
-    parameters: [
-      { key: 'window', label: 'Period', type: 'number', default: 20, min: 1, max: 500 }
-    ],
-    backendType: 'indicator',
-    validation: (params) => {
-      if (params.window < 1 || params.window > 500) return { valid: false, error: 'Period must be between 1 and 500' };
-      return { valid: true };
-    }
-  },
-  
-  'rsi': {
-    category: BlockCategories.INDICATORS,
-    name: 'RSI',
-    description: 'Relative Strength Index',
-    icon: Activity,
-    color: C.accent,
-    inputs: [StreamTypes.OHLCV],
-    outputs: [StreamTypes.INDICATOR],
-    parameters: [
-      { key: 'window', label: 'Period', type: 'number', default: 14, min: 2, max: 100 }
-    ],
-    backendType: 'indicator',
-    validation: (params) => {
-      if (params.window < 2 || params.window > 100) return { valid: false, error: 'Period must be between 2 and 100' };
-      return { valid: true };
-    }
-  },
-  
-  'macd': {
-    category: BlockCategories.INDICATORS,
-    name: 'MACD',
-    description: 'Moving Average Convergence Divergence',
-    icon: Activity,
-    color: C.accent,
-    inputs: [StreamTypes.OHLCV],
-    outputs: [StreamTypes.INDICATOR],
-    parameters: [
-      { key: 'fast_period', label: 'Fast Period', type: 'number', default: 12, min: 1, max: 200 },
-      { key: 'slow_period', label: 'Slow Period', type: 'number', default: 26, min: 1, max: 200 },
-      { key: 'signal_period', label: 'Signal Period', type: 'number', default: 9, min: 1, max: 50 },
-      { key: 'output', label: 'Output', type: 'select', options: ['macd', 'signal', 'histogram'], default: 'macd' }
-    ],
-    backendType: 'indicator',
-    validation: (params) => {
-      if (params.fast_period >= params.slow_period) return { valid: false, error: 'Fast period must be less than slow period' };
-      return { valid: true };
-    }
-  },
-  
-  'bollinger_bands': {
-    category: BlockCategories.INDICATORS,
-    name: 'Bollinger Bands',
-    description: 'Bollinger Bands volatility indicator',
-    icon: Activity,
-    color: C.accent,
-    inputs: [StreamTypes.OHLCV],
-    outputs: [StreamTypes.INDICATOR],
-    parameters: [
-      { key: 'window', label: 'Period', type: 'number', default: 20, min: 1, max: 200 },
-      { key: 'std_dev', label: 'Std Dev Multiplier', type: 'number', default: 2, min: 0.5, max: 4 },
-      { key: 'output', label: 'Output', type: 'select', options: ['upper', 'middle', 'lower'], default: 'middle' }
-    ],
-    backendType: 'indicator',
-    validation: (params) => {
-      if (params.std_dev < 0.5 || params.std_dev > 4) return { valid: false, error: 'Std dev must be between 0.5 and 4' };
-      return { valid: true };
-    }
-  },
-  
-  'atr': {
-    category: BlockCategories.INDICATORS,
-    name: 'ATR',
-    description: 'Average True Range',
-    icon: Activity,
-    color: C.accent,
-    inputs: [StreamTypes.OHLCV],
-    outputs: [StreamTypes.INDICATOR],
-    parameters: [
-      { key: 'window', label: 'Period', type: 'number', default: 14, min: 1, max: 100 }
-    ],
-    backendType: 'indicator',
-    validation: (params) => {
-      if (params.window < 1 || params.window > 100) return { valid: false, error: 'Period must be between 1 and 100' };
-      return { valid: true };
-    }
-  },
+/** The accent colour for a category. */
+export const getCategoryColor = (category) => getCategoryPresentation(category).color;
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // MATH BLOCKS
-  // ══════════════════════════════════════════════════════════════════════════
-  'constant': {
-    category: BlockCategories.MATH,
-    name: 'Constant',
-    description: 'Constant value',
-    icon: Target,
-    color: C.gold,
-    inputs: [],
-    outputs: [StreamTypes.NUMBER],
-    parameters: [
-      { key: 'value', label: 'Value', type: 'number', default: 0 }
-    ],
-    backendType: 'operator',
-    validation: (params) => {
-      if (params.value === null || params.value === undefined) return { valid: false, error: 'Value is required' };
-      return { valid: true };
-    }
-  },
-  
-  'compare': {
-    category: BlockCategories.MATH,
-    name: 'Compare',
-    description: 'Compare two values',
-    icon: GitBranch,
-    color: C.gold,
-    inputs: [StreamTypes.NUMBER, StreamTypes.NUMBER],
-    outputs: [StreamTypes.BOOLEAN],
-    parameters: [
-      { key: 'operator', label: 'Operator', type: 'select', options: ['>', '<', '>=', '<=', '==', '!='], default: '>' }
-    ],
-    backendType: 'operator',
-    validation: (params) => {
-      if (!params.operator) return { valid: false, error: 'Operator is required' };
-      return { valid: true };
-    }
-  },
-  
-  'math': {
-    category: BlockCategories.MATH,
-    name: 'Math Operation',
-    description: 'Mathematical operation',
-    icon: Cpu,
-    color: C.gold,
-    inputs: [StreamTypes.NUMBER, StreamTypes.NUMBER],
-    outputs: [StreamTypes.NUMBER],
-    parameters: [
-      { key: 'operation', label: 'Operation', type: 'select', options: ['add', 'subtract', 'multiply', 'divide', 'mod'], default: 'add' }
-    ],
-    backendType: 'operator',
-    validation: (params) => {
-      if (!params.operation) return { valid: false, error: 'Operation is required' };
-      return { valid: true };
-    }
-  },
-  
-  'crosses': {
-    category: BlockCategories.MATH,
-    name: 'Crosses',
-    description: 'Detect value crossing',
-    icon: Activity,
-    color: C.gold,
-    inputs: [StreamTypes.INDICATOR, StreamTypes.NUMBER],
-    outputs: [StreamTypes.BOOLEAN],
-    parameters: [
-      { key: 'direction', label: 'Direction', type: 'select', options: ['above', 'below', 'either'], default: 'above' }
-    ],
-    backendType: 'operator',
-    validation: (params) => {
-      if (!params.direction) return { valid: false, error: 'Direction is required' };
-      return { valid: true };
-    }
-  },
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // LOGIC BLOCKS
-  // ══════════════════════════════════════════════════════════════════════════
-  'signal_logic': {
-    category: BlockCategories.LOGIC,
-    name: 'Signal Logic',
-    description: 'Generate trading signal from conditions',
-    icon: GitBranch,
-    color: C.gold,
-    inputs: [StreamTypes.BOOLEAN],
-    outputs: [StreamTypes.SIGNAL],
-    parameters: [
-      { key: 'signal_on_true', label: 'Signal if True', type: 'select', options: ['BUY', 'SELL', 'HOLD'], default: 'BUY' },
-      { key: 'signal_on_false', label: 'Signal if False', type: 'select', options: ['BUY', 'SELL', 'HOLD'], default: 'HOLD' },
-      { key: 'min_confidence', label: 'Min Confidence', type: 'number', default: 0.5, min: 0, max: 1 }
-    ],
-    backendType: 'logic',
-    validation: (params) => {
-      if (params.min_confidence < 0 || params.min_confidence > 1) return { valid: false, error: 'Confidence must be between 0 and 1' };
-      return { valid: true };
-    }
-  },
-  
-  'and_gate': {
-    category: BlockCategories.LOGIC,
-    name: 'AND Gate',
-    description: 'Logical AND operation',
-    icon: GitBranch,
-    color: C.gold,
-    inputs: [StreamTypes.BOOLEAN, StreamTypes.BOOLEAN],
-    outputs: [StreamTypes.BOOLEAN],
-    parameters: [],
-    backendType: 'logic',
-    validation: () => ({ valid: true })
-  },
-  
-  'or_gate': {
-    category: BlockCategories.LOGIC,
-    name: 'OR Gate',
-    description: 'Logical OR operation',
-    icon: GitBranch,
-    color: C.gold,
-    inputs: [StreamTypes.BOOLEAN, StreamTypes.BOOLEAN],
-    outputs: [StreamTypes.BOOLEAN],
-    parameters: [],
-    backendType: 'logic',
-    validation: () => ({ valid: true })
-  },
-  
-  'condition_builder': {
-    category: BlockCategories.LOGIC,
-    name: 'Condition Builder',
-    description: 'Build complex conditions',
-    icon: Settings,
-    color: C.gold,
-    inputs: [StreamTypes.INDICATOR, StreamTypes.NUMBER],
-    outputs: [StreamTypes.BOOLEAN],
-    parameters: [
-      { key: 'left_indicator', label: 'Left Indicator', type: 'select', options: ['RSI', 'SMA', 'EMA', 'MACD', 'Close'], default: 'RSI' },
-      { key: 'operator', label: 'Operator', type: 'select', options: ['>', '<', '>=', '<=', '==', 'crosses_above', 'crosses_below'], default: '>' },
-      { key: 'right_type', label: 'Right Type', type: 'select', options: ['indicator', 'constant'], default: 'constant' },
-      { key: 'right_indicator', label: 'Right Indicator', type: 'select', options: ['RSI', 'SMA', 'EMA', 'MACD', 'Close'], default: 'SMA' },
-      { key: 'right_value', label: 'Right Value', type: 'number', default: 70 }
-    ],
-    backendType: 'logic',
-    validation: (params) => {
-      if (params.right_type === 'indicator' && !params.right_indicator) return { valid: false, error: 'Right indicator required when type is indicator' };
-      if (params.right_type === 'constant' && params.right_value === null) return { valid: false, error: 'Right value required when type is constant' };
-      return { valid: true };
-    }
-  },
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // ML BLOCKS
-  // ══════════════════════════════════════════════════════════════════════════
-  'xgboost': {
-    category: BlockCategories.ML,
-    name: 'XGBoost',
-    description: 'XGBoost gradient boosting model',
-    icon: Brain,
-    color: C.purple,
-    inputs: [StreamTypes.FEATURE],
-    outputs: [StreamTypes.PREDICTION],
-    parameters: [
-      { key: 'model_id', label: 'Model ID', type: 'text', default: '' },
-      { key: 'confidence_threshold', label: 'Confidence Threshold', type: 'number', default: 0.7, min: 0, max: 1 },
-      { key: 'lookback', label: 'Lookback Windows', type: 'number', default: 50, min: 10, max: 500 }
-    ],
-    backendType: 'mlmodel',
-    validation: (params) => {
-      if (!params.model_id) return { valid: false, error: 'Model ID is required' };
-      if (params.confidence_threshold < 0 || params.confidence_threshold > 1) return { valid: false, error: 'Confidence must be between 0 and 1' };
-      return { valid: true };
-    }
-  },
-  
-  'lightgbm': {
-    category: BlockCategories.ML,
-    name: 'LightGBM',
-    description: 'LightGBM gradient boosting model',
-    icon: Brain,
-    color: C.purple,
-    inputs: [StreamTypes.FEATURE],
-    outputs: [StreamTypes.PREDICTION],
-    parameters: [
-      { key: 'model_id', label: 'Model ID', type: 'text', default: '' },
-      { key: 'confidence_threshold', label: 'Confidence Threshold', type: 'number', default: 0.7, min: 0, max: 1 }
-    ],
-    backendType: 'mlmodel',
-    validation: (params) => {
-      if (!params.model_id) return { valid: false, error: 'Model ID is required' };
-      return { valid: true };
-    }
-  },
-  
-  'random_forest': {
-    category: BlockCategories.ML,
-    name: 'Random Forest',
-    description: 'Random Forest ensemble model',
-    icon: Brain,
-    color: C.purple,
-    inputs: [StreamTypes.FEATURE],
-    outputs: [StreamTypes.PREDICTION],
-    parameters: [
-      { key: 'model_id', label: 'Model ID', type: 'text', default: '' },
-      { key: 'confidence_threshold', label: 'Confidence Threshold', type: 'number', default: 0.7, min: 0, max: 1 }
-    ],
-    backendType: 'mlmodel',
-    validation: (params) => {
-      if (!params.model_id) return { valid: false, error: 'Model ID is required' };
-      return { valid: true };
-    }
-  },
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // DL BLOCKS
-  // ══════════════════════════════════════════════════════════════════════════
-  'lstm': {
-    category: BlockCategories.DL,
-    name: 'LSTM',
-    description: 'Long Short-Term Memory network',
-    icon: Brain,
-    color: C.purple,
-    inputs: [StreamTypes.FEATURE],
-    outputs: [StreamTypes.PREDICTION],
-    parameters: [
-      { key: 'model_id', label: 'Model ID', type: 'text', default: '' },
-      { key: 'confidence_threshold', label: 'Confidence Threshold', type: 'number', default: 0.7, min: 0, max: 1 },
-      { key: 'sequence_length', label: 'Sequence Length', type: 'number', default: 60, min: 10, max: 500 }
-    ],
-    backendType: 'mlmodel',
-    validation: (params) => {
-      if (!params.model_id) return { valid: false, error: 'Model ID is required' };
-      return { valid: true };
-    }
-  },
-  
-  'gru': {
-    category: BlockCategories.DL,
-    name: 'GRU',
-    description: 'Gated Recurrent Unit network',
-    icon: Brain,
-    color: C.purple,
-    inputs: [StreamTypes.FEATURE],
-    outputs: [StreamTypes.PREDICTION],
-    parameters: [
-      { key: 'model_id', label: 'Model ID', type: 'text', default: '' },
-      { key: 'confidence_threshold', label: 'Confidence Threshold', type: 'number', default: 0.7, min: 0, max: 1 }
-    ],
-    backendType: 'mlmodel',
-    validation: (params) => {
-      if (!params.model_id) return { valid: false, error: 'Model ID is required' };
-      return { valid: true };
-    }
-  },
-  
-  'transformer': {
-    category: BlockCategories.DL,
-    name: 'Transformer',
-    description: 'Transformer attention model',
-    icon: Brain,
-    color: C.purple,
-    inputs: [StreamTypes.FEATURE],
-    outputs: [StreamTypes.PREDICTION],
-    parameters: [
-      { key: 'model_id', label: 'Model ID', type: 'text', default: '' },
-      { key: 'confidence_threshold', label: 'Confidence Threshold', type: 'number', default: 0.7, min: 0, max: 1 }
-    ],
-    backendType: 'mlmodel',
-    validation: (params) => {
-      if (!params.model_id) return { valid: false, error: 'Model ID is required' };
-      return { valid: true };
-    }
-  },
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // ACTION BLOCKS
-  // ══════════════════════════════════════════════════════════════════════════
-  'buy_market': {
-    category: BlockCategories.ACTION,
-    name: 'Buy Market',
-    description: 'Execute market buy order',
-    icon: Check,
-    color: C.green,
-    inputs: [StreamTypes.SIGNAL],
-    outputs: [StreamTypes.TRADING_INTENT],
-    parameters: [
-      { key: 'size_pct', label: 'Size %', type: 'number', default: 10, min: 0.1, max: 100 },
-      { key: 'order_type', label: 'Order Type', type: 'select', options: ['MARKET', 'LIMIT'], default: 'MARKET' }
-    ],
-    backendType: 'action',
-    validation: (params) => {
-      if (params.size_pct < 0.1 || params.size_pct > 100) return { valid: false, error: 'Size must be between 0.1 and 100' };
-      return { valid: true };
-    }
-  },
-  
-  'sell_market': {
-    category: BlockCategories.ACTION,
-    name: 'Sell Market',
-    description: 'Execute market sell order',
-    icon: Check,
-    color: C.red,
-    inputs: [StreamTypes.SIGNAL],
-    outputs: [StreamTypes.TRADING_INTENT],
-    parameters: [
-      { key: 'size_pct', label: 'Size %', type: 'number', default: 10, min: 0.1, max: 100 },
-      { key: 'order_type', label: 'Order Type', type: 'select', options: ['MARKET', 'LIMIT'], default: 'MARKET' }
-    ],
-    backendType: 'action',
-    validation: (params) => {
-      if (params.size_pct < 0.1 || params.size_pct > 100) return { valid: false, error: 'Size must be between 0.1 and 100' };
-      return { valid: true };
-    }
-  },
-  
-  'close_position': {
-    category: BlockCategories.ACTION,
-    name: 'Close Position',
-    description: 'Close current position',
-    icon: Target,
-    color: C.warning,
-    inputs: [StreamTypes.SIGNAL],
-    outputs: [StreamTypes.TRADING_INTENT],
-    parameters: [
-      { key: 'side', label: 'Side', type: 'select', options: ['LONG', 'SHORT', 'BOTH'], default: 'BOTH' }
-    ],
-    backendType: 'action',
-    validation: () => ({ valid: true })
-  },
-  
-  'trailing_stop': {
-    category: BlockCategories.ACTION,
-    name: 'Trailing Stop',
-    description: 'Set trailing stop loss',
-    icon: AlertTriangle,
-    color: C.warning,
-    inputs: [StreamTypes.TRADING_INTENT],
-    outputs: [StreamTypes.TRADING_INTENT],
-    parameters: [
-      { key: 'trail_pct', label: 'Trail %', type: 'number', default: 2, min: 0.1, max: 20 }
-    ],
-    backendType: 'action',
-    validation: (params) => {
-      if (params.trail_pct < 0.1 || params.trail_pct > 20) return { valid: false, error: 'Trail must be between 0.1 and 20' };
-      return { valid: true };
-    }
-  }
-};
-
-// Helper functions
-export const getBlockByType = (type) => BlockRegistry[type];
-
-export const getBlocksByCategory = (category) => {
-  return Object.entries(BlockRegistry)
-    .filter(([_, block]) => block.category === category)
-    .map(([type, block]) => ({ type, ...block }));
-};
-
-export const getAllBlocks = () => {
-  return Object.entries(BlockRegistry).map(([type, block]) => ({ type, ...block }));
-};
-
-export const validateConnection = (sourceType, targetType, sourceOutput, targetInput) => {
-  // PHASE C: Strongly typed connections
-  // Validate that source output stream type matches target input stream type
-  const sourceBlock = getBlockByType(sourceType);
-  const targetBlock = getBlockByType(targetType);
-  
-  if (!sourceBlock || !targetBlock) {
-    return { valid: false, error: 'Invalid block type' };
-  }
-  
-  const sourceOutputs = sourceBlock.outputs;
-  const targetInputs = targetBlock.inputs;
-  
-  // If target has no inputs, reject
-  if (targetInputs.length === 0) {
-    return { valid: false, error: 'Target block has no inputs' };
-  }
-  
-  // If source has no outputs, reject
-  if (sourceOutputs.length === 0) {
-    return { valid: false, error: 'Source block has no outputs' };
-  }
-  
-  // Check if source output type is compatible with target input type
-  const outputType = sourceOutputs[0];
-  const inputType = targetInputs[0];
-  
-  // Allow NUMBER input to accept INDICATOR output
-  if (inputType === StreamTypes.NUMBER && outputType === StreamTypes.INDICATOR) {
-    return { valid: true };
-  }
-  
-  // Allow FEATURE input to accept INDICATOR output
-  if (inputType === StreamTypes.FEATURE && outputType === StreamTypes.INDICATOR) {
-    return { valid: true };
-  }
-  
-  // Otherwise, types must match
-  if (outputType !== inputType) {
-    return { valid: false, error: `Type mismatch: ${outputType} cannot connect to ${inputType}` };
-  }
-  
-  return { valid: true };
-};
-
-export const getCategoryIcon = (category) => {
-  const icons = {
-    [BlockCategories.DATA]: Database,
-    [BlockCategories.INDICATORS]: Activity,
-    [BlockCategories.FEATURE_ENGINEERING]: Cpu,
-    [BlockCategories.MATH]: GitBranch,
-    [BlockCategories.LOGIC]: Settings,
-    [BlockCategories.ML]: Brain,
-    [BlockCategories.DL]: Brain,
-    [BlockCategories.ACTION]: Check
-  };
-  return icons[category] || Activity;
-};
-
-export const getCategoryColor = (category) => {
-  const colors = {
-    [BlockCategories.DATA]: C.t2,
-    [BlockCategories.INDICATORS]: C.accent,
-    [BlockCategories.FEATURE_ENGINEERING]: C.cyan,
-    [BlockCategories.MATH]: C.gold,
-    [BlockCategories.LOGIC]: C.gold,
-    [BlockCategories.ML]: C.purple,
-    [BlockCategories.DL]: C.purple,
-    [BlockCategories.ACTION]: C.green
-  };
-  return colors[category] || C.t2;
-};
+// No block lookup lives here. `registryClient.getDescriptor(blockId)`,
+// `registryClient.getBlocksByCategory(categoryId)` and `registryClient.getPaletteSections()` are
+// the only ways to reach a block descriptor, and they answer from the served registry or not at
+// all (Requirement 4.12).

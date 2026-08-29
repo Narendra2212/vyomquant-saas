@@ -44,6 +44,8 @@ class ExchangeKeysRequest(BaseModel):
     api_key: str
     secret_key: str
     password: Optional[str] = None
+    uid: Optional[str] = None
+    label: Optional[str] = None
 
 
 class TestConnectionRequest(BaseModel):
@@ -169,11 +171,95 @@ class StrategyBlueprint(BaseModel):
 
 
 class NodeType(str, Enum):
+    """
+    Node category vocabulary for the strategy DAG.
+
+    The seven canonical categories (DATA, INDICATOR, MATH, LOGIC,
+    FEATURE_ENGINEERING, ML_DL, ACTION) are the target model. The legacy
+    members below are the values persisted by schema version 1 rows; they are
+    retained for one release so those rows keep deserializing, and they keep
+    their original wire values so existing string comparisons against them
+    continue to behave identically.
+
+    Legacy members are deprecated. New code writes canonical members and uses
+    ``canonical`` / ``LEGACY_NODE_TYPE_MAP`` to normalize legacy input.
+    """
+
+    # ── Canonical categories (schema version 2) ───────────────────────────
+    DATA = "data"
     INDICATOR = "indicator"
-    ML = "ml"
+    MATH = "math"
     LOGIC = "logic"
+    FEATURE_ENGINEERING = "feature_engineering"
+    ML_DL = "ml_dl"
     ACTION = "action"
+
+    # ── Legacy aliases (schema version 1, deprecated) ─────────────────────
+    # INDICATOR / LOGIC / ACTION are shared with the canonical set above and
+    # keep their original values, so only these two need separate members.
     INPUT = "input"
+    ML = "ml"
+
+    @classmethod
+    def _missing_(cls, value: Any) -> Optional["NodeType"]:
+        """Resolve legacy and differently-cased wire values."""
+        if isinstance(value, str):
+            key = value.strip().lower()
+            for member in cls:
+                if member.value == key:
+                    return member
+            return LEGACY_NODE_TYPE_MAP.get(key)
+        return None
+
+    @property
+    def is_legacy(self) -> bool:
+        """True for schema version 1 members that are not canonical categories."""
+        return self in _LEGACY_NODE_TYPES
+
+    @property
+    def canonical(self) -> "NodeType":
+        """The canonical category this member maps to (identity if already canonical)."""
+        return _LEGACY_TO_CANONICAL.get(self, self)
+
+
+#: The seven canonical categories, in declaration order.
+CANONICAL_NODE_TYPES: tuple = (
+    NodeType.DATA,
+    NodeType.INDICATOR,
+    NodeType.MATH,
+    NodeType.LOGIC,
+    NodeType.FEATURE_ENGINEERING,
+    NodeType.ML_DL,
+    NodeType.ACTION,
+)
+
+_LEGACY_NODE_TYPES: frozenset = frozenset({NodeType.INPUT, NodeType.ML})
+
+#: Legacy member -> canonical category. Consumed by the read-time v1 -> v2
+#: migration; canonical members are absent because they map to themselves.
+_LEGACY_TO_CANONICAL: Dict[NodeType, NodeType] = {
+    NodeType.INPUT: NodeType.DATA,
+    NodeType.ML: NodeType.ML_DL,
+}
+
+#: Legacy wire value -> canonical category. Covers the schema version 1
+#: five-value vocabulary plus the spellings emitted by older clients, so the
+#: v1 -> v2 migration can map a stored ``node["type"]`` without guessing.
+LEGACY_NODE_TYPE_MAP: Dict[str, NodeType] = {
+    "input": NodeType.DATA,
+    "market_data": NodeType.DATA,
+    "data": NodeType.DATA,
+    "indicator": NodeType.INDICATOR,
+    "math": NodeType.MATH,
+    "logic": NodeType.LOGIC,
+    "feature": NodeType.FEATURE_ENGINEERING,
+    "feature_engineering": NodeType.FEATURE_ENGINEERING,
+    "ml": NodeType.ML_DL,
+    "dl": NodeType.ML_DL,
+    "ml_model": NodeType.ML_DL,
+    "ml_dl": NodeType.ML_DL,
+    "action": NodeType.ACTION,
+}
 
 
 class LogicOperator(str, Enum):

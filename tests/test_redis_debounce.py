@@ -5,12 +5,12 @@ Tests the debouncing added to RedisManager (backend_app/backend/redis_manager.py
 the authoritative reconnection point for the entire platform.
 """
 
-import asyncio
 import os
 import sys
 import time
 from unittest.mock import AsyncMock, patch
 
+import anyio
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -45,10 +45,20 @@ async def test_thundering_herd_one_attempt():
         mgr._last_failed_at = time.monotonic()
         return False  # simulate Redis down
 
-    with patch.object(mgr, "initialize", side_effect=failing_initialize):
-        tasks = [mgr.try_reconnect() for _ in range(50)]
-        results = await asyncio.gather(*tasks)
+    results: list = []
 
+    async def caller():
+        results.append(await mgr.try_reconnect())
+
+    # anyio.create_task_group() is the backend-agnostic way to run the 50 callers
+    # concurrently. asyncio.gather() would bind this test to the asyncio backend,
+    # but @pytest.mark.anyio parametrises over every installed backend.
+    with patch.object(mgr, "initialize", side_effect=failing_initialize):
+        async with anyio.create_task_group() as tg:
+            for _ in range(50):
+                tg.start_soon(caller)
+
+    assert len(results) == 50, f"Expected all 50 callers to complete, got {len(results)}"
     assert all(r is False for r in results)
     assert init_count <= 2, f"Expected at most 2 attempts (1 winner + 1 cooldown bypass), got {init_count}"
 
@@ -156,11 +166,21 @@ async def test_get_redis_manager_debounced():
         self._last_failed_at = time.monotonic()
         return False
 
-    try:
-        with patch.object(rm_module.RedisManager, "initialize", side_effect=failing_initialize, autospec=True):
-            tasks = [rm_module.get_redis_manager() for _ in range(30)]
-            await asyncio.gather(*tasks)
+    completed = 0
 
+    async def caller():
+        nonlocal completed
+        await rm_module.get_redis_manager()
+        completed += 1
+
+    try:
+        # Backend-agnostic concurrency: see note in test_thundering_herd_one_attempt.
+        with patch.object(rm_module.RedisManager, "initialize", side_effect=failing_initialize, autospec=True):
+            async with anyio.create_task_group() as tg:
+                for _ in range(30):
+                    tg.start_soon(caller)
+
+        assert completed == 30, f"Expected all 30 callers to complete, got {completed}"
         assert init_count <= 2, f"Expected at most 2 init attempts, got {init_count}"
     finally:
         rm_module._redis_manager = original_manager

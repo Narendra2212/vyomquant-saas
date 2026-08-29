@@ -1,15 +1,19 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Activity, Hexagon, Cpu, Layers, Link2,
   Shield, CreditCard, BookOpen, HelpCircle, Bell,
-  Zap, ExternalLink, LogOut
+  Zap, ExternalLink, LogOut, BarChart2
 } from "lucide-react";
 import { C } from "./ui-legacy/primitives";
+import { api } from "../api";
+import { supabase } from "../supabase";
+import wsClient from "../websocketClient";
 
 export const NAV = [
   { id: "dashboard",     lbl: "Dashboard",       Icon: LayoutDashboard, g: "core" },
   { id: "strategies",    lbl: "Strategies",       Icon: Layers,          g: "core" },
+  { id: "backtest",      lbl: "Backtester",       Icon: BarChart2,       g: "core" },
   { id: "signal-trace",  lbl: "Signal Trace",     Icon: Activity,        g: "core" },
   { id: "marketplace",   lbl: "Marketplace",      Icon: Hexagon,         g: "core" },
   { id: "builder",       lbl: "Strategy Builder", Icon: Cpu,             g: "core" },
@@ -27,6 +31,61 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
   const groups = ["core", "vault", "platform"];
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [userProfile, setUserProfile] = useState({ name: "Quant Trader", tier: "FREE TIER", initial: "Q" });
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchSessionAndUnread = async () => {
+      // 1. Fetch unread count
+      try {
+        const res = await api.notifications.getUnreadCount();
+        if (isMounted && res && typeof res.unread_count === "number") {
+          setUnreadCount(res.unread_count);
+        }
+      } catch {
+        // Fallback silently if offline
+      }
+
+      // 2. Fetch authenticated user profile & subscription tier
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        let planName = "FREE";
+        try {
+          const ent = await api.billing.getEntitlements();
+          if (ent?.plan?.name) {
+            planName = ent.plan.name.toUpperCase();
+          }
+        } catch {
+          // Default plan
+        }
+
+        if (isMounted && user) {
+          const rawName = user.user_metadata?.full_name || user.email?.split("@")[0] || "Quant Trader";
+          const initial = rawName.charAt(0).toUpperCase();
+          setUserProfile({
+            name: rawName,
+            tier: `${planName} TIER`,
+            initial,
+          });
+        }
+      } catch {
+        // Keep fallback
+      }
+    };
+
+    fetchSessionAndUnread();
+
+    const unsub = wsClient.subscribe("notification", () => {
+      setUnreadCount((c) => c + 1);
+    });
+
+    return () => {
+      isMounted = false;
+      if (unsub) unsub();
+    };
+  }, [location.pathname]);
 
   const handleNavClick = (n) => {
     if (n.id === "docs") {
@@ -36,9 +95,15 @@ export default function Sidebar() {
     }
   };
 
-  const handleLogout = () => {
-    sessionStorage.removeItem("token");
-    navigate("/");
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // Ignore
+    }
+    sessionStorage.clear();
+    localStorage.removeItem("sb-" + (import.meta.env.VITE_SUPABASE_URL || "") + "-auth-token");
+    navigate("/signin");
   };
 
   return (
@@ -59,6 +124,7 @@ export default function Sidebar() {
             <div style={{ color: C.t3 }} className="text-[8px] font-mono font-black tracking-widest uppercase px-2 mb-1">{G_LABELS[g]}</div>
             {NAV.filter(n => n.g === g).map(n => {
               const active = location.pathname === `/app/${n.id}`;
+              const isNotif = n.id === "notifications";
               return (
                 <button
                   key={n.id}
@@ -78,7 +144,20 @@ export default function Sidebar() {
                   className="hover:text-cyan-400 hover:bg-cyan-500/5 focus:outline-none focus:ring-1 focus:ring-cyan-400"
                 >
                   <n.Icon size={12} aria-hidden="true" />
-                  <span>{n.lbl}</span>
+                  <span style={{ flex: 1, textAlign: "left" }}>{n.lbl}</span>
+                  {isNotif && unreadCount > 0 && (
+                    <span style={{
+                      background: C.cyan,
+                      color: "#000",
+                      fontSize: 9,
+                      padding: "1px 5px",
+                      borderRadius: 8,
+                      fontWeight: 800,
+                      lineHeight: "1.2"
+                    }}>
+                      {unreadCount > 99 ? "99+" : unreadCount}
+                    </span>
+                  )}
                   {n.id === "docs" && <ExternalLink size={10} style={{ marginLeft: 4, color: C.t3 }} aria-hidden="true" />}
                 </button>
               );
@@ -87,12 +166,15 @@ export default function Sidebar() {
         ))}
       </nav>
 
+      {/* User Session Profile Card */}
       <div style={{ borderTop: `1px solid ${C.border}`, padding: 10 }}>
         <div style={{ background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 10 }} className="p-2 flex items-center gap-2">
-          <div style={{ background: C.bg4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900, color: C.accent, flexShrink: 0 }}>N</div>
+          <div style={{ background: C.bg4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900, color: C.accent, flexShrink: 0 }}>
+            {userProfile.initial}
+          </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ color: C.t1 }} className="text-xs font-bold truncate">Neo_Quant</div>
-            <div style={{ color: C.t3 }} className="text-[8px] font-mono">PRO TIER</div>
+            <div style={{ color: C.t1 }} className="text-xs font-bold truncate">{userProfile.name}</div>
+            <div style={{ color: C.t3 }} className="text-[8px] font-mono tracking-wider">{userProfile.tier}</div>
           </div>
           <button
             type="button"

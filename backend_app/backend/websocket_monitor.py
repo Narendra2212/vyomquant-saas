@@ -384,12 +384,28 @@ class WebSocketMonitor:
             }
     
     def get_all_status(self) -> Dict[str, Dict[str, Any]]:
-        """Get status of all connections."""
+        """Get status of all connections.
+
+        Two phases, deliberately: the connection ids are snapshotted under the lock, and
+        each status is then read OUTSIDE it. ``self._lock`` is a plain ``threading.Lock``
+        and ``get_connection_status`` takes it too, so building this dict while holding it
+        deadlocked the calling thread for good on the first registered connection - which
+        hung ``GET /health/websocket`` as well as any other reader. Found by
+        strategy-builder task 7.4, whose feed-state observation reads this projection.
+
+        A connection unregistered between the snapshot and its read is omitted rather than
+        reported as ``None``: a caller asking for the status of every connection should not
+        have to distinguish "not monitored any more" from "monitored, no status".
+        """
         with self._lock:
-            return {
-                conn_id: self.get_connection_status(conn_id)
-                for conn_id in self._connections.keys()
-            }
+            connection_ids = list(self._connections.keys())
+
+        statuses: Dict[str, Dict[str, Any]] = {}
+        for conn_id in connection_ids:
+            status = self.get_connection_status(conn_id)
+            if status is not None:
+                statuses[conn_id] = status
+        return statuses
     
     def get_summary(self) -> Dict[str, Any]:
         """Get summary of all connections."""

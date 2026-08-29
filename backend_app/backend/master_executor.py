@@ -393,8 +393,76 @@ class BotRunner:
                     )
                 )
 
+                # ── Signal Trace Audit Trail Logging (Non-blocking) ───────
+                decision = str(order_payload.get("side", "BUY")).upper()
+                async def record_audit_signal(v_verdict, v_reason, v_exec_id=None, v_status="pending", v_fill=0.0, v_result=None):
+                    try:
+                        from backend_app.backend.signal_service import get_signal_service
+                        sig_svc = await get_signal_service()
+                        sig = await sig_svc.create_signal(
+                            user={"id": self.user_id},
+                            strategy_id=str(self.blueprint.get("id") or self.blueprint.get("strategy_id", "default")),
+                            strategy_version=str(self.blueprint.get("current_version", "1.0")),
+                            deployment_id=str(self.blueprint.get("deployment_id", self.blueprint.get("id", "default"))),
+                            exchange_id=self.exchange_id,
+                            symbol=self.symbol,
+                            timeframe=str(self.blueprint.get("timeframe", "1m")),
+                            worker_id=f"worker_{self.user_id}_{self.symbol.replace('/', '_')}",
+                            decision=decision,
+                            indicators=live_state,
+                            market_info={"price": price, "volume": volume, "timestamp": timestamp_ms},
+                            ml_info={"confidence": live_state.get("ML_Prediction")} if "ML_Prediction" in live_state else None
+                        )
+                        sig_id = sig.get("id")
+                        if not sig_id:
+                            return
+
+                        # Risk evaluation audit
+                        await sig_svc.update_risk_decision(
+                            user={"id": self.user_id},
+                            signal_id=sig_id,
+                            risk_passed=(v_verdict == RiskVerdict.APPROVED),
+                            risk_reason=str(v_reason or "Risk Approved"),
+                            position_size=float(order_payload["qty"]),
+                            capital=bal_usdt,
+                            exposure=float(self.recovered_exposure_coins * Decimal(str(price))),
+                            drawdown_check=bool(current_drawdown_pct < 0.2)
+                        )
+
+                        if v_verdict != RiskVerdict.APPROVED or not v_exec_id:
+                            return
+
+                        # Order & Execution update
+                        order_st = "FILLED" if v_status in ["completed", "skipped_completed"] else "FAILED"
+                        await sig_svc.update_order(
+                            user={"id": self.user_id},
+                            signal_id=sig_id,
+                            order_id=v_exec_id,
+                            exchange_order_id=None,
+                            order_status=order_st,
+                            quantity=float(order_payload["qty"]),
+                            filled=float(v_fill),
+                            remaining=0.0 if order_st == "FILLED" else float(order_payload["qty"]),
+                            average_price=float(price),
+                            fees=float(Decimal(str(v_fill)) * Decimal(str(price)) * Decimal("0.001")),
+                            slippage=0.0005,
+                            latency_ms=10.0
+                        )
+
+                        if order_st == "FILLED":
+                            await sig_svc.update_execution(
+                                user={"id": self.user_id},
+                                signal_id=sig_id,
+                                trade_id=f"tr_{v_exec_id[:12]}",
+                                pnl=0.0,
+                                realized_pnl=None
+                            )
+                    except Exception as sig_err:
+                        logger.debug(f"Signal trace audit logging exception: {sig_err}")
+
                 if verdict != RiskVerdict.APPROVED:
                     logger.warning(f"Risk check failed: {reason}")
+                    asyncio.create_task(record_audit_signal(verdict, reason))
                     continue
 
                 # ── ATOMIC EXECUTION + EXPOSURE UPDATE ─────────────────────
@@ -465,6 +533,16 @@ class BotRunner:
                         )
 
                     logger.info(f"✅ Executed {side} {filled_qty} {self.symbol} @ {price} (exposure: {self.recovered_exposure_coins})")
+
+                    # Record successful trace in background
+                    asyncio.create_task(record_audit_signal(
+                        verdict,
+                        reason,
+                        v_exec_id=execution_id,
+                        v_status=result.get("status") if result else "completed",
+                        v_fill=float(filled_qty),
+                        v_result=result
+                    ))
 
                     # Fire-and-forget telemetry log with error handling
                     async def safe_log():

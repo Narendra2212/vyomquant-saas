@@ -368,17 +368,26 @@ async def get_current_user(
 
 async def get_admin_user(user: dict = Depends(get_current_user)) -> dict:
     """
-    F-21 FIX: Users with app_metadata.role in ("admin", "support", "operator")
-    may access standard admin endpoints (health, metrics, user listing, etc.).
-    """
-    app_metadata = user.get("app_metadata") or {}
-    user_metadata = user.get("user_metadata") or {}
+    Phase 7B F-02 REMEDIATION: Admin authorization via app_metadata.role ONLY.
 
-    role = app_metadata.get("role") or user_metadata.get("role")
-    if not role:
-        top_role = user.get("role", "")
-        if top_role != "authenticated":
-            role = top_role
+    SECURITY CONTRACT:
+    - ONLY app_metadata.role is trusted — it is server-controlled and cannot be
+      set by the client SDK (Supabase auth.updateUser only writes user_metadata).
+    - user_metadata.role is EXPLICITLY EXCLUDED — user_metadata is writable by
+      any authenticated user via supabase.auth.updateUser(), making it a
+      privilege-escalation vector if accepted here.
+    - top-level JWT 'role' field is ignored; it carries the Postgres RLS role
+      ("authenticated"), not the application-level admin role.
+
+    Legitimate admins must have role set in app_metadata via the Supabase
+    Dashboard or service-role admin client — never via the browser SDK.
+
+    Permitted roles: admin, support, operator.
+    """
+    # SECURITY: app_metadata only — user_metadata is user-editable and MUST NOT
+    # be used for privilege gating. (Phase 7B F-02 fix)
+    app_metadata = user.get("app_metadata") or {}
+    role = app_metadata.get("role", "")
 
     if role not in ("admin", "support", "operator"):
         raise HTTPException(
@@ -390,23 +399,58 @@ async def get_admin_user(user: dict = Depends(get_current_user)) -> dict:
 
 async def get_operator_user(user: dict = Depends(get_current_user)) -> dict:
     """
-    OPERATOR ROLE GATING: Only users with role == "operator" (in app_metadata or user_metadata)
-    may execute high-blast-radius destructive admin actions (set_user_status, global_kill_switch).
-    Standard 'admin' or 'support' roles without operator permission are rejected with 403.
-    """
-    app_metadata = user.get("app_metadata") or {}
-    user_metadata = user.get("user_metadata") or {}
+    Phase 7B F-02 REMEDIATION: Operator authorization via app_metadata.role ONLY.
 
-    role = app_metadata.get("role") or user_metadata.get("role")
-    if not role:
-        top_role = user.get("role", "")
-        if top_role != "authenticated":
-            role = top_role
+    SECURITY CONTRACT:
+    - ONLY app_metadata.role == "operator" grants access.
+    - user_metadata.role is EXPLICITLY EXCLUDED for the same reason as
+      get_admin_user() — it is user-editable and must not gate elevated actions.
+    - High-blast-radius actions: set_user_status, global_kill_switch.
+    """
+    # SECURITY: app_metadata only (Phase 7B F-02 fix)
+    app_metadata = user.get("app_metadata") or {}
+    role = app_metadata.get("role", "")
 
     if role != "operator":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="OPERATOR PERMISSION REQUIRED. High-blast-radius action requires operator role.",
+        )
+    return user
+
+
+async def require_aal2(user: dict = Depends(get_current_user)) -> dict:
+    """
+    Phase 7B F-06 REMEDIATION: Enforce MFA / Authentication Assurance Level 2.
+
+    SECURITY CONTRACT:
+    - Reads the 'aal' claim from the decoded JWT payload.
+    - Supabase sets aal="aal2" in the JWT after a successful MFA challenge.
+    - aal="aal1" means only password was verified — MFA was not completed.
+    - This dependency MUST be applied to sensitive endpoints:
+        * Exchange API key mutation (create/delete)
+        * Admin endpoints
+        * Password change
+        * Billing/payment mutations
+
+    DO NOT apply globally — non-sensitive read endpoints should NOT require MFA.
+    Clients must complete the MFA challenge flow before calling AAL2 endpoints.
+    """
+    # The 'aal' claim is injected by Supabase into the JWT after MFA verification.
+    # It is validated by decode_token_local() as part of the JWT signature check.
+    app_metadata = user.get("app_metadata") or {}
+    aal = app_metadata.get("aal") or user.get("aal", "aal1")
+
+    if aal != "aal2":
+        logger.warning(
+            f"[AAL2] AAL2 required but got '{aal}' for user {user.get('id', 'unknown')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Two-factor authentication is required to access this resource. "
+                "Please complete MFA verification and retry."
+            ),
         )
     return user
 
@@ -420,12 +464,18 @@ async def get_operator_user(user: dict = Depends(get_current_user)) -> dict:
 
 DEPLOYMENT_LIMITS = {
     "free": 1,
+    "starter": 2,
+    "pro": 5,
+    "enterprise": float("inf"),
     "pro_999": 5,
     "elite_1999": float("inf"),
 }
 
 ML_BUILD_LIMITS = {
     "free": 0,
+    "starter": 0,
+    "pro": 5,
+    "enterprise": 15,
     "pro_999": 0,
     "elite_1999": 2,
 }

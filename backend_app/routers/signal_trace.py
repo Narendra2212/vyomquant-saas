@@ -1,23 +1,93 @@
 """
 routers/signal_trace.py — Signal Trace API Router
 
-Professional execution audit system API endpoints.
-Complete signal lifecycle tracking from strategy decision to final execution.
+Owns ``/api/signal-trace/*`` — the paths ``algo22-terminal/src/pages/SignalTrace.jsx``
+already calls. Mounted in ``backend_app/main.py`` with
+``prefix="/api/signal-trace"``.
+
+A NEW ROUTER, WITH ITS JUSTIFICATION (Requirement 22.1)
+------------------------------------------------------
+Requirement 22.1 forbids a new, parallel router "without such documented
+justification", and ``design.md`` supplies it under "New router: signal_trace.py":
+no existing router owns this resource. ``strategy_operations.py`` owns strategies,
+backtests and deployments; ``signals.py`` owns the legacy flat signal surface under
+``/api/signals``. Neither owns the Signal_Trace_Page's read model, and the frontend
+already calls ``/api/signal-trace/*``.
+
+This surface is READ-ONLY per Requirement 17 for everything the spec adds. The
+pre-spec write endpoints at the bottom of this file (``POST /signals``, the three
+``PUT /signals/{id}/...``) predate that decision and are left untouched rather than
+removed, because removing a live endpoint is not this task's change; nothing in this
+spec calls them.
+
+
+╔══════════════════════════════════════════════════════════════════════════╗
+║  ROUTE ORDER IS LOAD-BEARING IN THIS FILE. READ BEFORE ADDING A ROUTE.   ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+FastAPI matches routes IN REGISTRATION ORDER and stops at the first match. A
+path-parameter segment matches ANY single segment, INCLUDING a literal one. So a
+``/signals/{signal_id}`` registered before ``/signals/export`` makes the export
+endpoint **permanently unreachable** — every request for it is routed to the detail
+handler with ``signal_id="export"``, which then 404s a signal that never existed.
+
+THIS IS NOT HYPOTHETICAL. IT IS ALREADY BROKEN THREE TIMES IN THIS CODEBASE:
+
+  * ``backend_app/routers/signals.py`` registers ``GET /{signal_id}`` (line ~110)
+    and ``GET /export`` (line ~248). ``GET /api/signals/export`` is dead today.
+  * ``/api/library/creator/analytics``, ``/api/library/recommendations`` and
+    ``/api/library/favorites`` were broken the same way.
+
+THE RULE THIS FILE FOLLOWS, AND WHICH TASKS 13.2 AND 13.3 MUST KEEP:
+
+    Every LITERAL path under ``/signals`` is registered in the LITERAL section
+    below. Every PARAMETERISED path is registered in the section after it. The
+    two sections are separated by a banner, and the boundary is asserted by
+    ``tests/test_task_13_1_signal_trace_list.py`` against the REAL
+    ``backend_app.main.app`` — not against a router assembled in the test, which
+    would not catch a mounting-order regression.
+
+    Task 13.3's ``GET /signals/export`` IS in the LITERAL section, and is named in
+    ``SIGNAL_TRACE_LITERAL_PATHS`` so the guard test covers it.
+    Task 13.2's ``GET /signals/{signal_id}`` is in the PARAMETERISED section — it
+    EXTENDED the pre-spec handler that already owned that path rather than adding a
+    second registration for it, because a duplicate path is unreachable for the same
+    first-match reason a shadowed literal is.
+
+``SIGNAL_TRACE_LITERAL_PATHS`` below names the literals, so the guard test does not
+have to re-derive them from the source.
 """
 
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import Request, APIRouter, Depends, HTTPException, Query, Response
+from fastapi import Request, APIRouter, Depends, HTTPException, Query, Response, Body
 from pydantic import BaseModel, Field
 
-from backend_app.backend.signal_service import get_signal_service, SignalStatus, SignalDecision
+from backend_app.backend.order_lifecycle_state import (
+    ORDER_LIFECYCLE_STATE_VALUES,
+    OrderLifecycleRejected,
+)
+from backend_app.backend.signal_service import (
+    SIGNAL_TRACE_PAGE_SIZE,
+    SignalDecision,
+    SignalRejected,
+    SignalStatus,
+    get_signal_service,
+)
 from backend_app.core.dependencies import get_current_user
 from backend_app.core.rate_limit import limiter
 
 router = APIRouter()
 logger = logging.getLogger("SignalTraceRouter")
+
+#: Literal (non-parameterised) sub-paths of ``/signals`` this router serves. Every one of
+#: these MUST be registered before ``/signals/{signal_id}`` or it becomes unreachable —
+#: see this module's docstring. ``tests/test_task_13_1_signal_trace_list.py`` asserts the
+#: ordering against the real app for each entry, so adding one here without registering it
+#: in the literal section fails the build rather than shipping a dead endpoint.
+SIGNAL_TRACE_LITERAL_PATHS = ("/api/signal-trace/signals/export",)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -78,8 +148,9 @@ class ExecutionUpdateRequest(BaseModel):
 
 @router.post("/signals")
 @limiter.limit("100/minute")
-async def create_signal(request: Request,
-    body: SignalCreateRequest,
+async def create_signal(
+    request: Request,
+    body: SignalCreateRequest = Body(...),
     user: dict = Depends(get_current_user)
 ):
     """
@@ -92,17 +163,17 @@ async def create_signal(request: Request,
         
         signal = await service.create_signal(
             user=user,
-            strategy_id=request.strategy_id,
-            strategy_version=request.strategy_version,
-            deployment_id=request.deployment_id,
-            exchange_id=request.exchange_id,
-            symbol=request.symbol,
-            timeframe=request.timeframe,
-            worker_id=request.worker_id,
-            decision=request.decision,
-            indicators=request.indicators,
-            market_info=request.market_info,
-            ml_info=request.ml_info
+            strategy_id=body.strategy_id,
+            strategy_version=body.strategy_version,
+            deployment_id=body.deployment_id,
+            exchange_id=body.exchange_id,
+            symbol=body.symbol,
+            timeframe=body.timeframe,
+            worker_id=body.worker_id,
+            decision=body.decision,
+            indicators=body.indicators,
+            market_info=body.market_info,
+            ml_info=body.ml_info
         )
         
         return signal
@@ -114,238 +185,302 @@ async def create_signal(request: Request,
         )
 
 
-@router.get("/signals/{signal_id}")
-@limiter.limit("200/minute")
-async def get_signal(request: Request, 
-    signal_id: str,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Get complete signal data.
-    
-    Returns all signal information including:
-    - Signal metadata
-    - Risk decision
-    - Order information
-    - Execution information
-    - Timeline
-    """
-    try:
-        service = await get_signal_service()
-        
-        signal = await service.get_signal(user, signal_id)
-        if not signal:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "SIGNAL_NOT_FOUND", "message": f"Signal {signal_id} not found"}
-            )
-        
-        # Get timeline
-        timeline = await service.get_signal_timeline(user, signal_id)
-        
-        return {
-            "signal": signal,
-            "timeline": timeline
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting signal {signal_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "SIGNAL_GET_FAILED", "message": str(e)}
-        )
+# ══════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+#
+#   LITERAL PATHS — every route in this section is registered BEFORE the
+#   parameterised section below, and MUST STAY THERE. Adding a literal
+#   ``/signals/<word>`` route after ``/signals/{signal_id}`` makes it
+#   unreachable. See this module's docstring.
+#
+#   Task 13.3's ``GET /signals/export`` is here, for that reason.
+#
+# ══════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
 
 
 @router.get("/signals")
 @limiter.limit("200/minute")
-async def list_signals(request: Request, 
-    strategy_id: Optional[str] = Query(None),
-    exchange_id: Optional[str] = Query(None),
-    symbol: Optional[str] = Query(None),
-    worker_id: Optional[str] = Query(None),
-    deployment_id: Optional[str] = Query(None),
-    decision: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    ml_type: Optional[str] = Query(None, description="ml or rule_based"),
+async def list_signals(request: Request,
+    # ── Requirement 17.2's filter categories. Every one is declared as a LIST so
+    #    FastAPI collects a repeated query parameter (?symbol=A&symbol=B) into all of
+    #    its values instead of keeping only the last — which is what makes
+    #    OR-within-category expressible at all.
+    strategy_id: Optional[List[str]] = Query(None),
+    strategy_version: Optional[List[str]] = Query(None),
+    deployment_id: Optional[List[str]] = Query(None),
+    symbol: Optional[List[str]] = Query(None),
+    side: Optional[List[str]] = Query(None, description="BUY or SELL; filters the `decision` column"),
+    order_lifecycle_state: Optional[List[str]] = Query(
+        None, description=f"One of {list(ORDER_LIFECYCLE_STATE_VALUES)}"
+    ),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    # ── Requirement 17.5: at most 100 per page, and the bound is the service's own
+    #    constant rather than a second copy of the number.
+    limit: int = Query(SIGNAL_TRACE_PAGE_SIZE, ge=1, le=SIGNAL_TRACE_PAGE_SIZE),
     offset: int = Query(0, ge=0),
+    # ── Pre-spec filters SignalTrace.jsx still sends today. Kept so the page keeps
+    #    working until task 18 rewires it; not part of Requirement 17.2's set.
+    exchange_id: Optional[List[str]] = Query(None),
+    worker_id: Optional[List[str]] = Query(None),
+    decision: Optional[List[str]] = Query(None),
+    status: Optional[List[str]] = Query(None, description="Legacy signals.status vocabulary"),
+    ml_type: Optional[str] = Query(None, description="ml or rule_based"),
+    search: Optional[str] = Query(None),
     user: dict = Depends(get_current_user)
 ):
-    """
-    List signals with comprehensive filters.
-    
-    Supports filtering by:
-    - Strategy, Exchange, Symbol, Worker, Deployment
-    - Decision (BUY, SELL, EXIT, CLOSE, HOLD)
-    - Status (pending, accepted, rejected, executed, failed, cancelled, expired)
-    - ML type (ml, rule_based)
-    - Date range
-    - Search (signal_id)
+    """List the authenticated user's signals, filtered and paginated.
+
+    Requirements 17.1, 17.2, 17.5, 17.7, 20.1, 21.3.
+
+    Sorted by ``generated_at`` descending (Requirement 17.1). Filters combine
+    AND-across-categories / OR-within-category (Requirement 17.2). Ownership is enforced
+    twice — the request-scoped client applies RLS and the query adds an explicit
+    ``user_id`` predicate — and a filter naming another user's resource matches no row,
+    which is the identical response a nonexistent identifier produces (Requirements 20.1,
+    20.2).
+
+    Returns
+        **200** ``{signals, limit, offset, count, total, total_is_exact, has_more,
+        next_offset, filters_active, active_filters, lifecycle_state_source, degraded}``.
+        ``filters_active`` is Requirement 17.7's empty-state discriminator; ``degraded``
+        is non-null when migration 005b has not been applied.
+        **400** ``ORDER_LIFECYCLE_STATE_UNRECOGNISED``.
+        **500** ``SIGNALS_LIST_FAILED`` — an explicit error, never a stale or fabricated
+        list (Requirement 17.7).
+
+    NO RESPONSE CACHE, DELIBERATELY
+        A 10-second Redis cache used to sit here. It is removed rather than extended:
+        its key covered only 8 of the 13 filter categories, so two requests differing
+        only in ``deployment_id``, ``worker_id``, ``date_from``, ``date_to`` or
+        ``search`` collided and the second was served the FIRST one's signals — a
+        correctness bug against Requirement 17.1 ("SHALL NOT omit a signal that was
+        actually generated"), not just a staleness one. Requirement 18.1 makes this list
+        realtime over the ``SIGNAL_FAMILY`` channel anyway, so a cache in front of it
+        would be racing the frames that update it.
     """
     try:
-        # Check fast Redis cache (10 second TTL for instant sub-50ms repeat response)
-        cache_key = f"signals:{user['id']}:{strategy_id}:{exchange_id}:{symbol}:{decision}:{status}:{ml_type}:{limit}:{offset}"
-        try:
-            from backend_app.core.cache.redis_manager import redis_manager
-            cached = await redis_manager.get(cache_key)
-            if cached:
-                import json
-                return json.loads(cached)
-        except Exception as cache_err:
-            logger.debug(f"Signals cache read error: {cache_err}")
-
         service = await get_signal_service()
-        
-        signals = await service.list_signals(
-            user=user,
+        return await service.list_signal_trace(
+            user,
             strategy_id=strategy_id,
-            exchange_id=exchange_id,
-            symbol=symbol,
-            worker_id=worker_id,
+            strategy_version=strategy_version,
             deployment_id=deployment_id,
+            symbol=symbol,
+            side=side,
+            order_lifecycle_state=order_lifecycle_state,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+            offset=offset,
+            exchange_id=exchange_id,
+            worker_id=worker_id,
             decision=decision,
             status=status,
             ml_type=ml_type,
-            date_from=date_from,
-            date_to=date_to,
             search=search,
-            limit=limit,
-            offset=offset
         )
-        
-        response_data = {
-            "signals": signals,
-            "total": len(signals),
-            "limit": limit,
-            "offset": offset
-        }
-
-        # Write to fast cache
-        try:
-            from backend_app.core.cache.redis_manager import redis_manager
-            import json
-            await redis_manager.set(cache_key, json.dumps(response_data), ex=10)
-        except Exception as cache_write_err:
-            logger.debug(f"Signals cache write error: {cache_write_err}")
-
-        return response_data
+    except OrderLifecycleRejected as e:
+        raise HTTPException(status_code=e.http_status, detail=e.to_detail())
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error listing signals for user {user['id']}: {e}")
+        logger.error(f"Error listing signals for user {user.get('id')}: {e}")
         raise HTTPException(
             status_code=500,
             detail={"error": "SIGNALS_LIST_FAILED", "message": str(e)}
         )
 
 
-@router.put("/signals/{signal_id}/risk")
-@limiter.limit("100/minute")
-async def update_risk_decision(request: Request, 
-    signal_id: str,
-    body: RiskDecisionRequest,
+@router.get("/signals/export")
+@limiter.limit("50/minute")
+async def export_signals(request: Request,
+    # No `pattern=` here, deliberately: the service's own `normalise_export_format` is
+    # the single place the two accepted formats are named, and it answers an unsupported
+    # one with the documented 400 + SIGNAL_EXPORT_FORMAT_UNSUPPORTED below rather than
+    # FastAPI's generic 422 on a regex a caller cannot see. It also accepts "CSV" as
+    # "csv", which a hand-built URL or a bookmarked one legitimately sends.
+    format: str = Query("json", description="json or csv"),
+    # ── Requirement 17.2's filter categories, declared EXACTLY as `list_signals`
+    #    declares them (lists, so a repeated query parameter is collected instead of
+    #    overwritten). This is what makes "export what I am looking at" true rather than
+    #    approximately true.
+    strategy_id: Optional[List[str]] = Query(None),
+    strategy_version: Optional[List[str]] = Query(None),
+    deployment_id: Optional[List[str]] = Query(None),
+    symbol: Optional[List[str]] = Query(None),
+    side: Optional[List[str]] = Query(None, description="BUY or SELL; filters the `decision` column"),
+    order_lifecycle_state: Optional[List[str]] = Query(
+        None, description=f"One of {list(ORDER_LIFECYCLE_STATE_VALUES)}"
+    ),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    # ── The pre-spec filters SignalTrace.jsx's export button still sends today.
+    exchange_id: Optional[List[str]] = Query(None),
+    worker_id: Optional[List[str]] = Query(None),
+    decision: Optional[List[str]] = Query(None),
+    status: Optional[List[str]] = Query(None, description="Legacy signals.status vocabulary"),
+    ml_type: Optional[str] = Query(None, description="ml or rule_based"),
+    search: Optional[str] = Query(None),
     user: dict = Depends(get_current_user)
 ):
-    """
-    Update signal with risk decision.
-    
-    Risk evaluation event in the execution audit trail.
+    """The authenticated user's signals as a downloadable file. Requirement 17.1.
+
+    THE LIST, WALKED TO THE END - NOT A SECOND QUERY
+        Every filter above is ``GET /signals``'s own, and the body is rendered from the
+        same ``signal_trace_item`` projection that list returns, page by page to the end of
+        the filtered result. So an export of a filtered view is that view (Requirement
+        17.2's AND-of-categories / OR-within-category semantics included), ownership is
+        enforced by the same owner-scoped read (Requirements 20.1, 20.2), and no signal is
+        omitted because it fell past the first page (Requirement 17.1).
+
+    Returns
+        **200** the file. ``text/csv; charset=utf-8`` or ``application/json``, both as an
+        ``attachment`` named ``signal_trace.csv`` / ``signal_trace.json`` - the names
+        ``SignalTrace.jsx`` gives the blob it saves.
+
+        Three headers carry what the body cannot: ``X-Export-Row-Count``,
+        ``X-Export-Truncated`` and ``X-Export-Max-Rows``. A CSV has nowhere to put
+        metadata, and a partial export that does not say it is partial is the one way this
+        endpoint could quietly break Requirement 17.1 - so it says so in both formats
+        (the JSON body carries the same three fields).
+
+        ``Cache-Control: no-store`` because this is one user's own audit data on a
+        response that a shared cache has no business keeping.
+
+        **400** ``SIGNAL_EXPORT_FORMAT_UNSUPPORTED`` or
+        ``ORDER_LIFECYCLE_STATE_UNRECOGNISED`` (the list's own refusal, unchanged - an
+        unrecognised state filter is refused rather than ignored, because ignoring it
+        would export MORE signals than were asked for).
+        **500** ``SIGNALS_EXPORT_FAILED`` - an explicit error, never a truncated or empty
+        file passed off as a complete one.
     """
     try:
         service = await get_signal_service()
-        
-        signal = await service.update_risk_decision(
-            user=user,
-            signal_id=signal_id,
-            risk_passed=request.risk_passed,
-            risk_reason=request.risk_reason,
-            position_size=request.position_size,
-            capital=request.capital,
-            exposure=request.exposure,
-            expected_loss=request.expected_loss,
-            expected_reward=request.expected_reward,
-            drawdown_check=request.drawdown_check
+        export = await service.export_signal_trace(
+            user,
+            format=format,
+            strategy_id=strategy_id,
+            strategy_version=strategy_version,
+            deployment_id=deployment_id,
+            symbol=symbol,
+            side=side,
+            order_lifecycle_state=order_lifecycle_state,
+            date_from=date_from,
+            date_to=date_to,
+            exchange_id=exchange_id,
+            worker_id=worker_id,
+            decision=decision,
+            status=status,
+            ml_type=ml_type,
+            search=search,
         )
-        
-        return signal
+        return Response(
+            content=export["content"],
+            media_type=export["media_type"],
+            headers={
+                "Content-Disposition": f'attachment; filename="{export["filename"]}"',
+                "Cache-Control": "no-store",
+                "X-Export-Row-Count": str(export["row_count"]),
+                "X-Export-Truncated": "true" if export["truncated"] else "false",
+                "X-Export-Max-Rows": str(export["max_rows"]),
+            },
+        )
+    except (SignalRejected, OrderLifecycleRejected) as e:
+        raise HTTPException(status_code=e.http_status, detail=e.to_detail())
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error updating risk decision for signal {signal_id} for user {user['id']}: {e}")
+        logger.error(f"Error exporting signals for user {user.get('id')}: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": "RISK_UPDATE_FAILED", "message": str(e)}
+            detail={"error": "SIGNALS_EXPORT_FAILED", "message": str(e)}
         )
 
 
-@router.put("/signals/{signal_id}/order")
-@limiter.limit("100/minute")
-async def update_order(request: Request, 
+# ══════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+#
+#   PARAMETERISED PATHS — nothing below this line may be a literal sub-path of
+#   ``/signals``. ``{signal_id}`` matches any single segment, so a literal
+#   route added here is shadowed by it and becomes unreachable. Put literals
+#   in the section above. See this module's docstring.
+#
+#   Task 13.2's ``GET /signals/{signal_id}`` lives here (the pre-spec handler,
+#   extended in place — see its docstring).
+#
+# ══════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/signals/{signal_id}")
+@limiter.limit("200/minute")
+async def get_signal(request: Request, 
     signal_id: str,
-    body: OrderUpdateRequest,
     user: dict = Depends(get_current_user)
 ):
-    """
-    Update signal with order information.
-    
-    Order generation and exchange response event in the execution audit trail.
+    """One signal's FULL trace detail. Requirements 17.6, 16.7, 20.1, 20.2, 20.3.
+
+    THE PRE-SPEC HANDLER, EXTENDED IN PLACE — NOT A SECOND ROUTE
+        A ``GET /signals/{signal_id}`` already existed here before this spec and returned
+        ``{signal, timeline}``, where ``signal`` was the raw ``public.signals`` row. Task
+        13.2 extends it rather than registering a second handler for the same path,
+        because a duplicate path would be dead on arrival: FastAPI stops at the first
+        match, so the second registration could never be reached (the same shadowing
+        failure this module's route-order banner is about, in its other form).
+
+        ``timeline`` is kept, unchanged, because ``SignalTrace.jsx`` renders it today and
+        task 19 is what re-points the page. ``signal`` is now task 13.1's
+        ``signal_trace_item`` projection instead of the raw row, so the detail view and the
+        list agree field-for-field about the same signal.
+
+    Returns
+        **200** ``{signal, trace, lifecycle_transitions, timeline, lifecycle_state_source,
+        degraded}``.
+
+        ``trace`` carries Requirement 17.6's four sections — ``dag_nodes``,
+        ``ml_inference``, ``risk_validation``, ``execution`` — each labelled with the
+        ``source`` it was read from (``signal_trace_engine`` or ``signals_row``), because
+        ``signal_trace_engine`` is an in-memory store with an hour's retention and a
+        signal older than that legitimately has no record there.
+
+        ``ml_inference.applicable`` is ``false`` — not ``null`` — for a strategy version
+        with no ML node, which is Requirement 17.6's "where the signal's strategy version
+        includes an ML node" as a fact the page can render rather than an empty panel.
+
+        ``lifecycle_transitions`` is Requirement 16.7's persisted transition history in
+        chronological order by ``occurred_at``.
+
+        **404** ``SIGNAL_NOT_FOUND`` — for a signal that does not exist AND for one owned
+        by another user, byte-identically (Requirements 20.1, 20.2). That identity is
+        structural, not a matched pair of messages: the read is owner-scoped (RLS on the
+        caller's own client plus an explicit ``user_id`` predicate), it returns no row in
+        both cases, and nothing downstream of it looks the identifier up again — so there
+        is no second code path that could reveal existence.
+
+        **500** ``SIGNAL_GET_FAILED``. Reserved for a genuine failure: neither an
+        unapplied migration 005b nor an unreadable trace store reaches it. Both degrade,
+        and say so on the response (see ``degraded``).
     """
     try:
         service = await get_signal_service()
-        
-        signal = await service.update_order(
-            user=user,
-            signal_id=signal_id,
-            order_id=request.order_id,
-            exchange_order_id=request.exchange_order_id,
-            order_status=request.order_status,
-            quantity=request.quantity,
-            filled=request.filled,
-            remaining=request.remaining,
-            average_price=request.average_price,
-            fees=request.fees,
-            slippage=request.slippage,
-            latency_ms=request.latency_ms
-        )
-        
-        return signal
+
+        detail = await service.get_signal_trace(user, signal_id)
+        if not detail:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "SIGNAL_NOT_FOUND", "message": f"Signal {signal_id} not found"}
+            )
+
+        return detail
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error updating order for signal {signal_id} for user {user['id']}: {e}")
+        logger.error(f"Error getting signal {signal_id} for user {user.get('id')}: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": "ORDER_UPDATE_FAILED", "message": str(e)}
-        )
-
-
-@router.put("/signals/{signal_id}/execution")
-@limiter.limit("100/minute")
-async def update_execution(request: Request, 
-    signal_id: str,
-    body: ExecutionUpdateRequest,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Update signal with execution and PnL information.
-    
-    Execution event in the execution audit trail.
-    """
-    try:
-        service = await get_signal_service()
-        
-        signal = await service.update_execution(
-            user=user,
-            signal_id=signal_id,
-            trade_id=request.trade_id,
-            pnl=request.pnl,
-            realized_pnl=request.realized_pnl
-        )
-        
-        return signal
-    except Exception as e:
-        logger.error(f"Error updating execution for signal {signal_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "EXECUTION_UPDATE_FAILED", "message": str(e)}
+            detail={"error": "SIGNAL_GET_FAILED", "message": str(e)}
         )
 
 
@@ -382,52 +517,112 @@ async def get_signal_timeline(request: Request,
         )
 
 
-@router.get("/signals/export")
-@limiter.limit("50/minute")
-async def export_signals(request: Request, 
-    format: str = Query("json", pattern="^(json|csv)$"),
-    strategy_id: Optional[str] = Query(None),
-    exchange_id: Optional[str] = Query(None),
-    symbol: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
+@router.put("/signals/{signal_id}/risk")
+@limiter.limit("100/minute")
+async def update_risk_decision(
+    request: Request, 
+    signal_id: str,
+    body: RiskDecisionRequest = Body(...),
     user: dict = Depends(get_current_user)
 ):
     """
-    Export signals with filters.
+    Update signal with risk decision.
     
-    Supports JSON and CSV formats for external compliance audit.
+    Risk evaluation event in the execution audit trail.
     """
     try:
         service = await get_signal_service()
         
-        filters = {
-            "strategy_id": strategy_id,
-            "exchange_id": exchange_id,
-            "symbol": symbol,
-            "status": status,
-            "date_from": date_from,
-            "date_to": date_to
-        }
-        
-        data = await service.export_signals(user, filters, format)
-        
-        if format == "csv":
-            return Response(
-                content=data,
-                media_type="text/csv",
-                headers={"Content-Disposition": "attachment; filename=signal_trace.csv"}
-            )
-        
-        return Response(
-            content=data,
-            media_type="application/json",
-            headers={"Content-Disposition": "attachment; filename=signal_trace.json"}
+        signal = await service.update_risk_decision(
+            user=user,
+            signal_id=signal_id,
+            risk_passed=body.risk_passed,
+            risk_reason=body.risk_reason,
+            position_size=body.position_size,
+            capital=body.capital,
+            exposure=body.exposure,
+            expected_loss=body.expected_loss,
+            expected_reward=body.expected_reward,
+            drawdown_check=body.drawdown_check
         )
+        
+        return signal
     except Exception as e:
-        logger.error(f"Error exporting signals for user {user['id']}: {e}")
+        logger.error(f"Error updating risk decision for signal {signal_id} for user {user['id']}: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": "EXPORT_FAILED", "message": str(e)}
+            detail={"error": "RISK_UPDATE_FAILED", "message": str(e)}
+        )
+
+
+@router.put("/signals/{signal_id}/order")
+@limiter.limit("100/minute")
+async def update_order(
+    request: Request, 
+    signal_id: str,
+    body: OrderUpdateRequest = Body(...),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Update signal with order information.
+    
+    Order generation and exchange response event in the execution audit trail.
+    """
+    try:
+        service = await get_signal_service()
+        
+        signal = await service.update_order(
+            user=user,
+            signal_id=signal_id,
+            order_id=body.order_id,
+            exchange_order_id=body.exchange_order_id,
+            order_status=body.order_status,
+            quantity=body.quantity,
+            filled=body.filled,
+            remaining=body.remaining,
+            average_price=body.average_price,
+            fees=body.fees,
+            slippage=body.slippage,
+            latency_ms=body.latency_ms
+        )
+        
+        return signal
+    except Exception as e:
+        logger.error(f"Error updating order for signal {signal_id} for user {user['id']}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "ORDER_UPDATE_FAILED", "message": str(e)}
+        )
+
+
+@router.put("/signals/{signal_id}/execution")
+@limiter.limit("100/minute")
+async def update_execution(
+    request: Request, 
+    signal_id: str,
+    body: ExecutionUpdateRequest = Body(...),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Update signal with execution and PnL information.
+    
+    Execution event in the execution audit trail.
+    """
+    try:
+        service = await get_signal_service()
+        
+        signal = await service.update_execution(
+            user=user,
+            signal_id=signal_id,
+            trade_id=body.trade_id,
+            pnl=body.pnl,
+            realized_pnl=body.realized_pnl
+        )
+        
+        return signal
+    except Exception as e:
+        logger.error(f"Error updating execution for signal {signal_id} for user {user['id']}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "EXECUTION_UPDATE_FAILED", "message": str(e)}
         )

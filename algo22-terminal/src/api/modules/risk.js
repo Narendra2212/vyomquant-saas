@@ -71,13 +71,30 @@ export const riskApi = {
 
   /**
    * Activate kill switch
-   * @param {Object} params
-   * @param {string} [params.scope="user"]
-   * @param {string} params.confirm_code
-   * @returns {Promise<{status: string, message: string}>}
+   * @param {Object} [params]
+   * @param {string} [params.reason]
+   * @returns {Promise<{status: string, kill_switch_active: boolean, message: string}>}
    */
-  killSwitch: (params) => post('/api/risk/kill-switch', params),
+  killSwitch: (params = {}) => post('/api/risk/kill-switch', params),
+
+  /**
+   * Deactivate emergency kill switch and resume operations
+   * @returns {Promise<{status: string, kill_switch_active: boolean, message: string}>}
+   */
+  recoverKillSwitch: () => post('/api/risk/kill-switch/recover'),
+
+  /**
+   * Get audit history of risk violations
+   * @param {Object} [params]
+   * @param {number} [params.limit=50]
+   * @returns {Promise<Array>}
+   */
+  getViolations: (params = {}) => {
+    const limit = params.limit || 50;
+    return get(`/api/risk/violations?limit=${limit}`);
+  },
 };
 
 // Legacy compatibility
 export const riskEndpoints = riskApi;
+

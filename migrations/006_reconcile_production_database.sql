@@ -469,11 +469,18 @@ CREATE TABLE IF NOT EXISTS public.strategy_backtests (
     error TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     completed_at TIMESTAMPTZ,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    -- Reproducibility tracking fields
+    engine_version TEXT DEFAULT '1.0.0',
+    schema_version TEXT DEFAULT '2.0',
+    dag_hash TEXT,
+    dataset_checksum TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_strat_backtests_user ON public.strategy_backtests(user_id);
 CREATE INDEX IF NOT EXISTS idx_strat_backtests_strat ON public.strategy_backtests(strategy_id);
+CREATE INDEX IF NOT EXISTS idx_strat_backtests_dag_hash ON public.strategy_backtests(dag_hash) WHERE dag_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_strat_backtests_dataset_checksum ON public.strategy_backtests(dataset_checksum) WHERE dataset_checksum IS NOT NULL;
 ALTER TABLE public.strategy_backtests ENABLE ROW LEVEL SECURITY;
 
 DO $$

@@ -30,7 +30,12 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 
-from backend_app.backend.strategy_compiler import StrategyPackage, ExecutionGraph
+from backend_app.backend.strategy_compiler import (
+    ExecutionGraph,
+    StrategyPackage,
+    load_plan,
+    plan_to_engine_graph,
+)
 from backend_app.backend.dag_engine import DAGEngine
 from backend_app.backend.backtesting_engine import BacktestEngine
 from backend_app.core.risk_engine import RiskEngine
@@ -83,6 +88,9 @@ class BacktestRuntime:
             spread=spread
         )
         
+        # Store backtest results for UI
+        self.last_backtest_results = None
+        
         # PHASE E: Risk Engine (same as live trading)
         self.risk_engine = RiskEngine(
             initial_capital=initial_capital,
@@ -105,6 +113,128 @@ class BacktestRuntime:
     def set_data_engine(self, exchange_instance):
         """Inject exchange instance for historical data fetching."""
         self.data_engine = DataEngine(exchange_instance)
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  THE VERSION LOAD PATH  (strategy-builder task 2.4, Requirements 22.3, 22.5)
+    # ══════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def load_version_plan(version_row: Any, *, registry: Any = None):
+        """The ``LoadedPlan`` for a stored version row.
+
+        This is the backtester's half of Requirement 22.5. It used to reconstruct the
+        strategy from the ``blueprint`` column, which meant the backtester executed a
+        graph it had re-derived rather than the artifact the save path actually produced -
+        so a backtest and a live run could disagree about the same version.
+
+        Now the persisted ``compiled_plan`` is read and used **as-is** when
+        ``CompiledPlan.from_dict(row["compiled_plan"]).matches_graph(graph)``. It is
+        recompiled only on a hash mismatch, and only compiled from the graph when no plan
+        was stored at all - which is every existing row until migration 004 part 1 is
+        applied, so a missing or NULL ``compiled_plan`` is a normal case here, not a
+        crash.
+
+        Returns
+            ``LoadedPlan`` carrying ``plan``, ``graph``, ``reused`` and ``reason``, so the
+            caller can log or assert which branch was taken rather than assume.
+        """
+        loaded = load_plan(version_row, registry)
+        logger.info(
+            "[BACKTEST] Version plan %s: dag_hash=%s reused=%s reason=%s",
+            "reused" if loaded.reused else "recompiled",
+            loaded.dag_hash,
+            loaded.reused,
+            loaded.reason,
+        )
+        return loaded
+
+    async def run_version_backtest(
+        self,
+        version_row: Any,
+        user: dict,
+        strategy_id: str,
+        version_id: str,
+        version: str,
+        start_date: str,
+        end_date: str,
+        exchange_instance,
+        *,
+        registry: Any = None,
+    ) -> Dict:
+        """Backtest a stored version from its persisted plan.
+
+        The plan-shaped entry point for :meth:`run_backtest`: it resolves the version's
+        ``CompiledPlan`` through :meth:`load_version_plan`, adapts it to the node/edge
+        lists the DAG engine consumes, and then reuses the existing simulation path
+        unchanged - the market simulator, the risk engine and the portfolio engine are
+        untouched by task 2.4.
+
+        Market identity comes from the graph's DATA nodes, so nothing here falls back to
+        ``BTC/USDT`` / ``15m`` (SB-06).
+        """
+        from backend_app.backend.strategy_dag.schema import BlockCategory
+
+        loaded = self.load_version_plan(version_row, registry=registry)
+        nodes, edges = plan_to_engine_graph(loaded.plan, registry)
+
+        symbols: List[str] = []
+        timeframes: List[str] = []
+        for node in loaded.graph.nodes:
+            if node.category is not BlockCategory.DATA:
+                continue
+            symbol = node.params.get("symbol")
+            frame = node.params.get("timeframe")
+            if isinstance(symbol, str) and symbol and symbol not in symbols:
+                symbols.append(symbol)
+            if isinstance(frame, str) and frame and frame not in timeframes:
+                timeframes.append(frame)
+
+        if not symbols:
+            # SB-06: nothing here substitutes a market. A version whose DATA nodes carry
+            # no symbol cannot be backtested against anything in particular, and saying
+            # so is better than quietly backtesting BTC/USDT.
+            raise ValueError(
+                f"Version {version} declares no symbol on any DATA node; there is "
+                "nothing to backtest against. Set the DATA block's symbol."
+            )
+
+        metadata: Dict[str, Any] = {
+            "strategy_name": loaded.graph.name or strategy_id,
+            "symbols": symbols,
+            "dag_hash": loaded.dag_hash,
+            "warmup_bars": loaded.plan.warmup_bars,
+            "plan_reused": loaded.reused,
+        }
+        if timeframes:
+            metadata["timeframe"] = timeframes[0]
+
+        execution_graph = ExecutionGraph(
+            id=str(uuid4()),
+            version=version,
+            nodes=nodes,
+            edges=edges,
+            execution_order=list(loaded.plan.execution_order),
+            metadata=metadata,
+        )
+        package = StrategyPackage(
+            id=str(uuid4()),
+            strategy_id=strategy_id,
+            version=version,
+            execution_graph=execution_graph,
+            metadata=execution_graph.metadata,
+            dependencies={},
+        )
+
+        return await self.run_backtest(
+            strategy_package=package,
+            user=user,
+            strategy_id=strategy_id,
+            version_id=version_id,
+            version=version,
+            start_date=start_date,
+            end_date=end_date,
+            exchange_instance=exchange_instance,
+        )
     
     async def run_backtest(
         self,
@@ -406,19 +536,46 @@ class BacktestRuntime:
         Returns:
             Dictionary of chart data
         """
-        equity_series = pd.Series(equity_curve)
-        equity_series.index = pd.to_datetime(equity_series.index)
+        # ``equity_curve`` arrives as ``eq_df.to_dict(orient="records")`` - a list of
+        # ``{"timestamp", "equity"}`` mappings - so ``pd.Series(equity_curve)`` produced a
+        # Series OF DICTS with a RangeIndex, and the first arithmetic on it
+        # (``cummax()`` in :meth:`_calculate_drawdown_curve`) raised
+        # "'>=' not supported between instances of 'dict' and 'dict'". Every backtest that
+        # reached charting therefore answered 500.
+        #
+        # Normalised the same way :meth:`_calculate_performance_metrics` already normalises
+        # the identical argument, so the two readers of one value agree about its shape:
+        # the values are the equities and the index is the timestamps.
+        if (
+            isinstance(equity_curve, list)
+            and equity_curve
+            and isinstance(equity_curve[0], dict)
+        ):
+            equity_series = pd.Series(
+                [float(point.get("equity", 0.0)) for point in equity_curve],
+                index=pd.to_datetime([point.get("timestamp") for point in equity_curve]),
+            )
+        else:
+            equity_series = pd.Series(equity_curve, dtype=float)
+            equity_series.index = pd.to_datetime(equity_series.index)
         
+        # ``astype("int64")``, never ``astype(int)``: a DatetimeIndex converts to epoch
+        # NANOSECONDS, which needs 64 bits, and ``int`` is platform-dependent - it is
+        # ``int32`` on Windows, where pandas 2.x then refuses the cast outright with
+        # "Converting from datetime64[ns] to int32 is not supported". So this raised on
+        # every backtest that got as far as charting, on one of the platforms this backend
+        # is developed on, and silently truncated nothing on the other. Found by the
+        # Requirement 26.4 end-to-end sandbox suite (``tests/sandbox_lifecycle/``).
         charts = {
             "equity_curve": {
-                "timestamps": equity_series.index.astype(int).tolist(),
+                "timestamps": equity_series.index.astype("int64").tolist(),
                 "values": equity_series.tolist()
             },
             "drawdown_curve": self._calculate_drawdown_curve(equity_series),
             "monthly_returns": metrics.get("monthly_returns", []),
             "daily_returns": metrics.get("daily_returns", []),
             "price_chart": {
-                "timestamps": price_data.index.astype(int).tolist(),
+                "timestamps": price_data.index.astype("int64").tolist(),
                 "close": price_data["close"].tolist()
             }
         }
@@ -431,7 +588,8 @@ class BacktestRuntime:
         drawdown = (equity_series - running_max) / running_max * 100
         
         return {
-            "timestamps": equity_series.index.astype(int).tolist(),
+            # ``int64`` for the same reason as :meth:`_generate_charts` above.
+            "timestamps": equity_series.index.astype("int64").tolist(),
             "values": drawdown.tolist()
         }
 

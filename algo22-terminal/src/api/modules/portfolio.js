@@ -124,13 +124,38 @@ export const portfolioApi = {
   },
 
   /**
-   * Get closed positions only
-   * @param {Object} [filters] - Optional filters
-   * @param {number} [filters.limit] - Limit results
-   * @returns {Promise<Position[]>}
+   * Get asset allocation
+   * @returns {Promise<Array<{asset: string, value_usd: number, pct: number}>>}
    */
-  getClosedPositions: async (filters = {}) => {
-    const params = new URLSearchParams(filters);
-    return get(`/api/portfolio/positions/closed?${params}`);
+  getAllocation: async () => {
+    return get('/api/portfolio/allocation');
+  },
+
+  /**
+   * Get equity curve
+   * @param {number} [days=90]
+   * @returns {Promise<Array<{timestamp: string, equity: number}>>}
+   */
+  getEquityCurve: async (days = 90) => {
+    return get(`/api/portfolio/equity-curve?days=${days}`);
+  },
+
+  /**
+   * Get PnL heatmap
+   * @param {number} [months=3]
+   * @returns {Promise<Array<{date: string, pnl_usd: number}>>}
+   */
+  getHeatmap: async (months = 3) => {
+    return get(`/api/portfolio/heatmap?months=${months}`);
+  },
+
+  /**
+   * Get recent transactions
+   * @param {number} [limit=50]
+   * @param {number} [days=30]
+   */
+  getRecentTransactions: async (limit = 50, days = 30) => {
+    return get(`/api/portfolio/recent-transactions?limit=${limit}&days=${days}`);
   },
 };
+

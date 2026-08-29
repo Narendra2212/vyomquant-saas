@@ -30,6 +30,72 @@ from backend_app.core.worker_base import WorkerBase
 logger = logging.getLogger("DAGWorker")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  THE PLAN IS THE INPUT  (strategy-builder task 2.4, Requirements 22.3, 22.5)
+#
+#  This worker used to read `task.dag_config["nodes"]` and execute that list in
+#  ARRAY ORDER - i.e. in whatever order the payload happened to arrive in, with no
+#  guarantee a node's predecessors had run. It also had no relationship to the
+#  artifact the save path produced, so the worker could execute a node set the
+#  compiler had never approved.
+#
+#  It now resolves the task's `compiled_plan` through
+#  `strategy_compiler.load_plan`: the persisted plan is reused when its identity
+#  hash still matches the graph, and recompiled only when it does not
+#  (Requirement 22.5). Execution then follows `plan.execution_order`, the
+#  compiler's deterministic topological order, so this worker and the backtester
+#  execute the same version identically (Requirement 22.4).
+#
+#  A task whose payload carries no plan and no graph keeps its previous behaviour:
+#  the loose node list, in the order given. That path is reported, not silently
+#  taken, so an un-migrated producer is visible rather than invisible.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def resolve_task_plan(dag_config: Dict[str, Any]) -> Optional[Any]:
+    """The ``LoadedPlan`` for a task payload, or ``None`` when it carries no graph.
+
+    Never raises. A worker that cannot resolve a plan falls back to the payload's own
+    node list rather than dropping the task, and the reason is logged: this runs on the
+    execution path, where an unhandled exception is a stuck task.
+    """
+    try:
+        from backend_app.backend.strategy_compiler import load_plan
+
+        loaded = load_plan(dag_config)
+    except Exception as exc:  # noqa: BLE001 - classified into a log line, never swallowed
+        logger.warning(
+            "DAG task payload could not be resolved to a compiled plan (%s); "
+            "executing the payload's own node list in the order given.",
+            exc,
+        )
+        return None
+
+    logger.info(
+        "DAG task plan resolved: dag_hash=%s reused=%s reason=%s",
+        loaded.dag_hash,
+        loaded.reused,
+        loaded.reason,
+    )
+    return loaded
+
+
+def task_execution_nodes(dag_config: Dict[str, Any]) -> tuple:
+    """``(nodes, edges, plan)`` for a task, in the compiled plan's execution order.
+
+    ``plan`` is ``None`` for a payload that carries no graph, in which case ``nodes`` and
+    ``edges`` are the payload's own lists, unchanged.
+    """
+    loaded = resolve_task_plan(dag_config)
+    if loaded is None:
+        return list(dag_config.get("nodes") or []), list(dag_config.get("edges") or []), None
+
+    from backend_app.backend.strategy_compiler import plan_to_engine_graph
+
+    nodes, edges = plan_to_engine_graph(loaded.plan)
+    return nodes, edges, loaded.plan
+
+
 class DAGWorker(WorkerBase):
     """
     Worker that processes DAG tasks from the queue.
@@ -714,10 +780,11 @@ class DAGWorker(WorkerBase):
         try:
             # Create execution engine for tenant
             engine = DAGEngine()
-            
-            nodes = task.dag_config.get("nodes", [])
-            task.dag_config.get("edges", [])
-            
+
+            # Nodes come out in the compiled plan's execution_order, so a node's
+            # predecessors have always run by the time it does (task 2.4).
+            nodes, edges, plan = task_execution_nodes(task.dag_config)
+
             total_nodes = len(nodes)
             results = {}
             
@@ -768,7 +835,13 @@ class DAGWorker(WorkerBase):
                     f"Executing node {node.get('id', i)} ({i+1}/{total_nodes})"
                 )
                 
-                # Execute node
+                # Execute node.
+                # PRE-EXISTING and out of scope for task 2.4: this call does not match
+                # DAGEngine.execute_node(node, edges, market_data). The worker has no
+                # market data to pass, and this whole path is gated behind
+                # ExecutionFlags.DAG_TRADING_ENABLED, which raises above. Task 2.4
+                # changed WHICH nodes run and in WHAT ORDER, not the engine contract;
+                # `edges` is now available from the plan for whoever fixes the arity.
                 node_result = await engine.execute_node(node, results)
                 results[node.get("id")] = node_result
                 
@@ -784,7 +857,11 @@ class DAGWorker(WorkerBase):
             
             return {
                 "node_results": results,
-                "execution_order": [n.get("id") for n in nodes],
+                "execution_order": (
+                    list(plan.execution_order) if plan is not None
+                    else [n.get("id") for n in nodes]
+                ),
+                "dag_hash": plan.dag_hash if plan is not None else None,
                 "symbols": task.dag_config.get("symbols"),
                 "timestamp": datetime.utcnow().isoformat(),
             }
@@ -828,10 +905,10 @@ class DAGWorker(WorkerBase):
         """Run DAG execution."""
         # Create execution engine for tenant
         engine = DAGEngine()
-        
-        nodes = task.dag_config.get("nodes", [])
-        task.dag_config.get("edges", [])
-        
+
+        # Nodes come out in the compiled plan's execution_order (task 2.4).
+        nodes, edges, plan = task_execution_nodes(task.dag_config)
+
         total_nodes = len(nodes)
         results = {}
         
@@ -845,7 +922,8 @@ class DAGWorker(WorkerBase):
                 f"Executing node {node.get('id', i)} ({i+1}/{total_nodes})"
             )
             
-            # Execute node
+            # Execute node. See the note on the arity in
+            # _execute_dag_with_cancellation: pre-existing, out of scope for task 2.4.
             node_result = await engine.execute_node(node, results)
             results[node.get("id")] = node_result
             
@@ -861,7 +939,11 @@ class DAGWorker(WorkerBase):
         
         return {
             "node_results": results,
-            "execution_order": [n.get("id") for n in nodes],
+            "execution_order": (
+                list(plan.execution_order) if plan is not None
+                else [n.get("id") for n in nodes]
+            ),
+            "dag_hash": plan.dag_hash if plan is not None else None,
             "symbols": task.dag_config.get("symbols"),
             "timestamp": datetime.utcnow().isoformat(),
         }

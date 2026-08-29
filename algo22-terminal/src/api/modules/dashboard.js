@@ -131,11 +131,12 @@ export const dashboardApi = {
    * Get complete dashboard data in one optimized call
    * @param {Object} params
    * @param {number} [params.equity_days=30] - Number of days for equity curve data
+   * @param {string} [params.environment='live'] - Trading environment ('live' or 'paper')
    * @returns {Promise<DashboardData>}
    */
   getDashboard: (params = {}) => {
-    const { equity_days = 30 } = params;
-    return get(`/api/dashboard?equity_days=${equity_days}`);
+    const { equity_days = 30, environment = "live" } = params;
+    return get(`/api/dashboard?equity_days=${equity_days}&environment=${environment}`);
   },
 
   /**

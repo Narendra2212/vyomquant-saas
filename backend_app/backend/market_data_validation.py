@@ -141,6 +141,23 @@ class StrictDataValidator:
 logger = logging.getLogger("MarketDataValidation")
 
 
+#: Bar interval -> minutes per bar, for the row-coverage gate below.
+#:
+#: Hoisted out of :meth:`MarketDataValidator._validate_row_count` by strategy-builder task
+#: 7.2 so that it is *readable* as a vocabulary rather than buried in a method body. The
+#: values and the set of keys are unchanged; the gate's behaviour is unchanged. It is named
+#: here because it is the market-data path's own statement of which intervals it can measure
+#: coverage for, and ``/registry/timeframes`` intersects it (Requirement 11.8). An interval
+#: absent from this table does not get rejected by the gate - it gets measured as if it were
+#: an hour, which silently disarms the check - so absence from here is a real limitation of
+#: the pipeline for that interval, not a cosmetic omission.
+TIMEFRAME_MINUTES: Dict[str, int] = {
+    "1m": 1, "5m": 5, "15m": 15, "30m": 30,
+    "1h": 60, "2h": 120, "4h": 240, "6h": 360, "8h": 480, "12h": 720,
+    "1d": 1440, "3d": 4320, "1w": 10080,
+}
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # ENUMS & DATA CLASSES
 # ═══════════════════════════════════════════════════════════════════════════
@@ -321,7 +338,11 @@ class StructuralValidator:
                 message=f"Found {dup_count} duplicate timestamps",
                 details={"count": int(dup_count)}
             ))
-            df = df[~df.index.duplicated(keep="last")]
+            # FIRST WINS (Requirement 19.4, strategy-builder task 7.5). design.md names
+            # this validator as the owner of "keep first, count duplicate"; it previously
+            # kept the last arrival, which is a revision of a bar the pipeline may already
+            # have computed on. One word, and the counter above is unchanged.
+            df = df[~df.index.duplicated(keep="first")]
         
         # Sort by timestamp
         df = df.sort_index()
@@ -845,11 +866,7 @@ class MarketDataValidator:
             raise DataValidationError(f"Empty dataset for {symbol} - no data available")
         
         # Calculate expected rows based on timeframe
-        timeframe_minutes = {
-            "1m": 1, "5m": 5, "15m": 15, "30m": 30,
-            "1h": 60, "2h": 120, "4h": 240, "6h": 360, "8h": 480, "12h": 720,
-            "1d": 1440, "3d": 4320, "1w": 10080
-        }.get(timeframe, 60)
+        timeframe_minutes = TIMEFRAME_MINUTES.get(timeframe, 60)
         
         expected_duration_minutes = (end_time - start_time).total_seconds() / 60
         expected_rows = int(expected_duration_minutes / timeframe_minutes)

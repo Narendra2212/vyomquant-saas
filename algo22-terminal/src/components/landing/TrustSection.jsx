@@ -1,5 +1,5 @@
 import React from 'react'
-import { Network, Activity, Smartphone, Bot, Globe2, BarChart4 } from 'lucide-react'
+import { Network, Activity, Smartphone, ShieldCheck, Globe2, BarChart4 } from 'lucide-react'
 
 export default function TrustSection() {
   const cards = [
@@ -19,9 +19,9 @@ export default function TrustSection() {
       desc: 'Test your strategies in a live market environment with zero capital risk using our real-time paper trading engine.'
     },
     {
-      icon: Bot,
-      title: 'AI Trading Copilot',
-      desc: 'Generate strategy blocks, review performance, and optimize parameters via natural language with our integrated AI.'
+      icon: ShieldCheck,
+      title: 'Institutional Risk Controls',
+      desc: 'Deploy automated circuit breakers, max drawdown limits, and portfolio-level risk parameters to safeguard your capital.'
     },
     {
       icon: Globe2,

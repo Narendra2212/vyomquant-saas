@@ -8,6 +8,7 @@ All authentication must go through Supabase.
 from typing import Optional
 import logging
 import os
+import secrets
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 
@@ -140,111 +141,95 @@ async def register(
     user_data: UserCreate,
     supabase: SupabaseClient = Depends(get_supabase)
 ):
+    """
+    Register a new user account.
+
+    Phase 7B F-01 REMEDIATION:
+    - email_confirm=True (service-role admin bypass) has been removed.
+    - Registration now uses the standard anon client sign_up(), which honours
+      the Supabase project's email-confirmation setting.
+    - If email confirmation is required (project default), the user receives
+      verification_required=True and must verify before gaining API access.
+    - The 'email_verification_pending' fake-token placeholder (F-14) is removed;
+      the response now uses a typed field so API clients cannot mistake it for a
+      real JWT.
+
+    Referral code processing still uses the admin client when available,
+    but ONLY after the user record has been created via the standard flow.
+    """
     try:
-        from backend_app.core.supabase_connection import SupabaseConnection
-        vault = SupabaseConnection()
-        admin_client = vault.get_client()
-        
-        if admin_client:
-            # Use admin client to auto-confirm user
-            res = admin_client.auth.admin.create_user({
+        # Phase 7B F-01: Use standard anon sign_up — respects Supabase email-confirmation setting.
+        # Do NOT use admin.create_user(email_confirm=True) as that silently bypasses verification.
+        res = supabase.auth.sign_up(
+            {
                 "email": user_data.email,
                 "password": user_data.password,
-                "email_confirm": True,
-                "user_metadata": {
-                    "username": user_data.username,
-                    "phone": user_data.phone_number,
-                }
-            })
-            
-            # Immediately login to get a session token
-            login_res = supabase.auth.sign_in_with_password({
-                "email": user_data.email,
-                "password": user_data.password
-            })
-            if login_res.session:
-                user_id = login_res.user.id
-                access_token = login_res.session.access_token
-            else:
-                user_id = res.user.id
-                access_token = "email_verification_pending"
+                "options": {
+                    "data": {
+                        "username": user_data.username,
+                        "phone": user_data.phone_number,
+                    }
+                },
+            }
+        )
 
-            # Apply referral logic using new referral system
-            if getattr(user_data, "referral_code", None):
-                ref_code = user_data.referral_code.upper().strip()
-                try:
-                    # Validate referral code using new referral_codes table
+        if not res.user:
+            raise HTTPException(status_code=400, detail="Registration failed: no user returned from Supabase.")
+
+        user_id = res.user.id
+
+        # Process referral code using service-role admin client (post-creation, isolated)
+        if user_id and getattr(user_data, "referral_code", None):
+            try:
+                from backend_app.core.supabase_connection import SupabaseConnection
+                admin_client = SupabaseConnection().get_client()
+                if admin_client:
+                    ref_code = user_data.referral_code.upper().strip()
                     referral_code_res = admin_client.table("referral_codes").select("user_id", "id").eq("code", ref_code).execute()
-                    
                     if referral_code_res.data and len(referral_code_res.data) > 0:
                         referrer_data = referral_code_res.data[0]
                         referrer_id = referrer_data["user_id"]
                         referral_code_id = referrer_data["id"]
-                        
-                        # Prevent self-referral
                         if referrer_id == user_id:
                             logger.warning(f"Self-referral attempt blocked for user {user_id}")
                         else:
-                            # Check if user already has a referrer
                             existing_referral = admin_client.table("referral_relationships").select("id").eq("referred_id", user_id).execute()
-                            
                             if not existing_referral.data or len(existing_referral.data) == 0:
-                                # Create referral relationship using new schema
                                 admin_client.table("referral_relationships").insert({
                                     "referrer_id": referrer_id,
                                     "referred_id": user_id,
                                     "referral_code_id": referral_code_id,
                                     "status": "pending"
                                 }).execute()
-                                
-                                # Update profiles table for backward compatibility
                                 admin_client.table("profiles").update({
                                     "referred_by_user_id": referrer_id
                                 }).eq("id", user_id).execute()
-                                
                                 logger.info(f"Referral relationship created: {referrer_id} referred {user_id} using code {ref_code}")
                             else:
                                 logger.warning(f"User {user_id} already has a referrer, ignoring duplicate referral")
                     else:
                         logger.warning(f"Invalid referral code: {ref_code}")
-                        
-                except Exception as ref_err:
-                    logger.error(f"Failed to process referral code {ref_code}: {ref_err}")
+                else:
+                    logger.warning(f"Referral code {user_data.referral_code} ignored: admin client not available")
+            except Exception as ref_err:
+                logger.error(f"Failed to process referral code {user_data.referral_code}: {ref_err}")
 
-            if login_res.session:
-                return {"access_token": access_token, "token_type": "bearer"}
-            else:
-                return {"access_token": access_token, "message": "Failed to auto-login"}
-        else:
-            # Fallback to standard anon signup
-            res = supabase.auth.sign_up(
-                {
-                    "email": user_data.email,
-                    "password": user_data.password,
-                    "options": {
-                        "data": {
-                            "username": user_data.username,
-                            "phone": user_data.phone_number,
-                        }
-                    },
-                }
-            )
-            
-            user_id = res.user.id if res.user else None
+        # If Supabase returned a session, the project has email confirmation disabled.
+        if res.session:
+            return {
+                "access_token": res.session.access_token,
+                "token_type": "bearer",
+                "verification_required": False,
+            }
 
-            # Apply referral logic if possible (requires admin_client which might not be available here, 
-            # but we can try using the standard client if RLS permits, else we skip or log)
-            if user_id and getattr(user_data, "referral_code", None):
-                logger.warning(f"Referral code {user_data.referral_code} ignored during anon signup due to missing admin_client")
-
-            if res.session:
-                return {"access_token": res.session.access_token, "token_type": "bearer"}
-            else:
-                return {
-                    "access_token": "email_verification_pending",
-                    "message": "Check email",
-                }
-
+        # Email confirmation is required — user must verify before gaining access.
+        return {
+            "token_type": "bearer",
+            "verification_required": True,
+            "message": "Registration successful. Please check your email to verify your account before signing in.",
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -269,4 +254,49 @@ async def login(
             raise HTTPException(status_code=401, detail="Invalid credentials")
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
+
+
+# ----------------------------------
+# WEBSOCKET TICKET  (Phase 7B F-05)
+# ----------------------------------
+
+_WS_TICKET_TTL_SECONDS = 30
+_WS_TICKET_REDIS_PREFIX = "ws_ticket:"
+
+
+@router.post("/ws-ticket", status_code=200)
+@limiter.limit("30/minute")
+async def issue_ws_ticket(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Phase 7B F-05 REMEDIATION: Issue a short-lived WebSocket authentication ticket.
+    """
+    try:
+        from backend_app.core.cache import redis_manager
+
+        ticket = secrets.token_urlsafe(32)
+        redis_key = f"{_WS_TICKET_REDIS_PREFIX}{ticket}"
+
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=400, detail="Cannot issue WS ticket: user identity missing.")
+
+        if redis_manager.pool:
+            await redis_manager.setex(redis_key, _WS_TICKET_TTL_SECONDS, user_id)
+        else:
+            logger.warning("[WS-Ticket] Redis unavailable; ticket verification fallback.")
+
+        logger.info(f"[WS-Ticket] Issued ticket for user {user_id} (TTL={_WS_TICKET_TTL_SECONDS}s)")
+        return {
+            "ticket": ticket,
+            "ttl_seconds": _WS_TICKET_TTL_SECONDS,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[WS-Ticket] Failed to issue ticket: {e}")
+        raise HTTPException(status_code=500, detail="Failed to issue WebSocket ticket.")
 

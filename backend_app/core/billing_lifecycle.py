@@ -390,10 +390,10 @@ class BillingLifecycle:
             logger.info(f"Subscription upgraded for user {user_id}: {current_plan} -> {new_plan}")
             
             return {
+                **result,
                 "status": "upgraded",
                 "previous_plan": current_plan,
                 "new_plan": new_plan,
-                **result,
             }
         except Exception as e:
             logger.error(f"Failed to upgrade subscription for user {user_id}: {e}")

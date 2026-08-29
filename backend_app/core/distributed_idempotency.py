@@ -9,7 +9,16 @@ IMPLEMENTATION:
 - Key: f"idempotency:{tenant_id}:{client_order_id}"
 - Checks Redis BEFORE execution
 - If exists: returns cached result
-- If not: sets "processing" with 60s TTL, executes, then stores result with 3600s TTL
+- If not: sets "processing" with 60s TTL, executes, then stores result with
+  RESULT_TTL (3600s by default, or the caller's result_ttl override)
+
+SIGNAL -> ORDER PATH (trading-lifecycle-integration, Requirement 19.1):
+- idempotency_key_for(signal) derives the key deterministically from the
+  Signal's own id, so every retry of the same decision computes the same key.
+- SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS is that path's result TTL (6h default,
+  configurable). Passed per call; the 1-hour class default is unchanged for
+  every other caller.
+- Neither addition touches the locking algorithm.
 
 RULE:
 ALL orders must have client_order_id
@@ -31,6 +40,158 @@ from backend_app.core.cache import redis_manager
 from backend_app.core.global_safety import get_global_kill_switch
 
 logger = logging.getLogger("DistributedIdempotency")
+
+
+# ---------------------------------------------------------------------------
+# SIGNAL-SCOPED IDEMPOTENCY (trading-lifecycle-integration, Requirement 19.1)
+#
+# Two additions, both purely additive to the layer below: a deterministic key
+# derivation for a Signal, and a result TTL long enough for a Signal's real
+# lifecycle. NOTHING in the locking algorithm changes - the atomic Lua
+# check-and-set and the owner-token compare-and-delete release are reused
+# verbatim by the signal path.
+# ---------------------------------------------------------------------------
+
+#: Prefix that scopes a derived key to the signal namespace, so a signal-derived
+#: key can never be confused with an HTTP caller's own client_order_id.
+SIGNAL_KEY_PREFIX = "signal:"
+
+#: Default result TTL for the signal -> order path: 6 hours.
+#:
+#: WHY 6 HOURS AND NOT THE CLASS DEFAULT OF 1 HOUR.
+#:   DistributedIdempotencyLayer.RESULT_TTL = 3600 is correct for the layer's
+#:   original purpose - a synchronous HTTP request being retried - and is NOT
+#:   widened here. Every existing caller keeps the 1-hour default. Requirement
+#:   19.1 asks for something stronger on the trading path: the key and its
+#:   recorded outcome must stay enforced from a Signal's GENERATED state until
+#:   it reaches a terminal Order_Lifecycle_State, and must not be evicted
+#:   before then. The ceiling that bounds a real submission is the platform's
+#:   own order timeout - OrderStateEngine.default_timeout_seconds (30s) times
+#:   DistributedIdempotencyLayer.MAX_RETRY_ATTEMPTS - so 6 hours is that
+#:   ceiling plus very generous headroom, not a guess at a signal's lifetime.
+#:
+#: WHY A REDIS TTL IS NOT THE ONLY GUARANTEE, BY DESIGN.
+#:   Migration 005b's partial unique index uq_signals_idempotency_key is the
+#:   DURABLE BACKSTOP behind this Redis lock. If Redis is flushed or a key
+#:   expires mid-flight, a second INSERT carrying the same idempotency_key
+#:   fails at the database with 23505, which the caller (task 10.1/10.2's
+#:   signal_service) translates into DuplicateOrderError. So this TTL is sized
+#:   for the fast path; it is not load-bearing for correctness on its own.
+DEFAULT_SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS: int = 6 * 60 * 60
+
+
+def _read_signal_result_ttl() -> int:
+    """Read the signal-path result TTL from the environment, configured not hardcoded.
+
+    A missing, unparseable or non-positive value falls back to the 6-hour
+    default rather than raising at import time: a bad operator override must
+    never take the whole trading path down, and a zero or negative TTL would
+    mean "no idempotency window at all", which is the one value this layer
+    must never adopt silently.
+    """
+    raw = os.getenv("SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS")
+    if raw is None or str(raw).strip() == "":
+        return DEFAULT_SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS
+    try:
+        parsed = int(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning(
+            "SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS=%r is not an integer - "
+            "falling back to the %ds default.",
+            raw,
+            DEFAULT_SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS,
+        )
+        return DEFAULT_SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS
+    if parsed <= 0:
+        logger.warning(
+            "SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS=%d is not positive - "
+            "falling back to the %ds default.",
+            parsed,
+            DEFAULT_SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS,
+        )
+        return DEFAULT_SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS
+    return parsed
+
+
+#: The configured result TTL, in seconds, for the signal -> order path.
+SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS: int = _read_signal_result_ttl()
+
+
+def _signal_id_of(signal: Any) -> Any:
+    """Pull the signal's own id out of a Signal, a mapping, or a bare id string.
+
+    Deliberately duck-typed: task 10.1 owns the Signal record's final shape, and
+    this helper must already be usable by every writer on the path (the service,
+    a recovery sweep reading rows back out of the database as dicts, a test).
+    Only the id is ever read - see idempotency_key_for on why that matters.
+    """
+    if isinstance(signal, str):
+        return signal
+    if isinstance(signal, dict):
+        # A key present but NULL is treated exactly like a key absent. A database
+        # row read back with a NULL id must not derive "signal:None", which every
+        # such row would share.
+        if signal.get("id") is None:
+            raise ValueError(
+                "idempotency_key_for requires a signal with a non-null 'id'; "
+                "got a mapping without one."
+            )
+        return signal["id"]
+    signal_id = getattr(signal, "id", None)
+    if signal_id is None:
+        raise ValueError(
+            "idempotency_key_for requires a signal with an 'id'; "
+            f"got {type(signal).__name__} without one."
+        )
+    return signal_id
+
+
+def idempotency_key_for(signal: Any) -> str:
+    """Derive the Idempotency_Key for a Signal. Deterministic and pure.
+
+    Requirement 19.1. The key is a pure function of the Signal's own identity:
+
+        idempotency_key_for(signal) == "signal:" + signal.id
+
+    WHY signal.id AND NOTHING ELSE.
+        signal.id is minted once, at generation (Requirement 15.1), and is never
+        reused. Deriving the key from it - rather than from an attempt counter, a
+        timestamp, a retry number or anything else that moves - is precisely what
+        makes a network retry, an exchange-side retry, a WebSocket reconnect and
+        a worker restart submitting for the SAME signal all compute the SAME key,
+        which is what gives "at most one order at the exchange".
+
+        It is also what keeps the key clean under Requirement 20.3: no exchange
+        credential, API key, secret, passphrase or exchange identifier is read
+        here, so none can end up in a key that is logged, indexed in
+        uq_signals_idempotency_key, or sent as a client order id. The signal's
+        exchange_account_id is NOT part of the key either - the key names one
+        decision, not one venue.
+
+    NO NORMALISATION IS APPLIED to the id beyond str(). Stripping or lower-casing
+    it would let two distinct signals collapse onto one key, which would silently
+    suppress a real second order.
+
+    Args:
+        signal: A Signal (anything with an ``id``), a mapping with an ``"id"``,
+            or the signal id itself.
+
+    Returns:
+        The derived key, always prefixed ``signal:``.
+
+    Raises:
+        ValueError: If no id is present, or the id is empty/blank. An unnamed
+            signal has no identity to be idempotent on, so this fails loudly
+            rather than deriving a key that every unnamed signal would share.
+    """
+    signal_id = _signal_id_of(signal)
+    text = str(signal_id)
+    if text.strip() == "":
+        raise ValueError(
+            "idempotency_key_for requires a non-empty signal id; "
+            f"got {signal_id!r}."
+        )
+    return f"{SIGNAL_KEY_PREFIX}{text}"
 
 
 def _is_production() -> bool:
@@ -83,7 +244,8 @@ class DistributedIdempotencyLayer:
         3. If not exists:
            - Set key to "processing" with 60s TTL
            - Execute the operation
-           - Store result with 3600s TTL
+           - Store result with RESULT_TTL (3600s), or with the caller's
+             result_ttl override where one is given
     
     ENFORCEMENT:
         - ALL orders must have client_order_id
@@ -111,6 +273,31 @@ class DistributedIdempotencyLayer:
         if exchange_id:
             return f"{self.KEY_PREFIX}:{tenant_id}:{exchange_id}:{client_order_id}"
         return f"{self.KEY_PREFIX}:{tenant_id}:{client_order_id}"
+    
+    def _resolve_result_ttl(self, result_ttl: Optional[int] = None) -> int:
+        """Resolve the result TTL for one call.
+        
+        ``None`` means "the existing default", which is what keeps every caller
+        that predates the signal path on exactly the 1-hour RESULT_TTL it had
+        before. A non-positive or unparseable override is refused rather than
+        applied, because passing it to Redis as an expiry would either error or
+        - worse - store the result with no idempotency window at all.
+        """
+        if result_ttl is None:
+            return self.RESULT_TTL
+        try:
+            ttl = int(result_ttl)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"result_ttl must be a positive integer number of seconds; "
+                f"got {result_ttl!r}."
+            ) from exc
+        if ttl <= 0:
+            raise ValueError(
+                f"result_ttl must be a positive integer number of seconds; "
+                f"got {ttl}."
+            )
+        return ttl
     
     async def check_idempotency(
         self, 
@@ -380,23 +567,29 @@ class DistributedIdempotencyLayer:
         tenant_id: str, 
         client_order_id: str, 
         result: Any,
-        exchange_id: Optional[str] = None
+        exchange_id: Optional[str] = None,
+        result_ttl: Optional[int] = None
     ) -> str:
         """
         Store the execution result for future duplicate detection.
         
-        Sets key to JSON result with 3600s TTL.
+        Sets key to JSON result with RESULT_TTL (3600s) unless overridden.
         
         Args:
             tenant_id: Tenant identifier
             client_order_id: Client-provided unique order ID
             result: Execution result to cache (must be JSON serializable)
             exchange_id: Optional exchange identifier
+            result_ttl: Optional TTL override, in seconds. Defaults to
+                RESULT_TTL, so every existing caller's behaviour is unchanged.
+                The signal -> order path passes
+                SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS here (Requirement 19.1).
             
         Returns:
             The Redis key that was set
         """
         key = self._generate_key(tenant_id, client_order_id, exchange_id)
+        ttl = self._resolve_result_ttl(result_ttl)
         
         try:
             result_json = json.dumps({
@@ -406,8 +599,8 @@ class DistributedIdempotencyLayer:
                 "client_order_id": client_order_id,
                 "exchange_id": exchange_id
             })
-            await redis_manager.set(key, result_json, ex=self.RESULT_TTL)
-            logger.debug(f"STEP 2: Stored result for {key} (TTL={self.RESULT_TTL}s)")
+            await redis_manager.set(key, result_json, ex=ttl)
+            logger.debug(f"STEP 2: Stored result for {key} (TTL={ttl}s)")
             return key
         except Exception as e:
             logger.error(f"STEP 2: Failed to store result for {key}: {e}")
@@ -426,13 +619,38 @@ class DistributedIdempotencyLayer:
         operation: Callable,
         *args,
         exchange_id: Optional[str] = None,
+        result_ttl: Optional[int] = None,
         **kwargs
     ) -> Any:
         """
         Execute an operation with distributed idempotency guarantees.
         
         This is the MAIN ENTRY POINT for idempotent operations.
+        
+        Args:
+            tenant_id: Tenant identifier
+            client_order_id: The idempotency key. On the signal -> order path
+                this is ``idempotency_key_for(signal)``.
+            operation: The awaitable to run at most once for this key.
+            *args / **kwargs: Forwarded to ``operation``.
+            exchange_id: Optional exchange identifier, scopes the Redis key.
+            result_ttl: Optional result-TTL override, in seconds. Defaults to
+                None, meaning RESULT_TTL - so no existing caller's behaviour
+                changes. The signal -> order path passes
+                SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS (Requirement 19.1).
+                Consumed by this layer, NOT forwarded to ``operation``, the same
+                way ``exchange_id`` already is.
+        
+        The locking algorithm below is unchanged: the same atomic Lua
+        check-and-set acquires, and the same owner-token compare-and-delete
+        releases. ``result_ttl`` affects only how long a COMPLETED result is
+        remembered; PROCESSING_TTL, the in-flight lock's lifetime, is untouched.
         """
+        # Validate the override before doing any Redis work, so a bad TTL is a
+        # loud rejection up front rather than a surprise after the operation has
+        # already run and its result cannot be cached.
+        self._resolve_result_ttl(result_ttl)
+        
         # RULE: ALL orders must have client_order_id
         if not client_order_id:
             logger.error(
@@ -501,14 +719,38 @@ class DistributedIdempotencyLayer:
             result = await operation(*args, **kwargs)
             
             # Store result
-            await self.store_result(tenant_id, client_order_id, result, exchange_id=exchange_id)
+            await self.store_result(
+                tenant_id,
+                client_order_id,
+                result,
+                exchange_id=exchange_id,
+                result_ttl=result_ttl,
+            )
             
             return result
             
         except Exception:
-            # Owner-safe release of processing state on failure
+            # Owner-safe release of processing state on failure.
+            #
+            # owner_token, NOT lock_token. lock_token was a real bug: it is bound
+            # only inside the `if not lock_acquired:` retry loop above, so on the
+            # COMMON path - the lock acquired atomically on the first try - the
+            # name does not exist in this frame and this block raised
+            # UnboundLocalError instead of releasing the lock and re-raising the
+            # real error. Two consequences, both bad and both silent: the lock
+            # stayed held for the full PROCESSING_TTL (60s) even though the
+            # operation had already failed, and the actual failure - a risk
+            # rejection, an exchange error, a database write failure - was
+            # replaced by an UnboundLocalError that named none of it.
+            #
+            # owner_token is the correct value in BOTH cases: it is the token
+            # this call generated, it is the token the atomic Lua check-and-set
+            # wrote into the lock payload, and it is the token the retry loop
+            # passes to start_processing (which returns it back unchanged), so
+            # lock_token was only ever an alias for it on the one path where it
+            # existed at all.
             await self.release_processing_lock(
-                tenant_id, client_order_id, owner_token=lock_token, exchange_id=exchange_id
+                tenant_id, client_order_id, owner_token=owner_token, exchange_id=exchange_id
             )
             
             # Re-raise the original exception
@@ -538,4 +780,9 @@ __all__ = [
     "DuplicateOrderError",
     "MissingClientOrderIdError",
     "get_idempotency_layer",
+    # Signal-scoped additions (Requirement 19.1)
+    "idempotency_key_for",
+    "SIGNAL_KEY_PREFIX",
+    "SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS",
+    "DEFAULT_SIGNAL_IDEMPOTENCY_RESULT_TTL_SECONDS",
 ]

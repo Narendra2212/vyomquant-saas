@@ -491,10 +491,16 @@ class RiskIntegratedEventLoop(DAGEventLoop):
         if not window:
             return
         
-        if event.is_candle:
-            window.add_candle(event)
-        elif event.is_tick:
-            window.add_tick(event)
+        # Task 7.10: the window is fed through the market data contract, not from the event
+        # directly. `DAGEventLoop._ingest_event` offers the event to that symbol's
+        # `ClosedBarGate` (`market_data_contract.ClosedBarIngest`, `drop_late=True`) and
+        # appends only a bar the contract admitted, so a forming bar, a duplicate or a late
+        # arrival cannot reach the engine below (Requirements 19.2 - 19.4). It returns False
+        # for a tick that has not completed an interval: `self.last_prices` above is already
+        # updated from that tick, so position sizing still sees the live price while indicator
+        # computation waits for the bar to close.
+        if not self._ingest_event(event):
+            return
         
         if len(window) < 20:
             return

@@ -1,0 +1,269 @@
+{
+ "backtester": {
+  "action_nodes": [
+   "gold_buy"
+  ],
+  "engine_edge_order": [
+   "gold_e_data_ema",
+   "gold_e_data_rsi",
+   "gold_e_rsi_gate",
+   "gold_e_floor_gate",
+   "gold_e_ema_gate",
+   "gold_e_gate_buy"
+  ],
+  "engine_execution_order": [
+   "gold_data",
+   "gold_floor",
+   "gold_ema",
+   "gold_rsi",
+   "gold_gate",
+   "gold_buy"
+  ],
+  "engine_node_ids": [
+   "gold_data",
+   "gold_floor",
+   "gold_ema",
+   "gold_rsi",
+   "gold_gate",
+   "gold_buy"
+  ],
+  "engine_node_types": {
+   "gold_buy": "action",
+   "gold_data": "market_data",
+   "gold_ema": "indicator",
+   "gold_floor": "math",
+   "gold_gate": "logic",
+   "gold_rsi": "indicator"
+  },
+  "engine_payload_sha256": "42091f4d5b2ed1f1090f76d664f88a41d87acb9570d2b5611b9a19d8b073ab1d",
+  "gate_rle": [
+   [
+    false,
+    19
+   ],
+   [
+    true,
+    101
+   ]
+  ],
+  "intents": [],
+  "node_outputs": {
+   "gold_buy": {
+    "dtype": "int64",
+    "first": 0.0,
+    "last": 0.0,
+    "length": 120,
+    "sha256": "0f11a5a7df991d1addcfc7927eff30d2a5e80cda589afd9a69040156940f1048"
+   },
+   "gold_data": {
+    "dtype": "float64",
+    "first": 100.0,
+    "last": 151.76,
+    "length": 120,
+    "sha256": "2f17a64e74f8121a3c5da94028b0e52e1a835301dec28ec7fb8158b9084b4ad7"
+   },
+   "gold_ema": {
+    "dtype": "float64",
+    "first": "NaN",
+    "last": 143.88599323,
+    "length": 120,
+    "sha256": "e2cab3db9ba49c34490931f605d9f4680328b8c6d601ce0300c6876920e35183"
+   },
+   "gold_floor": {
+    "dtype": "float64",
+    "first": 30.0,
+    "last": 30.0,
+    "length": 120,
+    "sha256": "e2f7f730500777dc78059ff19308006d11f863cb9843128fa1852f4bd13413fa"
+   },
+   "gold_gate": {
+    "dtype": "bool",
+    "first": false,
+    "last": true,
+    "length": 120,
+    "sha256": "5cf2a63b0e4e27a60440d2dc4ceda19ee0d300cbf74f100fbb53b43fefe7c461"
+   },
+   "gold_rsi": {
+    "dtype": "float64",
+    "first": "NaN",
+    "last": 94.64595661,
+    "length": 120,
+    "sha256": "fe59ff0824007cf3506397ac983499c55fd356cc87ffe709b60a5016a11394d5"
+   }
+  },
+  "signals_rle": [
+   [
+    0.0,
+    120
+   ]
+  ],
+  "signals_sha256": "0f11a5a7df991d1addcfc7927eff30d2a5e80cda589afd9a69040156940f1048"
+ },
+ "candles": {
+  "bar_count": 120,
+  "sha256": "eb13575f4bbec9ceae8791652cec4af272de115a9e732e7637c5d350f4c83ade",
+  "symbol": "ETH/USDT",
+  "timeframe": "5m"
+ },
+ "graph": {
+  "dag_hash": "42a79bf16fd0e0cd",
+  "edge_addresses": [
+   "gold_data.close->gold_ema.series",
+   "gold_data.close->gold_rsi.series",
+   "gold_ema.value->gold_gate.upper",
+   "gold_floor.value->gold_gate.lower",
+   "gold_gate.out->gold_buy.signal",
+   "gold_rsi.value->gold_gate.value"
+  ],
+  "node_ids": [
+   "gold_buy",
+   "gold_data",
+   "gold_ema",
+   "gold_floor",
+   "gold_gate",
+   "gold_rsi"
+  ]
+ },
+ "live": {
+  "action_nodes": [
+   "gold_buy"
+  ],
+  "engine_edge_order": [
+   "gold_e_data_ema",
+   "gold_e_data_rsi",
+   "gold_e_rsi_gate",
+   "gold_e_floor_gate",
+   "gold_e_ema_gate",
+   "gold_e_gate_buy"
+  ],
+  "engine_execution_order": [
+   "gold_data",
+   "gold_floor",
+   "gold_ema",
+   "gold_rsi",
+   "gold_gate",
+   "gold_buy"
+  ],
+  "engine_node_ids": [
+   "gold_data",
+   "gold_floor",
+   "gold_ema",
+   "gold_rsi",
+   "gold_gate",
+   "gold_buy"
+  ],
+  "engine_node_types": {
+   "gold_buy": "action",
+   "gold_data": "market_data",
+   "gold_ema": "indicator",
+   "gold_floor": "math",
+   "gold_gate": "logic",
+   "gold_rsi": "indicator"
+  },
+  "engine_payload_sha256": "42091f4d5b2ed1f1090f76d664f88a41d87acb9570d2b5611b9a19d8b073ab1d",
+  "gate_rle": [
+   [
+    false,
+    19
+   ],
+   [
+    true,
+    101
+   ]
+  ],
+  "intents": [],
+  "node_outputs": {
+   "gold_buy": {
+    "dtype": "int64",
+    "first": 0.0,
+    "last": 0.0,
+    "length": 120,
+    "sha256": "0f11a5a7df991d1addcfc7927eff30d2a5e80cda589afd9a69040156940f1048"
+   },
+   "gold_data": {
+    "dtype": "float64",
+    "first": 100.0,
+    "last": 151.76,
+    "length": 120,
+    "sha256": "2f17a64e74f8121a3c5da94028b0e52e1a835301dec28ec7fb8158b9084b4ad7"
+   },
+   "gold_ema": {
+    "dtype": "float64",
+    "first": "NaN",
+    "last": 143.88599323,
+    "length": 120,
+    "sha256": "e2cab3db9ba49c34490931f605d9f4680328b8c6d601ce0300c6876920e35183"
+   },
+   "gold_floor": {
+    "dtype": "float64",
+    "first": 30.0,
+    "last": 30.0,
+    "length": 120,
+    "sha256": "e2f7f730500777dc78059ff19308006d11f863cb9843128fa1852f4bd13413fa"
+   },
+   "gold_gate": {
+    "dtype": "bool",
+    "first": false,
+    "last": true,
+    "length": 120,
+    "sha256": "5cf2a63b0e4e27a60440d2dc4ceda19ee0d300cbf74f100fbb53b43fefe7c461"
+   },
+   "gold_rsi": {
+    "dtype": "float64",
+    "first": "NaN",
+    "last": 94.64595661,
+    "length": 120,
+    "sha256": "fe59ff0824007cf3506397ac983499c55fd356cc87ffe709b60a5016a11394d5"
+   }
+  },
+  "signals_rle": [
+   [
+    0.0,
+    120
+   ]
+  ],
+  "signals_sha256": "0f11a5a7df991d1addcfc7927eff30d2a5e80cda589afd9a69040156940f1048"
+ },
+ "plan": {
+  "action_nodes": [
+   "gold_buy"
+  ],
+  "compiler_version": "2.1.0",
+  "dag_hash": "42a79bf16fd0e0cd",
+  "data_nodes": [
+   "gold_data"
+  ],
+  "execution_levels": [
+   [
+    "gold_data",
+    "gold_floor"
+   ],
+   [
+    "gold_ema",
+    "gold_rsi"
+   ],
+   [
+    "gold_gate"
+   ],
+   [
+    "gold_buy"
+   ]
+  ],
+  "execution_order": [
+   "gold_data",
+   "gold_floor",
+   "gold_ema",
+   "gold_rsi",
+   "gold_gate",
+   "gold_buy"
+  ],
+  "load_reason": "compiled_plan_hash_match",
+  "reused_from_row": true,
+  "schema_version": 2,
+  "sha256": "3fa85bbba345558e44f3b5568115b19139ff4b269de39f3f6634e3e5a2e4beb2",
+  "warmup_bars": 60
+ },
+ "safety": {
+  "order_placing_execution_blocked": true
+ }
+}

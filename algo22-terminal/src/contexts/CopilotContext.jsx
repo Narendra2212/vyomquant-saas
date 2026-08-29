@@ -1,3 +1,11 @@
+/**
+ * CopilotContext.jsx — AI Copilot React Context & Provider
+ * 
+ * NOTE: Intentionally DORMANT. Preserved for future Copilot UI restoration.
+ * All state management, SSE streaming reader, DAG event dispatchers,
+ * and API client methods remain fully implemented and intact.
+ */
+
 import React, { createContext, useContext, useState, useCallback, useRef } from "react";
 
 const CopilotContext = createContext(null);

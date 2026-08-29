@@ -1,10 +1,36 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   Plus, Trash2, RefreshCw, CheckCircle, XCircle,
   Globe, Key, Eye, EyeOff, Wifi, Database, AlertTriangle, Shield, Activity,
   Settings, Clock, Zap, Lock
 } from "lucide-react";
 import { api } from "../api";
+
+function sanitizeErrorMessage(err, fallback = "An error occurred. Please try again.") {
+  if (!err) return fallback;
+  if (err.name === "AbortError" || err.name === "CanceledError") return null;
+
+  const status = err?.response?.status;
+  if (status === 401) return "Session expired. Please log in again.";
+  if (status === 403) return "Access denied. Insufficient permissions.";
+  if (status === 429) return "Exchange rate limit reached. Please try again shortly.";
+
+  const detail = err?.response?.data?.detail;
+  if (typeof detail === "string") {
+    // Check for internal stack traces, DB errors, or raw exceptions
+    if (detail.includes("Traceback") || detail.includes("SELECT") || detail.includes("TypeError") || detail.includes("500 Internal")) {
+      return "Exchange service temporarily unavailable. Please try again.";
+    }
+    if (detail.toLowerCase().includes("cannot delete exchange")) {
+      return detail;
+    }
+    if (detail.toLowerCase().includes("verification failed") || detail.toLowerCase().includes("authentication failed")) {
+      return "Exchange credentials could not be verified. Please check API Key and Secret.";
+    }
+    return detail;
+  }
+  return fallback;
+}
 
 export default function ExchangeManager() {
   const [connectedExchanges, setConnectedExchanges] = useState([]);
@@ -20,74 +46,116 @@ export default function ExchangeManager() {
   const [processingById, setProcessingById] = useState({});
   const [toast, setToast] = useState(null);
 
-  const loadConnectedExchanges = async () => {
+  const isMountedRef = useRef(true);
+  const abortControllerRef = useRef(null);
+
+  const loadConnectedExchanges = useCallback(async () => {
     try {
       const data = await api.exchange.list();
+      if (!isMountedRef.current) return;
       setConnectedExchanges(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error("Failed loading connected exchanges:", err);
-      setToast({ type: "error", msg: "Failed to load exchange connections." });
+      if (!isMountedRef.current) return;
+      const msg = sanitizeErrorMessage(err, "Failed to load exchange connections.");
+      if (msg) setToast({ type: "error", msg });
     }
-  };
+  }, []);
 
-  const loadSupportedExchanges = async () => {
+  const loadSupportedExchanges = useCallback(async () => {
     try {
       const data = await api.exchange.getSupported();
-      setSupportedExchanges(data.exchanges || []);
+      if (!isMountedRef.current) return;
+      setSupportedExchanges(data?.exchanges || []);
     } catch (err) {
-      console.error("Failed loading supported exchanges:", err);
-      setToast({ type: "error", msg: "Failed to load supported exchanges." });
+      if (!isMountedRef.current) return;
+      const msg = sanitizeErrorMessage(err, "Failed to load supported exchanges.");
+      if (msg) setToast({ type: "error", msg });
     }
-  };
+  }, []);
 
-  const loadAuthSchema = async (exchangeId) => {
+  const loadAllData = useCallback(async () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    setLoadingExchanges(true);
+    try {
+      const results = await Promise.allSettled([
+        api.exchange.getSupported(),
+        api.exchange.list()
+      ]);
+
+      if (!isMountedRef.current) return;
+
+      const [supportedRes, connectedRes] = results;
+
+      if (supportedRes.status === "fulfilled") {
+        setSupportedExchanges(supportedRes.value?.exchanges || []);
+      } else {
+        const msg = sanitizeErrorMessage(supportedRes.reason, "Failed to load supported exchanges directory.");
+        if (msg) setToast({ type: "error", msg });
+      }
+
+      if (connectedRes.status === "fulfilled") {
+        setConnectedExchanges(Array.isArray(connectedRes.value) ? connectedRes.value : []);
+      } else {
+        const msg = sanitizeErrorMessage(connectedRes.reason, "Failed to load connected exchanges.");
+        if (msg) setToast({ type: "error", msg });
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setLoadingExchanges(false);
+      }
+    }
+  }, []);
+
+  const loadAuthSchema = useCallback(async (exchangeId) => {
     setLoadingSchema(true);
     try {
       const schema = await api.exchange.getAuthSchema(exchangeId);
+      if (!isMountedRef.current) return;
       setAuthSchema(schema);
-      // Initialize credential values with empty strings
       const initialValues = {};
       const fields = Array.isArray(schema?.fields) ? schema.fields : [];
       fields.forEach(field => {
-        if (field?.name) {
-          initialValues[field.name] = "";
+        const fieldName = field?.name || field?.field_id;
+        if (fieldName) {
+          initialValues[fieldName] = field?.default ?? "";
         }
       });
       setCredentialValues(initialValues);
     } catch (err) {
-      console.error("Failed loading auth schema:", err);
-      setToast({ type: "error", msg: "Failed to load exchange authentication schema." });
+      if (!isMountedRef.current) return;
+      const msg = sanitizeErrorMessage(err, "Failed to load exchange authentication schema.");
+      if (msg) setToast({ type: "error", msg });
     } finally {
-      setLoadingSchema(false);
-    }
-  };
-
-  useEffect(() => {
-    const loadAll = async () => {
-      setLoadingExchanges(true);
-      try {
-        await Promise.all([
-          loadSupportedExchanges(),
-          loadConnectedExchanges()
-        ]);
-      } catch (err) {
-        console.error("Failed to load exchange data:", err);
-        setToast({ type: "error", msg: "Failed to load exchange data." });
-      } finally {
-        setLoadingExchanges(false);
+      if (isMountedRef.current) {
+        setLoadingSchema(false);
       }
-    };
-    loadAll();
+    }
   }, []);
 
   useEffect(() => {
-    if (selectedExchange) {
+    isMountedRef.current = true;
+    loadAllData();
+    return () => {
+      isMountedRef.current = false;
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, [loadAllData]);
+
+  useEffect(() => {
+    if (selectedExchange?.id) {
       loadAuthSchema(selectedExchange.id);
     } else {
       setAuthSchema(null);
       setCredentialValues({});
     }
-  }, [selectedExchange]);
+  }, [selectedExchange, loadAuthSchema]);
 
   useEffect(() => {
     if (!toast) return;
@@ -106,19 +174,17 @@ export default function ExchangeManager() {
         password: credentialValues.password,
         uid: credentialValues.uid,
       });
+      if (!isMountedRef.current) return;
       setToast({ 
         type: "success", 
-        msg: `Connection verified! Balance: $${result.usdt_balance || 0} USDT. Clock: ${result.clock_sync}` 
+        msg: `Connection verified! Balance: $${result?.usdt_balance || 0} USDT. Clock: ${result?.clock_sync || 'Synchronized'}` 
       });
     } catch (err) {
-      const detail = err?.response?.data?.detail;
-      const message = typeof detail === 'string' ? detail : "Connection test failed. Check API keys.";
-      setToast({ 
-        type: "error", 
-        msg: message
-      });
+      if (!isMountedRef.current) return;
+      const msg = sanitizeErrorMessage(err, "Connection test failed. Please check your API credentials.");
+      if (msg) setToast({ type: "error", msg });
     } finally {
-      setIsTesting(false);
+      if (isMountedRef.current) setIsTesting(false);
     }
   };
 
@@ -134,6 +200,7 @@ export default function ExchangeManager() {
         uid: credentialValues.uid,
         label: credentialValues.label,
       });
+      if (!isMountedRef.current) return;
       setToast({ type: "success", msg: "Exchange keys encrypted and stored securely." });
 
       setCredentialValues({});
@@ -143,14 +210,11 @@ export default function ExchangeManager() {
 
       await loadConnectedExchanges();
     } catch (err) {
-      const detail = err?.response?.data?.detail;
-      const message = typeof detail === 'string' ? detail : "Failed to save exchange keys.";
-      setToast({ 
-        type: "error", 
-        msg: message
-      });
+      if (!isMountedRef.current) return;
+      const msg = sanitizeErrorMessage(err, "Failed to save exchange keys.");
+      if (msg) setToast({ type: "error", msg });
     } finally {
-      setIsSaving(false);
+      if (isMountedRef.current) setIsSaving(false);
     }
   };
 
@@ -173,17 +237,17 @@ export default function ExchangeManager() {
     setProcessingById((p) => ({ ...p, [exchangeId]: true }));
     try {
       await api.exchange.delete(exchangeId);
+      if (!isMountedRef.current) return;
       setConnectedExchanges((rows) => rows.filter((row) => row.exchange_id !== exchangeId));
       setToast({ type: "success", msg: "Exchange connection removed." });
     } catch (err) {
-      const detail = err?.response?.data?.detail;
-      const message = typeof detail === 'string' ? detail : "Failed to delete exchange connection.";
-      setToast({ 
-        type: "error", 
-        msg: message
-      });
+      if (!isMountedRef.current) return;
+      const msg = sanitizeErrorMessage(err, "Failed to delete exchange connection.");
+      if (msg) setToast({ type: "error", msg });
     } finally {
-      setProcessingById((p) => ({ ...p, [exchangeId]: false }));
+      if (isMountedRef.current) {
+        setProcessingById((p) => ({ ...p, [exchangeId]: false }));
+      }
     }
   };
 
@@ -192,21 +256,44 @@ export default function ExchangeManager() {
     setProcessingById((p) => ({ ...p, [exchangeId]: true }));
     try {
       const result = await api.exchange.testStoredConnection({ exchange_id: exchangeId });
+      if (!isMountedRef.current) return;
       setToast({ 
         type: "success", 
-        msg: `${exchangeId.toUpperCase()} verified! Balance: $${result.usdt_balance || 0} USDT` 
+        msg: `${exchangeId.toUpperCase()} verified! Balance: $${result?.usdt_balance || 0} USDT` 
       });
     } catch (err) {
-      const detail = err?.response?.data?.detail;
-      const message = typeof detail === 'string' ? detail : "Connection test failed.";
-      setToast({ 
-        type: "error", 
-        msg: message
-      });
+      if (!isMountedRef.current) return;
+      const msg = sanitizeErrorMessage(err, "Stored connection test failed.");
+      if (msg) setToast({ type: "error", msg });
     } finally {
-      setProcessingById((p) => ({ ...p, [exchangeId]: false }));
+      if (isMountedRef.current) {
+        setProcessingById((p) => ({ ...p, [exchangeId]: false }));
+      }
     }
   };
+
+  const handleReconnect = async (exchangeId) => {
+    if (processingById[exchangeId]) return;
+    setProcessingById((p) => ({ ...p, [exchangeId]: true }));
+    try {
+      await api.exchange.reconnect(exchangeId);
+      if (!isMountedRef.current) return;
+      setToast({ 
+        type: "success", 
+        msg: `${exchangeId.toUpperCase()} reconnected successfully!` 
+      });
+      await loadConnectedExchanges();
+    } catch (err) {
+      if (!isMountedRef.current) return;
+      const msg = sanitizeErrorMessage(err, "Reconnect failed.");
+      if (msg) setToast({ type: "error", msg });
+    } finally {
+      if (isMountedRef.current) {
+        setProcessingById((p) => ({ ...p, [exchangeId]: false }));
+      }
+    }
+  };
+
 
   const alphabeticalExchanges = useMemo(() => {
     const grouped = {};
@@ -344,6 +431,27 @@ export default function ExchangeManager() {
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() => handleReconnect(ex.exchange_id)}
+                      disabled={!!processingById[ex.exchange_id]}
+                      style={{
+                        padding: "6px 12px",
+                        borderRadius: 8,
+                        border: "1px solid #3b82f650",
+                        background: "#3b82f610",
+                        color: "#3b82f6",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: processingById[ex.exchange_id] ? "not-allowed" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6
+                      }}
+                      title="Reconnect"
+                    >
+                      <Zap size={14} />
+                      Reconnect
+                    </button>
                     <button
                       onClick={() => handleTestStoredConnection(ex.exchange_id)}
                       disabled={!!processingById[ex.exchange_id]}
@@ -614,6 +722,7 @@ export default function ExchangeManager() {
                           }}
                         />
                         <button
+                          type="button"
                           onClick={() => togglePasswordVisibility(field.name)}
                           style={{
                             position: "absolute",
@@ -630,6 +739,35 @@ export default function ExchangeManager() {
                           {showPasswords[field.name] ? <EyeOff size={16} /> : <Eye size={16} />}
                         </button>
                       </div>
+                    ) : field.type === "select" ? (
+                      <select
+                        value={credentialValues[field.name] ?? field.default ?? ""}
+                        onChange={e => handleCredentialChange(field.name, e.target.value)}
+                        style={{ 
+                          width: "100%", 
+                          background: "#0f172a", 
+                          border: "1px solid #334155", 
+                          color: "#f1f5f9", 
+                          padding: "12px 16px", 
+                          borderRadius: 8, 
+                          fontSize: 13,
+                          outline: "none"
+                        }}
+                      >
+                        {(field.options || []).map(opt => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                      </select>
+                    ) : field.type === "boolean" ? (
+                      <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", color: "#f1f5f9", fontSize: 13 }}>
+                        <input
+                          type="checkbox"
+                          checked={!!credentialValues[field.name]}
+                          onChange={e => handleCredentialChange(field.name, e.target.checked)}
+                          style={{ width: 16, height: 16, accentColor: "#3b82f6" }}
+                        />
+                        <span>{field.placeholder || "Enable"}</span>
+                      </label>
                     ) : (
                       <input
                         type={field.type}

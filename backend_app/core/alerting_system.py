@@ -57,6 +57,17 @@ class AlertType(Enum):
     WEBSOCKET_DISCONNECT = "websocket_disconnect"
     ORDER_EXECUTION_FAILED = "order_execution_failed"
     SYSTEM_ERROR = "system_error"
+    # ── Strategy Builder (strategy-builder task 9.2, Requirements 24.4/24.5) ──
+    # Added here rather than in a builder-shaped enum of their own, so there is one alert
+    # vocabulary and one dispatcher. The conditions, their thresholds and the reason each
+    # threshold is what it is live in `backend/builder_alerts.py`; this module still owns
+    # delivery, severity routing and the five-minute deduplication window. The dedup key is
+    # `(type, source, tenant_id)`, and all four are raised with `tenant_id=None` because
+    # they are platform-health facts rather than tenant events.
+    BUILDER_INTENT_BLOCKED_NON_FINITE = "builder_intent_blocked_non_finite"
+    BUILDER_FEED_STALE = "builder_feed_stale"
+    BUILDER_TRAINING_QUEUE_DEPTH = "builder_training_queue_depth"
+    BUILDER_ASSET_UNIVERSE_STALE = "builder_asset_universe_stale"
 
 
 @dataclass

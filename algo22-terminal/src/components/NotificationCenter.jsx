@@ -2,43 +2,39 @@
  * ═══════════════════════════════════════════════════════════════════════════
  * NOTIFICATION CENTER
  * ═══════════════════════════════════════════════════════════════════════════
- * 
  * Institutional notification center with:
  * - Chronological feed of real-time events
- * - Severity indicators
- * - Category filtering
- * - Mark as read functionality
- * - Real-time WebSocket updates
- * 
- * Categories:
- * - Trade Executed, Order Filled, Order Rejected
- * - Strategy Started, Strategy Stopped
- * - Risk Alert, Margin Alert
- * - Subscription, Billing
- * - Security, API Key
- * - System Maintenance, Database, WebSocket
+ * - Severity indicators & Category filtering
+ * - Search by title and content
+ * - Click-to-navigate action linking to relevant product surfaces
+ * - Mark as read / Mark all as read / Dismiss
+ * - Real-time WebSocket updates with deduplication
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   Bell, 
   RefreshCw, 
   Check, 
   X, 
-  Filter,
+  Search,
   TrendingUp,
   Shield,
   CreditCard,
-  Lock,
   Database,
   Activity,
   AlertTriangle,
   CheckCircle,
   XCircle,
   AlertCircle,
-  Loader2
+  Loader2,
+  HelpCircle,
+  Link2,
+  Trash2,
+  ExternalLink
 } from 'lucide-react';
-import { api } from '../api/typed-client';
+import { api } from '../api';
 import wsClient from '../websocketClient';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -52,6 +48,7 @@ const C = {
   t1: "#f1f5f9",
   t2: "#94a3b8",
   t3: "#64748b",
+  cyan: "#00d4ff",
   accent: "#00d4ff",
   green: "#00ff88",
   red: "#ff3366",
@@ -68,13 +65,15 @@ const CATEGORIES = [
   { id: 'trade', label: 'Trade', icon: TrendingUp },
   { id: 'strategy', label: 'Strategy', icon: Activity },
   { id: 'risk', label: 'Risk', icon: AlertTriangle },
+  { id: 'exchange', label: 'Exchange', icon: Link2 },
+  { id: 'support', label: 'Support', icon: HelpCircle },
   { id: 'security', label: 'Security', icon: Shield },
   { id: 'billing', label: 'Billing', icon: CreditCard },
   { id: 'system', label: 'System', icon: Database }
 ];
 
 const SEVERITY_COLORS = {
-  info: C.t2,
+  info: C.cyan,
   warning: C.orange,
   critical: C.red,
   emergency: C.red
@@ -91,11 +90,13 @@ const SEVERITY_ICONS = {
 // NOTIFICATION CENTER COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════
 function NotificationCenter() {
+  const navigate = useNavigate();
   const [notifications, setNotifications] = useState([]);
-  const [filteredNotifications, setFilteredNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [unreadCount, setUnreadCount] = useState(0);
   const [wsConnected, setWsConnected] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -149,10 +150,22 @@ function NotificationCenter() {
       setNotifications(prev => prev.filter(n => n.id !== id));
       setUnreadCount(prev => {
         const deleted = notifications.find(n => n.id === id);
-        return deleted && !deleted.read ? prev - 1 : prev;
+        return deleted && !deleted.read ? Math.max(0, prev - 1) : prev;
       });
     } catch (err) {
       console.error('Failed to delete notification:', err);
+    }
+  };
+
+  // ── Clear All Notifications ────────────────────────────────────────────────
+  const deleteAllNotifications = async () => {
+    if (!window.confirm("Are you sure you want to clear all notifications?")) return;
+    try {
+      await api.notifications.deleteAll();
+      setNotifications([]);
+      setUnreadCount(0);
+    } catch (err) {
+      console.error('Failed to clear notifications:', err);
     }
   };
 
@@ -162,41 +175,26 @@ function NotificationCenter() {
     fetchNotifications();
   };
 
-  // ── Filter Notifications ────────────────────────────────────────────────────
-  useEffect(() => {
-    if (selectedCategory === 'all') {
-      setFilteredNotifications(notifications);
-    } else {
-      setFilteredNotifications(
-        notifications.filter(n => n.category === selectedCategory)
-      );
-    }
-  }, [notifications, selectedCategory]);
-
   // ── Initial Load ───────────────────────────────────────────────────────────
   useEffect(() => {
     fetchNotifications();
   }, [fetchNotifications]);
 
-  // ── WebSocket Setup ───────────────────────────────────────────────────────
+  // ── WebSocket Setup & Real-time Listeners ──────────────────────────────────
   useEffect(() => {
-    // Subscribe to notification events
-    wsSubscriptionRef.current = wsClient.subscribe('notification', (message) => {
-      console.log('📨 Notification received:', message);
-      
-      if (message.data) {
-        setNotifications(prev => [
-          {
-            ...message.data,
-            read: false
-          },
-          ...prev.slice(0, 99) // Keep last 100
-        ]);
-        setUnreadCount(prev => prev + 1);
-      }
-    });
+    const handleIncomingNotification = (message) => {
+      const data = message.data || message;
+      if (!data || !data.id) return;
 
-    // Track connection status
+      setNotifications(prev => {
+        if (prev.some(n => n.id === data.id)) return prev;
+        return [{ ...data, read: false }, ...prev.slice(0, 99)];
+      });
+      setUnreadCount(prev => prev + 1);
+    };
+
+    wsSubscriptionRef.current = wsClient.subscribe('notification', handleIncomingNotification);
+
     const checkConnection = setInterval(() => {
       setWsConnected(wsClient.connectionStatus === 'connected');
     }, 1000);
@@ -209,8 +207,51 @@ function NotificationCenter() {
     };
   }, []);
 
+  // ── Navigate Target Helper ─────────────────────────────────────────────────
+  const handleNotificationClick = (notification) => {
+    if (!notification.read) {
+      markAsRead(notification.id);
+    }
+
+    const cat = (notification.category || '').toLowerCase();
+    const type = (notification.type || '').toLowerCase();
+
+    if (cat === 'support' || type.includes('support')) {
+      navigate('/app/support');
+    } else if (cat === 'exchange' || type.includes('exchange')) {
+      navigate('/app/exchange');
+    } else if (cat === 'risk' || type.includes('risk')) {
+      navigate('/app/risk');
+    } else if (cat === 'strategy' || type.includes('strategy')) {
+      navigate('/app/strategies');
+    } else if (cat === 'trade' || type.includes('order') || type.includes('trade')) {
+      navigate('/app/dashboard');
+    } else if (cat === 'billing' || type.includes('billing')) {
+      navigate('/app/billing');
+    } else if (cat === 'security' || type.includes('security')) {
+      navigate('/app/profile');
+    }
+  };
+
+  // ── Filter Notifications ────────────────────────────────────────────────────
+  const filteredNotifications = useMemo(() => {
+    return notifications.filter(n => {
+      if (selectedCategory !== 'all' && n.category !== selectedCategory) return false;
+      if (unreadOnly && n.read) return false;
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        const matchTitle = (n.title || '').toLowerCase().includes(query);
+        const matchMsg = (n.message || '').toLowerCase().includes(query);
+        const matchCat = (n.category || '').toLowerCase().includes(query);
+        if (!matchTitle && !matchMsg && !matchCat) return false;
+      }
+      return true;
+    });
+  }, [notifications, selectedCategory, unreadOnly, searchQuery]);
+
   // ── Format Time ────────────────────────────────────────────────────────────
   const formatTime = (timestamp) => {
+    if (!timestamp) return 'Just now';
     const date = new Date(timestamp);
     const now = new Date();
     const diff = now - date;
@@ -223,7 +264,7 @@ function NotificationCenter() {
     return date.toLocaleDateString();
   };
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  // ── Render Loading ─────────────────────────────────────────────────────────
   if (loading && notifications.length === 0) {
     return (
       <div style={{ 
@@ -249,32 +290,36 @@ function NotificationCenter() {
     }}>
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <Bell size={28} color={C.accent} />
-            <h1 style={{ 
-              fontSize: 24, 
-              fontWeight: 700, 
-              color: C.t1,
-              margin: 0 
-            }}>
-              Notification Center
-            </h1>
-            {unreadCount > 0 && (
-              <span style={{
-                background: C.red,
-                color: '#fff',
-                fontSize: 12,
-                padding: '2px 8px',
-                borderRadius: 10,
-                fontWeight: 600
-              }}>
-                {unreadCount} unread
-              </span>
-            )}
+            <div style={{ background: `${C.cyan}15`, border: `1px solid ${C.cyan}40`, borderRadius: 10, padding: 8 }}>
+              <Bell size={24} color={C.cyan} />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <h1 style={{ fontSize: 22, fontWeight: 800, color: C.t1, margin: 0, letterSpacing: '-0.02em' }}>
+                  Notifications
+                </h1>
+                {unreadCount > 0 && (
+                  <span style={{
+                    background: C.cyan,
+                    color: '#000',
+                    fontSize: 11,
+                    padding: '2px 8px',
+                    borderRadius: 12,
+                    fontWeight: 700
+                  }}>
+                    {unreadCount} unread
+                  </span>
+                )}
+              </div>
+              <p style={{ margin: '2px 0 0', fontSize: 12, color: C.t3, fontFamily: 'monospace' }}>
+                LIVE EVENT TELEMETRY & SYSTEM ALERTS
+              </p>
+            </div>
           </div>
           
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <div style={{ 
               display: 'flex', 
               alignItems: 'center', 
@@ -285,8 +330,8 @@ function NotificationCenter() {
               padding: '4px 12px',
             }}>
               <div style={{ 
-                width: 8, 
-                height: 8, 
+                width: 7, 
+                height: 7, 
                 borderRadius: '50%', 
                 background: wsConnected ? C.green : C.red,
                 animation: wsConnected ? 'pulse 2s infinite' : 'none'
@@ -294,9 +339,10 @@ function NotificationCenter() {
               <span style={{ 
                 fontSize: 11, 
                 color: wsConnected ? C.green : C.red,
-                fontFamily: 'monospace'
+                fontFamily: 'monospace',
+                fontWeight: 700
               }}>
-                {wsConnected ? 'LIVE' : 'OFFLINE'}
+                {wsConnected ? 'STREAM LIVE' : 'OFFLINE'}
               </span>
             </div>
             
@@ -304,7 +350,7 @@ function NotificationCenter() {
               onClick={handleRefresh}
               disabled={refreshing}
               style={{
-                background: 'transparent',
+                background: C.bg2,
                 border: `1px solid ${C.border}`,
                 borderRadius: 8,
                 padding: '8px 12px',
@@ -313,10 +359,11 @@ function NotificationCenter() {
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,
-                fontSize: 12
+                fontSize: 12,
+                fontWeight: 600
               }}
             >
-              <RefreshCw size={14} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
+              <RefreshCw size={13} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
               Refresh
             </button>
             
@@ -324,50 +371,140 @@ function NotificationCenter() {
               <button
                 onClick={markAllAsRead}
                 style={{
-                  background: `${C.accent}15`,
-                  border: `1px solid ${C.accent}50`,
+                  background: `${C.cyan}15`,
+                  border: `1px solid ${C.cyan}50`,
                   borderRadius: 8,
-                  padding: '8px 12px',
-                  color: C.accent,
+                  padding: '8px 14px',
+                  color: C.cyan,
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
                   fontSize: 12,
-                  fontWeight: 600
+                  fontWeight: 700
                 }}
               >
                 <Check size={14} />
                 Mark All Read
               </button>
             )}
+
+            {notifications.length > 0 && (
+              <button
+                onClick={deleteAllNotifications}
+                style={{
+                  background: 'transparent',
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 8,
+                  padding: '8px 12px',
+                  color: C.t3,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 12
+                }}
+                title="Clear all notifications"
+              >
+                <Trash2 size={13} />
+                Clear
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Category Filter */}
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {/* Filter Controls Bar */}
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+          {/* Search Box */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: C.bg2,
+            border: `1px solid ${C.border}`,
+            borderRadius: 8,
+            padding: '6px 12px',
+            flex: '1 1 240px',
+            minWidth: 200
+          }}>
+            <Search size={14} color={C.t3} />
+            <input
+              type="text"
+              placeholder="Search notifications..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: C.t1,
+                fontSize: 12,
+                outline: 'none',
+                width: '100%'
+              }}
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                style={{ background: 'transparent', border: 'none', color: C.t3, cursor: 'pointer', padding: 0 }}
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+
+          {/* Unread Only Toggle */}
+          <button
+            onClick={() => setUnreadOnly(!unreadOnly)}
+            style={{
+              background: unreadOnly ? `${C.cyan}20` : C.bg2,
+              border: `1px solid ${unreadOnly ? C.cyan : C.border}`,
+              borderRadius: 8,
+              padding: '6px 14px',
+              color: unreadOnly ? C.cyan : C.t2,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6
+            }}
+          >
+            <div style={{
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: unreadOnly ? C.cyan : C.t3
+            }} />
+            Unread Only
+          </button>
+        </div>
+
+        {/* Category Pills */}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {CATEGORIES.map(cat => {
             const Icon = cat.icon;
+            const active = selectedCategory === cat.id;
             return (
               <button
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
                 style={{
-                  background: selectedCategory === cat.id ? `${C.accent}15` : C.bg2,
-                  border: `1px solid ${selectedCategory === cat.id ? C.accent : C.border}`,
-                  borderRadius: 8,
-                  padding: '8px 16px',
-                  color: selectedCategory === cat.id ? C.accent : C.t2,
+                  background: active ? `${C.cyan}18` : C.bg2,
+                  border: `1px solid ${active ? C.cyan : C.border}`,
+                  borderRadius: 6,
+                  padding: '6px 12px',
+                  color: active ? C.cyan : C.t2,
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
-                  fontSize: 12,
-                  fontWeight: selectedCategory === cat.id ? 600 : 400,
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                  fontWeight: active ? 700 : 500,
                   transition: 'all 0.15s'
                 }}
               >
-                <Icon size={14} />
+                <Icon size={12} />
                 {cat.label}
               </button>
             );
@@ -375,24 +512,24 @@ function NotificationCenter() {
         </div>
       </div>
 
-      {/* Error State */}
+      {/* Error Banner */}
       {error && (
         <div style={{
           background: `${C.red}15`,
           border: `1px solid ${C.red}40`,
           borderRadius: 8,
           padding: '12px 16px',
-          marginBottom: 24,
+          marginBottom: 20,
           display: 'flex',
           alignItems: 'center',
           gap: 8,
         }}>
-          <X size={16} color={C.red} />
+          <AlertCircle size={16} color={C.red} />
           <span style={{ color: C.red, fontSize: 13 }}>{error}</span>
         </div>
       )}
 
-      {/* Notifications List */}
+      {/* Notifications Feed */}
       <div style={{
         background: C.bg2,
         border: `1px solid ${C.border}`,
@@ -400,82 +537,110 @@ function NotificationCenter() {
         overflow: 'hidden'
       }}>
         {filteredNotifications.length === 0 ? (
-          <div style={{ padding: '60px 20px', textAlign: 'center' }}>
-            <Bell size={48} color={C.t3} style={{ marginBottom: 16 }} />
-            <h3 style={{ color: C.t1, fontSize: 16, fontWeight: 600, marginBottom: 8 }}>
-              No Notifications
+          <div style={{ padding: '64px 20px', textAlign: 'center' }}>
+            <div style={{
+              width: 52,
+              height: 52,
+              borderRadius: '50%',
+              background: C.bg3,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 16px'
+            }}>
+              <Bell size={24} color={C.t3} />
+            </div>
+            <h3 style={{ color: C.t1, fontSize: 15, fontWeight: 700, marginBottom: 6 }}>
+              {unreadOnly ? "No Unread Notifications" : "No Notifications"}
             </h3>
-            <p style={{ color: C.t2, fontSize: 14 }}>
-              {selectedCategory === 'all' 
-                ? 'Your systems are running normally. Notifications will appear here.'
-                : `No ${CATEGORIES.find(c => c.id === selectedCategory)?.label} notifications.`
+            <p style={{ color: C.t3, fontSize: 13, maxWidth: 380, margin: '0 auto' }}>
+              {searchQuery 
+                ? `No notifications matching "${searchQuery}".`
+                : selectedCategory === 'all'
+                ? "Your quantitative trading systems and risk engines are running normally."
+                : `No notifications recorded under ${CATEGORIES.find(c => c.id === selectedCategory)?.label}.`
               }
             </p>
           </div>
         ) : (
-          filteredNotifications.map(notification => {
+          filteredNotifications.map((notification, idx) => {
             const SeverityIcon = SEVERITY_ICONS[notification.severity] || SEVERITY_ICONS.info;
             const categoryConfig = CATEGORIES.find(c => c.id === notification.category);
-            const CategoryIcon = categoryConfig?.icon || Bell;
+            const isUnread = !notification.read;
             
             return (
               <div
                 key={notification.id}
+                onClick={() => handleNotificationClick(notification)}
                 style={{
                   padding: '16px 20px',
-                  borderBottom: `1px solid ${C.border}`,
-                  background: notification.read ? C.bg3 : 'transparent',
+                  borderBottom: idx < filteredNotifications.length - 1 ? `1px solid ${C.border}` : 'none',
+                  background: isUnread ? `${C.cyan}07` : 'transparent',
+                  borderLeft: `3px solid ${isUnread ? C.cyan : 'transparent'}`,
                   cursor: 'pointer',
                   transition: 'background 0.15s',
                 }}
-                onClick={() => !notification.read && markAsRead(notification.id)}
               >
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
-                  {/* Severity Icon */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
+                  {/* Severity Badge */}
                   <div style={{
                     width: 32,
                     height: 32,
                     borderRadius: 8,
-                    background: `${SEVERITY_COLORS[notification.severity]}15`,
+                    background: `${SEVERITY_COLORS[notification.severity] || C.cyan}18`,
+                    border: `1px solid ${SEVERITY_COLORS[notification.severity] || C.cyan}35`,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     flexShrink: 0,
+                    marginTop: 2
                   }}>
-                    <SeverityIcon size={16} color={SEVERITY_COLORS[notification.severity]} />
+                    <SeverityIcon size={16} color={SEVERITY_COLORS[notification.severity] || C.cyan} />
                   </div>
 
-                  {/* Content */}
+                  {/* Content Area */}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ 
                       display: 'flex', 
                       alignItems: 'center', 
                       justifyContent: 'space-between',
                       marginBottom: 4,
+                      gap: 8
                     }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <span style={{ 
-                          fontSize: 14, 
-                          fontWeight: 600, 
-                          color: C.t1,
+                          fontSize: 13.5, 
+                          fontWeight: isUnread ? 700 : 600, 
+                          color: isUnread ? C.t1 : C.t2,
                         }}>
                           {notification.title}
                         </span>
                         <span style={{
-                          background: `${C.accent}15`,
-                          color: C.accent,
+                          background: `${C.cyan}15`,
+                          color: C.cyan,
                           fontSize: 10,
-                          padding: '2px 6px',
+                          padding: '1px 6px',
                           borderRadius: 4,
-                          fontWeight: 600
+                          fontWeight: 700,
+                          fontFamily: 'monospace',
+                          textTransform: 'uppercase'
                         }}>
                           {categoryConfig?.label || notification.category}
                         </span>
+                        {isUnread && (
+                          <span style={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: '50%',
+                            background: C.cyan
+                          }} />
+                        )}
                       </div>
                       <span style={{ 
                         fontSize: 11, 
-                        color: C.t3,
-                        fontFamily: 'monospace'
+                        color: C.t3, 
+                        fontFamily: 'monospace',
+                        flexShrink: 0
                       }}>
                         {formatTime(notification.created_at)}
                       </span>
@@ -484,46 +649,75 @@ function NotificationCenter() {
                     <p style={{ 
                       margin: 0, 
                       fontSize: 13, 
-                      color: C.t2,
-                      lineHeight: 1.4,
-                      marginBottom: 8
+                      color: isUnread ? C.t2 : C.t3,
+                      lineHeight: 1.45,
+                      marginBottom: (notification.strategy_id || notification.exchange || notification.metadata?.ticket_id) ? 8 : 0
                     }}>
                       {notification.message}
                     </p>
 
-                    {/* Metadata */}
-                    {(notification.strategy_id || notification.exchange) && (
-                      <div style={{ display: 'flex', gap: 12, fontSize: 11, color: C.t3 }}>
+                    {/* Metadata & Navigation Badges */}
+                    {(notification.strategy_id || notification.exchange || notification.metadata?.ticket_id) && (
+                      <div style={{ display: 'flex', gap: 10, fontSize: 11, color: C.t3, flexWrap: 'wrap' }}>
+                        {notification.metadata?.ticket_id && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: C.cyan, fontWeight: 600 }}>
+                            <HelpCircle size={11} />
+                            Ticket: #{notification.metadata.ticket_id}
+                          </span>
+                        )}
                         {notification.strategy_id && (
-                          <span>Strategy: {notification.strategy_id.slice(0, 8)}...</span>
+                          <span style={{ fontFamily: 'monospace' }}>
+                            Strategy: {notification.strategy_id.slice(0, 10)}...
+                          </span>
                         )}
                         {notification.exchange && (
-                          <span>Exchange: {notification.exchange}</span>
+                          <span style={{ fontFamily: 'monospace' }}>
+                            Venue: {notification.exchange.toUpperCase()}
+                          </span>
                         )}
                       </div>
                     )}
                   </div>
 
-                  {/* Delete Button */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteNotification(notification.id);
-                    }}
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      color: C.t3,
-                      cursor: 'pointer',
-                      padding: 4,
-                      opacity: 0.7,
-                      transition: 'opacity 0.15s'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.opacity = 1}
-                    onMouseLeave={(e) => e.currentTarget.style.opacity = 0.7}
-                  >
-                    <X size={16} />
-                  </button>
+                  {/* Actions (Mark Read & Dismiss) */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                    {isUnread && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          markAsRead(notification.id);
+                        }}
+                        title="Mark as read"
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: C.t3,
+                          cursor: 'pointer',
+                          padding: 6,
+                          borderRadius: 4,
+                        }}
+                      >
+                        <Check size={14} />
+                      </button>
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteNotification(notification.id);
+                      }}
+                      title="Dismiss notification"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: C.t3,
+                        cursor: 'pointer',
+                        padding: 6,
+                        borderRadius: 4,
+                      }}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
                 </div>
               </div>
             );

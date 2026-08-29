@@ -141,23 +141,27 @@ class APIKeyVault:
 
     def store_exchange_keys(
         self,
-        user_id:      str,
-        exchange_id:  str,
-        raw_api_key:  str,
-        raw_secret:   str,
-        raw_password: Optional[str] = None,
+        user_id:        str,
+        exchange_id:    str,
+        raw_api_key:    str,
+        raw_secret:     Optional[str] = None,
+        raw_password:   Optional[str] = None,
+        raw_secret_key: Optional[str] = None,
+        label:          Optional[str] = None,
+        uid:            Optional[str] = None,
     ) -> bool:
         user_id     = _validate_id(user_id,     "user_id")
         exchange_id = _validate_id(exchange_id, "exchange_id")
 
-        if not raw_api_key or not raw_secret:
+        secret = raw_secret if raw_secret is not None else raw_secret_key
+        if not raw_api_key or not secret:
             raise ValueError("api_key and secret_key are required.")
 
         data = {
             "user_id":              user_id,
             "exchange_id":          exchange_id.lower(),
             "encrypted_api_key":    self._encrypt(raw_api_key),
-            "encrypted_secret_key": self._encrypt(raw_secret),
+            "encrypted_secret_key": self._encrypt(secret),
             "encrypted_password":   self._encrypt(raw_password) if raw_password else None,
         }
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
-  CreditCard, CheckCircle, Star, Zap, Globe, Award, ArrowUpRight, Plus, AlertTriangle, XCircle, Loader2, TrendingUp, Bot, Cpu, Database, BarChart3, Shield, Crown, ChevronRight
+  CreditCard, CheckCircle, Star, Zap, Globe, Award, ArrowUpRight, Plus, AlertTriangle, XCircle, Loader2, TrendingUp, Bot, Cpu, Database, BarChart3, Shield, Crown, ChevronRight, RefreshCw, ExternalLink, AlertCircle, X, ChevronDown, MapPin
 } from "lucide-react";
 import { api } from "../api";
 import { C, SectionH, PanelTitle, Tag2 } from "../components/ui-legacy/primitives";
@@ -12,7 +12,38 @@ export default function Billing() {
   const [billingHistory, setBillingHistory] = useState([]);
   const [savedMethods, setSavedMethods] = useState([]);
   const [currency, setCurrency] = useState("USD");
+  const [currencySymbol, setCurrencySymbol] = useState("$");
+  const [countryCode, setCountryCode] = useState("US");
+  const [countryName, setCountryName] = useState("United States");
+  const [currencySource, setCurrencySource] = useState("ip");
+  const [checkoutCurrency, setCheckoutCurrency] = useState("USD");
+  const [isDirectCheckout, setIsDirectCheckout] = useState(true);
+  const [supportedCurrencies, setSupportedCurrencies] = useState([
+    { code: "USD", name: "US Dollar", symbol: "$" },
+    { code: "INR", name: "Indian Rupee", symbol: "₹" },
+    { code: "EUR", name: "Euro", symbol: "€" },
+    { code: "GBP", name: "British Pound", symbol: "£" },
+    { code: "JPY", name: "Japanese Yen", symbol: "¥" },
+    { code: "CAD", name: "Canadian Dollar", symbol: "CA$" },
+    { code: "AUD", name: "Australian Dollar", symbol: "A$" },
+    { code: "SGD", name: "Singapore Dollar", symbol: "S$" },
+    { code: "CHF", name: "Swiss Franc", symbol: "CHF" },
+    { code: "AED", name: "UAE Dirham", symbol: "AED" },
+    { code: "BRL", name: "Brazilian Real", symbol: "R$" },
+    { code: "MXN", name: "Mexican Peso", symbol: "Mex$" },
+    { code: "ZAR", name: "South African Rand", symbol: "R" },
+    { code: "KRW", name: "South Korean Won", symbol: "₩" },
+    { code: "HKD", name: "Hong Kong Dollar", symbol: "HK$" },
+    { code: "SEK", name: "Swedish Krona", symbol: "kr" },
+    { code: "NOK", name: "Norwegian Krone", symbol: "kr" },
+    { code: "DKK", name: "Danish Krone", symbol: "kr" },
+    { code: "PLN", name: "Polish Zloty", symbol: "zł" },
+    { code: "CZK", name: "Czech Koruna", symbol: "Kč" },
+    { code: "TRY", name: "Turkish Lira", symbol: "₺" },
+  ]);
+  const [isCurrencyDropdownOpen, setIsCurrencyDropdownOpen] = useState(false);
   const [isLoadingBilling, setIsLoadingBilling] = useState(true);
+  const [isLoadingPlans, setIsLoadingPlans] = useState(false);
   const [isCheckoutLoading, setIsCheckoutLoading] = useState("");
   const [billingError, setBillingError] = useState("");
   const [plans, setPlans] = useState([]);
@@ -21,32 +52,38 @@ export default function Billing() {
   const [subscriptionStatus, setSubscriptionStatus] = useState("active");
   const [renewalDate, setRenewalDate] = useState(null);
   const [cancelAtPeriodEnd, setCancelAtPeriodEnd] = useState(false);
+  const [isCancelLoading, setIsCancelLoading] = useState(false);
+  const [isResumeLoading, setIsResumeLoading] = useState(false);
+  const [isPortalLoading, setIsPortalLoading] = useState(false);
+  const [actionSuccess, setActionSuccess] = useState("");
 
-  useEffect(() => {
-    const loadPlans = async () => {
-      try {
-        const response = await api.billing.getPlans();
-        setPlans(response?.plans || []);
-      } catch (err) {
-        console.error("Failed to load plans:", err);
-      }
-    };
-    loadPlans();
-  }, []);
-
-  useEffect(() => {
-    const loadCurrency = async () => {
-      try {
-        const data = await api.billing.getCurrency();
-        if (data && data.currency) {
-          setCurrency(data.currency);
+  const loadPlans = useCallback(async (currOverride) => {
+    setIsLoadingPlans(true);
+    try {
+      const response = await api.billing.getPlans(currOverride);
+      if (response && response.plans) {
+        setPlans(response.plans);
+        if (response.currency) setCurrency(response.currency);
+        if (response.currency_symbol) setCurrencySymbol(response.currency_symbol);
+        if (response.country) setCountryCode(response.country);
+        if (response.country_name) setCountryName(response.country_name);
+        if (response.currency_source) setCurrencySource(response.currency_source);
+        if (response.checkout_currency) setCheckoutCurrency(response.checkout_currency);
+        if (response.is_direct_checkout !== undefined) setIsDirectCheckout(response.is_direct_checkout);
+        if (response.supported_currencies && response.supported_currencies.length > 0) {
+          setSupportedCurrencies(response.supported_currencies);
         }
-      } catch (err) {
-        console.error("Failed to load currency preference:", err);
       }
-    };
-    loadCurrency();
+    } catch (err) {
+      console.error("Failed to load localized plans:", err);
+    } finally {
+      setIsLoadingPlans(false);
+    }
   }, []);
+
+  useEffect(() => {
+    loadPlans();
+  }, [loadPlans]);
 
   const loadBilling = useCallback(async () => {
     setIsLoadingBilling(true);
@@ -108,8 +145,15 @@ export default function Billing() {
         ws.onmessage = (event) => {
           try {
             const message = JSON.parse(event.data);
-            if (message.type === 'subscription_update' || message.type === 'plan_changed') {
+            if (
+              message.type === 'subscription_update' ||
+              message.type === 'plan_changed' ||
+              message.event === 'subscription_cancelled' ||
+              message.event === 'cancellation_reversed' ||
+              message.event === 'payment_failed'
+            ) {
               loadBilling();
+              loadPlans(currency);
             }
           } catch (err) {
             console.error('Failed to parse WebSocket message:', err);
@@ -117,7 +161,6 @@ export default function Billing() {
         };
         ws.onerror = (error) => { console.error('WebSocket error:', error); };
         ws.onclose = () => {
-          console.log('WebSocket closed, reconnecting in 5s...');
           setTimeout(connectWebSocket, 5000);
         };
       } catch (err) {
@@ -126,7 +169,7 @@ export default function Billing() {
     };
     connectWebSocket();
     return () => { if (ws) ws.close(); };
-  }, [loadBilling]);
+  }, [loadBilling, loadPlans, currency]);
 
   const handleCheckout = useCallback(async (planId) => {
     if (isCheckoutLoading) return;
@@ -151,16 +194,67 @@ export default function Billing() {
 
   const handleCurrencyChange = useCallback(async (newCurrency) => {
     setCurrency(newCurrency);
+    setIsCurrencyDropdownOpen(false);
     try {
       await api.billing.setCurrency(newCurrency);
+      await loadPlans(newCurrency);
     } catch (err) {
       console.error("Failed to save currency preference:", err);
     }
-  }, []);
+  }, [loadPlans]);
 
-  const money = useCallback((amountUSD, amountINR) => {
-    return currency === "INR" ? `\u20B9${Number(amountINR || 0).toLocaleString()}` : `$${Number(amountUSD || 0).toLocaleString()}`;
-  }, [currency]);
+  const handleCancel = useCallback(async () => {
+    if (isCancelLoading) return;
+    setIsCancelLoading(true);
+    setBillingError("");
+    setActionSuccess("");
+    try {
+      const result = await api.billing.cancelSubscription();
+      setActionSuccess(result?.detail || "Subscription cancellation scheduled.");
+      await loadBilling();
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      setBillingError(typeof detail === 'string' ? detail : "Failed to cancel subscription.");
+    } finally {
+      setIsCancelLoading(false);
+    }
+  }, [isCancelLoading, loadBilling]);
+
+  const handleResume = useCallback(async () => {
+    if (isResumeLoading) return;
+    setIsResumeLoading(true);
+    setBillingError("");
+    setActionSuccess("");
+    try {
+      const result = await api.billing.resumeSubscription();
+      setActionSuccess(result?.detail || "Subscription resumed successfully.");
+      await loadBilling();
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      setBillingError(typeof detail === 'string' ? detail : "Failed to resume subscription.");
+    } finally {
+      setIsResumeLoading(false);
+    }
+  }, [isResumeLoading, loadBilling]);
+
+  const handleOpenPortal = useCallback(async () => {
+    if (isPortalLoading) return;
+    setIsPortalLoading(true);
+    setBillingError("");
+    try {
+      const data = await api.billing.openPortal();
+      if (data && data.url) {
+        window.open(data.url, '_blank', 'noopener,noreferrer');
+      } else {
+        throw new Error("Billing portal URL not returned by server.");
+      }
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      setBillingError(typeof detail === 'string' ? detail : "Failed to open billing portal.");
+    } finally {
+      setIsPortalLoading(false);
+    }
+  }, [isPortalLoading]);
 
   const fmtDate = useCallback((d) => {
     if (!d) return "N/A";
@@ -183,14 +277,57 @@ export default function Billing() {
     return C.green;
   }, []);
 
+  const formatPlanPrice = useCallback((plan) => {
+    if (!plan) return `${currencySymbol}0`;
+    const price = plan.localized_price !== undefined ? plan.localized_price : 0;
+    const decimals = plan.decimals !== undefined ? plan.decimals : (currency === "JPY" || currency === "KRW" ? 0 : 2);
+    const sym = plan.currency_symbol || currencySymbol;
+    return `${sym}${Number(price).toLocaleString(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    })}`;
+  }, [currencySymbol, currency]);
+
+  const isPaymentFailed = subscriptionStatus === "past_due" || subscriptionStatus === "payment_failed";
+  const isCancelled = subscriptionStatus === "cancelled";
+  const isFreePlan = currentPlan?.id === "free" || !currentPlan?.id;
+
   return (
     <div style={{ padding: 24, overflowY: "auto", flex: 1, background: C.bg0 }}>
-      <SectionH title="Subscription & Billing" sub="Manage your plan, usage, and payment methods" />
+      <SectionH title="Subscription & Billing" sub="Manage your plan, localized pricing, and payment methods" />
 
       {!!billingError && (
         <div style={{ marginBottom: 16, background: `${C.red}12`, border: `1px solid ${C.red}44`, color: C.red, borderRadius: 8, padding: "12px 16px", fontSize: 12, fontFamily: "monospace", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span><AlertTriangle size={14} style={{ display: "inline", marginRight: 8, verticalAlign: "middle" }} /> {billingError}</span>
-          <button onClick={() => window.location.reload()} style={{ background: `${C.red}20`, border: `1px solid ${C.red}40`, color: C.red, borderRadius: 6, padding: "6px 12px", fontSize: 11, fontFamily: "monospace", fontWeight: 700, cursor: "pointer", transition: "all 0.2s" }}>Retry</button>
+          <button onClick={() => setBillingError("")} style={{ background: "transparent", border: "none", color: C.red, cursor: "pointer", padding: 4 }}><X size={14} /></button>
+        </div>
+      )}
+
+      {!!actionSuccess && (
+        <div style={{ marginBottom: 16, background: `${C.green}12`, border: `1px solid ${C.green}44`, color: C.green, borderRadius: 8, padding: "12px 16px", fontSize: 12, fontFamily: "monospace", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span><CheckCircle size={14} style={{ display: "inline", marginRight: 8, verticalAlign: "middle" }} /> {actionSuccess}</span>
+          <button onClick={() => setActionSuccess("")} style={{ background: "transparent", border: "none", color: C.green, cursor: "pointer", padding: 4 }}><X size={14} /></button>
+        </div>
+      )}
+
+      {/* Payment Failure Alert */}
+      {isPaymentFailed && (
+        <div style={{ marginBottom: 16, background: `${C.red}10`, border: `1px solid ${C.red}55`, borderRadius: 12, padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <AlertCircle size={20} style={{ color: C.red, flexShrink: 0 }} />
+            <div>
+              <div style={{ color: C.red, fontWeight: 800, fontSize: 13, fontFamily: "monospace" }}>PAYMENT FAILED — ACTION REQUIRED</div>
+              <div style={{ color: C.t2, fontSize: 12, marginTop: 4 }}>Your subscription payment failed. Update your payment method to restore full access.</div>
+            </div>
+          </div>
+          <button
+            onClick={handleOpenPortal}
+            disabled={isPortalLoading}
+            style={{ background: C.red, color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 11, fontFamily: "monospace", fontWeight: 800, cursor: isPortalLoading ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", flexShrink: 0 }}
+          >
+            {isPortalLoading ? <Loader2 size={14} className="animate-spin" /> : <ExternalLink size={14} />}
+            Update Payment Method
+          </button>
         </div>
       )}
 
@@ -216,10 +353,10 @@ export default function Billing() {
       ) : (
         <>
           {/* Current Plan Overview */}
-          <Card className="p-6 mb-6" style={{ border: `1px solid ${C.cyan}40`, background: `linear-gradient(135deg, ${C.bg2} 0%, ${C.bg1} 100%)` }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+          <Card className="p-6 mb-6" style={{ border: `1px solid ${isPaymentFailed ? C.red : C.cyan}40`, background: `linear-gradient(135deg, ${C.bg2} 0%, ${C.bg1} 100%)` }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <div style={{ background: `${C.cyan}20`, borderRadius: 12, padding: 12 }}>
+                <div style={{ background: `${isPaymentFailed ? C.red : C.cyan}20`, borderRadius: 12, padding: 12 }}>
                   {currentPlan?.id === "enterprise" ? <Crown size={24} style={{ color: C.cyan }} /> :
                    currentPlan?.id === "pro" ? <Star size={24} style={{ color: C.cyan }} /> :
                    currentPlan?.id === "starter" ? <Zap size={24} style={{ color: C.cyan }} /> :
@@ -230,28 +367,132 @@ export default function Billing() {
                   <h2 style={{ color: C.t1, fontWeight: 900, fontSize: 24, textTransform: "capitalize" }}>
                     {currentPlan?.name || "Free"}
                   </h2>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
-                    <Tag2 c={subscriptionStatus === "active" ? "green" : subscriptionStatus === "cancelled" ? "red" : "orange"}>
-                      {subscriptionStatus?.toUpperCase() || "ACTIVE"}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+                    <Tag2 c={
+                      subscriptionStatus === "active" ? "green" :
+                      subscriptionStatus === "trial" ? "cyan" :
+                      subscriptionStatus === "past_due" || subscriptionStatus === "payment_failed" ? "red" :
+                      subscriptionStatus === "cancelled" ? "red" : "orange"
+                    }>
+                      {subscriptionStatus?.toUpperCase()?.replace("_", " ") || "ACTIVE"}
                     </Tag2>
-                    {renewalDate && (
+                    {renewalDate && !cancelAtPeriodEnd && (
                       <span style={{ color: C.t3, fontSize: 11, fontFamily: "monospace" }}>
                         Renews {fmtDate(renewalDate)}
                       </span>
                     )}
                     {cancelAtPeriodEnd && (
                       <span style={{ color: C.red, fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>
-                        Cancels at renewal
+                        Cancels {renewalDate ? fmtDate(renewalDate) : "at period end"}
                       </span>
                     )}
                   </div>
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <div style={{ display: "flex", background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 999, padding: 4 }}>
-                  <button onClick={() => handleCurrencyChange("USD")} style={{ background: currency === "USD" ? `${C.cyan}20` : "transparent", color: currency === "USD" ? C.cyan : C.t2, border: `1px solid ${currency === "USD" ? `${C.cyan}55` : "transparent"}`, borderRadius: 999, padding: "6px 14px", fontSize: 11, fontFamily: "monospace", fontWeight: 700, cursor: "pointer", transition: "all 0.2s" }}>USD ($)</button>
-                  <button onClick={() => handleCurrencyChange("INR")} style={{ background: currency === "INR" ? `${C.cyan}20` : "transparent", color: currency === "INR" ? C.cyan : C.t2, border: `1px solid ${currency === "INR" ? `${C.cyan}55` : "transparent"}`, borderRadius: 999, padding: "6px 14px", fontSize: 11, fontFamily: "monospace", fontWeight: 700, cursor: "pointer", transition: "all 0.2s" }}>INR (\u20B9)</button>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                {/* Location Tag */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6, background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 12px", fontSize: 11, fontFamily: "monospace", color: C.t2 }}>
+                  <MapPin size={12} style={{ color: C.cyan }} />
+                  <span>{countryName} ({currency})</span>
+                  <Tag2 c={currencySource === "ip" ? "cyan" : "green"} style={{ marginLeft: 4, fontSize: 9, padding: "1px 6px" }}>
+                    {currencySource === "ip" ? "Auto-detected" : "Preferred"}
+                  </Tag2>
                 </div>
+
+                {/* Searchable / Selectable Currency Dropdown */}
+                <div style={{ position: "relative" }}>
+                  <button
+                    onClick={() => setIsCurrencyDropdownOpen(!isCurrencyDropdownOpen)}
+                    style={{
+                      background: C.bg3,
+                      border: `1px solid ${C.cyan}50`,
+                      color: C.cyan,
+                      borderRadius: 8,
+                      padding: "6px 14px",
+                      fontSize: 11,
+                      fontFamily: "monospace",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      transition: "all 0.2s",
+                    }}
+                  >
+                    <Globe size={13} />
+                    <span>{currencySymbol} {currency}</span>
+                    <ChevronDown size={13} />
+                  </button>
+
+                  {isCurrencyDropdownOpen && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "100%",
+                        right: 0,
+                        marginTop: 6,
+                        background: C.bg2,
+                        border: `1px solid ${C.border}`,
+                        borderRadius: 10,
+                        padding: 6,
+                        width: 220,
+                        maxHeight: 280,
+                        overflowY: "auto",
+                        zIndex: 50,
+                        boxShadow: `0 8px 30px #00000088`,
+                      }}
+                    >
+                      <div style={{ padding: "4px 8px", fontSize: 10, color: C.t3, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", borderBottom: `1px solid ${C.border}40`, marginBottom: 4 }}>
+                        Select Currency
+                      </div>
+                      {supportedCurrencies.map((c) => (
+                        <button
+                          key={c.code}
+                          onClick={() => handleCurrencyChange(c.code)}
+                          style={{
+                            width: "100%",
+                            textAlign: "left",
+                            background: currency === c.code ? `${C.cyan}20` : "transparent",
+                            color: currency === c.code ? C.cyan : C.t1,
+                            border: "none",
+                            borderRadius: 6,
+                            padding: "6px 10px",
+                            fontSize: 11,
+                            fontFamily: "monospace",
+                            fontWeight: currency === c.code ? 800 : 500,
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                          }}
+                          onMouseEnter={(e) => {
+                            if (currency !== c.code) e.currentTarget.style.background = C.bg3;
+                          }}
+                          onMouseLeave={(e) => {
+                            if (currency !== c.code) e.currentTarget.style.background = "transparent";
+                          }}
+                        >
+                          <span>{c.code} ({c.symbol})</span>
+                          <span style={{ color: C.t3, fontSize: 10 }}>{c.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Manage Payment Method via Stripe Portal */}
+                {!isFreePlan && (
+                  <button
+                    onClick={handleOpenPortal}
+                    disabled={isPortalLoading}
+                    title="Open Stripe Billing Portal to manage payment method"
+                    style={{ background: `${C.cyan}15`, border: `1px solid ${C.cyan}40`, color: C.cyan, borderRadius: 8, padding: "8px 14px", fontSize: 11, fontFamily: "monospace", fontWeight: 700, cursor: isPortalLoading ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 6, transition: "all 0.2s" }}
+                  >
+                    {isPortalLoading ? <Loader2 size={12} className="animate-spin" /> : <ExternalLink size={12} />}
+                    Manage Billing
+                  </button>
+                )}
               </div>
             </div>
 
@@ -266,7 +507,7 @@ export default function Billing() {
                 const isUnlimited = item.limit === -1 || item.limit === Infinity;
                 const percent = isUnlimited ? 0 : getUsagePercent(item.key);
                 const color = getUsageColor(percent);
-                const displayLimit = isUnlimited ? "\u221E" : item.limit;
+                const displayLimit = isUnlimited ? "∞" : item.limit;
                 return (
                   <div key={item.label} style={{ background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
@@ -284,11 +525,53 @@ export default function Billing() {
                 );
               })}
             </div>
+
+            {/* Subscription Lifecycle Actions */}
+            {!isFreePlan && (
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", borderTop: `1px solid ${C.border}20`, paddingTop: 16, marginTop: 4 }}>
+                {cancelAtPeriodEnd ? (
+                  <button
+                    onClick={handleResume}
+                    disabled={isResumeLoading}
+                    style={{ background: `${C.green}20`, border: `1px solid ${C.green}50`, color: C.green, borderRadius: 8, padding: "9px 18px", fontSize: 11, fontFamily: "monospace", fontWeight: 800, cursor: isResumeLoading ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 8, transition: "all 0.2s" }}
+                  >
+                    {isResumeLoading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                    Resume Subscription
+                  </button>
+                ) : (
+                  !isCancelled && !isPaymentFailed && (
+                    <button
+                      onClick={handleCancel}
+                      disabled={isCancelLoading}
+                      style={{ background: `${C.red}10`, border: `1px solid ${C.red}35`, color: C.red, borderRadius: 8, padding: "9px 18px", fontSize: 11, fontFamily: "monospace", fontWeight: 700, cursor: isCancelLoading ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 8, transition: "all 0.2s", opacity: isCancelLoading ? 0.7 : 1 }}
+                    >
+                      {isCancelLoading ? <Loader2 size={13} className="animate-spin" /> : <XCircle size={13} />}
+                      Cancel Subscription
+                    </button>
+                  )
+                )}
+                <button
+                  onClick={loadBilling}
+                  style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.t3, borderRadius: 8, padding: "9px 14px", fontSize: 11, fontFamily: "monospace", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, transition: "all 0.2s" }}
+                >
+                  <RefreshCw size={12} />
+                  Refresh
+                </button>
+              </div>
+            )}
           </Card>
 
           {/* Pricing Cards */}
           <div style={{ marginBottom: 24 }}>
-            <h3 style={{ color: C.t1, fontSize: 18, fontWeight: 900, marginBottom: 16 }}>Available Plans</h3>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+              <h3 style={{ color: C.t1, fontSize: 18, fontWeight: 900 }}>Available Plans</h3>
+              {isLoadingPlans && (
+                <span style={{ color: C.t3, fontSize: 11, fontFamily: "monospace", display: "flex", alignItems: "center", gap: 6 }}>
+                  <Loader2 size={12} className="animate-spin" /> Updating pricing...
+                </span>
+              )}
+            </div>
+
             {plans.length === 0 ? (
               <div style={{ color: C.t3, fontSize: 12, fontFamily: "monospace", textAlign: "center", padding: 24 }}>Loading plans...</div>
             ) : (
@@ -296,7 +579,9 @@ export default function Billing() {
                 {plans.map((p) => {
                   const isActive = currentPlan?.id === p.id;
                   const isProcessingThis = isCheckoutLoading === p.id;
-                  const priceValue = currency === "INR" ? p.inr : p.usd;
+                  const formattedPrice = formatPlanPrice(p);
+                  const hasDifferentCheckoutCurr = !p.is_direct_checkout && p.checkout_currency && p.checkout_currency !== p.currency;
+
                   return (
                     <div key={p.id} style={{
                       background: C.bg2,
@@ -330,10 +615,16 @@ export default function Billing() {
                       <div style={{ color: C.t1, fontWeight: 900, fontSize: 22, marginBottom: 4 }}>{p.name}</div>
                       <div style={{ color: C.t3, fontSize: 12, fontFamily: "monospace", marginBottom: 16 }}>{p.description}</div>
 
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 20 }}>
-                        <span style={{ color: C.cyan, fontWeight: 900, fontSize: 40, lineHeight: 1 }}>{currency === "INR" ? "\u20B9" : "$"}{(priceValue || 0).toLocaleString()}</span>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: hasDifferentCheckoutCurr ? 4 : 20 }}>
+                        <span style={{ color: C.cyan, fontWeight: 900, fontSize: 36, lineHeight: 1 }}>{formattedPrice}</span>
                         <span style={{ color: C.t3, fontSize: 12, fontFamily: "monospace" }}>/month</span>
                       </div>
+
+                      {hasDifferentCheckoutCurr && (
+                        <div style={{ color: C.t3, fontSize: 10, fontFamily: "monospace", marginBottom: 16 }}>
+                          Billed as ${p.checkout_price || p.base_price} {p.checkout_currency} at checkout
+                        </div>
+                      )}
 
                       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 24, flex: 1 }}>
                         {(p.features || []).slice(0, 6).map((feat, fi) => (
@@ -345,14 +636,15 @@ export default function Billing() {
                       </div>
 
                       <button
-                        disabled={!!isCheckoutLoading || isActive}
+                        disabled={!!isCheckoutLoading || isActive || isPaymentFailed}
                         onClick={() => handleCheckout(p.id)}
+                        title={isPaymentFailed ? "Resolve payment issue first to change plan" : undefined}
                         style={{
                           width: "100%", background: isActive ? `${C.green}20` : C.cyan, color: isActive ? C.green : "#000",
                           border: `1px solid ${isActive ? `${C.green}40` : "transparent"}`, borderRadius: 10, padding: "14px",
                           fontSize: 12, fontFamily: "monospace", fontWeight: 900, textTransform: "uppercase", letterSpacing: 1,
-                          cursor: !!isCheckoutLoading || isActive ? "not-allowed" : "pointer",
-                          opacity: !!isCheckoutLoading && !isProcessingThis ? 0.5 : 1,
+                          cursor: !!isCheckoutLoading || isActive || isPaymentFailed ? "not-allowed" : "pointer",
+                          opacity: (!!isCheckoutLoading && !isProcessingThis) || isPaymentFailed ? 0.5 : 1,
                           transition: "all 0.3s ease",
                         }}
                       >
@@ -377,13 +669,20 @@ export default function Billing() {
                     <CreditCard size={20} style={{ color: "#fff" }} />
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ color: C.t1, fontWeight: 700, fontSize: 13 }}>{defaultMethod.brand} \u2022\u2022\u2022\u2022 {defaultMethod.last4}</div>
+                    <div style={{ color: C.t1, fontWeight: 700, fontSize: 13 }}>{defaultMethod.brand} •••• {defaultMethod.last4}</div>
                     <div style={{ color: C.t3, fontSize: 11, fontFamily: "monospace" }}>Expires {defaultMethod.expiry_month}/{defaultMethod.expiry_year}</div>
                   </div>
                   {defaultMethod.is_default && <Tag2 c="green">DEFAULT</Tag2>}
                 </div>
               )}
-              <Button variant="ghost" size="sm" Icon={Plus} cls="w-full justify-center mt-4">Add Payment Method</Button>
+              <button
+                onClick={handleOpenPortal}
+                disabled={isPortalLoading}
+                style={{ width: "100%", marginTop: 16, background: `${C.cyan}10`, border: `1px solid ${C.cyan}30`, color: C.cyan, borderRadius: 8, padding: "10px", fontSize: 11, fontFamily: "monospace", fontWeight: 700, cursor: isPortalLoading ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, transition: "all 0.2s" }}
+              >
+                {isPortalLoading ? <Loader2 size={13} className="animate-spin" /> : <ExternalLink size={13} />}
+                Manage via Stripe Portal
+              </button>
             </Card>
 
             <Card className="p-6">
@@ -399,9 +698,11 @@ export default function Billing() {
                     <tr><td colSpan={4} style={{ padding: "16px 12px", color: C.t3, textAlign: "center" }}>No invoices found.</td></tr>
                   ) : billingHistory.slice(0, 5).map(inv => (
                     <tr key={inv.id} style={{ borderBottom: `1px solid ${C.border}20` }}>
-                      <td style={{ padding: "10px 12px", color: C.cyan, cursor: "pointer", fontFamily: "monospace" }}>{inv.id.slice(0, 8)}...</td>
+                      <td style={{ padding: "10px 12px", color: C.cyan, cursor: "pointer", fontFamily: "monospace" }}>{String(inv.id).slice(0, 8)}...</td>
                       <td style={{ padding: "10px 12px", color: C.t2 }}>{fmtDate(inv.date)}</td>
-                      <td style={{ padding: "10px 12px", color: C.t1, fontWeight: 700 }}>{money(inv.amtUSD, inv.amtINR)}</td>
+                      <td style={{ padding: "10px 12px", color: C.t1, fontWeight: 700 }}>
+                        {inv.currency === "INR" ? `₹${Number(inv.amtINR || 0).toLocaleString()}` : `$${Number(inv.amtUSD || 0).toLocaleString()}`}
+                      </td>
                       <td style={{ padding: "10px 12px" }}><Tag2 c={inv.status === "paid" ? "green" : inv.status === "pending" ? "orange" : "red"}>{inv.status}</Tag2></td>
                     </tr>
                   ))}

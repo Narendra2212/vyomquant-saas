@@ -452,32 +452,29 @@ class ExchangeNormalizer:
         return symbol
     
     def format_symbol_for_ccxt(self, symbol: str) -> str:
-        """Format symbol for CCXT (usually with / separator)."""
-        symbol = self.normalize_symbol(symbol)
+        """Format symbol for CCXT (standard BASE/QUOTE separator)."""
+        clean = symbol.upper().replace("/", "").replace("-", "")
         
-        # CCXT standard is BASE/QUOTE
-        if "/" not in symbol:
-            if symbol.endswith("USDT"):
-                base = symbol[:-4]
-                quote = "USDT"
-            elif symbol.endswith("USD"):
-                base = symbol[:-3]
-                quote = "USD"
-            elif symbol.endswith("BTC"):
-                base = symbol[:-3]
-                quote = "BTC"
-            else:
-                # Assume last 3-4 chars are quote
-                if len(symbol) > 4:
-                    base = symbol[:-4]
-                    quote = symbol[-4:]
-                else:
-                    base = symbol[:-3]
-                    quote = symbol[-3:]
-            
-            symbol = f"{base}/{quote}"
+        if clean.endswith("USDT"):
+            base = clean[:-4]
+            quote = "USDT"
+        elif clean.endswith("USDC"):
+            base = clean[:-4]
+            quote = "USDC"
+        elif clean.endswith("USD"):
+            base = clean[:-3]
+            quote = "USD"
+        elif clean.endswith("BTC"):
+            base = clean[:-3]
+            quote = "BTC"
+        elif clean.endswith("ETH"):
+            base = clean[:-3]
+            quote = "ETH"
+        else:
+            base = clean[:-3] if len(clean) > 3 else clean
+            quote = clean[-3:] if len(clean) > 3 else "USDT"
         
-        return symbol
+        return f"{base}/{quote}"
     
     def normalize_price(self, symbol: str, price: Decimal) -> str:
         """Normalize price to exchange precision."""

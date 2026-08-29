@@ -62,9 +62,9 @@ export default function ScreenshotsSection() {
             description="Monitor live strategies, paper trading positions, and overall portfolio health in real-time."
           />
           <ScreenshotPlaceholder 
-            badge="Generative AI"
-            title="AI Copilot Screenshot" 
-            description="Use natural language to generate strategy templates and optimize parameters."
+            badge="Risk Controls"
+            title="Risk Management Screenshot" 
+            description="Configure automated circuit breakers, max drawdown limits, and real-time capital protection."
           />
         </div>
       </div>

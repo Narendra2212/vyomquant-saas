@@ -1,0 +1,14 @@
+# =======================================================================
+#  Aerora Quant Backend - development / test-only dependencies
+#  NOT installed in the production Docker image.
+#  Layer this on top of the runtime manifest, e.g.:
+#      pip install -r requirements.txt -r requirements-dev.txt      (local, GPU torch)
+#      pip install -r requirements-cpu.txt -r requirements-dev.txt  (CI / server)
+# =======================================================================
+
+# --- Property-based testing ----------------------------------------------
+# Used only by tests/ (property tests for the canonical strategy DAG,
+# block registry and block specs). Pinned exactly so that shrinking and
+# generated-example behaviour is reproducible across local runs and CI:
+# an unpinned hypothesis can surface or hide failures on a version bump.
+hypothesis==6.165.10

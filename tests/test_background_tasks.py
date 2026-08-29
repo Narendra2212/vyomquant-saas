@@ -9,6 +9,25 @@ import pytest
 
 from backend_app.core.background_tasks import fire_and_forget_task, _tracked_tasks, get_tracked_tasks_count
 
+async def wait_for_tracked_tasks_drained(deadline_seconds: float = 2.0) -> None:
+    """
+    Poll until every tracked task has been removed by its done-callback.
+
+    A fixed `await asyncio.sleep(...)` budget is flaky: on a loaded machine the
+    done-callback may not have run yet when the assertion executes. Polling with
+    a generous deadline is both faster in the common case and deterministic under
+    load. Raises AssertionError if the tasks never drain, so a genuine leak of a
+    tracked task still fails the test rather than hanging.
+    """
+    loop = asyncio.get_running_loop()
+    expiry = loop.time() + deadline_seconds
+    while get_tracked_tasks_count() != 0:
+        assert loop.time() < expiry, (
+            f"tracked tasks did not drain within {deadline_seconds}s; "
+            f"{get_tracked_tasks_count()} still tracked"
+        )
+        await asyncio.sleep(0.01)
+
 @pytest.fixture(autouse=True)
 def cleanup_tracked_tasks():
     # Clear the set before each test to ensure test isolation
@@ -34,8 +53,8 @@ def test_fire_and_forget_task_tracks_and_cleans_up():
         assert get_tracked_tasks_count() == 1
         assert task in _tracked_tasks
         
-        # Wait for the task to complete
-        await asyncio.sleep(0.05)
+        # Wait for the task to complete and for the done-callback to run
+        await wait_for_tracked_tasks_drained()
         
         # Task should be removed from tracking after completion
         assert get_tracked_tasks_count() == 0
@@ -54,7 +73,7 @@ def test_fire_and_forget_task_logs_exception():
             task = fire_and_forget_task(failing_task(), name="test_failing_task")
             
             # Wait for the task to complete and trigger the callback
-            await asyncio.sleep(0.05)
+            await wait_for_tracked_tasks_drained()
             
             # Verify it was removed
             assert get_tracked_tasks_count() == 0
@@ -80,8 +99,8 @@ def test_fire_and_forget_task_logs_cancellation():
             # Cancel the task manually
             task.cancel()
             
-            # Yield to event loop to process cancellation
-            await asyncio.sleep(0.05)
+            # Yield to event loop until the cancellation callback has run
+            await wait_for_tracked_tasks_drained()
             
             # Verify it was removed
             assert get_tracked_tasks_count() == 0

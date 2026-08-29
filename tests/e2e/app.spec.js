@@ -27,7 +27,9 @@ test('REAL trading flow → strategy → backtest → equity validation', async 
     if (signinResponse.status() === 200) {
       const signinData = await signinResponse.json();
       accessToken = signinData.access_token;
-      console.log('Access token obtained:', accessToken);
+      // F-04 REMEDIATION (Phase 7B): Never log raw JWT to test output.
+      // Use structural/presence confirmation only.
+      console.log('Access token obtained: [REDACTED, length=' + (accessToken ? accessToken.length : 0) + ']');
     }
   } catch (error) {
     console.warn('Signin failed, using fallback token:', error.message);
@@ -39,7 +41,8 @@ test('REAL trading flow → strategy → backtest → equity validation', async 
     accessToken = 'dev_bypass_token_e2e_test';
   }
 
-  console.log('Final access token:', accessToken);
+  // F-04: Log token presence only, not the value
+  console.log('Final token present:', !!accessToken, '| length:', accessToken ? accessToken.length : 0);
 
   // -------------------------------
   // 2. Load App

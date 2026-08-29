@@ -292,13 +292,12 @@ async def get_job_statistics(
 ):
     """Get job statistics."""
     try:
-        # Verify tenant access
+        # SECURITY (Phase 7B F-02): app_metadata.role only — user_metadata is user-editable
         target_tenant_id = user["tenant_id"]
         is_admin = (
             user.get("app_metadata", {}).get("role") == "admin"
-            or user.get("user_metadata", {}).get("role") == "admin"
-            or (user.get("role") == "admin")
         )
+
         if tenant_id and not is_admin:
             raise HTTPException(
                 status_code=403,

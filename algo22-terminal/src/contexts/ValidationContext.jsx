@@ -1,16 +1,50 @@
 /**
  * Builder Validation Context
- * 
+ *
  * PHASE H: Professional validation with continuous error checking
  * Shows errors directly on canvas, never generic popups
+ *
+ * Local checks are advisory only; the backend graph validator is authoritative
+ * (`design.md` → Frontend advisory vs backend authority).
+ *
+ * This context used to read a hardcoded block table (`blockRegistry.BlockRegistry`). That
+ * table is gone: it was the second source of truth behind SB-03 and SB-04. Block shape is
+ * now read from the descriptor the palette records on the node itself (`data.block_id`,
+ * `data.category`, `data.inputs`, `data.outputs` — the same fields `canonicalGraph.js`
+ * serializes). A node carrying no descriptor is **undetermined**, not invalid: guessing from
+ * `node.type` is exactly the label-derived inference this rework exists to remove, and
+ * flagging every such node would be a local opinion the backend never asked for.
+ *
+ * Connection type legality is deliberately not decided here. Task 3.8 adds
+ * `connectionLegality.js`, which evaluates R1–R8 against the `compatibility_matrix` the
+ * registry ships, so the client and the backend apply one rule instead of two.
  */
 
 import { createContext, useContext, useState, useCallback, useMemo } from 'react';
 import { AlertTriangle, AlertCircle, CheckCircle } from 'lucide-react';
 import { C } from '../components/ui-legacy/primitives';
-import { BlockRegistry, validateConnection, StreamTypes } from '../lib/blockRegistry';
 
 const ValidationContext = createContext(null);
+
+/**
+ * The registry descriptor recorded on a canvas node, or null when the node carries none.
+ * Never derived from `node.type` or `data.label`.
+ */
+const descriptorOf = (node) => {
+  const data = node?.data;
+  if (!data || typeof data !== 'object') return null;
+  const blockId = data.block_id || data.descriptor?.block_id || null;
+  if (!blockId) return null;
+  const descriptor = data.descriptor && typeof data.descriptor === 'object' ? data.descriptor : {};
+  const inputs = Array.isArray(data.inputs) ? data.inputs : descriptor.inputs;
+  const outputs = Array.isArray(data.outputs) ? data.outputs : descriptor.outputs;
+  return {
+    block_id: blockId,
+    category: data.category || descriptor.category || null,
+    inputs: Array.isArray(inputs) ? inputs : [],
+    outputs: Array.isArray(outputs) ? outputs : [],
+  };
+};
 
 export const useValidation = () => {
   const context = useContext(ValidationContext);
@@ -33,18 +67,14 @@ export const ValidationProvider = ({ children }) => {
       connectedNodeIds.add(edge.target);
     });
 
+    // Descriptor-derived checks only run when every node carries its descriptor. A mixed
+    // graph would produce half an opinion, which reads as a bug rather than as "waiting".
+    const descriptors = new Map(nodes.map(node => [node.id, descriptorOf(node)]));
+    const graphIsDetermined = nodes.length > 0 && nodes.every(node => descriptors.get(node.id));
+
     nodes.forEach(node => {
-      const block = BlockRegistry[node.type];
-      if (!block) {
-        newErrors.push({
-          id: `error-node-${node.id}`,
-          nodeId: node.id,
-          type: 'invalid_block',
-          message: `Unknown block type: ${node.type}`,
-          severity: 'error'
-        });
-        return;
-      }
+      const block = descriptors.get(node.id);
+      if (!block) return;
 
       // Check if node has inputs but no incoming edges
       if (block.inputs.length > 0 && !connectedNodeIds.has(node.id)) {
@@ -68,27 +98,13 @@ export const ValidationProvider = ({ children }) => {
         });
       }
 
-      // Validate node parameters
-      if (block.validation) {
-        const validationResult = block.validation(node.data?.params || {});
-        if (!validationResult.valid) {
-          newErrors.push({
-            id: `error-params-${node.id}`,
-            nodeId: node.id,
-            type: 'invalid_params',
-            message: validationResult.error,
-            severity: 'error'
-          });
-        }
-      }
+      // Parameter validation is not attempted locally. The registry publishes each block's
+      // ParamSpec; the form (task 3.7) enforces it and the backend validator decides.
     });
 
     // Check for missing data source
-    const hasDataSource = nodes.some(n => {
-      const block = BlockRegistry[n.type];
-      return block && block.category === 'data';
-    });
-    if (!hasDataSource) {
+    const hasDataSource = nodes.some(n => descriptors.get(n.id)?.category === 'DATA');
+    if (graphIsDetermined && !hasDataSource) {
       newErrors.push({
         id: 'error-no-data-source',
         type: 'no_data_source',
@@ -98,11 +114,8 @@ export const ValidationProvider = ({ children }) => {
     }
 
     // Check for missing action
-    const hasAction = nodes.some(n => {
-      const block = BlockRegistry[n.type];
-      return block && block.category === 'action';
-    });
-    if (!hasAction) {
+    const hasAction = nodes.some(n => descriptors.get(n.id)?.category === 'ACTION');
+    if (graphIsDetermined && !hasAction) {
       newErrors.push({
         id: 'error-no-action',
         type: 'no_action',
@@ -138,29 +151,12 @@ export const ValidationProvider = ({ children }) => {
         return;
       }
 
-      const connectionValidation = validateConnection(
-        sourceNode.type,
-        targetNode.type,
-        sourceNode.data?.params?.output,
-        targetNode.data?.params?.input
-      );
-
-      if (!connectionValidation.valid) {
-        newErrors.push({
-          id: `error-edge-type-${edge.id}`,
-          edgeId: edge.id,
-          type: 'type_mismatch',
-          message: connectionValidation.error,
-          severity: 'error'
-        });
-      }
+      // Port-type legality is decided by connectionLegality.js (task 3.8) against the
+      // compatibility matrix the registry ships, so this file states no second rule.
     });
 
     // Check for ML blocks without features
-    const mlNodes = nodes.filter(n => {
-      const block = BlockRegistry[n.type];
-      return block && (block.category === 'ml' || block.category === 'dl');
-    });
+    const mlNodes = nodes.filter(n => descriptors.get(n.id)?.category === 'ML_DL');
     mlNodes.forEach(mlNode => {
       const hasFeatureInput = edges.some(e => e.target === mlNode.id);
       if (!hasFeatureInput) {
@@ -175,10 +171,7 @@ export const ValidationProvider = ({ children }) => {
     });
 
     // Check for action blocks without signal
-    const actionNodes = nodes.filter(n => {
-      const block = BlockRegistry[n.type];
-      return block && block.category === 'action';
-    });
+    const actionNodes = nodes.filter(n => descriptors.get(n.id)?.category === 'ACTION');
     actionNodes.forEach(actionNode => {
       const hasSignalInput = edges.some(e => e.target === actionNode.id);
       if (!hasSignalInput) {
@@ -202,16 +195,15 @@ export const ValidationProvider = ({ children }) => {
     };
   }, []);
 
+  /**
+   * Local per-node check. `undetermined` when the node carries no registry descriptor —
+   * distinct from invalid, because this context cannot decide without one.
+   */
   const validateNode = useCallback((node) => {
-    const block = BlockRegistry[node.type];
+    const block = descriptorOf(node);
     if (!block) {
-      return { valid: false, error: 'Unknown block type' };
+      return { valid: true, undetermined: true, reason: 'No registry descriptor on the node' };
     }
-
-    if (block.validation) {
-      return block.validation(node.data?.params || {});
-    }
-
     return { valid: true };
   }, []);
 

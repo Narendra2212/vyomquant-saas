@@ -104,11 +104,13 @@ class ConnectionEngine:
         password: Optional[str] = None,
         testnet: bool = False,
         proxies: Optional[dict] = None,
+        uid: Optional[str] = None,
     ):
         self.exchange_id = exchange_id.lower()
         self.api_key = api_key if api_key != "dummy_api_key" else None
         self.secret_key = secret_key if secret_key != "dummy_secret_key" else None
         self.password = password
+        self.uid = uid
         self.testnet = testnet
         self.proxies = proxies
         self.exchange: Optional[ccxt.Exchange] = None
@@ -143,6 +145,8 @@ class ConnectionEngine:
             config["secret"] = self.secret_key
         if self.password:
             config["password"] = self.password
+        if self.uid:
+            config["uid"] = self.uid
         if self.proxies:
             config["proxies"] = self.proxies
 

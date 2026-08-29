@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { C, Tag2, StatusDot, ProgressBar } from "../components/ui-legacy/primitives";
 import { CONFIG } from "../config";
+import { get, post } from "../apiClient";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import ResearchConsole from "../components/ResearchConsole";
@@ -43,7 +44,8 @@ export default function StrategyDetail() {
   const [strategy, setStrategy] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState({});
-  
+  const [actionError, setActionError] = useState(null);
+
   const API_BASE = CONFIG.apiBaseUrl;
   const token = sessionStorage.getItem("token");
 
@@ -67,6 +69,104 @@ export default function StrategyDetail() {
       setStrategy(null);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const setBusy = (key, value) => setIsProcessing((prev) => ({ ...prev, [key]: value }));
+
+  const authedFetch = (path, options = {}) =>
+    fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+        ...(options.headers || {}),
+      },
+    });
+
+  const handleEdit = () => {
+    // StrategyDetail has no inline builder; hand off to the Strategies page,
+    // which already knows how to resume the builder for a given strategy.
+    navigate("/app/strategies", { state: { resumeBuilderStrategy: strategy?.strategy || strategy } });
+  };
+
+  const handleClone = async () => {
+    if (isProcessing.clone) return;
+    setBusy("clone", true);
+    setActionError(null);
+    const stratName = strategy?.strategy?.name || strategy?.name || "Strategy";
+    try {
+      const res = await authedFetch(`/api/strategies/${strategyId}/clone`, {
+        method: "POST",
+        body: JSON.stringify({ new_name: `${stratName} (Copy)` }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.detail || `Clone failed (HTTP ${res.status})`);
+      const newId = data.id || data.strategy_id || data.strategy?.id;
+      if (newId) navigate(`/app/strategies/${newId}`);
+      else await loadStrategyDetail();
+    } catch (err) {
+      console.error("Clone error:", err);
+      setActionError(err.message);
+    } finally {
+      setBusy("clone", false);
+    }
+  };
+
+  const handleDeploy = async () => {
+    if (isProcessing.deploy) return;
+    const stratName = strategy?.strategy?.name || strategy?.name || "Strategy";
+    if (!window.confirm(`Deploy "${stratName}" to paper trading?`)) return;
+    setBusy("deploy", true);
+    setActionError(null);
+    try {
+      const res = await authedFetch(`/api/strategies/${strategyId}/deploy`, {
+        method: "POST",
+        body: JSON.stringify({ environment: "paper" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.detail || `Deploy failed (HTTP ${res.status})`);
+      await loadStrategyDetail();
+    } catch (err) {
+      console.error("Deploy error:", err);
+      setActionError(err.message);
+    } finally {
+      setBusy("deploy", false);
+    }
+  };
+
+  const handlePause = async () => {
+    if (isProcessing.pause) return;
+    setBusy("pause", true);
+    setActionError(null);
+    try {
+      const res = await authedFetch(`/api/strategies/${strategyId}/pause`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.detail || `Pause failed (HTTP ${res.status})`);
+      await loadStrategyDetail();
+    } catch (err) {
+      console.error("Pause error:", err);
+      setActionError(err.message);
+    } finally {
+      setBusy("pause", false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (isProcessing.delete) return;
+    const stratName = strategy?.strategy?.name || strategy?.name || "Strategy";
+    if (!window.confirm(`Delete "${stratName}"? This cannot be undone.`)) return;
+    setBusy("delete", true);
+    setActionError(null);
+    try {
+      const res = await authedFetch(`/api/strategies/${strategyId}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.detail || `Delete failed (HTTP ${res.status})`);
+      navigate("/app/strategies");
+    } catch (err) {
+      console.error("Delete error:", err);
+      setActionError(err.message);
+      setBusy("delete", false);
     }
   };
 
@@ -131,16 +231,36 @@ export default function StrategyDetail() {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <Button variant="ghost" size="sm" icon={RefreshCw} onClick={loadStrategyDetail}>Refresh</Button>
-          <Button variant="ghost" size="sm" icon={Copy}>Clone</Button>
-          <Button variant="ghost" size="sm" icon={Edit2}>Edit</Button>
+          <Button variant="ghost" size="sm" icon={Copy} onClick={handleClone} disabled={!!isProcessing.clone}>
+            {isProcessing.clone ? "Cloning…" : "Clone"}
+          </Button>
+          <Button variant="ghost" size="sm" icon={Edit2} onClick={handleEdit}>Edit</Button>
           {strat.status === "running" ? (
-            <Button variant="ghost" size="sm" icon={Pause}>Pause</Button>
+            <Button variant="ghost" size="sm" icon={Pause} onClick={handlePause} disabled={!!isProcessing.pause}>
+              {isProcessing.pause ? "Pausing…" : "Pause"}
+            </Button>
           ) : (
-            <Button variant="success" size="sm" icon={Play}>Deploy</Button>
+            <Button variant="success" size="sm" icon={Play} onClick={handleDeploy} disabled={!!isProcessing.deploy}>
+              {isProcessing.deploy ? "Deploying…" : "Deploy"}
+            </Button>
           )}
-          <Button variant="danger" size="sm" icon={Trash2}>Delete</Button>
+          <Button variant="danger" size="sm" icon={Trash2} onClick={handleDelete} disabled={!!isProcessing.delete}>
+            {isProcessing.delete ? "Deleting…" : "Delete"}
+          </Button>
         </div>
       </div>
+
+      {actionError && (
+        <div style={{
+          marginBottom: 16, padding: "10px 12px", borderRadius: 6,
+          background: C.red + "15", border: `1px solid ${C.red}30`,
+          color: C.red, fontSize: 11, fontFamily: "monospace",
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+        }}>
+          <span>{actionError}</span>
+          <button onClick={() => setActionError(null)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12 }}>✕</button>
+        </div>
+      )}
 
       {/* Status Bar */}
       <Card className="p-4 mb-4">
@@ -296,17 +416,28 @@ function DeploymentsTab({ deployments }) {
 }
 
 function BacktestsTab({ backtests, strategyId }) {
+  const navigate = useNavigate();
   return (
     <div>
-      <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Backtest History</h3>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, margin: 0 }}>Backtest History</h3>
+        <Button variant="primary" size="xs" icon={BarChart2} onClick={() => navigate(`/app/backtest?strategy_id=${strategyId}`)}>
+          Run New Backtest
+        </Button>
+      </div>
       {backtests.length === 0 ? (
         <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
-          No backtests yet
+          No backtests recorded yet.
+          <div style={{ marginTop: 12 }}>
+            <Button variant="primary" size="sm" icon={BarChart2} onClick={() => navigate(`/app/backtest?strategy_id=${strategyId}`)}>
+              Launch Backtester
+            </Button>
+          </div>
         </Card>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {backtests.map(bt => (
-            <Card key={bt.id} cls="p-4" style={{ cursor: "pointer" }}>
+            <Card key={bt.id} cls="p-4 hover:border-cyan-500/30 transition-all cursor-pointer" onClick={() => navigate(`/app/backtest?strategy_id=${strategyId}`)}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                   <div style={{ color: C.t1, fontWeight: 600, fontSize: 12 }}>Version {bt.version}</div>
@@ -333,6 +464,10 @@ function BacktestsTab({ backtests, strategyId }) {
 
 function VersionsTab({ strategyId }) {
   const [versions, setVersions] = useState([]);
+  const [compareWith, setCompareWith] = useState(null);
+  const [comparison, setComparison] = useState(null);
+  const [busy, setBusy] = useState({});
+  const [error, setError] = useState(null);
   const API_BASE = CONFIG.apiBaseUrl;
   const token = sessionStorage.getItem("token");
 
@@ -340,11 +475,19 @@ function VersionsTab({ strategyId }) {
     loadVersions();
   }, [strategyId]);
 
+  const authedFetch = (path, options = {}) =>
+    fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+        ...(options.headers || {}),
+      },
+    });
+
   const loadVersions = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/strategies/${strategyId}/versions`, {
-        headers: { "Authorization": `Bearer ${token}` }
-      });
+      const res = await authedFetch(`/api/strategies/${strategyId}/versions`);
       const data = await res.json();
       setVersions(data.versions || []);
     } catch (err) {
@@ -352,9 +495,114 @@ function VersionsTab({ strategyId }) {
     }
   };
 
+  const setVerBusy = (id, action, value) =>
+    setBusy((prev) => ({ ...prev, [`${id}:${action}`]: value }));
+
+  const handleCompare = async (ver) => {
+    // First click picks the baseline; second click (on a different version) runs the compare.
+    if (!compareWith) {
+      setCompareWith(ver.version);
+      return;
+    }
+    if (compareWith === ver.version) {
+      setCompareWith(null);
+      return;
+    }
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/strategies/${strategyId}/versions/compare?version_a=${encodeURIComponent(compareWith)}&version_b=${encodeURIComponent(ver.version)}`,
+        { method: "POST" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.detail || `Compare failed (HTTP ${res.status})`);
+      setComparison({ a: compareWith, b: ver.version, data });
+    } catch (err) {
+      console.error("Compare error:", err);
+      setError(err.message);
+    } finally {
+      setCompareWith(null);
+    }
+  };
+
+  const handleRestore = async (ver) => {
+    if (!window.confirm(`Restore version ${ver.version}? This creates a new version based on it.`)) return;
+    setVerBusy(ver.id, "restore", true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/strategies/${strategyId}/versions/restore?version=${encodeURIComponent(ver.version)}`,
+        { method: "POST" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.detail || `Restore failed (HTTP ${res.status})`);
+      await loadVersions();
+    } catch (err) {
+      console.error("Restore error:", err);
+      setError(err.message);
+    } finally {
+      setVerBusy(ver.id, "restore", false);
+    }
+  };
+
+  const handleDeployVersion = async (ver) => {
+    if (!window.confirm(`Deploy version ${ver.version} to paper trading?`)) return;
+    setVerBusy(ver.id, "deploy", true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/strategies/${strategyId}/versions/${encodeURIComponent(ver.version)}/deploy?environment=paper`,
+        { method: "POST" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.detail || `Deploy failed (HTTP ${res.status})`);
+      await loadVersions();
+    } catch (err) {
+      console.error("Deploy version error:", err);
+      setError(err.message);
+    } finally {
+      setVerBusy(ver.id, "deploy", false);
+    }
+  };
+
   return (
     <div>
       <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Version History</h3>
+
+      {error && (
+        <div style={{
+          marginBottom: 12, padding: "8px 12px", borderRadius: 6,
+          background: C.red + "15", border: `1px solid ${C.red}30`,
+          color: C.red, fontSize: 11, fontFamily: "monospace",
+        }}>
+          {error}
+        </div>
+      )}
+
+      {compareWith && (
+        <div style={{
+          marginBottom: 12, padding: "8px 12px", borderRadius: 6,
+          background: C.cyan + "15", border: `1px solid ${C.cyan}30`,
+          color: C.cyan, fontSize: 11, fontFamily: "monospace",
+        }}>
+          Comparing from version {compareWith} — select another version to compare against.
+        </div>
+      )}
+
+      {comparison && (
+        <Card className="p-4 mb-4">
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+            <h4 style={{ color: C.t1, fontSize: 12, fontWeight: 700, margin: 0 }}>
+              Comparison: {comparison.a} vs {comparison.b}
+            </h4>
+            <button onClick={() => setComparison(null)} style={{ background: "none", border: "none", color: C.t3, cursor: "pointer" }}>✕</button>
+          </div>
+          <pre style={{ color: C.t2, fontSize: 10, fontFamily: "monospace", overflow: "auto", maxHeight: 300 }}>
+            {JSON.stringify(comparison.data, null, 2)}
+          </pre>
+        </Card>
+      )}
+
       {versions.length === 0 ? (
         <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
           No versions yet
@@ -375,9 +623,31 @@ function VersionsTab({ strategyId }) {
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 4 }}>
-                  <Button variant="ghost" size="xs">Compare</Button>
-                  {!ver.is_current && <Button variant="ghost" size="xs">Restore</Button>}
-                  <Button variant="ghost" size="xs">Deploy</Button>
+                  <Button
+                    variant={compareWith === ver.version ? "primary" : "ghost"}
+                    size="xs"
+                    onClick={() => handleCompare(ver)}
+                  >
+                    Compare
+                  </Button>
+                  {!ver.is_current && (
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => handleRestore(ver)}
+                      disabled={!!busy[`${ver.id}:restore`]}
+                    >
+                      {busy[`${ver.id}:restore`] ? "Restoring…" : "Restore"}
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => handleDeployVersion(ver)}
+                    disabled={!!busy[`${ver.id}:deploy`]}
+                  >
+                    {busy[`${ver.id}:deploy`] ? "Deploying…" : "Deploy"}
+                  </Button>
                 </div>
               </div>
             </Card>
@@ -518,25 +788,205 @@ function ConfigurationTab({ strategy }) {
 }
 
 function ExecutionsTab({ strategyId }) {
+  const [executions, setExecutions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchExecutions = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await get(`/api/orders/history?strategy_id=${strategyId}&limit=50`);
+        const list = Array.isArray(data) ? data : (data?.orders || data?.history || []);
+        if (isMounted) {
+          setExecutions(list);
+        }
+      } catch (err) {
+        console.error("Failed to load strategy executions:", err);
+        if (isMounted) {
+          setError("Failed to load execution ledger.");
+        }
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+    fetchExecutions();
+    return () => { isMounted = false; };
+  }, [strategyId]);
+
+  if (loading) {
+    return (
+      <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontFamily: "monospace", fontSize: 11 }}>
+          <Activity size={14} className="animate-spin" style={{ color: C.cyan }} />
+          <span>Loading execution records...</span>
+        </div>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card className="p-8" style={{ textAlign: "center", color: C.red, fontFamily: "monospace", fontSize: 11 }}>
+        {error}
+      </Card>
+    );
+  }
+
+  if (executions.length === 0) {
+    return (
+      <Card className="p-8" style={{ textAlign: "center", color: C.t3, fontFamily: "monospace", fontSize: 11 }}>
+        No execution records found for this strategy yet.
+        <div style={{ color: C.t4, fontSize: 10, marginTop: 4 }}>
+          Executions will populate here when the strategy triggers live or paper orders.
+        </div>
+      </Card>
+    );
+  }
+
   return (
-    <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
-      Execution history coming soon
+    <Card className="overflow-hidden">
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ color: C.t1, fontSize: 13, fontWeight: 700, margin: 0 }}>Execution Ledger</h3>
+        <span style={{ color: C.t3, fontSize: 10, fontFamily: "monospace" }}>{executions.length} orders recorded</span>
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, fontFamily: "monospace" }}>
+        <thead>
+          <tr style={{ borderBottom: `1px solid ${C.border}`, background: C.bg3 }}>
+            {["Order ID", "Timestamp", "Symbol", "Side", "Price", "Filled / Size", "Status"].map(h => (
+              <th key={h} style={{ color: C.t3, fontWeight: 900, padding: "8px 14px", textAlign: "left", fontSize: 8, letterSpacing: 1.5, textTransform: "uppercase" }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {executions.map(ex => (
+            <tr key={ex.id || Math.random()} style={{ borderBottom: `1px solid ${C.border}15` }} className="hover:bg-white/5 transition-colors">
+              <td style={{ padding: "8px 14px", color: C.cyan, fontWeight: 700 }}>
+                {ex.id ? (String(ex.id).length > 12 ? `${String(ex.id).slice(0, 8)}...` : ex.id) : "—"}
+              </td>
+              <td style={{ padding: "8px 14px", color: C.t3 }}>
+                {ex.created_at ? new Date(ex.created_at).toLocaleTimeString() : (ex.timestamp || "—")}
+              </td>
+              <td style={{ padding: "8px 14px", color: C.t1, fontWeight: 700 }}>{ex.symbol || "BTC/USDT"}</td>
+              <td style={{ padding: "8px 14px" }}>
+                <Tag2 c={String(ex.side).toUpperCase() === "BUY" ? "green" : "red"}>
+                  {String(ex.side || "BUY").toUpperCase()}
+                </Tag2>
+              </td>
+              <td style={{ padding: "8px 14px", color: C.t2 }}>
+                ${parseFloat(ex.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </td>
+              <td style={{ padding: "8px 14px", color: C.t2 }}>
+                {ex.filled_quantity ?? ex.filled ?? ex.amount ?? 0} / {ex.quantity ?? ex.amount ?? 0}
+              </td>
+              <td style={{ padding: "8px 14px" }}>
+                <Tag2 c={String(ex.status).toLowerCase() === "filled" ? "green" : String(ex.status).toLowerCase() === "rejected" ? "red" : "gray"}>
+                  {String(ex.status || "FILLED").toUpperCase()}
+                </Tag2>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </Card>
   );
 }
 
 function SignalsTab({ strategyId }) {
+  const navigate = useNavigate();
+  const [signals, setSignals] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchSignals = async () => {
+      setLoading(true);
+      try {
+        const data = await get(`/api/signal-trace/signals?strategy_id=${strategyId}&limit=20`);
+        setSignals(data?.signals || []);
+      } catch (err) {
+        console.error("Failed to load strategy signals:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchSignals();
+  }, [strategyId]);
+
   return (
-    <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
-      Signal history coming soon
-    </Card>
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, margin: 0 }}>Recent Signals</h3>
+        <Button
+          variant="primary"
+          size="xs"
+          icon={TrendingUp}
+          onClick={() => navigate(`/app/signal-trace?strategy_id=${strategyId}`)}
+        >
+          Open in Signal Trace
+        </Button>
+      </div>
+
+      {loading ? (
+        <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
+          Loading signals...
+        </Card>
+      ) : signals.length === 0 ? (
+        <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
+          No signals generated yet. Deployed strategies generate signals upon processing market data.
+          <div style={{ marginTop: 12 }}>
+            <Button
+              variant="outline"
+              size="sm"
+              icon={Activity}
+              onClick={() => navigate(`/app/signal-trace?strategy_id=${strategyId}`)}
+            >
+              View Signal Trace Console
+            </Button>
+          </div>
+        </Card>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {signals.map(sig => (
+            <Card
+              key={sig.id}
+              cls="p-4 hover:border-cyan-500/30 transition-all cursor-pointer"
+              onClick={() => navigate(`/app/signal-trace/${sig.id}`)}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <Tag2 c={sig.decision === "BUY" ? "green" : sig.decision === "SELL" ? "red" : "gray"}>
+                    {sig.decision}
+                  </Tag2>
+                  <div>
+                    <span style={{ color: C.t1, fontWeight: 600, fontSize: 12 }}>{sig.symbol}</span>
+                    <span style={{ color: C.t3, fontSize: 10, fontFamily: "monospace", marginLeft: 8 }}>
+                      {sig.timeframe} • {sig.exchange_id}
+                    </span>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <span style={{ color: C.t3, fontSize: 10, fontFamily: "monospace" }}>
+                    {sig.created_at ? new Date(sig.created_at).toLocaleTimeString() : "-"}
+                  </span>
+                  <Tag2 c={sig.status === "executed" ? "green" : sig.status === "rejected" ? "red" : "orange"}>
+                    {sig.status}
+                  </Tag2>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
 function OrdersTab({ strategyId }) {
   return (
     <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
-      Order history coming soon
+      Order execution history is tracked under the Deployments and Signal Trace consoles.
     </Card>
   );
 }
@@ -544,7 +994,7 @@ function OrdersTab({ strategyId }) {
 function PositionsTab({ strategyId }) {
   return (
     <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
-      Position data coming soon
+      Position tracking is synchronized through the Portfolio and Risk engine.
     </Card>
   );
 }
@@ -552,7 +1002,7 @@ function PositionsTab({ strategyId }) {
 function LogsTab({ strategyId }) {
   return (
     <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
-      Execution logs coming soon
+      Real-time execution logs are available in the Deployment Console tab.
     </Card>
   );
 }
@@ -565,10 +1015,10 @@ function MarketplaceTab({ strategy }) {
 
   const checkLibraryStatus = async () => {
     try {
-      const res = await client.get(`/api/library/me?strategy_id=${strat.id}`);
-      setLibraryStatus(res.data);
+      const res = await get(`/api/library/me?strategy_id=${strat.id}`);
+      setLibraryStatus(res?.data || res);
     } catch (err) {
-      console.error('Failed to check library status:', err);
+      console.debug('Failed to check library status:', err);
     }
   };
 
@@ -586,21 +1036,22 @@ function MarketplaceTab({ strategy }) {
         currency: 'USD',
         subscription_tier: 'free'
       };
-      const res = await client.post('/api/library', payload);
+      await post('/api/library', payload);
       alert('Strategy submitted for review!');
       checkLibraryStatus();
     } catch (err) {
       console.error(err);
-      const detail = err?.response?.data?.detail;
-      const message = typeof detail === 'string' ? detail : 'Failed to publish';
-      alert(message);
+      const detail = err?.message || 'Failed to publish';
+      alert(detail);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    checkLibraryStatus();
+    if (strat.id) {
+      checkLibraryStatus();
+    }
   }, [strat.id]);
 
   const hasLibraryEntry = libraryStatus && libraryStatus.strategies && libraryStatus.strategies.some(s => s.source_strategy_id === strat.id);

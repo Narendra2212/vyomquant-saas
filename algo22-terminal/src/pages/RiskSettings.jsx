@@ -4,6 +4,8 @@ import { api } from "../api";
 import { C, SectionH, PanelTitle, Inp, Toast, ToastContainer, ProgressBar, RiskMeter } from "../components/ui-legacy/primitives";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
+import wsClient from "../websocketClient";
+
 export default function RiskSettings() {
   const [maxLoss, setMaxLoss] = useState(500);
   const [maxPos, setMaxPos] = useState(10);
@@ -91,23 +93,46 @@ export default function RiskSettings() {
     };
 
     loadRiskData();
-    return () => controller.abort();
+
+    // Subscribe to live risk WebSocket events
+    const unsubActivated = wsClient.subscribe("risk.kill_switch_activated", (data) => {
+      setToast({ type: "error", msg: data?.message || "Emergency Kill Switch Activated across platform." });
+      setKillSwitches(prev => prev.map(ks => ({ ...ks, active: true })));
+    });
+
+    const unsubRecovered = wsClient.subscribe("risk.kill_switch_recovered", () => {
+      setToast({ type: "info", msg: "Emergency Kill Switch Recovered. Trading active." });
+    });
+
+    return () => {
+      controller.abort();
+      if (unsubActivated) unsubActivated();
+      if (unsubRecovered) unsubRecovered();
+    };
   }, []);
 
   const saveRiskConfig = async (overrides = {}) => {
     setIsSaving(true);
     try {
-      await api.risk.updateConfig({
-        max_daily_loss: maxLoss,
-        max_positions: maxPos,
-        max_leverage: leverage,
-        kill_switches: killSwitches.reduce((acc, ks) => ({ ...acc, [ks.key]: ks.active }), {}),
-        ...overrides,
-      });
+      const payload = {
+        max_daily_loss: Number(overrides.max_daily_loss !== undefined ? overrides.max_daily_loss : maxLoss),
+        max_positions: Number(overrides.max_positions !== undefined ? overrides.max_positions : maxPos),
+        max_leverage: Number(overrides.max_leverage !== undefined ? overrides.max_leverage : leverage),
+        circuit_breaker_armed: true,
+        kill_switches: overrides.kill_switches || killSwitches.reduce((acc, ks) => ({ ...acc, [ks.key]: ks.active }), {}),
+      };
+      const res = await api.risk.updateConfig(payload);
+      if (res?.data) {
+        setMaxLoss(res.data.max_daily_loss ?? payload.max_daily_loss);
+        setMaxPos(res.data.max_positions ?? payload.max_positions);
+        setLeverage(res.data.max_leverage ?? payload.max_leverage);
+      }
       setToast({ type: "success", msg: "Risk parameters updated successfully." });
       setHasUnsavedChanges(false);
     } catch (err) {
-      setToast({ type: "error", msg: "Failed to sync risk parameters." });
+      console.error("Failed to save risk config:", err);
+      const errMsg = err.response?.data?.detail || err.message || "Failed to sync risk parameters.";
+      setToast({ type: "error", msg: typeof errMsg === "string" ? errMsg : JSON.stringify(errMsg) });
     } finally {
       setIsSaving(false);
     }
@@ -200,27 +225,47 @@ export default function RiskSettings() {
   );
 
   return (
-    <div style={{ padding: 24, overflowY: "auto", flex: 1, position: "relative", background: "#0f172a" }}>
+    <div style={{ padding: 24, overflowY: "auto", flex: 1, position: "relative", background: "#080a0e", color: "#e2e8f0" }}>
+      {/* Toast Notification */}
+      {toast && (
+        <div style={{
+          position: "fixed",
+          top: 24,
+          right: 24,
+          zIndex: 1000,
+          background: toast.type === "error" ? "#ef4444" : toast.type === "info" ? "#38bdf8" : "#10b981",
+          color: "#ffffff",
+          padding: "10px 16px",
+          borderRadius: 8,
+          fontSize: 12,
+          fontFamily: "monospace",
+          fontWeight: 700,
+          boxShadow: "0 10px 25px rgba(0,0,0,0.5)"
+        }}>
+          {toast.msg}
+        </div>
+      )}
+
       {/* Header */}
       <div style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
             <Shield size={28} style={{ color: "#10b981" }} />
-            <h1 style={{ color: "#f1f5f9", fontSize: 24, fontWeight: 700, margin: 0 }}>Risk Management</h1>
+            <h1 style={{ color: "#f8fafc", fontSize: 24, fontWeight: 800, margin: 0, letterSpacing: "-0.02em" }}>Risk Management</h1>
           </div>
-          <p style={{ color: "#94a3b8", fontSize: 14, margin: 0 }}>Configure risk parameters to protect your trading capital</p>
+          <p style={{ color: "#64748b", fontSize: 13, margin: 0, fontFamily: "monospace" }}>Configure risk parameters and institutional safety guards</p>
         </div>
         <div style={{ display: "flex", gap: 12 }}>
           <button
             onClick={handleResetToDefaults}
             disabled={isSaving}
             style={{
-              padding: "10px 16px",
+              padding: "8px 14px",
               borderRadius: 8,
-              border: "1px solid #475569",
-              background: "#1e293b",
+              border: "1px solid #334155",
+              background: "#0c1017",
               color: "#94a3b8",
-              fontSize: 13,
+              fontSize: 12,
               fontWeight: 600,
               cursor: isSaving ? "not-allowed" : "pointer",
               display: "flex",
@@ -229,281 +274,146 @@ export default function RiskSettings() {
               transition: "all 0.2s"
             }}
           >
-            <RefreshCw size={16} />
+            <RefreshCw size={14} />
             Reset
           </button>
           <button
             onClick={handleManualSave}
             disabled={isSaving || !hasUnsavedChanges}
             style={{
-              padding: "10px 20px",
+              padding: "8px 18px",
               borderRadius: 8,
               border: "none",
-              background: hasUnsavedChanges ? "#10b981" : "#374151",
-              color: "#ffffff",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: isSaving || !hasUnsavedChanges ? "not-allowed" : "pointer",
+              background: hasUnsavedChanges ? "#10b981" : "#334155",
+              color: hasUnsavedChanges ? "#ffffff" : "#64748b",
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: hasUnsavedChanges ? "pointer" : "default",
               display: "flex",
               alignItems: "center",
               gap: 8,
-              transition: "all 0.2s",
-              opacity: !hasUnsavedChanges ? 0.5 : 1
+              transition: "all 0.2s"
             }}
           >
-            {isSaving ? <RefreshCw size={16} style={{ animation: "spin 1s linear infinite" }} /> : <Save size={16} />}
-            {isSaving ? "Saving..." : "Save Changes"}
+            <Save size={14} />
+            Save Changes
           </button>
         </div>
       </div>
 
-      {isLoadingRisk ? (
-        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: 400, color: "#64748b", fontSize: 14 }}>
-          <RefreshCw size={24} style={{ animation: "spin 1s linear infinite", marginRight: 12 }} />
-          Loading risk settings...
-        </div>
-      ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 20 }}>
-          {/* Global Risk Limits - Left Column */}
-          <div style={{ gridColumn: "span 6", display: "flex", flexDirection: "column", gap: 20 }}>
-            <Card className="p-6" style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-                <div style={{ width: 40, height: 40, borderRadius: 10, background: "#10b98120", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <Sliders size={20} style={{ color: "#10b981" }} />
-                </div>
-                <div>
-                  <h2 style={{ color: "#f1f5f9", fontSize: 16, fontWeight: 700, margin: 0 }}>Global Risk Limits</h2>
-                  <p style={{ color: "#64748b", fontSize: 12, margin: "4px 0 0 0" }}>Account-wide exposure ceilings</p>
-                </div>
-              </div>
-              
-              <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-                {[
-                  { k: "maxLoss", l: "Max Daily Loss", v: maxLoss, min: 100, max: 5000, step: 50, prefix: "$", c: "#ef4444", desc: "Stop trading when daily loss exceeds this amount" },
-                  { k: "maxPos", l: "Max Open Positions", v: maxPos, min: 1, max: 50, step: 1, prefix: "", c: "#f59e0b", desc: "Maximum number of concurrent positions" },
-                  { k: "leverage", l: "Max Leverage", v: leverage, min: 1, max: 20, step: 1, prefix: "", suffix: "x", c: "#8b5cf6", desc: "Maximum leverage multiplier per position" },
-                ].map(ctrl => (
-                  <div key={ctrl.l} style={{ padding: 16, background: "#0f172a", borderRadius: 8, border: "1px solid #334155" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                      <div>
-                        <label style={{ color: "#f1f5f9", fontSize: 13, fontWeight: 600, display: "block", marginBottom: 4 }}>{ctrl.l}</label>
-                        <span style={{ color: "#64748b", fontSize: 11 }}>{ctrl.desc}</span>
-                      </div>
-                      <span style={{ color: ctrl.c, fontFamily: "monospace", fontSize: 16, fontWeight: 700, background: `${ctrl.c}20`, padding: "4px 12px", borderRadius: 6 }}>
-                        {ctrl.prefix}{ctrl.v}{ctrl.suffix || ""}
-                      </span>
-                    </div>
-                    <input 
-                      type="range" 
-                      min={ctrl.min} 
-                      max={ctrl.max} 
-                      step={ctrl.step} 
-                      value={ctrl.v} 
-                      onChange={e => handleSliderChange(ctrl.k, +e.target.value)} 
-                      style={{ 
-                        width: "100%", 
-                        height: 6,
-                        borderRadius: 3,
-                        background: "#334155",
-                        outline: "none",
-                        WebkitAppearance: "none",
-                        cursor: "pointer"
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
-            </Card>
+      {/* Main Grid: Parameters & Kill Switches */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 20, marginBottom: 24 }}>
+        {/* Core Limits */}
+        <Card className="p-5 bg-[#0c1017] border-[#1e293b]">
+          <h2 style={{ fontSize: "0.875rem", fontWeight: 800, color: "#f8fafc", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 16 }}>
+            Portfolio Risk Limits
+          </h2>
 
-            <Card className="p-6" style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-                <div style={{ width: 40, height: 40, borderRadius: 10, background: "#ef444420", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <AlertTriangle size={20} style={{ color: "#ef4444" }} />
-                </div>
-                <div>
-                  <h2 style={{ color: "#f1f5f9", fontSize: 16, fontWeight: 700, margin: 0 }}>Kill Switches</h2>
-                  <p style={{ color: "#64748b", fontSize: 12, margin: "4px 0 0 0" }}>Automated trading halt mechanisms</p>
-                </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontSize: 12, color: "#94a3b8", fontFamily: "monospace" }}>Max Daily Loss ($)</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#00d4ff", fontFamily: "monospace" }}>${maxLoss}</span>
               </div>
-              
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {killSwitches.map((ks, i) => {
-                  const IconComponent = ks.icon;
-                  return (
-                    <div 
-                      key={ks.key} 
-                      style={{ 
-                        display: "flex", 
-                        alignItems: "center", 
-                        gap: 16, 
-                        padding: 16, 
-                        background: "#0f172a", 
-                        borderRadius: 8, 
-                        border: `1px solid ${ks.active ? "#10b98150" : "#334155"}`,
-                        transition: "all 0.2s"
-                      }}
-                    >
-                      <div style={{ width: 36, height: 36, borderRadius: 8, background: `${ks.active ? "#10b98120" : "#334155"}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <IconComponent size={18} style={{ color: ks.active ? "#10b981" : "#64748b" }} />
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ color: ks.active ? "#f1f5f9" : "#64748b", fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{ks.label}</div>
-                        <div style={{ color: "#64748b", fontSize: 11 }}>{ks.description}</div>
-                      </div>
-                      <Toggle active={ks.active} onClick={() => handleToggleSwitch(ks.key)} />
-                    </div>
-                  );
-                })}
+              <input
+                type="range"
+                min="50"
+                max="5000"
+                step="50"
+                value={maxLoss}
+                onChange={(e) => handleSliderChange("maxLoss", Number(e.target.value))}
+                style={{ width: "100%", accentColor: "#00d4ff" }}
+              />
+            </div>
+
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontSize: 12, color: "#94a3b8", fontFamily: "monospace" }}>Max Concurrent Positions</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#00d4ff", fontFamily: "monospace" }}>{maxPos} Slots</span>
               </div>
-            </Card>
+              <input
+                type="range"
+                min="1"
+                max="30"
+                step="1"
+                value={maxPos}
+                onChange={(e) => handleSliderChange("maxPos", Number(e.target.value))}
+                style={{ width: "100%", accentColor: "#00d4ff" }}
+              />
+            </div>
+
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontSize: 12, color: "#94a3b8", fontFamily: "monospace" }}>Max Account Leverage</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#00d4ff", fontFamily: "monospace" }}>{leverage}x</span>
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="20"
+                step="1"
+                value={leverage}
+                onChange={(e) => handleSliderChange("leverage", Number(e.target.value))}
+                style={{ width: "100%", accentColor: "#00d4ff" }}
+              />
+            </div>
           </div>
+        </Card>
 
-          {/* Right Column */}
-          <div style={{ gridColumn: "span 6", display: "flex", flexDirection: "column", gap: 20 }}>
-            <Card className="p-6" style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-                <div style={{ width: 40, height: 40, borderRadius: 10, background: "#3b82f620", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <Target size={20} style={{ color: "#3b82f6" }} />
-                </div>
-                <div>
-                  <h2 style={{ color: "#f1f5f9", fontSize: 16, fontWeight: 700, margin: 0 }}>Strategy Limits</h2>
-                  <p style={{ color: "#64748b", fontSize: 12, margin: "4px 0 0 0" }}>Per-strategy capital allocation</p>
-                </div>
-              </div>
-              
-              {strategyLimits.length === 0 ? (
-                <div style={{ padding: 40, textAlign: "center", color: "#64748b", fontSize: 13 }}>
-                  <Settings size={32} style={{ margin: "0 auto 12px", opacity: 0.5 }} />
-                  No active strategies deployed
-                </div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {strategyLimits.map(s => (
-                    <div key={s.id} style={{ padding: 16, background: "#0f172a", borderRadius: 8, border: "1px solid #334155" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <div style={{ width: 8, height: 8, borderRadius: "50%", background: s.enabled ? "#10b981" : "#64748b" }} />
-                          <span style={{ color: "#f1f5f9", fontSize: 13, fontWeight: 600 }}>{s.name}</span>
-                        </div>
-                        <span style={{ color: "#06b6d4", fontSize: 12, fontWeight: 700, fontFamily: "monospace" }}>{s.allocationPct}%</span>
-                      </div>
-                      <input 
-                        type="range" 
-                        min={0} 
-                        max={100} 
-                        step={1} 
-                        value={s.allocationPct} 
-                        onChange={(e) => handleStrategyAllocationChange(s.id, e.target.value)} 
-                        style={{ 
-                          width: "100%", 
-                          height: 6,
-                          borderRadius: 3,
-                          background: "#334155",
-                          outline: "none",
-                          WebkitAppearance: "none",
-                          cursor: "pointer"
-                        }}
-                      />
-                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 11, color: "#64748b" }}>
-                        <span>Max: {s.maxDailyTrades} trades/day</span>
-                        <span>{s.capitalText}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Card>
+        {/* Emergency Kill Switches */}
+        <Card className="p-5 bg-[#0c1017] border-[#1e293b]">
+          <h2 style={{ fontSize: "0.875rem", fontWeight: 800, color: "#f8fafc", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 16 }}>
+            Automated Protection Guards
+          </h2>
 
-            <Card className="p-6" style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-                <div style={{ width: 40, height: 40, borderRadius: 10, background: "#06b6d420", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <Activity size={20} style={{ color: "#06b6d4" }} />
-                </div>
-                <div>
-                  <h2 style={{ color: "#f1f5f9", fontSize: 16, fontWeight: 700, margin: 0 }}>Margin Health</h2>
-                  <p style={{ color: "#64748b", fontSize: 12, margin: "4px 0 0 0" }}>Live exchange margin metrics</p>
-                </div>
-              </div>
-              
-              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                {marginData.map(m => (
-                  <div key={m.key}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                      <span style={{ color: "#94a3b8", fontSize: 12, fontWeight: 500 }}>{m.label}</span>
-                      <span style={{ color: m.color, fontSize: 14, fontWeight: 700, fontFamily: "monospace" }}>{m.value}%</span>
-                    </div>
-                    <div style={{ height: 8, background: "#0f172a", borderRadius: 4, overflow: "hidden" }}>
-                      <div 
-                        style={{ 
-                          height: "100%", 
-                          width: `${m.value}%`, 
-                          background: m.color, 
-                          borderRadius: 4,
-                          transition: "width 0.3s ease"
-                        }} 
-                      />
-                    </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {killSwitches.map(ks => (
+              <div key={ks.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: "#080a0e", borderRadius: 8, border: "1px solid #1e293b" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <ks.icon size={18} style={{ color: ks.active ? "#10b981" : "#64748b" }} />
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#f8fafc" }}>{ks.label}</div>
+                    <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>{ks.description}</div>
                   </div>
-                ))}
+                </div>
+                <Toggle active={ks.active} onClick={() => handleToggleSwitch(ks.key)} />
               </div>
-            </Card>
+            ))}
           </div>
-        </div>
-      )}
+        </Card>
+      </div>
 
-      {/* Toast Notification */}
-      {toast && (
-        <div style={{ 
-          position: "fixed", 
-          right: 24, 
-          bottom: 24, 
-          background: toast.type === "success" ? "#10b98120" : toast.type === "error" ? "#ef444420" : "#3b82f620",
-          border: `1px solid ${toast.type === "success" ? "#10b981" : toast.type === "error" ? "#ef4444" : "#3b82f6"}`,
-          color: toast.type === "success" ? "#10b981" : toast.type === "error" ? "#ef4444" : "#3b82f6",
-          borderRadius: 12, 
-          padding: "16px 20px", 
-          fontSize: 13, 
-          fontFamily: "system-ui", 
-          fontWeight: 500, 
-          zIndex: 120, 
-          boxShadow: "0 10px 40px rgba(0,0,0,0.4)",
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          backdropFilter: "blur(10px)"
-        }}>
-          {toast.type === "success" && <CheckCircle size={20} />}
-          {toast.type === "error" && <AlertTriangle size={20} />}
-          {toast.type === "info" && <Zap size={20} />}
-          {toast.msg}
-        </div>
-      )}
+      {/* Strategy Level Allocations */}
+      <Card className="p-5 bg-[#0c1017] border-[#1e293b]">
+        <h2 style={{ fontSize: "0.875rem", fontWeight: 800, color: "#f8fafc", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 16 }}>
+          Strategy Capital Allocations ({strategyLimits.length})
+        </h2>
 
-      <style>{`
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        input[type="range"]::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 18px;
-          height: 18px;
-          border-radius: 50%;
-          background: #f1f5f9;
-          cursor: pointer;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-        }
-        input[type="range"]::-moz-range-thumb {
-          width: 18px;
-          height: 18px;
-          border-radius: 50%;
-          background: #f1f5f9;
-          cursor: pointer;
-          border: none;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-        }
-      `}</style>
+        {strategyLimits.length === 0 ? (
+          <div style={{ padding: 20, textAlign: "center", color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
+            No strategy-specific limits configured. Limits apply globally.
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
+            {strategyLimits.map(s => (
+              <div key={s.id} style={{ padding: 12, background: "#080a0e", borderRadius: 8, border: "1px solid #1e293b" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#f8fafc" }}>{s.name}</span>
+                  <span style={{ fontSize: 12, color: "#00d4ff", fontFamily: "monospace", fontWeight: 700 }}>{s.allocationPct}% Allocation</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={s.allocationPct}
+                  onChange={(e) => handleStrategyAllocationChange(s.id, e.target.value)}
+                  style={{ width: "100%", accentColor: "#00d4ff" }}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

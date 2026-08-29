@@ -16,11 +16,16 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
+import importlib
+import importlib.util
 import logging
 import os
 import re
 import uuid
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, replace
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import joblib
@@ -31,15 +36,13 @@ import numpy as np
 
 logger = logging.getLogger("MLModels")
 
-# Available ML models for Strategy Builder
-AVAILABLE_ML_MODELS = [
-    'xgboost', 'lightgbm', 'random_forest', 'catboost'
-]
-
-# Available DL models for Strategy Builder
-AVAILABLE_DL_MODELS = [
-    'lstm', 'gru', 'transformer', 'autoencoder'
-]
+# AVAILABLE_ML_MODELS and AVAILABLE_DL_MODELS are no longer hand-maintained parallel
+# lists. They are DERIVED from MODEL_SPECS at the bottom of this module, filtered by a
+# real per-library import probe. See "MODEL DESCRIPTOR REGISTRY" below.
+#
+# Why: the hand-maintained lists were one half of defect SB-04 — `catboost` and
+# `autoencoder` were runnable on the backend but unselectable in the UI because a second,
+# shorter list existed elsewhere. One source, derived, no drift.
 
 # Import ML safety infrastructure for institutional-grade safety
 try:
@@ -1012,3 +1015,1152 @@ CatBoostBlock = CatBoostStrategyBlock
 LSTMBlock = LSTMStrategyBlock
 GRUBlock = GRUStrategyBlock
 
+
+# ══════════════════════════════════════════════════════════════════════════
+#  MODEL DESCRIPTOR REGISTRY
+#
+#  Machine-readable descriptors for every ML/DL block above, so the block
+#  registry (strategy_dag/registry.py) can never advertise a model it cannot
+#  run, and never omit one it can.
+#
+#  Values come from `design.md § ML/DL model registry`. Nothing here executes
+#  a model, touches the network or the database — this section is pure data
+#  plus a safe import probe.
+#
+#  Closes half of defect SB-04: `catboost` and `autoencoder` are runnable on
+#  the backend but were unselectable in the UI, because the palette was fed
+#  by a shorter hand-maintained list. AVAILABLE_ML_MODELS / AVAILABLE_DL_MODELS
+#  are now derived from MODEL_SPECS, so the two can no longer disagree.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+# ── Vocabularies owned by this module ────────────────────────────────────
+
+
+class ModelFamily(str, Enum):
+    """How a model consumes its training rows. Drives the minimum-data gate."""
+
+    TREE = "TREE"
+    SEQUENCE = "SEQUENCE"
+    AUTOENCODER = "AUTOENCODER"
+
+
+class SerializationMode(str, Enum):
+    """Artifact format a trained model is persisted in."""
+
+    JOBLIB = "JOBLIB"
+    KERAS = "KERAS"
+    TORCH = "TORCH"
+
+
+class EpochUnit(str, Enum):
+    """
+    What `recommended_epochs` / `max_safe_epochs` actually count.
+
+    The design table mixes units on purpose: boosting rounds, CatBoost
+    iterations, forest estimators and gradient-descent epochs are not the same
+    thing, and a cap message that says "epochs" for a random forest is a lie.
+    """
+
+    ROUNDS = "rounds"
+    ITERATIONS = "iterations"
+    ESTIMATORS = "estimators"
+    EPOCHS = "epochs"
+
+
+# Port type strings are the *values* of the canonical ``PortType`` enum in
+# ``strategy_dag/schema.py``; they are kept as plain strings here so this module
+# stays dependency-free and importable on its own, matching the convention in
+# ``indicators_backend.py`` and ``feature_engineering.py``. A spelling that
+# drifts from the enum fails loudly in ``ModelPort.__post_init__`` and again at
+# ``PortType(value)`` during registry assembly.
+PORT_FEATURE_MATRIX = "FEATURE_MATRIX"
+PORT_PREDICTION = "PREDICTION"
+PORT_SCALAR_SERIES = "SCALAR_SERIES"
+PORT_BOOLEAN_SERIES = "BOOLEAN_SERIES"
+
+#: Canonical port-type vocabulary (values of ``strategy_dag.schema.PortType``).
+CANONICAL_PORT_TYPES = frozenset(
+    {
+        "OHLCV_FRAME",
+        "PRICE_SERIES",
+        "SCALAR_SERIES",
+        "BOOLEAN_SERIES",
+        "FEATURE_MATRIX",
+        "PREDICTION",
+        "SIGNAL",
+        "TRADE_INTENT",
+        "SCALAR",
+    }
+)
+
+# Param types are the values of the canonical ParamSpec type vocabulary.
+PARAM_INTEGER = "INTEGER"
+PARAM_NUMBER = "NUMBER"
+PARAM_SELECT = "SELECT"
+PARAM_BOOLEAN = "BOOLEAN"
+
+#: Canonical param-type vocabulary (matches ``feature_engineering.ParamType``).
+CANONICAL_PARAM_TYPES = frozenset(
+    {
+        "NUMBER",
+        "INTEGER",
+        "TEXT",
+        "SELECT",
+        "MULTISELECT",
+        "BOOLEAN",
+        "DATE",
+        "SYMBOL",
+        "TIMEFRAME",
+    }
+)
+
+# Platform floor from `design.md § Minimum-data gate`: every model needs at
+# least this many usable feature columns, on top of its own declared minimum.
+PLATFORM_MIN_FEATURE_COLUMNS = 5
+
+MODEL_SPEC_VERSION = "1.0.0"
+
+
+# ── Descriptor structures ────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ModelPort:
+    """One input or output port of a model block."""
+
+    name: str
+    type: str
+    required: bool = True
+    variadic: bool = False
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        if self.type not in CANONICAL_PORT_TYPES:
+            raise ValueError(
+                f"Port '{self.name}' declares unknown port type '{self.type}'"
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "port": self.name,
+            "type": self.type,
+            "required": self.required,
+            "variadic": self.variadic,
+            "description": self.description,
+        }
+
+
+@dataclass(frozen=True)
+class ModelParamSpec:
+    """
+    Declarative hyperparameter contract. The UI form generator and the backend
+    validator both read this, so a form cannot offer a value the backend rejects.
+    """
+
+    key: str
+    label: str
+    type: str
+    required: bool = False
+    default: Any = None
+    min: Optional[float] = None
+    max: Optional[float] = None
+    step: Optional[float] = None
+    options: Optional[Tuple[Any, ...]] = None
+    unit: Optional[str] = None
+    example: Any = None
+    help: str = ""
+    depends_on: Tuple[str, ...] = ()
+    affects_warmup: bool = False
+
+    def __post_init__(self) -> None:
+        if self.type not in CANONICAL_PARAM_TYPES:
+            raise ValueError(
+                f"Param '{self.key}' declares unknown param type '{self.type}'"
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "type": self.type,
+            "required": self.required,
+            "default": self.default,
+            "min": self.min,
+            "max": self.max,
+            "step": self.step,
+            "options": list(self.options) if self.options is not None else None,
+            "unit": self.unit,
+            "example": self.example,
+            "help": self.help,
+            "depends_on": list(self.depends_on),
+            "affects_warmup": self.affects_warmup,
+        }
+
+
+@dataclass(frozen=True)
+class ValidationRequirements:
+    """
+    Split geometry a model needs before training is admissible.
+
+    `embargo_bars` here is a per-model floor. Phase 6 raises it to at least the
+    longest feature lookback plus the label horizon, measured from the compiled
+    plan; it never lowers it.
+    """
+
+    val_fraction: float
+    test_fraction: float
+    embargo_bars: int
+    metric: str
+
+    def __post_init__(self) -> None:
+        if not 0.0 < self.val_fraction < 1.0:
+            raise ValueError(f"val_fraction out of range: {self.val_fraction}")
+        if not 0.0 < self.test_fraction < 1.0:
+            raise ValueError(f"test_fraction out of range: {self.test_fraction}")
+        if self.val_fraction + self.test_fraction >= 1.0:
+            raise ValueError(
+                "val_fraction + test_fraction must leave a non-empty train split: "
+                f"{self.val_fraction} + {self.test_fraction}"
+            )
+        if self.embargo_bars < 0:
+            raise ValueError(f"embargo_bars must be >= 0: {self.embargo_bars}")
+
+    @property
+    def reserved_fraction(self) -> float:
+        return self.val_fraction + self.test_fraction
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "val_fraction": self.val_fraction,
+            "test_fraction": self.test_fraction,
+            "embargo_bars": self.embargo_bars,
+            "metric": self.metric,
+        }
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    """
+    Everything the registry, the minimum-data gate and the training caps need to
+    know about one model block, without importing or running the model.
+    """
+
+    block_id: str
+    display_name: str
+    model_family: ModelFamily
+    inputs: Tuple[ModelPort, ...]
+    outputs: Tuple[ModelPort, ...]
+    min_feature_columns: int
+    min_training_rows: int
+    sequence_length: Optional[int]
+    hyperparameters: Tuple[ModelParamSpec, ...]
+    recommended_epochs: int
+    max_safe_epochs: int
+    default_batch_size: int
+    validation_requirements: ValidationRequirements
+    can_train: bool
+    can_predict: bool
+    serialization: SerializationMode
+    backend_available: bool
+    version: str
+    # Supporting fields — not part of the design's minimum struct, but needed so
+    # the registry can resolve a runtime and so cap messages state honest units.
+    epoch_unit: EpochUnit = EpochUnit.EPOCHS
+    runtime_ref: str = ""
+    required_modules: Tuple[str, ...] = ()
+    description: str = ""
+
+    @property
+    def is_sequence(self) -> bool:
+        return self.model_family is ModelFamily.SEQUENCE
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "block_id": self.block_id,
+            "display_name": self.display_name,
+            "model_family": self.model_family.value,
+            "inputs": [p.to_dict() for p in self.inputs],
+            "outputs": [p.to_dict() for p in self.outputs],
+            "min_feature_columns": self.min_feature_columns,
+            "min_training_rows": self.min_training_rows,
+            "sequence_length": self.sequence_length,
+            "hyperparameters": [p.to_dict() for p in self.hyperparameters],
+            "recommended_epochs": self.recommended_epochs,
+            "max_safe_epochs": self.max_safe_epochs,
+            "epoch_unit": self.epoch_unit.value,
+            "default_batch_size": self.default_batch_size,
+            "validation_requirements": self.validation_requirements.to_dict(),
+            "can_train": self.can_train,
+            "can_predict": self.can_predict,
+            "serialization": self.serialization.value,
+            "backend_available": self.backend_available,
+            "version": self.version,
+            "runtime_ref": self.runtime_ref,
+            "required_modules": list(self.required_modules),
+            "description": self.description,
+        }
+
+
+# ── Import probe ─────────────────────────────────────────────────────────
+#
+# `backend_available` is measured, never asserted. If catboost or the DL
+# framework cannot be resolved in the running image, the block is omitted from
+# the derived lists (and, in Phase 1.7, from the registry) instead of being
+# offered and then failing at train time.
+#
+# Default probe is spec resolution (importlib.util.find_spec): it answers "is
+# this library present in this image" without paying the multi-second cost of
+# executing tensorflow's __init__ at module import. Set
+# ML_MODELS_DEEP_IMPORT_PROBE=1 to force a full `import_module` instead, which
+# additionally catches a present-but-broken install (bad DLL, ABI mismatch).
+#
+# Either way the probe cannot raise: a failed probe is False, never an exception.
+
+_DEEP_IMPORT_PROBE = os.getenv("ML_MODELS_DEEP_IMPORT_PROBE", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+_probe_cache: Dict[Tuple[str, bool], bool] = {}
+
+
+def probe_module(module_name: str, deep: Optional[bool] = None) -> bool:
+    """
+    Return True when `module_name` is importable in this environment.
+
+    Never raises. Results are cached per (module, depth) so registry assembly
+    and repeated gate evaluations do not re-pay the cost.
+    """
+    use_deep = _DEEP_IMPORT_PROBE if deep is None else deep
+    cache_key = (module_name, use_deep)
+    if cache_key in _probe_cache:
+        return _probe_cache[cache_key]
+
+    available = False
+    try:
+        if use_deep:
+            importlib.import_module(module_name)
+            available = True
+        else:
+            available = importlib.util.find_spec(module_name) is not None
+    except Exception as exc:  # noqa: BLE001 - a broken library must not break import
+        # ImportError, ValueError (namespace edge cases), and anything a
+        # third-party __init__ raises all mean the same thing here: unusable.
+        logger.debug("Model backend probe failed for %r: %s", module_name, exc)
+        available = False
+
+    _probe_cache[cache_key] = available
+    return available
+
+
+def probe_backends(deep: Optional[bool] = None) -> Dict[str, bool]:
+    """Probe every library any model block depends on. Diagnostics and tests."""
+    modules = sorted({m for spec in MODEL_SPECS.values() for m in spec.required_modules})
+    return {m: probe_module(m, deep=deep) for m in modules}
+
+
+def _backend_available_for(required_modules: Tuple[str, ...], deep: Optional[bool] = None) -> bool:
+    return all(probe_module(m, deep=deep) for m in required_modules)
+
+
+# ── Shared port shapes ───────────────────────────────────────────────────
+
+
+def _supervised_ports() -> Tuple[Tuple[ModelPort, ...], Tuple[ModelPort, ...]]:
+    inputs = (
+        ModelPort(
+            name="features",
+            type=PORT_FEATURE_MATRIX,
+            required=True,
+            description="Aligned feature matrix with column names and warmup offset.",
+        ),
+    )
+    outputs = (
+        ModelPort(
+            name="prediction",
+            type=PORT_PREDICTION,
+            required=False,
+            description="Per-bar model output.",
+        ),
+        ModelPort(
+            name="confidence",
+            type=PORT_SCALAR_SERIES,
+            required=False,
+            description="Per-bar confidence in [0, 1].",
+        ),
+    )
+    return inputs, outputs
+
+
+def _anomaly_ports() -> Tuple[Tuple[ModelPort, ...], Tuple[ModelPort, ...]]:
+    inputs = (
+        ModelPort(
+            name="features",
+            type=PORT_FEATURE_MATRIX,
+            required=True,
+            description="Aligned feature matrix to reconstruct.",
+        ),
+    )
+    outputs = (
+        ModelPort(
+            name="anomaly_score",
+            type=PORT_SCALAR_SERIES,
+            required=False,
+            description="Reconstruction error scaled against the trained threshold, in [0, 1].",
+        ),
+        ModelPort(
+            name="is_anomaly",
+            type=PORT_BOOLEAN_SERIES,
+            required=False,
+            description="True when the anomaly score exceeds the trained threshold.",
+        ),
+    )
+    return inputs, outputs
+
+
+# ── Shared hyperparameter fragments ──────────────────────────────────────
+
+
+def _p_learning_rate(default: float = 0.05) -> ModelParamSpec:
+    return ModelParamSpec(
+        key="learning_rate",
+        label="Learning rate",
+        type=PARAM_NUMBER,
+        default=default,
+        min=0.0001,
+        max=0.5,
+        step=0.001,
+        example=default,
+        help="Smaller values train more slowly but generalise better.",
+    )
+
+
+def _p_dropout(default: float = 0.2) -> ModelParamSpec:
+    return ModelParamSpec(
+        key="dropout",
+        label="Dropout",
+        type=PARAM_NUMBER,
+        default=default,
+        min=0.0,
+        max=0.7,
+        step=0.05,
+        example=default,
+        help="Fraction of units dropped per step to reduce overfitting.",
+    )
+
+
+def _p_batch_size(default: int = 64) -> ModelParamSpec:
+    return ModelParamSpec(
+        key="batch_size",
+        label="Batch size",
+        type=PARAM_INTEGER,
+        default=default,
+        min=8,
+        max=1024,
+        step=8,
+        unit="rows",
+        example=default,
+        help="Rows per gradient step.",
+    )
+
+
+def _p_epochs(default: int, maximum: int) -> ModelParamSpec:
+    return ModelParamSpec(
+        key="epochs",
+        label="Epochs",
+        type=PARAM_INTEGER,
+        default=default,
+        min=1,
+        max=maximum,
+        step=1,
+        unit="epochs",
+        example=default,
+        help=(
+            "Full passes over the training split. The backend caps this at "
+            f"{maximum}; a higher plan tier cannot exceed that."
+        ),
+    )
+
+
+def _p_sequence_length(default: int) -> ModelParamSpec:
+    return ModelParamSpec(
+        key="sequence_length",
+        label="Sequence length",
+        type=PARAM_INTEGER,
+        default=default,
+        min=10,
+        max=500,
+        step=1,
+        unit="bars",
+        example=default,
+        help="Bars per training sample. Every sample consumes this many rows.",
+        affects_warmup=True,
+    )
+
+
+# ── The eight model specs (design.md § ML/DL model registry) ──────────────
+
+
+def _build_model_specs() -> Dict[str, ModelSpec]:
+    tree_in, tree_out = _supervised_ports()
+    seq_in, seq_out = _supervised_ports()
+    ae_in, ae_out = _anomaly_ports()
+
+    tree_validation = ValidationRequirements(
+        val_fraction=0.15, test_fraction=0.15, embargo_bars=10, metric="f1_macro"
+    )
+
+    specs: List[ModelSpec] = [
+        ModelSpec(
+            block_id="xgboost",
+            display_name="XGBoost",
+            model_family=ModelFamily.TREE,
+            inputs=tree_in,
+            outputs=tree_out,
+            min_feature_columns=5,
+            min_training_rows=2000,
+            sequence_length=None,
+            hyperparameters=(
+                ModelParamSpec(
+                    key="n_estimators",
+                    label="Boosting rounds",
+                    type=PARAM_INTEGER,
+                    default=200,
+                    min=10,
+                    max=2000,
+                    step=10,
+                    unit="rounds",
+                    example=200,
+                    help="Number of boosting rounds.",
+                ),
+                _p_learning_rate(0.05),
+                ModelParamSpec(
+                    key="max_depth",
+                    label="Max depth",
+                    type=PARAM_INTEGER,
+                    default=4,
+                    min=2,
+                    max=16,
+                    step=1,
+                    example=4,
+                    help="Deeper trees fit more, generalise less.",
+                ),
+                ModelParamSpec(
+                    key="subsample",
+                    label="Row subsample",
+                    type=PARAM_NUMBER,
+                    default=0.8,
+                    min=0.1,
+                    max=1.0,
+                    step=0.05,
+                    example=0.8,
+                ),
+                ModelParamSpec(
+                    key="colsample_bytree",
+                    label="Column subsample",
+                    type=PARAM_NUMBER,
+                    default=0.8,
+                    min=0.1,
+                    max=1.0,
+                    step=0.05,
+                    example=0.8,
+                ),
+            ),
+            recommended_epochs=200,
+            max_safe_epochs=2000,
+            epoch_unit=EpochUnit.ROUNDS,
+            default_batch_size=0,
+            validation_requirements=tree_validation,
+            can_train=True,
+            can_predict=True,
+            serialization=SerializationMode.JOBLIB,
+            backend_available=False,
+            version=MODEL_SPEC_VERSION,
+            runtime_ref="ml_models.XGBoostStrategyBlock",
+            required_modules=("xgboost",),
+            description="Gradient-boosted trees. Strong tabular baseline.",
+        ),
+        ModelSpec(
+            block_id="lightgbm",
+            display_name="LightGBM",
+            model_family=ModelFamily.TREE,
+            inputs=tree_in,
+            outputs=tree_out,
+            min_feature_columns=5,
+            min_training_rows=2000,
+            sequence_length=None,
+            hyperparameters=(
+                ModelParamSpec(
+                    key="n_estimators",
+                    label="Boosting rounds",
+                    type=PARAM_INTEGER,
+                    default=200,
+                    min=10,
+                    max=2000,
+                    step=10,
+                    unit="rounds",
+                    example=200,
+                ),
+                _p_learning_rate(0.05),
+                ModelParamSpec(
+                    key="max_depth",
+                    label="Max depth",
+                    type=PARAM_INTEGER,
+                    default=5,
+                    min=2,
+                    max=16,
+                    step=1,
+                    example=5,
+                ),
+                ModelParamSpec(
+                    key="num_leaves",
+                    label="Leaves per tree",
+                    type=PARAM_INTEGER,
+                    default=31,
+                    min=2,
+                    max=512,
+                    step=1,
+                    example=31,
+                    help="Keep below 2**max_depth to avoid overfitting.",
+                    depends_on=("max_depth",),
+                ),
+                ModelParamSpec(
+                    key="subsample",
+                    label="Row subsample",
+                    type=PARAM_NUMBER,
+                    default=0.8,
+                    min=0.1,
+                    max=1.0,
+                    step=0.05,
+                    example=0.8,
+                ),
+                ModelParamSpec(
+                    key="colsample_bytree",
+                    label="Column subsample",
+                    type=PARAM_NUMBER,
+                    default=0.8,
+                    min=0.1,
+                    max=1.0,
+                    step=0.05,
+                    example=0.8,
+                ),
+            ),
+            recommended_epochs=200,
+            max_safe_epochs=2000,
+            epoch_unit=EpochUnit.ROUNDS,
+            default_batch_size=0,
+            validation_requirements=tree_validation,
+            can_train=True,
+            can_predict=True,
+            serialization=SerializationMode.JOBLIB,
+            backend_available=False,
+            version=MODEL_SPEC_VERSION,
+            runtime_ref="ml_models.LightGBMStrategyBlock",
+            required_modules=("lightgbm",),
+            description="Histogram-based gradient boosting. Fast on wide feature sets.",
+        ),
+        ModelSpec(
+            block_id="random_forest",
+            display_name="Random Forest",
+            model_family=ModelFamily.TREE,
+            inputs=tree_in,
+            outputs=tree_out,
+            min_feature_columns=5,
+            min_training_rows=2000,
+            sequence_length=None,
+            hyperparameters=(
+                ModelParamSpec(
+                    key="n_estimators",
+                    label="Trees",
+                    type=PARAM_INTEGER,
+                    default=100,
+                    min=10,
+                    max=1000,
+                    step=10,
+                    unit="trees",
+                    example=100,
+                    help="Random forests do not train in epochs; this is the forest size.",
+                ),
+                ModelParamSpec(
+                    key="max_depth",
+                    label="Max depth",
+                    type=PARAM_INTEGER,
+                    default=6,
+                    min=2,
+                    max=32,
+                    step=1,
+                    example=6,
+                ),
+                ModelParamSpec(
+                    key="min_samples_split",
+                    label="Min samples to split",
+                    type=PARAM_INTEGER,
+                    default=5,
+                    min=2,
+                    max=100,
+                    step=1,
+                    example=5,
+                ),
+                ModelParamSpec(
+                    key="max_features",
+                    label="Features per split",
+                    type=PARAM_SELECT,
+                    default="sqrt",
+                    options=("sqrt", "log2", "all"),
+                    example="sqrt",
+                ),
+            ),
+            # The design table records "n/a (n_estimators 100)": there is no epoch
+            # loop, so the recommended and maximum counts are forest sizes.
+            recommended_epochs=100,
+            max_safe_epochs=1000,
+            epoch_unit=EpochUnit.ESTIMATORS,
+            default_batch_size=0,
+            validation_requirements=tree_validation,
+            can_train=True,
+            can_predict=True,
+            serialization=SerializationMode.JOBLIB,
+            backend_available=False,
+            version=MODEL_SPEC_VERSION,
+            runtime_ref="ml_models.RandomForestStrategyBlock",
+            required_modules=("sklearn",),
+            description="Bagged decision trees. Robust, low-tuning baseline.",
+        ),
+        ModelSpec(
+            block_id="catboost",
+            display_name="CatBoost",
+            model_family=ModelFamily.TREE,
+            inputs=tree_in,
+            outputs=tree_out,
+            min_feature_columns=5,
+            min_training_rows=2000,
+            sequence_length=None,
+            hyperparameters=(
+                ModelParamSpec(
+                    key="iterations",
+                    label="Iterations",
+                    type=PARAM_INTEGER,
+                    default=300,
+                    min=10,
+                    max=3000,
+                    step=10,
+                    unit="iterations",
+                    example=300,
+                ),
+                _p_learning_rate(0.05),
+                ModelParamSpec(
+                    key="depth",
+                    label="Tree depth",
+                    type=PARAM_INTEGER,
+                    default=5,
+                    min=2,
+                    max=12,
+                    step=1,
+                    example=5,
+                ),
+                ModelParamSpec(
+                    key="l2_leaf_reg",
+                    label="L2 leaf regularisation",
+                    type=PARAM_NUMBER,
+                    default=3.0,
+                    min=0.1,
+                    max=30.0,
+                    step=0.1,
+                    example=3.0,
+                ),
+            ),
+            recommended_epochs=300,
+            max_safe_epochs=3000,
+            epoch_unit=EpochUnit.ITERATIONS,
+            default_batch_size=0,
+            validation_requirements=tree_validation,
+            can_train=True,
+            can_predict=True,
+            serialization=SerializationMode.JOBLIB,
+            backend_available=False,
+            version=MODEL_SPEC_VERSION,
+            runtime_ref="ml_models.CatBoostStrategyBlock",
+            required_modules=("catboost",),
+            description="Ordered boosting with strong defaults. Half of SB-04.",
+        ),
+        ModelSpec(
+            block_id="lstm",
+            display_name="LSTM",
+            model_family=ModelFamily.SEQUENCE,
+            inputs=seq_in,
+            outputs=seq_out,
+            min_feature_columns=5,
+            min_training_rows=5000,
+            sequence_length=60,
+            hyperparameters=(
+                _p_sequence_length(60),
+                ModelParamSpec(
+                    key="units_1",
+                    label="First layer units",
+                    type=PARAM_INTEGER,
+                    default=64,
+                    min=8,
+                    max=512,
+                    step=8,
+                    example=64,
+                ),
+                ModelParamSpec(
+                    key="units_2",
+                    label="Second layer units",
+                    type=PARAM_INTEGER,
+                    default=32,
+                    min=8,
+                    max=256,
+                    step=8,
+                    example=32,
+                ),
+                _p_dropout(0.2),
+                _p_epochs(30, 200),
+                _p_batch_size(64),
+                _p_learning_rate(0.001),
+            ),
+            recommended_epochs=30,
+            max_safe_epochs=200,
+            epoch_unit=EpochUnit.EPOCHS,
+            default_batch_size=64,
+            validation_requirements=ValidationRequirements(
+                val_fraction=0.15, test_fraction=0.15, embargo_bars=60, metric="accuracy"
+            ),
+            can_train=True,
+            can_predict=True,
+            serialization=SerializationMode.KERAS,
+            backend_available=False,
+            version=MODEL_SPEC_VERSION,
+            runtime_ref="ml_models.LSTMStrategyBlock",
+            required_modules=("tensorflow", "sklearn"),
+            description="Stacked LSTM over a rolling window of features.",
+        ),
+        ModelSpec(
+            block_id="gru",
+            display_name="GRU",
+            model_family=ModelFamily.SEQUENCE,
+            inputs=seq_in,
+            outputs=seq_out,
+            min_feature_columns=5,
+            min_training_rows=5000,
+            sequence_length=60,
+            hyperparameters=(
+                _p_sequence_length(60),
+                ModelParamSpec(
+                    key="units_1",
+                    label="First layer units",
+                    type=PARAM_INTEGER,
+                    default=64,
+                    min=8,
+                    max=512,
+                    step=8,
+                    example=64,
+                ),
+                ModelParamSpec(
+                    key="units_2",
+                    label="Second layer units",
+                    type=PARAM_INTEGER,
+                    default=32,
+                    min=8,
+                    max=256,
+                    step=8,
+                    example=32,
+                ),
+                _p_dropout(0.2),
+                _p_epochs(30, 200),
+                _p_batch_size(64),
+                _p_learning_rate(0.001),
+            ),
+            recommended_epochs=30,
+            max_safe_epochs=200,
+            epoch_unit=EpochUnit.EPOCHS,
+            default_batch_size=64,
+            validation_requirements=ValidationRequirements(
+                val_fraction=0.15, test_fraction=0.15, embargo_bars=60, metric="accuracy"
+            ),
+            can_train=True,
+            can_predict=True,
+            serialization=SerializationMode.KERAS,
+            backend_available=False,
+            version=MODEL_SPEC_VERSION,
+            runtime_ref="ml_models.GRUStrategyBlock",
+            required_modules=("tensorflow", "sklearn"),
+            description="Gated recurrent network. Cheaper than LSTM, similar shape.",
+        ),
+        ModelSpec(
+            block_id="transformer",
+            display_name="Transformer",
+            model_family=ModelFamily.SEQUENCE,
+            inputs=seq_in,
+            outputs=seq_out,
+            min_feature_columns=5,
+            min_training_rows=10000,
+            sequence_length=120,
+            hyperparameters=(
+                _p_sequence_length(120),
+                ModelParamSpec(
+                    key="num_heads",
+                    label="Attention heads",
+                    type=PARAM_INTEGER,
+                    default=4,
+                    min=1,
+                    max=16,
+                    step=1,
+                    example=4,
+                ),
+                ModelParamSpec(
+                    key="key_dim",
+                    label="Key dimension",
+                    type=PARAM_INTEGER,
+                    default=16,
+                    min=4,
+                    max=128,
+                    step=4,
+                    example=16,
+                ),
+                ModelParamSpec(
+                    key="ff_dim",
+                    label="Feed-forward units",
+                    type=PARAM_INTEGER,
+                    default=32,
+                    min=8,
+                    max=512,
+                    step=8,
+                    example=32,
+                ),
+                _p_dropout(0.2),
+                _p_epochs(40, 200),
+                _p_batch_size(64),
+                _p_learning_rate(0.001),
+            ),
+            recommended_epochs=40,
+            max_safe_epochs=200,
+            epoch_unit=EpochUnit.EPOCHS,
+            default_batch_size=64,
+            validation_requirements=ValidationRequirements(
+                val_fraction=0.15,
+                test_fraction=0.15,
+                embargo_bars=120,
+                metric="accuracy",
+            ),
+            can_train=True,
+            can_predict=True,
+            serialization=SerializationMode.KERAS,
+            backend_available=False,
+            version=MODEL_SPEC_VERSION,
+            runtime_ref="ml_models.TransformerStrategyBlock",
+            required_modules=("tensorflow", "sklearn"),
+            description="Multi-head attention over a longer window. Needs the most data.",
+        ),
+        ModelSpec(
+            block_id="autoencoder",
+            display_name="Autoencoder (anomaly)",
+            model_family=ModelFamily.AUTOENCODER,
+            inputs=ae_in,
+            outputs=ae_out,
+            min_feature_columns=5,
+            min_training_rows=5000,
+            # The design table declares a 60-bar window for this block. The current
+            # runtime reconstructs a single row at a time; the declared window is the
+            # registry contract the executor is held to, and the value the data gate
+            # reserves for.
+            sequence_length=60,
+            hyperparameters=(
+                _p_sequence_length(60),
+                ModelParamSpec(
+                    key="hidden_ratio",
+                    label="Hidden layer ratio",
+                    type=PARAM_NUMBER,
+                    default=0.5,
+                    min=0.1,
+                    max=1.0,
+                    step=0.05,
+                    example=0.5,
+                    help="Hidden units as a fraction of the input column count.",
+                ),
+                ModelParamSpec(
+                    key="bottleneck_ratio",
+                    label="Bottleneck ratio",
+                    type=PARAM_NUMBER,
+                    default=0.25,
+                    min=0.05,
+                    max=0.9,
+                    step=0.05,
+                    example=0.25,
+                    help="Must stay below the hidden layer ratio.",
+                    depends_on=("hidden_ratio",),
+                ),
+                _p_dropout(0.2),
+                _p_epochs(50, 300),
+                _p_batch_size(64),
+                ModelParamSpec(
+                    key="anomaly_percentile",
+                    label="Anomaly threshold percentile",
+                    type=PARAM_NUMBER,
+                    default=99.0,
+                    min=90.0,
+                    max=99.9,
+                    step=0.1,
+                    unit="%",
+                    example=99.0,
+                    help="Training reconstruction-error percentile treated as the threshold.",
+                ),
+            ),
+            recommended_epochs=50,
+            max_safe_epochs=300,
+            epoch_unit=EpochUnit.EPOCHS,
+            default_batch_size=64,
+            validation_requirements=ValidationRequirements(
+                val_fraction=0.15,
+                test_fraction=0.15,
+                embargo_bars=60,
+                metric="reconstruction_mse",
+            ),
+            can_train=True,
+            can_predict=True,
+            serialization=SerializationMode.KERAS,
+            backend_available=False,
+            version=MODEL_SPEC_VERSION,
+            runtime_ref="ml_models.AutoencoderStrategyBlock",
+            required_modules=("tensorflow", "sklearn"),
+            description="Unsupervised anomaly detector. The other half of SB-04.",
+        ),
+    ]
+
+    return {
+        spec.block_id: replace(
+            spec, backend_available=_backend_available_for(spec.required_modules)
+        )
+        for spec in specs
+    }
+
+
+def resolve_model_runtime(runtime_ref: str):
+    """
+    Resolve a descriptor's `runtime_ref` to the model class that implements it.
+
+    Accepts "ml_models.XGBoostStrategyBlock" and a bare class name. Raises
+    AttributeError naming the offender so `build_registry()` fails startup rather
+    than advertising a model block the platform cannot run (Requirements 4.7, 4.8).
+    This is the ML_DL counterpart of `indicators_backend._resolve_runtime_ref`,
+    `feature_engineering.resolve_feature_runtime` and
+    `strategy_dag.block_specs.resolve_block_runtime`: every family resolves through
+    the module that owns its implementations.
+    """
+    attribute = str(runtime_ref).rsplit(".", 1)[-1]
+    target = globals().get(attribute)
+    if not callable(target):
+        raise AttributeError(
+            f"runtime_ref does not resolve to a callable: {runtime_ref}"
+        )
+    return target
+
+
+def _assert_spec_integrity(specs: Dict[str, ModelSpec]) -> None:
+    """
+    Static self-check on the descriptor table.
+
+    This validates authored data, not the environment, so it either always
+    passes or always fails — the same class of problem as a syntax error, and it
+    should surface the moment the module is imported rather than at train time.
+    """
+    for block_id, spec in specs.items():
+        if spec.block_id != block_id:
+            raise ValueError(f"MODEL_SPECS key {block_id!r} != block_id {spec.block_id!r}")
+        if spec.min_feature_columns < PLATFORM_MIN_FEATURE_COLUMNS:
+            raise ValueError(
+                f"{block_id}: min_feature_columns {spec.min_feature_columns} is below the "
+                f"platform floor {PLATFORM_MIN_FEATURE_COLUMNS}"
+            )
+        if spec.min_training_rows <= 0:
+            raise ValueError(f"{block_id}: min_training_rows must be positive")
+        if spec.model_family is ModelFamily.TREE:
+            if spec.sequence_length is not None:
+                raise ValueError(f"{block_id}: TREE models must not declare a sequence length")
+        elif not spec.sequence_length or spec.sequence_length <= 0:
+            raise ValueError(f"{block_id}: {spec.model_family.value} needs a sequence length")
+        if spec.max_safe_epochs < spec.recommended_epochs:
+            raise ValueError(
+                f"{block_id}: max_safe_epochs {spec.max_safe_epochs} is below "
+                f"recommended {spec.recommended_epochs}"
+            )
+        if not spec.inputs:
+            raise ValueError(f"{block_id}: no input ports declared")
+        if not spec.outputs:
+            raise ValueError(f"{block_id}: no output ports declared")
+        if not spec.required_modules:
+            raise ValueError(f"{block_id}: no required_modules to probe")
+        # runtime_ref must name a real callable in this module
+        try:
+            resolve_model_runtime(spec.runtime_ref)
+        except AttributeError as exc:
+            raise ValueError(
+                f"{block_id}: runtime_ref {spec.runtime_ref!r} does not resolve to a callable"
+            ) from exc
+
+
+# ── The registry and the derived lists ───────────────────────────────────
+
+MODEL_SPECS: Dict[str, ModelSpec] = _build_model_specs()
+_assert_spec_integrity(MODEL_SPECS)
+
+_ML_FAMILIES = (ModelFamily.TREE,)
+_DL_FAMILIES = (ModelFamily.SEQUENCE, ModelFamily.AUTOENCODER)
+
+
+def _derive_available(families: Tuple[ModelFamily, ...]) -> List[str]:
+    return [
+        spec.block_id
+        for spec in MODEL_SPECS.values()
+        if spec.model_family in families and spec.backend_available and spec.can_train
+    ]
+
+
+# Derived, not hand-maintained. `catboost` and `autoencoder` appear here the
+# moment their libraries are importable — the SB-04 fix.
+AVAILABLE_ML_MODELS: List[str] = _derive_available(_ML_FAMILIES)
+AVAILABLE_DL_MODELS: List[str] = _derive_available(_DL_FAMILIES)
+
+
+def get_model_spec(block_id: str) -> Optional[ModelSpec]:
+    """Return the spec for `block_id`, or None when it is not a known model block."""
+    return MODEL_SPECS.get(block_id)
+
+
+def available_model_specs() -> List[ModelSpec]:
+    """
+    Specs whose libraries actually resolve in this image.
+
+    Registry assembly iterates this: an unavailable model is omitted rather than
+    advertised and then failing at train time.
+    """
+    return [spec for spec in MODEL_SPECS.values() if spec.backend_available]
+
+
+def refresh_backend_availability(deep: Optional[bool] = None) -> Dict[str, bool]:
+    """
+    Re-probe every model library and update MODEL_SPECS plus the derived lists
+    in place, so existing `from ... import AVAILABLE_ML_MODELS` references stay
+    valid. Returns block_id -> availability.
+
+    Used by registry assembly and by the SB-04 parity test, which needs to prove
+    that a model whose library is absent disappears from the registry.
+    """
+    _probe_cache.clear()
+    for block_id, spec in list(MODEL_SPECS.items()):
+        MODEL_SPECS[block_id] = replace(
+            spec,
+            backend_available=_backend_available_for(spec.required_modules, deep=deep),
+        )
+
+    AVAILABLE_ML_MODELS[:] = _derive_available(_ML_FAMILIES)
+    AVAILABLE_DL_MODELS[:] = _derive_available(_DL_FAMILIES)
+
+    unavailable = [b for b, s in MODEL_SPECS.items() if not s.backend_available]
+    if unavailable:
+        logger.info("Model blocks omitted (library not importable): %s", ", ".join(unavailable))
+
+    return {block_id: spec.backend_available for block_id, spec in MODEL_SPECS.items()}

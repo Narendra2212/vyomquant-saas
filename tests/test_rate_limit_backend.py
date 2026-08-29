@@ -17,6 +17,38 @@ import os
 import pytest
 from unittest.mock import patch, MagicMock
 
+
+@pytest.fixture(autouse=True)
+def restore_rate_limit_module():
+    """Put `core.rate_limit` back the way it was found.
+
+    Every test below reloads the module, and `importlib.reload` mutates the module object
+    in place: `rate_limit.limiter` is rebound to a freshly constructed `Limiter` while
+    `app.state.limiter` and every `@limiter.limit(...)` decorator closure in the routers
+    keep the original object. Two consequences that outlive this file:
+
+    * A later test that reaches for `rate_limit.limiter` gets an orphan no route consults.
+      `tests/test_support_feature_e2e.py` calls `limiter.reset()` to clear its own
+      rate-limit budget; against the orphan that reset silently does nothing, and its
+      ninth `POST /api/support/tickets` answers 429 whenever the module happens to run
+      fast enough to fit inside one 60-second window. That is exactly how a fixed baseline
+      turns into "44 or 45 failures".
+    * Two tests here reload under `ENV=production` and expect `RuntimeError`, which leaves
+      the module half-initialised.
+
+    Snapshotting and restoring `__dict__` keeps the damage inside this file: `monkeypatch`
+    already restores the environment, and this restores the singleton the environment was
+    read into.
+    """
+    module = importlib.import_module("backend_app.core.rate_limit")
+    snapshot = dict(module.__dict__)
+    try:
+        yield
+    finally:
+        module.__dict__.clear()
+        module.__dict__.update(snapshot)
+
+
 class TestRateLimitBackendSelection:
     def test_dev_environment_without_redis_uses_memory(self, monkeypatch):
         monkeypatch.setenv("ENV", "development")

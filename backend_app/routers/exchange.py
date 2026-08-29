@@ -7,6 +7,7 @@ FIXES:
 """
 
 import asyncio
+from datetime import datetime, timezone
 import inspect
 import json
 import logging
@@ -18,7 +19,7 @@ from backend_app.backend.connection_engine import (ConnectionEngine,
                                                    release_exchange)
 from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.core.dependencies import (get_current_user,
-                                           get_request_supabase, get_vault)
+                                           get_request_supabase, get_vault, get_ws_manager)
 from backend_app.core.models import ExchangeKeysRequest, TestConnectionRequest
 from backend_app.backend.redis_manager import get_redis_manager
 from backend_app.core.rate_limit import limiter  # BE-CRITICAL-004 FIX
@@ -91,6 +92,13 @@ async def get_supported_exchanges(request: Request, user: dict = Depends(get_cur
                 except Exception:
                     pass
                 
+                from backend_app.core.exchange_certification import get_exchange_certification_registry
+                cert_registry = get_exchange_certification_registry()
+                caps = cert_registry.get_capabilities(exchange_id)
+                cert_level = caps.certification_level.value if caps else 0
+                is_cert = caps.is_production_certified if caps else False
+                cert_status = "certified" if is_cert else ("partially_certified" if cert_level >= 2 else "uncertified")
+
                 exchanges.append({
                     "id": exchange_id,
                     "display_name": exchange_instance.name or exchange_id.upper(),
@@ -102,7 +110,11 @@ async def get_supported_exchanges(request: Request, user: dict = Depends(get_cur
                     "required_fields": required_fields,
                     "requires_passphrase": bool(requires_passphrase),
                     "requires_subaccount": bool(requires_subaccount),
-                    "status": "available"
+                    "certification_level": cert_level,
+                    "is_certified": is_cert,
+                    "certification_status": cert_status,
+                    "known_limitations": caps.known_limitations if caps else ["Level 0: Metadata only"],
+                    "status": "certified" if is_cert else "available"
                 })
             except Exception as e:
                 logger.warning(f"Failed to load metadata for {exchange_id}: {e}")
@@ -146,6 +158,7 @@ async def store_keys(
             api_key=body.api_key,
             secret_key=body.secret_key,
             password=body.password,
+            uid=body.uid,
         )
         exchange = await bridge.connect()
         await DataEngine(exchange).fetch_wallet_balance_snapshot()
@@ -160,21 +173,38 @@ async def store_keys(
             user_id=user["id"],
             exchange_id=body.exchange_id,
             raw_api_key=body.api_key,
-            raw_secret_key=body.secret_key,
+            raw_secret=body.secret_key,
             raw_password=body.password,
-            label=body.label,
+            raw_secret_key=body.secret_key,
+            label=getattr(body, "label", None),
+            uid=getattr(body, "uid", None),
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
         logger.error(f"Key storage failed for {user['id']}: {e}")
-        raise HTTPException(500, "Failed to store keys in vault.")
+        raise HTTPException(500, f"Failed to store keys in vault: {e}")
 
     # Invalidate cache
     if redis_manager:
         cache_key = f"exchanges:list:{user['id']}"
         await redis_manager.cache_delete(cache_key)
         logger.debug(f"Invalidated cache for user {user['id']} after storing new exchange")
+
+    try:
+        from backend_app.core.notification_dispatcher import dispatch_user_notification
+        await dispatch_user_notification(
+            user_id=user["id"],
+            event_type="exchange_connected",
+            category="exchange",
+            severity="info",
+            title=f"Exchange Connected: {body.exchange_id.upper()}",
+            message=f"Secure connection to {body.exchange_id.upper()} established.",
+            exchange=body.exchange_id,
+            metadata={"exchange": body.exchange_id, "label": getattr(body, "label", body.exchange_id), "idempotency_key": f"exchange_connect:{user['id']}:{body.exchange_id}"},
+        )
+    except Exception as notif_err:
+        logger.debug(f"[EXCHANGE] Notification dispatch error: {notif_err}")
 
     return {"status": "ok", "message": "Exchange keys securely encrypted and stored in vault."}
 
@@ -193,6 +223,8 @@ async def list_exchanges(
     """
     try:
         keys = []
+        bot_counts = {}
+        strat_counts = {}
         if supabase:
             try:
                 q1_res = supabase.table("exchange_keys").select("exchange_id, updated_at").eq("user_id", user["id"]).execute()
@@ -201,19 +233,33 @@ async def list_exchanges(
             except Exception as e:
                 logger.warning(f"Failed to fetch exchange keys: {e}")
                 keys = []
+
+            try:
+                res_strat = supabase.table("strategies").select("id, exchange_id, status").eq("user_id", user["id"]).execute()
+                strat_resp = await res_strat if inspect.isawaitable(res_strat) else res_strat
+                strat_data = strat_resp.data if strat_resp and hasattr(strat_resp, "data") and isinstance(strat_resp.data, list) else []
+                for s in strat_data:
+                    ex_id = (s.get("exchange_id") or "").lower()
+                    if ex_id:
+                        strat_counts[ex_id] = strat_counts.get(ex_id, 0) + 1
+                        if s.get("status") in ("running", "deployed", "active"):
+                            bot_counts[ex_id] = bot_counts.get(ex_id, 0) + 1
+            except Exception as e:
+                logger.warning(f"Failed to fetch user strategies for exchange aggregation: {e}")
         
         exchanges = []
         for row in keys:
-            exchange_id = row.get("exchange_id", "unknown")
+            exchange_id = (row.get("exchange_id") or "unknown").lower()
             exchanges.append({
                 "id": f"{user['id']}_{exchange_id}",
                 "exchange_id": exchange_id,
                 "name": exchange_id.upper(),
+                "credential_configured": True,
                 "masked_key": f"{exchange_id[:3].upper()}{'•' * 24}{exchange_id[-2:].upper() if len(exchange_id) > 2 else ''}",
                 "status": "CONNECTED",
                 "permissions": ["Spot Trading", "Read"],
-                "bot_count": 0,
-                "strategy_count": 0,
+                "bot_count": bot_counts.get(exchange_id, 0),
+                "strategy_count": strat_counts.get(exchange_id, 0),
                 "account_type": "Spot",
                 "enabled_features": ["Trading", "Balance"],
                 "connected_at": row.get("updated_at"),
@@ -277,6 +323,21 @@ async def delete_connection(
             await redis_manager.cache_delete(cache_key)
             logger.debug(f"Invalidated cache for user {user['id']} after deleting exchange")
 
+        try:
+            from backend_app.core.notification_dispatcher import dispatch_user_notification
+            await dispatch_user_notification(
+                user_id=user["id"],
+                event_type="exchange_disconnected",
+                category="exchange",
+                severity="warning",
+                title=f"Exchange Disconnected: {exchange_id.upper()}",
+                message=f"Connection to {exchange_id.upper()} was disconnected.",
+                exchange=exchange_id,
+                metadata={"exchange": exchange_id, "idempotency_key": f"exchange_disconnect:{user['id']}:{exchange_id}"},
+            )
+        except Exception as notif_err:
+            logger.debug(f"[EXCHANGE] Disconnect notification error: {notif_err}")
+
         logger.info(f"Exchange {exchange_id} deleted for user {user['id']}")
         return {"status": "ok", "message": f"{exchange_id.upper()} disconnected successfully."}
     except HTTPException:
@@ -287,14 +348,15 @@ async def delete_connection(
 
 
 @router.get("/schema/{exchange_id}")
+@router.get("/{exchange_id}/connection-schema")
 async def get_exchange_auth_schema(
     exchange_id: str,
+    user: dict = Depends(get_current_user),
     redis_manager=Depends(get_redis_manager)
 ):
     """
-    Returns the authentication schema for a specific exchange.
-    Includes required fields, field labels, field types, and validation rules.
-    Cached in Redis for 1 hour.
+    Returns the dynamic authentication schema for a specific exchange.
+    Sourced from authoritative ExchangeConnectionSchemaRegistry with Redis caching.
     """
     try:
         exchange_id = exchange_id.lower()
@@ -304,76 +366,92 @@ async def get_exchange_auth_schema(
         if cached:
             return cached
         
-        # Fetch CCXT instance to inspect auth requirements
-        import ccxt as ccxt_base
-        if not hasattr(ccxt_base, exchange_id):
-            raise HTTPException(404, f"Exchange '{exchange_id}' not supported by CCXT.")
-        
-        exchange_class = getattr(ccxt_base, exchange_id)
-        exchange_instance = exchange_class()
-        has = exchange_instance.has
-        
-        # Build field definitions
-        fields = []
-        
-        if has.get('apiKey'):
+        from backend_app.core.exchange_connection_schema import get_exchange_connection_schema_registry
+        registry = get_exchange_connection_schema_registry()
+        schema_obj = registry.get_schema(exchange_id)
+        if schema_obj:
+            schema = schema_obj.to_dict()
+        else:
+            # Fallback for uncertified CCXT venues
+            import ccxt as ccxt_base
+            if not hasattr(ccxt_base, exchange_id):
+                raise HTTPException(404, f"Exchange '{exchange_id}' not supported by CCXT.")
+            
+            exchange_class = getattr(ccxt_base, exchange_id)
+            exchange_instance = exchange_class()
+            has = getattr(exchange_instance, 'has', {})
+            
+            fields = []
+            if has.get('apiKey', True):
+                fields.append({
+                    "name": "api_key",
+                    "field_id": "api_key",
+                    "label": "API Key",
+                    "type": "text",
+                    "required": True,
+                    "secret": True,
+                    "placeholder": "Enter your API key",
+                    "description": "Public identifier for your API credentials"
+                })
+            
+            if has.get('secret', True):
+                fields.append({
+                    "name": "secret_key",
+                    "field_id": "secret_key",
+                    "label": "Secret Key",
+                    "type": "password",
+                    "required": True,
+                    "secret": True,
+                    "placeholder": "Enter your secret key",
+                    "description": "Private key for signing requests"
+                })
+            
+            if has.get('password'):
+                fields.append({
+                    "name": "password",
+                    "field_id": "password",
+                    "label": "Password / Passphrase",
+                    "type": "password",
+                    "required": True,
+                    "secret": True,
+                    "placeholder": "Enter your API passphrase",
+                    "description": "Additional security parameter for API authentication"
+                })
+            
+            if has.get('uid'):
+                fields.append({
+                    "name": "uid",
+                    "field_id": "uid",
+                    "label": "User ID",
+                    "type": "text",
+                    "required": True,
+                    "secret": False,
+                    "placeholder": "Enter your user ID",
+                    "description": "Unique identifier for your account"
+                })
+            
             fields.append({
-                "name": "api_key",
-                "label": "API Key",
+                "name": "label",
+                "field_id": "label",
+                "label": "Connection Label",
                 "type": "text",
-                "required": True,
-                "placeholder": "Enter your API key",
-                "description": "Public identifier for your API credentials"
+                "required": False,
+                "secret": False,
+                "placeholder": "e.g., Main Account",
+                "description": "Optional label to identify this connection"
             })
-        
-        if has.get('secret'):
-            fields.append({
-                "name": "secret_key",
-                "label": "Secret Key",
-                "type": "password",
-                "required": True,
-                "placeholder": "Enter your secret key",
-                "description": "Private key for signing requests"
-            })
-        
-        if has.get('password'):
-            fields.append({
-                "name": "password",
-                "label": "Password",
-                "type": "password",
-                "required": True,
-                "placeholder": "Enter your password",
-                "description": "Additional security parameter for API authentication"
-            })
-        
-        if has.get('uid'):
-            fields.append({
-                "name": "uid",
-                "label": "User ID",
-                "type": "text",
-                "required": True,
-                "placeholder": "Enter your user ID",
-                "description": "Unique identifier for your account"
-            })
-        
-        # Optional label field
-        fields.append({
-            "name": "label",
-            "label": "Connection Label",
-            "type": "text",
-            "required": False,
-            "placeholder": "e.g., Main Binance Account",
-            "description": "Optional label to identify this connection"
-        })
-        
-        schema = {
-            "exchange_id": exchange_id,
-            "display_name": exchange_instance.name or exchange_id.upper(),
-            "fields": fields,
-            "supports_testnet": has.get('sandbox', False),
-            "supports_subaccount": has.get('createFuturesOrder') or has.get('futures'),
-            "default_account_type": "spot" if has.get('createOrder') else None
-        }
+            
+            schema = {
+                "exchange_id": exchange_id,
+                "display_name": getattr(exchange_instance, 'name', exchange_id.upper()) or exchange_id.upper(),
+                "ccxt_id": exchange_id,
+                "certification_level": 0,
+                "is_certified": False,
+                "fields": fields,
+                "supports_testnet": bool(has.get('sandbox', False)),
+                "supports_subaccount": bool(has.get('createFuturesOrder') or has.get('futures')),
+                "default_account_type": "spot" if has.get('createOrder') else None
+            }
         
         # Cache for 1 hour
         if redis_manager:
@@ -403,6 +481,7 @@ async def test_connection(
             api_key=body.api_key,
             secret_key=body.secret_key,
             password=body.password,
+            uid=body.uid,
         )
         exchange = await bridge.connect()
         
@@ -496,3 +575,130 @@ async def test_stored_connection(
     finally:
         if bridge:
             await bridge.disconnect()
+
+
+@router.get("/certification")
+async def get_certification_summary(user: dict = Depends(get_current_user)):
+    """
+    Get authoritative certification matrix across all exchanges.
+    """
+    from backend_app.core.exchange_certification import get_exchange_certification_registry
+    registry = get_exchange_certification_registry()
+    return registry.get_certification_matrix()
+
+
+@router.get("/{exchange_id}/capabilities")
+async def get_exchange_capabilities(exchange_id: str, user: dict = Depends(get_current_user)):
+    """
+    Get capabilities and limits for an individual exchange.
+    """
+    from backend_app.core.exchange_certification import get_exchange_certification_registry
+    registry = get_exchange_certification_registry()
+    caps = registry.get_capabilities(exchange_id)
+    if not caps:
+        raise HTTPException(404, f"Exchange '{exchange_id}' not found in certification registry.")
+    
+    data = caps.to_dict()
+    data["health"] = registry.get_exchange_health(exchange_id).value
+    return data
+
+
+@router.get("/{exchange_id}/health")
+async def get_exchange_health_status(exchange_id: str, user: dict = Depends(get_current_user)):
+    """
+    Get runtime health status of an exchange.
+    """
+    from backend_app.core.exchange_certification import get_exchange_certification_registry
+    registry = get_exchange_certification_registry()
+    caps = registry.get_capabilities(exchange_id)
+    if not caps:
+        raise HTTPException(404, f"Exchange '{exchange_id}' not found.")
+    
+    return {
+        "exchange_id": exchange_id,
+        "health": registry.get_exchange_health(exchange_id).value,
+        "is_certified": caps.is_production_certified,
+        "certification_level": caps.certification_level.value,
+    }
+
+
+@router.post("/{exchange_id}/preflight")
+async def validate_preflight(
+    exchange_id: str,
+    deployment_config: dict,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Execute authoritative capability and safety preflight check on candidate live deployment.
+    """
+    from backend_app.core.exchange_certification import get_exchange_certification_registry
+    registry = get_exchange_certification_registry()
+    
+    config = dict(deployment_config)
+    config["exchange_id"] = exchange_id
+    
+    passed, reason = registry.validate_deployment_preflight(config)
+    return {
+        "exchange_id": exchange_id,
+        "preflight_passed": passed,
+        "reason": reason,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DYNAMIC EXCHANGE CONNECTION LIFECYCLE
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/connections")
+async def list_user_connections(
+    user: dict = Depends(get_current_user),
+    supabase: Any = Depends(get_request_supabase),
+    redis_manager=Depends(get_redis_manager),
+    vault=Depends(get_vault),
+):
+    """
+    Get all active exchange connections for the user without exposing secrets.
+    """
+    return await list_exchanges(user=user, supabase=supabase, redis_manager=redis_manager, vault=vault)
+
+
+@router.post("/connections/{exchange_id}/test")
+async def test_connection_by_id(
+    exchange_id: str,
+    user: dict = Depends(get_current_user),
+    vault=Depends(get_vault),
+):
+    """
+    Test stored exchange credentials safely.
+    """
+    return await test_stored_connection(
+        body=TestConnectionRequest(exchange_id=exchange_id),
+        user=user,
+        vault=vault,
+    )
+
+
+@router.post("/connections/{exchange_id}/reconnect")
+async def reconnect_connection_by_id(
+    exchange_id: str,
+    user: dict = Depends(get_current_user),
+    vault=Depends(get_vault),
+):
+    """
+    Reconnect stored exchange connection and refresh connectivity state.
+    """
+    test_result = await test_stored_connection(
+        body=TestConnectionRequest(exchange_id=exchange_id),
+        user=user,
+        vault=vault,
+    )
+    return {
+        "status": "RECONNECTED",
+        "exchange_id": exchange_id,
+        "details": test_result,
+        "reconnected_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+

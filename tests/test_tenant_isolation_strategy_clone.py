@@ -153,22 +153,56 @@ class TestStrategyCloneTenantIsolation:
         assert response.status_code == 401
 
     def test_clone_preserves_dag_content(self, client, user_a_token, mock_supabase):
-        """Test that clone preserves full DAG structure (nodes, edges, buy_logic)."""
-        # Create a strategy with a non-trivial DAG
+        """Test that clone preserves full DAG structure (nodes, edges, buy_logic).
+
+        The stored DAG is a real canonical graph. It used to be a hand-written blob whose
+        node types ("condition") and edge keys ("from"/"to") matched no vocabulary the
+        platform has ever had; the clone endpoint accepted it only because the router's
+        own compiler swallowed every failure (SB-02). Since strategy-builder task 2.4 the
+        clone path compiles through the single compiler and reports an unexecutable graph
+        as 422, so preserving DAG content has to be asserted with a graph that actually
+        is one.
+        """
+        from backend_app.backend.strategy_dag import registry as registry_module
+        from backend_app.backend.strategy_dag.schema import (
+            EdgeSpec,
+            NodeSpec,
+            StrategyGraph,
+        )
+
+        reg = registry_module.get_registry()
+
+        def node(block_id, **params):
+            return NodeSpec.create(block_id, reg[block_id].category, params=params)
+
+        data = node(
+            "ohlcv_feed",
+            symbol="BTC/USDT",
+            timeframe="1h",
+            market_type="spot",
+            mode="streaming",
+        )
+        rsi = node("rsi", window=14, source="close")
+        threshold = node("constant", value=30.0)
+        gt = node("gt")
+        buy = node(
+            "action_buy_market", quantity_type="percent_of_equity", quantity=0.25
+        )
+        graph = StrategyGraph(
+            nodes=[data, rsi, threshold, gt, buy],
+            edges=[
+                EdgeSpec.create(data.id, "close", rsi.id, "series"),
+                EdgeSpec.create(rsi.id, "value", gt.id, "left"),
+                EdgeSpec.create(threshold.id, "value", gt.id, "right"),
+                EdgeSpec.create(gt.id, "out", buy.id, "signal"),
+            ],
+        ).to_dict()
+
         original_dag = {
-            "_nodes": [
-                {"id": "node1", "type": "indicator", "data": {"indicator": "RSI"}},
-                {"id": "node2", "type": "indicator", "data": {"indicator": "MACD"}},
-                {"id": "node3", "type": "condition", "data": {"condition": "RSI > 30"}},
-                {"id": "node4", "type": "action", "data": {"action": "BUY"}}
-            ],
-            "_edges": [
-                {"from": "node1", "to": "node3"},
-                {"from": "node2", "to": "node3"},
-                {"from": "node3", "to": "node4"}
-            ],
-            "_dag_hash": "abc123",
-            "_execution_order": ["node1", "node2", "node3", "node4"]
+            "_nodes": graph["nodes"],
+            "_edges": graph["edges"],
+            "_dag_schema_version": graph["schema_version"],
+            "_dag_hash": None,
         }
 
         mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute = AsyncMock(

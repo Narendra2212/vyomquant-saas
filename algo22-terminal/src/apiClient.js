@@ -650,7 +650,11 @@ client.interceptors.request.use(
         console.log("🔐 TOKEN ATTACHED");
       }
     }
-    console.log("📡 REQUEST:", config.url);
+    // F-03 REMEDIATION (Phase 7B): API request URL logging is dev-only.
+    // Production builds must not emit request URLs to the browser console.
+    if (import.meta.env.DEV) {
+      console.log("📡 REQUEST:", config.url);
+    }
     // Add request ID for observability
     const requestId = generateRequestId();
     config.headers['X-Request-ID'] = requestId;
@@ -738,7 +742,11 @@ client.interceptors.response.use(
 
       // Authentication errors - trigger logout, clear cache, and notify app
       if (status === 401) {
-        console.error(`🔒 Auth error 401 Unauthorized:`, error.response.data);
+      // F-11 REMEDIATION (Phase 7B): Never log auth response body in production.
+      // Error body may contain diagnostic info that aids credential theft.
+      if (import.meta.env.DEV) {
+        console.error(`🔒 Auth error 401 Unauthorized (dev only):`, status);
+      }
         sessionStorage.removeItem("token");
         clearApiCache();
         window.dispatchEvent(new CustomEvent('auth-expired'));
@@ -923,12 +931,23 @@ const retryWithBackoff = async (fn, retries = MAX_RETRIES, attempt = 0, requestI
 
 /**
  * GET request helper with caching, deduplication, retry, and circuit breaker
+ *
+ * `config.cache === false` opts one call out of the 60-second response cache — it is
+ * neither read from nor written to. That exists for endpoints whose whole purpose is to
+ * report a value that changes underneath a still-open UI: the deployment preflight
+ * (`GET .../deploy/preflight`) is polled every two seconds precisely so a condition that
+ * has just started failing disables the Deploy button (Requirement 13.6), and a cached
+ * answer would make that poll a no-op for a minute. Deduplication of genuinely concurrent
+ * identical requests still applies; only the stored-response cache is bypassed, so an
+ * opted-out poll also cannot evict other pages' cached reads from the LRU.
+ *
  * @param {string} url - API endpoint path
- * @param {Object} [config] - Axios config (params, headers, etc.)
+ * @param {Object} [config] - Axios config (params, headers, etc.), plus `cache: false`
  * @returns {Promise<any>} Response data (never undefined, returns null on error)
  */
 export const get = (url, config = {}) => {
   const params = config.params || {};
+  const useCache = config.cache !== false;
   const cacheKey = getCacheKey(url, params);
   const endpoint = normalizeEndpoint(url);
 
@@ -936,7 +955,7 @@ export const get = (url, config = {}) => {
   if (isCircuitOpen(endpoint)) {
     // Return cached data if available when circuit is open
     const cached = safeGet(cache, cacheKey);
-    if (isCacheValid(cached)) {
+    if (useCache && isCacheValid(cached)) {
       metrics.cacheHits++;
       enforceSizeLimit(cache, MAX_CACHE_SIZE, cacheKey);
       return Promise.resolve(cached.data);
@@ -965,7 +984,7 @@ export const get = (url, config = {}) => {
 
   // Check cache first (promote to end for LRU)
   const cached = safeGet(cache, cacheKey);
-  if (isCacheValid(cached)) {
+  if (useCache && isCacheValid(cached)) {
     metrics.cacheHits++;
     enforceSizeLimit(cache, MAX_CACHE_SIZE, cacheKey);
     return Promise.resolve(cached.data);
@@ -996,7 +1015,7 @@ export const get = (url, config = {}) => {
     recordCircuitSuccess(endpoint);
 
     // Cache successful responses
-    if (response.data !== null && response.data !== undefined) {
+    if (useCache && response.data !== null && response.data !== undefined) {
       enforceSizeLimit(cache, MAX_CACHE_SIZE, cacheKey);
       cache.set(cacheKey, {
         data: response.data,

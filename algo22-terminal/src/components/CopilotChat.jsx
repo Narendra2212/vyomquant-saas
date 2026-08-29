@@ -1,3 +1,11 @@
+/**
+ * CopilotChat.jsx — Floating Drawer & Chat UI for AI Copilot
+ * 
+ * NOTE: Intentionally DORMANT / UNMOUNTED. Preserved for future Copilot UI restoration.
+ * All chat controls, message rendering, auto-scroll, and session management
+ * remain fully implemented and intact.
+ */
+
 import React, { useState, useEffect, useRef } from "react";
 import { Bot, X, Send, RotateCcw } from "lucide-react";
 import { useCopilot } from "../contexts/CopilotContext";

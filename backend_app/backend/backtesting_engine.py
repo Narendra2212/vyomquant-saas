@@ -129,13 +129,13 @@ class BacktestEngine:
         tech_long_condition: np.ndarray,
         tech_short_condition: np.ndarray,
         params: dict,
-    ) -> tuple[dict, list]:
+    ) -> tuple[dict, list, list]:
         """
         Async wrapper. Converts raw CCXT OHLCV list to a proper pandas
         Series with a DatetimeIndex, then dispatches to thread pool.
 
         ohlcv_list: [[timestamp_ms, open, high, low, close, volume], ...]
-        Returns:    (stats_dict, equity_curve_list)
+        Returns:    (stats_dict, equity_curve_list, trades_list)
         """
         # ── Build DatetimeIndex price series (FIX BT-3) ──────────────────
         df = pd.DataFrame(
@@ -178,7 +178,7 @@ class BacktestEngine:
         tech_long: np.ndarray,
         tech_short: np.ndarray,
         params: dict,
-    ) -> tuple[dict, list]:
+    ) -> tuple[dict, list, list]:
         try:
             import vectorbt as vbt
             has_vbt = True
@@ -240,7 +240,8 @@ class BacktestEngine:
             }
             equity_curve = [{"timestamp": str(ts), "equity": float(val * self.initial_capital)} for ts, val in cum_returns.items()]
             results["equity_curve"] = equity_curve
-            return results, []
+            results["trades"] = []  # Fallback has no detailed trade data
+            return results, equity_curve
 
         # ── Align arrays to price_data length ────────────────────────────
         n = len(price_data)
@@ -497,8 +498,76 @@ class BacktestEngine:
         eq_df = equity_series.reset_index()
         # Rename whatever the two columns are to standard names
         eq_df.columns = ["timestamp", "equity"]
+        
+        # ── EXTENDED TRADE DETAIL EXTRACTION ───────────────────────────
+        # Extract detailed trade-by-trade data from VectorBT portfolio
+        trades_list = []
+        if trades_count > 0:
+            # ``portfolio.trades`` is a VectorBT ``ExitTrades`` RECORD ACCESSOR, not a
+            # DataFrame: it has no ``iterrows``, so this block raised
+            # ``AttributeError: 'ExitTrades' object has no attribute 'iterrows'`` on every
+            # backtest that produced at least one trade - which made
+            # ``BacktestRuntime.run_backtest`` answer 500 for every strategy that traded and
+            # complete only for ones that did not. ``records_readable`` is the DataFrame
+            # this loop was written against: every column name the body reaches for
+            # ('Entry Timestamp', 'Exit Timestamp', 'Size', 'PnL', ...) is one of its
+            # columns. Found by the Requirement 26.4 end-to-end sandbox suite
+            # (``tests/sandbox_lifecycle/``), which is the first test to run a real
+            # simulation through this method end to end.
+            readable = portfolio.trades.records_readable
+            # VectorBT reports the two prices as averages and splits fees across the two
+            # legs. Aliased rather than left to the ``else`` branches below, which would
+            # have recorded 0.0 - a fabricated figure, which the specification's
+            # non-functional constraints forbid outright.
+            if "Entry Price" not in readable.columns and "Avg Entry Price" in readable.columns:
+                readable = readable.assign(**{"Entry Price": readable["Avg Entry Price"]})
+            if "Exit Price" not in readable.columns and "Avg Exit Price" in readable.columns:
+                readable = readable.assign(**{"Exit Price": readable["Avg Exit Price"]})
+            if "Fees" not in readable.columns and {"Entry Fees", "Exit Fees"} <= set(
+                readable.columns
+            ):
+                readable = readable.assign(
+                    **{"Fees": readable["Entry Fees"] + readable["Exit Fees"]}
+                )
+            for idx, trade in readable.iterrows():
+                try:
+                    # Extract trade details from VectorBT trade object
+                    trade_detail = {
+                        "trade_id": int(idx),
+                        "entry_time": str(trade['Entry Timestamp']) if 'Entry Timestamp' in trade else str(trade.index[idx]),
+                        "exit_time": str(trade['Exit Timestamp']) if 'Exit Timestamp' in trade else None,
+                        "entry_price": float(trade['Entry Price']) if 'Entry Price' in trade else float(trade.get('entry_price', 0)),
+                        "exit_price": float(trade['Exit Price']) if 'Exit Price' in trade else float(trade.get('exit_price', 0)),
+                        "side": "BUY" if trade.get('Size', 0) > 0 else "SELL",
+                        "quantity": float(abs(trade.get('Size', 0))),
+                        "gross_pnl": float(trade['PnL']) if 'PnL' in trade else float(trade.get('pnl', 0)),
+                        "fees": float(trade['Fees']) if 'Fees' in trade else float(trade.get('fees', 0)),
+                        "net_pnl": float(trade['PnL'] - trade.get('Fees', 0)) if 'PnL' in trade else float(trade.get('pnl', 0)),
+                        "return_pct": float((trade['PnL'] / trade['Entry Price']) * 100) if 'PnL' in trade and 'Entry Price' in trade else 0.0,
+                        "duration": 0,  # Will be calculated if timestamps available
+                        "status": "CLOSED"
+                    }
+                    
+                    # Calculate duration if timestamps available
+                    if 'Entry Timestamp' in trade and 'Exit Timestamp' in trade:
+                        try:
+                            entry_ts = pd.to_datetime(trade['Entry Timestamp'])
+                            exit_ts = pd.to_datetime(trade['Exit Timestamp'])
+                            duration_seconds = (exit_ts - entry_ts).total_seconds()
+                            trade_detail["duration"] = duration_seconds
+                        except:
+                            pass
+                    
+                    trades_list.append(trade_detail)
+                except Exception as e:
+                    logger.warning(f"Failed to extract trade {idx} details: {e}")
+        
+        logger.info(f"[BACKTEST] Extracted {len(trades_list)} detailed trade records")
         eq_df["timestamp"] = eq_df["timestamp"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         eq_df["equity"] = eq_df["equity"].round(4)
+        
+        # Add detailed trades to results
+        results["trades"] = trades_list
 
         return results, eq_df.to_dict(orient="records")
 

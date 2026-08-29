@@ -7,15 +7,37 @@ from pydantic import BaseModel, Field
 
 
 class SubscriptionTier(str, Enum):
+    # Canonical SaaS Plans (SubscriptionEngine single source of truth)
     FREE = "free"
-    PRO = "pro_999"
-    ELITE = "elite_1999"
+    STARTER = "starter"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
+
+    # Legacy Payment Provider Aliases (Backward Compatibility)
+    PRO_999 = "pro_999"
+    ELITE_1999 = "elite_1999"
+    STARTER_499 = "starter_499"
+    BASIC = "basic"
+    ELITE = "elite"
+
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class CheckoutRequest(BaseModel):
     tier: SubscriptionTier
     currency: str = "INR"  # "INR" triggers Razorpay, "USD" triggers Stripe
     is_addon: bool = False  # Set to true if buying the 199 INR ML strategy addon
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency_code(cls, v: str) -> str:
+        if not v or not isinstance(v, str):
+            raise ValueError("Currency must be a valid 3-letter code")
+        code = v.strip().upper()
+        if len(code) != 3 or not code.isalpha():
+            raise ValueError(f"Invalid currency code format: {v}")
+        return code
 
 
 class UserLimits(BaseModel):

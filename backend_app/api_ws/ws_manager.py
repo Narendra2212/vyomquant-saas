@@ -57,6 +57,7 @@ class ConnectionManager:
         self._dashboard: Dict[str, Set[WebSocket]] = defaultdict(set)  # PHASE 14: Dashboard channel
         self._strategy: Dict[str, Set[WebSocket]] = defaultdict(set)  # PHASE 14: Strategy channel
         self._signal_trace: Dict[str, Set[WebSocket]] = defaultdict(set)  # PHASE 10: Signal Trace channel
+        self._admin: Dict[str, Set[WebSocket]] = defaultdict(set)  # Admin & Staff channel
         self._lock = asyncio.Lock()
         
         # STEP 8: Connection tracking for rate limiting
@@ -232,6 +233,10 @@ class ConnectionManager:
     async def broadcast_pnl(self, user_id: str, data: dict):
         await self._publish_to_bridge("pnl", user_id, data)
 
+    async def broadcast_admin(self, data: dict):
+        """Broadcast administrative & support events to staff and admin subscribers."""
+        await self._publish_to_bridge("admin", "support", data)
+
     async def broadcast_marketplace(self, event_type: str, data: dict):
         """Broadcast marketplace events (new strategies, ratings, subscriptions)."""
         await self._publish_to_bridge("marketplace", event_type, data)
@@ -287,6 +292,13 @@ class ConnectionManager:
         except Exception as e:
             logger.warning(f"[WS] Direct send failed: {e}")
 
+    async def send_to_user_ws(self, ws: WebSocket, data: dict):
+        """Direct send without going through a named channel (for initial payloads)."""
+        try:
+            await ws.send_text(json.dumps(data))
+        except Exception as e:
+            logger.warning(f"[WS] Direct send failed: {e}")
+
     # ── Utilities ──────────────────────────────────────────────────────────
 
     def _get_store(self, channel: str) -> Dict:
@@ -300,6 +312,7 @@ class ConnectionManager:
             "dashboard": self._dashboard,  # PHASE 14: Dashboard channel
             "strategy": self._strategy,    # PHASE 14: Strategy channel
             "signal_trace": self._signal_trace,  # PHASE 10: Signal Trace channel
+            "admin": self._admin,          # Admin & Support channel
         }
         if channel not in mapping:
             raise ValueError(f"Unknown channel: {channel}")

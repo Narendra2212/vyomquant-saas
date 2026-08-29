@@ -387,15 +387,18 @@ class TestGetAdminUserP01Regression:
         result = self._run(get_admin_user(user))
         assert result["id"] == "admin-uuid"
 
-    def test_admin_via_user_metadata_allowed(self):
+    def test_admin_via_user_metadata_rejected(self):
+        # Phase 7B F-02: user_metadata is client-writable, must not grant admin
         user = {
             "id": "admin-uuid-2",
             "role": "authenticated",
             "app_metadata": {},
             "user_metadata": {"role": "admin"},
         }
-        result = self._run(get_admin_user(user))
-        assert result["id"] == "admin-uuid-2"
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            self._run(get_admin_user(user))
+        assert exc_info.value.status_code == 403
 
     def test_non_admin_rejected_with_403(self):
         user = {

@@ -39,6 +39,12 @@ class BacktestService:
     def __init__(self):
         pass
     
+    def _generate_dataset_checksum(self, dataset: str, start_date: str, end_date: str) -> str:
+        """Generate a checksum for dataset reproducibility tracking."""
+        import hashlib
+        checksum_string = f"{dataset}:{start_date}:{end_date}"
+        return hashlib.sha256(checksum_string.encode()).hexdigest()[:16]
+    
     async def _get_supabase(self, user: dict):
         """Get Supabase client for user."""
         res = create_request_supabase_async(user.get("access_token"))
@@ -48,15 +54,15 @@ class BacktestService:
         self,
         user: dict,
         strategy_id: str,
-        version_id: str,
-        version: str,
+        version: int,
         blueprint: dict,
         dataset: str,
         start_date: str,
         end_date: str,
         initial_capital: float,
         commission: float,
-        slippage: float
+        slippage: float,
+        version_id: Optional[str] = None,
     ) -> Dict:
         """
         Create a new backtest record.
@@ -64,8 +70,7 @@ class BacktestService:
         Args:
             user: User dict
             strategy_id: Strategy ID
-            version_id: Version ID
-            version: Version string
+            version: Version label recorded on the row (``strategy_backtests.version``)
             blueprint: Strategy blueprint
             dataset: Dataset used
             start_date: Backtest start date
@@ -73,7 +78,21 @@ class BacktestService:
             initial_capital: Initial capital
             commission: Commission rate
             slippage: Slippage rate
-            
+            version_id: The ``strategy_versions.id`` this backtest ran. Keyword-only in
+                practice and last in the signature, so no existing positional caller
+                changes shape.
+
+        ``version_id`` (trading-lifecycle-integration task 6.1): ``BacktestRuntime.
+        run_backtest`` has always called this method with ``version_id=…`` while the
+        signature did not accept it, so every canonical backtest raised ``TypeError``
+        before it reached the simulator. ``strategy_backtests.version_id`` is
+        ``NOT NULL REFERENCES strategy_versions(id)`` in ``001_strategy_architecture.sql``,
+        so the row could not have been written without it either. It is now accepted and
+        persisted, which is what makes the backtest result traceable to the immutable
+        version that produced it (Requirement 10.1). It is omitted from the payload when
+        ``None`` so a caller that has no version to name gets the database's own NOT NULL
+        complaint rather than an explicit ``NULL`` that hides which caller sent it.
+
         Returns:
             Backtest record
         """
@@ -86,7 +105,10 @@ class BacktestService:
             "id": backtest_id,
             "strategy_id": strategy_id,
             "user_id": user["id"],
-            "version_id": version_id,
+            # ``strategy_backtests.version`` is VARCHAR(20) NOT NULL
+            # (001_strategy_architecture.sql), and the caller's own label is what makes the
+            # row say which version ran. This used to be a hardcoded ``1``, which discarded
+            # the argument and recorded every backtest against "version 1".
             "version": version,
             "blueprint": blueprint,
             "dataset": dataset,
@@ -96,9 +118,26 @@ class BacktestService:
             "commission": commission,
             "slippage": slippage,
             "status": "running",
-            "created_at": datetime.now(timezone.utc).isoformat()
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            # Reproducibility tracking
+            "engine_version": "1.0.0",
+            "schema_version": blueprint.get("schema_version", "2.0"),
+            # ``blueprint`` is ``ExecutionGraph.to_dict()`` when the canonical runtime calls
+            # this (``BacktestRuntime.run_backtest``), and that document carries the graph's
+            # identity hash on its ``metadata``, not at the top level - so this column, whose
+            # only purpose is reproducibility tracking, was written NULL on every canonical
+            # backtest. Both shapes are read now, in the order of specificity, so a caller
+            # that really does put ``dag_hash`` at the top level still wins.
+            # Found by the Requirement 26.4 end-to-end sandbox suite
+            # (``tests/sandbox_lifecycle/``).
+            "dag_hash": blueprint.get("dag_hash")
+            or (blueprint.get("metadata") or {}).get("dag_hash"),
+            "dataset_checksum": self._generate_dataset_checksum(dataset, start_date, end_date)
         }
-        
+
+        if version_id is not None:
+            backtest_data["version_id"] = str(version_id)
+
         if sb is None:
             logger.info(f"[DEV_MODE] Skipping Supabase backtest insertion for {backtest_id}")
             return backtest_data
@@ -118,14 +157,29 @@ class BacktestService:
     ) -> Dict:
         """
         Update backtest with execution results.
-        
+
         Args:
             user: User dict
             backtest_id: Backtest ID
             results: Backtest results dictionary
-            
+
         Returns:
-            Updated backtest record
+            The updated backtest record, or ``{}`` when no row belonging to this user
+            carries ``backtest_id``.
+
+        OWNERSHIP (Requirement 20.1)
+            The UPDATE is scoped by ``user_id`` as well as by ``id``. It used to filter on
+            ``id`` alone, which made this both a cross-tenant WRITE - a non-owner's metrics
+            landed on the owner's row - and an existence oracle, because the response
+            echoed the row it had just overwritten. ``get_backtest``, ``list_backtests``,
+            ``get_backtest_history``, ``compare_backtests`` and ``delete_backtest`` all
+            already carried the ``user_id`` predicate; this method was the one that did
+            not.
+
+            A caller that owns no such row therefore matches nothing and gets ``{}`` -
+            exactly what a ``backtest_id`` that names no row at all returns, so the two
+            cases are indistinguishable from here up (Requirement 20.2). The HTTP layer
+            turns that single empty answer into one 404 for both.
         """
         sb_res = self._get_supabase(user)
         sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
@@ -147,19 +201,35 @@ class BacktestService:
             "monthly_returns": results.get("monthly_returns", []),
             "daily_returns": results.get("daily_returns", []),
             "execution_time_seconds": results.get("execution_time_seconds", 0),
-            "final_capital": results.get("final_capital", 0)
+            "final_capital": results.get("final_capital", 0),
+            "trades": results.get("trades", [])  # Store detailed trade data
         }
         
         if sb is None:
             logger.info(f"[DEV_MODE] Skipping Supabase backtest update for {backtest_id}")
             return update_data
         
-        query_res = sb.table("strategy_backtests").update(update_data).eq("id", backtest_id).execute()
+        query_res = (sb.table("strategy_backtests")
+                 .update(update_data)
+                 .eq("id", backtest_id)
+                 .eq("user_id", user["id"])
+                 .execute())
         result = await query_res if inspect.isawaitable(query_res) else query_res
-        
+
+        if not result.data:
+            # Nothing matched: either no such backtest, or it is not this user's. Logged
+            # as one sentence on purpose - the two are the same event to this method, and
+            # the caller is told the same thing about both.
+            logger.info(
+                "No backtest %s belonging to user %s; results not written",
+                backtest_id,
+                user["id"],
+            )
+            return {}
+
         logger.info(f"Updated backtest {backtest_id} with results")
-        
-        return result.data[0] if result.data else {}
+
+        return result.data[0]
     
     async def get_backtest(
         self,
@@ -304,26 +374,56 @@ class BacktestService:
     ) -> bool:
         """
         Delete a backtest.
-        
+
         Args:
             user: User dict
             backtest_id: Backtest ID
-            
+
         Returns:
-            Success status
+            ``True`` when a row belonging to this user was actually deleted, ``False`` when
+            the ownership-scoped DELETE matched nothing - because no such backtest exists,
+            or because it is not this user's.
+
+        WHY THIS RETURN VALUE AND THE HTTP RESPONSE DELIBERATELY DIFFER
+            This method used to ``return True`` unconditionally, below the DELETE and
+            without looking at it, so it reported success for a row it had not touched. The
+            ownership predicate (``.eq("user_id", ...)``) was already here and correct; what
+            was wrong was the report. It is truthful now, because an in-process caller
+            asking "was it deleted?" is entitled to the answer, and a false ``True`` is how
+            a "deleted" that deleted nothing reaches an audit log or a cache invalidation.
+
+            The HTTP layer does NOT forward this value. ``DELETE /api/backtests/{id}``
+            answers ``{"success": true}`` for every caller, and must keep doing so:
+            Requirement 20.2 requires "not yours" and "not there" to be indistinguishable,
+            and Requirement 20.1 is satisfied by the predicate on the statement, not by the
+            wording of the reply. Truthfulness in-process and silence over the wire are two
+            different obligations, and this is the one place they point in opposite
+            directions - see the handler in ``routers/strategy_operations.py``.
         """
         sb_res = self._get_supabase(user)
         sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
-        
-        if sb:
-            query_res = sb.table("strategy_backtests").delete().eq("id", backtest_id).eq("user_id", user["id"]).execute()
-            result = await query_res if inspect.isawaitable(query_res) else query_res
-        
-        logger.info(f"Deleted backtest {backtest_id}")
-        return True
-        
-        logger.info(f"Deleted backtest {backtest_id}")
-        return True
+
+        if sb is None:
+            logger.info(f"[DEV_MODE] Skipping Supabase backtest deletion for {backtest_id}")
+            return False
+
+        query_res = sb.table("strategy_backtests").delete().eq("id", backtest_id).eq("user_id", user["id"]).execute()
+        result = await query_res if inspect.isawaitable(query_res) else query_res
+
+        # PostgREST returns the deleted rows, so an empty ``data`` means the predicate -
+        # ``id`` AND ``user_id`` - matched nothing.
+        deleted = bool(getattr(result, "data", None))
+
+        if deleted:
+            logger.info(f"Deleted backtest {backtest_id}")
+        else:
+            logger.info(
+                "No backtest %s belonging to user %s; nothing deleted",
+                backtest_id,
+                user["id"],
+            )
+
+        return deleted
     
     async def get_backtest_report(
         self,
@@ -393,6 +493,162 @@ class BacktestService:
         }
         
         return report
+    
+    async def validate_historical_data(
+        self,
+        symbol: str,
+        timeframe: str,
+        start_date: str,
+        end_date: str
+    ) -> Dict:
+        """
+        Validate historical data availability and quality before backtest.
+        
+        Args:
+            symbol: Trading pair (e.g., BTC/USDT)
+            timeframe: Timeframe (e.g., 1h, 4h, 1d)
+            start_date: Start date (ISO format)
+            end_date: End date (ISO format)
+            
+        Returns:
+            Validation result with issues if any
+        """
+        from backend_app.backend.data_seeking_engine import DataEngine
+        import pandas as pd
+        from datetime import datetime
+        
+        validation_result = {
+            "valid": True,
+            "issues": [],
+            "warnings": [],
+            "data_info": {}
+        }
+        
+        try:
+            # Initialize data engine
+            data_engine = DataEngine()
+            
+            # Fetch sample data to validate
+            df = await data_engine.fetch_ohlcv(
+                symbol=symbol,
+                timeframe=timeframe,
+                start_date=start_date,
+                end_date=end_date
+            )
+            
+            if df is None or df.empty:
+                validation_result["valid"] = False
+                validation_result["issues"].append({
+                    "code": "NO_DATA_AVAILABLE",
+                    "message": f"No historical data available for {symbol} {timeframe} between {start_date} and {end_date}",
+                    "severity": "critical"
+                })
+                return validation_result
+            
+            # Basic data quality checks
+            validation_result["data_info"] = {
+                "total_candles": len(df),
+                "date_range": f"{df.index[0]} to {df.index[-1]}",
+                "columns": list(df.columns)
+            }
+            
+            # Check for missing candles (gaps)
+            if len(df) > 1:
+                time_diffs = df.index.to_series().diff()
+                expected_diff = pd.Timedelta(minutes=self._timeframe_to_minutes(timeframe))
+                gaps = time_diffs[time_diffs > expected_diff * 1.5]  # Allow some tolerance
+                
+                if len(gaps) > 0:
+                    validation_result["warnings"].append({
+                        "code": "DATA_GAPS_DETECTED",
+                        "message": f"Found {len(gaps)} potential data gaps in the time series",
+                        "severity": "warning",
+                        "gap_count": len(gaps)
+                    })
+            
+            # Check for duplicate timestamps
+            duplicates = df.index.duplicated()
+            if duplicates.any():
+                validation_result["issues"].append({
+                    "code": "DUPLICATE_TIMESTAMPS",
+                    "message": f"Found {duplicates.sum()} duplicate timestamps in the data",
+                    "severity": "error",
+                    "duplicate_count": int(duplicates.sum())
+                })
+                validation_result["valid"] = False
+            
+            # Check for invalid OHLCV values
+            invalid_values = 0
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                if col in df.columns:
+                    invalid_count = (df[col] <= 0).sum() if col != 'volume' else (df[col] < 0).sum()
+                    if invalid_count > 0:
+                        invalid_values += invalid_count
+            
+            if invalid_values > 0:
+                validation_result["issues"].append({
+                    "code": "INVALID_OHLCV_VALUES",
+                    "message": f"Found {invalid_values} invalid OHLCV values (zero or negative)",
+                    "severity": "error",
+                    "invalid_count": invalid_values
+                })
+                validation_result["valid"] = False
+            
+            # Check timestamp ordering
+            if not df.index.is_monotonic_increasing:
+                validation_result["issues"].append({
+                    "code": "TIMESTAMP_ORDERING",
+                    "message": "Timestamps are not in chronological order",
+                    "severity": "error"
+                })
+                validation_result["valid"] = False
+            
+            # Check minimum warmup period (at least 100 candles)
+            if len(df) < 100:
+                validation_result["issues"].append({
+                    "code": "INSUFFICIENT_WARMUP",
+                    "message": f"Insufficient data for warmup period (need at least 100 candles, got {len(df)})",
+                    "severity": "error",
+                    "candle_count": len(df)
+                })
+                validation_result["valid"] = False
+            
+            # Check high/low consistency
+            if 'high' in df.columns and 'low' in df.columns:
+                inconsistent = df[df['high'] < df['low']]
+                if len(inconsistent) > 0:
+                    validation_result["issues"].append({
+                        "code": "OHLCV_CONSISTENCY",
+                        "message": f"Found {len(inconsistent)} candles where high < low",
+                        "severity": "error",
+                        "inconsistent_count": len(inconsistent)
+                    })
+                    validation_result["valid"] = False
+            
+        except Exception as e:
+            logger.error(f"Error validating historical data: {e}")
+            validation_result["valid"] = False
+            validation_result["issues"].append({
+                "code": "VALIDATION_ERROR",
+                "message": f"Error during data validation: {str(e)}",
+                "severity": "critical"
+            })
+        
+        return validation_result
+    
+    def _timeframe_to_minutes(self, timeframe: str) -> int:
+        """Convert timeframe string to minutes."""
+        timeframe_map = {
+            '1m': 1,
+            '5m': 5,
+            '15m': 15,
+            '30m': 30,
+            '1h': 60,
+            '4h': 240,
+            '1d': 1440,
+            '1w': 10080
+        }
+        return timeframe_map.get(timeframe, 60)
 
 
 # Singleton instance

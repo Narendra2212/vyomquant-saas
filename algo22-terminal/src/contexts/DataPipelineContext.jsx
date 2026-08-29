@@ -1,7 +1,45 @@
+/**
+ * DataPipelineContext.jsx
+ *
+ * What task 7.3 removed from this file, and why it could not stay
+ * --------------------------------------------------------------
+ * This file used to hold three client-side vocabularies, all three of them the same defect:
+ *
+ * 1. **A ten-symbol fallback list** in `loadMarkets`. It tested the `/api/market/symbols`
+ *    response with `Array.isArray` and, on any failure, set `availableSymbols` to
+ *    `["BTC/USDT", "ETH/USDT", …]` with a `console.warn`. Task 7.2 deleted the identical list
+ *    from `routers/market.py`; leaving this one would have re-armed the defect **in the
+ *    client**, where nothing on the server can see it — the endpoint would honestly answer
+ *    `503 ASSET_UNIVERSE_UNAVAILABLE` and the UI would show ten markets anyway, as though the
+ *    platform had confirmed it could trade them.
+ * 2. **A seven-label timeframe list** as `availableTimeframes`' initial state
+ *    (`1m … 1w`). The published set is the *intersection* of the pipeline's own vocabularies
+ *    (task 7.2) and it does not contain `1w`, and deliberately does not contain `3m`: the
+ *    market-data coverage gate has no figure for either, so a strategy on one would run with
+ *    its completeness check silently unfailable. Offering them was the lie.
+ * 3. **A second copy of that list** inside `validateInputs`, used to accept or reject a
+ *    timeframe. A local whitelist that disagrees with the pipeline is a gate that passes what
+ *    the engine will refuse and refuses what it would accept.
+ *
+ * What replaced them: the symbol list is whatever the endpoint served on this page load, and
+ * an unavailable universe is an explicit error state (`symbolsError`) with **zero** symbols —
+ * never a substitute, and never a silently empty list presented as if the platform traded
+ * nothing. The timeframe set comes from `lib/registryClient.js`'s
+ * `GET /api/strategy-operations/registry/timeframes` cache, which is the same source the
+ * builder's own `TimeframeSelector` reads, so there is exactly one interval vocabulary in the
+ * frontend.
+ *
+ * The builder's DATA-node controls do **not** read this context — they use
+ * `components/builder/AssetSelector.jsx` and `TimeframeSelector.jsx` against the canonical,
+ * paginated, provenance-carrying endpoints. This context remains the backtest/live data
+ * pipeline's own state; what it must not do is hold a vocabulary of its own.
+ */
+
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { api, endpoints, get, post } from '../api';
 import wsClient from '../websocketClient';
 import { getTimeframeMs, getMaxHistoryForTimeframe } from '../utils/engineHelpers';
+import { getTimeframeSnapshot, loadTimeframes, subscribeTimeframes } from '../lib/registryClient';
 
 export const DataPipelineContext = createContext(null);
 
@@ -18,12 +56,20 @@ export const DataPipelineProvider = ({ children, mode = 'backtest' }) => {
   // Exchange from vault (no user selection needed)
   const [activeExchange, setActiveExchange] = useState(null);
   const [isLoadingExchange, setIsLoadingExchange] = useState(true);
-  const [availableTimeframes, setAvailableTimeframes] = useState(["1m", "5m", "15m", "1h", "4h", "1d", "1w"]);
+
+  /**
+   * The published interval set, from the one registry cache (Requirement 11.8). Starts empty
+   * and stays empty until the endpoint answers: there is no initial list here, because an
+   * initial list is a list.
+   */
+  const [timeframeSnapshot, setTimeframeSnapshot] = useState(getTimeframeSnapshot);
 
   // Symbol discovery
   const [availableSymbols, setAvailableSymbols] = useState([]);
   const [symbolSearchQuery, setSymbolSearchQuery] = useState("");
   const [isLoadingSymbols, setIsLoadingSymbols] = useState(false);
+  /** Why there are no symbols, when there are none. `null` while nothing has failed. */
+  const [symbolsError, setSymbolsError] = useState(null);
 
   // OHLCV data cache
   const [ohlcCache, setOhlcCache] = useState(new Map());
@@ -75,32 +121,64 @@ export const DataPipelineProvider = ({ children, mode = 'backtest' }) => {
     fetchActiveExchange();
   }, []);
 
-  // Load markets from CCXT
-  const loadMarkets = useCallback(async (exchangeName = null) => {
-    const exchange = exchangeName || activeExchange?.name || 'binance';
+  // The published interval set. Subscribed before loading, so a cache that is already ready
+  // resolves synchronously without the listener missing its transition.
+  useEffect(() => {
+    const unsubscribe = subscribeTimeframes(setTimeframeSnapshot);
+    setTimeframeSnapshot(getTimeframeSnapshot());
+    loadTimeframes();
+    return unsubscribe;
+  }, []);
+
+  /**
+   * The markets the platform can trade, from `GET /api/market/symbols` — which task 7.2
+   * re-pointed at the same cached universe `GET /api/strategy-operations/assets` serves.
+   *
+   * Fails closed. A failure sets `symbolsError` and leaves `availableSymbols` **empty**: there
+   * is no fallback list here any more, and a response that is not an array is an error rather
+   * than a reason to substitute one. The two empty cases stay distinguishable, because they
+   * have different fixes — `symbolsError === null` with an empty list means the endpoint
+   * genuinely served no market, and a non-null `symbolsError` means the list is unknown.
+   */
+  const loadMarkets = useCallback(async () => {
     setIsLoadingSymbols(true);
+    setSymbolsError(null);
 
     try {
-      // Call backend market symbols route
       const symbols = await endpoints.market.getSymbols();
 
-      if (symbols && Array.isArray(symbols)) {
-        setAvailableSymbols(symbols);
-        return symbols;
+      if (!Array.isArray(symbols)) {
+        throw new Error(
+          'The market symbols endpoint did not return a list of symbols, so the tradeable ' +
+            'market list is unknown.',
+        );
       }
+
+      const canonical = symbols.filter((symbol) => typeof symbol === 'string' && symbol !== '');
+      setAvailableSymbols(canonical);
+      return canonical;
     } catch (err) {
-      console.error("Failed to load markets:", err);
-      // Fallback to hardcoded popular pairs if API fails
-      const fallback = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
-        "ADA/USDT", "DOGE/USDT", "MATIC/USDT", "DOT/USDT", "LTC/USDT"];
-      // Note: These are fallback defaults - normally loaded from exchange API via loadMarkets()
-      console.warn("Using fallback symbol list - exchange API unavailable");
-      setAvailableSymbols(fallback);
-      return fallback;
+      console.error('Failed to load markets:', err);
+      setAvailableSymbols([]);
+      setSymbolsError({
+        // The backend's own sentence where it sent one (a 503 carries
+        // `ASSET_UNIVERSE_UNAVAILABLE` and its message); this file authors none of its own
+        // beyond the shape error above.
+        code: err?.data?.error || err?.code || 'SYMBOL_UNIVERSE_UNAVAILABLE',
+        message: err?.data?.message || err?.message || 'The tradeable market list is unavailable.',
+        status: err?.status ?? null,
+        retryAfterSeconds:
+          typeof err?.data?.details?.retry_after_seconds === 'number'
+            ? err.data.details.retry_after_seconds
+            : null,
+      });
+      // Rethrown rather than swallowed into a value: a caller that cannot tell a failure from
+      // an empty market list is the defect this task removed.
+      throw err;
     } finally {
       setIsLoadingSymbols(false);
     }
-  }, [activeExchange]);
+  }, []);
 
   // Fetch OHLCV data - uses backend /data/historical endpoint
   const fetchOHLCV = useCallback(async (symbol, timeframe, startDate, endDate, options = {}) => {
@@ -337,19 +415,61 @@ export const DataPipelineProvider = ({ children, mode = 'backtest' }) => {
     setOhlcCache(new Map());
   }, []);
 
-  // Validate pipeline inputs
+  const availableTimeframes = useMemo(
+    () => timeframeSnapshot.timeframes.map((entry) => entry.id),
+    [timeframeSnapshot],
+  );
+
+  /**
+   * Validate pipeline inputs.
+   *
+   * The symbol and timeframe checks are made against the **fetched** sets, and both fail
+   * closed when the corresponding set could not be loaded: an unverifiable value is reported
+   * as unverifiable rather than waved through, because this gate guards a data fetch and a
+   * timeframe the pipeline cannot process produces silently mis-aligned bars. Each error names
+   * why, so "we could not check" and "your value is wrong" are different messages.
+   */
   const validateInputs = useCallback((symbol, timeframe, startDate, endDate) => {
     const errors = [];
 
-    if (!symbol || !availableSymbols.includes(symbol)) {
-      errors.push({ field: 'symbol', message: 'Invalid or unavailable symbol' });
+    if (symbolsError !== null) {
+      errors.push({
+        field: 'symbol',
+        code: 'SYMBOL_UNIVERSE_UNAVAILABLE',
+        message: `The tradeable market list is unavailable, so “${symbol}” cannot be checked: ${symbolsError.message}`,
+      });
+    } else if (availableSymbols.length === 0) {
+      errors.push({
+        field: 'symbol',
+        code: 'SYMBOL_UNIVERSE_NOT_LOADED',
+        message: 'The tradeable market list has not been loaded yet, so the symbol cannot be checked.',
+      });
+    } else if (!symbol || !availableSymbols.includes(symbol)) {
+      errors.push({
+        field: 'symbol',
+        code: 'SYMBOL_NOT_TRADEABLE',
+        message: 'This symbol is not in the market list this platform can trade',
+      });
     }
 
-    // Common timeframes supported by most exchanges
-    // Note: These are standard timeframes - individual exchanges may have varying support
-    const validTimeframes = ["1m", "5m", "15m", "1h", "4h", "1d", "1w"];
-    if (!validTimeframes.includes(timeframe)) {
-      errors.push({ field: 'timeframe', message: 'Invalid timeframe' });
+    if (timeframeSnapshot.isError) {
+      errors.push({
+        field: 'timeframe',
+        code: 'TIMEFRAME_SET_UNAVAILABLE',
+        message: `The supported interval set is unavailable, so “${timeframe}” cannot be checked: ${timeframeSnapshot.error?.message || ''}`.trim(),
+      });
+    } else if (availableTimeframes.length === 0) {
+      errors.push({
+        field: 'timeframe',
+        code: 'TIMEFRAME_SET_NOT_LOADED',
+        message: 'The supported interval set has not been loaded yet, so the timeframe cannot be checked.',
+      });
+    } else if (!availableTimeframes.includes(timeframe)) {
+      errors.push({
+        field: 'timeframe',
+        code: 'TIMEFRAME_NOT_SUPPORTED',
+        message: 'This interval is not one every stage of the data pipeline can process',
+      });
     }
 
     const start = new Date(startDate);
@@ -370,7 +490,7 @@ export const DataPipelineProvider = ({ children, mode = 'backtest' }) => {
 
     setValidationErrors(errors);
     return errors.length === 0;
-  }, [availableSymbols]);
+  }, [availableSymbols, availableTimeframes, symbolsError, timeframeSnapshot]);
 
   const value = {
     // Mode
@@ -380,13 +500,20 @@ export const DataPipelineProvider = ({ children, mode = 'backtest' }) => {
     // Exchange
     activeExchange,
     isLoadingExchange,
+
+    // Timeframes — the registry's published intersection, never a local list
     availableTimeframes,
+    timeframeEntries: timeframeSnapshot.timeframes,
+    isLoadingTimeframes: timeframeSnapshot.isLoading,
+    timeframesError: timeframeSnapshot.error,
 
     // Symbols
     availableSymbols,
     symbolSearchQuery,
     setSymbolSearchQuery,
     isLoadingSymbols,
+    /** Non-null when the market list is unknown. Consumers must not render zero as "none". */
+    symbolsError,
     loadMarkets,
 
     // Data fetching

@@ -1,3 +1,9 @@
+/**
+ * AICopilot.jsx — Landing Page AI Copilot Showcase Component
+ * 
+ * NOTE: Intentionally DORMANT / UNMOUNTED. Preserved for future Copilot reactivation.
+ */
+
 import React from 'react'
 import { Link } from 'react-router-dom'
 import { Brain, ArrowRight, Sparkles, MessageSquare, Wand2 } from 'lucide-react'

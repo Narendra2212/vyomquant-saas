@@ -1,0 +1,3313 @@
+{
+  "generated_by": "scripts/generate_connection_legality_fixture.py",
+  "validator_version": "1.0.0",
+  "registry": {
+    "registry_version": "r_3d173598",
+    "blocks": [
+      {
+        "block_id": "ohlcv_feed",
+        "display_name": "OHLCV Feed",
+        "category": "DATA",
+        "description": "Validated candles for one market and timeframe. The exchange is bound at deployment, never stored in the strategy.",
+        "inputs": [],
+        "outputs": [
+          {
+            "port": "frame",
+            "type": "OHLCV_FRAME",
+            "required": true,
+            "description": "Full candle frame"
+          },
+          {
+            "port": "open",
+            "type": "PRICE_SERIES",
+            "required": true,
+            "description": "Bar open"
+          },
+          {
+            "port": "high",
+            "type": "PRICE_SERIES",
+            "required": true,
+            "description": "Bar high"
+          },
+          {
+            "port": "low",
+            "type": "PRICE_SERIES",
+            "required": true,
+            "description": "Bar low"
+          },
+          {
+            "port": "close",
+            "type": "PRICE_SERIES",
+            "required": true,
+            "description": "Bar close"
+          },
+          {
+            "port": "volume",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "description": "Base volume"
+          }
+        ],
+        "params": [
+          {
+            "key": "symbol",
+            "label": "Symbol",
+            "type": "SYMBOL",
+            "required": true,
+            "default": null,
+            "min": null,
+            "max": null,
+            "step": null,
+            "options": null,
+            "options_source": null,
+            "unit": null,
+            "example": "BTC/USDT",
+            "help": "Market to read, chosen from the asset universe. No default: a strategy must never trade a market the author did not choose.",
+            "depends_on": [],
+            "affects_warmup": false
+          },
+          {
+            "key": "timeframe",
+            "label": "Timeframe",
+            "type": "TIMEFRAME",
+            "required": true,
+            "default": null,
+            "min": null,
+            "max": null,
+            "step": null,
+            "options": null,
+            "options_source": null,
+            "unit": null,
+            "example": "15m",
+            "help": "Bar interval, from the platform's supported timeframes. No default: the timeframe changes every downstream calculation.",
+            "depends_on": [],
+            "affects_warmup": false
+          },
+          {
+            "key": "market_type",
+            "label": "Market type",
+            "type": "SELECT",
+            "required": true,
+            "default": "spot",
+            "min": null,
+            "max": null,
+            "step": null,
+            "options": [
+              "spot",
+              "swap",
+              "future"
+            ],
+            "options_source": null,
+            "unit": null,
+            "example": "spot",
+            "help": "Market shape to read. This is not an exchange: exchange identity is bound at deployment, never saved in the strategy.",
+            "depends_on": [],
+            "affects_warmup": false
+          },
+          {
+            "key": "mode",
+            "label": "Mode",
+            "type": "SELECT",
+            "required": true,
+            "default": "streaming",
+            "min": null,
+            "max": null,
+            "step": null,
+            "options": [
+              "streaming",
+              "historical"
+            ],
+            "options_source": null,
+            "unit": null,
+            "example": "streaming",
+            "help": "Streaming follows live closed bars; historical reads a fixed window.",
+            "depends_on": [],
+            "affects_warmup": false
+          },
+          {
+            "key": "warmup_bars",
+            "label": "Warmup bars",
+            "type": "INTEGER",
+            "required": false,
+            "default": null,
+            "min": 0,
+            "max": 100000,
+            "step": 1,
+            "options": null,
+            "options_source": null,
+            "unit": "bars",
+            "example": 500,
+            "help": "Blank = use the compiler's computed warmup, which composes every downstream lookback. Set this only to prefetch more.",
+            "depends_on": [],
+            "affects_warmup": true
+          },
+          {
+            "key": "history_start",
+            "label": "History start",
+            "type": "DATE",
+            "required": false,
+            "default": null,
+            "min": null,
+            "max": null,
+            "step": null,
+            "options": null,
+            "options_source": null,
+            "unit": null,
+            "example": "2024-01-01",
+            "help": "First bar to read in historical mode.",
+            "depends_on": [
+              "mode"
+            ],
+            "affects_warmup": false
+          },
+          {
+            "key": "history_end",
+            "label": "History end",
+            "type": "DATE",
+            "required": false,
+            "default": null,
+            "min": null,
+            "max": null,
+            "step": null,
+            "options": null,
+            "options_source": null,
+            "unit": null,
+            "example": "2024-06-30",
+            "help": "Last bar to read in historical mode. Blank runs to the latest bar.",
+            "depends_on": [
+              "mode",
+              "history_start"
+            ],
+            "affects_warmup": false
+          }
+        ],
+        "allowed_predecessor_categories": [],
+        "allowed_successor_categories": [
+          "FEATURE_ENGINEERING",
+          "INDICATOR",
+          "LOGIC",
+          "MATH",
+          "ML_DL"
+        ],
+        "execution_semantics": "SERIES_MAP",
+        "runtime_ref": "DataEngine.fetch_historical_ohlcv",
+        "streaming_runtime_ref": "DataEngine.stream_live_ohlcv",
+        "serialization": "NONE",
+        "leakage_risk": "NONE",
+        "version": "1.0.0",
+        "capability_flags": [
+          "historical",
+          "streaming"
+        ],
+        "has_cross_field_validation": true,
+        "metadata": {
+          "source": "candles"
+        }
+      },
+      {
+        "block_id": "ema",
+        "display_name": "Exponential Moving Average",
+        "category": "INDICATOR",
+        "description": "Exponentially weighted moving average, seeded with an SMA.",
+        "inputs": [
+          {
+            "port": "series",
+            "type": "PRICE_SERIES",
+            "required": true,
+            "description": "Price series to smooth."
+          }
+        ],
+        "outputs": [
+          {
+            "port": "value",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "description": "Exponential Moving Average of the input series."
+          }
+        ],
+        "params": [
+          {
+            "key": "window",
+            "label": "Period",
+            "type": "INTEGER",
+            "required": true,
+            "default": 14,
+            "min": 2,
+            "max": 1000,
+            "step": 1,
+            "options": null,
+            "options_source": null,
+            "unit": "bars",
+            "example": 14,
+            "help": "Number of closed bars in the rolling window.",
+            "depends_on": [],
+            "affects_warmup": true
+          },
+          {
+            "key": "source",
+            "label": "Price source",
+            "type": "SELECT",
+            "required": true,
+            "default": "close",
+            "min": null,
+            "max": null,
+            "step": null,
+            "options": [
+              "open",
+              "high",
+              "low",
+              "close",
+              "hl2",
+              "hlc3",
+              "ohlc4"
+            ],
+            "options_source": null,
+            "unit": null,
+            "example": "close",
+            "help": "Which price series the indicator reads when an OHLCV frame is wired in.",
+            "depends_on": [],
+            "affects_warmup": false
+          }
+        ],
+        "allowed_predecessor_categories": [
+          "DATA",
+          "INDICATOR"
+        ],
+        "allowed_successor_categories": [
+          "FEATURE_ENGINEERING",
+          "INDICATOR",
+          "LOGIC",
+          "MATH"
+        ],
+        "execution_semantics": "STATEFUL",
+        "runtime_ref": "indicators_backend.ema",
+        "streaming_runtime_ref": null,
+        "serialization": "NONE",
+        "leakage_risk": "NONE",
+        "version": "1.0.0",
+        "capability_flags": [],
+        "has_cross_field_validation": false,
+        "metadata": {
+          "leaky_outputs": [],
+          "multi_output": false
+        }
+      },
+      {
+        "block_id": "sma",
+        "display_name": "Simple Moving Average",
+        "category": "INDICATOR",
+        "description": "Unweighted mean of the last N closed bars.",
+        "inputs": [
+          {
+            "port": "series",
+            "type": "PRICE_SERIES",
+            "required": true,
+            "description": "Price series to smooth."
+          }
+        ],
+        "outputs": [
+          {
+            "port": "value",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "description": "Simple Moving Average of the input series."
+          }
+        ],
+        "params": [
+          {
+            "key": "window",
+            "label": "Period",
+            "type": "INTEGER",
+            "required": true,
+            "default": 20,
+            "min": 2,
+            "max": 1000,
+            "step": 1,
+            "options": null,
+            "options_source": null,
+            "unit": "bars",
+            "example": 20,
+            "help": "Number of closed bars in the rolling window.",
+            "depends_on": [],
+            "affects_warmup": true
+          },
+          {
+            "key": "source",
+            "label": "Price source",
+            "type": "SELECT",
+            "required": true,
+            "default": "close",
+            "min": null,
+            "max": null,
+            "step": null,
+            "options": [
+              "open",
+              "high",
+              "low",
+              "close",
+              "hl2",
+              "hlc3",
+              "ohlc4"
+            ],
+            "options_source": null,
+            "unit": null,
+            "example": "close",
+            "help": "Which price series the indicator reads when an OHLCV frame is wired in.",
+            "depends_on": [],
+            "affects_warmup": false
+          }
+        ],
+        "allowed_predecessor_categories": [
+          "DATA",
+          "INDICATOR"
+        ],
+        "allowed_successor_categories": [
+          "FEATURE_ENGINEERING",
+          "INDICATOR",
+          "LOGIC",
+          "MATH"
+        ],
+        "execution_semantics": "WINDOWED",
+        "runtime_ref": "indicators_backend.sma",
+        "streaming_runtime_ref": null,
+        "serialization": "NONE",
+        "leakage_risk": "NONE",
+        "version": "1.0.0",
+        "capability_flags": [],
+        "has_cross_field_validation": false,
+        "metadata": {
+          "leaky_outputs": [],
+          "multi_output": false
+        }
+      },
+      {
+        "block_id": "add",
+        "display_name": "Add",
+        "category": "MATH",
+        "description": "Element-wise sum of two or more aligned series.",
+        "inputs": [
+          {
+            "port": "a",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "variadic": true,
+            "description": "First operand"
+          },
+          {
+            "port": "b",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "description": "Second operand"
+          }
+        ],
+        "outputs": [
+          {
+            "port": "out",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "description": "Result series"
+          }
+        ],
+        "params": [],
+        "allowed_predecessor_categories": [
+          "DATA",
+          "INDICATOR",
+          "MATH",
+          "ML_DL"
+        ],
+        "allowed_successor_categories": [
+          "FEATURE_ENGINEERING",
+          "INDICATOR",
+          "LOGIC",
+          "MATH",
+          "ML_DL"
+        ],
+        "execution_semantics": "SERIES_MAP",
+        "runtime_ref": "block_specs.math_add",
+        "streaming_runtime_ref": null,
+        "serialization": "NONE",
+        "leakage_risk": "NONE",
+        "version": "1.0.0",
+        "capability_flags": [],
+        "has_cross_field_validation": false,
+        "metadata": {
+          "operator": "+"
+        }
+      },
+      {
+        "block_id": "multiply",
+        "display_name": "Multiply",
+        "category": "MATH",
+        "description": "Element-wise product of two or more aligned series.",
+        "inputs": [
+          {
+            "port": "a",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "variadic": true,
+            "description": "First factor"
+          },
+          {
+            "port": "b",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "description": "Second factor"
+          }
+        ],
+        "outputs": [
+          {
+            "port": "out",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "description": "Result series"
+          }
+        ],
+        "params": [],
+        "allowed_predecessor_categories": [
+          "DATA",
+          "INDICATOR",
+          "MATH",
+          "ML_DL"
+        ],
+        "allowed_successor_categories": [
+          "FEATURE_ENGINEERING",
+          "INDICATOR",
+          "LOGIC",
+          "MATH",
+          "ML_DL"
+        ],
+        "execution_semantics": "SERIES_MAP",
+        "runtime_ref": "block_specs.math_multiply",
+        "streaming_runtime_ref": null,
+        "serialization": "NONE",
+        "leakage_risk": "NONE",
+        "version": "1.0.0",
+        "capability_flags": [],
+        "has_cross_field_validation": false,
+        "metadata": {
+          "operator": "*"
+        }
+      },
+      {
+        "block_id": "divide",
+        "display_name": "Divide",
+        "category": "MATH",
+        "description": "Element-wise division. A zero denominator yields NaN for that bar, never an infinity, and the bar is reported as DIVISION_BY_ZERO.",
+        "inputs": [
+          {
+            "port": "numerator",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "description": "Dividend"
+          },
+          {
+            "port": "denominator",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "description": "Divisor; a zero bar yields NaN"
+          }
+        ],
+        "outputs": [
+          {
+            "port": "out",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "description": "Result series"
+          }
+        ],
+        "params": [],
+        "allowed_predecessor_categories": [
+          "DATA",
+          "INDICATOR",
+          "MATH",
+          "ML_DL"
+        ],
+        "allowed_successor_categories": [
+          "FEATURE_ENGINEERING",
+          "INDICATOR",
+          "LOGIC",
+          "MATH",
+          "ML_DL"
+        ],
+        "execution_semantics": "SERIES_MAP",
+        "runtime_ref": "block_specs.math_divide",
+        "streaming_runtime_ref": null,
+        "serialization": "NONE",
+        "leakage_risk": "NONE",
+        "version": "1.0.0",
+        "capability_flags": [],
+        "has_cross_field_validation": false,
+        "metadata": {
+          "operator": "/"
+        }
+      },
+      {
+        "block_id": "gt",
+        "display_name": "Greater than",
+        "category": "LOGIC",
+        "description": "True on each bar where left > right. A bar whose either side is undefined reports False, so the warmup region never signals.",
+        "inputs": [
+          {
+            "port": "left",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "description": "Left-hand series"
+          },
+          {
+            "port": "right",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "description": "Right-hand series or constant"
+          }
+        ],
+        "outputs": [
+          {
+            "port": "out",
+            "type": "BOOLEAN_SERIES",
+            "required": true,
+            "description": "Per-bar truth series"
+          }
+        ],
+        "params": [],
+        "allowed_predecessor_categories": [
+          "DATA",
+          "INDICATOR",
+          "MATH",
+          "ML_DL"
+        ],
+        "allowed_successor_categories": [
+          "ACTION",
+          "LOGIC",
+          "MATH"
+        ],
+        "execution_semantics": "SERIES_MAP",
+        "runtime_ref": "block_specs.logic_gt",
+        "streaming_runtime_ref": null,
+        "serialization": "NONE",
+        "leakage_risk": "NONE",
+        "version": "1.0.0",
+        "capability_flags": [],
+        "has_cross_field_validation": false,
+        "metadata": {}
+      },
+      {
+        "block_id": "and",
+        "display_name": "AND",
+        "category": "LOGIC",
+        "description": "True where every input is true on the same bar.",
+        "inputs": [
+          {
+            "port": "a",
+            "type": "BOOLEAN_SERIES",
+            "required": true,
+            "variadic": true,
+            "description": "First condition"
+          },
+          {
+            "port": "b",
+            "type": "BOOLEAN_SERIES",
+            "required": true,
+            "description": "Second condition"
+          }
+        ],
+        "outputs": [
+          {
+            "port": "out",
+            "type": "BOOLEAN_SERIES",
+            "required": true,
+            "description": "Per-bar truth series"
+          }
+        ],
+        "params": [],
+        "allowed_predecessor_categories": [
+          "DATA",
+          "INDICATOR",
+          "LOGIC",
+          "MATH",
+          "ML_DL"
+        ],
+        "allowed_successor_categories": [
+          "ACTION",
+          "LOGIC",
+          "MATH"
+        ],
+        "execution_semantics": "SERIES_MAP",
+        "runtime_ref": "block_specs.logic_and",
+        "streaming_runtime_ref": null,
+        "serialization": "NONE",
+        "leakage_risk": "NONE",
+        "version": "1.0.0",
+        "capability_flags": [],
+        "has_cross_field_validation": false,
+        "metadata": {}
+      },
+      {
+        "block_id": "feat_lag",
+        "display_name": "Lag",
+        "category": "FEATURE_ENGINEERING",
+        "description": "Past values of a series at the chosen offsets (t-1, t-2, ...).",
+        "inputs": [
+          {
+            "port": "series",
+            "type": "SCALAR_SERIES",
+            "required": true,
+            "description": "Series to derive features from"
+          }
+        ],
+        "outputs": [
+          {
+            "port": "matrix",
+            "type": "FEATURE_MATRIX",
+            "required": true,
+            "description": "Feature columns with timestamp index"
+          }
+        ],
+        "params": [
+          {
+            "key": "lags",
+            "label": "Lags",
+            "type": "MULTISELECT",
+            "required": true,
+            "default": [
+              1,
+              2,
+              3
+            ],
+            "min": 1,
+            "max": 100,
+            "step": null,
+            "options": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35,
+              36,
+              37,
+              38,
+              39,
+              40,
+              41,
+              42,
+              43,
+              44,
+              45,
+              46,
+              47,
+              48,
+              49,
+              50,
+              51,
+              52,
+              53,
+              54,
+              55,
+              56,
+              57,
+              58,
+              59,
+              60,
+              61,
+              62,
+              63,
+              64,
+              65,
+              66,
+              67,
+              68,
+              69,
+              70,
+              71,
+              72,
+              73,
+              74,
+              75,
+              76,
+              77,
+              78,
+              79,
+              80,
+              81,
+              82,
+              83,
+              84,
+              85,
+              86,
+              87,
+              88,
+              89,
+              90,
+              91,
+              92,
+              93,
+              94,
+              95,
+              96,
+              97,
+              98,
+              99,
+              100
+            ],
+            "options_source": null,
+            "unit": "bars",
+            "example": [
+              1,
+              2,
+              3
+            ],
+            "help": "How many bars back each lag column reads. Past values only.",
+            "depends_on": [],
+            "affects_warmup": true
+          }
+        ],
+        "allowed_predecessor_categories": [
+          "DATA",
+          "INDICATOR",
+          "MATH"
+        ],
+        "allowed_successor_categories": [
+          "FEATURE_ENGINEERING",
+          "LOGIC",
+          "MATH",
+          "ML_DL"
+        ],
+        "execution_semantics": "WINDOWED",
+        "runtime_ref": "FeatureEngine.compute_lag_features",
+        "streaming_runtime_ref": null,
+        "serialization": "NONE",
+        "leakage_risk": "NONE",
+        "version": "1.0.0",
+        "capability_flags": [],
+        "has_cross_field_validation": false,
+        "metadata": {
+          "global_statistic_block": false
+        }
+      },
+      {
+        "block_id": "xgboost",
+        "display_name": "XGBoost",
+        "category": "ML_DL",
+        "description": "Gradient-boosted trees. Strong tabular baseline.",
+        "inputs": [
+          {
+            "port": "features",
+            "type": "FEATURE_MATRIX",
+            "required": true,
+            "description": "Aligned feature matrix with column names and warmup offset."
+          }
+        ],
+        "outputs": [
+          {
+            "port": "prediction",
+            "type": "PREDICTION",
+            "description": "Per-bar model output."
+          },
+          {
+            "port": "confidence",
+            "type": "SCALAR_SERIES",
+            "description": "Per-bar confidence in [0, 1]."
+          }
+        ],
+        "params": [
+          {
+            "key": "n_estimators",
+            "label": "Boosting rounds",
+            "type": "INTEGER",
+            "required": false,
+            "default": 200,
+            "min": 10,
+            "max": 2000,
+            "step": 10,
+            "options": null,
+            "options_source": null,
+            "unit": "rounds",
+            "example": 200,
+            "help": "Number of boosting rounds.",
+            "depends_on": [],
+            "affects_warmup": false
+          },
+          {
+            "key": "learning_rate",
+            "label": "Learning rate",
+            "type": "NUMBER",
+            "required": false,
+            "default": 0.05,
+            "min": 0.0001,
+            "max": 0.5,
+            "step": 0.001,
+            "options": null,
+            "options_source": null,
+            "unit": null,
+            "example": 0.05,
+            "help": "Smaller values train more slowly but generalise better.",
+            "depends_on": [],
+            "affects_warmup": false
+          },
+          {
+            "key": "max_depth",
+            "label": "Max depth",
+            "type": "INTEGER",
+            "required": false,
+            "default": 4,
+            "min": 2,
+            "max": 16,
+            "step": 1,
+            "options": null,
+            "options_source": null,
+            "unit": null,
+            "example": 4,
+            "help": "Deeper trees fit more, generalise less.",
+            "depends_on": [],
+            "affects_warmup": false
+          },
+          {
+            "key": "subsample",
+            "label": "Row subsample",
+            "type": "NUMBER",
+            "required": false,
+            "default": 0.8,
+            "min": 0.1,
+            "max": 1.0,
+            "step": 0.05,
+            "options": null,
+            "options_source": null,
+            "unit": null,
+            "example": 0.8,
+            "help": "",
+            "depends_on": [],
+            "affects_warmup": false
+          },
+          {
+            "key": "colsample_bytree",
+            "label": "Column subsample",
+            "type": "NUMBER",
+            "required": false,
+            "default": 0.8,
+            "min": 0.1,
+            "max": 1.0,
+            "step": 0.05,
+            "options": null,
+            "options_source": null,
+            "unit": null,
+            "example": 0.8,
+            "help": "",
+            "depends_on": [],
+            "affects_warmup": false
+          }
+        ],
+        "allowed_predecessor_categories": [
+          "FEATURE_ENGINEERING"
+        ],
+        "allowed_successor_categories": [
+          "INDICATOR",
+          "LOGIC",
+          "MATH"
+        ],
+        "execution_semantics": "STATEFUL",
+        "runtime_ref": "ml_models.XGBoostStrategyBlock",
+        "streaming_runtime_ref": null,
+        "serialization": "JOBLIB",
+        "leakage_risk": "NONE",
+        "version": "1.0.0",
+        "capability_flags": [
+          "needs_model",
+          "predicts",
+          "trainable"
+        ],
+        "has_cross_field_validation": false,
+        "metadata": {
+          "model": {
+            "block_id": "xgboost",
+            "display_name": "XGBoost",
+            "model_family": "TREE",
+            "inputs": [
+              {
+                "port": "features",
+                "type": "FEATURE_MATRIX",
+                "required": true,
+                "variadic": false,
+                "description": "Aligned feature matrix with column names and warmup offset."
+              }
+            ],
+            "outputs": [
+              {
+                "port": "prediction",
+                "type": "PREDICTION",
+                "required": false,
+                "variadic": false,
+                "description": "Per-bar model output."
+              },
+              {
+                "port": "confidence",
+                "type": "SCALAR_SERIES",
+                "required": false,
+                "variadic": false,
+                "description": "Per-bar confidence in [0, 1]."
+              }
+            ],
+            "min_feature_columns": 5,
+            "min_training_rows": 2000,
+            "sequence_length": null,
+            "hyperparameters": [
+              {
+                "key": "n_estimators",
+                "label": "Boosting rounds",
+                "type": "INTEGER",
+                "required": false,
+                "default": 200,
+                "min": 10,
+                "max": 2000,
+                "step": 10,
+                "options": null,
+                "unit": "rounds",
+                "example": 200,
+                "help": "Number of boosting rounds.",
+                "depends_on": [],
+                "affects_warmup": false
+              },
+              {
+                "key": "learning_rate",
+                "label": "Learning rate",
+                "type": "NUMBER",
+                "required": false,
+                "default": 0.05,
+                "min": 0.0001,
+                "max": 0.5,
+                "step": 0.001,
+                "options": null,
+                "unit": null,
+                "example": 0.05,
+                "help": "Smaller values train more slowly but generalise better.",
+                "depends_on": [],
+                "affects_warmup": false
+              },
+              {
+                "key": "max_depth",
+                "label": "Max depth",
+                "type": "INTEGER",
+                "required": false,
+                "default": 4,
+                "min": 2,
+                "max": 16,
+                "step": 1,
+                "options": null,
+                "unit": null,
+                "example": 4,
+                "help": "Deeper trees fit more, generalise less.",
+                "depends_on": [],
+                "affects_warmup": false
+              },
+              {
+                "key": "subsample",
+                "label": "Row subsample",
+                "type": "NUMBER",
+                "required": false,
+                "default": 0.8,
+                "min": 0.1,
+                "max": 1.0,
+                "step": 0.05,
+                "options": null,
+                "unit": null,
+                "example": 0.8,
+                "help": "",
+                "depends_on": [],
+                "affects_warmup": false
+              },
+              {
+                "key": "colsample_bytree",
+                "label": "Column subsample",
+                "type": "NUMBER",
+                "required": false,
+                "default": 0.8,
+                "min": 0.1,
+                "max": 1.0,
+                "step": 0.05,
+                "options": null,
+                "unit": null,
+                "example": 0.8,
+                "help": "",
+                "depends_on": [],
+                "affects_warmup": false
+              }
+            ],
+            "recommended_epochs": 200,
+            "max_safe_epochs": 2000,
+            "epoch_unit": "rounds",
+            "default_batch_size": 0,
+            "validation_requirements": {
+              "val_fraction": 0.15,
+              "test_fraction": 0.15,
+              "embargo_bars": 10,
+              "metric": "f1_macro"
+            },
+            "can_train": true,
+            "can_predict": true,
+            "serialization": "JOBLIB",
+            "backend_available": true,
+            "version": "1.0.0",
+            "runtime_ref": "ml_models.XGBoostStrategyBlock",
+            "required_modules": [
+              "xgboost"
+            ],
+            "description": "Gradient-boosted trees. Strong tabular baseline."
+          }
+        }
+      },
+      {
+        "block_id": "action_buy_market",
+        "display_name": "Buy (market)",
+        "category": "ACTION",
+        "description": "Buy immediately at the best available price when the signal fires.",
+        "inputs": [
+          {
+            "port": "signal",
+            "type": "SIGNAL",
+            "required": true,
+            "description": "Signal or condition that triggers the order"
+          }
+        ],
+        "outputs": [],
+        "params": [
+          {
+            "key": "quantity_type",
+            "label": "Size expressed as",
+            "type": "SELECT",
+            "required": true,
+            "default": null,
+            "min": null,
+            "max": null,
+            "step": null,
+            "options": [
+              "base_amount",
+              "quote_notional",
+              "percent_of_equity",
+              "percent_of_free_balance",
+              "fixed_notional"
+            ],
+            "options_source": null,
+            "unit": null,
+            "example": "percent_of_equity",
+            "help": "How the order size is expressed. No default: a silent sizing convention is a financial-safety defect.",
+            "depends_on": [],
+            "affects_warmup": false
+          },
+          {
+            "key": "quantity",
+            "label": "Size",
+            "type": "NUMBER",
+            "required": true,
+            "default": null,
+            "min": 0,
+            "max": null,
+            "step": null,
+            "options": null,
+            "options_source": null,
+            "unit": "depends on quantity_type",
+            "example": 0.25,
+            "help": "Order size in the unit chosen above. No default: a silent default position size is a financial-safety defect, so the builder refuses to save without it.",
+            "depends_on": [
+              "quantity_type"
+            ],
+            "affects_warmup": false
+          },
+          {
+            "key": "time_in_force",
+            "label": "Time in force",
+            "type": "SELECT",
+            "required": false,
+            "default": null,
+            "min": null,
+            "max": null,
+            "step": null,
+            "options": [
+              "GTC",
+              "IOC",
+              "FOK",
+              "PO"
+            ],
+            "options_source": null,
+            "unit": null,
+            "example": "GTC",
+            "help": "How long the order stays live. Blank uses the venue default resolved at execution.",
+            "depends_on": [],
+            "affects_warmup": false
+          },
+          {
+            "key": "reduce_only",
+            "label": "Reduce only",
+            "type": "BOOLEAN",
+            "required": false,
+            "default": false,
+            "min": null,
+            "max": null,
+            "step": null,
+            "options": null,
+            "options_source": null,
+            "unit": null,
+            "example": false,
+            "help": "When set, the order can only shrink an open position, never open exposure.",
+            "depends_on": [],
+            "affects_warmup": false
+          },
+          {
+            "key": "client_tag",
+            "label": "Client tag",
+            "type": "TEXT",
+            "required": false,
+            "default": null,
+            "min": null,
+            "max": null,
+            "step": null,
+            "options": null,
+            "options_source": null,
+            "unit": null,
+            "example": "breakout-entry",
+            "help": "Free-text label carried on the order for your own reporting.",
+            "depends_on": [],
+            "affects_warmup": false
+          }
+        ],
+        "allowed_predecessor_categories": [
+          "LOGIC"
+        ],
+        "allowed_successor_categories": [],
+        "execution_semantics": "TERMINAL",
+        "runtime_ref": "CCXTExchangeExecutor.place_order",
+        "streaming_runtime_ref": null,
+        "serialization": "NONE",
+        "leakage_risk": "NONE",
+        "version": "1.0.0",
+        "capability_flags": [
+          "places_order"
+        ],
+        "has_cross_field_validation": false,
+        "metadata": {
+          "order_type": "market",
+          "side": "buy",
+          "intent": "entry",
+          "reduce_only_forced": false
+        }
+      }
+    ],
+    "compatibility_matrix": {
+      "OHLCV_FRAME": [
+        "OHLCV_FRAME",
+        "PRICE_SERIES"
+      ],
+      "PRICE_SERIES": [
+        "PRICE_SERIES",
+        "SCALAR_SERIES"
+      ],
+      "SCALAR_SERIES": [
+        "SCALAR_SERIES"
+      ],
+      "BOOLEAN_SERIES": [
+        "BOOLEAN_SERIES",
+        "SIGNAL"
+      ],
+      "FEATURE_MATRIX": [
+        "FEATURE_MATRIX"
+      ],
+      "PREDICTION": [
+        "PREDICTION",
+        "SCALAR_SERIES"
+      ],
+      "SIGNAL": [
+        "SIGNAL",
+        "TRADE_INTENT"
+      ],
+      "TRADE_INTENT": [],
+      "SCALAR": [
+        "SCALAR",
+        "SCALAR_SERIES"
+      ]
+    },
+    "port_types": [
+      "OHLCV_FRAME",
+      "PRICE_SERIES",
+      "SCALAR_SERIES",
+      "BOOLEAN_SERIES",
+      "FEATURE_MATRIX",
+      "PREDICTION",
+      "SIGNAL",
+      "TRADE_INTENT",
+      "SCALAR"
+    ]
+  },
+  "cases": [
+    {
+      "name": "R1 rejects an edge naming a node that is not in the graph",
+      "rule": "R1",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r1",
+        "source": "n_ghost",
+        "source_port": "close",
+        "target": "n_ema",
+        "target_port": "series"
+      },
+      "verdict": {
+        "code": "EDGE_ENDPOINT_UNKNOWN",
+        "severity": "error",
+        "node_id": null,
+        "edge_id": "e_r1",
+        "field": null,
+        "message": "Connection 'e_r1' names a block that is not in this strategy (source='n_ghost').",
+        "expected": "both endpoints present in the graph",
+        "actual": {
+          "source": "n_ghost",
+          "target": "n_ema"
+        },
+        "fix_hint": "Delete the connection, or re-add the block it points at."
+      }
+    },
+    {
+      "name": "R1 accepts an edge whose endpoints both resolve",
+      "rule": "R1",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r1_ok",
+        "source": "n_data",
+        "source_port": "close",
+        "target": "n_ema",
+        "target_port": "series"
+      },
+      "verdict": null
+    },
+    {
+      "name": "R2 rejects a node joined to itself",
+      "rule": "R2",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r2",
+        "source": "n_add",
+        "source_port": "out",
+        "target": "n_add",
+        "target_port": "b"
+      },
+      "verdict": {
+        "code": "SELF_LOOP",
+        "severity": "error",
+        "node_id": "n_add",
+        "edge_id": "e_r2",
+        "field": null,
+        "message": "A block cannot feed itself: 'n_add' is both ends of connection 'e_r2'.",
+        "expected": "source and target to be different blocks",
+        "actual": "n_add",
+        "fix_hint": "Point one end of the connection at a different block."
+      }
+    },
+    {
+      "name": "R2 accepts two different blocks",
+      "rule": "R2",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r2_ok",
+        "source": "n_ema",
+        "source_port": "value",
+        "target": "n_add",
+        "target_port": "a"
+      },
+      "verdict": null
+    },
+    {
+      "name": "R3 rejects an output port the descriptor does not publish",
+      "rule": "R3",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r3_src",
+        "source": "n_data",
+        "source_port": "not_a_port",
+        "target": "n_ema",
+        "target_port": "series"
+      },
+      "verdict": {
+        "code": "UNKNOWN_SOURCE_PORT",
+        "severity": "error",
+        "node_id": "n_data",
+        "edge_id": "e_r3_src",
+        "field": "n_data.not_a_port",
+        "message": "Unknown output port 'not_a_port' on 'n_data'. 'ohlcv_feed' publishes outputs ['frame', 'open', 'high', 'low', 'close', 'volume'].",
+        "expected": [
+          "frame",
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume"
+        ],
+        "actual": "not_a_port",
+        "fix_hint": "Re-draw the connection from a port the block publishes."
+      }
+    },
+    {
+      "name": "R3 rejects an input port the descriptor does not accept",
+      "rule": "R3",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r3_dst",
+        "source": "n_data",
+        "source_port": "close",
+        "target": "n_ema",
+        "target_port": "not_a_port"
+      },
+      "verdict": {
+        "code": "UNKNOWN_TARGET_PORT",
+        "severity": "error",
+        "node_id": "n_ema",
+        "edge_id": "e_r3_dst",
+        "field": "n_ema.not_a_port",
+        "message": "Unknown input port 'not_a_port' on 'n_ema'. 'ema' accepts inputs ['series'].",
+        "expected": [
+          "series"
+        ],
+        "actual": "not_a_port",
+        "fix_hint": "Re-draw the connection into a port the block accepts."
+      }
+    },
+    {
+      "name": "R3 accepts ports both descriptors declare",
+      "rule": "R3",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r3_ok",
+        "source": "n_data",
+        "source_port": "close",
+        "target": "n_ema",
+        "target_port": "series"
+      },
+      "verdict": null
+    },
+    {
+      "name": "R4 rejects SCALAR_SERIES feeding a PRICE_SERIES input",
+      "rule": "R4",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r4",
+        "source": "n_data",
+        "source_port": "volume",
+        "target": "n_ema",
+        "target_port": "series"
+      },
+      "verdict": {
+        "code": "TYPE_MISMATCH",
+        "severity": "error",
+        "node_id": "n_ema",
+        "edge_id": "e_r4",
+        "field": "n_ema.series",
+        "message": "SCALAR_SERIES cannot feed PRICE_SERIES. Insert a converting block or pick a different port.",
+        "expected": [
+          "SCALAR_SERIES"
+        ],
+        "actual": "PRICE_SERIES",
+        "fix_hint": "'n_data.volume' produces SCALAR_SERIES; connect it to a port that accepts that type."
+      }
+    },
+    {
+      "name": "R4 accepts OHLCV_FRAME feeding a PRICE_SERIES input",
+      "rule": "R4",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r4_ok",
+        "source": "n_data",
+        "source_port": "frame",
+        "target": "n_ema",
+        "target_port": "series"
+      },
+      "verdict": null
+    },
+    {
+      "name": "R4 accepts SCALAR_SERIES feeding a SCALAR_SERIES input",
+      "rule": "R4",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r4_ok2",
+        "source": "n_ema",
+        "source_port": "value",
+        "target": "n_add",
+        "target_port": "a"
+      },
+      "verdict": null
+    },
+    {
+      "name": "R5 rejects INDICATOR feeding ACTION",
+      "rule": "R5",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_action",
+            "block_id": "action_buy_market",
+            "category": "ACTION",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r5",
+        "source": "n_ema",
+        "source_port": "value",
+        "target": "n_action",
+        "target_port": "signal"
+      },
+      "verdict": {
+        "code": "ILLEGAL_CATEGORY_FLOW",
+        "severity": "error",
+        "node_id": "n_action",
+        "edge_id": "e_r5",
+        "field": "n_action.signal",
+        "message": "INDICATOR cannot feed ACTION: 'ema' may only feed ['FEATURE_ENGINEERING', 'INDICATOR', 'LOGIC', 'MATH'].",
+        "expected": [
+          "FEATURE_ENGINEERING",
+          "INDICATOR",
+          "LOGIC",
+          "MATH"
+        ],
+        "actual": "ACTION",
+        "fix_hint": "Insert a block of a permitted category between the two, or connect to a different block."
+      }
+    },
+    {
+      "name": "R5 rejects ML_DL feeding DATA, before R3 blames the missing port",
+      "rule": "R5",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_ml",
+            "block_id": "xgboost",
+            "category": "ML_DL",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r5_ml_data",
+        "source": "n_ml",
+        "source_port": "prediction",
+        "target": "n_data",
+        "target_port": "series"
+      },
+      "verdict": {
+        "code": "ILLEGAL_CATEGORY_FLOW",
+        "severity": "error",
+        "node_id": "n_data",
+        "edge_id": "e_r5_ml_data",
+        "field": "n_data.series",
+        "message": "ML_DL cannot feed DATA: 'xgboost' may only feed ['INDICATOR', 'LOGIC', 'MATH'].",
+        "expected": [
+          "INDICATOR",
+          "LOGIC",
+          "MATH"
+        ],
+        "actual": "DATA",
+        "fix_hint": "Insert a block of a permitted category between the two, or connect to a different block."
+      }
+    },
+    {
+      "name": "R5 accepts LOGIC feeding ACTION",
+      "rule": "R5",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_and",
+            "block_id": "and",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_action",
+            "block_id": "action_buy_market",
+            "category": "ACTION",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r5_ok",
+        "source": "n_and",
+        "source_port": "out",
+        "target": "n_action",
+        "target_port": "signal"
+      },
+      "verdict": null
+    },
+    {
+      "name": "R6 rejects an ACTION source with TERMINAL_HAS_NO_OUTPUT, not UNKNOWN_SOURCE_PORT",
+      "rule": "R6",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_action",
+            "block_id": "action_buy_market",
+            "category": "ACTION",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r6_ind",
+        "source": "n_action",
+        "source_port": "signal",
+        "target": "n_ema",
+        "target_port": "series"
+      },
+      "verdict": {
+        "code": "TERMINAL_HAS_NO_OUTPUT",
+        "severity": "error",
+        "node_id": "n_action",
+        "edge_id": "e_r6_ind",
+        "field": null,
+        "message": "'action_buy_market' is terminal: an action block ends a path and cannot feed another block.",
+        "expected": "a non-terminal source block",
+        "actual": "action_buy_market (ACTION, TERMINAL)",
+        "fix_hint": "Take the connection from the block that feeds the action instead."
+      }
+    },
+    {
+      "name": "R6 rejects ACTION feeding DATA",
+      "rule": "R6",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_action",
+            "block_id": "action_buy_market",
+            "category": "ACTION",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r6_data",
+        "source": "n_action",
+        "source_port": "out",
+        "target": "n_data",
+        "target_port": "series"
+      },
+      "verdict": {
+        "code": "TERMINAL_HAS_NO_OUTPUT",
+        "severity": "error",
+        "node_id": "n_action",
+        "edge_id": "e_r6_data",
+        "field": null,
+        "message": "'action_buy_market' is terminal: an action block ends a path and cannot feed another block.",
+        "expected": "a non-terminal source block",
+        "actual": "action_buy_market (ACTION, TERMINAL)",
+        "fix_hint": "Take the connection from the block that feeds the action instead."
+      }
+    },
+    {
+      "name": "R6 rejects ACTION feeding ML_DL",
+      "rule": "R6",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_action",
+            "block_id": "action_buy_market",
+            "category": "ACTION",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ml",
+            "block_id": "xgboost",
+            "category": "ML_DL",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r6_ml",
+        "source": "n_action",
+        "source_port": "out",
+        "target": "n_ml",
+        "target_port": "features"
+      },
+      "verdict": {
+        "code": "TERMINAL_HAS_NO_OUTPUT",
+        "severity": "error",
+        "node_id": "n_action",
+        "edge_id": "e_r6_ml",
+        "field": null,
+        "message": "'action_buy_market' is terminal: an action block ends a path and cannot feed another block.",
+        "expected": "a non-terminal source block",
+        "actual": "action_buy_market (ACTION, TERMINAL)",
+        "fix_hint": "Take the connection from the block that feeds the action instead."
+      }
+    },
+    {
+      "name": "R6 accepts a non-terminal source",
+      "rule": "R6",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_gt",
+            "block_id": "gt",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_and",
+            "block_id": "and",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r6_ok",
+        "source": "n_gt",
+        "source_port": "out",
+        "target": "n_and",
+        "target_port": "a"
+      },
+      "verdict": null
+    },
+    {
+      "name": "R7 rejects a second connection into a non-variadic input",
+      "rule": "R7",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_sma",
+            "block_id": "sma",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [
+          {
+            "id": "e_existing",
+            "source": "n_ema",
+            "source_port": "value",
+            "target": "n_add",
+            "target_port": "b"
+          }
+        ],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r7",
+        "source": "n_sma",
+        "source_port": "value",
+        "target": "n_add",
+        "target_port": "b"
+      },
+      "verdict": {
+        "code": "PORT_ALREADY_CONNECTED",
+        "severity": "error",
+        "node_id": "n_add",
+        "edge_id": "e_r7",
+        "field": "n_add.b",
+        "message": "n_add.b accepts one connection and already has one.",
+        "expected": 1,
+        "actual": 2,
+        "fix_hint": "Remove the existing connection first, or use a block whose input accepts several sources."
+      }
+    },
+    {
+      "name": "R7 accepts a second connection into a variadic input",
+      "rule": "R7",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_sma",
+            "block_id": "sma",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [
+          {
+            "id": "e_existing",
+            "source": "n_ema",
+            "source_port": "value",
+            "target": "n_add",
+            "target_port": "a"
+          }
+        ],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r7_ok",
+        "source": "n_sma",
+        "source_port": "value",
+        "target": "n_add",
+        "target_port": "a"
+      },
+      "verdict": null
+    },
+    {
+      "name": "R7 accepts re-judging the edge that already occupies the port",
+      "rule": "R7",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [
+          {
+            "id": "e_existing",
+            "source": "n_ema",
+            "source_port": "value",
+            "target": "n_add",
+            "target_port": "b"
+          }
+        ],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_existing",
+        "source": "n_ema",
+        "source_port": "value",
+        "target": "n_add",
+        "target_port": "b"
+      },
+      "verdict": null
+    },
+    {
+      "name": "R8 rejects an edge closing a two-node loop, naming the path",
+      "rule": "R8",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_mul",
+            "block_id": "multiply",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [
+          {
+            "id": "e_fwd",
+            "source": "n_add",
+            "source_port": "out",
+            "target": "n_mul",
+            "target_port": "a"
+          }
+        ],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r8",
+        "source": "n_mul",
+        "source_port": "out",
+        "target": "n_add",
+        "target_port": "b"
+      },
+      "verdict": {
+        "code": "CYCLE",
+        "severity": "error",
+        "node_id": "n_mul",
+        "edge_id": "e_r8",
+        "field": null,
+        "message": "Connection would create a loop: n_add -> n_mul -> n_add",
+        "expected": "an acyclic graph",
+        "actual": [
+          "n_add",
+          "n_mul",
+          "n_add"
+        ],
+        "fix_hint": "Remove one connection on that loop; a strategy must flow one way."
+      }
+    },
+    {
+      "name": "R8 rejects an edge closing a three-node loop, naming the path",
+      "rule": "R8",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_mul",
+            "block_id": "multiply",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_div",
+            "block_id": "divide",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [
+          {
+            "id": "e_1",
+            "source": "n_add",
+            "source_port": "out",
+            "target": "n_mul",
+            "target_port": "a"
+          },
+          {
+            "id": "e_2",
+            "source": "n_mul",
+            "source_port": "out",
+            "target": "n_div",
+            "target_port": "numerator"
+          }
+        ],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r8_3",
+        "source": "n_div",
+        "source_port": "out",
+        "target": "n_add",
+        "target_port": "b"
+      },
+      "verdict": {
+        "code": "CYCLE",
+        "severity": "error",
+        "node_id": "n_div",
+        "edge_id": "e_r8_3",
+        "field": null,
+        "message": "Connection would create a loop: n_add -> n_mul -> n_div -> n_add",
+        "expected": "an acyclic graph",
+        "actual": [
+          "n_add",
+          "n_mul",
+          "n_div",
+          "n_add"
+        ],
+        "fix_hint": "Remove one connection on that loop; a strategy must flow one way."
+      }
+    },
+    {
+      "name": "R4 is evaluated before R8: a type-mismatched edge that would also close a loop reports TYPE_MISMATCH",
+      "rule": "order",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_mul",
+            "block_id": "multiply",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_gt",
+            "block_id": "gt",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [
+          {
+            "id": "e_1",
+            "source": "n_add",
+            "source_port": "out",
+            "target": "n_mul",
+            "target_port": "a"
+          },
+          {
+            "id": "e_2",
+            "source": "n_mul",
+            "source_port": "out",
+            "target": "n_gt",
+            "target_port": "left"
+          }
+        ],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_order_r4_r8",
+        "source": "n_gt",
+        "source_port": "out",
+        "target": "n_add",
+        "target_port": "b"
+      },
+      "verdict": {
+        "code": "TYPE_MISMATCH",
+        "severity": "error",
+        "node_id": "n_add",
+        "edge_id": "e_order_r4_r8",
+        "field": "n_add.b",
+        "message": "BOOLEAN_SERIES cannot feed SCALAR_SERIES. Insert a converting block or pick a different port.",
+        "expected": [
+          "BOOLEAN_SERIES",
+          "SIGNAL"
+        ],
+        "actual": "SCALAR_SERIES",
+        "fix_hint": "'n_gt.out' produces BOOLEAN_SERIES; connect it to a port that accepts that type."
+      }
+    },
+    {
+      "name": "R8 accepts a fan-out that closes nothing",
+      "rule": "R8",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_mul",
+            "block_id": "multiply",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [
+          {
+            "id": "e_fwd",
+            "source": "n_add",
+            "source_port": "out",
+            "target": "n_mul",
+            "target_port": "a"
+          }
+        ],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_r8_ok",
+        "source": "n_add",
+        "source_port": "out",
+        "target": "n_mul",
+        "target_port": "b"
+      },
+      "verdict": null
+    },
+    {
+      "name": "the preferred DATA -> INDICATOR -> LOGIC -> ACTION path is legal, edge 1",
+      "rule": "path",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_sma",
+            "block_id": "sma",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_gt",
+            "block_id": "gt",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_and",
+            "block_id": "and",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_feat",
+            "block_id": "feat_lag",
+            "category": "FEATURE_ENGINEERING",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ml",
+            "block_id": "xgboost",
+            "category": "ML_DL",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_action",
+            "block_id": "action_buy_market",
+            "category": "ACTION",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_p1",
+        "source": "n_data",
+        "source_port": "close",
+        "target": "n_ema",
+        "target_port": "series"
+      },
+      "verdict": null
+    },
+    {
+      "name": "the preferred path is legal, edge 2 (INDICATOR -> LOGIC)",
+      "rule": "path",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_sma",
+            "block_id": "sma",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_gt",
+            "block_id": "gt",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_and",
+            "block_id": "and",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_feat",
+            "block_id": "feat_lag",
+            "category": "FEATURE_ENGINEERING",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ml",
+            "block_id": "xgboost",
+            "category": "ML_DL",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_action",
+            "block_id": "action_buy_market",
+            "category": "ACTION",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_p2",
+        "source": "n_ema",
+        "source_port": "value",
+        "target": "n_gt",
+        "target_port": "left"
+      },
+      "verdict": null
+    },
+    {
+      "name": "the preferred path is legal, edge 3 (LOGIC -> LOGIC merge)",
+      "rule": "path",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_sma",
+            "block_id": "sma",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_gt",
+            "block_id": "gt",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_and",
+            "block_id": "and",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_feat",
+            "block_id": "feat_lag",
+            "category": "FEATURE_ENGINEERING",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ml",
+            "block_id": "xgboost",
+            "category": "ML_DL",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_action",
+            "block_id": "action_buy_market",
+            "category": "ACTION",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_p3",
+        "source": "n_gt",
+        "source_port": "out",
+        "target": "n_and",
+        "target_port": "a"
+      },
+      "verdict": null
+    },
+    {
+      "name": "the preferred path is legal, edge 4 (LOGIC -> ACTION)",
+      "rule": "path",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_sma",
+            "block_id": "sma",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_gt",
+            "block_id": "gt",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_and",
+            "block_id": "and",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_feat",
+            "block_id": "feat_lag",
+            "category": "FEATURE_ENGINEERING",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ml",
+            "block_id": "xgboost",
+            "category": "ML_DL",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_action",
+            "block_id": "action_buy_market",
+            "category": "ACTION",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_p4",
+        "source": "n_and",
+        "source_port": "out",
+        "target": "n_action",
+        "target_port": "signal"
+      },
+      "verdict": null
+    },
+    {
+      "name": "DATA -> FEATURE_ENGINEERING is legal (branching, Requirement 7.4)",
+      "rule": "path",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_sma",
+            "block_id": "sma",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_gt",
+            "block_id": "gt",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_and",
+            "block_id": "and",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_feat",
+            "block_id": "feat_lag",
+            "category": "FEATURE_ENGINEERING",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ml",
+            "block_id": "xgboost",
+            "category": "ML_DL",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_action",
+            "block_id": "action_buy_market",
+            "category": "ACTION",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_p5",
+        "source": "n_data",
+        "source_port": "volume",
+        "target": "n_feat",
+        "target_port": "series"
+      },
+      "verdict": null
+    },
+    {
+      "name": "FEATURE_ENGINEERING -> ML_DL is legal",
+      "rule": "path",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_sma",
+            "block_id": "sma",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_gt",
+            "block_id": "gt",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_and",
+            "block_id": "and",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_feat",
+            "block_id": "feat_lag",
+            "category": "FEATURE_ENGINEERING",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ml",
+            "block_id": "xgboost",
+            "category": "ML_DL",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_action",
+            "block_id": "action_buy_market",
+            "category": "ACTION",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_p6",
+        "source": "n_feat",
+        "source_port": "matrix",
+        "target": "n_ml",
+        "target_port": "features"
+      },
+      "verdict": null
+    },
+    {
+      "name": "ML_DL -> MATH is legal (Requirement 7.4)",
+      "rule": "path",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_data",
+            "block_id": "ohlcv_feed",
+            "category": "DATA",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_sma",
+            "block_id": "sma",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_add",
+            "block_id": "add",
+            "category": "MATH",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_gt",
+            "block_id": "gt",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_and",
+            "block_id": "and",
+            "category": "LOGIC",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_feat",
+            "block_id": "feat_lag",
+            "category": "FEATURE_ENGINEERING",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ml",
+            "block_id": "xgboost",
+            "category": "ML_DL",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_action",
+            "block_id": "action_buy_market",
+            "category": "ACTION",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_p7",
+        "source": "n_ml",
+        "source_port": "confidence",
+        "target": "n_add",
+        "target_port": "a"
+      },
+      "verdict": null
+    },
+    {
+      "name": "an unresolved source block is reported as an unknown source port",
+      "rule": "R3",
+      "graph": {
+        "schema_version": 2,
+        "strategy_id": "fixture",
+        "version": "1",
+        "name": "connection legality fixture",
+        "nodes": [
+          {
+            "id": "n_ghostblock",
+            "block_id": "block_that_does_not_exist",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          },
+          {
+            "id": "n_ema",
+            "block_id": "ema",
+            "category": "INDICATOR",
+            "params": {},
+            "inputs": [],
+            "outputs": [],
+            "ui": {}
+          }
+        ],
+        "edges": [],
+        "metadata": {},
+        "validation_state": "UNVALIDATED"
+      },
+      "edge": {
+        "id": "e_unresolved",
+        "source": "n_ghostblock",
+        "source_port": "value",
+        "target": "n_ema",
+        "target_port": "series"
+      },
+      "verdict": {
+        "code": "UNKNOWN_SOURCE_PORT",
+        "severity": "error",
+        "node_id": "n_ghostblock",
+        "edge_id": "e_unresolved",
+        "field": "n_ghostblock.value",
+        "message": "Unknown output port 'value' on 'n_ghostblock'. The block registry publishes no descriptor for 'block_that_does_not_exist'.",
+        "expected": [],
+        "actual": "value",
+        "fix_hint": "Re-draw the connection from a port the block publishes."
+      }
+    }
+  ]
+}

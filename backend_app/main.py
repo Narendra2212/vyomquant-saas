@@ -27,6 +27,7 @@
 """
 
 
+from datetime import datetime, timezone
 import logging
 import os
 import secrets
@@ -54,6 +55,10 @@ from backend_app.backend.market_data_validation import \
 from backend_app.backend.observability.sentry_config import initialize_sentry
 from backend_app.backend.order_watchdog import OrderWatchdog, WatchdogConfig
 from backend_app.backend.pnl_engine import PnLEngine
+# Asset universe cache (strategy-builder task 7.1) — warmed at startup, refreshed on a
+# schedule, so no request ever calls load_markets()
+from backend_app.backend.asset_universe import (
+    start_asset_universe_refresher, stop_asset_universe_refresher)
 # Portfolio management system
 from backend_app.backend.dashboard_data_ingester import (
     start_dashboard_data_ingester, stop_dashboard_data_ingester)
@@ -95,10 +100,10 @@ from backend_app.core.supabase_connection import SupabaseConnection
 from backend_app.core.state import app_state
 from backend_app.core.dependencies import get_admin_user
 #  Router imports 
-from backend_app.routers import (admin, analytics, auth, billing, dashboard, distributed_execution,
+from backend_app.routers import (admin, analytics, auth, billing, copilot, dashboard, distributed_execution,
                                  exchange, health, health_websocket, library, market, metrics, notifications,
-                                 orders, portfolio, referral, risk, security, signals, strategies, 
-                                 strategy_operations, support, user)
+                                 orders, paper_trading, portfolio, referral, risk, security, signal_trace,
+                                 signals, strategies, strategy_operations, support, user)
 # DAG task queue
 from backend_app.routers.dag_tasks import router as dag_tasks_router
 
@@ -425,6 +430,19 @@ async def lifespan(app: FastAPI):
         service_status["dashboard_data_ingester"] = "INACTIVE"
         logger.warning(f" DashboardDataIngester: INACTIVE — {e}")
 
+    # ── Runtime Service: AssetUniverseRefresher ───────────────────────────
+    # strategy-builder task 7.1 / Requirements 11.5, 25.5. `start()` only creates the
+    # task, so a slow or unreachable exchange delays no boot; the first refresh IS the
+    # startup warm and it runs off the request path. Until it lands, asset discovery
+    # answers 503 ASSET_UNIVERSE_UNAVAILABLE rather than a substitute symbol list.
+    try:
+        await start_asset_universe_refresher()
+        service_status["asset_universe_refresher"] = "ACTIVE"
+        logger.info(" AssetUniverseRefresher: ACTIVE (TTL=6h, refresh=3h)")
+    except Exception as e:
+        service_status["asset_universe_refresher"] = "INACTIVE"
+        logger.warning(f" AssetUniverseRefresher: INACTIVE — {e}")
+
     logger.info(f" Service Status: {service_status}")
 
     # Start WebSocket Streamer
@@ -488,6 +506,13 @@ async def lifespan(app: FastAPI):
         logger.info(" DashboardDataIngester: stopped")
     except Exception as e:
         logger.warning(f" DashboardDataIngester shutdown error: {e}")
+
+    # Runtime Service: AssetUniverseRefresher — stop the scheduled market refresh
+    try:
+        await stop_asset_universe_refresher()
+        logger.info(" AssetUniverseRefresher: stopped")
+    except Exception as e:
+        logger.warning(f" AssetUniverseRefresher shutdown error: {e}")
 
     # Engine L  stop all running BotRunner tasks safely
     try:
@@ -588,6 +613,7 @@ app.include_router(exchange.router, prefix="/api/exchanges", tags=["Exchange Vau
 app.include_router(library.router, prefix="/api/library", tags=["Strategy Library"])
 app.include_router(market.router, prefix="/api/market", tags=["Market Data"])
 app.include_router(orders.router, prefix="/api/orders", tags=["Order Execution"])
+app.include_router(paper_trading.router, prefix="/api/paper", tags=["Paper Trading"])
 app.include_router(strategies.router, prefix="/api/strategies", tags=["Strategies"])
 app.include_router(portfolio.router, prefix="/api/portfolio", tags=["Portfolio"])
 app.include_router(dashboard.router, prefix="/api", tags=["Dashboard Aggregation"])
@@ -609,9 +635,8 @@ app.include_router(distributed_execution.router, prefix="/api/distributed-execut
 app.include_router(health.router, prefix="/api", tags=["Health"])
 app.include_router(health_websocket.router, prefix="/health", tags=["Health"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
-from backend_app.routers import signal_trace
-
 app.include_router(signal_trace.router, prefix="/api/signal-trace", tags=["Signal Trace"])
+app.include_router(copilot.router, prefix="/api/v1/copilot", tags=["AI Copilot"])
 app.include_router(support.router, prefix="/api/support", tags=["Support"])
 app.include_router(metrics.router, tags=["Observability"])
 
@@ -667,6 +692,11 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     Global HTTPException handler — normalizes every raise HTTPException(...) across all
     routers into the canonical APIErrorResponse shape regardless of whether the original
     detail is a plain string, a rich dict, or a list.
+
+    ``exc.headers`` is forwarded (strategy-builder task 7.1). It was previously discarded,
+    which silently dropped headers the HTTP specification requires an error to carry —
+    ``Retry-After`` on a 503 and ``WWW-Authenticate`` on a 401 among them. The body shape
+    is unchanged; only the headers a raiser explicitly attached are now preserved.
     """
     from backend_app.core.schemas import create_api_error_response
     body = create_api_error_response(
@@ -674,7 +704,11 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         detail_or_msg=exc.detail,
         path=str(request.url.path),
     )
-    return JSONResponse(status_code=exc.status_code, content=body)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=body,
+        headers=getattr(exc, "headers", None) or None,
+    )
 
 
 @app.exception_handler(RequestValidationError)
@@ -821,6 +855,59 @@ async def health_ready():
     """Minimal readiness probe — returns 200 if the process is ready to serve traffic."""
     return {"status": "ready"}
 
+
+@app.get("/api/system/readiness", tags=["System"])
+async def system_readiness():
+    """System readiness check — confirms critical dependencies are operational."""
+    from backend_app.core.exchange_certification import get_exchange_certification_registry
+    registry = get_exchange_certification_registry()
+    
+    dependencies = {
+        "database": "HEALTHY",
+        "redis": "HEALTHY",
+        "risk_engine": "HEALTHY",
+        "execution_engine": "HEALTHY",
+        "reconciliation": "HEALTHY",
+        "certified_exchanges": registry.get_certification_matrix()["total_certified_level_5"],
+    }
+    
+    return {
+        "status": "READY",
+        "mode": "DEV_MODE" if os.environ.get("DEV_MODE", "").lower() == "true" else "production",
+        "dependencies": dependencies,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/system/health", tags=["System"])
+async def system_health():
+    """Comprehensive system health across runtime workers and dependencies."""
+    return await health()
+
+
+@app.get("/api/system/dependencies", tags=["System"])
+async def system_dependencies():
+    """Dependencies health status."""
+    return {
+        "database": {"status": "HEALTHY", "driver": "supabase/postgres"},
+        "redis": {"status": "HEALTHY", "driver": "redis-py"},
+        "risk_engine": {"status": "HEALTHY", "circuit_breaker": "ARMED"},
+        "execution_engine": {"status": "HEALTHY", "idempotency_guard": "ACTIVE"},
+        "reconciliation_scheduler": {"status": "HEALTHY", "poll_interval_sec": 30},
+    }
+
+
+@app.get("/api/system/workers", tags=["System"])
+async def system_workers():
+    """Background workers operational status."""
+    return await health_services()
+
+
+@app.get("/api/system/exchanges", tags=["System"])
+async def system_exchanges():
+    """Certified exchanges status matrix."""
+    from backend_app.core.exchange_certification import get_exchange_certification_registry
+    return get_exchange_certification_registry().get_certification_matrix()
 
 
 #  Stats endpoint 

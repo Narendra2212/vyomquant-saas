@@ -93,7 +93,28 @@ export const exchangeApi = {
    * @returns {Promise<{status: string, message: string}>}
    */
   delete: (exchangeId) => del(`/api/exchanges/${exchangeId}`),
+
+  /**
+   * Reconnect an existing exchange connection
+   * @param {string} exchangeId
+   * @returns {Promise<Object>}
+   */
+  reconnect: (exchangeId) => post(`/api/exchanges/connections/${exchangeId}/reconnect`),
+
+  /**
+   * Get dynamic connection schema
+   * @param {string} exchangeId
+   * @returns {Promise<Object>}
+   */
+  getConnectionSchema: (exchangeId) => get(`/api/exchanges/${exchangeId}/connection-schema`),
+
+  /**
+   * List connections alias
+   * @returns {Promise<ExchangeConnection[]>}
+   */
+  listConnections: () => get('/api/exchanges/connections'),
 };
 
 // Legacy compatibility
 export const exchangeEndpoints = exchangeApi;
+

@@ -117,6 +117,24 @@ def mock_signal_service():
 
     service.get_signal_timeline = AsyncMock(side_effect=mock_get_signal_timeline)
 
+    # GET /api/signal-trace/signals/{id} routes through get_signal_trace as of task 13.2
+    # (the trace-detail view: DAG node trace, ML inference, risk validation, execution
+    # outcome). It is wired to the REAL builder rather than to a canned dict, so the
+    # ownership decision this test class is about is still made by production code: the
+    # builder's only owner-scoped read is service.get_signal above, and it returns None -
+    # which the router renders as 404 - for every user but the owner.
+    #
+    # No database: _get_supabase reports None, so the builder degrades (no canonical
+    # lifecycle column, no transition history) instead of reaching for one.
+    from backend_app.backend.signal_service import build_signal_trace_detail
+
+    service._get_supabase = AsyncMock(return_value=None)
+
+    async def mock_get_signal_trace(user, signal_id):
+        return await build_signal_trace_detail(service, user, signal_id)
+
+    service.get_signal_trace = AsyncMock(side_effect=mock_get_signal_trace)
+
     return service
 
 

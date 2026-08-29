@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { Routes, Route, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import * as Sentry from "@sentry/react";
-import { CopilotProvider } from './contexts/CopilotContext';
 import { AppStateProvider } from './AppState';
 import wsClient from './websocketClient';
 import { Lock } from "lucide-react";
@@ -9,10 +8,8 @@ import { supabase } from './supabase';
 import ErrorBoundary from './components/ErrorBoundary';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
-import SignalTraceVisualization from './components/SignalTraceVisualization';
 import SupportCenter from './components/SupportCenter';
 import NotificationCenter from './components/NotificationCenter';
-import CopilotChat from './components/CopilotChat';
 import DesktopOnlyOverlay from './components/DesktopOnlyOverlay';
 import {
   C, Inp, ToastContainer,
@@ -255,7 +252,6 @@ function AppShell() {
           <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
             <Outlet />
           </div>
-          <CopilotChat />
         </div>
       </div>
     </DesktopOnlyOverlay>
@@ -267,65 +263,65 @@ export default function AppWrapper() {
   return (
     <ErrorBoundary>
       <AppStateProvider>
-        <CopilotProvider>
-          <PasswordRecoveryHandler />
-          <Routes>
-            {/* Public landing */}
-            <Route path="/" element={<Suspense fallback={PAGE_FALLBACK}><LandingPage /></Suspense>} />
-            <Route path="/download" element={<Suspense fallback={PAGE_FALLBACK}><DownloadPage /></Suspense>} />
-            <Route path="/admin/waitlist" element={<Suspense fallback={PAGE_FALLBACK}><AdminDashboard /></Suspense>} />
+        <PasswordRecoveryHandler />
+        <Routes>
+          {/* Public landing */}
+          <Route path="/" element={<Suspense fallback={PAGE_FALLBACK}><LandingPage /></Suspense>} />
+          <Route path="/download" element={<Suspense fallback={PAGE_FALLBACK}><DownloadPage /></Suspense>} />
+          <Route path="/admin/waitlist" element={<Suspense fallback={PAGE_FALLBACK}><AdminDashboard /></Suspense>} />
 
-            {/* Legal */}
-            <Route path="/legal" element={<Suspense fallback={PAGE_FALLBACK}><LegalPage /></Suspense>} />
-            <Route path="/legal/privacy" element={<Suspense fallback={PAGE_FALLBACK}><LegalPageRoute type="privacy" /></Suspense>} />
-            <Route path="/legal/terms" element={<Suspense fallback={PAGE_FALLBACK}><LegalPageRoute type="terms" /></Suspense>} />
-            <Route path="/legal/risk" element={<Suspense fallback={PAGE_FALLBACK}><LegalPageRoute type="risk" /></Suspense>} />
-            <Route path="/legal/refund" element={<Suspense fallback={PAGE_FALLBACK}><LegalPageRoute type="refund" /></Suspense>} />
+          {/* Legal */}
+          <Route path="/legal" element={<Suspense fallback={PAGE_FALLBACK}><LegalPage /></Suspense>} />
+          <Route path="/legal/privacy" element={<Suspense fallback={PAGE_FALLBACK}><LegalPageRoute type="privacy" /></Suspense>} />
+          <Route path="/legal/terms" element={<Suspense fallback={PAGE_FALLBACK}><LegalPageRoute type="terms" /></Suspense>} />
+          <Route path="/legal/risk" element={<Suspense fallback={PAGE_FALLBACK}><LegalPageRoute type="risk" /></Suspense>} />
+          <Route path="/legal/refund" element={<Suspense fallback={PAGE_FALLBACK}><LegalPageRoute type="refund" /></Suspense>} />
 
-            {/* Marketplace accessible publicly */}
-            <Route path="/marketplace" element={<Suspense fallback={PAGE_FALLBACK}><StrategyMarketplace /></Suspense>} />
+          {/* Marketplace accessible publicly */}
+          <Route path="/marketplace" element={<Suspense fallback={PAGE_FALLBACK}><StrategyMarketplace /></Suspense>} />
 
-            {/* Guest-only: redirect to /app/dashboard if already authenticated */}
-            <Route element={<GuestGuard />}>
-              <Route path="/signin" element={<Suspense fallback={PAGE_FALLBACK}><AuthPage mode="signin" /></Suspense>} />
-              <Route path="/signup" element={<Suspense fallback={PAGE_FALLBACK}><AuthPage mode="signup" /></Suspense>} />
+          {/* Guest-only: redirect to /app/dashboard if already authenticated */}
+          <Route element={<GuestGuard />}>
+            <Route path="/signin" element={<Suspense fallback={PAGE_FALLBACK}><AuthPage mode="signin" /></Suspense>} />
+            <Route path="/signup" element={<Suspense fallback={PAGE_FALLBACK}><AuthPage mode="signup" /></Suspense>} />
+          </Route>
+
+          {/* Password reset / onboarding (auth-agnostic) */}
+          <Route path="/reset-password" element={<UpdatePasswordPage />} />
+          <Route path="/2fa" element={<Suspense fallback={PAGE_FALLBACK}><TwoFA /></Suspense>} />
+          <Route path="/wizard" element={<Suspense fallback={PAGE_FALLBACK}><Wizard /></Suspense>} />
+
+          {/* Authenticated app shell */}
+          <Route element={<AuthGuard />}>
+            <Route element={<LoadingProvider><AppShell /></LoadingProvider>}>
+              <Route path="/app" element={<Navigate to="/app/dashboard" replace />} />
+              <Route path="/app/dashboard" element={<Suspense fallback={PAGE_FALLBACK}><Dashboard /></Suspense>} />
+              <Route path="/app/live-trading" element={<Suspense fallback={PAGE_FALLBACK}><Dashboard /></Suspense>} />
+              <Route path="/app/strategies" element={<Suspense fallback={PAGE_FALLBACK}><Strategies /></Suspense>} />
+              <Route path="/app/strategies/:strategyId" element={<Suspense fallback={PAGE_FALLBACK}><StrategyDetail /></Suspense>} />
+              <Route path="/app/signal-trace" element={<Suspense fallback={PAGE_FALLBACK}><SignalTrace /></Suspense>} />
+              <Route path="/app/signal-trace/:signalId" element={<Suspense fallback={PAGE_FALLBACK}><SignalTrace /></Suspense>} />
+              <Route path="/app/builder" element={<Suspense fallback={PAGE_FALLBACK}><StrategyBuilder /></Suspense>} />
+              <Route path="/app/backtest" element={<Suspense fallback={PAGE_FALLBACK}><Backtester /></Suspense>} />
+              <Route path="/app/backtester" element={<Suspense fallback={PAGE_FALLBACK}><Backtester /></Suspense>} />
+              <Route path="/app/marketplace" element={<Suspense fallback={PAGE_FALLBACK}><StrategyMarketplace /></Suspense>} />
+              <Route path="/app/exchange" element={<Suspense fallback={PAGE_FALLBACK}><ExchangeManager /></Suspense>} />
+              <Route path="/app/risk" element={<Suspense fallback={PAGE_FALLBACK}><RiskSettings /></Suspense>} />
+              <Route path="/app/billing" element={<Suspense fallback={PAGE_FALLBACK}><Billing /></Suspense>} />
+              <Route path="/app/profile" element={<Suspense fallback={PAGE_FALLBACK}><Profile /></Suspense>} />
+              <Route path="/app/security-logs" element={<Suspense fallback={PAGE_FALLBACK}><SecurityLogs /></Suspense>} />
+              <Route path="/app/portfolio" element={<Suspense fallback={PAGE_FALLBACK}><Portfolio /></Suspense>} />
+              <Route path="/app/trades" element={<Suspense fallback={PAGE_FALLBACK}><TradeHistory /></Suspense>} />
+              <Route path="/app/2fa" element={<Suspense fallback={PAGE_FALLBACK}><TwoFA /></Suspense>} />
+              <Route path="/app/support" element={<SupportCenter />} />
+              <Route path="/app/notifications" element={<NotificationCenter />} />
+              <Route path="/app/*" element={<Navigate to="/app/dashboard" replace />} />
             </Route>
+          </Route>
 
-            {/* Password reset / onboarding (auth-agnostic) */}
-            <Route path="/reset-password" element={<UpdatePasswordPage />} />
-            <Route path="/2fa" element={<Suspense fallback={PAGE_FALLBACK}><TwoFA /></Suspense>} />
-            <Route path="/wizard" element={<Suspense fallback={PAGE_FALLBACK}><Wizard /></Suspense>} />
-
-            {/* Authenticated app shell */}
-            <Route element={<AuthGuard />}>
-              <Route element={<LoadingProvider><AppShell /></LoadingProvider>}>
-                <Route path="/app" element={<Navigate to="/app/dashboard" replace />} />
-                <Route path="/app/dashboard" element={<Suspense fallback={PAGE_FALLBACK}><Dashboard /></Suspense>} />
-                <Route path="/app/live-trading" element={<Suspense fallback={PAGE_FALLBACK}><Dashboard /></Suspense>} />
-                <Route path="/app/strategies" element={<Suspense fallback={PAGE_FALLBACK}><Strategies /></Suspense>} />
-                <Route path="/app/strategies/:strategyId" element={<Suspense fallback={PAGE_FALLBACK}><StrategyDetail /></Suspense>} />
-                <Route path="/app/signal-trace" element={<Suspense fallback={PAGE_FALLBACK}><SignalTrace /></Suspense>} />
-                <Route path="/app/builder" element={<Suspense fallback={PAGE_FALLBACK}><StrategyBuilder /></Suspense>} />
-                <Route path="/app/backtest" element={<Suspense fallback={PAGE_FALLBACK}><Backtester /></Suspense>} />
-                <Route path="/app/marketplace" element={<Suspense fallback={PAGE_FALLBACK}><StrategyMarketplace /></Suspense>} />
-                <Route path="/app/exchange" element={<Suspense fallback={PAGE_FALLBACK}><ExchangeManager /></Suspense>} />
-                <Route path="/app/risk" element={<Suspense fallback={PAGE_FALLBACK}><RiskSettings /></Suspense>} />
-                <Route path="/app/billing" element={<Suspense fallback={PAGE_FALLBACK}><Billing /></Suspense>} />
-                <Route path="/app/profile" element={<Suspense fallback={PAGE_FALLBACK}><Profile /></Suspense>} />
-                <Route path="/app/security-logs" element={<Suspense fallback={PAGE_FALLBACK}><SecurityLogs /></Suspense>} />
-                <Route path="/app/portfolio" element={<Suspense fallback={PAGE_FALLBACK}><Portfolio /></Suspense>} />
-                <Route path="/app/trades" element={<Suspense fallback={PAGE_FALLBACK}><TradeHistory /></Suspense>} />
-                <Route path="/app/2fa" element={<Suspense fallback={PAGE_FALLBACK}><TwoFA /></Suspense>} />
-                <Route path="/app/support" element={<SupportCenter />} />
-                <Route path="/app/notifications" element={<NotificationCenter />} />
-                <Route path="/app/*" element={<Navigate to="/app/dashboard" replace />} />
-              </Route>
-            </Route>
-
-            {/* Global catch-all */}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </CopilotProvider>
+          {/* Global catch-all */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </AppStateProvider>
     </ErrorBoundary>
   );

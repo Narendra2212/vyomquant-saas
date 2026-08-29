@@ -74,10 +74,39 @@ async def update_profile(
         raise HTTPException(400, "No valid profile fields provided to update.")
 
     if not supabase:
+        try:
+            from backend_app.core.notification_dispatcher import dispatch_user_notification
+            await dispatch_user_notification(
+                user_id=user["id"],
+                event_type="profile_updated",
+                category="security",
+                severity="info",
+                title="Profile Information Updated",
+                message=f"Profile details updated ({', '.join(sorted(clean.keys()))}).",
+                metadata={"updated_fields": list(clean.keys()), "idempotency_key": f"profile_update:{user['id']}"},
+            )
+        except Exception:
+            pass
         return {"status": "success", "updated_fields": list(clean.keys())}
+
     res = supabase.table("profiles").update(clean).eq("id", user["id"]).execute()
     if inspect.isawaitable(res):
         await res
+
+    try:
+        from backend_app.core.notification_dispatcher import dispatch_user_notification
+        await dispatch_user_notification(
+            user_id=user["id"],
+            event_type="profile_updated",
+            category="security",
+            severity="info",
+            title="Profile Information Updated",
+            message=f"Profile details updated ({', '.join(sorted(clean.keys()))}).",
+            metadata={"updated_fields": list(clean.keys()), "idempotency_key": f"profile_update:{user['id']}"},
+        )
+    except Exception:
+        pass
+
     return {"status": "ok"}
 
 

@@ -32,6 +32,7 @@ logger = logging.getLogger("DashboardRouter")
 @limiter.limit("100/minute")
 async def get_dashboard(
     request: Request,
+    environment: str = Query("live", regex="^(live|paper)$", description="Trading environment (live or paper)"),
     equity_days: int = Query(30, ge=1, le=365, description="Number of days for equity curve data"),
     user: dict = Depends(get_current_user)
 ):
@@ -41,19 +42,25 @@ async def get_dashboard(
     This is the SINGLE SOURCE OF TRUTH for all Dashboard data.
     Replaces multiple frontend API calls with one aggregated request.
     
+    Supports strict environment isolation:
+    - environment=live: Aggregates real exchange balances, positions, executions, and QuestDB telemetry.
+    - environment=paper: Aggregates deterministic virtual paper account, paper positions, and paper trades.
+    
     Returns comprehensive dashboard data including:
-    - overview: Portfolio summary (total_value, today_pnl, today_return_pct, unrealized_pnl, available_balance)
+    - environment: Current environment ('live' or 'paper')
+    - overview: Normalized portfolio summary (total_value, total_equity, available_balance, free_balance, used_balance, today_pnl, today_realized_pnl, today_return_pct, unrealized_pnl, cumulative_pnl)
+    - positions: Normalized open positions array
+    - executions: Normalized recent trade executions / fills
     - subscription: Current subscription tier and billing status
     - usage: Resource usage metrics (strategies, bots, ML training)
-    - bots: Bot status (running, stopped, total)
     - strategies: Strategy information with calculated metrics
     - marketplace: Marketplace data and user publications
-    - risk: Risk management metrics and circuit breaker status
+    - risk: Risk management metrics (risk_score, risk_level, daily loss, drawdown, circuit breaker)
     - notifications: Notification counts and recent notifications
     - referrals: Referral program data and earnings
-    - health: System health metrics (latency, sync status)
+    - health: System health metrics (real measured latency or null, sync status)
     - exchange: Exchange connection status and metrics
-    - recent_activity: Recent signals and trading insights
+    - recent_activity: Recent signals, insights, and executions
     - equity_curve: Historical equity performance data
     
     All calculations are performed in the backend. Frontend only renders data.
@@ -61,8 +68,9 @@ async def get_dashboard(
     Rate limited: 100 requests per minute per user.
     """
     try:
+        norm_env = environment.lower() if environment in ("live", "paper") else "live"
         # Check fast Redis cache (10 second TTL for instant sub-50ms repeat response)
-        cache_key = f"dashboard:{user['id']}:{equity_days}"
+        cache_key = f"dashboard:{user['id']}:{norm_env}:{equity_days}"
         try:
             from backend_app.core.cache.redis_manager import redis_manager
             cached = await redis_manager.get(cache_key)
@@ -74,10 +82,11 @@ async def get_dashboard(
 
         dashboard_service = await get_dashboard_service()
         
-        # Get complete dashboard data from aggregation service
+        # Get complete dashboard data from aggregation service with explicit environment
         dashboard_data = await dashboard_service.get_dashboard_data(
             user=user,
-            equity_days=equity_days
+            equity_days=equity_days,
+            environment=norm_env
         )
         
         # Write to fast cache
@@ -88,7 +97,7 @@ async def get_dashboard(
         except Exception as cache_write_err:
             logger.debug(f"Dashboard cache write error: {cache_write_err}")
 
-        logger.info(f"Dashboard data fetched successfully for user {user['id']}")
+        logger.info(f"Dashboard data fetched successfully for user {user['id']} in {norm_env} mode")
         return dashboard_data
         
     except HTTPException:
