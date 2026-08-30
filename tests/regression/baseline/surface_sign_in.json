@@ -1,0 +1,17 @@
+{
+  "api_call_count": 0,
+  "api_calls": [],
+  "capture": "surface_sign_in",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/AuthPage.jsx"
+  ],
+  "supabase_auth_calls": [
+    "resetPasswordForEmail",
+    "signInWithOAuth",
+    "signInWithPassword",
+    "signUp"
+  ],
+  "surface": "sign_in",
+  "unresolved_usages": []
+}

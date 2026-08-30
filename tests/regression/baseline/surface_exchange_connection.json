@@ -1,0 +1,362 @@
+{
+  "api_call_count": 8,
+  "api_calls": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.delete('/{exchange_id}')"
+          ],
+          "handler": "delete_connection",
+          "module": "backend_app.routers.exchange",
+          "parameters": {
+            "exchange_id": {
+              "annotation": "str"
+            },
+            "redis_manager": {
+              "annotation": "_empty",
+              "depends_on": "get_redis_manager"
+            },
+            "supabase": {
+              "annotation": "SyncClient",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "message": "str",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/exchanges/{exchange_id}"
+        }
+      ],
+      "method": "DELETE",
+      "path": "/api/exchanges/{exchangeId}",
+      "path_template": "/api/exchanges/{exchangeId}",
+      "resolved": true,
+      "via": "api.exchange.delete"
+    },
+    {
+      "handler_count": 2,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('')",
+            "router.get('/')"
+          ],
+          "handler": "list_exchanges",
+          "module": "backend_app.routers.exchange",
+          "parameters": {
+            "redis_manager": {
+              "annotation": "_empty",
+              "depends_on": "get_redis_manager"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "vault": {
+              "annotation": "_empty",
+              "depends_on": "get_vault"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            "list"
+          ],
+          "route_path": "/api/exchanges"
+        },
+        {
+          "decorators": [
+            "router.get('')",
+            "router.get('/')"
+          ],
+          "handler": "list_exchanges",
+          "module": "backend_app.routers.exchange",
+          "parameters": {
+            "redis_manager": {
+              "annotation": "_empty",
+              "depends_on": "get_redis_manager"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "vault": {
+              "annotation": "_empty",
+              "depends_on": "get_vault"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            "list"
+          ],
+          "route_path": "/api/exchanges/"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/exchanges/",
+      "path_template": "/api/exchanges/",
+      "resolved": true,
+      "via": "api.exchange.list"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/schema/{exchange_id}')",
+            "router.get('/{exchange_id}/connection-schema')"
+          ],
+          "handler": "get_exchange_auth_schema",
+          "module": "backend_app.routers.exchange",
+          "parameters": {
+            "exchange_id": {
+              "annotation": "str"
+            },
+            "redis_manager": {
+              "annotation": "_empty",
+              "depends_on": "get_redis_manager"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            "computed"
+          ],
+          "route_path": "/api/exchanges/schema/{exchange_id}"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/exchanges/schema/{exchangeId}",
+      "path_template": "/api/exchanges/schema/{exchangeId}",
+      "resolved": true,
+      "via": "api.exchange.getAuthSchema"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/supported')",
+            "limiter.limit('60/minute')"
+          ],
+          "handler": "get_supported_exchanges",
+          "module": "backend_app.routers.exchange",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            "computed",
+            "computed"
+          ],
+          "route_path": "/api/exchanges/supported"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/exchanges/supported",
+      "path_template": "/api/exchanges/supported",
+      "resolved": true,
+      "via": "api.exchange.getSupported"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/connections/{exchange_id}/reconnect')"
+          ],
+          "handler": "reconnect_connection_by_id",
+          "module": "backend_app.routers.exchange",
+          "parameters": {
+            "exchange_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "vault": {
+              "annotation": "_empty",
+              "depends_on": "get_vault"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "details": "computed",
+              "exchange_id": "computed",
+              "reconnected_at": "str",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/exchanges/connections/{exchange_id}/reconnect"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/exchanges/connections/{exchangeId}/reconnect",
+      "path_template": "/api/exchanges/connections/{exchangeId}/reconnect",
+      "resolved": true,
+      "via": "api.exchange.reconnect"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/keys')"
+          ],
+          "handler": "store_keys",
+          "module": "backend_app.routers.exchange",
+          "parameters": {
+            "body": {
+              "annotation": "ExchangeKeysRequest"
+            },
+            "redis_manager": {
+              "annotation": "_empty",
+              "depends_on": "get_redis_manager"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "vault": {
+              "annotation": "_empty",
+              "depends_on": "get_vault"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "message": "str",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/exchanges/keys"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/exchanges/keys",
+      "path_template": "/api/exchanges/keys",
+      "resolved": true,
+      "via": "api.exchange.saveKeys"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/test')"
+          ],
+          "handler": "test_connection",
+          "module": "backend_app.routers.exchange",
+          "parameters": {
+            "body": {
+              "annotation": "ExchangeKeysRequest"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "clock_sync": "computed",
+              "exchange": "str",
+              "exchange_status": "computed",
+              "message": "str",
+              "permissions": "computed",
+              "status": "str",
+              "usdt_balance": "float"
+            }
+          ],
+          "route_path": "/api/exchanges/test"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/exchanges/test",
+      "path_template": "/api/exchanges/test",
+      "resolved": true,
+      "via": "api.exchange.testConnection"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/test-stored')"
+          ],
+          "handler": "test_stored_connection",
+          "module": "backend_app.routers.exchange",
+          "parameters": {
+            "body": {
+              "annotation": "TestConnectionRequest"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "vault": {
+              "annotation": "_empty",
+              "depends_on": "get_vault"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "exchange": "str",
+              "exchange_status": "computed",
+              "message": "str",
+              "status": "str",
+              "usdt_balance": "float"
+            }
+          ],
+          "route_path": "/api/exchanges/test-stored"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/exchanges/test-stored",
+      "path_template": "/api/exchanges/test-stored",
+      "resolved": true,
+      "via": "api.exchange.testStoredConnection"
+    }
+  ],
+  "capture": "surface_exchange_connection",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/ExchangeManager.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "exchange_connection",
+  "unresolved_usages": []
+}

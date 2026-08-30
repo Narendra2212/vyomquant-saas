@@ -1,0 +1,56 @@
+{
+  "api_call_count": 1,
+  "api_calls": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/security/logs')"
+          ],
+          "handler": "get_security_logs",
+          "module": "backend_app.routers.user",
+          "parameters": {
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "supabase": {
+              "annotation": "SyncClient",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 503
+            }
+          ],
+          "returns": [
+            "computed",
+            "list",
+            "computed"
+          ],
+          "route_path": "/api/security/logs"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/security/logs",
+      "path_template": "/api/security/logs",
+      "resolved": true,
+      "via": "api.user.getSecurityLogs"
+    }
+  ],
+  "capture": "surface_security_logs",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/SecurityLogs.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "security_logs",
+  "unresolved_usages": []
+}

@@ -1,0 +1,46 @@
+{
+  "capture": "billing_portal",
+  "frontend_bindings": {
+    "openPortal": [
+      {
+        "method": "POST",
+        "path_template": "/api/billing/portal"
+      }
+    ]
+  },
+  "requirement": "25.2 \u2014 portal",
+  "routes": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/portal')",
+            "limiter.limit('5/minute')"
+          ],
+          "handler": "create_portal_session",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "url": "computed"
+            }
+          ],
+          "route_path": "/api/billing/portal"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/billing/portal",
+      "resolved": true
+    }
+  ]
+}

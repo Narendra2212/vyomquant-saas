@@ -1,0 +1,345 @@
+{
+  "api_call_count": 6,
+  "api_calls": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/faqs')"
+          ],
+          "handler": "get_faqs",
+          "module": "backend_app.routers.support",
+          "parameters": {
+            "category": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "search": {
+              "annotation": "Optional",
+              "has_default": true
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "faqs": "computed",
+              "total": "int"
+            }
+          ],
+          "route_path": "/api/support/faqs"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/support/faqs{expr}",
+      "path_template": "/api/support/faqs{expr}",
+      "resolved": true,
+      "via": "api.support.getFaqs"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/tickets/{ticket_id}')"
+          ],
+          "handler": "get_ticket",
+          "module": "backend_app.routers.support",
+          "parameters": {
+            "include_comments": {
+              "annotation": "bool",
+              "has_default": true
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "ticket_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 404
+            }
+          ],
+          "returns": [
+            {
+              "attachment": "computed",
+              "category": "computed",
+              "comment_count": "int",
+              "comments": {
+                "one_of": [
+                  "computed",
+                  "list"
+                ]
+              },
+              "created_at": "computed",
+              "description": "computed",
+              "id": "computed",
+              "order_id": "computed",
+              "priority": "computed",
+              "related_feature": "computed",
+              "resolved_at": "computed",
+              "status": "computed",
+              "strategy_id": "computed",
+              "subject": "computed",
+              "updated_at": "computed"
+            }
+          ],
+          "route_path": "/api/support/tickets/{ticket_id}"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/support/tickets/{ticketId}",
+      "path_template": "/api/support/tickets/{ticketId}",
+      "resolved": true,
+      "via": "api.support.getTicket"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/tickets')"
+          ],
+          "handler": "get_tickets",
+          "module": "backend_app.routers.support",
+          "parameters": {
+            "category": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "offset": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "priority": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "search": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "status": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            {
+              "count": "int",
+              "limit": "computed",
+              "offset": "computed",
+              "tickets": "computed",
+              "total": "int"
+            }
+          ],
+          "route_path": "/api/support/tickets"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/support/tickets{expr}",
+      "path_template": "/api/support/tickets{expr}",
+      "resolved": true,
+      "via": "api.support.getTickets"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/tickets')",
+            "limiter.limit('10/minute')"
+          ],
+          "handler": "create_ticket",
+          "module": "backend_app.routers.support",
+          "parameters": {
+            "body": {
+              "annotation": "CreateTicketRequest"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "ws_mgr": {
+              "annotation": "Any",
+              "depends_on": "get_ws_manager"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "created_at": "computed",
+              "priority": "computed",
+              "status": "str",
+              "subject": "computed",
+              "ticket_id": "computed"
+            }
+          ],
+          "route_path": "/api/support/tickets"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/support/tickets",
+      "path_template": "/api/support/tickets",
+      "resolved": true,
+      "via": "api.support.createTicket"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/tickets/{ticket_id}/comments')",
+            "limiter.limit('30/minute')"
+          ],
+          "handler": "add_comment",
+          "module": "backend_app.routers.support",
+          "parameters": {
+            "body": {
+              "annotation": "AddCommentRequest"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "ticket_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "ws_mgr": {
+              "annotation": "Any",
+              "depends_on": "get_ws_manager"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 400
+            },
+            {
+              "detail_type": "str",
+              "status_code": 404
+            }
+          ],
+          "returns": [
+            {
+              "comment_id": "computed",
+              "created_at": "computed",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/support/tickets/{ticket_id}/comments"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/support/tickets/{ticketId}/comments",
+      "path_template": "/api/support/tickets/{ticketId}/comments",
+      "resolved": true,
+      "via": "api.support.addComment"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.put('/tickets/{ticket_id}')"
+          ],
+          "handler": "update_ticket",
+          "module": "backend_app.routers.support",
+          "parameters": {
+            "body": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "status": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "ticket_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "ws_mgr": {
+              "annotation": "Any",
+              "depends_on": "get_ws_manager"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 404
+            }
+          ],
+          "returns": [
+            {
+              "new_status": "computed",
+              "status": "str",
+              "ticket_id": "computed",
+              "updated_at": "computed"
+            }
+          ],
+          "route_path": "/api/support/tickets/{ticket_id}"
+        }
+      ],
+      "method": "PUT",
+      "path": "/api/support/tickets/{ticketId}",
+      "path_template": "/api/support/tickets/{ticketId}",
+      "resolved": true,
+      "via": "api.support.updateTicket"
+    }
+  ],
+  "capture": "surface_support",
+  "requirement": "25.4",
+  "source_files": [
+    "components/SupportCenter.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "support",
+  "unresolved_usages": []
+}

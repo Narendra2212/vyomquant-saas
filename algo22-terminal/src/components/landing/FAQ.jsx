@@ -4,7 +4,7 @@ import { Accordion } from '../ui/Accordion'
 const platformFaqs = [
   { question: 'Do I need coding experience to use VyomQuant?', answer: 'No. VyomQuant is built as a visual node interface. All strategy logic is constructed via drag-and-drop DAG. Programming knowledge is not required.' },
   { question: 'What is the difference between Paper Trading and Live Trading?', answer: 'Paper trading executes against live market data with simulated capital. Live trading routes orders to connected exchanges via your API credentials. Paper is the default deployment mode.' },
-  { question: 'Which exchanges are supported?', answer: '50+ exchanges via CCXT.pro integration, including Binance, Bybit, OKX, Kraken, and Coinbase. See documentation for the full list.' },
+  { question: 'Which exchanges are supported?', answer: '50+ exchanges via CCXT.pro integration, including Binance, Bybit, OKX, Kraken, and Coinbase. Exchange connectivity can be configured and tested directly in the Exchange Manager.' },
   { question: 'Can I use machine learning models without knowing Python?', answer: 'Yes. The XGBoost node accepts parameter configuration through the visual interface. Model training runs on managed infrastructure. No local Python environment required.' },
 ]
 

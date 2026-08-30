@@ -1,4 +1,4 @@
-﻿/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    VyomQuant â€” Unified Stylesheet (Tailwind CSS v4)
    Merged from: existing App.css + ZIP index.css design tokens
    â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
@@ -215,10 +215,86 @@ html {
   overflow: hidden;
 }
 
-/* â”€â”€ Scrollbar â”€â”€ */
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #080A0E;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1E2530;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2A3441;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #1E2530 #080A0E;
+}
+
 @utility scrollbar-hide {
   -ms-overflow-style: none;
   scrollbar-width: none;
   &::-webkit-scrollbar { display: none; }
 }
 
+/* ── Quantitative Terminal Utilities ── */
+@utility kpi-card {
+  background-color: #0C1017;
+  border: 1px solid #1A2332;
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  transition: all 0.2s ease;
+  &:hover {
+    border-color: #243247;
+    background-color: #0F151F;
+  }
+}
+
+@utility table-container {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #1A2332;
+  border-radius: 0.75rem;
+  background-color: #0C1017;
+}
+
+@utility input-institutional {
+  background-color: #0F151F;
+  border: 1px solid #1A2332;
+  color: #F0F4F8;
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  font-size: 0.875rem;
+  border-radius: 0.5rem;
+  padding: 0.625rem 0.875rem;
+  transition: all 0.15s ease;
+  &:focus {
+    outline: none;
+    border-color: #00D4FF;
+    box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.15);
+  }
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+@utility badge-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}

@@ -3,21 +3,87 @@ import { Link } from 'react-router-dom'
 import { Check, Loader2 } from 'lucide-react'
 import { api } from '../../api'
 
+const FALLBACK_PLANS = [
+  {
+    id: 'free',
+    name: 'Free / Sandbox',
+    description: 'Essential sandbox for systematic strategy design and forward paper testing.',
+    usd: 0,
+    inr: 0,
+    recommended: false,
+    features: [
+      'Visual DAG Strategy Builder',
+      'VectorBT Backtesting Engine',
+      'Real-Time Paper Trading Mode',
+      '1 Active Strategy Bot',
+      'Standard Market Data Feeds',
+    ]
+  },
+  {
+    id: 'starter',
+    name: 'Trader',
+    description: 'For active systematic traders executing strategies on connected exchanges.',
+    usd: 29,
+    inr: 2400,
+    recommended: false,
+    features: [
+      'Everything in Free',
+      '5 Active Strategy Bots',
+      'Tick-level Historical Data',
+      'CCXT.pro Multi-Exchange Routing',
+      'Account Drawdown Circuit Breakers',
+    ]
+  },
+  {
+    id: 'pro',
+    name: 'Pro Quant',
+    description: 'High-capacity execution engine with machine learning models and priority routing.',
+    usd: 79,
+    inr: 6500,
+    recommended: true,
+    features: [
+      'Everything in Trader',
+      '15 Active Strategy Bots',
+      'XGBoost ML Node Training',
+      'Custom Indicator Parameters',
+      'Priority WebSocket Data Streams',
+      'Priority Technical Support',
+    ]
+  },
+  {
+    id: 'enterprise',
+    name: 'Institutional',
+    description: 'Dedicated infrastructure, custom connectors, and multi-account risk management.',
+    usd: 199,
+    inr: 16500,
+    recommended: false,
+    features: [
+      'Unlimited Strategy Bots',
+      'Isolated VPC Execution Core',
+      'Granular Role-Based Access',
+      'Custom Risk Control Boundaries',
+      'Direct Exchange Connectivity',
+      '24/7 SLA & Dedicated Support',
+    ]
+  }
+]
+
 export default function Pricing() {
   const [isAnnual, setIsAnnual] = useState(false)
   const [currency, setCurrency] = useState('USD')
-  const [plans, setPlans] = useState([])
-  const [isLoading, setIsLoading] = useState(true)
+  const [plans, setPlans] = useState(FALLBACK_PLANS)
+  const [isLoading, setIsLoading] = useState(false)
 
   useEffect(() => {
     const loadPlans = async () => {
       try {
         const data = await api.billing.getPlans()
-        setPlans(data?.plans || (Array.isArray(data) ? data : []))
+        const fetched = data?.plans || (Array.isArray(data) ? data : [])
+        if (fetched && fetched.length > 0) {
+          setPlans(fetched)
+        }
       } catch (err) {
-        console.error('Failed to load plans:', err)
-      } finally {
-        setIsLoading(false)
+        console.warn('Billing API notice (using fallback plans):', err?.message || err)
       }
     }
     loadPlans()

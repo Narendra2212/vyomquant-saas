@@ -1,0 +1,37 @@
+{
+  "aal2_gate": {
+    "aal1": {
+      "allowed": false,
+      "status_code": 403
+    },
+    "aal2_at_top_level": {
+      "allowed": true
+    },
+    "aal2_in_app_metadata": {
+      "allowed": true
+    },
+    "aal2_in_user_metadata_is_not_trusted": {
+      "allowed": false,
+      "status_code": 403
+    },
+    "no_aal_claim_at_all": {
+      "allowed": false,
+      "status_code": 403
+    }
+  },
+  "capture": "auth_2fa",
+  "frontend_mfa_calls": [
+    "challenge",
+    "enroll",
+    "getAuthenticatorAssuranceLevel",
+    "listFactors",
+    "unenroll",
+    "verify"
+  ],
+  "frontend_sources": [
+    "pages/TwoFA.jsx",
+    "pages/Wizard.jsx"
+  ],
+  "requirement": "25.3 \u2014 two-factor enrolment",
+  "subject": "backend_app/core/dependencies.py::require_aal2 + the 2FA surface"
+}

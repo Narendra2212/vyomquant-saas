@@ -1,3 +1,12 @@
+/**
+ * DEPRECATED / UNMOUNTED — LEGACY LANDING PAGE
+ * 
+ * The active, production landing page component is located at:
+ * src/components/landing/LandingPage.jsx (routed at '/' in App.jsx)
+ * 
+ * This file is retained for historical reference only.
+ */
+
 import React, { useState, useEffect } from 'react';
 import {
   Zap, ChevronRight, Shield, Cpu, Activity, ArrowUpRight, Check, BarChart2,

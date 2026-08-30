@@ -1,0 +1,51 @@
+{
+  "capture": "billing_invoices",
+  "frontend_bindings": {
+    "getInvoices": [
+      {
+        "method": "GET",
+        "path_template": "/api/billing/invoices"
+      }
+    ]
+  },
+  "requirement": "25.2 \u2014 invoice retrieval",
+  "routes": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/invoices')",
+            "limiter.limit('60/minute')"
+          ],
+          "handler": "get_invoices",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            "list",
+            "computed",
+            "list"
+          ],
+          "route_path": "/api/billing/invoices"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/invoices",
+      "resolved": true
+    }
+  ]
+}

@@ -1,0 +1,138 @@
+{
+  "adapter": {
+    "entry_intent": {
+      "decision": "BUY",
+      "keys": [
+        "decision",
+        "market_context",
+        "sizing_intention",
+        "source_node_ids",
+        "symbol"
+      ],
+      "quantity": null,
+      "sizing_intention": {
+        "basis": "str",
+        "quantity": "float",
+        "quantity_type": "str"
+      },
+      "type_map": {
+        "decision": "str",
+        "market_context": {
+          "declared_price": "float",
+          "order_intent": "str"
+        },
+        "sizing_intention": {
+          "basis": "str",
+          "quantity": "float",
+          "quantity_type": "str"
+        },
+        "source_node_ids": {
+          "list_of": "str"
+        },
+        "symbol": "str"
+      }
+    },
+    "exit_intent_with_no_side": {
+      "decision": "CLOSE",
+      "keys": [
+        "decision",
+        "market_context",
+        "sizing_intention",
+        "source_node_ids",
+        "symbol"
+      ],
+      "quantity_is_absent_when_sized_as_a_percentage": true,
+      "sizing_intention": {
+        "basis": "str",
+        "quantity": "float",
+        "quantity_type": "str"
+      }
+    }
+  },
+  "capture": "live_runtime",
+  "closure_gate": {
+    "no_evidence": null,
+    "reported_not_ready": false,
+    "reported_ready": true
+  },
+  "contract": {
+    "decorators": [],
+    "handler": "action_node_output",
+    "module": "backend_app.backend.signal_service",
+    "parameters": {
+      "intent": {
+        "annotation": "Any"
+      },
+      "market_context": {
+        "annotation": "Optional",
+        "has_default": true
+      },
+      "ml_inference": {
+        "annotation": "Optional",
+        "has_default": true
+      },
+      "plan": {
+        "annotation": "Any",
+        "has_default": true
+      },
+      "risk_validation": {
+        "annotation": "Optional",
+        "has_default": true
+      },
+      "runtime_state": {
+        "annotation": "Any",
+        "has_default": true
+      }
+    },
+    "raises": [],
+    "returns": [
+      "dict"
+    ]
+  },
+  "execution_outcome_fields": [
+    "accepted",
+    "detail",
+    "execution_id",
+    "failure_kind",
+    "filled",
+    "order_id",
+    "order_state",
+    "quantity",
+    "reason",
+    "refused"
+  ],
+  "feed_states": [
+    "DELAYED",
+    "DISCONNECTED",
+    "INSUFFICIENT_DATA",
+    "LIVE",
+    "STALE"
+  ],
+  "live_signal_path_operations": [
+    "_now",
+    "apply_feed_state",
+    "observe_feed_state",
+    "on_action_output",
+    "on_action_outputs",
+    "record_evaluation_failure",
+    "to_dict"
+  ],
+  "outcome_vocabulary": [
+    "CLOSURE_NOT_READY",
+    "CONTAINED_ERROR",
+    "FEED_SUSPENDED",
+    "GENERATION_REFUSED",
+    "NODE_EVALUATION_FAILED",
+    "NOT_PERSISTED",
+    "RISK_REFUSED",
+    "SUBMITTED"
+  ],
+  "requirement": "25.1",
+  "risk_verdict_fields": [
+    "adjusted_quantity",
+    "approved",
+    "detail",
+    "reason"
+  ],
+  "subject": "backend_app/backend/signal_service.py::action_node_output, closure_readiness, LiveSignalPath"
+}

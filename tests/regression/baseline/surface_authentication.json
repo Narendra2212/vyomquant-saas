@@ -1,0 +1,26 @@
+{
+  "api_call_count": 0,
+  "api_calls": [],
+  "capture": "surface_authentication",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/AuthPage.jsx",
+    "pages/TwoFA.jsx",
+    "pages/UpdatePasswordPage.jsx"
+  ],
+  "supabase_auth_calls": [
+    "getUser",
+    "mfa.challenge",
+    "mfa.enroll",
+    "mfa.listFactors",
+    "mfa.unenroll",
+    "mfa.verify",
+    "resetPasswordForEmail",
+    "signInWithOAuth",
+    "signInWithPassword",
+    "signUp",
+    "updateUser"
+  ],
+  "surface": "authentication",
+  "unresolved_usages": []
+}

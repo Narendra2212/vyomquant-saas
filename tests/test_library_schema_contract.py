@@ -24,6 +24,13 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS_DIR = REPO_ROOT / "migrations"
+# The second, independently numbered migration sequence. Applied by hand, per
+# file, exactly like migrations/ — see the header of
+# backend_app/migrations/006_backtest_evidence_columns.sql on why the two
+# sequences exist and why neither is renumbered. The marketplace columns of
+# the marketplace-subscriptions-paper-trading spec land here, so a contract
+# test that read only migrations/ would report them missing.
+BACKEND_MIGRATIONS_DIR = REPO_ROOT / "backend_app" / "migrations"
 LIBRARY_ROUTER = REPO_ROOT / "backend_app" / "routers" / "library.py"
 
 # Marketplace columns backend_app/routers/library.py reads and writes on
@@ -37,15 +44,31 @@ REQUIRED_LIBRARY_COLUMNS = {
     "verification_status",
     "evaluation_score",
     "subscriber_count",
+    # marketplace-subscriptions-paper-trading, added by
+    # backend_app/migrations/007_marketplace_submissions.sql (task 11.2).
+    # price_minor is the authoritative price in Minor_Units (Requirement
+    # 8.12), price above is retained and mirrored from it by trigger;
+    # source_cloning_enabled is Requirement 7.4's stored consent;
+    # supported_timeframes, market_type and condition_count are on the
+    # Listing_Projection allow-list (Requirement 6.2).
+    "price_minor",
+    "source_cloning_enabled",
+    "supported_timeframes",
+    "market_type",
+    "condition_count",
 }
 
 
 def _migration_sql() -> str:
-    """Concatenate every migration in migrations/ (the applied set)."""
+    """Concatenate every migration in both applied migration sequences."""
     assert MIGRATIONS_DIR.is_dir(), f"missing migrations dir: {MIGRATIONS_DIR}"
+    assert BACKEND_MIGRATIONS_DIR.is_dir(), (
+        f"missing migrations dir: {BACKEND_MIGRATIONS_DIR}"
+    )
     parts = []
-    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
-        parts.append(path.read_text(encoding="utf-8", errors="replace"))
+    for directory in (MIGRATIONS_DIR, BACKEND_MIGRATIONS_DIR):
+        for path in sorted(directory.glob("*.sql")):
+            parts.append(path.read_text(encoding="utf-8", errors="replace"))
     return "\n".join(parts)
 
 

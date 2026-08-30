@@ -1,0 +1,568 @@
+{
+  "api_call_count": 6,
+  "api_calls": [
+    {
+      "handler_count": 2,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('')",
+            "router.post('/')",
+            "limiter.limit('20/minute')"
+          ],
+          "handler": "create_strategy",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "_quota": {
+              "annotation": "_empty",
+              "depends_on": "check_strategy_quota"
+            },
+            "body": {
+              "annotation": "Dict"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "computed",
+              "status_code": "DAG_INVALID_STATUS"
+            },
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_503_SERVICE_UNAVAILABLE"
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_CREATE_ERROR",
+              "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_CREATE_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/strategies"
+        },
+        {
+          "decorators": [
+            "router.post('')",
+            "router.post('/')",
+            "limiter.limit('20/minute')"
+          ],
+          "handler": "create_strategy",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "_quota": {
+              "annotation": "_empty",
+              "depends_on": "check_strategy_quota"
+            },
+            "body": {
+              "annotation": "Dict"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "computed",
+              "status_code": "DAG_INVALID_STATUS"
+            },
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_503_SERVICE_UNAVAILABLE"
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_CREATE_ERROR",
+              "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_CREATE_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/strategies/"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/strategies",
+      "path_template": "/api/strategies",
+      "resolved": true,
+      "via": "api.strategies.create"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/strategies/compile')",
+            "limiter.limit('100/minute')"
+          ],
+          "handler": "compile_strategy",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "body": {
+              "annotation": "StrategyCompileRequest"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "codes": "list",
+                "error": "str",
+                "errors": "list",
+                "message": "str",
+                "report": {
+                  "one_of": [
+                    "computed",
+                    "null"
+                  ]
+                },
+                "warnings": "list"
+              },
+              "error_code": "STRATEGY_VALIDATION_FAILED",
+              "status_code": 422
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "hint": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_GRAPH_UNREADABLE",
+              "status_code": 422
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "COMPILE_FAILED",
+              "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_COMPILATION_FAILED",
+              "status_code": 400
+            }
+          ],
+          "returns": [
+            {
+              "compiled_at": "str",
+              "compiled_plan": "computed",
+              "compiler_version": "computed",
+              "dag_hash": "computed",
+              "dependencies": "computed",
+              "execution_graph": "computed",
+              "schema_version": "computed",
+              "status": "str",
+              "warmup_bars": "computed"
+            }
+          ],
+          "route_path": "/api/strategies/compile"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/strategies/compile",
+      "path_template": "/api/strategies/compile",
+      "resolved": true,
+      "via": "api.strategies.compile"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/validate')"
+          ],
+          "handler": "validate_strategy",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "body": {
+              "annotation": "Dict"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "dag_hash": "null",
+              "errors": "list",
+              "execution_path": "list",
+              "node_types": {},
+              "stats": {
+                "action_nodes": "int",
+                "total_nodes": "int"
+              },
+              "summary": {
+                "edge_count": "int",
+                "node_count": "int"
+              },
+              "valid": "bool",
+              "validation_state": "str",
+              "warnings": "list"
+            },
+            {
+              "dag_hash": "null",
+              "errors": "list",
+              "execution_path": "list",
+              "node_types": {},
+              "stats": {
+                "action_nodes": "int",
+                "total_nodes": "int"
+              },
+              "summary": {
+                "edge_count": "int",
+                "node_count": "int"
+              },
+              "valid": "bool",
+              "validation_state": "str",
+              "warnings": "list"
+            },
+            "computed"
+          ],
+          "route_path": "/api/strategies/validate"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/strategies/validate",
+      "path_template": "/api/strategies/validate",
+      "resolved": true,
+      "via": "api.strategies.validate"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/strategy-operations/strategies/{strategy_id}/nodes/{node_id}/preview')",
+            "limiter.limit('30/minute')"
+          ],
+          "handler": "preview_node",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "body": {
+              "annotation": "NodePreviewRequest"
+            },
+            "node_id": {
+              "annotation": "str"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "codes": "list",
+                "error": "str",
+                "errors": "list",
+                "hint": "str",
+                "message": "str",
+                "report": {
+                  "one_of": [
+                    "computed",
+                    "null"
+                  ]
+                },
+                "warnings": "list"
+              },
+              "error_code": "STRATEGY_VALIDATION_FAILED",
+              "status_code": 422
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "failure": "computed",
+                "issues": "computed",
+                "message": "str",
+                "node_id": "computed",
+                "trace": "computed"
+              },
+              "error_code": "PREVIEW_EXECUTION_FAILED",
+              "status_code": 422
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "hint": "str",
+                "max_bars": "computed",
+                "message": "str",
+                "needed_bars": "computed",
+                "node_id": "computed",
+                "node_warmup_bars": "computed"
+              },
+              "error_code": "PREVIEW_WARMUP_EXCEEDS_WINDOW",
+              "status_code": 422
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "hint": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_GRAPH_UNREADABLE",
+              "status_code": 422
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "PREVIEW_BLOCK_UNPUBLISHED",
+              "status_code": 422
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "PREVIEW_DATA_UNAVAILABLE",
+              "status_code": 503
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "PREVIEW_GRAPH_UNAVAILABLE",
+              "status_code": 422
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "PREVIEW_NODE_NOT_FOUND",
+              "status_code": 404
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_COMPILATION_FAILED",
+              "status_code": 400
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_GET_FAILED",
+              "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_NOT_FOUND",
+              "status_code": 404
+            }
+          ],
+          "returns": [
+            {
+              "block_id": "computed",
+              "category": "computed",
+              "compiler_version": "computed",
+              "computed_at": "str",
+              "dag_hash": "computed",
+              "executed_nodes": "list",
+              "graph_source": "computed",
+              "issues": "computed",
+              "market": "computed",
+              "market_data": {
+                "closed_bars_only": "bool",
+                "counters": "computed",
+                "gap_policy": "computed",
+                "quality": "computed"
+              },
+              "node_id": "computed",
+              "outputs": "computed",
+              "strategy_id": "computed",
+              "trace": "computed",
+              "window": "dict_with_spread"
+            }
+          ],
+          "route_path": "/api/strategy-operations/strategies/{strategy_id}/nodes/{node_id}/preview"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/strategy-operations/strategies/{expr}/nodes/{expr}/preview",
+      "path_template": "/api/strategy-operations/strategies/{expr}/nodes/{expr}/preview",
+      "resolved": true,
+      "via": "api.strategies.previewNode"
+    },
+    {
+      "handler_count": 2,
+      "handlers": [
+        {
+          "decorators": [
+            "router.put('/strategies/{strategy_id}')",
+            "limiter.limit('100/minute')"
+          ],
+          "handler": "update_strategy",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "body": {
+              "annotation": "StrategyUpdateRequest"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_NOT_FOUND",
+              "status_code": 404
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_UPDATE_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            {
+              "new_version": "computed",
+              "status": "str",
+              "strategy": "computed"
+            }
+          ],
+          "route_path": "/api/strategies/{strategy_id}"
+        },
+        {
+          "decorators": [
+            "router.put('/{strategy_id}')"
+          ],
+          "handler": "update_strategy",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "body": {
+              "annotation": "Dict"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "computed",
+              "status_code": "e.http_status"
+            },
+            {
+              "detail_type": "str",
+              "status_code": 503
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "DIRECT_STATUS_UPDATE_FORBIDDEN",
+              "status_code": 403
+            }
+          ],
+          "returns": [
+            {
+              "id": "computed",
+              "name": "computed",
+              "user_id": "computed"
+            },
+            "computed"
+          ],
+          "route_path": "/api/strategies/{strategy_id}"
+        }
+      ],
+      "method": "PUT",
+      "path": "/api/strategies/{id}",
+      "path_template": "/api/strategies/{id}",
+      "resolved": true,
+      "via": "api.strategies.update"
+    },
+    {
+      "method": "UNKNOWN",
+      "path_template": "<built at runtime>",
+      "resolved": false,
+      "via": "api.dataQuality.forStrategy"
+    }
+  ],
+  "capture": "surface_strategy_builder",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/StrategyBuilder.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "strategy_builder",
+  "unresolved_usages": []
+}

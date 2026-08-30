@@ -35,18 +35,18 @@ export default function FinalCTA() {
             Deploy Your First System
           </h2>
           <p className="text-text-secondary max-w-xl mx-auto mb-10 text-sm leading-relaxed">
-            VyomQuant is in closed beta. Launch in browser or download the native desktop terminal.
+            VyomQuant is in early access. Sign up in your browser or download the native desktop terminal.
             Paper trading enabled by default — zero capital required to start.
           </p>
 
           {/* 3 CTAs matching hero */}
           <div className="flex flex-col items-center gap-4 max-w-sm mx-auto sm:max-w-none">
             <Link
-              to="/app"
+              to="/signup"
               className="w-full sm:w-auto inline-flex items-center justify-center gap-3 px-8 py-4 rounded-xl font-semibold text-sm bg-accent-cyan text-text-inverse hover:bg-accent-cyan/90 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_0_32px_rgba(0,212,255,0.3)] animate-pulse-glow"
             >
               <Globe className="w-4 h-4" />
-              Launch Web App
+              Get Started Free
               <ArrowRight className="w-4 h-4" />
             </Link>
 

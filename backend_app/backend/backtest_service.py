@@ -18,6 +18,7 @@ Provides:
 import inspect
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -26,6 +27,217 @@ from uuid import uuid4
 from backend_app.core.dependencies import create_request_supabase_async
 
 logger = logging.getLogger("BacktestService")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  ``strategy_backtests.executed_bar_count`` AVAILABILITY
+#  (marketplace-subscriptions-paper-trading task 12.1, Requirements 3.8, 3.4, 25.1)
+#
+#  Nothing in this repository ever recorded how many bars a backtest actually
+#  ran over: ``backtesting_engine.py`` line 189 checks ``len(price_data) < 50``
+#  and throws the number away, and ``BacktestRuntime.run_backtest`` knows
+#  ``len(ohlcv_data)`` and did not persist it. Requirement 3.8 needs that number
+#  on the row, because the Evidence_Validator must reject a Backtest_Condition
+#  whose bar count is null, absent or below 50 - and it must reject rather than
+#  infer, so a NULL is a failed criterion and never a guess derived from the
+#  equity curve's length.
+#
+#  The column is created by ``006_backtest_evidence_columns.sql``, which - like
+#  004/004e/005a before it - is applied BY HAND: ``.github/workflows/03-deploy.yml``
+#  has no migration step, so this code can reach production before the DDL does.
+#  Naming an absent column in an UPDATE payload is PostgreSQL ``42703`` /
+#  PostgREST ``PGRST204``, which would turn "the bar count was not recorded" into
+#  "the whole backtest result was lost" - every metric, on a run that had already
+#  finished computing them.
+#
+#  So availability is DETECTED, exactly the way ``strategy_service``,
+#  ``deployment_binding`` and ``strategy_archive`` detect theirs:
+#
+#    1. Once per process, a read-only ``SELECT executed_bar_count ... LIMIT 1``
+#       through the caller's own RLS-scoped client, cached in this module.
+#    2. A definitive "absent" answer degrades the write: the bar count is dropped
+#       from ``update_data``, a warning NAMING the migration is logged, and every
+#       other metric is still persisted.
+#    3. An inconclusive probe (network, auth, timeout) decides and caches nothing,
+#       and resolves to "supported" so a real failure surfaces at the UPDATE
+#       instead of being pre-emptively downgraded.
+#    4. If the UPDATE itself then reports a missing column, that is newer
+#       information than the probe had: it is remembered, and the write is retried
+#       once without the bar count so the results still land.
+#    5. The negative verdict expires after
+#       :data:`EXECUTED_BAR_COUNT_RECHECK_SECONDS`, so applying 006 to a running
+#       fleet takes effect without a redeploy. A positive one is kept for the life
+#       of the process - 006 is additive and drops nothing.
+#
+#  Net effect: applying 006 late costs the bar count and a loud warning; it never
+#  costs a completed backtest's metrics.
+# ══════════════════════════════════════════════════════════════════════════
+
+#: The one column task 12.1 starts writing.
+EXECUTED_BAR_COUNT_COLUMN = "executed_bar_count"
+
+#: The migration named in the degradation warning, so an operator is never left guessing.
+BACKTEST_EVIDENCE_MIGRATION = "backend_app/migrations/006_backtest_evidence_columns.sql"
+
+#: How long an "``executed_bar_count`` is absent" verdict is trusted before it is re-probed.
+#: Same value and same reason as ``deployment_binding.BINDING_COLUMN_RECHECK_SECONDS``.
+EXECUTED_BAR_COUNT_RECHECK_SECONDS = 300.0
+
+#: PostgreSQL's ``undefined_column`` and PostgREST's schema-cache equivalents. ``PGRST205``
+#: and ``42P01`` (a missing *table*) are deliberately absent: ``strategy_backtests`` is
+#: created by migration 001, and a missing table there is a real problem, not something to
+#: degrade around.
+_MISSING_COLUMN_CODES = ("42703", "undefined_column", "pgrst204")
+
+_executed_bar_count_supported: Optional[bool] = None
+_executed_bar_count_checked_at: float = 0.0
+
+
+def reset_executed_bar_count_support() -> None:
+    """Forget the cached 006 verdict. For tests, and for an operator who just applied it."""
+    global _executed_bar_count_supported, _executed_bar_count_checked_at
+    _executed_bar_count_supported = None
+    _executed_bar_count_checked_at = 0.0
+
+
+def executed_bar_count_support_state() -> Optional[bool]:
+    """The cached verdict: ``True``, ``False`` or ``None`` for "not yet determined"."""
+    return _executed_bar_count_supported
+
+
+def _remember_executed_bar_count_support(supported: bool) -> None:
+    global _executed_bar_count_supported, _executed_bar_count_checked_at
+    _executed_bar_count_supported = supported
+    _executed_bar_count_checked_at = time.monotonic()
+
+
+def remember_executed_bar_count_absent() -> None:
+    """Record that 006 is not applied, so the next write degrades without re-probing.
+
+    Public because the write path learns this the hard way: a process that cached a
+    positive verdict and then meets ``42703`` at the UPDATE has newer information than the
+    probe did. The negative verdict still expires after
+    :data:`EXECUTED_BAR_COUNT_RECHECK_SECONDS`.
+    """
+    _remember_executed_bar_count_support(False)
+
+
+def _cached_executed_bar_count_support() -> Optional[bool]:
+    if _executed_bar_count_supported is None:
+        return None
+    if _executed_bar_count_supported:
+        return True
+    if (
+        time.monotonic() - _executed_bar_count_checked_at
+        >= EXECUTED_BAR_COUNT_RECHECK_SECONDS
+    ):
+        return None
+    return False
+
+
+def is_missing_executed_bar_count_error(exc: BaseException) -> bool:
+    """True only when ``exc`` definitively says the bar-count column does not exist.
+
+    Narrow on purpose, for the same reason its three siblings are: anything this returns
+    ``False`` for is re-raised, because the one outcome worse than a results write that
+    fails loudly is one that fails silently and leaves a finished backtest stuck at
+    ``running``.
+    """
+    text = str(exc).lower()
+    if not text:
+        return False
+    if "pgrst205" in text or "42p01" in text:  # a missing TABLE, not a missing column
+        return False
+    if any(code in text for code in _MISSING_COLUMN_CODES):
+        return True
+    if EXECUTED_BAR_COUNT_COLUMN not in text:
+        return False
+    return any(
+        phrase in text
+        for phrase in ("does not exist", "schema cache", "could not find", "unknown column")
+    )
+
+
+def warn_executed_bar_count_absent(detail: str) -> None:
+    """The degradation warning. Names the file, and says exactly what is not stored."""
+    logger.warning(
+        "strategy_backtests is missing the %s column. Apply %s, then restart or wait "
+        "%.0fs for the re-probe. Until then the executed bar count is NOT persisted, so "
+        "Requirement 3.8 is not met and the Evidence_Validator's bar-count criterion will "
+        "fail for every backtest produced meanwhile. Every other result metric was still "
+        "written. Detail: %s",
+        EXECUTED_BAR_COUNT_COLUMN,
+        BACKTEST_EVIDENCE_MIGRATION,
+        EXECUTED_BAR_COUNT_RECHECK_SECONDS,
+        detail,
+    )
+
+
+async def _execute(query: Any) -> Any:
+    return await query if inspect.isawaitable(query) else query
+
+
+async def executed_bar_count_supported(sb: Any) -> bool:
+    """Whether ``strategy_backtests`` carries 006's ``executed_bar_count``.
+
+    Read-only and cached: one ``SELECT executed_bar_count ... LIMIT 1`` per process through
+    the caller's own RLS-scoped client, so the probe sees what the write will see. An
+    *indeterminate* answer resolves to ``True`` so the write is attempted and any real
+    failure surfaces at the UPDATE - the same disposition
+    ``deployment_binding.binding_columns_supported`` takes.
+    """
+    cached = _cached_executed_bar_count_support()
+    if cached is not None:
+        return cached
+    if sb is None:
+        return False
+
+    try:
+        result = await _execute(
+            sb.table("strategy_backtests")
+            .select(EXECUTED_BAR_COUNT_COLUMN)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001 - classified below, never swallowed blindly
+        if is_missing_executed_bar_count_error(exc):
+            _remember_executed_bar_count_support(False)
+            warn_executed_bar_count_absent(str(exc))
+            return False
+        logger.warning(
+            "The strategy_backtests.%s probe was inconclusive (%s); attempting the write "
+            "and letting a real error surface.",
+            EXECUTED_BAR_COUNT_COLUMN,
+            exc,
+        )
+        return True
+
+    # PostgREST clients that report errors on the response rather than by raising.
+    error = getattr(result, "error", None)
+    if error is not None and is_missing_executed_bar_count_error(Exception(str(error))):
+        _remember_executed_bar_count_support(False)
+        warn_executed_bar_count_absent(str(error))
+        return False
+
+    _remember_executed_bar_count_support(True)
+    return True
+
+
+def coerce_executed_bar_count(value: Any) -> Optional[int]:
+    """``value`` as a non-negative ``int``, or ``None`` when it cannot be one.
+
+    ``chk_sb_executed_bar_count`` allows ``NULL`` or ``>= 0``, so a negative or
+    unparseable count is dropped rather than sent to be rejected by the CHECK - the caller
+    is recording a fact about a run that already completed, and a bad count must not cost
+    the metrics. ``bool`` is excluded because ``True`` is not a bar count.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None
+    return count if count >= 0 else None
 
 
 class BacktestService:
@@ -153,7 +365,8 @@ class BacktestService:
         self,
         user: dict,
         backtest_id: str,
-        results: Dict
+        results: Dict,
+        executed_bar_count: Optional[int] = None,
     ) -> Dict:
         """
         Update backtest with execution results.
@@ -162,6 +375,27 @@ class BacktestService:
             user: User dict
             backtest_id: Backtest ID
             results: Backtest results dictionary
+            executed_bar_count: How many OHLCV bars the simulation actually ran over.
+                Keyword-only in practice and last in the signature, so no existing
+                caller changes shape. ``None`` - the default, and what the HTTP
+                ``PUT /api/backtests/{id}/results`` handler still sends - leaves the
+                column untouched rather than writing an explicit ``NULL``, so a
+                partial update cannot erase a count an earlier write recorded.
+
+        ``executed_bar_count`` (task 12.1, Requirements 3.8, 3.4, 25.1): the number of
+        bars a backtest ran over was computed and discarded everywhere it appeared -
+        ``backtesting_engine.py`` line 189 tests ``len(price_data) < 50``,
+        ``BacktestRuntime.run_backtest`` knows ``len(ohlcv_data)`` - so no row could
+        satisfy Requirement 3.8's "non-null executed bar count of at least 50" and
+        every marketplace submission would have failed its bar-count criterion on
+        evidence that existed but was never written down. It is recorded here, next to
+        the metrics it describes, in the same UPDATE. The 50-bar guard and the 20-trade
+        significance warning in ``backtesting_engine.py`` are untouched: this method
+        records the number, it does not re-judge it.
+
+        The write degrades when ``006_backtest_evidence_columns.sql`` has not been
+        applied - see this module's availability block. A results write must never be
+        lost to a column that a hand-applied migration has not created yet.
 
         Returns:
             The updated backtest record, or ``{}`` when no row belonging to this user
@@ -204,17 +438,55 @@ class BacktestService:
             "final_capital": results.get("final_capital", 0),
             "trades": results.get("trades", [])  # Store detailed trade data
         }
-        
+
+        bar_count = coerce_executed_bar_count(executed_bar_count)
+
         if sb is None:
+            # DEV_MODE echoes what would have been written, including the bar count: there
+            # is no database to probe, and a caller inspecting this payload is entitled to
+            # see the value it supplied.
+            if bar_count is not None:
+                update_data[EXECUTED_BAR_COUNT_COLUMN] = bar_count
             logger.info(f"[DEV_MODE] Skipping Supabase backtest update for {backtest_id}")
             return update_data
-        
-        query_res = (sb.table("strategy_backtests")
-                 .update(update_data)
-                 .eq("id", backtest_id)
-                 .eq("user_id", user["id"])
-                 .execute())
-        result = await query_res if inspect.isawaitable(query_res) else query_res
+
+        if bar_count is not None and await executed_bar_count_supported(sb):
+            update_data[EXECUTED_BAR_COUNT_COLUMN] = bar_count
+
+        async def _write(payload: Dict) -> Any:
+            query_res = (sb.table("strategy_backtests")
+                     .update(payload)
+                     .eq("id", backtest_id)
+                     .eq("user_id", user["id"])
+                     .execute())
+            return await query_res if inspect.isawaitable(query_res) else query_res
+
+        try:
+            result = await _write(update_data)
+        except Exception as exc:  # noqa: BLE001 - classified below, never swallowed blindly
+            if EXECUTED_BAR_COUNT_COLUMN not in update_data:
+                raise
+            if not is_missing_executed_bar_count_error(exc):
+                raise
+            # The probe said the column was there (or was inconclusive) and the write says
+            # otherwise. The write is the newer information: remember it, and land the
+            # metrics without the bar count rather than losing a finished run.
+            remember_executed_bar_count_absent()
+            warn_executed_bar_count_absent(str(exc))
+            update_data.pop(EXECUTED_BAR_COUNT_COLUMN, None)
+            result = await _write(update_data)
+        else:
+            # Clients that report errors on the response instead of raising.
+            error = getattr(result, "error", None)
+            if (
+                error is not None
+                and EXECUTED_BAR_COUNT_COLUMN in update_data
+                and is_missing_executed_bar_count_error(Exception(str(error)))
+            ):
+                remember_executed_bar_count_absent()
+                warn_executed_bar_count_absent(str(error))
+                update_data.pop(EXECUTED_BAR_COUNT_COLUMN, None)
+                result = await _write(update_data)
 
         if not result.data:
             # Nothing matched: either no such backtest, or it is not this user's. Logged

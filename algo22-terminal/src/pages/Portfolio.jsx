@@ -429,12 +429,12 @@ export default function Portfolio() {
 
       {/* P&L Heatmap */}
       <Card className="p-4 bg-[#0c1017] border-[#1e293b]">
-        <PanelTitle title="P&L Heatmap" sub="Daily execution performance calendar" />
+        <PanelTitle title="P&L Heatmap" sub="Daily execution performance calendar and trade history" />
         {heatmapData.length === 0 ? (
           <div style={{ height: 160, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#64748b", fontFamily: "monospace" }}>
             <Activity size={28} style={{ color: "#334155", marginBottom: "10px", opacity: 0.5 }} />
             <span className="text-body">No daily trade P&L records</span>
-            <span className="text-caption-sm" style={{ color: "#475569", marginTop: "4px" }}>Executed trades from live and paper bots will appear here</span>
+            <span className="text-caption-sm" style={{ color: "#475569", marginTop: "4px" }}>Executed trades and trade history from live and paper bots will appear here</span>
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: "4px", marginTop: 8 }}>

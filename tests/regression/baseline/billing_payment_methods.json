@@ -1,0 +1,144 @@
+{
+  "capture": "billing_payment_methods",
+  "frontend_bindings": {
+    "deletePaymentMethod": [
+      {
+        "method": "DELETE",
+        "path_template": "/api/billing/payment-methods/{methodId}"
+      }
+    ],
+    "getPaymentMethods": [
+      {
+        "method": "GET",
+        "path_template": "/api/billing/payment-methods"
+      }
+    ]
+  },
+  "requirement": "25.2 \u2014 payment-method management",
+  "routes": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/payment-methods')",
+            "limiter.limit('60/minute')"
+          ],
+          "handler": "get_payment_methods",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "db": {
+              "annotation": "Session",
+              "depends_on": "get_db"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            "computed"
+          ],
+          "route_path": "/api/billing/payment-methods"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/payment-methods",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/payment-methods')",
+            "limiter.limit('10/minute')"
+          ],
+          "handler": "add_payment_method",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "body": {
+              "annotation": "AddPaymentMethodRequest"
+            },
+            "db": {
+              "annotation": "Session",
+              "depends_on": "get_db"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 422
+            }
+          ],
+          "returns": [
+            {
+              "payment_method": {
+                "brand": "computed",
+                "expiry_month": "computed",
+                "expiry_year": "computed",
+                "id": "computed",
+                "is_default": "computed",
+                "last4": "computed",
+                "type": "str"
+              },
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/billing/payment-methods"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/billing/payment-methods",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.delete('/payment-methods/{method_id}')"
+          ],
+          "handler": "delete_payment_method",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "db": {
+              "annotation": "Session",
+              "depends_on": "get_db"
+            },
+            "method_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "deleted": "computed",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/billing/payment-methods/{method_id}"
+        }
+      ],
+      "method": "DELETE",
+      "path": "/api/billing/payment-methods/{method_id}",
+      "resolved": true
+    }
+  ]
+}

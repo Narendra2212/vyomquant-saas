@@ -53,6 +53,20 @@ from backend_app.core.cache.redis_manager import redis_manager
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Route registration order (design §5 — route shadowing)
+#
+# FastAPI matches routes in registration order, so a parameterised route such as
+# GET /{library_id} or GET /creator/{creator_id} declared before a literal one
+# (GET /favorites, GET /creator/analytics, …) permanently shadows it. Every route
+# whose path has no path parameter is therefore registered on `literal_router`,
+# and at the bottom of this module those routes are spliced in front of the
+# parameterised routes on `router`. Paths, handlers and dependencies are
+# unchanged — only the order in which FastAPI sees them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+literal_router = APIRouter()
 _CACHED_CATEGORIES = None
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -365,7 +379,7 @@ def grant_deployment_permission(user_id: str, library_id: str, granted_via: str,
 # GET /api/library/featured — Featured strategies
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/featured")
+@literal_router.get("/featured")
 async def get_featured_strategies(
     limit: int = Query(3, ge=1, le=10),
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
@@ -512,7 +526,7 @@ async def get_featured_strategies(
 # GET /api/library/trending — Trending strategies
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/trending")
+@literal_router.get("/trending")
 async def get_trending_strategies(
     limit: int = Query(10, ge=1, le=20),
 ):
@@ -562,7 +576,7 @@ async def get_trending_strategies(
 # GET /api/library/categories — Available categories
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/categories")
+@literal_router.get("/categories")
 async def get_categories():
     """Returns available strategy categories with counts."""
     global _CACHED_CATEGORIES
@@ -677,7 +691,7 @@ async def get_creator_profile(creator_id: str):
 # GET /api/library — Browse catalogue
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("")
+@literal_router.get("")
 async def browse_library(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=50),
@@ -895,7 +909,7 @@ async def browse_library(
 # GET /api/library/me — My published strategies
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/me")
+@literal_router.get("/me")
 async def my_library(user: dict = Depends(get_current_user)):
     """Returns all library entries authored by the authenticated user."""
     user_id = _safe_uuid(user["id"], "user_id")
@@ -1015,7 +1029,7 @@ async def get_library_detail(
 # POST /api/library — Publish a strategy
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@literal_router.post("", status_code=status.HTTP_201_CREATED)
 @limiter.limit("20/minute")
 async def publish_strategy(
     request: Request,
@@ -1762,7 +1776,7 @@ async def admin_moderate_strategy(
 # GET /api/admin/library/pending — Admin pending queue
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/admin/pending", status_code=status.HTTP_200_OK)
+@literal_router.get("/admin/pending", status_code=status.HTTP_200_OK)
 async def admin_pending_strategies(
     admin: dict = Depends(get_admin_user),
 ):
@@ -2335,7 +2349,7 @@ async def renew_subscription(sub_id: str, user: dict = Depends(get_current_user)
     
     return {"status": "renewed", "subscription_id": sub_id, "renewed_at": now}
 
-@router.get("/creator/analytics")
+@literal_router.get("/creator/analytics")
 async def creator_analytics(user: dict = Depends(get_current_user)):
     """Creator analytics dashboard derived from actual user publications and subscriber data."""
     svc = _build_service_client()
@@ -2378,7 +2392,7 @@ async def creator_analytics(user: dict = Depends(get_current_user)):
             "payout_schedule": "Monthly auto-transfer (Stripe Connect)"
         }
 
-@router.get("/subscriber/analytics")
+@literal_router.get("/subscriber/analytics")
 async def subscriber_analytics(user: dict = Depends(get_current_user)):
     """
     Subscriber analytics: what strategies has this user subscribed to?
@@ -2456,7 +2470,7 @@ async def get_strategy_reviews(
 # GET /api/library/recommendations — Get personalized recommendations
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/recommendations")
+@literal_router.get("/recommendations")
 async def get_recommendations(
     user: dict = Depends(get_current_user),
     limit: int = Query(10, ge=1, le=20),
@@ -2552,7 +2566,7 @@ async def get_recommendations(
 class CompareRequest(BaseModel):
     library_ids: List[str] = Field(..., min_items=2, max_items=5)
 
-@router.post("/compare")
+@literal_router.post("/compare")
 async def compare_strategies(
     payload: CompareRequest,
     user: dict = Depends(get_current_user),
@@ -2666,7 +2680,7 @@ async def unfavorite_strategy(
 # GET /api/library/favorites — Get user's favorites
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/favorites")
+@literal_router.get("/favorites")
 async def get_user_favorites(
     user: dict = Depends(get_current_user),
     limit: int = Query(20, ge=1, le=50),
@@ -2720,3 +2734,17 @@ async def get_user_favorites(
         item.pop("author_id", None)
     
     return {"favorites": items, "total": len(items)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Final registration order — literal-segment routes first (design §5)
+#
+# `main.py` includes `library.router`, and FastAPI resolves a request against
+# `router.routes` in order. Splicing the literal router's routes in front of the
+# parameterised ones makes GET /creator/analytics, GET /recommendations and
+# GET /favorites reachable instead of being swallowed by GET /creator/{creator_id}
+# and GET /{library_id}. The route objects themselves are untouched, so paths,
+# handlers, dependencies and rate limits are exactly as declared above.
+# ─────────────────────────────────────────────────────────────────────────────
+
+router.routes[:0] = literal_router.routes

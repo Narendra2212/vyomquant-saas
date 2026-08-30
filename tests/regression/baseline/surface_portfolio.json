@@ -1,0 +1,248 @@
+{
+  "api_call_count": 8,
+  "api_calls": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/positions')",
+            "limiter.limit('120/minute')"
+          ],
+          "handler": "get_paper_positions",
+          "module": "backend_app.routers.paper_trading",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "count": "int",
+              "positions": "computed"
+            }
+          ],
+          "route_path": "/api/paper/positions"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/paper/positions",
+      "path_template": "/api/paper/positions",
+      "resolved": true,
+      "via": "api.paper.getPositions"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/summary')",
+            "limiter.limit('120/minute')"
+          ],
+          "handler": "get_paper_summary",
+          "module": "backend_app.routers.paper_trading",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/paper/summary"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/paper/summary",
+      "path_template": "/api/paper/summary",
+      "resolved": true,
+      "via": "api.paper.getSummary"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/allocation')"
+          ],
+          "handler": "allocation",
+          "module": "backend_app.routers.portfolio",
+          "parameters": {
+            "telemetry": {
+              "annotation": "_empty",
+              "depends_on": "get_telemetry"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "list",
+            "list"
+          ],
+          "route_path": "/api/portfolio/allocation"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/portfolio/allocation",
+      "path_template": "/api/portfolio/allocation",
+      "resolved": true,
+      "via": "api.portfolio.getAllocation"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/equity-curve')"
+          ],
+          "handler": "equity_curve",
+          "module": "backend_app.routers.portfolio",
+          "parameters": {
+            "days": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "telemetry": {
+              "annotation": "_empty",
+              "depends_on": "get_telemetry"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "EQUITY_CURVE_FETCH_FAILED",
+              "status_code": 503
+            }
+          ],
+          "returns": [
+            "list",
+            "list"
+          ],
+          "route_path": "/api/portfolio/equity-curve"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/portfolio/equity-curve?days={days}",
+      "path_template": "/api/portfolio/equity-curve?days={days}",
+      "resolved": true,
+      "via": "api.portfolio.getEquityCurve"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/heatmap')"
+          ],
+          "handler": "pnl_heatmap",
+          "module": "backend_app.routers.portfolio",
+          "parameters": {
+            "months": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "telemetry": {
+              "annotation": "_empty",
+              "depends_on": "get_telemetry"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "list",
+            "list"
+          ],
+          "route_path": "/api/portfolio/heatmap"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/portfolio/heatmap?months={months}",
+      "path_template": "/api/portfolio/heatmap?months={months}",
+      "resolved": true,
+      "via": "api.portfolio.getHeatmap"
+    },
+    {
+      "method": "GET",
+      "path": "/api/portfolio/positions/open",
+      "path_template": "/api/portfolio/positions/open",
+      "resolved": false,
+      "via": "api.portfolio.getOpenPositions"
+    },
+    {
+      "method": "GET",
+      "path": "/api/portfolio/positions?{params}",
+      "path_template": "/api/portfolio/positions?{params}",
+      "resolved": false,
+      "via": "api.portfolio.getPositions"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/summary')"
+          ],
+          "handler": "portfolio_summary",
+          "module": "backend_app.routers.portfolio",
+          "parameters": {
+            "telemetry": {
+              "annotation": "_empty",
+              "depends_on": "get_telemetry"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "dict",
+            {
+              "pnl_pct": "str",
+              "total_equity": "str",
+              "total_exposure": "str",
+              "total_pnl": "str"
+            }
+          ],
+          "route_path": "/api/portfolio/summary"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/portfolio/summary",
+      "path_template": "/api/portfolio/summary",
+      "resolved": true,
+      "via": "api.portfolio.getSummary"
+    }
+  ],
+  "capture": "surface_portfolio",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/Portfolio.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "portfolio",
+  "unresolved_usages": []
+}

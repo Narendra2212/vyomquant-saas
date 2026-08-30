@@ -1,0 +1,198 @@
+{
+  "capture": "risk_utilisation",
+  "known_account": {
+    "available_balance": "70000.00",
+    "initial_capital": "100000.0",
+    "locked_balance": "10000.00",
+    "open_position_count": 2,
+    "realized_pnl": "-300.00",
+    "total_equity": "102450.00",
+    "unrealized_pnl": "450.00"
+  },
+  "margin_health_endpoint": {
+    "keys": [
+      "currency",
+      "free_margin",
+      "margin_ratio",
+      "risk_score"
+    ],
+    "status_code": 200,
+    "type_map": {
+      "currency": "str",
+      "free_margin": "float",
+      "margin_ratio": "float",
+      "risk_score": "int"
+    },
+    "values": {
+      "currency": "USD",
+      "free_margin": 68.33,
+      "margin_ratio": 9.76,
+      "risk_score": 14
+    }
+  },
+  "requirement": "25.5",
+  "risk_settings": {
+    "circuit_breaker_armed": true,
+    "max_daily_loss": 500.0,
+    "max_leverage": 3,
+    "max_positions": 10
+  },
+  "routes": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/status')"
+          ],
+          "handler": "get_risk_status",
+          "module": "backend_app.routers.risk",
+          "parameters": {
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "circuit_breaker_armed": "computed",
+              "daily_loss": {
+                "current": "computed",
+                "max": "computed",
+                "utilization_pct": "computed"
+              },
+              "drawdown_pct": "float",
+              "kill_switch_active": "computed",
+              "leverage": {
+                "configured_max": "computed",
+                "current": "float"
+              },
+              "positions": {
+                "current": "computed",
+                "max": "computed",
+                "utilization_pct": "computed"
+              },
+              "status": "computed",
+              "timestamp": "str"
+            }
+          ],
+          "route_path": "/api/risk/status"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/risk/status",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/margin-health')"
+          ],
+          "handler": "get_margin_health",
+          "module": "backend_app.routers.risk",
+          "parameters": {
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "currency": "str",
+              "free_margin": "computed",
+              "margin_ratio": "computed",
+              "risk_score": "computed"
+            }
+          ],
+          "route_path": "/api/risk/margin-health"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/risk/margin-health",
+      "resolved": true
+    }
+  ],
+  "semantics": {
+    "free_margin": "round(available_balance / total_equity * 100, 2), 100.0 when total_equity <= 0",
+    "loss_utilisation_pct": "round(realized_loss / max_daily_loss * 100, 2), 0.0 when max_daily_loss <= 0",
+    "margin_ratio": "round(locked_balance / total_equity * 100, 2), 0.0 when total_equity <= 0",
+    "open_position_count_source": "len(paper_service.get_positions(user_id))",
+    "position_utilisation_pct": "round(open_position_count / max_positions * 100, 2), 0.0 when max_positions <= 0",
+    "realized_loss_is_the_negated_floor_of_realized_pnl_at_zero": true,
+    "risk_level_ladder": [
+      "BLOCKED when the kill switch is active",
+      "BLOCKED at utilisation >= 100",
+      "CRITICAL at utilisation >= 85",
+      "WARNING at utilisation >= 60",
+      "SAFE otherwise"
+    ],
+    "risk_score": "min(100, int(margin_ratio * 0.8 + (100 - free_margin) * 0.2))"
+  },
+  "status_endpoint": {
+    "keys": [
+      "circuit_breaker_armed",
+      "daily_loss",
+      "daily_loss.current",
+      "daily_loss.max",
+      "daily_loss.utilization_pct",
+      "drawdown_pct",
+      "kill_switch_active",
+      "leverage",
+      "leverage.configured_max",
+      "leverage.current",
+      "positions",
+      "positions.current",
+      "positions.max",
+      "positions.utilization_pct",
+      "status",
+      "timestamp"
+    ],
+    "status_code": 200,
+    "type_map": {
+      "circuit_breaker_armed": "bool",
+      "daily_loss": {
+        "current": "float",
+        "max": "float",
+        "utilization_pct": "float"
+      },
+      "drawdown_pct": "float",
+      "kill_switch_active": "bool",
+      "leverage": {
+        "configured_max": "int",
+        "current": "float"
+      },
+      "positions": {
+        "current": "int",
+        "max": "int",
+        "utilization_pct": "float"
+      },
+      "status": "str",
+      "timestamp": "str"
+    },
+    "values": {
+      "circuit_breaker_armed": true,
+      "daily_loss": {
+        "current": 300.0,
+        "max": 500.0,
+        "utilization_pct": 60.0
+      },
+      "drawdown_pct": 0.0,
+      "kill_switch_active": false,
+      "leverage": {
+        "configured_max": 3,
+        "current": 1.0
+      },
+      "positions": {
+        "current": 2,
+        "max": 10,
+        "utilization_pct": 20.0
+      },
+      "status": "WARNING"
+    }
+  },
+  "subject": "backend_app/routers/risk.py::get_risk_status (lines 300-311), get_margin_health (lines 355-360)"
+}

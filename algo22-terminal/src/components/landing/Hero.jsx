@@ -1,6 +1,6 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
-import { Check, Globe, ArrowDown } from 'lucide-react'
+import { Check, Globe, ArrowDown, ArrowRight, ChevronRight, Shield, Activity, Sliders, Play } from 'lucide-react'
 
 function WindowsIcon({ className }) {
   return (
@@ -20,15 +20,15 @@ function AppleIcon({ className }) {
 
 export default function Hero() {
   return (
-    <section className="relative min-h-[92vh] flex items-center pt-28 pb-20 sm:pt-36 sm:pb-24 lg:pt-40 lg:pb-32 overflow-hidden" aria-label="Hero">
+    <section className="relative min-h-[94vh] flex items-center pt-28 pb-20 sm:pt-36 sm:pb-24 lg:pt-40 lg:pb-32 overflow-hidden" aria-label="Hero">
       {/* Layered Background Glows & Grid */}
       <div className="absolute inset-0 bg-[#0a0e17] pointer-events-none">
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1100px] h-[750px] bg-accent-cyan/8 rounded-full blur-[170px] opacity-70" />
         <div className="absolute bottom-0 right-0 w-[600px] h-[450px] bg-accent-profit/5 rounded-full blur-[140px] opacity-60" />
         <div 
-          className="absolute inset-0 opacity-40" 
+          className="absolute inset-0 opacity-30" 
           style={{
-            backgroundImage: 'linear-gradient(rgba(0, 212, 255, 0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 212, 255, 0.06) 1px, transparent 1px)',
+            backgroundImage: 'linear-gradient(rgba(0, 212, 255, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 212, 255, 0.05) 1px, transparent 1px)',
             backgroundSize: '64px 64px'
           }} 
         />
@@ -40,39 +40,55 @@ export default function Hero() {
           {/* Status badge */}
           <div className="inline-flex items-center gap-2.5 px-4.5 py-1.5 rounded-full border border-accent-cyan/30 bg-accent-cyan/10 backdrop-blur-md mb-8 shadow-[0_0_20px_rgba(0,212,255,0.15)]">
             <span className="w-2 h-2 rounded-full bg-accent-cyan animate-pulse" />
-            <span className="text-xs font-mono text-accent-cyan font-semibold uppercase tracking-wider">Closed Beta — Early Access Available</span>
+            <span className="text-xs font-mono text-accent-cyan font-semibold uppercase tracking-wider">Early Access Beta — Quantitative SaaS</span>
           </div>
 
-          {/* Headline */}
-          <h1 className="text-4xl sm:text-5xl lg:text-[clamp(2.75rem,5.5vw,5.2rem)] font-black tracking-tight leading-[1.05] max-w-4xl mb-8 text-text-primary">
-            Build, Backtest and Deploy{' '}
-            <span className="text-gradient-cyan drop-shadow-[0_0_35px_rgba(0,212,255,0.3)]">Quantitative Trading Strategies</span>{' '}
-            Without Writing Code
+          {/* Dominant Headline */}
+          <h1 className="text-4xl sm:text-5xl lg:text-[clamp(2.75rem,5.5vw,5.2rem)] font-black tracking-tight leading-[1.05] max-w-4xl mb-6 text-text-primary">
+            Systematic Quantitative Infrastructure{' '}
+            <span className="text-gradient-cyan drop-shadow-[0_0_35px_rgba(0,212,255,0.3)]">Without Writing Code</span>
           </h1>
 
           {/* Subheadline */}
-          <p className="text-text-secondary text-lg sm:text-xl max-w-2xl leading-relaxed mb-12 font-normal">
-            Institutional-grade algorithmic trading infrastructure featuring visual strategy design,
-            vectorized backtesting, paper trading, AI assistance, and live execution.
+          <p className="text-text-secondary text-lg sm:text-xl max-w-2xl leading-relaxed mb-10 font-normal">
+            Construct complex algorithmic logic visually via DAGs, validate against historical tick data with VectorBT, and forward-test with real exchange order books.
           </p>
 
-          {/* ── Platform Cards — above the fold ── */}
+          {/* Dual Action CTAs */}
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 w-full max-w-md mb-14">
+            <Link
+              to="/signup"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-8 py-4 rounded-xl font-bold text-sm bg-accent-cyan text-text-inverse hover:bg-accent-cyan/90 transition-all duration-200 hover:-translate-y-0.5 shadow-[0_0_35px_rgba(0,212,255,0.35)]"
+            >
+              Get Started Free
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+            <a
+              href="#architecture"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-4 rounded-xl border border-border-default bg-bg-surface/80 text-sm font-semibold text-text-primary hover:border-accent-cyan/40 hover:bg-bg-elevated transition-all duration-200"
+            >
+              Explore Architecture
+              <ChevronRight className="w-4 h-4 text-accent-cyan" />
+            </a>
+          </div>
+
+          {/* ── Platform Availability Cards ── */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 w-full max-w-4xl mb-10">
             {/* Web App Card */}
             <Link
-              to="/app"
-              className="group relative flex flex-col items-center gap-3.5 p-7 rounded-2xl border-2 border-accent-cyan/50 bg-accent-cyan/8 hover:bg-accent-cyan/15 hover:border-accent-cyan transition-all duration-300 hover:-translate-y-1.5 shadow-[0_0_30px_rgba(0,212,255,0.2)] hover:shadow-[0_0_50px_rgba(0,212,255,0.35)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
-              aria-label="Launch Web Application"
+              to="/signup"
+              className="group relative flex flex-col items-center gap-3.5 p-7 rounded-2xl border-2 border-accent-cyan/40 bg-accent-cyan/5 hover:bg-accent-cyan/10 hover:border-accent-cyan transition-all duration-300 hover:-translate-y-1.5 shadow-[0_0_30px_rgba(0,212,255,0.15)] hover:shadow-[0_0_45px_rgba(0,212,255,0.3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
+              aria-label="Start Free with Web Application"
             >
               <div className="w-13 h-13 rounded-xl bg-accent-cyan flex items-center justify-center shadow-[0_0_25px_rgba(0,212,255,0.4)] group-hover:scale-105 transition-transform duration-300">
                 <Globe className="w-6.5 h-6.5 text-text-inverse" />
               </div>
               <div className="text-center">
                 <div className="text-base font-bold text-text-primary mb-0.5">Web Application</div>
-                <div className="text-xs text-text-secondary font-mono">Browser Access</div>
+                <div className="text-xs text-text-secondary font-mono">Immediate Browser Access</div>
               </div>
               <div className="mt-auto inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-accent-cyan text-text-inverse text-xs font-bold group-hover:bg-accent-cyan/90 transition-colors shadow-md">
-                Launch Web App
+                Start in Browser
               </div>
             </Link>
 
@@ -86,8 +102,8 @@ export default function Hero() {
                 <WindowsIcon className="w-6.5 h-6.5 text-text-primary" />
               </div>
               <div className="text-center">
-                <div className="text-base font-bold text-text-primary mb-0.5">Windows Desktop App</div>
-                <div className="text-xs text-text-secondary font-mono">64-bit Installer</div>
+                <div className="text-base font-bold text-text-primary mb-0.5">Windows Desktop</div>
+                <div className="text-xs text-text-secondary font-mono">64-bit Installer (.exe)</div>
               </div>
               <div className="mt-auto inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-border-default text-xs font-semibold text-text-secondary group-hover:text-text-primary group-hover:border-accent-cyan/50 transition-colors">
                 <ArrowDown className="w-3.5 h-3.5" />
@@ -105,8 +121,8 @@ export default function Hero() {
                 <AppleIcon className="w-6.5 h-6.5 text-text-primary" />
               </div>
               <div className="text-center">
-                <div className="text-base font-bold text-text-primary mb-0.5">macOS Desktop App</div>
-                <div className="text-xs text-text-secondary font-mono">Apple Silicon & Intel</div>
+                <div className="text-base font-bold text-text-primary mb-0.5">macOS Desktop</div>
+                <div className="text-xs text-text-secondary font-mono">Apple Silicon & Intel (.dmg)</div>
               </div>
               <div className="mt-auto inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-border-default text-xs font-semibold text-text-secondary group-hover:text-text-primary group-hover:border-accent-cyan/50 transition-colors">
                 <ArrowDown className="w-3.5 h-3.5" />
@@ -117,9 +133,9 @@ export default function Hero() {
 
           {/* Platform availability checkmarks */}
           <div className="flex flex-wrap justify-center items-center gap-x-8 gap-y-3 text-text-muted text-sm font-medium mb-16">
-            <span className="flex items-center gap-2.5"><Check className="w-4.5 h-4.5 text-accent-profit" /> Web Application</span>
-            <span className="flex items-center gap-2.5"><Check className="w-4.5 h-4.5 text-accent-profit" /> Windows Desktop App</span>
-            <span className="flex items-center gap-2.5"><Check className="w-4.5 h-4.5 text-accent-profit" /> macOS Desktop App</span>
+            <span className="flex items-center gap-2.5"><Check className="w-4.5 h-4.5 text-accent-profit" /> Web SaaS Terminal</span>
+            <span className="flex items-center gap-2.5"><Check className="w-4.5 h-4.5 text-accent-profit" /> Windows 64-bit Desktop</span>
+            <span className="flex items-center gap-2.5"><Check className="w-4.5 h-4.5 text-accent-profit" /> macOS Universal Desktop</span>
           </div>
 
           {/* DAG terminal mockup */}
@@ -135,9 +151,8 @@ export default function Hero() {
                 <div className="flex-1 text-center">
                   <span className="text-xs font-mono text-text-muted tracking-wide">vyomquant — strategy-builder-dag</span>
                 </div>
-                <div className="flex items-center gap-2 px-2.5 py-1 rounded-md bg-accent-profit-dim border border-accent-profit/30">
-                  <span className="w-1.5 h-1.5 rounded-full bg-accent-profit animate-pulse" />
-                  <span className="text-[10px] font-mono font-bold text-accent-profit uppercase tracking-wider">LIVE EXECUTION</span>
+                <div className="flex items-center gap-2 px-2.5 py-1 rounded-md bg-bg-elevated/80 border border-border-default/60">
+                  <span className="text-[10px] font-mono font-semibold text-text-muted uppercase tracking-wider">Strategy Builder DAG</span>
                 </div>
               </div>
 
@@ -179,7 +194,7 @@ export default function Hero() {
                   </div>
                 </div>
 
-                {/* Floating backtest stats */}
+                {/* Illustrative backtest stats — demo values only */}
                 <div className="absolute top-4 right-4 flex flex-col gap-2">
                   <div className="bg-bg-elevated/95 border border-border-default rounded-lg px-3.5 py-1.5 text-xs font-mono shadow-md backdrop-blur-sm">
                     <span className="text-text-muted">Sharpe:</span>{' '}<span className="text-accent-cyan font-bold">2.1</span>
@@ -190,6 +205,7 @@ export default function Hero() {
                   <div className="bg-bg-elevated/95 border border-border-default rounded-lg px-3.5 py-1.5 text-xs font-mono shadow-md backdrop-blur-sm">
                     <span className="text-text-muted">Max DD:</span>{' '}<span className="text-accent-loss font-bold">-8.2%</span>
                   </div>
+                  <div className="text-[9px] font-mono text-text-muted text-right opacity-60">Illustrative demo values</div>
                 </div>
               </div>
             </div>
@@ -200,3 +216,4 @@ export default function Hero() {
     </section>
   )
 }
+

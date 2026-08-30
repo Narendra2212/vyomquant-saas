@@ -1,0 +1,303 @@
+{
+  "api_call_count": 5,
+  "api_calls": [
+    {
+      "handler_count": 2,
+      "handlers": [
+        {
+          "decorators": [
+            "router.delete('', response_model=Dict[str, Any])",
+            "router.delete('/', response_model=Dict[str, Any])"
+          ],
+          "handler": "delete_all_notifications",
+          "module": "backend_app.routers.notifications",
+          "parameters": {
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "response_model": "Dict",
+          "returns": [
+            {
+              "message": "str",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/notifications"
+        },
+        {
+          "decorators": [
+            "router.delete('', response_model=Dict[str, Any])",
+            "router.delete('/', response_model=Dict[str, Any])"
+          ],
+          "handler": "delete_all_notifications",
+          "module": "backend_app.routers.notifications",
+          "parameters": {
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "response_model": "Dict",
+          "returns": [
+            {
+              "message": "str",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/notifications/"
+        }
+      ],
+      "method": "DELETE",
+      "path": "/api/notifications",
+      "path_template": "/api/notifications",
+      "resolved": true,
+      "via": "api.notifications.deleteAll"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.delete('/{notification_id}')"
+          ],
+          "handler": "delete_notification",
+          "module": "backend_app.routers.notifications",
+          "parameters": {
+            "notification_id": {
+              "annotation": "str"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 404
+            }
+          ],
+          "returns": [
+            {
+              "id": "computed",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/notifications/{notification_id}"
+        }
+      ],
+      "method": "DELETE",
+      "path": "/api/notifications/{id}",
+      "path_template": "/api/notifications/{id}",
+      "resolved": true,
+      "via": "api.notifications.delete"
+    },
+    {
+      "handler_count": 2,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('', response_model=NotificationListResponse)",
+            "router.get('/', response_model=NotificationListResponse)"
+          ],
+          "handler": "list_notifications",
+          "module": "backend_app.routers.notifications",
+          "parameters": {
+            "category": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "offset": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "unread_only": {
+              "annotation": "bool",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "response_model": "NotificationListResponse",
+          "response_model_fields": {
+            "items": "List",
+            "limit": "int",
+            "offset": "int",
+            "total": "int",
+            "unread_count": "int"
+          },
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/notifications"
+        },
+        {
+          "decorators": [
+            "router.get('', response_model=NotificationListResponse)",
+            "router.get('/', response_model=NotificationListResponse)"
+          ],
+          "handler": "list_notifications",
+          "module": "backend_app.routers.notifications",
+          "parameters": {
+            "category": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "offset": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "unread_only": {
+              "annotation": "bool",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "response_model": "NotificationListResponse",
+          "response_model_fields": {
+            "items": "List",
+            "limit": "int",
+            "offset": "int",
+            "total": "int",
+            "unread_count": "int"
+          },
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/notifications/"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/notifications{expr}",
+      "path_template": "/api/notifications{expr}",
+      "resolved": true,
+      "via": "api.notifications.list"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.put('/read-all')"
+          ],
+          "handler": "mark_all_notifications_read",
+          "module": "backend_app.routers.notifications",
+          "parameters": {
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "message": "str",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/notifications/read-all"
+        }
+      ],
+      "method": "PUT",
+      "path": "/api/notifications/read-all",
+      "path_template": "/api/notifications/read-all",
+      "resolved": true,
+      "via": "api.notifications.markAllRead"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.put('/{notification_id}/read')"
+          ],
+          "handler": "mark_notification_read",
+          "module": "backend_app.routers.notifications",
+          "parameters": {
+            "notification_id": {
+              "annotation": "str"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 404
+            }
+          ],
+          "returns": [
+            {
+              "id": "computed",
+              "read": "bool",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/notifications/{notification_id}/read"
+        }
+      ],
+      "method": "PUT",
+      "path": "/api/notifications/{id}/read",
+      "path_template": "/api/notifications/{id}/read",
+      "resolved": true,
+      "via": "api.notifications.markRead"
+    }
+  ],
+  "capture": "surface_notifications",
+  "requirement": "25.4",
+  "source_files": [
+    "components/NotificationCenter.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "notifications",
+  "unresolved_usages": []
+}

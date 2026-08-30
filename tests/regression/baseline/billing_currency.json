@@ -1,0 +1,123 @@
+{
+  "capture": "billing_currency",
+  "frontend_bindings": {
+    "getCurrency": [
+      {
+        "method": "GET",
+        "path_template": "/api/billing/currency"
+      }
+    ],
+    "setCurrency": [
+      {
+        "method": "POST",
+        "path_template": "/api/billing/currency"
+      }
+    ]
+  },
+  "requirement": "25.2 \u2014 currency selection",
+  "routes": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/currency')",
+            "limiter.limit('60/minute')"
+          ],
+          "handler": "get_currency",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            "computed",
+            {
+              "checkout_currency": "str",
+              "checkout_currency_symbol": "str",
+              "checkout_provider": "str",
+              "country": "str",
+              "country_name": "str",
+              "currency": "str",
+              "currency_source": "str",
+              "currency_symbol": "str",
+              "fx_rate": "float",
+              "fx_rate_timestamp": "str",
+              "is_direct_checkout": "bool",
+              "is_fallback": "bool",
+              "supported_currencies": "list"
+            }
+          ],
+          "route_path": "/api/billing/currency"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/currency",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/currency')",
+            "limiter.limit('10/minute')"
+          ],
+          "handler": "set_currency",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "body": {
+              "annotation": "Dict"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "currency": "str",
+              "status": "str",
+              "warning": "str"
+            },
+            {
+              "currency": "computed",
+              "status": "str"
+            },
+            {
+              "currency": "str",
+              "status": "str"
+            },
+            {
+              "currency": "computed",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/billing/currency"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/billing/currency",
+      "resolved": true
+    }
+  ]
+}

@@ -2,11 +2,11 @@ import React from 'react'
 import Navbar from './Navbar'
 import Hero from './Hero'
 import TrustSection from './TrustSection'
-import SecuritySection from './SecuritySection'
 import ScreenshotsSection from './ScreenshotsSection'
-import ModernTradingSection from './ModernTradingSection'
-import FounderSection from './FounderSection'
 import HowItWorks from './HowItWorks'
+import ModernTradingSection from './ModernTradingSection'
+import SecuritySection from './SecuritySection'
+import FounderSection from './FounderSection'
 import DownloadSection from './DownloadSection'
 import Pricing from './Pricing'
 import FAQ from './FAQ'
@@ -20,11 +20,11 @@ export default function LandingPage() {
       <Navbar />
       <Hero />
       <TrustSection />
-      <SecuritySection />
       <ScreenshotsSection />
-      <ModernTradingSection />
-      <FounderSection />
       <HowItWorks />
+      <ModernTradingSection />
+      <SecuritySection />
+      <FounderSection />
       <DownloadSection />
       <Pricing />
       <FAQ />
@@ -34,3 +34,4 @@ export default function LandingPage() {
     </div>
   )
 }
+

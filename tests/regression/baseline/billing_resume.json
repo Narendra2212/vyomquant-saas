@@ -1,0 +1,52 @@
+{
+  "capture": "billing_resume",
+  "frontend_bindings": {
+    "resumeSubscription": [
+      {
+        "method": "POST",
+        "path_template": "/api/billing/resume"
+      }
+    ]
+  },
+  "requirement": "25.2 \u2014 resume",
+  "routes": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/resume')",
+            "limiter.limit('5/minute')"
+          ],
+          "handler": "resume_subscription",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "cancel_at_period_end": "bool",
+              "detail": "str",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/billing/resume"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/billing/resume",
+      "resolved": true
+    }
+  ]
+}

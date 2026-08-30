@@ -1,0 +1,381 @@
+{
+  "capture": "live_order_path",
+  "contract": {
+    "decorators": [],
+    "handler": "execute_with_idempotency",
+    "module": "backend_app.core.execution_engine",
+    "parameters": {
+      "execution_interval_minutes": {
+        "annotation": "int",
+        "has_default": true
+      },
+      "price": {
+        "annotation": "Decimal"
+      },
+      "self": {
+        "annotation": "_empty"
+      },
+      "side": {
+        "annotation": "str"
+      },
+      "size": {
+        "annotation": "Decimal"
+      },
+      "source": {
+        "annotation": "str",
+        "has_default": true
+      },
+      "strategy_id": {
+        "annotation": "str"
+      },
+      "symbol": {
+        "annotation": "str"
+      },
+      "task_id": {
+        "annotation": "Optional",
+        "has_default": true
+      },
+      "tenant_id": {
+        "annotation": "UUID"
+      }
+    },
+    "raises": [],
+    "returns": [
+      {
+        "execution_id": "null",
+        "message": "str",
+        "result": "null",
+        "status": "str"
+      },
+      {
+        "execution_id": "null",
+        "message": "str",
+        "result": "null",
+        "status": "str"
+      },
+      {
+        "execution_id": "null",
+        "message": "str",
+        "result": "null",
+        "status": "str"
+      },
+      {
+        "execution_id": "null",
+        "message": "str",
+        "result": "null",
+        "status": "str"
+      },
+      {
+        "execution_id": "computed",
+        "message": "str",
+        "result": "computed",
+        "status": "str"
+      },
+      {
+        "execution_id": "computed",
+        "message": "str",
+        "result": "null",
+        "status": "str"
+      },
+      {
+        "execution_id": "computed",
+        "message": "str",
+        "result": "computed",
+        "status": "str"
+      },
+      {
+        "execution_id": "computed",
+        "message": "str",
+        "result": "null",
+        "status": "str"
+      },
+      {
+        "execution_id": "computed",
+        "message": "str",
+        "result": "computed",
+        "status": "str"
+      },
+      {
+        "execution_id": "computed",
+        "message": "str",
+        "result": "computed",
+        "status": "str"
+      },
+      {
+        "execution_id": "computed",
+        "message": "str",
+        "result": "computed",
+        "status": "str"
+      }
+    ]
+  },
+  "execution_statuses_available": [
+    "completed",
+    "executing",
+    "failed",
+    "pending",
+    "unknown"
+  ],
+  "intent": {
+    "price": "61234.50",
+    "side": "buy",
+    "size": "0.25",
+    "source": "bot_runner",
+    "symbol": "BTCUSDT"
+  },
+  "requirement": "25.1",
+  "scenarios": [
+    {
+      "collaborator_sequence": [
+        {
+          "call": "GlobalKillSwitch.is_active",
+          "returns": "bool"
+        },
+        {
+          "call": "ExecutionEngine._validate_strategy_exists",
+          "returns": "bool"
+        },
+        {
+          "call": "SessionLocal"
+        },
+        {
+          "call": "ExecutionRecordRepository"
+        },
+        {
+          "arguments": [
+            "allow_failed_retry",
+            "execution_interval_minutes",
+            "price",
+            "qty",
+            "side",
+            "strategy_id",
+            "symbol",
+            "task_id",
+            "tenant_id",
+            "timestamp"
+          ],
+          "call": "ExecutionRecordRepository.check_idempotent_execution",
+          "returns_action": "proceed"
+        },
+        {
+          "call": "ExecutionRecordRepository.claim_execution",
+          "returns": "tuple[bool, record]"
+        },
+        {
+          "arguments": [
+            "execution_id",
+            "price",
+            "side",
+            "size",
+            "symbol"
+          ],
+          "call": "ExecutionEngine._execute_trade_internal"
+        },
+        {
+          "arguments": [
+            "execution_id",
+            "order_id",
+            "result",
+            "status",
+            "tenant_id"
+          ],
+          "call": "ExecutionRecordRepository.update_status",
+          "status": "completed"
+        },
+        {
+          "call": "execution_metrics.record_success"
+        },
+        {
+          "call": "SessionLocal.close"
+        }
+      ],
+      "result": {
+        "keys": [
+          "execution_id",
+          "message",
+          "result",
+          "result.executed_at",
+          "result.price",
+          "result.side",
+          "result.size",
+          "result.symbol",
+          "result.trade_result",
+          "result.trade_result.filled_size",
+          "result.trade_result.order_id",
+          "status"
+        ],
+        "type_map": {
+          "execution_id": "str",
+          "message": "str",
+          "result": {
+            "executed_at": "str",
+            "price": "str",
+            "side": "str",
+            "size": "str",
+            "symbol": "str",
+            "trade_result": {
+              "filled_size": "str",
+              "order_id": "str"
+            }
+          },
+          "status": "str"
+        }
+      },
+      "result_status": "completed",
+      "scenario": "representative_intent_completes"
+    },
+    {
+      "collaborator_sequence": [
+        {
+          "call": "GlobalKillSwitch.is_active",
+          "returns": "bool"
+        },
+        {
+          "call": "ExecutionEngine._validate_strategy_exists",
+          "returns": "bool"
+        },
+        {
+          "call": "SessionLocal"
+        },
+        {
+          "call": "ExecutionRecordRepository"
+        },
+        {
+          "arguments": [
+            "allow_failed_retry",
+            "execution_interval_minutes",
+            "price",
+            "qty",
+            "side",
+            "strategy_id",
+            "symbol",
+            "task_id",
+            "tenant_id",
+            "timestamp"
+          ],
+          "call": "ExecutionRecordRepository.check_idempotent_execution",
+          "returns_action": "skip_return_result"
+        },
+        {
+          "call": "SessionLocal.close"
+        }
+      ],
+      "result": {
+        "keys": [
+          "execution_id",
+          "message",
+          "result",
+          "result.order_id",
+          "status"
+        ],
+        "type_map": {
+          "execution_id": "str",
+          "message": "str",
+          "result": {
+            "order_id": "str"
+          },
+          "status": "str"
+        }
+      },
+      "result_status": "skipped_completed",
+      "scenario": "already_completed_returns_cached"
+    },
+    {
+      "collaborator_sequence": [
+        {
+          "call": "GlobalKillSwitch.is_active",
+          "returns": "bool"
+        },
+        {
+          "call": "ExecutionEngine._validate_strategy_exists",
+          "returns": "bool"
+        },
+        {
+          "call": "SessionLocal"
+        },
+        {
+          "call": "ExecutionRecordRepository"
+        },
+        {
+          "arguments": [
+            "allow_failed_retry",
+            "execution_interval_minutes",
+            "price",
+            "qty",
+            "side",
+            "strategy_id",
+            "symbol",
+            "task_id",
+            "tenant_id",
+            "timestamp"
+          ],
+          "call": "ExecutionRecordRepository.check_idempotent_execution",
+          "returns_action": "skip_already_running"
+        },
+        {
+          "call": "SessionLocal.close"
+        }
+      ],
+      "result": {
+        "keys": [
+          "execution_id",
+          "message",
+          "result",
+          "status"
+        ],
+        "type_map": {
+          "execution_id": "str",
+          "message": "str",
+          "result": "null",
+          "status": "str"
+        }
+      },
+      "result_status": "skipped_executing",
+      "scenario": "already_executing_is_skipped"
+    },
+    {
+      "collaborator_sequence": [
+        {
+          "call": "GlobalKillSwitch.is_active",
+          "returns": "bool"
+        }
+      ],
+      "result": {
+        "keys": [
+          "execution_id",
+          "message",
+          "result",
+          "status"
+        ],
+        "type_map": {
+          "execution_id": "null",
+          "message": "str",
+          "result": "null",
+          "status": "str"
+        }
+      },
+      "result_status": "blocked",
+      "scenario": "global_kill_switch_blocks"
+    },
+    {
+      "collaborator_sequence": [],
+      "result": {
+        "keys": [
+          "execution_id",
+          "message",
+          "result",
+          "status"
+        ],
+        "type_map": {
+          "execution_id": "null",
+          "message": "str",
+          "result": "null",
+          "status": "str"
+        }
+      },
+      "result_status": "blocked",
+      "scenario": "non_bot_runner_source_blocked"
+    }
+  ],
+  "subject": "backend_app/core/execution_engine.py::ExecutionEngine.execute_with_idempotency"
+}

@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import uuid
 from uuid import UUID
 
+from backend_app.backend.execution_environment import (
+    ExecutionEnvironment, assert_live_environment)
 from backend_app.core.database import SessionLocal
 from backend_app.core.metrics import execution_metrics
 from backend_app.core.models.execution_record import (
@@ -157,6 +159,7 @@ class ExecutionEngine:
         task_id: Optional[UUID] = None,
         execution_interval_minutes: int = 5,
         source: str = "unknown",
+        execution_environment: Any = ExecutionEnvironment.LIVE,
     ) -> Dict[str, Any]:
         """
         Execute trade with idempotency check - PREVENTS DUPLICATE EXECUTIONS.
@@ -167,6 +170,7 @@ class ExecutionEngine:
         this wrapper to ensure idempotency and prevent double execution.
         
         Flow:
+        0. Assert the Execution_Environment is LIVE - REJECT PAPER/BACKTEST/unresolved
         1. Validate source is "bot_runner" - REJECT direct/manual execution
         2. Validate strategy_id exists in database - REJECT fake IDs
         3. Generate deterministic execution_id
@@ -185,6 +189,14 @@ class ExecutionEngine:
             task_id: Optional associated DAG task ID
             execution_interval_minutes: Time bucket for idempotency
             source: Execution source - MUST be "bot_runner"
+            execution_environment: The order's Execution_Environment. MUST resolve to
+                `ExecutionEnvironment.LIVE`; `PAPER`, `BACKTEST`, `None` and any
+                out-of-set value are refused by `assert_live_environment` before any
+                other work (marketplace-subscriptions-paper-trading Requirements
+                13.9, 13.10). The default is `LIVE` because this engine had exactly one
+                environment before the parameter existed - it is the pre-existing call
+                convention of every live caller, written down. The guard itself never
+                defaults: an explicitly supplied absent or unrecognised value raises.
         
         Returns:
             Dict with execution result:
@@ -195,7 +207,30 @@ class ExecutionEngine:
         
         ⚠️ WARNING: Direct calls to open_position/close_position are BLOCKED.
         Use this method for ALL trade executions.
+
+        Raises:
+            UnresolvedExecutionEnvironment: `execution_environment` is absent or outside
+                `BACKTEST`/`PAPER`/`LIVE` (Requirement 13.10).
+            ExecutionEnvironmentMismatch: `execution_environment` is `PAPER` or
+                `BACKTEST` (Requirement 13.9). Audited before the raise.
         """
+        # ═══════════════════════════════════════════════════════════════════
+        # 🔴 STEP 0: EXECUTION ENVIRONMENT GUARD - the live path is LIVE only
+        # ═══════════════════════════════════════════════════════════════════
+        # First statement of the only entry point to live execution, so it precedes every
+        # other check, every repository and session handle, and the exchange_executor /
+        # CCXT call in `_execute_trade_internal`. A PAPER or BACKTEST order therefore
+        # cannot reach an exchange, and cannot move a balance on the way to being refused
+        # (Requirements 13.9, 13.10). It raises rather than returning a `blocked` result:
+        # a returned verdict can be dropped by a caller, and dropping this one places a
+        # real order for a simulated intent.
+        await assert_live_environment(
+            execution_environment,
+            actor_id=str(tenant_id),
+            strategy_id=str(strategy_id) if strategy_id else None,
+            symbol=symbol,
+        )
+
         import time, threading
         start_time = time.time()
         thread_id = threading.get_ident()

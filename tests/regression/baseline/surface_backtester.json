@@ -1,0 +1,447 @@
+{
+  "api_call_count": 6,
+  "api_calls": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/backtests')",
+            "limiter.limit('200/minute')"
+          ],
+          "handler": "list_backtests",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "strategy_id": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "BACKTESTS_LIST_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            {
+              "backtests": "computed",
+              "total": "int"
+            }
+          ],
+          "route_path": "/api/backtests"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/backtests{expr}",
+      "path_template": "/api/backtests{expr}",
+      "resolved": true,
+      "via": "api.strategies.listBacktests"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/supported')",
+            "limiter.limit('60/minute')"
+          ],
+          "handler": "get_supported_exchanges",
+          "module": "backend_app.routers.exchange",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            "computed",
+            "computed"
+          ],
+          "route_path": "/api/exchanges/supported"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/exchanges/supported",
+      "path_template": "/api/exchanges/supported",
+      "resolved": true,
+      "via": "api.exchange.getSupported"
+    },
+    {
+      "handler_count": 3,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('')",
+            "router.get('/')"
+          ],
+          "handler": "list_strategies",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "include_archived": {
+              "annotation": "bool",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "archived_total": "int",
+              "include_archived": "computed",
+              "strategies": "list",
+              "total": "int"
+            },
+            {
+              "archived_total": "computed",
+              "include_archived": "computed",
+              "strategies": "computed",
+              "total": "int"
+            },
+            {
+              "archived_total": "int",
+              "include_archived": "computed",
+              "strategies": "list",
+              "total": "int"
+            }
+          ],
+          "route_path": "/api/strategies"
+        },
+        {
+          "decorators": [
+            "router.get('')",
+            "router.get('/')"
+          ],
+          "handler": "list_strategies",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "include_archived": {
+              "annotation": "bool",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "archived_total": "int",
+              "include_archived": "computed",
+              "strategies": "list",
+              "total": "int"
+            },
+            {
+              "archived_total": "computed",
+              "include_archived": "computed",
+              "strategies": "computed",
+              "total": "int"
+            },
+            {
+              "archived_total": "int",
+              "include_archived": "computed",
+              "strategies": "list",
+              "total": "int"
+            }
+          ],
+          "route_path": "/api/strategies/"
+        },
+        {
+          "decorators": [
+            "router.get('/strategies')",
+            "limiter.limit('200/minute')"
+          ],
+          "handler": "list_strategies",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "environment": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "status": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGIES_LIST_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            "computed",
+            "computed"
+          ],
+          "route_path": "/api/strategies"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/strategies",
+      "path_template": "/api/strategies",
+      "resolved": true,
+      "via": "api.strategies.list"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/strategies/{strategy_id}/versions')",
+            "limiter.limit('200/minute')"
+          ],
+          "handler": "get_version_history",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "VERSION_HISTORY_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            {
+              "read_only_states": "list",
+              "strategy_id": "computed",
+              "total": "int",
+              "versions": "computed"
+            }
+          ],
+          "route_path": "/api/strategies/{strategy_id}/versions"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/strategies/{expr}/versions",
+      "path_template": "/api/strategies/{expr}/versions",
+      "resolved": true,
+      "via": "api.strategies.versions"
+    },
+    {
+      "handler_count": 2,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/strategies/{strategy_id}')",
+            "limiter.limit('200/minute')"
+          ],
+          "handler": "get_strategy",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_GET_FAILED",
+              "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_NOT_FOUND",
+              "status_code": 404
+            }
+          ],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/strategies/{strategy_id}"
+        },
+        {
+          "decorators": [
+            "router.get('/{strategy_id}')"
+          ],
+          "handler": "get_strategy_route",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "id": "computed",
+              "name": "str",
+              "status": "str",
+              "user_id": "computed"
+            },
+            "computed"
+          ],
+          "route_path": "/api/strategies/{strategy_id}"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/strategies/{id}",
+      "path_template": "/api/strategies/{id}",
+      "resolved": true,
+      "via": "api.strategies.getById"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/strategy-operations/strategies/{strategy_id}/backtests/execute')",
+            "router.post('/strategies/{strategy_id}/backtests/execute')",
+            "limiter.limit('10/minute')"
+          ],
+          "handler": "execute_backtest",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "body": {
+              "annotation": "BacktestExecuteRequest"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str",
+                "report": {
+                  "one_of": [
+                    "computed",
+                    "null"
+                  ]
+                },
+                "strategy_id": "computed",
+                "version_id": "computed"
+              },
+              "error_code": "BACKTEST_VERSION_UNAVAILABLE",
+              "status_code": 422
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str",
+                "strategy_id": "computed",
+                "version_id": "computed"
+              },
+              "error_code": "BACKTEST_NOT_RUNNABLE",
+              "status_code": 422
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "BACKTEST_EXECUTE_FAILED",
+              "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_GET_FAILED",
+              "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_NOT_FOUND",
+              "status_code": 404
+            }
+          ],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/strategy-operations/strategies/{strategy_id}/backtests/execute"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/strategy-operations/strategies/{expr}/backtests/execute",
+      "path_template": "/api/strategy-operations/strategies/{expr}/backtests/execute",
+      "resolved": true,
+      "via": "api.strategies.executeBacktest"
+    }
+  ],
+  "capture": "surface_backtester",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/Backtester.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "backtester",
+  "unresolved_usages": []
+}

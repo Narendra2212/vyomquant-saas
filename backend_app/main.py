@@ -574,6 +574,16 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Marketplace and paper-trading structured errors (marketplace-subscriptions-paper-trading
+# task 5.5). One handler serves MarketplaceError and PaperError alike — it is registered
+# against their shared base, and Starlette resolves a handler by walking the exception's
+# __mro__, so it is found before the catch-all ``Exception`` handler below. The body is
+# ``{"error": {code, message, details}, "request_id"}`` and carries no stack trace, database
+# error string, query, internal path or foreign identifier (Requirements 22.9, 26.1).
+from backend_app.backend.marketplace.errors import register_structured_error_handlers
+register_structured_error_handlers(app)
+
 app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(SecurityHeadersMiddleware)

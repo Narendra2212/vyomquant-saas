@@ -1,0 +1,52 @@
+{
+  "capture": "billing_cancel",
+  "frontend_bindings": {
+    "cancelSubscription": [
+      {
+        "method": "POST",
+        "path_template": "/api/billing/cancel"
+      }
+    ]
+  },
+  "requirement": "25.2 \u2014 cancel",
+  "routes": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/cancel')",
+            "limiter.limit('5/minute')"
+          ],
+          "handler": "cancel_subscription",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "cancel_at_period_end": "bool",
+              "detail": "computed",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/billing/cancel"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/billing/cancel",
+      "resolved": true
+    }
+  ]
+}

@@ -45,7 +45,19 @@ class TestSchemaAsCodeCompleteness:
             'execution_records',
             'signals',
             'exchange_keys',
-            'users'
+            'users',
+            # marketplace-subscriptions-paper-trading, migration
+            # backend_app/migrations/007_marketplace_submissions.sql (task 11.2)
+            'marketplace_submissions',
+            'marketplace_submission_transitions',
+            'marketplace_backtest_evidence',
+            'marketplace_price_evaluations',
+            'marketplace_submission_allowed_transitions',
+            # marketplace-subscriptions-paper-trading, migration
+            # backend_app/migrations/008_marketplace_settlement.sql (task 11.3)
+            'marketplace_settlements',
+            'library_subscription_transitions',
+            'marketplace_subscription_allowed_transitions'
         }
         
         # Tables with CREATE TABLE in migrations (from Phase 1 analysis)
@@ -87,7 +99,28 @@ class TestSchemaAsCodeCompleteness:
             'marketplace_analytics',
             'exchange_keys',  # Now has migration
             'exchange_connections',  # Now has migration
-            'referral_profiles'  # Now has migration
+            'referral_profiles',  # Now has migration
+            # backend_app/migrations/007_marketplace_submissions.sql (task 11.2).
+            # Requirement 1.2 keeps marketplace_listings and
+            # strategy_subscriptions above untouched: the Marketplace reads
+            # neither, but both stay in version control so this test keeps
+            # passing.
+            'marketplace_submissions',
+            'marketplace_submission_transitions',
+            'marketplace_backtest_evidence',
+            'marketplace_price_evaluations',
+            'marketplace_submission_allowed_transitions',
+            # backend_app/migrations/008_marketplace_settlement.sql (task 11.3).
+            # The Settlement_Ledger (Requirement 10), the append-only
+            # Subscription_State history (Requirement 11.12) and the
+            # twelve-pair transition seed (Requirement 11.2). The additive
+            # library_subscriptions columns the same migration adds do not
+            # appear here: library_subscriptions is already in both sets
+            # above, and this test tracks tables, not columns - the column
+            # contract is tests/test_library_schema_contract.py's.
+            'marketplace_settlements',
+            'library_subscription_transitions',
+            'marketplace_subscription_allowed_transitions'
         }
         
         # Tables that are Supabase system tables (expected to not have migrations)

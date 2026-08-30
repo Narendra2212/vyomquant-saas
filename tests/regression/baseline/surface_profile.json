@@ -1,0 +1,368 @@
+{
+  "api_call_count": 8,
+  "api_calls": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/plan')",
+            "limiter.limit('60/minute')"
+          ],
+          "handler": "get_current_plan",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/billing/plan"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/plan",
+      "path_template": "/api/billing/plan",
+      "resolved": true,
+      "via": "api.user.getBillingPlan"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/notifications/settings')"
+          ],
+          "handler": "get_notif_settings",
+          "module": "backend_app.routers.user",
+          "parameters": {
+            "supabase": {
+              "annotation": "SyncClient",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 503
+            }
+          ],
+          "returns": [
+            {},
+            {
+              "one_of": [
+                "computed",
+                {}
+              ]
+            }
+          ],
+          "route_path": "/api/notifications/settings"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/notifications/settings",
+      "path_template": "/api/notifications/settings",
+      "resolved": true,
+      "via": "api.user.getNotificationSettings"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/referral/stats')",
+            "limiter.limit('60/minute')"
+          ],
+          "handler": "get_referral_stats",
+          "module": "backend_app.routers.referral",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "SyncClient",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            {
+              "active_referrals": "int",
+              "approved_earnings": "float",
+              "available_discounts": "int",
+              "commission_history": "list",
+              "lifetime_earnings": "float",
+              "paid_earnings": "float",
+              "payout_history": "list",
+              "pending_earnings": "float",
+              "referral_code": "str",
+              "referral_link": "computed",
+              "status": "str",
+              "total_referrals": "int"
+            },
+            {
+              "active_referrals": "int",
+              "approved_earnings": "float",
+              "commission_history": "list",
+              "lifetime_earnings": "float",
+              "paid_earnings": "float",
+              "payout_history": "list",
+              "pending_earnings": "float",
+              "referral_code": "str",
+              "referral_link": "computed",
+              "status": "str",
+              "total_referrals": "int"
+            },
+            "computed"
+          ],
+          "route_path": "/api/referral/stats"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/referral/stats",
+      "path_template": "/api/referral/stats",
+      "resolved": true,
+      "via": "api.referral.getStats"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/security/logs')"
+          ],
+          "handler": "get_security_logs",
+          "module": "backend_app.routers.user",
+          "parameters": {
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "supabase": {
+              "annotation": "SyncClient",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 503
+            }
+          ],
+          "returns": [
+            "computed",
+            "list",
+            "computed"
+          ],
+          "route_path": "/api/security/logs"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/security/logs",
+      "path_template": "/api/security/logs",
+      "resolved": true,
+      "via": "api.user.getSecurityLogs"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "app.get('/api/stats', tags=['Stats'])"
+          ],
+          "handler": "get_stats",
+          "module": "backend_app.main",
+          "parameters": {},
+          "raises": [],
+          "returns": [
+            {
+              "active_bots": "int",
+              "daily_pnl": "float",
+              "monthly_pnl": "float",
+              "total_pnl": "float",
+              "total_strategies": "int",
+              "total_trades": "computed",
+              "weekly_pnl": "float",
+              "win_rate": "float"
+            },
+            {
+              "active_bots": "int",
+              "daily_pnl": "float",
+              "monthly_pnl": "float",
+              "total_pnl": "float",
+              "total_strategies": "int",
+              "total_trades": "int",
+              "weekly_pnl": "float",
+              "win_rate": "float"
+            }
+          ],
+          "route_path": "/api/stats"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/stats",
+      "path_template": "/api/stats",
+      "resolved": true,
+      "via": "api.user.getStats"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/user/profile')"
+          ],
+          "handler": "get_profile",
+          "module": "backend_app.routers.user",
+          "parameters": {
+            "supabase": {
+              "annotation": "SyncClient",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 503
+            }
+          ],
+          "returns": [
+            {
+              "email": "computed",
+              "id": "computed",
+              "role": "computed"
+            },
+            "computed"
+          ],
+          "route_path": "/api/user/profile"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/user/profile",
+      "path_template": "/api/user/profile",
+      "resolved": true,
+      "via": "api.user.getProfile"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.put('/notifications/settings')"
+          ],
+          "handler": "update_notif_settings",
+          "module": "backend_app.routers.user",
+          "parameters": {
+            "body": {
+              "annotation": "NotificationSettingsRequest"
+            },
+            "supabase": {
+              "annotation": "SyncClient",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "status": "str"
+            },
+            {
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/notifications/settings"
+        }
+      ],
+      "method": "PUT",
+      "path": "/api/notifications/settings",
+      "path_template": "/api/notifications/settings",
+      "resolved": true,
+      "via": "api.user.updateNotificationSettings"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.put('/user/profile')"
+          ],
+          "handler": "update_profile",
+          "module": "backend_app.routers.user",
+          "parameters": {
+            "data": {
+              "annotation": "dict"
+            },
+            "supabase": {
+              "annotation": "SyncClient",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "status": "str",
+              "updated_fields": "list"
+            },
+            {
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/user/profile"
+        }
+      ],
+      "method": "PUT",
+      "path": "/api/user/profile",
+      "path_template": "/api/user/profile",
+      "resolved": true,
+      "via": "api.user.updateProfile"
+    }
+  ],
+  "capture": "surface_profile",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/Profile.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "profile",
+  "unresolved_usages": []
+}

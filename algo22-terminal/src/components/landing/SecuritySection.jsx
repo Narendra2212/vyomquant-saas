@@ -21,12 +21,12 @@ export default function SecuritySection() {
     {
       icon: FileSearch,
       title: 'Audit Logging',
-      desc: 'Comprehensive, immutable audit trails for all critical actions including logins, strategy modifications, and order routing.'
+      desc: 'Comprehensive audit trails for all critical actions including logins, strategy modifications, and order routing.'
     },
     {
       icon: Lock,
-      title: 'Encrypted Credentials',
-      desc: 'Password hashing using Argon2id and strict secure cookie policies for all authentication tokens.'
+      title: 'Secure Authentication',
+      desc: 'Industry-standard password hashing and strict secure cookie policies for all authentication tokens.'
     },
     {
       icon: Server,

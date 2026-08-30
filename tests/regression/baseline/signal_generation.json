@@ -1,0 +1,280 @@
+{
+  "actionable_decisions": [
+    "BUY",
+    "CLOSE",
+    "EXIT",
+    "SELL"
+  ],
+  "capture": "signal_generation",
+  "contract": {
+    "decorators": [],
+    "handler": "generate_signal",
+    "module": "backend_app.backend.signal_service",
+    "parameters": {
+      "deployment": {
+        "annotation": "Any"
+      },
+      "node_output": {
+        "annotation": "Any"
+      },
+      "now": {
+        "annotation": "Optional",
+        "has_default": true
+      },
+      "sb": {
+        "annotation": "Any",
+        "has_default": true
+      },
+      "signal_id": {
+        "annotation": "Optional",
+        "has_default": true
+      },
+      "user": {
+        "annotation": "Any",
+        "has_default": true
+      }
+    },
+    "raises": [],
+    "returns": [
+      "computed"
+    ]
+  },
+  "entry_decisions": [
+    "BUY",
+    "SELL"
+  ],
+  "exit_decisions": [
+    "CLOSE",
+    "EXIT"
+  ],
+  "generate_signal_collaborator_sequence": [
+    {
+      "call": "postgrest.select",
+      "columns": "idempotency_key,order_lifecycle_state",
+      "table": "signals"
+    },
+    {
+      "call": "postgrest.insert",
+      "columns": [
+        "capital",
+        "decision",
+        "deployment_id",
+        "drawdown_check",
+        "exchange_id",
+        "expected_loss",
+        "expected_reward",
+        "exposure",
+        "generated_at",
+        "id",
+        "idempotency_key",
+        "indicators",
+        "market_info",
+        "ml_info",
+        "order_lifecycle_state",
+        "position_size",
+        "quantity",
+        "risk_evaluated_at",
+        "risk_passed",
+        "risk_reason",
+        "strategy_id",
+        "strategy_version",
+        "symbol",
+        "timeframe",
+        "user_id",
+        "worker_id"
+      ],
+      "table": "signals"
+    }
+  ],
+  "generate_signal_returns_state": "GENERATED",
+  "idempotency_key_is_derived_from_the_id_alone": true,
+  "initial_state": "GENERATED",
+  "lifecycle_columns": [
+    "idempotency_key",
+    "order_lifecycle_state"
+  ],
+  "lifecycle_migration": "backend_app/migrations/005b_signal_lifecycle_and_idempotency.sql",
+  "no_credential_reaches_the_record": true,
+  "record_fields": [
+    "closure_ready",
+    "decision",
+    "deployment_id",
+    "exchange_account_id",
+    "execution_id",
+    "generated_at",
+    "id",
+    "market_context",
+    "ml_inference",
+    "mode",
+    "node_closure",
+    "order_id",
+    "order_lifecycle_state",
+    "quantity",
+    "risk_validation",
+    "side",
+    "signal_type",
+    "sizing_intention",
+    "source_node_ids",
+    "strategy_id",
+    "strategy_version",
+    "strategy_version_id",
+    "symbol",
+    "timeframe",
+    "user_id",
+    "venue",
+    "worker_id"
+  ],
+  "record_type_map": {
+    "closure_ready": "bool",
+    "decision": "str",
+    "deployment_id": "str",
+    "exchange_account_id": "str",
+    "execution_id": "null",
+    "generated_at": "str",
+    "id": "str",
+    "market_context": {
+      "bar_time": "str",
+      "price": "float",
+      "symbol": "str",
+      "timeframe": "str"
+    },
+    "ml_inference": {
+      "confidence": "float",
+      "model_id": "str",
+      "model_version": "str",
+      "prediction": "str",
+      "probabilities": {
+        "BUY": "float",
+        "SELL": "float"
+      }
+    },
+    "mode": "str",
+    "node_closure": {
+      "data-1": {
+        "node_type": "str",
+        "ready": "bool",
+        "value": "float"
+      },
+      "logic-1": {
+        "node_type": "str",
+        "ready": "bool",
+        "value": "bool"
+      },
+      "rsi-1": {
+        "node_type": "str",
+        "ready": "bool",
+        "value": "float"
+      }
+    },
+    "order_id": "null",
+    "order_lifecycle_state": "str",
+    "quantity": "float",
+    "risk_validation": {
+      "capital": "float",
+      "drawdown_check": "bool",
+      "evaluated_at": "str",
+      "expected_loss": "float",
+      "expected_reward": "float",
+      "exposure": "float",
+      "passed": "bool",
+      "position_size": "float",
+      "reason": "str"
+    },
+    "side": "str",
+    "signal_type": "str",
+    "sizing_intention": "null",
+    "source_node_ids": {
+      "list_of": "str"
+    },
+    "strategy_id": "str",
+    "strategy_version": "str",
+    "strategy_version_id": "str",
+    "symbol": "str",
+    "timeframe": "str",
+    "user_id": "str",
+    "venue": "str",
+    "worker_id": "str"
+  },
+  "record_values": {
+    "closure_ready": true,
+    "decision": "BUY",
+    "execution_id": null,
+    "generated_at": "2024-05-01T12:00:00+00:00",
+    "idempotency_key": "signal:5f3b9c2e-0000-4000-8000-0000000000aa",
+    "mode": "live",
+    "order_id": null,
+    "order_lifecycle_state": "GENERATED",
+    "quantity": 0.25,
+    "risk_passed": true,
+    "side": "BUY",
+    "signal_type": "ENTRY",
+    "symbol": "BTC/USDT",
+    "timeframe": "1h"
+  },
+  "refusals": {
+    "hold_is_not_actionable": {
+      "code": "SIGNAL_DECISION_NOT_ACTIONABLE",
+      "error_type": "SignalGenerationRefused"
+    },
+    "unsized_decision_is_refused": {
+      "code": "SIGNAL_SIZING_UNSPECIFIED",
+      "error_type": "SignalGenerationRefused"
+    }
+  },
+  "requirement": "25.1",
+  "signals_row_with_lifecycle_columns": [
+    "capital",
+    "decision",
+    "deployment_id",
+    "drawdown_check",
+    "exchange_id",
+    "expected_loss",
+    "expected_reward",
+    "exposure",
+    "generated_at",
+    "id",
+    "idempotency_key",
+    "indicators",
+    "market_info",
+    "ml_info",
+    "order_lifecycle_state",
+    "position_size",
+    "quantity",
+    "risk_evaluated_at",
+    "risk_passed",
+    "risk_reason",
+    "strategy_id",
+    "strategy_version",
+    "symbol",
+    "timeframe",
+    "user_id",
+    "worker_id"
+  ],
+  "signals_row_without_lifecycle_columns": [
+    "capital",
+    "decision",
+    "deployment_id",
+    "drawdown_check",
+    "exchange_id",
+    "expected_loss",
+    "expected_reward",
+    "exposure",
+    "generated_at",
+    "id",
+    "indicators",
+    "market_info",
+    "ml_info",
+    "position_size",
+    "quantity",
+    "risk_evaluated_at",
+    "risk_passed",
+    "risk_reason",
+    "strategy_id",
+    "strategy_version",
+    "symbol",
+    "timeframe",
+    "user_id",
+    "worker_id"
+  ],
+  "subject": "backend_app/backend/signal_service.py::mint_signal, generate_signal"
+}

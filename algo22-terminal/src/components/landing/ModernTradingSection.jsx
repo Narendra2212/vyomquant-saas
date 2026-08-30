@@ -6,7 +6,7 @@ export default function ModernTradingSection() {
     {
       icon: Zap,
       title: 'Native Execution Engine',
-      desc: 'Direct market access to 50+ exchanges. Execute orders with sub-millisecond latency without routing through third-party platforms.'
+      desc: 'Direct market access to 50+ exchanges via CCXT.pro WebSocket connectivity. Orders are routed without additional third-party platform intermediaries.'
     },
     {
       icon: Lock,

@@ -1,0 +1,155 @@
+{
+  "api_call_count": 5,
+  "api_calls": [
+    {
+      "method": "GET",
+      "path": "/api/risk/account-health",
+      "path_template": "/api/risk/account-health",
+      "resolved": false,
+      "via": "api.risk.getMarginHealth"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/settings')"
+          ],
+          "handler": "get_risk_settings",
+          "module": "backend_app.routers.risk",
+          "parameters": {
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            "computed"
+          ],
+          "route_path": "/api/risk/settings"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/risk/settings",
+      "path_template": "/api/risk/settings",
+      "resolved": true,
+      "via": "api.risk.getConfig"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/strategy-limits')"
+          ],
+          "handler": "get_strategy_limits",
+          "module": "backend_app.routers.risk",
+          "parameters": {
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "count": "int",
+              "limits": "computed",
+              "user_id": "computed"
+            }
+          ],
+          "route_path": "/api/risk/strategy-limits"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/risk/strategy-limits",
+      "path_template": "/api/risk/strategy-limits",
+      "resolved": true,
+      "via": "api.risk.getStrategyLimits"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.put('/settings')"
+          ],
+          "handler": "update_risk_settings",
+          "module": "backend_app.routers.risk",
+          "parameters": {
+            "body": {
+              "annotation": "RiskSettingsUpdateRequest"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "ws_mgr": {
+              "annotation": "_empty",
+              "depends_on": "get_ws_manager"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "dict_with_spread"
+          ],
+          "route_path": "/api/risk/settings"
+        }
+      ],
+      "method": "PUT",
+      "path": "/api/risk/settings",
+      "path_template": "/api/risk/settings",
+      "resolved": true,
+      "via": "api.risk.updateConfig"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.put('/strategy-limits/{strategy_id}')"
+          ],
+          "handler": "update_single_strategy_limit",
+          "module": "backend_app.routers.risk",
+          "parameters": {
+            "body": {
+              "annotation": "Union"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "count": "int",
+              "data": "computed",
+              "status": "str",
+              "updated": "str"
+            }
+          ],
+          "route_path": "/api/risk/strategy-limits/{strategy_id}"
+        }
+      ],
+      "method": "PUT",
+      "path": "/api/risk/strategy-limits/{strategyId}",
+      "path_template": "/api/risk/strategy-limits/{strategyId}",
+      "resolved": true,
+      "via": "api.risk.updateStrategyLimit"
+    }
+  ],
+  "capture": "surface_risk_settings",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/RiskSettings.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "risk_settings",
+  "unresolved_usages": []
+}

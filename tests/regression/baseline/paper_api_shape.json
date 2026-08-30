@@ -1,0 +1,669 @@
+{
+  "capture": "paper_api_shape",
+  "endpoints": {
+    "GET /api/paper/account": {
+      "keys": [
+        "account_id",
+        "available_balance",
+        "created_at",
+        "currency",
+        "initial_capital",
+        "locked_balance",
+        "name",
+        "realized_pnl",
+        "status",
+        "total_equity",
+        "unrealized_pnl",
+        "updated_at",
+        "user_id"
+      ],
+      "status_code": 200,
+      "top_level_keys": [
+        "account_id",
+        "available_balance",
+        "created_at",
+        "currency",
+        "initial_capital",
+        "locked_balance",
+        "name",
+        "realized_pnl",
+        "status",
+        "total_equity",
+        "unrealized_pnl",
+        "updated_at",
+        "user_id"
+      ],
+      "type_map": {
+        "account_id": "str",
+        "available_balance": "str",
+        "created_at": "str",
+        "currency": "str",
+        "initial_capital": "str",
+        "locked_balance": "str",
+        "name": "str",
+        "realized_pnl": "str",
+        "status": "str",
+        "total_equity": "str",
+        "unrealized_pnl": "str",
+        "updated_at": "str",
+        "user_id": "str"
+      }
+    },
+    "GET /api/paper/orders": {
+      "keys": [
+        "count",
+        "orders",
+        "orders[].created_at",
+        "orders[].deployment_id",
+        "orders[].execution_id",
+        "orders[].fee",
+        "orders[].filled_quantity",
+        "orders[].order_id",
+        "orders[].order_type",
+        "orders[].price",
+        "orders[].quantity",
+        "orders[].side",
+        "orders[].status",
+        "orders[].strategy_id",
+        "orders[].symbol",
+        "orders[].updated_at",
+        "orders[].user_id"
+      ],
+      "status_code": 200,
+      "top_level_keys": [
+        "count",
+        "orders"
+      ],
+      "type_map": {
+        "count": "int",
+        "orders": {
+          "list_of_one_of": [
+            {
+              "created_at": "str",
+              "deployment_id": "null",
+              "execution_id": "str",
+              "fee": "str",
+              "filled_quantity": "str",
+              "order_id": "str",
+              "order_type": "str",
+              "price": "str",
+              "quantity": "str",
+              "side": "str",
+              "status": "str",
+              "strategy_id": "null",
+              "symbol": "str",
+              "updated_at": "str",
+              "user_id": "str"
+            },
+            {
+              "created_at": "str",
+              "deployment_id": "null",
+              "filled_quantity": "str",
+              "order_id": "str",
+              "order_type": "str",
+              "price": "str",
+              "quantity": "str",
+              "side": "str",
+              "status": "str",
+              "strategy_id": "null",
+              "symbol": "str",
+              "updated_at": "str",
+              "user_id": "str"
+            }
+          ]
+        }
+      }
+    },
+    "GET /api/paper/positions": {
+      "keys": [
+        "count",
+        "positions",
+        "positions[].created_at",
+        "positions[].current_price",
+        "positions[].entry_price",
+        "positions[].side",
+        "positions[].size",
+        "positions[].symbol",
+        "positions[].unrealized_pnl",
+        "positions[].updated_at"
+      ],
+      "status_code": 200,
+      "top_level_keys": [
+        "count",
+        "positions"
+      ],
+      "type_map": {
+        "count": "int",
+        "positions": {
+          "list_of": {
+            "created_at": "str",
+            "current_price": "str",
+            "entry_price": "str",
+            "side": "str",
+            "size": "str",
+            "symbol": "str",
+            "unrealized_pnl": "str",
+            "updated_at": "str"
+          }
+        }
+      }
+    },
+    "GET /api/paper/summary": {
+      "keys": [
+        "account",
+        "account.account_id",
+        "account.available_balance",
+        "account.created_at",
+        "account.currency",
+        "account.initial_capital",
+        "account.locked_balance",
+        "account.name",
+        "account.realized_pnl",
+        "account.status",
+        "account.total_equity",
+        "account.unrealized_pnl",
+        "account.updated_at",
+        "account.user_id",
+        "closed_trades",
+        "losing_trades",
+        "open_positions_count",
+        "profit_factor",
+        "roi_pct",
+        "total_pnl",
+        "total_trades",
+        "win_rate_pct",
+        "winning_trades"
+      ],
+      "status_code": 200,
+      "top_level_keys": [
+        "account",
+        "closed_trades",
+        "losing_trades",
+        "open_positions_count",
+        "profit_factor",
+        "roi_pct",
+        "total_pnl",
+        "total_trades",
+        "win_rate_pct",
+        "winning_trades"
+      ],
+      "type_map": {
+        "account": {
+          "account_id": "str",
+          "available_balance": "str",
+          "created_at": "str",
+          "currency": "str",
+          "initial_capital": "str",
+          "locked_balance": "str",
+          "name": "str",
+          "realized_pnl": "str",
+          "status": "str",
+          "total_equity": "str",
+          "unrealized_pnl": "str",
+          "updated_at": "str",
+          "user_id": "str"
+        },
+        "closed_trades": "int",
+        "losing_trades": "int",
+        "open_positions_count": "int",
+        "profit_factor": "float",
+        "roi_pct": "float",
+        "total_pnl": "str",
+        "total_trades": "int",
+        "win_rate_pct": "float",
+        "winning_trades": "int"
+      }
+    },
+    "GET /api/paper/trades": {
+      "keys": [
+        "count",
+        "trades",
+        "trades[].deployment_id",
+        "trades[].executed_at",
+        "trades[].execution_id",
+        "trades[].fee",
+        "trades[].order_id",
+        "trades[].price",
+        "trades[].quantity",
+        "trades[].realized_pnl",
+        "trades[].side",
+        "trades[].status",
+        "trades[].strategy_id",
+        "trades[].symbol",
+        "trades[].user_id"
+      ],
+      "status_code": 200,
+      "top_level_keys": [
+        "count",
+        "trades"
+      ],
+      "type_map": {
+        "count": "int",
+        "trades": {
+          "list_of": {
+            "deployment_id": "null",
+            "executed_at": "str",
+            "execution_id": "str",
+            "fee": "str",
+            "order_id": "str",
+            "price": "str",
+            "quantity": "str",
+            "realized_pnl": "str",
+            "side": "str",
+            "status": "str",
+            "strategy_id": "null",
+            "symbol": "str",
+            "user_id": "str"
+          }
+        }
+      }
+    },
+    "POST /api/paper/account/reset": {
+      "keys": [
+        "account",
+        "account.account_id",
+        "account.available_balance",
+        "account.created_at",
+        "account.currency",
+        "account.initial_capital",
+        "account.locked_balance",
+        "account.name",
+        "account.realized_pnl",
+        "account.status",
+        "account.total_equity",
+        "account.unrealized_pnl",
+        "account.updated_at",
+        "account.user_id",
+        "message",
+        "status"
+      ],
+      "status_code": 200,
+      "top_level_keys": [
+        "account",
+        "message",
+        "status"
+      ],
+      "type_map": {
+        "account": {
+          "account_id": "str",
+          "available_balance": "str",
+          "created_at": "str",
+          "currency": "str",
+          "initial_capital": "str",
+          "locked_balance": "str",
+          "name": "str",
+          "realized_pnl": "str",
+          "status": "str",
+          "total_equity": "str",
+          "unrealized_pnl": "str",
+          "updated_at": "str",
+          "user_id": "str"
+        },
+        "message": "str",
+        "status": "str"
+      }
+    }
+  },
+  "frontend_bindings": {
+    "cancelOrder": [
+      {
+        "method": "DELETE",
+        "path_template": "/api/paper/orders/{orderId}"
+      }
+    ],
+    "getAccount": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/account"
+      }
+    ],
+    "getOrders": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/orders{expr}"
+      }
+    ],
+    "getPositions": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/positions"
+      }
+    ],
+    "getSummary": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/summary"
+      }
+    ],
+    "getTrades": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/trades?limit={limit}"
+      }
+    ],
+    "module_file": "api/modules/paper.js",
+    "placeOrder": [
+      {
+        "method": "POST",
+        "path_template": "/api/paper/orders"
+      }
+    ],
+    "resetAccount": [
+      {
+        "method": "POST",
+        "path_template": "/api/paper/account/reset"
+      }
+    ]
+  },
+  "order_statuses": [
+    "CANCELLED",
+    "FILLED",
+    "NEW",
+    "OPEN",
+    "REJECTED"
+  ],
+  "orders_by_status": {
+    "CANCELLED": {
+      "keys": [
+        "count",
+        "orders",
+        "orders[].created_at",
+        "orders[].deployment_id",
+        "orders[].filled_quantity",
+        "orders[].order_id",
+        "orders[].order_type",
+        "orders[].price",
+        "orders[].quantity",
+        "orders[].side",
+        "orders[].status",
+        "orders[].strategy_id",
+        "orders[].symbol",
+        "orders[].updated_at",
+        "orders[].user_id"
+      ],
+      "type_map": {
+        "count": "int",
+        "orders": {
+          "list_of": {
+            "created_at": "str",
+            "deployment_id": "null",
+            "filled_quantity": "str",
+            "order_id": "str",
+            "order_type": "str",
+            "price": "str",
+            "quantity": "str",
+            "side": "str",
+            "status": "str",
+            "strategy_id": "null",
+            "symbol": "str",
+            "updated_at": "str",
+            "user_id": "str"
+          }
+        }
+      }
+    },
+    "FILLED": {
+      "keys": [
+        "count",
+        "orders",
+        "orders[].created_at",
+        "orders[].deployment_id",
+        "orders[].execution_id",
+        "orders[].fee",
+        "orders[].filled_quantity",
+        "orders[].order_id",
+        "orders[].order_type",
+        "orders[].price",
+        "orders[].quantity",
+        "orders[].side",
+        "orders[].status",
+        "orders[].strategy_id",
+        "orders[].symbol",
+        "orders[].updated_at",
+        "orders[].user_id"
+      ],
+      "type_map": {
+        "count": "int",
+        "orders": {
+          "list_of": {
+            "created_at": "str",
+            "deployment_id": "null",
+            "execution_id": "str",
+            "fee": "str",
+            "filled_quantity": "str",
+            "order_id": "str",
+            "order_type": "str",
+            "price": "str",
+            "quantity": "str",
+            "side": "str",
+            "status": "str",
+            "strategy_id": "null",
+            "symbol": "str",
+            "updated_at": "str",
+            "user_id": "str"
+          }
+        }
+      }
+    },
+    "OPEN": {
+      "keys": [
+        "count",
+        "orders"
+      ],
+      "type_map": {
+        "count": "int",
+        "orders": {
+          "list_of": "empty"
+        }
+      }
+    }
+  },
+  "requirement": "17.12",
+  "routes": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/account')",
+            "limiter.limit('120/minute')"
+          ],
+          "handler": "get_paper_account",
+          "module": "backend_app.routers.paper_trading",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/paper/account"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/paper/account",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/positions')",
+            "limiter.limit('120/minute')"
+          ],
+          "handler": "get_paper_positions",
+          "module": "backend_app.routers.paper_trading",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "count": "int",
+              "positions": "computed"
+            }
+          ],
+          "route_path": "/api/paper/positions"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/paper/positions",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/orders')",
+            "limiter.limit('120/minute')"
+          ],
+          "handler": "get_paper_orders",
+          "module": "backend_app.routers.paper_trading",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "status": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "count": "int",
+              "orders": "computed"
+            }
+          ],
+          "route_path": "/api/paper/orders"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/paper/orders",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/trades')",
+            "limiter.limit('120/minute')"
+          ],
+          "handler": "get_paper_trades",
+          "module": "backend_app.routers.paper_trading",
+          "parameters": {
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "count": "int",
+              "trades": "computed"
+            }
+          ],
+          "route_path": "/api/paper/trades"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/paper/trades",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/summary')",
+            "limiter.limit('120/minute')"
+          ],
+          "handler": "get_paper_summary",
+          "module": "backend_app.routers.paper_trading",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/paper/summary"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/paper/summary",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/account/reset')",
+            "limiter.limit('30/minute')"
+          ],
+          "handler": "reset_paper_account",
+          "module": "backend_app.routers.paper_trading",
+          "parameters": {
+            "body": {
+              "annotation": "PaperResetRequest"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "account": "computed",
+              "message": "str",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/paper/account/reset"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/paper/account/reset",
+      "resolved": true
+    }
+  ],
+  "subject": "backend_app/routers/paper_trading.py \u2014 the six endpoints api.paper consumes"
+}

@@ -389,10 +389,21 @@ class BacktestRuntime:
             }
             
             # PHASE K: Update backtest with results
+            #
+            # ``executed_bar_count`` (marketplace-subscriptions-paper-trading task 12.1,
+            # Requirements 3.8, 3.4, 25.1): ``len(ohlcv_data)`` is the number of bars this
+            # simulation actually ran over - the same value the guard above tests against
+            # 50 and the same one the log line reports - and it was computed here and
+            # thrown away, so ``strategy_backtests`` carried no bar count at all and the
+            # marketplace Evidence_Validator's "non-null, at least 50" criterion could
+            # never pass. It is recorded now, in the same UPDATE as the metrics it
+            # describes. Nothing re-judges it here: the 50-bar guard above and the
+            # 20-trade significance warning in ``backtesting_engine`` are unchanged.
             await self.backtest_service.update_backtest_results(
                 user=user,
                 backtest_id=backtest_id,
-                results=results
+                results=results,
+                executed_bar_count=len(ohlcv_data),
             )
             
             logger.info(f"[BACKTEST] Completed backtest {backtest_id} in {execution_time:.2f}s")

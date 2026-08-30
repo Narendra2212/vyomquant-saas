@@ -1,0 +1,109 @@
+{
+  "api_call_count": 2,
+  "api_calls": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/history')"
+          ],
+          "handler": "get_history",
+          "module": "backend_app.routers.orders",
+          "parameters": {
+            "exchange_id": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "symbol": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "telemetry": {
+              "annotation": "_empty",
+              "depends_on": "get_telemetry"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "vault": {
+              "annotation": "_empty",
+              "depends_on": "get_vault"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 400
+            }
+          ],
+          "returns": [
+            "computed",
+            "computed",
+            "list",
+            "computed",
+            "list"
+          ],
+          "route_path": "/api/orders/history"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/orders/history?{params}",
+      "path_template": "/api/orders/history?{params}",
+      "resolved": true,
+      "via": "api.orders.getHistory"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/trades')",
+            "limiter.limit('120/minute')"
+          ],
+          "handler": "get_paper_trades",
+          "module": "backend_app.routers.paper_trading",
+          "parameters": {
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "count": "int",
+              "trades": "computed"
+            }
+          ],
+          "route_path": "/api/paper/trades"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/paper/trades?limit={limit}",
+      "path_template": "/api/paper/trades?limit={limit}",
+      "resolved": true,
+      "via": "api.paper.getTrades"
+    }
+  ],
+  "capture": "surface_trade_history",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/TradeHistory.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "trade_history",
+  "unresolved_usages": []
+}

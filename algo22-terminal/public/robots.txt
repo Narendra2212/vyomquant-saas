@@ -1,0 +1,17 @@
+User-agent: *
+Allow: /
+Allow: /download
+Allow: /marketplace
+Allow: /legal
+Allow: /legal/*
+Allow: /signin
+Allow: /signup
+
+Disallow: /app/
+Disallow: /admin/
+Disallow: /api/
+Disallow: /reset-password
+Disallow: /2fa
+Disallow: /wizard
+
+Sitemap: https://vyomquant.in/sitemap.xml

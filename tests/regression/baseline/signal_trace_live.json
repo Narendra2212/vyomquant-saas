@@ -1,0 +1,272 @@
+{
+  "capture": "signal_trace_live",
+  "collaborator_sequence": [
+    {
+      "call": "postgrest.select",
+      "columns": "idempotency_key,order_lifecycle_state",
+      "table": "signals"
+    },
+    {
+      "call": "postgrest.insert",
+      "columns": [
+        "capital",
+        "decision",
+        "deployment_id",
+        "drawdown_check",
+        "exchange_id",
+        "expected_loss",
+        "expected_reward",
+        "exposure",
+        "generated_at",
+        "id",
+        "idempotency_key",
+        "indicators",
+        "market_info",
+        "ml_info",
+        "order_lifecycle_state",
+        "position_size",
+        "quantity",
+        "risk_evaluated_at",
+        "risk_passed",
+        "risk_reason",
+        "strategy_id",
+        "strategy_version",
+        "symbol",
+        "timeframe",
+        "user_id",
+        "worker_id"
+      ],
+      "table": "signals"
+    },
+    {
+      "call": "--- anchor the GENERATED genesis row ---"
+    },
+    {
+      "call": "postgrest.select",
+      "columns": "id",
+      "table": "order_lifecycle_transitions"
+    },
+    {
+      "call": "postgrest.insert",
+      "columns": [
+        "from_state",
+        "occurred_at",
+        "reason",
+        "signal_id",
+        "to_state",
+        "user_id"
+      ],
+      "table": "order_lifecycle_transitions"
+    }
+  ],
+  "event_row": {
+    "keys": [
+      "from_state",
+      "occurred_at",
+      "reason",
+      "signal_id",
+      "to_state",
+      "user_id"
+    ],
+    "type_map": {
+      "from_state": "null",
+      "occurred_at": "str",
+      "reason": "str",
+      "signal_id": "str",
+      "to_state": "str",
+      "user_id": "str"
+    }
+  },
+  "event_row_columns": [
+    "from_state",
+    "occurred_at",
+    "reason",
+    "signal_id",
+    "to_state",
+    "user_id"
+  ],
+  "event_sequence": [
+    {
+      "from_state": null,
+      "to_state": "GENERATED"
+    }
+  ],
+  "event_table": "order_lifecycle_transitions",
+  "execution_environment_column_present": false,
+  "genesis_row_was_written": true,
+  "manual_reconciliation_event": "MANUAL_RECONCILIATION_REQUIRED",
+  "mode_recorded_at": "market_info.mode",
+  "mode_value": "live",
+  "order_lifecycle_states": [
+    "GENERATED",
+    "PENDING",
+    "SUBMITTED",
+    "PARTIALLY_EXECUTED",
+    "EXECUTED",
+    "CLOSED",
+    "FAILED",
+    "CANCELLED",
+    "REJECTED"
+  ],
+  "requirement": "25.1",
+  "signal_events_table": "signal_events",
+  "signals_row": {
+    "keys": [
+      "capital",
+      "decision",
+      "deployment_id",
+      "drawdown_check",
+      "exchange_id",
+      "expected_loss",
+      "expected_reward",
+      "exposure",
+      "generated_at",
+      "id",
+      "idempotency_key",
+      "indicators",
+      "indicators.data-1",
+      "indicators.data-1.node_type",
+      "indicators.data-1.ready",
+      "indicators.data-1.value",
+      "indicators.logic-1",
+      "indicators.logic-1.node_type",
+      "indicators.logic-1.ready",
+      "indicators.logic-1.value",
+      "indicators.rsi-1",
+      "indicators.rsi-1.node_type",
+      "indicators.rsi-1.ready",
+      "indicators.rsi-1.value",
+      "market_info",
+      "market_info.bar_time",
+      "market_info.closure_ready",
+      "market_info.exchange_account_id",
+      "market_info.mode",
+      "market_info.price",
+      "market_info.side",
+      "market_info.signal_type",
+      "market_info.sizing_intention",
+      "market_info.source_node_ids",
+      "market_info.strategy_version_id",
+      "market_info.symbol",
+      "market_info.timeframe",
+      "ml_info",
+      "ml_info.confidence",
+      "ml_info.model_id",
+      "ml_info.model_version",
+      "ml_info.prediction",
+      "ml_info.probabilities",
+      "ml_info.probabilities.BUY",
+      "ml_info.probabilities.SELL",
+      "order_lifecycle_state",
+      "position_size",
+      "quantity",
+      "risk_evaluated_at",
+      "risk_passed",
+      "risk_reason",
+      "strategy_id",
+      "strategy_version",
+      "symbol",
+      "timeframe",
+      "user_id",
+      "worker_id"
+    ],
+    "type_map": {
+      "capital": "float",
+      "decision": "str",
+      "deployment_id": "str",
+      "drawdown_check": "bool",
+      "exchange_id": "str",
+      "expected_loss": "float",
+      "expected_reward": "float",
+      "exposure": "float",
+      "generated_at": "str",
+      "id": "str",
+      "idempotency_key": "str",
+      "indicators": {
+        "data-1": {
+          "node_type": "str",
+          "ready": "bool",
+          "value": "float"
+        },
+        "logic-1": {
+          "node_type": "str",
+          "ready": "bool",
+          "value": "bool"
+        },
+        "rsi-1": {
+          "node_type": "str",
+          "ready": "bool",
+          "value": "float"
+        }
+      },
+      "market_info": {
+        "bar_time": "str",
+        "closure_ready": "bool",
+        "exchange_account_id": "str",
+        "mode": "str",
+        "price": "float",
+        "side": "str",
+        "signal_type": "str",
+        "sizing_intention": "null",
+        "source_node_ids": {
+          "list_of": "str"
+        },
+        "strategy_version_id": "str",
+        "symbol": "str",
+        "timeframe": "str"
+      },
+      "ml_info": {
+        "confidence": "float",
+        "model_id": "str",
+        "model_version": "str",
+        "prediction": "str",
+        "probabilities": {
+          "BUY": "float",
+          "SELL": "float"
+        }
+      },
+      "order_lifecycle_state": "str",
+      "position_size": "float",
+      "quantity": "float",
+      "risk_evaluated_at": "str",
+      "risk_passed": "bool",
+      "risk_reason": "str",
+      "strategy_id": "str",
+      "strategy_version": "str",
+      "symbol": "str",
+      "timeframe": "str",
+      "user_id": "str",
+      "worker_id": "str"
+    }
+  },
+  "signals_row_columns": [
+    "capital",
+    "decision",
+    "deployment_id",
+    "drawdown_check",
+    "exchange_id",
+    "expected_loss",
+    "expected_reward",
+    "exposure",
+    "generated_at",
+    "id",
+    "idempotency_key",
+    "indicators",
+    "market_info",
+    "ml_info",
+    "order_lifecycle_state",
+    "position_size",
+    "quantity",
+    "risk_evaluated_at",
+    "risk_passed",
+    "risk_reason",
+    "strategy_id",
+    "strategy_version",
+    "symbol",
+    "timeframe",
+    "user_id",
+    "worker_id"
+  ],
+  "signals_table": "signals",
+  "subject": "backend_app/backend/signal_service.py \u2014 the LIVE recording path"
+}

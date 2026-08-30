@@ -1,0 +1,141 @@
+{
+  "capture": "billing_plan_checkout",
+  "frontend_bindings": {
+    "createCheckout": [
+      {
+        "method": "POST",
+        "path_template": "/api/billing/checkout"
+      }
+    ],
+    "getPlans": [
+      {
+        "method": "GET",
+        "path_template": "/api/billing/plans?currency={expr}"
+      },
+      {
+        "method": "GET",
+        "path_template": "/api/billing/plans"
+      }
+    ]
+  },
+  "requirement": "25.2 \u2014 plan checkout",
+  "routes": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/plans')"
+          ],
+          "handler": "get_plans",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "currency": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/billing/plans"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/plans",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/plan')",
+            "limiter.limit('60/minute')"
+          ],
+          "handler": "get_current_plan",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/billing/plan"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/plan",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/checkout')",
+            "limiter.limit('10/minute')"
+          ],
+          "handler": "create_checkout_session",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "background_tasks": {
+              "annotation": "BackgroundTasks"
+            },
+            "body": {
+              "annotation": "CheckoutRequest"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "amount": "computed",
+              "checkoutUrl": "computed",
+              "checkout_url": "computed",
+              "currency": "computed",
+              "provider": "str"
+            },
+            {
+              "amount": "computed",
+              "checkoutUrl": "computed",
+              "checkout_url": "computed",
+              "currency": "str",
+              "order_id": "computed",
+              "provider": "str"
+            }
+          ],
+          "route_path": "/api/billing/checkout"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/billing/checkout",
+      "resolved": true
+    }
+  ]
+}

@@ -137,6 +137,47 @@ function GuestGuard() {
   return <Outlet />;
 }
 
+// Admin-only guard: verifies Supabase session and app_metadata.role === 'admin'.
+// No waitlist data is fetched until this resolves to an authorized admin.
+function AdminGuard() {
+  const [status, setStatus] = useState('loading'); // 'loading' | 'authorized' | 'denied'
+
+  useEffect(() => {
+    let cancelled = false;
+    async function checkAdmin() {
+      try {
+        const { data: { user }, error } = await supabase.auth.getUser();
+        if (cancelled) return;
+        if (error || !user) { setStatus('denied'); return; }
+        const role = user.app_metadata?.role;
+        setStatus(role === 'admin' ? 'authorized' : 'denied');
+      } catch {
+        if (!cancelled) setStatus('denied');
+      }
+    }
+    checkAdmin();
+    return () => { cancelled = true; };
+  }, []);
+
+  if (status === 'loading') {
+    return (
+      <div style={{ background: C.bg0, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span style={{ color: C.t3, fontFamily: 'monospace', fontSize: 12 }}>Verifying access…</span>
+      </div>
+    );
+  }
+  if (status === 'denied') {
+    return (
+      <div style={{ background: C.bg0, minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+        <Lock size={32} style={{ color: C.red }} />
+        <div style={{ color: C.t1, fontWeight: 700, fontSize: 16 }}>Access Denied</div>
+        <div style={{ color: C.t3, fontFamily: 'monospace', fontSize: 11 }}>Administrator credentials required.</div>
+      </div>
+    );
+  }
+  return <Outlet />;
+}
+
 // Intercepts Supabase OAuth and password-recovery hashes on mount
 function PasswordRecoveryHandler() {
   const navigate = useNavigate();
@@ -268,8 +309,6 @@ export default function AppWrapper() {
           {/* Public landing */}
           <Route path="/" element={<Suspense fallback={PAGE_FALLBACK}><LandingPage /></Suspense>} />
           <Route path="/download" element={<Suspense fallback={PAGE_FALLBACK}><DownloadPage /></Suspense>} />
-          <Route path="/admin/waitlist" element={<Suspense fallback={PAGE_FALLBACK}><AdminDashboard /></Suspense>} />
-
           {/* Legal */}
           <Route path="/legal" element={<Suspense fallback={PAGE_FALLBACK}><LegalPage /></Suspense>} />
           <Route path="/legal/privacy" element={<Suspense fallback={PAGE_FALLBACK}><LegalPageRoute type="privacy" /></Suspense>} />
@@ -279,6 +318,11 @@ export default function AppWrapper() {
 
           {/* Marketplace accessible publicly */}
           <Route path="/marketplace" element={<Suspense fallback={PAGE_FALLBACK}><StrategyMarketplace /></Suspense>} />
+
+          {/* Admin-only: AdminGuard verifies Supabase session + app_metadata.role === 'admin' */}
+          <Route element={<AdminGuard />}>
+            <Route path="/admin/waitlist" element={<Suspense fallback={PAGE_FALLBACK}><AdminDashboard /></Suspense>} />
+          </Route>
 
           {/* Guest-only: redirect to /app/dashboard if already authenticated */}
           <Route element={<GuestGuard />}>

@@ -1,0 +1,223 @@
+{
+  "capture": "auth_signin",
+  "outcomes": {
+    "credentials_accepted": {
+      "collaborator_sequence": [
+        {
+          "argument_keys": [
+            "email",
+            "password"
+          ],
+          "call": "supabase.auth.sign_in_with_password"
+        }
+      ],
+      "keys": [
+        "access_token",
+        "token_type",
+        "user"
+      ],
+      "status_code": 200,
+      "type_map": {
+        "access_token": "str",
+        "token_type": "str",
+        "user": {}
+      }
+    },
+    "identity_without_a_bearer_token": {
+      "keys": [
+        "detail",
+        "details",
+        "error",
+        "message",
+        "path",
+        "solution",
+        "status_code",
+        "timestamp"
+      ],
+      "status_code": 401
+    },
+    "no_session_returned": {
+      "collaborator_sequence": [
+        {
+          "argument_keys": [
+            "email",
+            "password"
+          ],
+          "call": "supabase.auth.sign_in_with_password"
+        }
+      ],
+      "keys": [
+        "detail",
+        "details",
+        "error",
+        "message",
+        "path",
+        "solution",
+        "status_code",
+        "timestamp"
+      ],
+      "status_code": 401
+    }
+  },
+  "request_fields": [
+    "email",
+    "password"
+  ],
+  "requirement": "25.3 \u2014 sign-in",
+  "routes": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/login')",
+            "limiter.limit('5/minute')"
+          ],
+          "handler": "login",
+          "module": "backend_app.routers.auth",
+          "parameters": {
+            "credentials": {
+              "annotation": "UserLogin"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "SyncClient",
+              "depends_on": "get_supabase"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 401
+            }
+          ],
+          "returns": [
+            {
+              "access_token": "computed",
+              "token_type": "str",
+              "user": "computed"
+            }
+          ],
+          "route_path": "/api/auth/login"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/auth/login",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/google')",
+            "limiter.limit('10/minute')"
+          ],
+          "handler": "google_auth",
+          "module": "backend_app.routers.auth",
+          "parameters": {
+            "data": {
+              "annotation": "GoogleAuthRequest"
+            },
+            "request": {
+              "annotation": "Request"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 401
+            },
+            {
+              "detail_type": "str",
+              "status_code": 503
+            }
+          ],
+          "returns": [
+            {
+              "access_token": "computed",
+              "token_type": "str",
+              "user": "computed"
+            }
+          ],
+          "route_path": "/api/auth/google"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/auth/google",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/signout')"
+          ],
+          "handler": "signout",
+          "module": "backend_app.routers.auth",
+          "parameters": {
+            "current_user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "token": {
+              "annotation": "str"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 400
+            },
+            {
+              "detail_type": "str",
+              "status_code": 503
+            }
+          ],
+          "returns": [
+            {
+              "message": "str"
+            }
+          ],
+          "route_path": "/api/auth/signout"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/auth/signout",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/me')"
+          ],
+          "handler": "get_current_user_profile",
+          "module": "backend_app.routers.auth",
+          "parameters": {
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "email": "computed",
+              "id": "computed",
+              "role": "computed"
+            }
+          ],
+          "route_path": "/api/auth/me"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/auth/me",
+      "resolved": true
+    }
+  ]
+}

@@ -1,0 +1,904 @@
+{
+  "api_call_count": 12,
+  "api_calls": [
+    {
+      "handler_count": 2,
+      "handlers": [
+        {
+          "decorators": [
+            "router.delete('/strategies/{strategy_id}')",
+            "limiter.limit('50/minute')"
+          ],
+          "handler": "delete_strategy",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_DELETE_FAILED",
+              "status_code": 404
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_DELETE_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            {
+              "status": "str",
+              "strategy_id": "computed"
+            }
+          ],
+          "route_path": "/api/strategies/{strategy_id}"
+        },
+        {
+          "decorators": [
+            "router.delete('/{strategy_id}')"
+          ],
+          "handler": "delete_strategy",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "computed",
+              "status_code": "e.http_status"
+            }
+          ],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/strategies/{strategy_id}"
+        }
+      ],
+      "method": "DELETE",
+      "path": "/api/strategies/{id}",
+      "path_template": "/api/strategies/{id}",
+      "resolved": true,
+      "via": "api.strategies.delete"
+    },
+    {
+      "handler_count": 2,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('')",
+            "router.get('/')"
+          ],
+          "handler": "list_exchanges",
+          "module": "backend_app.routers.exchange",
+          "parameters": {
+            "redis_manager": {
+              "annotation": "_empty",
+              "depends_on": "get_redis_manager"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "vault": {
+              "annotation": "_empty",
+              "depends_on": "get_vault"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            "list"
+          ],
+          "route_path": "/api/exchanges"
+        },
+        {
+          "decorators": [
+            "router.get('')",
+            "router.get('/')"
+          ],
+          "handler": "list_exchanges",
+          "module": "backend_app.routers.exchange",
+          "parameters": {
+            "redis_manager": {
+              "annotation": "_empty",
+              "depends_on": "get_redis_manager"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "vault": {
+              "annotation": "_empty",
+              "depends_on": "get_vault"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            "list"
+          ],
+          "route_path": "/api/exchanges/"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/exchanges/",
+      "path_template": "/api/exchanges/",
+      "resolved": true,
+      "via": "api.exchange.list"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/creator/analytics')"
+          ],
+          "handler": "creator_analytics",
+          "module": "backend_app.routers.library",
+          "parameters": {
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "active_subscribers": "computed",
+              "creator_id": "computed",
+              "monthly_recurring_revenue": "computed",
+              "payout_schedule": "str",
+              "platform_fee_paid": "computed",
+              "published_strategies_count": "int",
+              "rating_average": "computed",
+              "total_earnings_usd": "computed"
+            },
+            {
+              "active_subscribers": "int",
+              "creator_id": "computed",
+              "monthly_recurring_revenue": "float",
+              "payout_schedule": "str",
+              "platform_fee_paid": "float",
+              "published_strategies_count": "int",
+              "rating_average": "float",
+              "total_earnings_usd": "float"
+            }
+          ],
+          "route_path": "/api/library/creator/analytics"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/library/creator/analytics",
+      "path_template": "/api/library/creator/analytics",
+      "resolved": true,
+      "via": "apiClient direct"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/me')"
+          ],
+          "handler": "my_library",
+          "module": "backend_app.routers.library",
+          "parameters": {
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+            }
+          ],
+          "returns": [
+            {
+              "items": "computed",
+              "total": "int"
+            }
+          ],
+          "route_path": "/api/library/me"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/library/me?strategy_id={strat.id}",
+      "path_template": "/api/library/me?strategy_id={strat.id}",
+      "resolved": true,
+      "via": "apiClient direct"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/history')"
+          ],
+          "handler": "get_history",
+          "module": "backend_app.routers.orders",
+          "parameters": {
+            "exchange_id": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "symbol": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "telemetry": {
+              "annotation": "_empty",
+              "depends_on": "get_telemetry"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "vault": {
+              "annotation": "_empty",
+              "depends_on": "get_vault"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 400
+            }
+          ],
+          "returns": [
+            "computed",
+            "computed",
+            "list",
+            "computed",
+            "list"
+          ],
+          "route_path": "/api/orders/history"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/orders/history?strategy_id={strategyId}&limit=50",
+      "path_template": "/api/orders/history?strategy_id={strategyId}&limit=50",
+      "resolved": true,
+      "via": "apiClient direct"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/signals')",
+            "limiter.limit('200/minute')"
+          ],
+          "handler": "list_signals",
+          "module": "backend_app.routers.signal_trace",
+          "parameters": {
+            "date_from": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "date_to": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "decision": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "deployment_id": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "exchange_id": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "ml_type": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "offset": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "order_lifecycle_state": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "search": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "side": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "status": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "strategy_id": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "strategy_version": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "symbol": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "worker_id": {
+              "annotation": "Optional",
+              "has_default": true
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "computed",
+              "status_code": "e.http_status"
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "SIGNALS_LIST_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/signal-trace/signals"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/signal-trace/signals?strategy_id={strategyId}&limit=20",
+      "path_template": "/api/signal-trace/signals?strategy_id={strategyId}&limit=20",
+      "resolved": true,
+      "via": "apiClient direct"
+    },
+    {
+      "handler_count": 3,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('')",
+            "router.get('/')"
+          ],
+          "handler": "list_strategies",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "include_archived": {
+              "annotation": "bool",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "archived_total": "int",
+              "include_archived": "computed",
+              "strategies": "list",
+              "total": "int"
+            },
+            {
+              "archived_total": "computed",
+              "include_archived": "computed",
+              "strategies": "computed",
+              "total": "int"
+            },
+            {
+              "archived_total": "int",
+              "include_archived": "computed",
+              "strategies": "list",
+              "total": "int"
+            }
+          ],
+          "route_path": "/api/strategies"
+        },
+        {
+          "decorators": [
+            "router.get('')",
+            "router.get('/')"
+          ],
+          "handler": "list_strategies",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "include_archived": {
+              "annotation": "bool",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "archived_total": "int",
+              "include_archived": "computed",
+              "strategies": "list",
+              "total": "int"
+            },
+            {
+              "archived_total": "computed",
+              "include_archived": "computed",
+              "strategies": "computed",
+              "total": "int"
+            },
+            {
+              "archived_total": "int",
+              "include_archived": "computed",
+              "strategies": "list",
+              "total": "int"
+            }
+          ],
+          "route_path": "/api/strategies/"
+        },
+        {
+          "decorators": [
+            "router.get('/strategies')",
+            "limiter.limit('200/minute')"
+          ],
+          "handler": "list_strategies",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "environment": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "status": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGIES_LIST_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            "computed",
+            "computed"
+          ],
+          "route_path": "/api/strategies"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/strategies",
+      "path_template": "/api/strategies",
+      "resolved": true,
+      "via": "api.strategies.list"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('', status_code=status.HTTP_201_CREATED)",
+            "limiter.limit('20/minute')"
+          ],
+          "handler": "publish_strategy",
+          "module": "backend_app.routers.library",
+          "parameters": {
+            "_feature": {
+              "annotation": "_empty",
+              "depends_on": "require_marketplace_publish"
+            },
+            "_quota": {
+              "annotation": "_empty",
+              "depends_on": "check_marketplace_publish_quota"
+            },
+            "payload": {
+              "annotation": "PublishStrategyRequest"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_400_BAD_REQUEST"
+            },
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_403_FORBIDDEN"
+            },
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_404_NOT_FOUND"
+            },
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_409_CONFLICT"
+            },
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+            }
+          ],
+          "returns": [
+            {
+              "evaluation_score": "computed",
+              "library_id": "computed",
+              "message": "str",
+              "moderation_status": "str",
+              "suggested_price": "computed"
+            }
+          ],
+          "route_path": "/api/library",
+          "status_code": 201
+        }
+      ],
+      "method": "POST",
+      "path": "/api/library",
+      "path_template": "/api/library",
+      "resolved": true,
+      "via": "apiClient direct"
+    },
+    {
+      "handler_count": 2,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/strategies/{strategy_id}/deploy')",
+            "limiter.limit('50/minute')"
+          ],
+          "handler": "deploy_strategy",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "body": {
+              "annotation": "StrategyDeployRequest"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "computed"
+              },
+              "error_code": "STRATEGY_DEPLOY_FAILED",
+              "status_code": "status_code"
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str",
+                "missing_prerequisite": "computed"
+              },
+              "error_code": "DEPLOY_PREREQUISITE_NOT_MET",
+              "status_code": 409
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_DEPLOY_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/strategies/{strategy_id}/deploy"
+        },
+        {
+          "decorators": [
+            "router.post('/{strategy_id}/deploy')"
+          ],
+          "handler": "deploy_bot",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "_feature": {
+              "annotation": "_empty",
+              "depends_on": "require_live_trading"
+            },
+            "_limit": {
+              "annotation": "_empty",
+              "depends_on": "check_bot_quota"
+            },
+            "body": {
+              "annotation": "Dict"
+            },
+            "fleet": {
+              "annotation": "_empty",
+              "depends_on": "get_fleet"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "ws_mgr": {
+              "annotation": "_empty",
+              "depends_on": "get_ws_manager"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "computed",
+              "status_code": "e.http_status"
+            },
+            {
+              "detail_type": "str",
+              "status_code": 403
+            },
+            {
+              "detail_type": "str",
+              "status_code": 503
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "DEPLOY_DISPATCH_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            {
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/strategies/{strategy_id}/deploy"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/strategies/{id}/deploy",
+      "path_template": "/api/strategies/{id}/deploy",
+      "resolved": true,
+      "via": "api.strategies.deploy"
+    },
+    {
+      "handler_count": 2,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/strategies/{strategy_id}/pause')",
+            "router.post('/strategies/{strategy_id}/stop')",
+            "limiter.limit('50/minute')"
+          ],
+          "handler": "pause_strategy",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_PAUSE_FAILED",
+              "status_code": 404
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_PAUSE_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            {
+              "status": "str",
+              "strategy_id": "computed"
+            }
+          ],
+          "route_path": "/api/strategies/{strategy_id}/pause"
+        },
+        {
+          "decorators": [
+            "router.post('/{strategy_id}/pause')"
+          ],
+          "handler": "pause_strategy",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "fleet": {
+              "annotation": "_empty",
+              "depends_on": "get_fleet"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_404_NOT_FOUND"
+            },
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_409_CONFLICT"
+            },
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+            },
+            {
+              "detail_type": "str",
+              "status_code": 503
+            }
+          ],
+          "returns": [
+            {
+              "bot_stopped": "computed",
+              "status": "str",
+              "strategy_id": "computed"
+            }
+          ],
+          "route_path": "/api/strategies/{strategy_id}/pause"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/strategies/{id}/pause",
+      "path_template": "/api/strategies/{id}/pause",
+      "resolved": true,
+      "via": "api.strategies.pause"
+    },
+    {
+      "method": "POST",
+      "path": "/api/strategy-operations/strategies/{expr}/versions/{expr}/deploy",
+      "path_template": "/api/strategy-operations/strategies/{expr}/versions/{expr}/deploy",
+      "resolved": false,
+      "via": "api.strategies.deployVersion"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.put('/{strategy_id}/rename')"
+          ],
+          "handler": "rename_strategy",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "body": {
+              "annotation": "Dict"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "computed",
+              "status_code": "e.http_status"
+            },
+            {
+              "detail_type": "str",
+              "status_code": 503
+            }
+          ],
+          "returns": [
+            {
+              "id": "computed",
+              "name": "computed",
+              "user_id": "computed"
+            },
+            "dict",
+            "dict_with_spread"
+          ],
+          "route_path": "/api/strategies/{strategy_id}/rename"
+        }
+      ],
+      "method": "PUT",
+      "path": "/api/strategies/{expr}/rename",
+      "path_template": "/api/strategies/{expr}/rename",
+      "resolved": true,
+      "via": "api.strategies.rename"
+    }
+  ],
+  "capture": "surface_strategies",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/Strategies.jsx",
+    "pages/StrategyDetail.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "strategies",
+  "unresolved_usages": []
+}

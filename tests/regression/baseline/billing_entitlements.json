@@ -1,0 +1,58 @@
+{
+  "capture": "billing_entitlements",
+  "frontend_bindings": {
+    "getEntitlements": [
+      {
+        "method": "GET",
+        "path_template": "/api/billing/entitlements"
+      }
+    ]
+  },
+  "requirement": "25.2 \u2014 entitlement resolution",
+  "routes": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/entitlements')",
+            "limiter.limit('60/minute')"
+          ],
+          "handler": "get_entitlements",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "BILLING_ENTITLEMENTS_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            "computed",
+            "computed"
+          ],
+          "route_path": "/api/billing/entitlements"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/entitlements",
+      "resolved": true
+    }
+  ]
+}

@@ -1,0 +1,277 @@
+{
+  "admin_routes": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/users')"
+          ],
+          "handler": "list_users",
+          "module": "backend_app.routers.admin",
+          "parameters": {
+            "admin": {
+              "annotation": "dict",
+              "depends_on": "get_admin_user"
+            },
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "search": {
+              "annotation": "str",
+              "has_default": true
+            },
+            "supabase": {
+              "annotation": "SyncClient",
+              "depends_on": "get_request_supabase"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "list",
+            "computed"
+          ],
+          "route_path": "/api/admin/users"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/admin/users",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/users/{user_id}/status')"
+          ],
+          "handler": "set_user_status",
+          "module": "backend_app.routers.admin",
+          "parameters": {
+            "admin": {
+              "annotation": "dict",
+              "depends_on": "get_operator_user"
+            },
+            "alert": {
+              "annotation": "_empty",
+              "depends_on": "get_alert"
+            },
+            "body": {
+              "annotation": "UserStatusRequest"
+            },
+            "fleet": {
+              "annotation": "_empty",
+              "depends_on": "get_fleet"
+            },
+            "supabase": {
+              "annotation": "SyncClient",
+              "depends_on": "get_request_supabase"
+            },
+            "user_id": {
+              "annotation": "str"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "is_frozen": "computed",
+              "reason": "computed",
+              "status": "str",
+              "user_id": "computed"
+            }
+          ],
+          "route_path": "/api/admin/users/{user_id}/status"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/admin/users/{user_id}/status",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/kill-all')"
+          ],
+          "handler": "global_kill_switch",
+          "module": "backend_app.routers.admin",
+          "parameters": {
+            "admin": {
+              "annotation": "dict",
+              "depends_on": "get_operator_user"
+            },
+            "alert": {
+              "annotation": "_empty",
+              "depends_on": "get_alert"
+            },
+            "body": {
+              "annotation": "GlobalKillRequest"
+            },
+            "fleet": {
+              "annotation": "_empty",
+              "depends_on": "get_fleet"
+            },
+            "ws_mgr": {
+              "annotation": "_empty",
+              "depends_on": "get_ws_manager"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "message": "str",
+              "reason": "computed",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/admin/kill-all"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/admin/kill-all",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/admin/pending', status_code=status.HTTP_200_OK)"
+          ],
+          "handler": "admin_pending_strategies",
+          "module": "backend_app.routers.library",
+          "parameters": {
+            "admin": {
+              "annotation": "dict",
+              "depends_on": "get_admin_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+            }
+          ],
+          "returns": [
+            {
+              "items": "computed",
+              "total": "int"
+            }
+          ],
+          "route_path": "/api/library/admin/pending",
+          "status_code": 200
+        }
+      ],
+      "method": "GET",
+      "path": "/api/library/admin/pending",
+      "resolved": true
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.patch('/admin/{library_id}', status_code=status.HTTP_200_OK)"
+          ],
+          "handler": "admin_moderate_strategy",
+          "module": "backend_app.routers.library",
+          "parameters": {
+            "admin": {
+              "annotation": "dict",
+              "depends_on": "get_admin_user"
+            },
+            "body": {
+              "annotation": "AdminModerateRequest"
+            },
+            "library_id": {
+              "annotation": "str"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_404_NOT_FOUND"
+            },
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+            }
+          ],
+          "returns": [
+            {
+              "library_id": "computed",
+              "message": "str",
+              "moderation_status": "computed"
+            }
+          ],
+          "route_path": "/api/library/admin/{library_id}",
+          "status_code": 200
+        }
+      ],
+      "method": "PATCH",
+      "path": "/api/library/admin/{library_id}",
+      "resolved": true
+    }
+  ],
+  "capture": "auth_admin_role",
+  "get_admin_user": {
+    "app_metadata_admin": {
+      "allowed": true
+    },
+    "app_metadata_operator": {
+      "allowed": true
+    },
+    "app_metadata_support": {
+      "allowed": true
+    },
+    "app_metadata_user": {
+      "allowed": false,
+      "status_code": 403
+    },
+    "no_app_metadata": {
+      "allowed": false,
+      "status_code": 403
+    },
+    "top_level_role_admin": {
+      "allowed": false,
+      "status_code": 403
+    },
+    "user_metadata_admin": {
+      "allowed": false,
+      "status_code": 403
+    }
+  },
+  "get_operator_user": {
+    "app_metadata_admin": {
+      "allowed": false,
+      "status_code": 403
+    },
+    "app_metadata_operator": {
+      "allowed": true
+    },
+    "app_metadata_support": {
+      "allowed": false,
+      "status_code": 403
+    },
+    "app_metadata_user": {
+      "allowed": false,
+      "status_code": 403
+    },
+    "no_app_metadata": {
+      "allowed": false,
+      "status_code": 403
+    },
+    "top_level_role_admin": {
+      "allowed": false,
+      "status_code": 403
+    },
+    "user_metadata_admin": {
+      "allowed": false,
+      "status_code": 403
+    }
+  },
+  "requirement": "25.3 \u2014 administrative role resolution",
+  "subject": "backend_app/core/dependencies.py::get_admin_user, get_operator_user"
+}

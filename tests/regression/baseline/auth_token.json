@@ -1,0 +1,147 @@
+{
+  "accepted_claims": [
+    "app_metadata",
+    "aud",
+    "email",
+    "exp",
+    "iat",
+    "iss",
+    "role",
+    "sub",
+    "user_metadata"
+  ],
+  "capture": "auth_token",
+  "claim_type_map": {
+    "app_metadata": {
+      "role": "str",
+      "tenant_id": "str"
+    },
+    "aud": "str",
+    "email": "str",
+    "exp": "int",
+    "iat": "int",
+    "iss": "str",
+    "role": "str",
+    "sub": "str",
+    "user_metadata": {
+      "username": "str"
+    }
+  },
+  "get_current_user_contract": {
+    "decorators": [],
+    "handler": "get_current_user",
+    "module": "backend_app.core.dependencies",
+    "parameters": {
+      "credentials": {
+        "annotation": "Optional",
+        "depends_on": "HTTPBearer"
+      },
+      "supabase": {
+        "annotation": "_empty",
+        "depends_on": "get_supabase"
+      }
+    },
+    "raises": [
+      {
+        "detail_type": "str",
+        "status_code": "status.HTTP_401_UNAUTHORIZED"
+      },
+      {
+        "detail_type": "str",
+        "status_code": "status.HTTP_403_FORBIDDEN"
+      },
+      {
+        "detail_type": "str",
+        "status_code": "status.HTTP_503_SERVICE_UNAVAILABLE"
+      }
+    ],
+    "returns": [
+      "computed"
+    ]
+  },
+  "identity_fields": [
+    "access_token",
+    "app_metadata",
+    "email",
+    "id",
+    "role",
+    "tenant_id"
+  ],
+  "identity_type_map": {
+    "access_token": "str",
+    "app_metadata": {
+      "role": "str",
+      "tenant_id": "str"
+    },
+    "email": "str",
+    "id": "str",
+    "role": "str",
+    "tenant_id": "str"
+  },
+  "rejections": {
+    "expired": {
+      "error_type": "ExpiredSignatureError"
+    },
+    "foreign_issuer": {
+      "error_type": "InvalidTokenError"
+    },
+    "not_a_token": {
+      "error_type": "InvalidTokenError"
+    },
+    "unsigned_none_algorithm": {
+      "error_type": "InvalidTokenError"
+    },
+    "wrong_audience": {
+      "error_type": "InvalidAudienceError"
+    },
+    "wrong_secret": {
+      "error_type": "InvalidTokenError"
+    }
+  },
+  "requirement": "25.3 \u2014 token handling",
+  "subject": "backend_app/core/auth_middleware.py::decode_token_local, backend_app/core/dependencies.py::get_current_user",
+  "tenant_id_falls_back_to_the_subject": true,
+  "ws_ticket_route": {
+    "handler_count": 1,
+    "handlers": [
+      {
+        "decorators": [
+          "router.post('/ws-ticket', status_code=200)",
+          "limiter.limit('30/minute')"
+        ],
+        "handler": "issue_ws_ticket",
+        "module": "backend_app.routers.auth",
+        "parameters": {
+          "current_user": {
+            "annotation": "dict",
+            "depends_on": "get_current_user"
+          },
+          "request": {
+            "annotation": "Request"
+          }
+        },
+        "raises": [
+          {
+            "detail_type": "str",
+            "status_code": 400
+          },
+          {
+            "detail_type": "str",
+            "status_code": 500
+          }
+        ],
+        "returns": [
+          {
+            "ticket": "computed",
+            "ttl_seconds": "computed"
+          }
+        ],
+        "route_path": "/api/auth/ws-ticket",
+        "status_code": 200
+      }
+    ],
+    "method": "POST",
+    "path": "/api/auth/ws-ticket",
+    "resolved": true
+  }
+}

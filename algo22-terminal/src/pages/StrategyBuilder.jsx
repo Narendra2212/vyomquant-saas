@@ -427,6 +427,12 @@ const PremiumNodeWrapper = ({
             ? color
             : color + '90';
   const borderStyle = unvalidated && severity === null && !hasError ? 'dotted' : 'solid';
+  const shadowStyle = selected
+    ? `0 0 0 2px ${C.cyan}, 0 0 24px rgba(0,212,255,0.28)`
+    : isHovered
+      ? `0 4px 14px rgba(0,0,0,0.45), 0 0 12px ${color}35`
+      : `0 2px 8px rgba(0,0,0,0.3), 0 0 8px ${color}15`;
+
   return (
     <div
       onMouseEnter={() => setIsHovered(true)}
@@ -438,9 +444,9 @@ const PremiumNodeWrapper = ({
         borderRadius: 8,
         color: C.t1,
         padding: '8px 10px',
-        boxShadow: isHovered ? `0 4px 12px rgba(0,0,0,0.3)` : `0 0 15px ${color}25`,
+        boxShadow: shadowStyle,
         fontFamily: 'monospace',
-        transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
         cursor: 'pointer',
         position: 'relative',
       }}

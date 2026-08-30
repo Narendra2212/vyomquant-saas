@@ -1,0 +1,207 @@
+{
+  "api_call_count": 5,
+  "api_calls": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/plans')"
+          ],
+          "handler": "get_plans",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "currency": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/billing/plans"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/plans",
+      "path_template": "/api/billing/plans",
+      "resolved": true,
+      "via": "api.billing.getPlans"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/plans')"
+          ],
+          "handler": "get_plans",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "currency": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/billing/plans"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/plans?currency={expr}",
+      "path_template": "/api/billing/plans?currency={expr}",
+      "resolved": true,
+      "via": "api.billing.getPlans"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/backtest/{job_id}')"
+          ],
+          "handler": "get_backtest_status",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "job_id": {
+              "annotation": "str"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 404
+            }
+          ],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/strategies/backtest/{job_id}"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/strategies/backtest/{res.job_id}",
+      "path_template": "/api/strategies/backtest/{res.job_id}",
+      "resolved": true,
+      "via": "api.strategies.backtest"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/checkout')",
+            "limiter.limit('10/minute')"
+          ],
+          "handler": "create_checkout_session",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "background_tasks": {
+              "annotation": "BackgroundTasks"
+            },
+            "body": {
+              "annotation": "CheckoutRequest"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "amount": "computed",
+              "checkoutUrl": "computed",
+              "checkout_url": "computed",
+              "currency": "computed",
+              "provider": "str"
+            },
+            {
+              "amount": "computed",
+              "checkoutUrl": "computed",
+              "checkout_url": "computed",
+              "currency": "str",
+              "order_id": "computed",
+              "provider": "str"
+            }
+          ],
+          "route_path": "/api/billing/checkout"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/billing/checkout",
+      "path_template": "/api/billing/checkout",
+      "resolved": true,
+      "via": "api.billing.createCheckout"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/backtest')",
+            "limiter.limit('30/minute')"
+          ],
+          "handler": "backtest",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "payload": {
+              "annotation": "dict"
+            },
+            "request": {
+              "annotation": "Request"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            {
+              "job_id": "computed",
+              "status": "str"
+            },
+            "computed"
+          ],
+          "route_path": "/api/strategies/backtest"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/strategies/backtest",
+      "path_template": "/api/strategies/backtest",
+      "resolved": true,
+      "via": "api.strategies.backtest"
+    }
+  ],
+  "capture": "surface_sign_up",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/AuthPage.jsx",
+    "pages/Wizard.jsx"
+  ],
+  "supabase_auth_calls": [
+    "getUser",
+    "mfa.getAuthenticatorAssuranceLevel",
+    "resetPasswordForEmail",
+    "signInWithOAuth",
+    "signInWithPassword",
+    "signUp"
+  ],
+  "surface": "sign_up",
+  "unresolved_usages": []
+}

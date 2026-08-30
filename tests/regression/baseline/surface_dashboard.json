@@ -1,0 +1,139 @@
+{
+  "api_call_count": 3,
+  "api_calls": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/dashboard')",
+            "limiter.limit('100/minute')"
+          ],
+          "handler": "get_dashboard",
+          "module": "backend_app.routers.dashboard",
+          "parameters": {
+            "environment": {
+              "annotation": "str",
+              "has_default": true
+            },
+            "equity_days": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "DASHBOARD_FETCH_FAILED",
+              "status_code": 503
+            }
+          ],
+          "returns": [
+            "computed",
+            "computed"
+          ],
+          "route_path": "/api/dashboard"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/dashboard?equity_days={equity_days}&environment={environment}",
+      "path_template": "/api/dashboard?equity_days={equity_days}&environment={environment}",
+      "resolved": true,
+      "via": "api.dashboard.getDashboard"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/kill-switch')"
+          ],
+          "handler": "activate_kill_switch",
+          "module": "backend_app.routers.risk",
+          "parameters": {
+            "body": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "ws_mgr": {
+              "annotation": "_empty",
+              "depends_on": "get_ws_manager"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "kill_switch_active": "bool",
+              "message": "str",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/risk/kill-switch"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/risk/kill-switch",
+      "path_template": "/api/risk/kill-switch",
+      "resolved": true,
+      "via": "api.risk.killSwitch"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/kill-switch/recover')"
+          ],
+          "handler": "recover_kill_switch",
+          "module": "backend_app.routers.risk",
+          "parameters": {
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "ws_mgr": {
+              "annotation": "_empty",
+              "depends_on": "get_ws_manager"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "kill_switch_active": "bool",
+              "message": "str",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/risk/kill-switch/recover"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/risk/kill-switch/recover",
+      "path_template": "/api/risk/kill-switch/recover",
+      "resolved": true,
+      "via": "api.risk.recoverKillSwitch"
+    }
+  ],
+  "capture": "surface_dashboard",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/Dashboard.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "dashboard",
+  "unresolved_usages": []
+}

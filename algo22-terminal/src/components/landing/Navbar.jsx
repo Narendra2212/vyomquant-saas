@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import { Menu, X, Globe } from 'lucide-react'
 
 const navLinks = [
-  { label: 'Features', href: '#features' },
+  { label: 'Platform', href: '#platform' },
+  { label: 'Architecture', href: '#architecture' },
   { label: 'Security', href: '#security' },
   { label: 'Pricing', href: '#pricing' },
   { label: 'FAQ', href: '#faq' },
@@ -108,11 +109,11 @@ export default function Navbar() {
                 Sign In
               </Link>
               <Link 
-                to="/app" 
+                to="/signup" 
                 className="inline-flex items-center gap-2 bg-accent-cyan text-text-inverse font-bold text-xs px-4.5 py-2.5 rounded-xl hover:bg-accent-cyan/90 transition-all shadow-[0_0_20px_rgba(0,212,255,0.25)] hover:shadow-[0_0_30px_rgba(0,212,255,0.4)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
               >
                 <Globe className="w-3.5 h-3.5" />
-                Launch App
+                Get Started
               </Link>
             </div>
 
@@ -167,9 +168,9 @@ export default function Navbar() {
               <Link to="/signin" onClick={() => setMobileOpen(false)} className="text-center py-3 text-text-secondary font-semibold">
                 Sign In
               </Link>
-              <Link to="/app" onClick={() => setMobileOpen(false)} className="inline-flex items-center justify-center gap-2 bg-accent-cyan text-text-inverse font-bold py-3.5 rounded-xl shadow-lg shadow-accent-cyan/20">
+              <Link to="/signup" onClick={() => setMobileOpen(false)} className="inline-flex items-center justify-center gap-2 bg-accent-cyan text-text-inverse font-bold py-3.5 rounded-xl shadow-lg shadow-accent-cyan/20">
                 <Globe className="w-4.5 h-4.5" />
-                Launch Web App
+                Get Started
               </Link>
             </div>
           </div>

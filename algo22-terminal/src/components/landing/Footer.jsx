@@ -56,16 +56,12 @@ const platformLinks = [
   { label: 'Platform Capabilities', href: '#features' },
   { label: 'Security & Infrastructure', href: '#security' },
   { label: 'Pricing Options', href: '#pricing' },
-  { label: 'Strategy Marketplace', href: '#marketplace' },
   { label: 'Downloads', to: '/download' },
-  { label: 'Documentation', to: '/docs' },
 ]
 
 const companyLinks = [
-  { label: 'About Us', href: '#about' },
-  { label: 'About the Founder', href: '#about' },
-  { label: 'Contact Us', href: '#contact' },
-  { label: 'Careers', href: '#about' },
+  { label: 'About the Founder', href: '#founder' },
+  { label: 'Frequently Asked Questions', href: '#faq' },
 ]
 
 export default function Footer() {

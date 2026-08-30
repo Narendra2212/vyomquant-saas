@@ -1,0 +1,174 @@
+{
+  "api_call_count": 2,
+  "api_calls": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/signals/{signal_id}')",
+            "limiter.limit('200/minute')"
+          ],
+          "handler": "get_signal",
+          "module": "backend_app.routers.signal_trace",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "signal_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "SIGNAL_GET_FAILED",
+              "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "SIGNAL_NOT_FOUND",
+              "status_code": 404
+            }
+          ],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/signal-trace/signals/{signal_id}"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/signal-trace/signals/{signalId}",
+      "path_template": "/api/signal-trace/signals/{signalId}",
+      "resolved": true,
+      "via": "apiClient direct"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/signals')",
+            "limiter.limit('200/minute')"
+          ],
+          "handler": "list_signals",
+          "module": "backend_app.routers.signal_trace",
+          "parameters": {
+            "date_from": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "date_to": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "decision": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "deployment_id": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "exchange_id": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "ml_type": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "offset": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "order_lifecycle_state": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "search": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "side": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "status": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "strategy_id": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "strategy_version": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "symbol": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "worker_id": {
+              "annotation": "Optional",
+              "has_default": true
+            }
+          },
+          "raises": [
+            {
+              "detail_type": "computed",
+              "status_code": "e.http_status"
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "SIGNALS_LIST_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/signal-trace/signals"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/signal-trace/signals?{params}",
+      "path_template": "/api/signal-trace/signals?{params}",
+      "resolved": true,
+      "via": "apiClient direct"
+    }
+  ],
+  "capture": "surface_signal_trace",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/SignalTrace.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "signal_trace",
+  "unresolved_usages": []
+}

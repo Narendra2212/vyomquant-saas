@@ -1,0 +1,422 @@
+{
+  "api_call_count": 10,
+  "api_calls": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/entitlements')",
+            "limiter.limit('60/minute')"
+          ],
+          "handler": "get_entitlements",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "BILLING_ENTITLEMENTS_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            "computed",
+            "computed"
+          ],
+          "route_path": "/api/billing/entitlements"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/entitlements",
+      "path_template": "/api/billing/entitlements",
+      "resolved": true,
+      "via": "api.billing.getEntitlements"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/invoices')",
+            "limiter.limit('60/minute')"
+          ],
+          "handler": "get_invoices",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            "list",
+            "computed",
+            "list"
+          ],
+          "route_path": "/api/billing/invoices"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/invoices",
+      "path_template": "/api/billing/invoices",
+      "resolved": true,
+      "via": "api.billing.getInvoices"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/payment-methods')",
+            "limiter.limit('60/minute')"
+          ],
+          "handler": "get_payment_methods",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "db": {
+              "annotation": "Session",
+              "depends_on": "get_db"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed",
+            "computed"
+          ],
+          "route_path": "/api/billing/payment-methods"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/payment-methods",
+      "path_template": "/api/billing/payment-methods",
+      "resolved": true,
+      "via": "api.billing.getPaymentMethods"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/plans')"
+          ],
+          "handler": "get_plans",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "currency": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/billing/plans"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/plans",
+      "path_template": "/api/billing/plans",
+      "resolved": true,
+      "via": "api.billing.getPlans"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/plans')"
+          ],
+          "handler": "get_plans",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "currency": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/billing/plans"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/billing/plans?currency={expr}",
+      "path_template": "/api/billing/plans?currency={expr}",
+      "resolved": true,
+      "via": "api.billing.getPlans"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/cancel')",
+            "limiter.limit('5/minute')"
+          ],
+          "handler": "cancel_subscription",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "cancel_at_period_end": "bool",
+              "detail": "computed",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/billing/cancel"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/billing/cancel",
+      "path_template": "/api/billing/cancel",
+      "resolved": true,
+      "via": "api.billing.cancelSubscription"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/checkout')",
+            "limiter.limit('10/minute')"
+          ],
+          "handler": "create_checkout_session",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "background_tasks": {
+              "annotation": "BackgroundTasks"
+            },
+            "body": {
+              "annotation": "CheckoutRequest"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "amount": "computed",
+              "checkoutUrl": "computed",
+              "checkout_url": "computed",
+              "currency": "computed",
+              "provider": "str"
+            },
+            {
+              "amount": "computed",
+              "checkoutUrl": "computed",
+              "checkout_url": "computed",
+              "currency": "str",
+              "order_id": "computed",
+              "provider": "str"
+            }
+          ],
+          "route_path": "/api/billing/checkout"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/billing/checkout",
+      "path_template": "/api/billing/checkout",
+      "resolved": true,
+      "via": "api.billing.createCheckout"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/currency')",
+            "limiter.limit('10/minute')"
+          ],
+          "handler": "set_currency",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "body": {
+              "annotation": "Dict"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "currency": "str",
+              "status": "str",
+              "warning": "str"
+            },
+            {
+              "currency": "computed",
+              "status": "str"
+            },
+            {
+              "currency": "str",
+              "status": "str"
+            },
+            {
+              "currency": "computed",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/billing/currency"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/billing/currency",
+      "path_template": "/api/billing/currency",
+      "resolved": true,
+      "via": "api.billing.setCurrency"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/portal')",
+            "limiter.limit('5/minute')"
+          ],
+          "handler": "create_portal_session",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "url": "computed"
+            }
+          ],
+          "route_path": "/api/billing/portal"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/billing/portal",
+      "path_template": "/api/billing/portal",
+      "resolved": true,
+      "via": "api.billing.openPortal"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/resume')",
+            "limiter.limit('5/minute')"
+          ],
+          "handler": "resume_subscription",
+          "module": "backend_app.routers.billing",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "cancel_at_period_end": "bool",
+              "detail": "str",
+              "status": "str"
+            }
+          ],
+          "route_path": "/api/billing/resume"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/billing/resume",
+      "path_template": "/api/billing/resume",
+      "resolved": true,
+      "via": "api.billing.resumeSubscription"
+    }
+  ],
+  "capture": "surface_billing",
+  "requirement": "25.4",
+  "source_files": [
+    "pages/Billing.jsx"
+  ],
+  "supabase_auth_calls": [],
+  "surface": "billing",
+  "unresolved_usages": []
+}

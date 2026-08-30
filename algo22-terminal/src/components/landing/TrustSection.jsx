@@ -36,7 +36,7 @@ export default function TrustSection() {
   ]
 
   return (
-    <section id="trust" className="py-24 lg:py-32 border-t border-border-default relative overflow-hidden">
+    <section id="platform" className="py-24 lg:py-32 border-t border-border-default relative overflow-hidden" aria-label="Platform Overview">
       <div className="section-container relative z-10">
         <div className="section-inner">
           <div className="text-center mb-16">
