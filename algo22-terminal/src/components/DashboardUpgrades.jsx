@@ -277,7 +277,7 @@ export const EquityCurveChart = React.memo(function EquityCurveChart({ data, hei
                       {typeof p.timestamp === 'string' ? p.timestamp : `Point ${p.index}`}
                     </div>
                     <div style={{ color: C.t1, fontSize: 13, fontWeight: 700 }}>
-                      ${p.value.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      ${Number(p?.value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </div>
                     {p.drawdown > 0 && (
                       <div style={{ color: C.warning, fontSize: 10, marginTop: 2 }}>

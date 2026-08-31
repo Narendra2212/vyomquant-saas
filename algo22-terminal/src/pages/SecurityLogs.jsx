@@ -106,10 +106,10 @@ export default function SecurityLogs() {
       {/* Summary Cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 14 }}>
         {[
-          { l: "Logins (30d)", v: isLoading ? "..." : summary.logins_30d, c: C.cyan },
-          { l: "API Calls (24h)", v: isLoading ? "..." : summary.api_calls_24h.toLocaleString(), c: C.purple },
-          { l: "Failed Attempts", v: isLoading ? "..." : summary.failed_attempts, c: summary.failed_attempts > 0 ? C.red : C.green },
-          { l: "Active Sessions", v: isLoading ? "..." : summary.active_sessions, c: C.green },
+          { l: "Logins (30d)", v: isLoading ? "..." : (summary?.logins_30d ?? 0), c: C.cyan },
+          { l: "API Calls (24h)", v: isLoading ? "..." : Number(summary?.api_calls_24h ?? 0).toLocaleString(), c: C.purple },
+          { l: "Failed Attempts", v: isLoading ? "..." : (summary?.failed_attempts ?? 0), c: (summary?.failed_attempts ?? 0) > 0 ? C.red : C.green },
+          { l: "Active Sessions", v: isLoading ? "..." : (summary?.active_sessions ?? 0), c: C.green },
         ].map(s => (
           <Card key={s.l} className="p-4">
             <div style={{ color: C.t3, fontSize: 9, fontFamily: "monospace", letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 }}>{s.l}</div>

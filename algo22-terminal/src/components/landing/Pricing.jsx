@@ -68,6 +68,13 @@ const FALLBACK_PLANS = [
   }
 ]
 
+const formatNumber = (value) => {
+  if (value === null || value === undefined) return '0'
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return '0'
+  return numericValue.toLocaleString()
+}
+
 export default function Pricing() {
   const [isAnnual, setIsAnnual] = useState(false)
   const [currency, setCurrency] = useState('USD')
@@ -75,11 +82,12 @@ export default function Pricing() {
   const [isLoading, setIsLoading] = useState(false)
 
   useEffect(() => {
+    let isMounted = true
     const loadPlans = async () => {
       try {
-        const data = await api.billing.getPlans()
+        const data = await api.billing.getPlans(currency)
         const fetched = data?.plans || (Array.isArray(data) ? data : [])
-        if (fetched && fetched.length > 0) {
+        if (isMounted && Array.isArray(fetched) && fetched.length > 0) {
           setPlans(fetched)
         }
       } catch (err) {
@@ -87,20 +95,40 @@ export default function Pricing() {
       }
     }
     loadPlans()
-  }, [])
+    return () => {
+      isMounted = false
+    }
+  }, [currency])
+
+  const getBasePrice = (plan) => {
+    if (!plan) return 0
+    if (currency === 'INR') {
+      if (typeof plan.inr === 'number') return plan.inr
+      if (plan.currency === 'INR' && typeof plan.localized_price === 'number') return plan.localized_price
+      if (typeof plan.base_price === 'number') return plan.base_price * 83
+      if (typeof plan.usd === 'number') return plan.usd * 83
+      if (typeof plan.localized_price === 'number') return plan.localized_price
+    } else {
+      if (typeof plan.usd === 'number') return plan.usd
+      if (typeof plan.base_price === 'number') return plan.base_price
+      if (typeof plan.localized_price === 'number') return plan.localized_price
+    }
+    const num = Number(plan.price ?? 0)
+    return Number.isFinite(num) ? num : 0
+  }
 
   const getDisplayPrice = (plan) => {
-    const basePrice = currency === 'INR' ? plan.inr : plan.usd
+    const basePrice = getBasePrice(plan)
     if (isAnnual && basePrice > 0) {
-      return (basePrice * 12 * 0.8) / 12 // 20% discount on annual
+      return Math.round((basePrice * 12 * 0.8) / 12) // 20% discount on annual
     }
     return basePrice
   }
 
   const getAnnualPrice = (plan) => {
-    const basePrice = currency === 'INR' ? plan.inr : plan.usd
+    const basePrice = getBasePrice(plan)
     if (basePrice > 0) {
-      return basePrice * 12 * 0.8
+      return Math.round(basePrice * 12 * 0.8)
     }
     return 0
   }
@@ -164,15 +192,15 @@ export default function Pricing() {
           </div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8 max-w-6xl mx-auto items-stretch">
-            {plans.map((plan) => {
+            {(Array.isArray(plans) ? plans : []).map((plan) => {
               const displayPrice = getDisplayPrice(plan)
               const annualPrice = getAnnualPrice(plan)
-              const isRecommended = plan.recommended
-              const isFree = plan.id === 'free'
+              const isRecommended = plan?.recommended
+              const isFree = plan?.id === 'free'
               
               return (
                 <div 
-                  key={plan.id} 
+                  key={plan?.id || Math.random()} 
                   className={`relative card-surface p-8 flex flex-col h-full rounded-2xl transition-all duration-300 ${
                     isRecommended 
                       ? 'border-2 border-accent-cyan bg-bg-surface shadow-[0_0_50px_rgba(0,212,255,0.15)] lg:-translate-y-2 z-10' 
@@ -186,24 +214,24 @@ export default function Pricing() {
                   )}
                   
                   <div className="mb-6">
-                    <h3 className="text-xl font-bold text-text-primary mb-1.5">{plan.name}</h3>
-                    <p className="text-sm text-text-secondary">{plan.description}</p>
+                    <h3 className="text-xl font-bold text-text-primary mb-1.5">{plan?.name || 'Plan'}</h3>
+                    <p className="text-sm text-text-secondary">{plan?.description || ''}</p>
                   </div>
 
                   <div className="mb-6 pb-6 border-b border-border-default/60">
                     <div className="flex items-baseline gap-1.5">
                       <span className="text-4xl sm:text-5xl font-black text-text-primary tracking-tight">
-                        {currencySymbol}{displayPrice.toLocaleString()}
+                        {currencySymbol}{formatNumber(displayPrice)}
                       </span>
                       <span className="text-text-muted text-sm font-medium">/month</span>
                     </div>
                     {isAnnual && !isFree && annualPrice > 0 && (
-                      <p className="text-xs text-accent-profit mt-1.5 font-mono font-medium">Billed at {currencySymbol}{annualPrice.toLocaleString()}/yr — save 20%</p>
+                      <p className="text-xs text-accent-profit mt-1.5 font-mono font-medium">Billed at {currencySymbol}{formatNumber(annualPrice)}/yr — save 20%</p>
                     )}
                   </div>
 
                   <ul className="space-y-3.5 mb-8 flex-1">
-                    {plan.features.map((feature, fi) => (
+                    {(Array.isArray(plan?.features) ? plan.features : []).map((feature, fi) => (
                       <li key={fi} className="flex items-start gap-3 text-sm text-text-secondary font-medium">
                         <Check className="w-4.5 h-4.5 text-accent-profit flex-shrink-0 mt-0.5" />
                         {feature}

@@ -1095,10 +1095,10 @@ export default function Dashboard() {
             Total Equity ({portfolioData.currency})
           </div>
           <div style={{ fontSize: isDense ? "1.25rem" : "1.5rem", fontWeight: 800, color: "#f8fafc", marginTop: "0.25rem", letterSpacing: "-0.03em" }}>
-            ${portfolioData.totalEquity.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+            ${(portfolioData?.totalEquity ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
           </div>
-          <div style={{ fontSize: "0.6875rem", color: portfolioData.cumulativePnl >= 0 ? "#10b981" : "#ef4444", marginTop: "0.25rem" }}>
-            Lifetime P&L: {portfolioData.cumulativePnl >= 0 ? "+" : ""}${portfolioData.cumulativePnl.toFixed(2)}
+          <div style={{ fontSize: "0.6875rem", color: (portfolioData?.cumulativePnl ?? 0) >= 0 ? "#10b981" : "#ef4444", marginTop: "0.25rem" }}>
+            Lifetime P&L: {(portfolioData?.cumulativePnl ?? 0) >= 0 ? "+" : ""}${(portfolioData?.cumulativePnl ?? 0).toFixed(2)}
           </div>
         </div>
 
@@ -1113,10 +1113,10 @@ export default function Dashboard() {
             Available Liquidity
           </div>
           <div style={{ fontSize: isDense ? "1.25rem" : "1.5rem", fontWeight: 800, color: "#f8fafc", marginTop: "0.25rem", letterSpacing: "-0.03em" }}>
-            ${portfolioData.availableBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+            ${(portfolioData?.availableBalance ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
           </div>
           <div style={{ fontSize: "0.6875rem", color: "#64748b", marginTop: "0.25rem" }}>
-            Free: ${portfolioData.freeBalance.toFixed(0)} • Used: ${portfolioData.usedBalance.toFixed(0)}
+            Free: ${(portfolioData?.freeBalance ?? 0).toFixed(0)} • Used: ${(portfolioData?.usedBalance ?? 0).toFixed(0)}
           </div>
         </div>
 
@@ -1133,20 +1133,20 @@ export default function Dashboard() {
           <div style={{
             fontSize: isDense ? "1.25rem" : "1.5rem",
             fontWeight: 800,
-            color: portfolioData.todayPnl >= 0 ? "#10b981" : "#ef4444",
+            color: (portfolioData?.todayPnl ?? 0) >= 0 ? "#10b981" : "#ef4444",
             marginTop: "0.25rem",
             letterSpacing: "-0.03em"
           }}>
-            {portfolioData.todayPnl >= 0 ? "+" : ""}${portfolioData.todayPnl.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+            {(portfolioData?.todayPnl ?? 0) >= 0 ? "+" : ""}${(portfolioData?.todayPnl ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
             <span style={{ fontSize: "0.8125rem", fontWeight: 600, marginLeft: "0.375rem" }}>
-              ({portfolioData.todayReturnPct >= 0 ? "+" : ""}{portfolioData.todayReturnPct}%)
+              ({(portfolioData?.todayReturnPct ?? 0) >= 0 ? "+" : ""}{portfolioData?.todayReturnPct ?? 0}%)
             </span>
           </div>
           <div style={{ fontSize: "0.6875rem", color: "#94a3b8", marginTop: "0.25rem" }}>
-            Realized: <span style={{ color: portfolioData.todayRealizedPnl >= 0 ? "#10b981" : "#ef4444" }}>
-              {portfolioData.todayRealizedPnl >= 0 ? "+" : ""}${portfolioData.todayRealizedPnl.toFixed(2)}
-            </span> • uPnL: <span style={{ color: portfolioData.unrealizedPnl >= 0 ? "#10b981" : "#ef4444" }}>
-              {portfolioData.unrealizedPnl >= 0 ? "+" : ""}${portfolioData.unrealizedPnl.toFixed(2)}
+            Realized: <span style={{ color: (portfolioData?.todayRealizedPnl ?? 0) >= 0 ? "#10b981" : "#ef4444" }}>
+              {(portfolioData?.todayRealizedPnl ?? 0) >= 0 ? "+" : ""}${(portfolioData?.todayRealizedPnl ?? 0).toFixed(2)}
+            </span> • uPnL: <span style={{ color: (portfolioData?.unrealizedPnl ?? 0) >= 0 ? "#10b981" : "#ef4444" }}>
+              {(portfolioData?.unrealizedPnl ?? 0) >= 0 ? "+" : ""}${(portfolioData?.unrealizedPnl ?? 0).toFixed(2)}
             </span>
           </div>
         </div>
@@ -1162,7 +1162,7 @@ export default function Dashboard() {
             Market Exposure
           </div>
           <div style={{ fontSize: isDense ? "1.25rem" : "1.5rem", fontWeight: 800, color: "#f8fafc", marginTop: "0.25rem", letterSpacing: "-0.03em" }}>
-            ${portfolioData.totalExposure.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+            ${(portfolioData?.totalExposure ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
           </div>
           <div style={{ fontSize: "0.6875rem", color: "#64748b", marginTop: "0.25rem" }}>
             {positions.length} Open Positions Active
@@ -1353,10 +1353,10 @@ export default function Dashboard() {
                             {pos.contracts}
                           </td>
                           <td style={{ padding: isDense ? "0.4375rem 0.5rem" : "0.625rem 0.75rem", textAlign: "right", color: "#94a3b8" }}>
-                            ${pos.entryPrice.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                            ${Number(pos?.entryPrice ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
                           </td>
                           <td style={{ padding: isDense ? "0.4375rem 0.5rem" : "0.625rem 0.75rem", textAlign: "right", color: "#f8fafc", fontWeight: 600 }}>
-                            ${pos.markPrice.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                            ${Number(pos?.markPrice ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
                           </td>
                           <td style={{
                             padding: isDense ? "0.4375rem 0.5rem" : "0.625rem 0.75rem",
@@ -1459,7 +1459,7 @@ export default function Dashboard() {
                     <YAxis domain={["auto", "auto"]} hide />
                     <Tooltip
                       contentStyle={{ background: "#090d16", border: "1px solid #1e293b", borderRadius: 6, fontSize: "0.6875rem" }}
-                      formatter={(val) => [`$${val.toLocaleString()}`, "Equity"]}
+                      formatter={(val) => [`$${Number(val ?? 0).toLocaleString()}`, "Equity"]}
                     />
                     <Area type="monotone" dataKey="v" stroke="#0284c7" strokeWidth={2} fill="url(#equityGrad)" />
                   </AreaChart>
@@ -1561,7 +1561,7 @@ export default function Dashboard() {
                           </span>
                         </td>
                         <td style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", textAlign: "right", color: "#f8fafc", fontWeight: 600 }}>
-                          ${exec.price.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                          ${Number(exec?.price ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
                         </td>
                         <td style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", textAlign: "right", color: "#94a3b8" }}>
                           {exec.amount}

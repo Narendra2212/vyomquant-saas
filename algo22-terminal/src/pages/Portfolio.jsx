@@ -352,10 +352,10 @@ export default function Portfolio() {
                       </span>
                     </td>
                     <td style={{ padding: "8px 10px", textAlign: "right", color: "#f8fafc", fontWeight: 600 }}>{pos.size}</td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", color: "#94a3b8" }}>${pos.entryPrice.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", color: "#f8fafc", fontWeight: 600 }}>${pos.markPrice.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: pos.unrealizedPnl >= 0 ? "#10b981" : "#ef4444" }}>
-                      {pos.unrealizedPnl >= 0 ? "+" : ""}${pos.unrealizedPnl.toFixed(2)}
+                    <td style={{ padding: "8px 10px", textAlign: "right", color: "#94a3b8" }}>${Number(pos?.entryPrice ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", color: "#f8fafc", fontWeight: 600 }}>${Number(pos?.markPrice ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: (pos?.unrealizedPnl ?? 0) >= 0 ? "#10b981" : "#ef4444" }}>
+                      {(pos?.unrealizedPnl ?? 0) >= 0 ? "+" : ""}${Number(pos?.unrealizedPnl ?? 0).toFixed(2)}
                     </td>
                   </tr>
                 ))}
@@ -387,7 +387,7 @@ export default function Portfolio() {
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
                 <XAxis dataKey="date" stroke="#64748b" fontSize={10} tickLine={false} />
-                <YAxis domain={["auto", "auto"]} stroke="#64748b" fontSize={10} tickLine={false} tickFormatter={v => `$${v.toLocaleString()}`} />
+                <YAxis domain={["auto", "auto"]} stroke="#64748b" fontSize={10} tickLine={false} tickFormatter={v => `$${Number(v ?? 0).toLocaleString()}`} />
                 <Tooltip content={<CustomTooltip prefix="$" />} />
                 <Area dataKey="value" stroke="#10B981" strokeWidth={2} fill="url(#eg)" dot={false} />
               </AreaChart>

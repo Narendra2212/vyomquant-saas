@@ -228,8 +228,8 @@ export default function TradeHistory() {
                       </span>
                     </td>
                     <td style={{ padding: "8px 12px" }}><Tag2 c={t.side === "buy" ? "green" : "red"}>{t.side.toUpperCase()}</Tag2></td>
-                    <td style={{ padding: "8px 12px", color: "#94a3b8" }}>${t.entry.toLocaleString()}</td>
-                    <td style={{ padding: "8px 12px", color: "#94a3b8" }}>${t.exit.toLocaleString()}</td>
+                    <td style={{ padding: "8px 12px", color: "#94a3b8" }}>${Number(t?.entry ?? 0).toLocaleString()}</td>
+                    <td style={{ padding: "8px 12px", color: "#94a3b8" }}>${Number(t?.exit ?? 0).toLocaleString()}</td>
                     <td style={{ padding: "8px 12px", color: "#94a3b8" }}>{t.size}</td>
                     <td style={{ padding: "8px 12px", color: t.pnl >= 0 ? "#10b981" : "#ef4444", fontWeight: 700 }}>{t.pnl >= 0 ? "+" : ""}{t.pnl.toFixed(2)}</td>
                     <td style={{ padding: "8px 12px", color: "#64748b" }}>${t.fees}</td>
