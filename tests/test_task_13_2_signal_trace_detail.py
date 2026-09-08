@@ -137,6 +137,15 @@ class FakeQuery:
             rows = [self._project(r) for r in self.client.rows if self._matches(r)]
             return _Result(data=rows)
 
+        if self.table_name == svc.STRATEGY_OWNER_TABLE:
+            # Task 29.4 resolves the viewer's role by comparing the authenticated identity
+            # with ``strategies.user_id`` for the signal's ``strategy_id``. Answered here so
+            # this module's premise is stated rather than assumed: the caller in these tests
+            # OWNS ``strat-1``, which is why they are entitled to the full trace below.
+            # ``self.client.strategies`` is what a test varies to make the caller a non-owner.
+            rows = [r for r in self.client.strategies if self._matches(r)]
+            return _Result(data=[dict(r) for r in rows])
+
         if self.table_name == svc.ORDER_LIFECYCLE_TRANSITIONS_TABLE:
             if not self.client.transitions_table:
                 raise Exception(
@@ -177,9 +186,17 @@ class FakeSupabase:
         transitions=(),
         lifecycle_columns=True,
         transitions_table=True,
+        strategies=None,
     ):
         self.rows = list(rows)
         self.transitions = list(transitions)
+        # The strategy the signals below belong to, owned by the caller. See FakeQuery's
+        # ``strategies`` branch: task 29.4 reads this to decide the viewer's role.
+        self.strategies = (
+            [{"id": "strat-1", "user_id": OWNER["id"]}]
+            if strategies is None
+            else list(strategies)
+        )
         self.lifecycle_columns = lifecycle_columns
         self.transitions_table = transitions_table
         self.calls = []

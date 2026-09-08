@@ -64,6 +64,22 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wsSubscriptions.clear();
+
+    // Portfolio's LIVE branch issues FIVE reads in one `Promise.allSettled` -- the summary and
+    // positions each test mocks, plus the equity curve, the allocation and the heatmap. Those last
+    // three were left unmocked, so they were dispatched to the real backend through jsdom's XHR and
+    // rejected with `AggregateError` (nothing is listening during a test run). Because the page
+    // holds `isLoading` until all five settle, the whole grid stayed on "Loading..." for as long as
+    // those three sockets took to be refused -- fast on an idle machine, slower than the 1s
+    // `findByText`/`waitFor` window when the full suite is running, which is exactly the
+    // intermittent failure of invariant 1. Stubbing them here removes the network from these tests
+    // without changing what any of them assert: every one of the three resolves to `[]`, which is
+    // the same state the page reached when the read failed (`setEquityCurve([])`,
+    // `setAllocation([])`, `setHeatmapData([])`), so the rendering under test is identical -- only
+    // now it is reached deterministically and immediately.
+    vi.spyOn(portfolioModule.portfolioApi, 'getEquityCurve').mockResolvedValue([]);
+    vi.spyOn(portfolioModule.portfolioApi, 'getAllocation').mockResolvedValue([]);
+    vi.spyOn(portfolioModule.portfolioApi, 'getHeatmap').mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -108,17 +124,35 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
   });
 
   // 3 & 4: Live & Paper API Failures handled gracefully without fallback mixing
-  it('3 & 4: Live API failure renders zero state and never falls back to paper', async () => {
+  //
+  // Invariant 3 used to be spelled "renders zero state": the assertion was that a failed live
+  // read produced `$0.00` cards. That spelling is no longer correct behaviour - a `$0.00` for a
+  // read that never completed presents a fabricated figure as a measurement, which Requirement
+  // 28.5 forbids. The invariant being protected (a failed read must not silently look like a
+  // funded, zeroed account, and must not be papered over with paper data) is unchanged; it is now
+  // pinned as the failure being stated in words, with no figure of any kind shown.
+  //
+  // Invariant 4 - no fallback to the paper reads - is asserted exactly as before.
+  it('3 & 4: Live API failure states the failure instead of a figure and never falls back to paper', async () => {
     vi.spyOn(portfolioModule.portfolioApi, 'getSummary').mockRejectedValue(new Error('Network error 500'));
     vi.spyOn(portfolioModule.portfolioApi, 'getOpenPositions').mockRejectedValue(new Error('Network error 500'));
+    // `getOpenPositions` rejecting sends the page down its documented fallback,
+    // `.catch(() => api.portfolio.getPositions())`, so this read is part of the failure being
+    // staged and has to be mocked too -- unmocked it went to the real backend, which is the same
+    // load-sensitive stall that broke invariant 1. Its message is deliberately NOT
+    // "Network error 500": the assertion below is a `getByText`, which throws on more than one
+    // match, and both regions render their own failure sentence.
+    vi.spyOn(portfolioModule.portfolioApi, 'getPositions').mockRejectedValue(new Error('Positions read did not complete'));
     const paperSpy = vi.spyOn(paperModule.paperApi, 'getSummary');
 
     render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => {
-      expect(screen.getAllByText('$0.00').length).toBeGreaterThan(0);
-      expect(paperSpy).not.toHaveBeenCalled();
+      expect(screen.getAllByText('Unavailable — read failed').length).toBeGreaterThan(0);
     });
+    expect(screen.getByText(/Network error 500/)).toBeDefined();
+    expect(screen.queryByText('$0.00')).toBeNull();
+    expect(paperSpy).not.toHaveBeenCalled();
   });
 
   // 5 & 6 & 7 & 8: WebSocket Stale Event & Wrong Environment Rejection

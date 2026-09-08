@@ -141,11 +141,27 @@ def no_deployments_table(monkeypatch):
 
 
 class TestTheSignalFamily:
-    def test_the_registry_now_holds_exactly_six_owned_families(self):
-        """The exhaustive set, which this file owns because it closed it.
+    def test_the_registry_holds_exactly_the_owned_families_and_signal_is_one(self):
+        """The exhaustive set.
 
         `market.{symbol}.{timeframe}` stays outside: a symbol belongs to nobody, so it
         cannot be authorised against an owner.
+
+        UPDATED BY marketplace-subscriptions-paper-trading TASK 26.3, AND WHY
+        --------------------------------------------------------------------
+        This assertion read "exactly six" when task 14.1 wrote it, because `signal` was the
+        sixth and last family then. **Requirement 19.1** of
+        marketplace-subscriptions-paper-trading mandates a seventh - "THE Paper_Channel SHALL
+        be implemented as a parameterised, ownership-authorised channel family following the
+        existing `OwnedChannelFamily` pattern ... AND SHALL be registered in the existing
+        WebSocket infrastructure rather than in a new server" - so `paper` is now in the
+        registry and the exhaustive set is seven.
+
+        The assertion is still EXHAUSTIVE and not relaxed to a subset: an eighth family that
+        appeared without a test saying so would still fail here. What changed is one member,
+        and the requirement that mandates it is named above (Requirement 25.8's condition for
+        updating an existing suite). `tests/test_task_26_3_paper_channel.py` asserts the same
+        set from the other side, so the two cannot drift apart silently.
         """
         assert {family.namespace for family in C.OWNED_CHANNEL_FAMILIES} == {
             "training",
@@ -154,6 +170,7 @@ class TestTheSignalFamily:
             "deployment",
             "execution",
             "signal",
+            "paper",
         }
         assert C.claims_owned_namespace("market.BTC/USDT.1h") is False
 

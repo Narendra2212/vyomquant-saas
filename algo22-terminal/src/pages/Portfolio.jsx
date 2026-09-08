@@ -3,11 +3,263 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell
 } from "recharts";
-import { DollarSign, TrendingUp, TrendingDown, Percent, Target, Activity, RefreshCw } from "lucide-react";
+import { DollarSign, TrendingUp, TrendingDown, Percent, Target, Activity, RefreshCw, FlaskConical, AlertTriangle, Minus } from "lucide-react";
 import { C, SectionH, PanelTitle, CustomTooltip } from "../components/ui-legacy/primitives";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { api } from "../api";
+
+/**
+ * The two additive provenance fields, read off a paper response body and nothing else.
+ *
+ * `backend_app/routers/paper_trading.py` returns `execution_environment` and `is_simulated`
+ * on every paper body (task 23.3): on the `/api/paper/summary` body itself, through
+ * `PaperTradingService._paper_provenance`, and on the `/api/paper/positions` envelope beside
+ * `positions` and `count`. Nothing here defaults or invents either field - a body that
+ * carries neither yields `null`, and the indicator says so, rather than a label being
+ * manufactured on the client (Requirement 28.5).
+ *
+ * @param {any} body - A resolved paper response body.
+ * @returns {{execution_environment: (string|null), is_simulated: boolean}|null}
+ */
+const readPaperProvenance = (body) => {
+  if (!body || typeof body !== "object") return null;
+  const env = typeof body.execution_environment === "string" && body.execution_environment
+    ? body.execution_environment
+    : null;
+  const flagged = body.is_simulated === true;
+  if (!env && !flagged) return null;
+  return { execution_environment: env, is_simulated: flagged };
+};
+
+/**
+ * Requirement 28.5 - the two sentences this page shows in place of a figure it does not have.
+ *
+ * `PaperTrading.jsx` established this vocabulary for the paper session page ("Not reported" /
+ * "Not computed" for an absent figure, and the error panel for a read that did not complete),
+ * and the two pages are kept in the same words so a reader moving between them does not have to
+ * learn a second dialect. `StrategyMarketplace.jsx` spells the same absence as an em dash in a
+ * table cell; here the figures are headline cards, so the words are written out.
+ *
+ * The distinction that matters: NOT_REPORTED means the response arrived and carried no such
+ * figure; READ_FAILED means the request did not complete, so nothing at all is known. Neither is
+ * a zero, and a genuine zero renders as `$0.00`.
+ */
+const NOT_REPORTED = "Not reported";
+const READ_FAILED = "Unavailable — read failed";
+
+/**
+ * The first candidate that is a finite number, or `null`.
+ *
+ * Replaces the `?? 0` / `?? 100000` chains this page used to end its field reads with. Those
+ * chains turned "the server sent no such field" into a displayed balance, which is exactly what
+ * Requirement 28.5 forbids; `null` here travels to the card and is rendered as
+ * {@link NOT_REPORTED} instead.
+ *
+ * @param {...unknown} candidates - Field readings, in precedence order.
+ * @returns {number|null}
+ */
+const readNumber = (...candidates) => {
+  for (const candidate of candidates) {
+    if (candidate === null || candidate === undefined || candidate === "") continue;
+    if (typeof candidate === "boolean") continue;
+    const parsed = typeof candidate === "number" ? candidate : Number(String(candidate).trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+};
+
+/**
+ * The positions list off a response body, or `null` when the body carries no list at all.
+ *
+ * Two shapes reach this page and both are read here rather than one being assumed:
+ *
+ * * **An envelope.** `GET /api/paper/positions`
+ *   (`backend_app/routers/paper_trading.py`) answers
+ *   `{positions, count, execution_environment, is_simulated, session_id}`, and the shared client's
+ *   `get` resolves to the response BODY - so `api.paper.getPositions()` resolves to that object,
+ *   never to an array. The internal portfolio-management `GET /positions` answers
+ *   `{count, positions}` in the same style.
+ * * **A bare array.** The live portfolio reads (`allocation`, `equity-curve`, `heatmap`) all
+ *   answer bare lists, so `api.portfolio.getOpenPositions()` answering one is entirely plausible.
+ *
+ * `null` for anything else is deliberate: a body that carries neither shape is a read this page
+ * cannot interpret, and it is reported as such rather than as "you hold no positions" - an empty
+ * ledger is a claim, and an unreadable body did not make it.
+ *
+ * @param {unknown} body - A resolved response body.
+ * @returns {Array<Object>|null}
+ */
+const readPositionsList = (body) => {
+  if (Array.isArray(body)) return body;
+  if (body && typeof body === "object" && Array.isArray(body.positions)) return body.positions;
+  return null;
+};
+
+/**
+ * A rejected `Promise.allSettled` entry's reason as one sentence.
+ *
+ * The shared client rejects with an `ApiError` carrying the server's own message, so that
+ * message is shown verbatim rather than replaced with a generic line.
+ *
+ * @param {unknown} reason
+ * @returns {string}
+ */
+const failureSentence = (reason) => {
+  const message = typeof reason?.message === "string" ? reason.message.trim() : "";
+  return message || "The request did not complete.";
+};
+
+/** A signed figure's colour. Absent figures get the neutral tone, not the loss tone. */
+const signTone = (value) =>
+  value === null || value === undefined ? "#94a3b8" : value >= 0 ? "#10b981" : "#ef4444";
+
+/**
+ * A signed figure's trend icon.
+ *
+ * An absent figure gets a neutral dash: the previous `value >= 0 ? up : down` test sent every
+ * missing figure down the loss branch, which drew a red downward arrow for a number nobody had.
+ */
+const SignIcon = ({ value }) => {
+  if (value === null || value === undefined) {
+    return <Minus size={13} style={{ color: "#64748b" }} aria-hidden="true" />;
+  }
+  return value >= 0
+    ? <TrendingUp size={13} style={{ color: "#10b981" }} aria-hidden="true" />
+    : <TrendingDown size={13} style={{ color: "#ef4444" }} aria-hidden="true" />;
+};
+
+/**
+ * One summary card's value slot: the figure, or - in text, never an empty cell - why there is
+ * none (Requirement 28.5).
+ *
+ * Four outcomes, each visually and textually distinct, so a failed read can never be mistaken
+ * for a measurement:
+ *
+ * | outcome                          | rendering                                |
+ * |----------------------------------|------------------------------------------|
+ * | the read is in flight            | "Loading..." with the spinner            |
+ * | the read did not complete        | amber "Unavailable — read failed" + icon |
+ * | the response carried no figure   | muted "Not reported"                     |
+ * | a figure arrived, including zero | the formatted figure                     |
+ */
+function CardFigure({ isLoading, readFailed, value, format }) {
+  if (isLoading) {
+    return (
+      <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <Activity size={16} className="animate-spin" style={{ color: "#64748b" }} />
+        Loading...
+      </span>
+    );
+  }
+  if (readFailed) {
+    return (
+      <span style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "6px",
+        color: "#fbbf24",
+        fontSize: "0.8125rem",
+        fontWeight: 800,
+        fontFamily: "monospace",
+      }}>
+        <AlertTriangle size={13} aria-hidden="true" />
+        {READ_FAILED}
+      </span>
+    );
+  }
+  if (value === null || value === undefined) {
+    return (
+      <span style={{ color: "#64748b", fontSize: "0.8125rem", fontWeight: 700, fontFamily: "monospace" }}>
+        {NOT_REPORTED}
+      </span>
+    );
+  }
+  return <>{format(value)}</>;
+}
+
+/** A read that did not complete, said in a sentence beside a shape and a word. */
+function ReadFailureNotice({ children, span = false }) {
+  return (
+    <div
+      role="status"
+      style={{
+        ...(span ? { gridColumn: "1 / -1" } : {}),
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        padding: "8px 10px",
+        borderRadius: "6px",
+        background: "rgba(245, 158, 11, 0.10)",
+        border: "1px solid rgba(245, 158, 11, 0.40)",
+        color: "#fbbf24",
+        fontSize: "0.6875rem",
+        lineHeight: 1.5,
+      }}
+    >
+      <AlertTriangle size={13} aria-hidden="true" style={{ flexShrink: 0 }} />
+      <span>{children}</span>
+    </div>
+  );
+}
+
+/** `$1,234.56` - two fraction digits, as every money figure on this page has always rendered. */
+const money = (value) =>
+  `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** A signed P&L figure, keeping this page's existing unprefixed spelling. */
+const signedAmount = (value) =>
+  `${value >= 0 ? "+" : ""}${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/**
+ * Requirement 13.6 / 20.6 / 28.1 - the simulated indicator.
+ *
+ * It is rendered from the server's own `execution_environment` / `is_simulated` fields, it
+ * carries its meaning in text plus a shape rather than in colour alone, and each instance sits
+ * **inside the region holding the figures it qualifies** - not in the page header, which a
+ * reader who has scrolled to the positions table cannot see.
+ *
+ * A `null` provenance in the PAPER branch means the response arrived without those fields. The
+ * indicator then reports the label as unavailable instead of asserting a server label that was
+ * never sent, and still marks the region, because an unlabelled PAPER figure is what
+ * Requirement 28.4 forbids.
+ */
+function SimulatedIndicator({ provenance, announce = false }) {
+  const env = provenance?.execution_environment ?? null;
+  const flagged = provenance?.is_simulated === true;
+  const known = Boolean(env) || flagged;
+  const label = env && flagged
+    ? `${env} · SIMULATED`
+    : env || (flagged ? "SIMULATED" : "SIMULATED · SERVER LABEL UNAVAILABLE");
+  const tone = known
+    ? { fg: "#818cf8", bg: "rgba(99, 102, 241, 0.12)", border: "rgba(99, 102, 241, 0.45)" }
+    : { fg: "#fbbf24", bg: "rgba(245, 158, 11, 0.12)", border: "rgba(245, 158, 11, 0.45)" };
+
+  return (
+    <span
+      role={announce ? "status" : undefined}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "6px",
+        padding: "3px 8px",
+        borderRadius: "6px",
+        background: tone.bg,
+        border: `1px solid ${tone.border}`,
+        color: tone.fg,
+        fontFamily: "monospace",
+        fontSize: "0.625rem",
+        fontWeight: 800,
+        letterSpacing: 1.2,
+        textTransform: "uppercase",
+        whiteSpace: "nowrap",
+      }}
+    >
+      <FlaskConical size={11} aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
 
 export default function Portfolio() {
   const [environment, setEnvironment] = useState("live");
@@ -18,14 +270,32 @@ export default function Portfolio() {
   const [heatmapData, setHeatmapData] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
+  // Requirement 28.5: a read that did not complete is recorded as a failure, per region, and is
+  // rendered as one. Previously both regions fell back to fabricated figures - the summary to a
+  // hardcoded 100000/0, the positions ledger to `[]`, which rendered as the honest-looking
+  // "no open positions currently held". An empty list is a claim about the account; a failed
+  // read did not make it, so the two are kept apart here and on screen.
+  const [summaryError, setSummaryError] = useState(null);
+  const [positionsError, setPositionsError] = useState(null);
+  // Per-region provenance: the summary body labels the equity/P&L/cash cards and the
+  // allocation figure derived from them, the positions envelope labels the positions ledger.
+  // They are kept apart so one region never borrows the other region's label.
+  const [paperProvenance, setPaperProvenance] = useState({ summary: null, positions: null });
   const COLORS = [C.orange, C.purple, C.cyan, C.gold, C.t3];
 
   const loadPortfolioData = useCallback(async () => {
     setIsLoading(true);
     setLoadError(null);
+    setSummaryError(null);
+    setPositionsError(null);
 
     try {
       if (environment === "live") {
+        // No paper provenance on the LIVE branch: the label belongs to paper figures, and this
+        // branch holds none. The two branches are mutually exclusive, so a LIVE total is never
+        // computed from a figure this reader labelled as simulated (Requirement 13.6).
+        setPaperProvenance({ summary: null, positions: null });
+
         // 1. Fetch live portfolio analytics concurrently
         const [summaryRes, posRes, equityRes, allocRes, heatmapRes] = await Promise.allSettled([
           api.portfolio.getSummary(),
@@ -36,29 +306,36 @@ export default function Portfolio() {
         ]);
 
         // Process Summary
+        // Requirement 28.5: each field is the figure the response carried or `null`, and a read
+        // that did not complete leaves no summary at all rather than a grid of zeros. A zero here
+        // now means the server reported zero.
         if (summaryRes.status === "fulfilled" && summaryRes.value) {
           const s = summaryRes.value;
           const acct = s.account || s;
           setSummary({
-            total_value: parseFloat(acct.total_equity ?? acct.total_value ?? 0),
-            unrealized_pnl: parseFloat(acct.unrealized_pnl ?? acct.total_pnl ?? 0),
-            realized_pnl: parseFloat(acct.realized_pnl ?? 0),
-            available_balance: parseFloat(acct.available_balance ?? acct.total_equity ?? 0),
-            roi_percentage: parseFloat(acct.pnl_pct ?? s.roi_pct ?? 0),
+            total_value: readNumber(acct.total_equity, acct.total_value),
+            unrealized_pnl: readNumber(acct.unrealized_pnl, acct.total_pnl),
+            realized_pnl: readNumber(acct.realized_pnl),
+            available_balance: readNumber(acct.available_balance, acct.total_equity),
+            roi_percentage: readNumber(acct.pnl_pct, s.roi_pct),
           });
         } else {
-          setSummary({
-            total_value: 0,
-            unrealized_pnl: 0,
-            realized_pnl: 0,
-            available_balance: 0,
-            roi_percentage: 0,
-          });
+          setSummary(null);
+          setSummaryError(
+            summaryRes.status === "rejected"
+              ? failureSentence(summaryRes.reason)
+              : "The response carried no portfolio figures."
+          );
         }
 
         // Process Open Positions
-        if (posRes.status === "fulfilled" && Array.isArray(posRes.value)) {
-          setPositions(posRes.value.map((p, i) => ({
+        //
+        // `getOpenPositions()` may answer a bare array and `getPositions()` - its fallback - may
+        // answer the `{count, positions}` envelope the portfolio-management router uses, so both
+        // shapes are read. A body carrying neither is a failed read, not an empty ledger.
+        const livePositions = posRes.status === "fulfilled" ? readPositionsList(posRes.value) : null;
+        if (livePositions) {
+          setPositions(livePositions.map((p, i) => ({
             id: p.id || p.position_id || `pos_${i}`,
             symbol: p.symbol || "UNKNOWN",
             exchange: p.exchange_id || p.exchange || "binance",
@@ -70,6 +347,11 @@ export default function Portfolio() {
           })));
         } else {
           setPositions([]);
+          setPositionsError(
+            posRes.status === "rejected"
+              ? failureSentence(posRes.reason)
+              : "The response carried no positions list."
+          );
         }
 
         // Process Equity Curve
@@ -87,10 +369,12 @@ export default function Portfolio() {
 
         // Process Asset Allocation
         if (allocRes.status === "fulfilled" && Array.isArray(allocRes.value)) {
+          // An allocation row whose share or value the response did not carry keeps `null` here
+          // and says so in the legend (Requirement 28.5); a 0.0% share is now the server's own.
           const mappedAlloc = allocRes.value.map(a => ({
             asset: a.asset || "USDT",
-            percentage: parseFloat(a.pct ?? a.percentage ?? 0),
-            value_usd: parseFloat(a.value_usd ?? a.value ?? 0),
+            percentage: readNumber(a.pct, a.percentage),
+            value_usd: readNumber(a.value_usd, a.value),
           }));
           setAllocation(mappedAlloc);
         } else {
@@ -114,27 +398,45 @@ export default function Portfolio() {
           api.paper.getPositions(),
         ]);
 
+        setPaperProvenance({
+          summary: paperSumRes.status === "fulfilled" ? readPaperProvenance(paperSumRes.value) : null,
+          positions: paperPosRes.status === "fulfilled" ? readPaperProvenance(paperPosRes.value) : null,
+        });
+
+        // Requirement 28.5: no `?? 100000`. The 100000 was the default opening capital of a paper
+        // account, not a balance anybody read, and rendering it as "Total Equity" stated a
+        // simulated balance the account may never have held. An unread figure is now `null` and
+        // renders as "Not reported"; a read that did not complete renders as a failure.
+        let paperTotalEquity = null;
         if (paperSumRes.status === "fulfilled" && paperSumRes.value) {
           const pSum = paperSumRes.value;
+          paperTotalEquity = readNumber(pSum.total_equity, pSum.balance);
           setSummary({
-            total_value: parseFloat(pSum.total_equity ?? pSum.balance ?? 100000),
-            unrealized_pnl: parseFloat(pSum.unrealized_pnl ?? 0),
-            realized_pnl: parseFloat(pSum.realized_pnl ?? 0),
-            available_balance: parseFloat(pSum.available_balance ?? pSum.balance ?? 100000),
-            roi_percentage: parseFloat(pSum.roi_pct ?? 0),
+            total_value: paperTotalEquity,
+            unrealized_pnl: readNumber(pSum.unrealized_pnl),
+            realized_pnl: readNumber(pSum.realized_pnl),
+            available_balance: readNumber(pSum.available_balance, pSum.balance),
+            roi_percentage: readNumber(pSum.roi_pct),
           });
         } else {
-          setSummary({
-            total_value: 100000,
-            unrealized_pnl: 0,
-            realized_pnl: 0,
-            available_balance: 100000,
-            roi_percentage: 0,
-          });
+          setSummary(null);
+          setSummaryError(
+            paperSumRes.status === "rejected"
+              ? failureSentence(paperSumRes.reason)
+              : "The response carried no paper account figures."
+          );
         }
 
-        if (paperPosRes.status === "fulfilled" && Array.isArray(paperPosRes.value)) {
-          setPositions(paperPosRes.value.map((p, i) => ({
+        // `api.paper.getPositions()` resolves to the response BODY, and `GET /api/paper/positions`
+        // answers the envelope `{positions, count, execution_environment, is_simulated,
+        // session_id}` - never an array. The previous `Array.isArray(paperPosRes.value)` guard was
+        // therefore false for every successful read, and this ledger was permanently empty however
+        // many positions the account held. The list is read off the envelope.
+        const paperPositions = paperPosRes.status === "fulfilled"
+          ? readPositionsList(paperPosRes.value)
+          : null;
+        if (paperPositions) {
+          setPositions(paperPositions.map((p, i) => ({
             id: p.id || `paper_pos_${i}`,
             symbol: p.symbol || "UNKNOWN",
             exchange: "paper",
@@ -146,11 +448,21 @@ export default function Portfolio() {
           })));
         } else {
           setPositions([]);
+          setPositionsError(
+            paperPosRes.status === "rejected"
+              ? failureSentence(paperPosRes.reason)
+              : "The response carried no positions list."
+          );
         }
 
         setEquityCurve([]);
+        // The row's figure is `paperTotalEquity` - the equity THIS branch just read - or `null`.
+        // It used to be `summary?.total_value`, and `summary` is the closure value from before this
+        // branch ran: on a LIVE -> PAPER flip that was the LIVE equity, a live figure sitting in a
+        // PAPER structure, which is what Requirement 13.6 forbids combining. Its fallback was the
+        // same fabricated 100000. Neither can occur now: the figure is the paper one or absent.
         setAllocation([
-          { asset: "USD (Simulated)", percentage: 100, value_usd: summary?.total_value || 100000 }
+          { asset: "USD (Simulated)", percentage: 100, value_usd: paperTotalEquity }
         ]);
         setHeatmapData([]);
       }
@@ -247,48 +559,69 @@ export default function Portfolio() {
 
       {/* Top 4 Summary Cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px", marginBottom: "16px" }}>
+        {/* Requirement 13.6: the indicator is the first cell of the figure grid itself, spanning
+            it, so equity, unrealized P&L, realized P&L and cash can never be read without it. */}
+        {environment === "paper" && (
+          <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <SimulatedIndicator provenance={paperProvenance.summary} announce />
+            <span style={{ color: "#64748b", fontSize: "0.6875rem" }}>
+              Every figure below is simulated. No real capital is held or at risk.
+            </span>
+          </div>
+        )}
+
+        {/* Requirement 28.5: the read that did not complete is said once, in full, in text, and
+            spans the grid whose four figures it accounts for. Each card then reads
+            "Unavailable — read failed" rather than a number. */}
+        {!isLoading && summaryError && (
+          <ReadFailureNotice span>
+            {environment === "paper" ? "Paper account" : "Portfolio"} figures could not be read, so
+            none are shown below. {summaryError}
+          </ReadFailureNotice>
+        )}
+
         <Card className="p-4 relative overflow-hidden hover:border-cyan-500/20 transition-all bg-[#0c1017] border-[#1e293b]">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
             <span className="text-caption-sm" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Total Equity</span>
             <DollarSign size={13} style={{ color: "#00d4ff" }} />
           </div>
           <div className="text-heading-lg" style={{ color: "#f8fafc", fontWeight: 900, fontFamily: "monospace" }}>
-            {isLoading ? (
-              <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <Activity size={16} className="animate-spin" style={{ color: "#64748b" }} />
-                Loading...
-              </span>
-            ) : `$${(summary?.total_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            <CardFigure
+              isLoading={isLoading}
+              readFailed={Boolean(summaryError)}
+              value={summary?.total_value ?? null}
+              format={money}
+            />
           </div>
         </Card>
 
         <Card className="p-4 relative overflow-hidden hover:border-cyan-500/20 transition-all bg-[#0c1017] border-[#1e293b]">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
             <span className="text-caption-sm" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Unrealized P&L</span>
-            {summary && summary.unrealized_pnl >= 0 ? <TrendingUp size={13} style={{ color: "#10b981" }} /> : <TrendingDown size={13} style={{ color: "#ef4444" }} />}
+            <SignIcon value={summaryError ? null : summary?.unrealized_pnl ?? null} />
           </div>
-          <div className="text-heading-lg" style={{ color: summary && summary.unrealized_pnl >= 0 ? "#10b981" : "#ef4444", fontWeight: 900, fontFamily: "monospace" }}>
-            {isLoading ? (
-              <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <Activity size={16} className="animate-spin" style={{ color: "#64748b" }} />
-                Loading...
-              </span>
-            ) : `${summary && summary.unrealized_pnl >= 0 ? "+" : ""}${(summary?.unrealized_pnl || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+          <div className="text-heading-lg" style={{ color: signTone(summaryError ? null : summary?.unrealized_pnl ?? null), fontWeight: 900, fontFamily: "monospace" }}>
+            <CardFigure
+              isLoading={isLoading}
+              readFailed={Boolean(summaryError)}
+              value={summary?.unrealized_pnl ?? null}
+              format={signedAmount}
+            />
           </div>
         </Card>
 
         <Card className="p-4 relative overflow-hidden hover:border-cyan-500/20 transition-all bg-[#0c1017] border-[#1e293b]">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
             <span className="text-caption-sm" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Realized P&L</span>
-            {summary && summary.realized_pnl >= 0 ? <TrendingUp size={13} style={{ color: "#10b981" }} /> : <TrendingDown size={13} style={{ color: "#ef4444" }} />}
+            <SignIcon value={summaryError ? null : summary?.realized_pnl ?? null} />
           </div>
-          <div className="text-heading-lg" style={{ color: summary && summary.realized_pnl >= 0 ? "#10b981" : "#ef4444", fontWeight: 900, fontFamily: "monospace" }}>
-            {isLoading ? (
-              <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <Activity size={16} className="animate-spin" style={{ color: "#64748b" }} />
-                Loading...
-              </span>
-            ) : `${summary && summary.realized_pnl >= 0 ? "+" : ""}${(summary?.realized_pnl || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+          <div className="text-heading-lg" style={{ color: signTone(summaryError ? null : summary?.realized_pnl ?? null), fontWeight: 900, fontFamily: "monospace" }}>
+            <CardFigure
+              isLoading={isLoading}
+              readFailed={Boolean(summaryError)}
+              value={summary?.realized_pnl ?? null}
+              format={signedAmount}
+            />
           </div>
         </Card>
 
@@ -298,12 +631,12 @@ export default function Portfolio() {
             <DollarSign size={13} style={{ color: "#00d4ff" }} />
           </div>
           <div className="text-heading-lg" style={{ color: "#f8fafc", fontWeight: 900, fontFamily: "monospace" }}>
-            {isLoading ? (
-              <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <Activity size={16} className="animate-spin" style={{ color: "#64748b" }} />
-                Loading...
-              </span>
-            ) : `$${(summary?.available_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            <CardFigure
+              isLoading={isLoading}
+              readFailed={Boolean(summaryError)}
+              value={summary?.available_balance ?? null}
+              format={money}
+            />
           </div>
         </Card>
       </div>
@@ -313,13 +646,30 @@ export default function Portfolio() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
           <div>
             <h2 style={{ fontSize: "0.875rem", fontWeight: 800, color: "#f8fafc", margin: 0, textTransform: "uppercase", letterSpacing: "0.03em" }}>
-              Open Positions Ledger ({positions.length})
+              {/* A count of 0 for a read that did not complete is a figure nobody measured, so the
+                  heading says the list was not read instead (Requirement 28.5). */}
+              Open Positions Ledger ({positionsError ? "not read" : positions.length})
             </h2>
-            <span style={{ fontSize: "0.6875rem", color: "#64748b" }}>Live mark-to-market valuations</span>
+            <span style={{ fontSize: "0.6875rem", color: "#64748b" }}>
+              {environment === "paper" ? "Simulated mark-to-market valuations" : "Live mark-to-market valuations"}
+            </span>
           </div>
+          {/* Requirement 13.6: inside the positions card, beside its own heading, because a
+              reader scrolled down to this table cannot see the page header. */}
+          {environment === "paper" && <SimulatedIndicator provenance={paperProvenance.positions} />}
         </div>
 
-        {positions.length === 0 ? (
+        {/* Three states, and the first two are different facts. "No open positions" is a claim
+            about the account; a read that did not complete made no such claim, so it gets its own
+            wording and its own colour and shape rather than borrowing the empty state's. */}
+        {positionsError ? (
+          <div style={{ padding: "0.75rem 0" }}>
+            <ReadFailureNotice>
+              Open positions could not be read, so none are listed. This is not a statement that the
+              account holds none. {positionsError}
+            </ReadFailureNotice>
+          </div>
+        ) : positions.length === 0 ? (
           <div style={{ padding: "1.5rem", textAlign: "center", color: "#64748b", fontSize: "0.75rem" }}>
             No open positions currently held in {environment.toUpperCase()} mode.
           </div>
@@ -398,6 +748,13 @@ export default function Portfolio() {
         {/* Asset Allocation Donut */}
         <Card className="p-4 bg-[#0c1017] border-[#1e293b]">
           <PanelTitle title="Asset Allocation" sub="Capital distribution" />
+          {/* Requirement 13.6: the allocation figure is derived from the paper summary's equity,
+              so it carries the summary's label in its own region. */}
+          {environment === "paper" && (
+            <div style={{ marginBottom: "8px" }}>
+              <SimulatedIndicator provenance={paperProvenance.summary} />
+            </div>
+          )}
           {allocation.length === 0 ? (
             <div style={{ height: 240, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#64748b", fontFamily: "monospace" }}>
               <Target size={32} style={{ color: "#334155", marginBottom: "12px", opacity: 0.5 }} />
@@ -418,7 +775,16 @@ export default function Portfolio() {
                   <li key={a.asset} style={{ display: "flex", alignItems: "center", gap: "8px" }} role="listitem">
                     <div style={{ width: 8, height: 8, borderRadius: 2, background: COLORS[i % COLORS.length], flexShrink: 0 }} aria-hidden="true" />
                     <span className="text-caption" style={{ color: "#94a3b8", fontFamily: "monospace", flex: 1 }}>{a.asset}</span>
-                    <span className="text-caption" style={{ color: "#f8fafc", fontFamily: "monospace", fontWeight: 700 }}>{a.percentage.toFixed(1)}%</span>
+                    <span
+                      className="text-caption"
+                      style={{
+                        color: a.percentage === null ? "#64748b" : "#f8fafc",
+                        fontFamily: "monospace",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {a.percentage === null ? NOT_REPORTED : `${a.percentage.toFixed(1)}%`}
+                    </span>
                   </li>
                 ))}
               </ul>

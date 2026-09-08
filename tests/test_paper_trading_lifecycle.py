@@ -21,21 +21,58 @@ import pytest
 from uuid import uuid4
 from fastapi.testclient import TestClient
 
+from backend_app.backend.paper import paper_repository as repo
 from backend_app.backend.paper_trading_service import (
     PaperTradingService, PaperOrderStatus, get_paper_trading_service
 )
 from backend_app.main import app
+from tests.test_paper_repository import FakeSupabase
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# THE PERSISTENCE_LAYER THESE TESTS RUN AGAINST (task 23.2)
+#
+# Paper trading no longer keeps a balance, a position, an order or a fill in process memory:
+# every figure below is written to and read back from the ``paper_*`` tables through
+# ``paper/paper_repository.py``, and an absent ``paper_accounts`` is answered with 503
+# ``PAPER_PERSISTENCE_UNAVAILABLE`` rather than with a remembered balance (Requirements 17.2,
+# 28.3). So a service under test needs a Persistence_Layer, and it is the double from
+# ``tests/test_paper_repository.py`` - which enforces the five unique indexes 009 declares -
+# rather than a second one written here with a second set of assumptions.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture(autouse=True)
+def _fresh_persistence_probe():
+    """Forget the cached migration verdict around every test in this file."""
+    repo.reset_persistence_probe()
+    yield
+    repo.reset_persistence_probe()
 
 
 @pytest.fixture
 def paper_service():
-    """Provides an isolated instance of PaperTradingService for unit testing."""
-    return PaperTradingService(default_capital=100_000.0, default_fee_rate=0.001, default_slippage=0.0005)
+    """An isolated PaperTradingService over an isolated in-memory Persistence_Layer."""
+    service = PaperTradingService(
+        default_capital=100_000.0, default_fee_rate=0.001, default_slippage=0.0005
+    )
+    service.bind_persistence(FakeSupabase())
+    return service
 
 
 @pytest.fixture
 def test_client():
-    return TestClient(app)
+    """A ``TestClient`` whose ``/api/paper/*`` endpoints have storage behind them.
+
+    The routers reach the service through ``get_paper_trading_service()``, so the singleton is
+    what the endpoints use and it is bound to a fresh double for the duration of the test.
+    """
+    service = get_paper_trading_service()
+    service.bind_persistence(FakeSupabase())
+    try:
+        yield TestClient(app)
+    finally:
+        service.bind_persistence(None)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -256,11 +293,20 @@ async def test_limit_order_matching_engine(paper_service):
     assert limit_ord["status"] == PaperOrderStatus.OPEN.value
 
     # Market price is $150.00 -> Should NOT fill
-    unfilled = await paper_service.check_limit_orders("SOL-USDT", Decimal("150.00"))
+    #
+    # ``user_id`` is now required. The in-memory matcher walked every tenant's orders in one
+    # process dictionary; the persisted one cannot, because ``user_id`` is a predicate on every
+    # statement and row-level security is scoped to one identity, so the identity whose resting
+    # orders are being matched is an argument rather than an assumption (Requirements 21.2, 21.5).
+    unfilled = await paper_service.check_limit_orders(
+        "SOL-USDT", Decimal("150.00"), user_id=user_id
+    )
     assert len(unfilled) == 0
 
     # Market price drops to $138.00 -> Should TRIGGER FILL!
-    filled = await paper_service.check_limit_orders("SOL-USDT", Decimal("138.00"))
+    filled = await paper_service.check_limit_orders(
+        "SOL-USDT", Decimal("138.00"), user_id=user_id
+    )
     assert len(filled) == 1
     assert filled[0]["status"] == PaperOrderStatus.FILLED.value
     assert len(paper_service.get_positions(user_id)) == 1

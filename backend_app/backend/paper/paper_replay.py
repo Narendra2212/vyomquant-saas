@@ -1,16 +1,22 @@
 """
 backend/paper/paper_replay.py - deterministic replay and the P-31 reference ledger.
 
-Spec: marketplace-subscriptions-paper-trading task 9.2. ``design.md`` -> "``paper_replay.py``
-# deterministic replay + the P-31 reference ledger". Requirements 15.4, 18.13, and the
-accounting rules of Requirement 18 that this file re-derives (18.2 - 18.10, 18.12, 18.15).
+Spec: marketplace-subscriptions-paper-trading tasks 9.2 (:class:`ReferenceLedger`) and 27.5
+(:func:`replay`). ``design.md`` -> "``paper_replay.py`` # deterministic replay + the P-31
+reference ledger" and "Deterministic replay (Requirement 15.4, 15.5, P-31)". Requirements
+15.4, 15.5, 18.13, and the accounting rules of Requirement 18 that this file re-derives
+(18.2 - 18.10, 18.12, 18.15).
 
-This module currently contains :class:`ReferenceLedger` only. ``replay(session_id)`` -
-the audit path of Requirements 15.4 and 15.5 that reconstructs a session from
-``(paper_sessions.config, paper_market_events, the recorded order intents in
-paper_orders)`` - is task 27.5 and lands at the bottom of this file, driving this same
-ledger. Nothing here reads a clock, a database, a socket or ``random``, so it stays
-importable from a property test with no fixture at all.
+This module contains two things. :class:`ReferenceLedger` - the naive second implementation
+of Requirement 18's accounting rules, which P-31 compares the simulator against - reads no
+clock, no database, no socket and no ``random``, so it stays constructible from a property
+test with no fixture at all. :func:`replay` - task 27.5, the audit path of Requirements 15.4
+and 15.5 - drives that same ledger over a session's recorded
+``(paper_sessions.config, paper_market_events, order intents in paper_orders)`` and therefore
+does issue reads, all of them through ``paper_repository`` and all of them carrying
+``user_id`` as a predicate. It still reads no clock and no ``random``: every timestamp it
+records comes from a recorded event, which is the whole of why the reconstruction is
+byte-identical. See "DETERMINISTIC REPLAY" at the bottom of this file.
 
 WHAT A "REFERENCE" LEDGER IS FOR
 --------------------------------
@@ -73,8 +79,10 @@ WHAT IS DELIBERATELY NOT HERE
 
 from __future__ import annotations
 
+import logging
+from bisect import bisect_right
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import (
     ROUND_CEILING,
     ROUND_DOWN,
@@ -87,7 +95,14 @@ from decimal import (
     InvalidOperation,
     localcontext,
 )
+from itertools import accumulate
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+
+from backend_app.backend.paper import paper_market_feed as feed
+from backend_app.backend.paper import paper_repository as repo
+from backend_app.backend.paper import paper_simulator as sim
+
+logger = logging.getLogger("PaperReplay")
 
 # ══════════════════════════════════════════════════════════════════════════
 # CONSTANTS - the vocabulary of Requirement 18 and Requirement 16
@@ -1393,13 +1408,1069 @@ class ReferenceLedger:
 # DETERMINISTIC REPLAY (Requirements 15.4, 15.5) - task 27.5
 # ══════════════════════════════════════════════════════════════════════════
 #
-# ``replay(session_id)`` belongs here, below :class:`ReferenceLedger`, and is deliberately
-# not implemented yet (task 9.2 covers the ledger only). It reconstructs a session from
-# ``(paper_sessions.config, paper_market_events, the recorded order intents in
-# paper_orders)`` against a fresh in-memory store - this ledger - and returns the final
-# order states, fills, balances, positions, realized PnL and equity series. Every timestamp
-# it records comes from the event payload rather than from ``now()``, which is what makes
-# the reconstruction byte-identical to the original run.
+# :func:`replay` reconstructs a session from ``(paper_sessions.config, paper_market_events,
+# the recorded order intents in paper_orders)`` against a fresh in-memory store - the
+# :class:`ReferenceLedger` above - and returns the final order states, fills, balances,
+# positions, realized PnL and equity series. ``design.md`` -> "Deterministic replay
+# (Requirement 15.4, 15.5, P-31)", which names this file, this input triple and this store.
+#
+# WHERE EACH HALF OF THE RECONSTRUCTION COMES FROM, AND WHY IT IS NOT A THIRD PATH
+# -------------------------------------------------------------------------------
+# A session's behaviour is two separable decisions, and this function borrows both rather
+# than re-deriving either:
+#
+# ==========================  ====================================================================
+# The FILL MODEL              ``paper_simulator``'s own functions, called directly:
+# (what price, whether a      ``static_rejection_reason``, ``reference_price``,
+# resting order triggers,     ``market_fill_price``, ``fee_amount``, ``slippage_amount``,
+# how much fills, what fee)   ``limit_fill_triggered``, ``limit_fill_price``,
+#                             ``fillable_quantity``, ``market_fill_event_id``,
+#                             ``resting_fill_event_id``. Every one is PURE - no clock, no
+#                             ``random``, no statement - and every one reads its rates and
+#                             precisions off the frozen ``SessionConfig``. So the replay's fill
+#                             decisions are not a copy of the simulator's: they ARE the
+#                             simulator's, which is what makes "the same order states and fills"
+#                             (Requirement 15.4) a fact rather than a hope.
+# The ACCOUNTING              :class:`ReferenceLedger`, the fresh in-memory store. NOT
+# (balances, positions,       ``paper_accounting`` + ``paper_repository``, because those write
+# realized PnL, equity)       to the database and a replay must reconstruct without touching
+#                             the recorded session. The two agree by P-31 - that is precisely
+#                             what P-31 is for - so the reconstruction is comparable to the
+#                             stored figures, and a disagreement is P-31's failure to report.
+# ==========================  ====================================================================
+#
+# WHY NOT ``paper_session_service.step_session``
+# ---------------------------------------------
+# Its section header offers itself for this ("it is also what lets ``paper_replay`` (task 27.5)
+# drive the same per-event path over a recorded event stream instead of a live feed"), and the
+# per-event ORDER stated there is followed here exactly: for each recorded event, the intents
+# recorded against that bar are submitted, then the resting book is checked against the same
+# event, then the book is revalued. What cannot be reused is the callable, and for reasons of
+# substance rather than of taste: ``step_session`` takes a live ``FeedHandle`` and pulls the
+# next event off it, WRITES every row it computes through ``paper_repository``, EMITS a
+# ``paper_events`` record and a Paper_Channel frame per bar, and calls the platform's DAG
+# runtime to produce the intents. A replay has a recorded stream and not a feed, must write
+# nothing (the reconstruction is against a fresh in-memory store), must emit nothing (a replay
+# that re-broadcast a year-old session's ticks would be publishing a fiction to live
+# subscribers, and would need a seventeenth ``paper_events`` type ``chk_paper_event_type``
+# does not admit), and must take the intents from ``paper_orders`` rather than from the DAG -
+# the intents are a recorded INPUT here, which is the whole of Requirement 15.4's "the same
+# order intents". So the shape genuinely does not line up, and what is reused is the ORDER and
+# the fill model rather than the function.
+#
+# WHAT MAKES IT BYTE-IDENTICAL
+# ----------------------------
+# * Every timestamp written into the reconstruction - a fill's ``filled_at``, a position's
+#   ``opened_at`` / ``price_at``, an equity point's ``taken_at`` - is the recorded event's
+#   ``event_timestamp``. There is no ``now()`` call on this path, and no ``utcnow`` import in
+#   this module at all.
+# * Every rate is the frozen config's, read back through
+#   ``paper_simulator.session_config_from_jsonb``, which REFUSES an incomplete payload rather
+#   than completing it (Requirements 16.12, 28.3).
+# * No ``random``, anywhere in this package, statically enforced by
+#   ``tests/test_paper_no_random.py``.
+# * The five OHLCV values come back off ``paper_market_events.payload`` as exact decimal
+#   STRINGS, so ``Decimal(text)`` recovers the digits the exchange published. A ``float`` is
+#   refused, not converted (Requirement 18.1).
+#
+# THE INTERLEAVE, AND THE ONE PLACE THE LOG'S RESOLUTION LIMITS IT
+# ---------------------------------------------------------------
+# An order intent has to be replayed against the event the session priced it from, and the
+# only recorded evidence of that pairing is time: ``paper_market_events.received_at`` is when
+# the session accepted the event, ``paper_orders.created_at`` is when it inserted the order.
+# So an intent belongs to the LAST event that had arrived when it was created - which is
+# exactly the pairing ``step_session`` produces, since it submits a bar's intents inside that
+# bar's step. Both instants are stored columns; reading them is not a clock read.
+#
+# Where two orders were created inside the same recorded instant the log does not say which
+# came first, so the tie is broken by ``paper_orders.id`` to keep the reconstruction
+# deterministic, and :attr:`Reconstruction.tied_intents` REPORTS how many ties were broken
+# that way instead of leaving the ambiguity silent.
+#
+# WHAT THIS DOES NOT RECONSTRUCT, STATED RATHER THAN GLOSSED
+# ---------------------------------------------------------
+# 1. **A session that was stopped or reset mid-log.** ``stop_session`` cancels resting orders
+#    and ``reset_session`` cancels them, closes every position and restarts the equity series
+#    (task 27.4). Neither is a market event or an order intent, so neither is in this
+#    function's input triple, and a session that was reset replays as though it had not been:
+#    its cancelled orders come back ``ACCEPTED`` and its equity series is one series rather
+#    than two. Requirement 15.4 is about replaying events, configuration and intents, and the
+#    lifecycle operations are outside that; reconstructing them would need
+#    ``paper_balance_events`` and ``paper_events`` in the input, which is a wider contract than
+#    the design states. :attr:`Reconstruction.session_state` carries the state the session is
+#    recorded in so a caller can see that it was stopped or reset.
+# 2. **The feed gate.** ``submit_intent`` raises ``FeedNotHealthy`` for a market order on a
+#    feed that is not ``HEALTHY`` - BEFORE any order row is inserted. So a gated intent left no
+#    recorded intent to replay, and the gate needs no model here: it cannot cause a divergence
+#    on any order that exists. ``paper_market_events`` records no per-event feed state, so this
+#    is also the only reading available.
+# 3. **A retry.** ``with_retries`` re-runs an attempt on a version conflict. The outcome is the
+#    same either way (that is what the version guard is for) and the backoff is jitter-free, so
+#    a retry changes no figure - only how many statements were issued, which a reconstruction
+#    that issues none cannot and need not report.
+
+#: Why a replay refused. Stable strings: a runbook and a test both match on a code rather than on
+#: a sentence, the same convention ``paper_simulator.REJECTION_*`` and
+#: ``paper_market_feed.INVALID_*`` follow. Every one of them means "the recorded session cannot be
+#: reconstructed as it was recorded" - never "reconstruct it under a filled-in value".
+REFUSAL_SESSION_UNREADABLE = "SESSION_UNREADABLE"
+REFUSAL_CONFIG_INCOMPLETE = "SESSION_CONFIG_INCOMPLETE"
+REFUSAL_CAPITAL_UNREADABLE = "INITIAL_CAPITAL_UNREADABLE"
+REFUSAL_MARKET_LOG_UNREADABLE = "MARKET_EVENT_LOG_UNREADABLE"
+REFUSAL_ORDER_LOG_UNREADABLE = "ORDER_LOG_UNREADABLE"
+REFUSAL_EVENT_UNREADABLE = "MARKET_EVENT_UNREADABLE"
+REFUSAL_EVENT_IDENTITY_MISMATCH = "MARKET_EVENT_IDENTITY_MISMATCH"
+REFUSAL_ORDER_UNREADABLE = "RECORDED_ORDER_UNREADABLE"
+
+REFUSAL_REASONS: Tuple[str, ...] = (
+    REFUSAL_SESSION_UNREADABLE,
+    REFUSAL_CONFIG_INCOMPLETE,
+    REFUSAL_CAPITAL_UNREADABLE,
+    REFUSAL_MARKET_LOG_UNREADABLE,
+    REFUSAL_ORDER_LOG_UNREADABLE,
+    REFUSAL_EVENT_UNREADABLE,
+    REFUSAL_EVENT_IDENTITY_MISMATCH,
+    REFUSAL_ORDER_UNREADABLE,
+)
+
+#: The six payload fields ``paper_market_feed.source_event_id`` builds Requirement 14.7's event
+#: identity from. A row carrying all six can have its identity RECOMPUTED rather than trusted,
+#: which is why that function is public; a row carrying fewer cannot, and is counted as unverified
+#: rather than refused - the pricing fields it does carry are still the ones the session priced
+#: from, and refusing a readable log because its payload predates a field would be a refusal to
+#: audit rather than an audit.
+IDENTITY_PAYLOAD_FIELDS: Tuple[str, ...] = (
+    "exchange",
+    "symbol",
+    "timeframe",
+    "timestamp",
+    "close",
+    "volume",
+)
+
+
+class PaperReplayError(Exception):
+    """Base class for every refusal :func:`replay` makes."""
+
+
+class ReplayRefused(PaperReplayError):
+    """The recorded session cannot be reconstructed as it was recorded.
+
+    Raised rather than answered, and rather than reconstructed under a substituted value: a
+    session whose configuration is incomplete, whose market-data log did not read, or whose
+    recorded rows cannot be read as what they are must not be replayed on a filled-in one
+    (Requirements 16.12, 28.3). Nothing is reconstructed when this is raised.
+
+    ``reason`` is one of :data:`REFUSAL_REASONS`, so a caller matches a code.
+    """
+
+    def __init__(self, reason: str, detail: str, *, session_id: Any = None) -> None:
+        self.reason = str(reason)
+        self.detail = str(detail)
+        self.session_id = None if session_id is None else str(session_id)
+        super().__init__(f"{self.reason}: {self.detail}")
+
+
+@dataclass(frozen=True)
+class ReplayedOrder:
+    """One recorded order intent, and the state replaying it put the order in.
+
+    The intent's own values (``symbol`` ... ``limit_price``, ``idempotency_key``, ``created_at``)
+    are the RECORDED ones, exact off the ``paper_orders`` row - not the ledger's quantization of
+    them, so an order whose recorded quantity carries more decimal places than the session's
+    precision (which is Requirement 16.5's ``QUANTITY_PRECISION`` rejection) reports the quantity
+    the session recorded rather than a rounded one.
+
+    Everything from ``reference_price`` down is RE-DERIVED by the replay: that is the claim
+    Requirement 15.4 makes, and comparing it against the stored columns is what checks it.
+    """
+
+    order_id: str
+    symbol: str
+    side: str
+    order_type: str
+    quantity: Decimal
+    limit_price: Optional[Decimal]
+    idempotency_key: Optional[str]
+    created_at: Optional[datetime]
+    reference_price: Optional[Decimal]
+    filled_quantity: Decimal
+    avg_fill_price: Optional[Decimal]
+    fee_minor: int
+    slippage_minor: int
+    order_state: str
+    rejection_reason: Optional[str]
+
+    def as_dict(self) -> Dict[str, Any]:
+        """The comparable projection, as plain built-in values and exact ``Decimal``."""
+        return {
+            "order_id": self.order_id,
+            "symbol": self.symbol,
+            "side": self.side,
+            "order_type": self.order_type,
+            "quantity": self.quantity,
+            "limit_price": self.limit_price,
+            "idempotency_key": self.idempotency_key,
+            "created_at": self.created_at,
+            "reference_price": self.reference_price,
+            "filled_quantity": self.filled_quantity,
+            "avg_fill_price": self.avg_fill_price,
+            "fee_minor": self.fee_minor,
+            "slippage_minor": self.slippage_minor,
+            "order_state": self.order_state,
+            "rejection_reason": self.rejection_reason,
+        }
+
+
+@dataclass(frozen=True)
+class ReplayedFill:
+    """One fill the replay applied, in the shape ``paper_fills`` records it.
+
+    ``fill_event_id`` is the deterministic identity ``paper_simulator`` derives - from the order
+    alone for a market fill, from the order and the event's identity for a resting one - so it is
+    the SAME string the original run wrote and the two fill logs can be compared row for row.
+    """
+
+    order_id: str
+    fill_event_id: str
+    symbol: str
+    side: str
+    quantity: Decimal
+    price: Decimal
+    fee: Decimal
+    fee_minor: int
+    slippage: Decimal
+    slippage_minor: int
+    reference_price: Decimal
+    source_event_id: Optional[str]
+    filled_at: Optional[datetime]
+    realized_pnl: Decimal
+    order_state: str
+
+    def as_dict(self) -> Dict[str, Any]:
+        """The comparable projection, as plain built-in values and exact ``Decimal``."""
+        return {
+            "order_id": self.order_id,
+            "fill_event_id": self.fill_event_id,
+            "symbol": self.symbol,
+            "side": self.side,
+            "quantity": self.quantity,
+            "price": self.price,
+            "fee": self.fee,
+            "fee_minor": self.fee_minor,
+            "slippage": self.slippage,
+            "slippage_minor": self.slippage_minor,
+            "reference_price": self.reference_price,
+            "source_event_id": self.source_event_id,
+            "filled_at": self.filled_at,
+            "realized_pnl": self.realized_pnl,
+            "order_state": self.order_state,
+        }
+
+
+@dataclass(frozen=True)
+class Reconstruction:
+    """What :func:`replay` returns: the whole reconstruction, and what it was built from.
+
+    The five subjects task 27.5 names - final order states, fills, balances, positions, realized
+    PnL and equity series - plus the closed round trips (a ``paper_trades`` row is written only
+    when a position reaches exactly zero, so it is the one place a reversal's split into "the trip
+    that closed" and "the surplus that opened the other side" is visible) and the counts an audit
+    needs to know what was actually read.
+
+    :meth:`as_dict` is the whole thing as plain built-in structures, so two reconstructions - or a
+    reconstruction and a projection of the stored rows - compare with a bare ``==`` and get exact
+    ``Decimal`` equality rather than an approximate one.
+    """
+
+    session_id: str
+    user_id: str
+    session_state: Optional[str]
+    currency: str
+    initial_balance: Decimal
+    config: Any
+    events_replayed: int
+    events_verified: int
+    events_unverified: int
+    intents_replayed: int
+    tied_intents: int
+    orders: Tuple[ReplayedOrder, ...]
+    fills: Tuple[ReplayedFill, ...]
+    balances: Mapping[str, Decimal]
+    positions: Mapping[str, Mapping[str, Any]]
+    realized_pnl: Decimal
+    equity_series: Tuple[Mapping[str, Any], ...]
+    closed_trades: Tuple[Mapping[str, Any], ...]
+    stale: bool
+
+    @property
+    def order_states(self) -> Dict[str, str]:
+        """``{order_id: Paper_Order_State}`` - Requirement 15.4's first named subject."""
+        return {order.order_id: order.order_state for order in self.orders}
+
+    def as_dict(self) -> Dict[str, Any]:
+        """Everything a caller compares, as plain built-in structures."""
+        return {
+            "session_id": self.session_id,
+            "user_id": self.user_id,
+            "session_state": self.session_state,
+            "currency": self.currency,
+            "initial_balance": self.initial_balance,
+            "events_replayed": self.events_replayed,
+            "events_verified": self.events_verified,
+            "events_unverified": self.events_unverified,
+            "intents_replayed": self.intents_replayed,
+            "tied_intents": self.tied_intents,
+            "orders": [order.as_dict() for order in self.orders],
+            "fills": [fill.as_dict() for fill in self.fills],
+            "balances": dict(self.balances),
+            "positions": {
+                symbol: dict(position) for symbol, position in self.positions.items()
+            },
+            "realized_pnl": self.realized_pnl,
+            "equity_series": [dict(row) for row in self.equity_series],
+            "closed_trades": [dict(trade) for trade in self.closed_trades],
+            "stale": self.stale,
+        }
+
+
+def _instant(value: Any) -> Optional[datetime]:
+    """A ``TIMESTAMPTZ`` value as a tz-aware UTC ``datetime``, or ``None``.
+
+    The reading ``paper_repository._instant`` writes: ISO-8601 with an explicit offset. A trailing
+    ``Z`` is translated because ``fromisoformat`` on this interpreter's minimum version does not
+    accept it, and a naive value is assumed UTC and made explicit so no comparison here ever puts
+    a naive instant beside an aware one.
+
+    NOT a clock read and never a default: an unreadable instant answers ``None``, and every caller
+    below turns that ``None`` into a named refusal rather than into ``now()``.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _minor_of(amount: Decimal, exponent: int) -> int:
+    """A money amount as the exact integer Minor_Units a ``*_minor`` column stores.
+
+    ``amount.scaleb(exponent)`` and an exactness check - the same reading
+    ``paper_simulator._minor_units`` makes, spelled here because it is a private helper there and
+    this module does not reach into another's privates. A value that is not a whole number of
+    minor units is refused rather than rounded: rounding would change a recorded fee
+    (Requirement 18.2).
+    """
+    scaled = to_decimal(amount, "minor units").scaleb(int(exponent))
+    if scaled != scaled.to_integral_value():
+        raise ReferenceBadValue(
+            f"{amount} is not a whole number of minor units at exponent {exponent}; it is not "
+            "rounded here, because rounding a recorded fee or slippage would change the figure "
+            "the session reports (Requirement 18.2)"
+        )
+    return int(scaled)
+
+
+def _flat_event(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """One ``paper_market_events`` row as the flat mapping the fill model reads.
+
+    ``payload`` carries the five OHLCV values as exact decimal strings plus the market, the
+    instant and the transport; the row carries the identity, the ordering and the symbol. Flattened
+    into one mapping so ``paper_simulator``'s public fill-model functions - which accept exactly
+    this shape - are handed the recorded event and nothing else.
+
+    ``id`` is deliberately NOT copied in, and ``source_event_id`` deliberately is. A replay that
+    supplied the row's database-generated primary key would produce a fill that differed from the
+    recorded one in that column alone, which is a divergence invented by the reconstruction rather
+    than found by it. ``paper_simulator`` writes ``paper_fills.market_event_id`` from
+    ``event["source_event_id"]`` - the identity ``uq_paper_market_event`` de-duplicates on, which
+    the live path's ``paper_market_feed.MarketEvent`` carries and this mapping carries too - so the
+    provenance the live path stores is a value this reconstruction reproduces exactly rather than
+    one it has to leave out. :attr:`ReplayedFill.source_event_id` reports the same identity.
+    """
+    payload = row.get("payload")
+    event: Dict[str, Any] = dict(payload) if isinstance(payload, Mapping) else {}
+    event["symbol"] = row.get("symbol")
+    event["timeframe"] = row.get("timeframe")
+    event["event_timestamp"] = row.get("event_timestamp")
+    event["sequence"] = row.get("sequence")
+    event["source_event_id"] = row.get("source_event_id")
+    return event
+
+
+def _recomputed_identity(event: Mapping[str, Any]) -> Optional[str]:
+    """Requirement 14.7's event identity, recomputed from the stored payload, or ``None``.
+
+    ``None`` when the payload does not carry all six of :data:`IDENTITY_PAYLOAD_FIELDS`, which is
+    "this row's identity cannot be recomputed" and not "it is wrong".
+    ``paper_market_feed.source_event_id`` is called rather than re-derived: it is public precisely
+    so an audit can recompute an identity from a stored row rather than trusting the stored string,
+    and its ``canonical_number`` normalisation is what makes a re-serialised close land on the same
+    identity.
+    """
+    if any(event.get(name) is None for name in IDENTITY_PAYLOAD_FIELDS):
+        return None
+    try:
+        return feed.source_event_id(
+            event["exchange"],
+            event["symbol"],
+            event["timeframe"],
+            int(to_decimal(event["timestamp"], "payload timestamp")),
+            to_decimal(event["close"], "payload close"),
+            to_decimal(event["volume"], "payload volume"),
+        )
+    except (ReferenceBadValue, InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _resting_row(order_id: str, intent: Any, created_at: Optional[datetime]) -> Dict[str, Any]:
+    """One resting limit order as the mapping the fill model reads it from.
+
+    The same three columns ``paper_simulator.limit_fill_triggered`` /
+    ``fillable_quantity`` / ``limit_fill_price`` read off a ``paper_orders`` row - ``side``,
+    ``limit_price``, ``quantity`` and ``filled_quantity`` - so the trigger and the participation
+    cap are decided by the module that decides them in production, on the shape it decides them
+    on. ``filled_quantity`` is updated in place as the replay fills it, exactly as the column is.
+    """
+    return {
+        "id": order_id,
+        "symbol": intent.symbol,
+        "side": intent.side,
+        "order_type": intent.order_type,
+        "limit_price": intent.limit_price,
+        "quantity": intent.quantity,
+        "filled_quantity": ZERO,
+        "created_at": created_at,
+    }
+
+
+@dataclass
+class _Run:
+    """The mutable state of ONE reconstruction. Created per :func:`replay` call, discarded after.
+
+    A value object rather than a pile of arguments threaded through four helpers, and rather than
+    module-level state: two replays running in one process must not be able to see each other's
+    book, and a module global is exactly how they would.
+
+    Attributes:
+        config: the session's frozen :class:`~paper_simulator.SessionConfig`.
+        ledger: the fresh in-memory store every figure is accumulated in.
+        book: the resting limit orders, as the mappings the fill model reads them from.
+        orders: ``{recorded order id: ReplayedOrder}``, rewritten as an order's state moves.
+        fills: every applied fill, in the order they were applied.
+        ref_ids: ``{recorded order id: the ledger's own order id}``. The ledger mints
+            ``ref-order-{n}`` and the reconstruction is keyed by the RECORDED id, so the two are
+            mapped rather than one being renamed.
+        order_fills: ``{recorded order id: [RefFill, ...]}`` - what ``filled_quantity``,
+            ``avg_fill_price`` and ``fee_minor`` are projected from, per order.
+        order_slippage: ``{recorded order id: cumulative recorded slippage cost}``.
+    """
+
+    config: Any
+    ledger: ReferenceLedger
+    book: List[Dict[str, Any]] = field(default_factory=list)
+    orders: Dict[str, "ReplayedOrder"] = field(default_factory=dict)
+    fills: List["ReplayedFill"] = field(default_factory=list)
+    ref_ids: Dict[str, str] = field(default_factory=dict)
+    order_fills: Dict[str, List[RefFill]] = field(default_factory=dict)
+    order_slippage: Dict[str, Decimal] = field(default_factory=dict)
+
+    def record(
+        self,
+        order_id: str,
+        intent: Any,
+        created_at: Optional[datetime],
+        reference: Optional[Decimal],
+    ) -> None:
+        """(Re)project one order onto :class:`ReplayedOrder` from its current ledger state."""
+        order = self.ledger.orders[self.ref_ids[order_id]]
+        self.orders[order_id] = _projected(
+            order_id=order_id,
+            intent=intent,
+            created_at=created_at,
+            reference=reference,
+            order=order,
+            applied=self.order_fills.get(order_id, []),
+            slippage=self.order_slippage.get(order_id, ZERO),
+            ledger=self.ledger,
+        )
+
+    def add_fill(
+        self,
+        order_id: str,
+        intent: Any,
+        result: RefFill,
+        reference: Decimal,
+        slippage: Decimal,
+        source_event_id: Any,
+    ) -> None:
+        """Record one applied fill, and the two per-order totals projected off it."""
+        self.order_fills.setdefault(order_id, []).append(result)
+        self.order_slippage[order_id] = self.ledger.money(
+            self.order_slippage.get(order_id, ZERO) + slippage
+        )
+        exponent = int(self.config.minor_unit_exponent)
+        self.fills.append(
+            ReplayedFill(
+                order_id=order_id,
+                fill_event_id=str(result.fill_event_id),
+                symbol=intent.symbol,
+                side=intent.side,
+                quantity=result.quantity,
+                price=result.price,
+                fee=result.fee,
+                fee_minor=_minor_of(result.fee, exponent),
+                slippage=slippage,
+                slippage_minor=_minor_of(slippage, exponent),
+                reference_price=reference,
+                source_event_id=(
+                    None if source_event_id is None else str(source_event_id)
+                ),
+                filled_at=result.filled_at,
+                realized_pnl=result.realized_pnl,
+                order_state=str(result.order_state),
+            )
+        )
+
+
+def _order_sort_key(row: Mapping[str, Any]) -> Tuple[str, str]:
+    """``(created_at, id)`` as text - the deterministic order of the recorded intents.
+
+    ``created_at`` first because it is the recorded submission order, ``id`` second because two
+    orders created inside one recorded instant are not ordered by the log and something has to
+    break the tie deterministically. Compared as ISO-8601 TEXT, which sorts as the instant does
+    for the offset-carrying form ``paper_repository._instant`` writes.
+    """
+    return (str(row.get("created_at") or ""), str(row.get("id") or ""))
+
+
+def replay(
+    supabase: Any, user_id: Any, session_id: Any
+) -> Optional[Reconstruction]:
+    """Reconstruct one recorded Paper_Session from its log. Requirements 15.4, 15.5. Task 27.5.
+
+    Reads the session's frozen configuration, its append-only ``paper_market_events`` log and its
+    recorded order intents, drives them through ``paper_simulator``'s fill model against a fresh
+    :class:`ReferenceLedger`, and returns the final order states, fills, balances, positions,
+    realized PnL and equity series. **Nothing is written**: the reconstruction lives in the ledger
+    and dies with the return value, so replaying a session cannot alter the session it is auditing.
+
+    THE SIGNATURE, AND WHY IT IS NOT ``replay(session_id)``
+    ------------------------------------------------------
+    ``design.md`` writes it as ``replay(session_id)``. It cannot be, and the difference is a
+    security property rather than a style: every read here goes through ``paper_repository``, and
+    every one of those functions carries ``user_id`` as a PREDICATE (Requirements 21.2, 21.5). A
+    one-argument signature would have to resolve the owner itself and would then be reading rows
+    it had not been authorised for. So the caller's identity is an argument, exactly as it is on
+    ``read_session_config``, ``read_session_lifecycle`` and ``get_market_events``.
+
+    Args:
+        supabase: the caller's RLS-scoped Persistence_Layer handle.
+        user_id: the identity the reads are scoped to. A predicate, not a filter applied after.
+        session_id: the Paper_Session to reconstruct.
+
+    Returns:
+        The :class:`Reconstruction`, or ``None`` when the reads completed and matched nothing.
+        ``None`` is deliberately the same answer for "no such session" and "another user's
+        session" (Requirements 21.2, 21.5), which is how ``read_session``,
+        ``read_session_config`` and ``read_session_lifecycle`` all answer it - a distinct answer
+        for the second would disclose that the session exists.
+
+    Raises:
+        ReplayRefused: a read DID NOT COMPLETE, the recorded configuration is incomplete, the
+            recorded initial capital is unreadable, a recorded event carries no readable instant,
+            or a recorded event's identity does not match its payload. ``reason`` is one of
+            :data:`REFUSAL_REASONS` and NOTHING is reconstructed - a read that did not complete is
+            not a read that found nothing, and a session with an incomplete configuration must not
+            be replayed under a filled-in one (Requirements 16.12, 28.3).
+    """
+    uid = str(user_id)
+    sid = str(session_id)
+
+    # ── 1: the session, its frozen configuration and its recorded capital ──
+    try:
+        row = repo.read_session_lifecycle(supabase, uid, sid)
+    except repo.PaperRepositoryError as exc:
+        raise ReplayRefused(
+            REFUSAL_SESSION_UNREADABLE,
+            f"the paper_sessions read for {sid} did not complete, so the frozen configuration "
+            f"this replay must apply is unknown: {exc}",
+            session_id=sid,
+        ) from exc
+    if row is None:
+        return None
+
+    try:
+        config = sim.session_config_from_jsonb(row.get("config"))
+    except sim.InvalidSessionConfig as exc:
+        raise ReplayRefused(
+            REFUSAL_CONFIG_INCOMPLETE,
+            f"session {sid} has no complete recorded configuration, so there is no fee rate, "
+            f"slippage rate or participation rate to replay it under: {exc}",
+            session_id=sid,
+        ) from exc
+
+    try:
+        capital_minor = int(row["initial_capital_minor"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ReplayRefused(
+            REFUSAL_CAPITAL_UNREADABLE,
+            f"session {sid} records no readable initial_capital_minor, so the balance every "
+            f"figure below is measured against is unknown; a zero would be a fabricated one "
+            f"(Requirement 28.3)",
+            session_id=sid,
+        ) from exc
+    initial_balance = Decimal(capital_minor).scaleb(-config.minor_unit_exponent)
+    currency = str(row.get("currency") or "")
+
+    # ── 2: the two logs. ``[]`` is a real answer; a failed read is not. ──
+    try:
+        event_rows = repo.get_market_events(supabase, uid, sid)
+    except repo.PaperRepositoryError as exc:
+        raise ReplayRefused(
+            REFUSAL_MARKET_LOG_UNREADABLE,
+            f"the paper_market_events read for session {sid} did not complete. Answering with a "
+            f"partial or empty event log would report a session that never traded: {exc}",
+            session_id=sid,
+        ) from exc
+    try:
+        order_rows = repo.get_orders(supabase, uid, session_id=sid)
+    except repo.PaperRepositoryError as exc:
+        raise ReplayRefused(
+            REFUSAL_ORDER_LOG_UNREADABLE,
+            f"the paper_orders read for session {sid} did not complete, so the recorded order "
+            f"intents this replay is driven from are unknown: {exc}",
+            session_id=sid,
+        ) from exc
+
+    # ── 3: the events, in the log's own order, each one checked and flattened ──
+    events: List[Dict[str, Any]] = []
+    arrivals: List[datetime] = []
+    verified = 0
+    unverified = 0
+    for row_ in sorted(event_rows, key=lambda r: int(r.get("sequence") or 0)):
+        event = _flat_event(row_)
+        instant = _instant(row_.get("event_timestamp"))
+        if instant is None:
+            raise ReplayRefused(
+                REFUSAL_EVENT_UNREADABLE,
+                f"market event {row_.get('source_event_id')!r} of session {sid} carries no "
+                f"readable event_timestamp. Every instant this replay records comes from the "
+                f"event, so there is nothing to record for this one and no clock is read to "
+                f"stand in for it (Requirement 15.4)",
+                session_id=sid,
+            )
+        recomputed = _recomputed_identity(event)
+        stored_identity = str(row_.get("source_event_id") or "")
+        if recomputed is None:
+            unverified += 1
+        elif recomputed != stored_identity:
+            raise ReplayRefused(
+                REFUSAL_EVENT_IDENTITY_MISMATCH,
+                f"market event {stored_identity!r} of session {sid} does not match the identity "
+                f"its own payload computes ({recomputed!r}). The stored log is not the log the "
+                f"session processed, so replaying it would report a history that did not happen "
+                f"(Requirements 14.7, 15.5)",
+                session_id=sid,
+            )
+        else:
+            verified += 1
+        event["event_timestamp"] = instant
+        events.append(event)
+        arrivals.append(_instant(row_.get("received_at")) or instant)
+
+    # A monotone reading of the arrival column, so the bisect below is over a sorted sequence even
+    # if two rows were stamped out of order. ``max`` and not a sort: the log's ``sequence`` order is
+    # the order the session processed the events in, and re-sorting by a timestamp would replace it.
+    reached: List[datetime] = list(accumulate(arrivals, max)) if arrivals else []
+
+    # ── 4: the intents, oldest first, each assigned to the bar it was created on ──
+    intents = sorted(order_rows, key=_order_sort_key)
+    buckets: Dict[int, List[Mapping[str, Any]]] = {}
+    tied = 0
+    seen_keys: Set[Tuple[str, str]] = set()
+    previous_created: Optional[str] = None
+    for order_row in intents:
+        created = _instant(order_row.get("created_at"))
+        if created is None:
+            raise ReplayRefused(
+                REFUSAL_ORDER_UNREADABLE,
+                f"recorded order {order_row.get('id')!r} of session {sid} carries no readable "
+                f"created_at, so it cannot be placed against the market event the session priced "
+                f"it from and the interleave of intents and events is unknown",
+                session_id=sid,
+            )
+        created_text = str(order_row.get("created_at"))
+        if created_text == previous_created:
+            tied += 1
+        previous_created = created_text
+        index = bisect_right(reached, created) - 1
+        buckets.setdefault(index, []).append(order_row)
+        seen_keys.add((created_text, str(order_row.get("id"))))
+
+    # ── 5: the fresh in-memory store ──
+    ledger = ReferenceLedger(
+        config=config.to_jsonb(),
+        initial_balance=initial_balance,
+        currency=currency,
+        started_at=_instant(row.get("started_at")),
+    )
+    run = _Run(config=config, ledger=ledger)
+
+    # Intents created before the first recorded event arrived. A market order among them has no
+    # validated price and is rejected exactly as the session rejected it; a limit order rests.
+    for order_row in buckets.get(-1, ()):
+        _replay_intent(order_row, event=None, run=run)
+
+    # ── 6: the per-event path, in ``step_session``'s order ──
+    for index, event in enumerate(events):
+        for order_row in buckets.get(index, ()):
+            _replay_intent(order_row, event=event, run=run)
+        _check_resting(event, run=run)
+        _revalue(event, run=run)
+
+    state = ledger.state()
+    logger.info(
+        "[paper-replay] session %s reconstructed from %d recorded market event(s) (%d identity "
+        "verified, %d unverifiable) and %d recorded order intent(s); nothing was written",
+        sid,
+        len(events),
+        verified,
+        unverified,
+        len(intents),
+    )
+    return Reconstruction(
+        session_id=sid,
+        user_id=uid,
+        session_state=(
+            None if row.get("session_state") is None else str(row["session_state"])
+        ),
+        currency=currency,
+        initial_balance=ledger.money(initial_balance),
+        config=config,
+        events_replayed=len(events),
+        events_verified=verified,
+        events_unverified=unverified,
+        intents_replayed=len(intents),
+        tied_intents=tied,
+        orders=tuple(
+            run.orders[str(order_row["id"])]
+            for order_row in intents
+            if str(order_row["id"]) in run.orders
+        ),
+        fills=tuple(run.fills),
+        balances={
+            "available_balance": state["available_balance"],
+            "locked_balance": state["locked_balance"],
+            "total_equity": state["total_equity"],
+        },
+        positions={
+            symbol: dict(position) for symbol, position in state["positions"].items()
+        },
+        realized_pnl=state["realized_pnl"],
+        equity_series=tuple(dict(point) for point in state["equity_series"]),
+        closed_trades=tuple(dict(trade) for trade in state["closed_trades"]),
+        stale=bool(state["stale"]),
+    )
+
+
+def _replay_intent(
+    order_row: Mapping[str, Any], *, event: Optional[Mapping[str, Any]], run: _Run
+) -> None:
+    """Replay one recorded order intent against the bar it was created on.
+
+    ``paper_simulator.submit_intent``'s five steps, in its order, with its own functions doing
+    every decision:
+
+    1. static validation -> :func:`paper_simulator.static_rejection_reason`, one of Requirement
+       16.5's eight names or ``None``;
+    2. the reference price -> its limit for a limit order, ``reference_price(event, side)`` for a
+       market one, and ``NO_VALIDATED_PRICE`` when the recorded event supplies none. Nothing is
+       synthesised, interpolated or extrapolated (Requirement 14.9);
+    3. the funds check against the ledger's ``available_balance`` -> ``INSUFFICIENT_FUNDS``;
+    4. accept, and for a limit order lock Requirement 16.6's required funds and add it to the
+       resting book;
+    5. a market order fills immediately, at ``market_fill_price`` off that reference, with
+       ``fee_amount``'s fee and ``slippage_amount``'s recorded cost, under the deterministic
+       ``market_fill_event_id``.
+
+    The idempotency probe is step 1 in production and is absent here for a reason that is a fact
+    about the input rather than an omission: ``uq_paper_order_idem`` means the recorded log holds
+    AT MOST ONE row per ``(session_id, idempotency_key)``, so a duplicate submission left no
+    second intent to replay.
+    """
+    ledger = run.ledger
+    config = run.config
+    order_id = str(order_row["id"])
+    created_at = _instant(order_row.get("created_at"))
+    filled_at = None if event is None else event.get("event_timestamp")
+
+    try:
+        intent = sim.OrderIntent.from_mapping(
+            {
+                "symbol": order_row.get("symbol"),
+                "side": order_row.get("side"),
+                "order_type": order_row.get("order_type"),
+                "quantity": order_row.get("quantity"),
+                "limit_price": order_row.get("limit_price"),
+                "idempotency_key": order_row.get("idempotency_key"),
+                "signal_id": order_row.get("signal_id"),
+            }
+        )
+    except sim.InvalidOrderIntent as exc:
+        raise ReplayRefused(
+            REFUSAL_ORDER_UNREADABLE,
+            f"recorded order {order_id!r} cannot be read back as the intent it was: {exc}",
+            session_id=str(order_row.get("session_id") or ""),
+        ) from exc
+
+    ref_order = ledger.submit(
+        {
+            "symbol": intent.symbol,
+            "side": intent.side,
+            "order_type": intent.order_type,
+            "quantity": intent.quantity,
+            "limit_price": intent.limit_price,
+            # The recorded key is NOT carried into the ledger. ``ReferenceLedger.submit`` returns
+            # an existing order for a repeated key without comparing the parameters, and two
+            # recorded intents of one session cannot share a key anyway
+            # (``uq_paper_order_idem``) - so passing it could only ever collapse two distinct
+            # recorded orders into one.
+            "created_at": created_at,
+        }
+    )
+    run.ref_ids[order_id] = ref_order.order_id
+
+    reason = sim.static_rejection_reason(intent, config)
+    if reason is not None:
+        ledger.reject(ref_order.order_id, reason)
+        run.record(order_id, intent, created_at, None)
+        return
+
+    if intent.limit_price is not None:
+        reference: Optional[Decimal] = ledger.price(intent.limit_price)
+    else:
+        derived = sim.reference_price(event, intent.side)
+        reference = None if derived is None else ledger.price(derived)
+    if reference is None or reference <= ZERO:
+        ledger.reject(ref_order.order_id, sim.REJECTION_NO_VALIDATED_PRICE)
+        run.record(order_id, intent, created_at, None)
+        return
+
+    required = ledger.required_funds(intent.quantity, reference)
+    if required > ledger.available_balance:
+        ledger.reject(ref_order.order_id, sim.REJECTION_INSUFFICIENT_FUNDS)
+        run.record(order_id, intent, created_at, reference)
+        return
+
+    ledger.accept(ref_order.order_id)
+
+    if intent.order_type == "limit":
+        ledger.lock(required)
+        run.book.append(_resting_row(order_id, intent, created_at))
+        run.record(order_id, intent, created_at, reference)
+        return
+
+    price = sim.market_fill_price(reference, intent.side, config)
+    fee = sim.fee_amount(intent.quantity, price, config)
+    slippage = sim.slippage_amount(intent.quantity, price, reference, config)
+    result = ledger.fill_order(
+        ref_order.order_id,
+        quantity=intent.quantity,
+        price=price,
+        fee=fee,
+        fill_event_id=sim.market_fill_event_id(order_id),
+        filled_at=filled_at,
+    )
+    if result.applied:
+        run.add_fill(
+            order_id,
+            intent,
+            result,
+            reference,
+            slippage,
+            None if event is None else event.get("source_event_id"),
+        )
+    run.record(order_id, intent, created_at, reference)
+
+
+def _check_resting(event: Mapping[str, Any], *, run: _Run) -> None:
+    """Fill every resting limit order this recorded event triggers.
+
+    ``paper_simulator.check_resting_orders``'s rule, through its own functions: the event's own
+    symbol, oldest order first, :func:`paper_simulator.limit_fill_triggered` deciding whether this
+    event is the one, :func:`paper_simulator.fillable_quantity` deciding how much (the
+    deterministic participation cap, never a probability) and :func:`limit_fill_price` deciding
+    the price - exactly the limit, so a resting fill's recorded slippage is zero.
+
+    The release from ``locked_balance`` is the production rule: ``required_funds`` for the filled
+    portion at the limit, clamped to what is actually locked, because the lock was quantized once
+    for the whole quantity while the releases are quantized per fill and the parts need not sum to
+    the whole.
+    """
+    ledger = run.ledger
+    config = run.config
+    symbol = event.get("symbol")
+    instant = event.get("event_timestamp")
+    candidates = [
+        row
+        for row in sorted(
+            run.book, key=lambda r: (str(r.get("created_at") or ""), str(r["id"]))
+        )
+        if (symbol is None or row.get("symbol") == symbol)
+        and sim.limit_fill_triggered(row, event)
+    ]
+    for row in candidates:
+        quantity = sim.fillable_quantity(row, event, config)
+        if quantity <= ZERO:
+            continue
+        price = sim.limit_fill_price(row, config)
+        fee = sim.fee_amount(quantity, price, config)
+        needed = ledger.required_funds(quantity, price)
+        release = needed if needed < ledger.locked_balance else ledger.locked_balance
+        order_id = str(row["id"])
+        result = ledger.fill_order(
+            run.ref_ids[order_id],
+            quantity=quantity,
+            price=price,
+            fee=fee,
+            fill_event_id=sim.resting_fill_event_id(order_id, event),
+            filled_at=instant,
+            release_from_locked=release,
+        )
+        if not result.applied:
+            # A repeated event identity or a terminal order: unchanged, no snapshot and no fill
+            # row (Requirements 16.3, 18.13). Recorded as nothing, which is what happened.
+            continue
+        row["filled_quantity"] = ledger.qty(
+            to_decimal(row["filled_quantity"], "filled_quantity") + quantity
+        )
+        previous = run.orders[order_id]
+        intent = sim.OrderIntent.from_mapping(
+            {
+                "symbol": previous.symbol,
+                "side": previous.side,
+                "order_type": previous.order_type,
+                "quantity": previous.quantity,
+                "limit_price": previous.limit_price,
+                "idempotency_key": previous.idempotency_key,
+            }
+        )
+        # Zero slippage, and not by omission: a resting order fills at exactly its limit, so the
+        # reference IS the fill price and ``|price - reference|`` is zero (task 25.5).
+        run.add_fill(
+            order_id,
+            intent,
+            result,
+            price,
+            ledger.money(ZERO),
+            event.get("source_event_id"),
+        )
+        run.record(order_id, intent, previous.created_at, previous.reference_price)
+
+
+def _revalue(event: Mapping[str, Any], *, run: _Run) -> None:
+    """Revalue the open book at this bar's close and record the equity point.
+
+    ``paper_session_service._revalue``'s rule, including its refusals:
+
+    * **A book with no open position is not revalued**, and no equity point is written. A
+      revaluation restates what open positions are worth; with none there is nothing to restate,
+      and a row per candle for an idle session would make Requirement 18.9's drawdown a function
+      of how long the session ran rather than of what it did.
+    * The price supplied is this bar's validated **close**, for the symbol it is for. A position in
+      another symbol falls back to its own last validated price and the revaluation is reported
+      ``stale`` (Requirement 18.15) - nothing is interpolated and nothing is zeroed.
+    * A position that has never been priced at all is not revalued either. It cannot happen for a
+      position this replay opened (every fill records its price), so it is logged as the surprise
+      it would be rather than silently priced.
+    """
+    ledger = run.ledger
+    if not any(position.is_open for position in ledger.positions.values()):
+        return
+    close = event.get("close")
+    prices: Dict[str, Any] = {}
+    if close is not None and event.get("symbol") is not None:
+        prices[str(event["symbol"])] = to_decimal(close, "market event close")
+    unpriced = [
+        position.symbol
+        for position in ledger.positions.values()
+        if position.is_open
+        and position.symbol not in prices
+        and position.current_price is None
+    ]
+    if unpriced:
+        logger.warning(
+            "[paper-replay] the reconstruction holds an open position with no validated price, so "
+            "this bar was not revalued and no price was substituted: %s",
+            sorted(unpriced),
+        )
+        ledger.stale = True
+        return
+    ledger.revalue(prices, price_at=event.get("event_timestamp"))
+
+
+def _projected(
+    *,
+    order_id: str,
+    intent: Any,
+    created_at: Optional[datetime],
+    reference: Optional[Decimal],
+    order: RefOrder,
+    applied: Sequence[RefFill],
+    slippage: Decimal,
+    ledger: ReferenceLedger,
+) -> ReplayedOrder:
+    """One :class:`ReplayedOrder`, with the derived columns projected off the applied fills.
+
+    ``filled_quantity``, ``avg_fill_price`` and ``fee_minor`` are recomputed from the fills
+    applied to THIS order rather than incremented, which is the discipline
+    ``paper_simulator._fill_event_totals`` records: the columns are a projection of the fill rows,
+    so a drift between the two is detectable rather than built in. ``avg_fill_price`` is
+    ``quantize(sum(qty x price) / sum(qty))``, the same expression the simulator writes to
+    ``paper_orders.avg_fill_price``, and it is ``None`` for an order that never filled - not a
+    zero, which would claim it filled at nothing.
+    """
+    total_quantity = ZERO
+    notional = ZERO
+    fee_total = ZERO
+    for fill in applied:
+        total_quantity += fill.quantity
+        notional += fill.quantity * fill.price
+        fee_total += fill.fee
+
+    average: Optional[Decimal] = None
+    if total_quantity > ZERO:
+        with localcontext() as ctx:
+            ctx.prec = PRECISION
+            average = ledger.price(notional / total_quantity)
+
+    return ReplayedOrder(
+        order_id=order_id,
+        symbol=intent.symbol,
+        side=intent.side,
+        order_type=intent.order_type,
+        quantity=intent.quantity,
+        limit_price=intent.limit_price,
+        idempotency_key=intent.idempotency_key,
+        created_at=created_at,
+        reference_price=reference,
+        filled_quantity=order.filled_quantity,
+        avg_fill_price=average,
+        fee_minor=_minor_of(ledger.money(fee_total), ledger.minor_unit_exponent),
+        slippage_minor=_minor_of(ledger.money(slippage), ledger.minor_unit_exponent),
+        order_state=order.order_state,
+        rejection_reason=order.rejection_reason,
+    )
 
 
 __all__ = [
@@ -1444,4 +2515,21 @@ __all__ = [
     # the ledger
     "ReferenceLedger",
     "to_decimal",
+    # 27.5 - the deterministic replay
+    "IDENTITY_PAYLOAD_FIELDS",
+    "PaperReplayError",
+    "REFUSAL_CAPITAL_UNREADABLE",
+    "REFUSAL_CONFIG_INCOMPLETE",
+    "REFUSAL_EVENT_IDENTITY_MISMATCH",
+    "REFUSAL_EVENT_UNREADABLE",
+    "REFUSAL_MARKET_LOG_UNREADABLE",
+    "REFUSAL_ORDER_LOG_UNREADABLE",
+    "REFUSAL_ORDER_UNREADABLE",
+    "REFUSAL_REASONS",
+    "REFUSAL_SESSION_UNREADABLE",
+    "Reconstruction",
+    "ReplayRefused",
+    "ReplayedFill",
+    "ReplayedOrder",
+    "replay",
 ]

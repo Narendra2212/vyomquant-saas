@@ -30,6 +30,17 @@ from backend_app.backend.order_lifecycle_state import (
     resolve_order_lifecycle_state,
 )
 
+# The three Execution_Environment values, imported rather than re-spelled: task 13.1's
+# module is the single place BACKTEST/PAPER/LIVE are written, and its own docstring names
+# "the Signal_Trace recorder's environment column (Requirement 23.1)" as one of the
+# consumers that derives the vocabulary from there. Pure standard library at module scope,
+# like order_lifecycle_state above, so importing it costs nothing and cannot cycle.
+from backend_app.backend.execution_environment import (
+    EXECUTION_ENVIRONMENTS,
+    ExecutionEnvironment,
+    parse_execution_environment,
+)
+
 # Re-exported so callers find the Idempotency_Key derivation where the design's
 # module map puts it (signal_service), while the single implementation lives with
 # the layer that consumes it. Requirement 19.1.
@@ -75,20 +86,57 @@ SIGNAL_TRACE_PAGE_SIZE = 100
 #:   believing it has everything. 100 pages of 100.
 SIGNAL_TRACE_EXPORT_MAX_ROWS = SIGNAL_TRACE_PAGE_SIZE * 100
 
+#: The two columns migration 010 adds to ``public.signals``: the Execution_Environment a
+#: signal was produced under (Requirement 23.1) and, for a ``PAPER`` signal, the
+#: Paper_Session it belongs to (Requirement 23.2). Probed as a SET, for the same reason
+#: :data:`SIGNAL_LIFECYCLE_COLUMNS` is - PostgREST reports only the FIRST missing column,
+#: so a projection naming both is answered by one error naming one of them and "is 010
+#: applied" is a single verdict rather than two.
+#:
+#: Declared here rather than beside the probe because the projections below are built from
+#: it; the probe, its cached verdict, its recheck window and its degradation warning live
+#: with 005b's in the availability section (see :func:`signal_environment_columns_supported`).
+SIGNAL_ENVIRONMENT_COLUMNS: Tuple[str, ...] = ("environment", "paper_session_id")
+
 #: The long-standing ``public.signals`` select projection for a list view. Named so the
 #: signal-trace reader can extend it with 005b's ``order_lifecycle_state`` without
 #: re-spelling the other thirty-four columns.
+#:
+#: Task 29.1 APPENDS 010's pair to it - :data:`SIGNAL_ENVIRONMENT_COLUMNS`, joined onto the
+#: end - so the thirty-four are not re-spelled, not re-ordered and not re-typed, and the
+#: reader that needs the environment does not need a second projection constant.
+#: :func:`without_signal_environment_columns` is what a database WITHOUT 010 is read with,
+#: and the probe decides which of the two is used (Requirement 24.10 - a handler may not
+#: read a column the migration set has not created).
 SIGNAL_SUMMARY_COLUMNS = (
     "id,user_id,strategy_id,strategy_version,deployment_id,exchange_id,symbol,"
     "timeframe,worker_id,decision,status,risk_passed,risk_reason,position_size,"
     "capital,exposure,expected_loss,expected_reward,order_id,order_status,"
     "quantity,filled,remaining,average_price,fees,slippage,latency_ms,trade_id,"
     "pnl,realized_pnl,generated_at,risk_evaluated_at,order_updated_at,executed_at"
+    + "," + ",".join(SIGNAL_ENVIRONMENT_COLUMNS)
 )
 
-#: What the signal-trace list reads: the summary projection, the three JSONB columns the
-#: public shape is rebuilt from, and (added conditionally) 005b's canonical column.
+#: What the signal-trace list reads: the summary projection (010's pair included, task
+#: 29.1), the three JSONB columns the public shape is rebuilt from, and (added
+#: conditionally) 005b's canonical column.
 SIGNAL_TRACE_COLUMNS = SIGNAL_SUMMARY_COLUMNS + ",indicators,market_info,ml_info"
+
+
+def without_signal_environment_columns(columns: str) -> str:
+    """``columns`` with migration 010's pair removed, preserving the order of the rest.
+
+    The projection a database that has NOT had ``010_signal_environment.sql`` applied is
+    read with. Requirement 24.9/24.10's condition - a handler reading a column the schema
+    does not have is a PostgreSQL ``42703`` - is avoided by asking the probe first and
+    stripping here, rather than by keeping a second full projection constant that could
+    drift from :data:`SIGNAL_SUMMARY_COLUMNS` one column at a time.
+    """
+    return ",".join(
+        name
+        for name in str(columns).split(",")
+        if name.strip() not in SIGNAL_ENVIRONMENT_COLUMNS
+    )
 
 
 class SignalDecision:
@@ -347,17 +395,28 @@ class SignalService:
     async def get_signal(
         self,
         user: dict,
-        signal_id: str
+        signal_id: str,
+        environment: Optional[Any] = None,
     ) -> Optional[Dict]:
         """
         Get complete signal data.
+
+        ``environment`` is task 29.3's Execution_Environment filter on the DETAIL path,
+        applied as a PREDICATE in the same statement as the ownership predicates rather than
+        by inspecting the row after it has been fetched: a signal excluded by the filter is
+        then a row the database never returned, so it answers exactly as an unknown
+        identifier does (Requirements 20.1, 20.2) with no second code path that could reveal
+        that it exists. ``None`` - the default, and what every pre-29.3 caller passes - adds
+        no predicate at all, so the unfiltered read is the statement it always was.
         """
         user_id = str(user.get("id", "")) if isinstance(user, dict) else ""
         
         try:
             sb = await self._get_supabase(user)
             if sb and user_id:
-                query_res = sb.table("signals").select("*").eq("id", signal_id).eq("user_id", user_id).execute()
+                query = sb.table("signals").select("*").eq("id", signal_id).eq("user_id", user_id)
+                query = _apply_column_filter(query, "environment", environment)
+                query_res = query.execute()
                 result = await query_res if inspect.isawaitable(query_res) else query_res
                 if result and hasattr(result, "data") and result.data:
                     return result.data[0]
@@ -366,6 +425,8 @@ class SignalService:
         
         local = self._local_signals.get(signal_id)
         if local:
+            if not _matches_column_filter(local.get("environment"), environment):
+                return None
             if not user_id or str(local.get("user_id", "")) == user_id or user_id == "anonymous":
                 return local
         return None
@@ -389,6 +450,7 @@ class SignalService:
         strategy_version: Optional[Any] = None,
         order_lifecycle_state: Optional[Any] = None,
         columns: Optional[str] = None,
+        environment: Optional[Any] = None,
     ) -> List[Dict]:
         """
         List signals with filters.
@@ -411,16 +473,40 @@ class SignalService:
         ``columns`` overrides the select projection for a caller that needs a column this
         summary does not list (again, 005b's ``order_lifecycle_state``). ``None`` keeps the
         long-standing projection.
+
+        ``environment`` is 010's column, and it is applied as a PREDICATE in the statement
+        like every other category above - never as a post-filter over rows already fetched,
+        which would page the wrong rows (``limit``/``offset`` are applied by the database)
+        and read every environment's signals to answer a question about one. On a database
+        without 010 there is no column to predicate on: the filtered read answers NOTHING
+        rather than answering every environment's signals as though they had been filtered,
+        and :func:`build_signal_trace_page` is where that condition is declared to the caller
+        (see :func:`_environment_degradation`).
         """
         user_id = str(user.get("id", "")) if isinstance(user, dict) else ""
         
         try:
             sb = await self._get_supabase(user)
             if sb and user_id:
-                summary_columns = columns or SIGNAL_SUMMARY_COLUMNS
+                # 010's pair is in the projection; it is stripped when the probe says the
+                # migration is absent, so a pre-010 database answers this list instead of
+                # raising 42703 into the fallback below (task 29.1).
+                summary_columns, with_environment = await signal_environment_projection(
+                    sb, columns or SIGNAL_SUMMARY_COLUMNS
+                )
+                if _filter_values(environment) and not with_environment:
+                    warn_signal_environment_columns_absent(
+                        "an environment filter "
+                        f"{list(_filter_values(environment))} was requested on the "
+                        "signal-trace read path, and there is no environment column to "
+                        "answer it with; no signal is reported rather than reporting every "
+                        "environment's signals as though they had been filtered"
+                    )
+                    return []
                 query = sb.table("signals").select(summary_columns).eq("user_id", user_id)
 
                 for column, value in (
+                    ("environment", environment),
                     ("strategy_id", strategy_id),
                     ("strategy_version", strategy_version),
                     ("exchange_id", exchange_id),
@@ -473,6 +559,8 @@ class SignalService:
                 continue
             if not _matches_column_filter(s.get("order_lifecycle_state"), order_lifecycle_state):
                 continue
+            if not _matches_column_filter(s.get("environment"), environment):
+                continue
             if ml_type == "ml" and not s.get("ml_info"):
                 continue
             if ml_type == "rule_based" and s.get("ml_info"):
@@ -508,6 +596,7 @@ class SignalService:
         status: Optional[Any] = None,
         ml_type: Optional[str] = None,
         search: Optional[str] = None,
+        environment: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """One page of the Signal_Trace_Page's list. See :func:`build_signal_trace_page`.
 
@@ -535,6 +624,7 @@ class SignalService:
             status=status,
             ml_type=ml_type,
             search=search,
+            environment=environment,
         )
     
     async def get_signal_timeline(
@@ -555,13 +645,22 @@ class SignalService:
             return []
         return signal_event_timeline(signal)
 
-    async def get_signal_trace(self, user: dict, signal_id: str) -> Optional[Dict[str, Any]]:
+    async def get_signal_trace(
+        self,
+        user: dict,
+        signal_id: str,
+        *,
+        environment: Optional[Any] = None,
+        viewer_role: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """One signal's full trace detail. See :func:`build_signal_trace_detail`.
 
         Thin for the same reason :meth:`list_signal_trace` is: the only things that need
         the service are the caller's RLS-scoped client and the 005b probe.
         """
-        return await build_signal_trace_detail(self, user, signal_id)
+        return await build_signal_trace_detail(
+            self, user, signal_id, environment=environment, viewer_role=viewer_role
+        )
 
     async def export_signal_trace(
         self,
@@ -582,6 +681,7 @@ class SignalService:
         status: Optional[Any] = None,
         ml_type: Optional[str] = None,
         search: Optional[str] = None,
+        environment: Optional[Any] = None,
         max_rows: int = SIGNAL_TRACE_EXPORT_MAX_ROWS,
     ) -> Dict[str, Any]:
         """The Signal_Trace_Page's export. See :func:`build_signal_trace_export`.
@@ -609,6 +709,7 @@ class SignalService:
             status=status,
             ml_type=ml_type,
             search=search,
+            environment=environment,
             max_rows=max_rows,
         )
 
@@ -931,6 +1032,60 @@ class SignalExportRefused(SignalRejected):
         super().__init__(code, message, details, http_status=http_status)
 
 
+class SignalEnvironmentRefused(SignalRejected):
+    """An ``environment`` filter value that is not an Execution_Environment. 400 (task 29.3).
+
+    Refused rather than ignored, for the reason
+    :class:`~backend_app.backend.order_lifecycle_state.OrderLifecycleRejected` is: silently
+    dropping ``?environment=PAPR`` would answer with signals from EVERY environment, which
+    is MORE than the caller asked for. On an audit page that is the wrong way to be wrong.
+    """
+
+    def __init__(self, unrecognised: Iterable[Any]):
+        offending = [str(value) for value in unrecognised]
+        accepted = [member.value for member in EXECUTION_ENVIRONMENTS]
+        super().__init__(
+            "SIGNAL_ENVIRONMENT_UNRECOGNISED",
+            f"{offending} is not an Execution_Environment. The filter accepts {accepted}; an "
+            "unrecognised value is refused rather than ignored, because ignoring it would "
+            "return signals from environments the caller did not ask for.",
+            {"unrecognised": offending, "recognised_environments": accepted},
+            http_status=400,
+        )
+
+
+class SignalEnvironmentFilterUnanswerable(SignalRejected):
+    """An ``environment`` filter on a database that has no ``environment`` column. 404.
+
+    THE DETAIL VIEW'S HALF OF THE PRE-010 DEGRADATION (task 29.3)
+        The list answers this condition with an EMPTY page that declares it (see
+        :func:`_environment_degradation`). One signal has no empty page to return, so the
+        detail says the same thing with the same status the "no such signal in that
+        environment" answer carries - 404 - and names the migration in the body.
+
+        Raised BEFORE the row is read, deliberately: the answer is then identical for every
+        identifier and every caller, so it cannot become a channel for whether some
+        signal exists (Requirements 20.1, 20.2). It reveals one fact, and only one: that
+        ``010_signal_environment.sql`` has not been applied to this database.
+    """
+
+    def __init__(self, requested: Iterable[Any]):
+        asked = [str(value) for value in requested]
+        super().__init__(
+            "SIGNAL_NOT_FOUND",
+            f"An environment filter {asked} was requested, and public.signals has no "
+            f"environment column to answer it with. Apply {SIGNAL_ENVIRONMENT_MIGRATION}. "
+            "No signal is reported rather than reporting one whose environment could not "
+            "be checked.",
+            {
+                "environment_filter": asked,
+                "environment_filter_answered": False,
+                "migration": SIGNAL_ENVIRONMENT_MIGRATION,
+            },
+            http_status=404,
+        )
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # 005b AVAILABILITY - detected, never assumed
 # ══════════════════════════════════════════════════════════════════════════
@@ -1065,6 +1220,225 @@ async def signal_lifecycle_columns_supported(sb: Any) -> bool:
 
     _remember_signal_lifecycle_support(True)
     return True
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 010 AVAILABILITY - the same probe, for the environment pair (task 29.1)
+#
+# WHY A SECOND VERDICT AND NOT A SECOND MECHANISM
+# -----------------------------------------------
+# Everything below is 005b's probe applied to 010's pair: the same cached verdict, the same
+# 300-second recheck window, the same public ``remember_*_absent`` escape hatch for a
+# process that met a 42703 at the INSERT after caching a positive verdict, the same narrow
+# error classification, and the same disposition - an indeterminate answer resolves to
+# "supported" so a real failure surfaces at the statement rather than being pre-emptively
+# downgraded. Nothing here is a new way of asking the question.
+#
+# It is a SEPARATE verdict because 005b and 010 are separate files applied BY HAND, in a
+# maintenance window, with no migration table recording which have run (see 010's own
+# header). A database can carry either, both or neither, so one boolean cannot answer for
+# two migrations.
+#
+# WHY AN ABSENT PAIR DEGRADES RATHER THAN REFUSES
+# ----------------------------------------------
+# The same reading 005b's section above takes, and deliberately NOT the one
+# ``paper/paper_repository`` takes for a missing paper TABLE. There, an absent table costs
+# the Paper_Account balance itself, so refusing is the only safe answer. Here an absent
+# COLUMN costs an audit field: the signal row is still written, still owner-scoped, still
+# carries its decision, its sizing and its canonical state, and the ONE thing missing is
+# which environment produced it. Refusing the write would suppress the record entirely to
+# protect one of its columns - strictly worse - so the write proceeds and a warning NAMES
+# ``010_signal_environment.sql`` and says exactly which guarantee is not in force.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+#: Named in every degradation warning so an operator never has to guess which file to
+#: apply. Same convention as SIGNAL_LIFECYCLE_MIGRATION.
+SIGNAL_ENVIRONMENT_MIGRATION = "backend_app/migrations/010_signal_environment.sql"
+
+#: How long an "absent" verdict is trusted before it is re-probed, so applying 010 to a
+#: running fleet takes effect without a redeploy. Same window as the 005b probe.
+SIGNAL_ENVIRONMENT_COLUMN_RECHECK_SECONDS = 300.0
+
+#: Where the reported Execution_Environment of a page's rows came from. Reported on the list
+#: and the export envelopes beside ``lifecycle_state_source``, and read the same way: the
+#: page states the provenance of the label instead of leaving a reader to assume one.
+ENVIRONMENT_SOURCE_COLUMN = "column"
+ENVIRONMENT_SOURCE_UNAVAILABLE = "unavailable"
+
+#: The label a row carries in ``count_by_environment`` when its environment is not known -
+#: a pre-010 database, where the column does not exist. NOT ``"LIVE"``: Requirement 23.7
+#: back-fills the existing rows to ``LIVE`` *in the migration*, and until that has run a
+#: PAPER signal is indistinguishable from a live one (see
+#: :func:`warn_signal_environment_columns_absent`), so calling an unlabelled row ``LIVE``
+#: here would be this module inventing the very fact the column exists to record.
+UNLABELLED_ENVIRONMENT = "UNLABELLED"
+
+_signal_environment_columns_supported: Optional[bool] = None
+_signal_environment_columns_checked_at: float = 0.0
+
+
+def reset_signal_environment_column_support() -> None:
+    """Forget the cached 010 verdict. For tests, and for an operator who just applied it."""
+    global _signal_environment_columns_supported, _signal_environment_columns_checked_at
+    _signal_environment_columns_supported = None
+    _signal_environment_columns_checked_at = 0.0
+
+
+def signal_environment_column_support_state() -> Optional[bool]:
+    """The cached verdict: ``True``, ``False``, or ``None`` for "not yet determined"."""
+    return _signal_environment_columns_supported
+
+
+def _remember_signal_environment_support(supported: bool) -> None:
+    global _signal_environment_columns_supported, _signal_environment_columns_checked_at
+    _signal_environment_columns_supported = supported
+    _signal_environment_columns_checked_at = time.monotonic()
+
+
+def remember_signal_environment_columns_absent() -> None:
+    """Record that 010 is not applied, so the next write degrades without re-probing.
+
+    Public for the same reason :func:`remember_signal_lifecycle_columns_absent` is: a
+    process that cached a positive verdict and then met ``42703`` at the INSERT has newer
+    information than the probe did.
+    """
+    _remember_signal_environment_support(False)
+
+
+def _cached_signal_environment_support() -> Optional[bool]:
+    if _signal_environment_columns_supported is None:
+        return None
+    if _signal_environment_columns_supported:
+        return True
+    if (
+        time.monotonic() - _signal_environment_columns_checked_at
+        >= SIGNAL_ENVIRONMENT_COLUMN_RECHECK_SECONDS
+    ):
+        return None
+    return False
+
+
+def is_missing_signal_environment_column_error(exc: BaseException) -> bool:
+    """True only when ``exc`` definitively says a 010 column does not exist.
+
+    Narrow in exactly the way :func:`is_missing_signal_lifecycle_column_error` is narrow,
+    and for the same reason: anything this returns ``False`` for is re-raised as a
+    persistence failure rather than quietly turned into a signal row with no environment.
+    """
+    text = str(exc).lower()
+    if not text:
+        return False
+    if "pgrst205" in text:  # a missing TABLE, which degrading cannot help with
+        return False
+    if any(code in text for code in _MISSING_SIGNAL_COLUMN_CODES):
+        return True
+    if not any(column in text for column in SIGNAL_ENVIRONMENT_COLUMNS):
+        return False
+    return any(
+        phrase in text
+        for phrase in ("does not exist", "schema cache", "could not find", "unknown column")
+    )
+
+
+def _names_signal_environment_column(detail: Any) -> bool:
+    """Whether ``detail`` names one of 010's two columns by name.
+
+    Used only to decide WHICH pair an undefined-column error is about when a statement
+    carried both 005b's and 010's columns: a bare ``42703`` with no column name matches
+    both classifiers, and this is what breaks the tie in favour of the one the database
+    actually complained about.
+    """
+    text = str(detail).lower()
+    return any(column in text for column in SIGNAL_ENVIRONMENT_COLUMNS)
+
+
+def warn_signal_environment_columns_absent(detail: str) -> None:
+    """The degradation warning. Names the file, and says which guarantee is not in force."""
+    logger.warning(
+        "public.signals is missing the signal environment columns (%s). "
+        "Apply %s, then restart or wait %.0fs for the re-probe. Until then a signal row is "
+        "written in the pre-010 shape: environment and paper_session_id are NOT persisted, "
+        "so chk_signals_environment and fk_signals_paper_session do not exist, the "
+        "Execution_Environment of Requirement 23.1 is not readable from the row, and a "
+        "PAPER signal is not distinguishable from a LIVE one by any column - the Paper_Session "
+        "it belongs to is recorded only in paper_orders/paper_events. The signal itself is "
+        "still written: an absent column costs an audit field, not the record. Detail: %s",
+        ", ".join(SIGNAL_ENVIRONMENT_COLUMNS),
+        SIGNAL_ENVIRONMENT_MIGRATION,
+        SIGNAL_ENVIRONMENT_COLUMN_RECHECK_SECONDS,
+        detail,
+    )
+
+
+async def signal_environment_columns_supported(sb: Any) -> bool:
+    """Whether ``public.signals`` carries 010's two columns.
+
+    Read-only and cached: one ``SELECT environment,paper_session_id ... LIMIT 1`` per
+    process through the caller's own RLS-scoped client, so the probe sees what the write
+    will see. An *indeterminate* answer resolves to ``True`` so the full write is attempted
+    and any real failure surfaces at the statement rather than being pre-emptively
+    downgraded - the same disposition :func:`signal_lifecycle_columns_supported` takes.
+    """
+    cached = _cached_signal_environment_support()
+    if cached is not None:
+        return cached
+    if sb is None:
+        return False
+
+    try:
+        result = await _execute(
+            sb.table("signals")
+            .select(",".join(SIGNAL_ENVIRONMENT_COLUMNS))
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001 - classified, never swallowed blindly
+        if is_missing_signal_environment_column_error(exc):
+            _remember_signal_environment_support(False)
+            warn_signal_environment_columns_absent(str(exc))
+            return False
+        logger.warning(
+            "Signal environment column probe was inconclusive (%s); attempting the full "
+            "projection and letting a real error surface.",
+            exc,
+        )
+        return True
+
+    error = getattr(result, "error", None)
+    if error is not None and is_missing_signal_environment_column_error(Exception(str(error))):
+        _remember_signal_environment_support(False)
+        warn_signal_environment_columns_absent(str(error))
+        return False
+
+    _remember_signal_environment_support(True)
+    return True
+
+
+async def signal_environment_projection(sb: Any, columns: str) -> Tuple[str, bool]:
+    """``(projection, whether 010's pair is in it)``. ONE probe, ONE decision.
+
+    Both facts from one call because a reader that needs the projection almost always needs
+    the verdict too - the pair is what a ``?environment=`` PREDICATE is applied to (task
+    29.3), and asking twice is either a second statement or a second chance to disagree.
+    """
+    supported = await signal_environment_columns_supported(sb)
+    if supported:
+        return columns, True
+    return without_signal_environment_columns(columns), False
+
+
+async def signal_projection_for(sb: Any, columns: str) -> str:
+    """``columns`` as this database can actually answer it: 010's pair kept, or stripped.
+
+    One call, so no reader has to remember both the probe and the strip. Returns
+    ``columns`` unchanged when 010 is applied (or when the probe is indeterminate, per that
+    function's disposition) and :func:`without_signal_environment_columns` of it when 010
+    is definitively absent - with the warning that names the file already emitted by the
+    probe.
+    """
+    projection, _supported = await signal_environment_projection(sb, columns)
+    return projection
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1416,11 +1790,30 @@ class Signal:
 
     # ── projections ─────────────────────────────────────────────────────
 
-    def to_row(self, *, include_lifecycle_columns: bool = True) -> Dict[str, Any]:
+    def to_row(
+        self,
+        *,
+        include_lifecycle_columns: bool = True,
+        environment: Optional[str] = None,
+        paper_session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """The ``public.signals`` INSERT payload. Exactly the columns that exist.
 
         ``include_lifecycle_columns=False`` drops 005b's two columns for a database that
         has not had that migration applied yet.
+
+        ``environment`` and ``paper_session_id`` are 010's pair, and both default to
+        ``None`` - which is why the LIVE path's payload is byte-for-byte what it was before
+        task 29.2. The live writer does not name the environment on purpose: 010 adds the
+        column ``NOT NULL DEFAULT 'LIVE'`` precisely so that the only writer which predates
+        the Paper_Session still records a true value without being changed (see that file's
+        "WHY environment IS NOT NULL"). A PAPER signal must NAME it, because that default
+        would otherwise label it ``LIVE``.
+
+        ``paper_session_id`` is written only together with ``environment``: a session
+        identifier on a row that does not say which environment produced it would be a
+        half-recorded fact, and Requirement 23.2 asks for "the Paper_Session or deployment
+        identifier as applicable" - which is only interpretable next to the environment.
 
         ``status`` is deliberately absent: it is NOT NULL DEFAULT 'pending', so the
         database fills it, and this code does not claim a legacy state for a signal at
@@ -1464,6 +1857,10 @@ class Signal:
         if include_lifecycle_columns:
             row["order_lifecycle_state"] = self.order_lifecycle_state.value
             row["idempotency_key"] = self.idempotency_key
+        if environment is not None:
+            row["environment"] = environment
+            if paper_session_id is not None:
+                row["paper_session_id"] = paper_session_id
         if self.order_id is not None:
             row["order_id"] = self.order_id
         if self.execution_id is not None:
@@ -1940,8 +2337,43 @@ async def _resolve_client(sb: Any, user: Any, deployment: Any) -> Any:
         return None
 
 
-async def _insert_signal_row(sb: Any, signal: Signal, *, with_lifecycle: bool) -> Dict[str, Any]:
-    """One INSERT. Degrades to the legacy shape when 005b's columns are absent.
+def _environment_pair_is_absent(
+    exc: BaseException, *, environment: Optional[str], with_lifecycle: bool
+) -> bool:
+    """Whether this INSERT failure is 010's pair missing, rather than 005b's.
+
+    Both classifiers accept a bare ``42703`` with no column name, so when one statement
+    carried BOTH pairs the tie is broken by which columns the message names: if it names
+    ``environment`` or ``paper_session_id``, 010 is the answer; if it names neither and
+    005b's pair was also on the payload, 005b is retried first and a second, still-failing
+    attempt converges on 010 (by which point ``with_lifecycle`` is ``False``, so this
+    predicate no longer has to share the message with anything).
+    """
+    if environment is None:
+        return False
+    if not is_missing_signal_environment_column_error(exc):
+        return False
+    if with_lifecycle and not _names_signal_environment_column(exc):
+        return False
+    return True
+
+
+async def _insert_signal_row(
+    sb: Any,
+    signal: Signal,
+    *,
+    with_lifecycle: bool,
+    environment: Optional[str] = None,
+    paper_session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """One INSERT. Degrades to the legacy shape when 005b's or 010's columns are absent.
+
+    ``environment`` / ``paper_session_id`` are 010's pair and default to ``None``, so a LIVE
+    write issues exactly the statement it always did. When they ARE given and 010 turns out
+    not to be applied, the pair is dropped and the row is written without it - the same
+    degradation 005b's pair gets, with a warning naming ``010_signal_environment.sql``.
+    This is the ONE insert on this path: a PAPER signal is the same row shape as a LIVE one,
+    distinguished by a column, and there is no second store (Requirement 23.5).
 
     A 23505 on ``uq_signals_idempotency_key`` is translated into ``DuplicateOrderError``
     rather than reported as a persistence failure. That is migration 005b section 1's
@@ -1955,15 +2387,32 @@ async def _insert_signal_row(sb: Any, signal: Signal, *, with_lifecycle: bool) -
     :func:`is_duplicate_idempotency_key_error` on why it is deliberately narrow - a 23505
     on any other index is still a persistence failure.
     """
-    payload = signal.to_row(include_lifecycle_columns=with_lifecycle)
+    payload = signal.to_row(
+        include_lifecycle_columns=with_lifecycle,
+        environment=environment,
+        paper_session_id=paper_session_id,
+    )
+
+    def _retry(*, lifecycle: bool, env: Optional[str]) -> Any:
+        return _insert_signal_row(
+            sb,
+            signal,
+            with_lifecycle=lifecycle,
+            environment=env,
+            paper_session_id=paper_session_id if env is not None else None,
+        )
 
     try:
         result = await _execute(sb.table("signals").insert(payload).execute())
     except Exception as exc:  # noqa: BLE001 - classified, never swallowed blindly
+        if _environment_pair_is_absent(exc, environment=environment, with_lifecycle=with_lifecycle):
+            remember_signal_environment_columns_absent()
+            warn_signal_environment_columns_absent(str(exc))
+            return await _retry(lifecycle=with_lifecycle, env=None)
         if with_lifecycle and is_missing_signal_lifecycle_column_error(exc):
             remember_signal_lifecycle_columns_absent()
             warn_signal_lifecycle_columns_absent(str(exc))
-            return await _insert_signal_row(sb, signal, with_lifecycle=False)
+            return await _retry(lifecycle=False, env=environment)
         if is_duplicate_idempotency_key_error(exc):
             raise DuplicateOrderError(
                 f"A signal row already carries idempotency key {signal.idempotency_key} "
@@ -1979,10 +2428,17 @@ async def _insert_signal_row(sb: Any, signal: Signal, *, with_lifecycle: bool) -
 
     error = getattr(result, "error", None)
     if error is not None:
-        if with_lifecycle and is_missing_signal_lifecycle_column_error(Exception(str(error))):
+        reported = Exception(str(error))
+        if _environment_pair_is_absent(
+            reported, environment=environment, with_lifecycle=with_lifecycle
+        ):
+            remember_signal_environment_columns_absent()
+            warn_signal_environment_columns_absent(str(error))
+            return await _retry(lifecycle=with_lifecycle, env=None)
+        if with_lifecycle and is_missing_signal_lifecycle_column_error(reported):
             remember_signal_lifecycle_columns_absent()
             warn_signal_lifecycle_columns_absent(str(error))
-            return await _insert_signal_row(sb, signal, with_lifecycle=False)
+            return await _retry(lifecycle=False, env=environment)
         # PostgREST reports a constraint violation as an error OBJECT on the response as
         # often as it raises, so 005b's 23505 contract is honoured on both shapes.
         if is_duplicate_idempotency_key_error(Exception(str(error))):
@@ -2069,7 +2525,28 @@ async def generate_signal(
             the caller must not route this signal anywhere.
     """
     signal = mint_signal(deployment, node_output, now=now, signal_id=signal_id)
+    return await _persist_signal(signal, sb=sb, user=user, deployment=deployment)
 
+
+async def _persist_signal(
+    signal: Signal,
+    *,
+    sb: Any,
+    user: Any,
+    deployment: Any,
+    environment: Optional[str] = None,
+    paper_session_id: Optional[str] = None,
+) -> Signal:
+    """Resolve the client, probe, INSERT, reconcile the stored id, log. The ONE write.
+
+    Lifted out of :func:`generate_signal` unchanged in behaviour so that
+    :func:`generate_paper_signal` reaches the SAME statement rather than a second one
+    (Requirement 23.5: ``PAPER`` signals are recorded through the same path as ``LIVE``
+    ones, and no second signal store is introduced). ``environment`` and
+    ``paper_session_id`` default to ``None``, which is exactly the live call, so the live
+    path issues the same probe and the same INSERT it issued before task 29.2 - the 010
+    probe runs only for a caller that names an environment.
+    """
     client = await _resolve_client(sb, user, deployment)
     if client is None:
         raise SignalPersistenceError(
@@ -2084,7 +2561,16 @@ async def generate_signal(
         )
 
     with_lifecycle = await signal_lifecycle_columns_supported(client)
-    row = await _insert_signal_row(client, signal, with_lifecycle=with_lifecycle)
+    with_environment = (
+        await signal_environment_columns_supported(client) if environment is not None else False
+    )
+    row = await _insert_signal_row(
+        client,
+        signal,
+        with_lifecycle=with_lifecycle,
+        environment=environment if with_environment else None,
+        paper_session_id=paper_session_id if with_environment else None,
+    )
 
     # The database is authoritative about the id it stored. It should be the one that was
     # minted (this INSERT names it), and if it is not, the Idempotency_Key derived from
@@ -2112,6 +2598,148 @@ async def generate_signal(
         signal.order_lifecycle_state.value,
     )
     return signal
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TASK 29.2 - the PAPER write, through the path above and no other
+#
+# A Paper_Session is NOT a deployment, and that is the whole shape of this section.
+# ``mint_signal`` reads its attribution through ten NAMED keys (:func:`_deployment_facts`),
+# so a Paper_Session is admitted by handing it the same ten facts rather than by teaching
+# the minter about a second kind of owner. Three of those facts differ from a deployment's
+# and each difference is a fact about paper trading, not a workaround:
+#
+#   * ``deployment_id`` is absent, so it is written NULL. 010's own comment on
+#     ``signals.paper_session_id`` states this in terms: "signals.deployment_id stays NULL
+#     for a paper signal: a Paper_Session is not a deployment, and paper_session_id is the
+#     applicable identifier." Requirement 23.2 asks for "the Paper_Session or deployment
+#     identifier AS APPLICABLE", and for a session the applicable one is the session.
+#   * ``exchange_account_id`` is absent, because a Paper_Session trades no real account.
+#     There is no credential to point at and none is invented.
+#   * ``mode`` is ``'paper'`` and ``environment`` is ``'PAPER'``. The first is the
+#     pre-existing spelling inside ``market_info`` and is left exactly as it was; the
+#     second is the COLUMN Requirement 23.1 adds, and it is the one a reader filters on.
+#
+# Everything else - the id, the Idempotency_Key derivation, the decision vocabulary, the
+# refusals, the JSONB decision metadata, the canonical ``GENERATED`` state and the INSERT
+# itself - is the live path's, unchanged, because it IS the live path.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def paper_session_facts(session: Any, *, version: Any = None) -> Dict[str, Any]:
+    """The attribution a ``PAPER`` signal takes from its Paper_Session, as named keys.
+
+    Shaped for :func:`_deployment_facts` - which is why it is a plain mapping and not a new
+    type: the minter reads ten names, this supplies them, and no second attribution path
+    is introduced.
+
+    ``session`` is a ``paper_sessions`` row (or anything exposing the same names).
+    ``version`` is the ``strategy_versions`` row for ``session.version_id``, supplied by the
+    layer that already resolved it for the session's plan; it is what carries the version
+    LABEL (``strategy_versions.version``, e.g. ``"v3"``), which a ``paper_sessions`` row does
+    not hold. Without it the label falls back to the session's own spelling and, failing
+    that, is absent - at which point :func:`mint_signal` refuses with
+    ``SIGNAL_ATTRIBUTION_INCOMPLETE`` rather than inventing one.
+
+    NO ``id`` / ``deployment_id`` KEY IS RETURNED, and that is deliberate rather than an
+    omission: ``_deployment_facts`` reads ``deployment_id`` from ``id``, and a
+    ``paper_sessions.id`` landing in ``signals.deployment_id`` would name a deployment that
+    does not exist. The session identifier travels in ``paper_session_id`` instead.
+    """
+    return {
+        "user_id": _text(_pick(session, "user_id", "owner_id")),
+        "strategy_id": _text(_pick(session, "source_strategy_id", "strategy_id")),
+        "strategy_version": _text(
+            _pick(version, "version", "version_label")
+            or _pick(session, "strategy_version", "version")
+        ),
+        "version_id": _text(_pick(session, "version_id") or _pick(version, "id")),
+        "exchange_id": _text(_pick(session, "exchange_id", "venue", "exchange")),
+        "symbol": _text(_pick(session, "symbol", "exchange_symbol")),
+        "timeframe": _text(_pick(session, "timeframe")),
+        # The pre-existing in-row spelling (``market_info.mode``), not the new column.
+        "mode": "paper",
+    }
+
+
+async def generate_paper_signal(
+    session: Any,
+    node_output: Any,
+    *,
+    paper_session_id: Any = None,
+    version: Any = None,
+    sb: Any = None,
+    user: Any = None,
+    now: Optional[datetime] = None,
+    signal_id: Optional[str] = None,
+) -> Signal:
+    """Record one Paper_Session decision in the Signal_Trace. Requirements 23.1, 23.5.
+
+    The ``PAPER`` counterpart of :func:`generate_signal`, and NOT a second recording path:
+    it mints through :func:`mint_signal` and persists through :func:`_persist_signal`, so
+    the table, the projection, the INSERT, the ``42703`` degradations and the duplicate-key
+    contract are the ones the live path uses. What it adds is three columns' worth of
+    attribution: ``environment='PAPER'``, ``paper_session_id`` set, and ``deployment_id``
+    left NULL.
+
+    ``signals.order_lifecycle_state`` carries the unchanged vocabulary from
+    ``order_lifecycle_state.py`` - the row starts at ``GENERATED`` exactly as a live one
+    does, and no paper-specific state is introduced.
+
+    Args:
+        session: The ``paper_sessions`` row this decision was made inside.
+        node_output: What the strategy runtime produced for the bar - the evaluator's OWN
+            object, read through named keys. Deliberately not a narrowed projection: the
+            trace records Requirement 23.2's full detail and Requirement 23.3 restricts it
+            for a subscriber at READ time (task 29.4), so narrowing here would shrink the
+            record rather than the disclosure.
+        paper_session_id: The Paper_Session identifier to record. Defaults to the session
+            row's own ``id``.
+        version: The ``strategy_versions`` row, for the version label. See
+            :func:`paper_session_facts`.
+        sb: An RLS-scoped PostgREST client. Required in practice for a paper session: the
+            fallback builds one from an access token, and a session loop holds a client
+            rather than a token.
+        user: The owning user, for that fallback.
+        now: The generation instant, for a deterministic test.
+        signal_id: An id to reuse instead of minting one - for a replay re-deriving a known
+            signal's record (the Paper_Session's identifiers are UUIDv5-derived precisely so
+            a replay reproduces them).
+
+    Returns:
+        The persisted :class:`Signal`, at ``GENERATED``, with ``deployment_id`` ``None``.
+
+    Raises:
+        SignalGenerationRefused: The session and output do not describe an actionable,
+            attributable, sized signal. Nothing is minted and nothing is written.
+        SignalPersistenceError: The row could not be written. The caller - the paper session
+            loop - logs and continues: a paper order is durably recorded in
+            ``paper_orders``/``paper_events`` regardless, and that asymmetry with the live
+            path is stated where the swallow lives, not here.
+    """
+    facts = paper_session_facts(session, version=version)
+    signal = mint_signal(facts, node_output, now=now, signal_id=signal_id)
+
+    resolved_session_id = _text(paper_session_id) or _text(_pick(session, "id", "session_id"))
+    if not resolved_session_id:
+        raise SignalGenerationRefused(
+            "PAPER_SIGNAL_SESSION_UNIDENTIFIED",
+            "A PAPER signal must name the Paper_Session it was generated inside "
+            "(Requirement 23.2), and neither the session row nor the caller states an "
+            "identifier. Recording it without one would produce a row that says PAPER and "
+            "cannot say which session, which is the fact the column exists to hold.",
+            {"strategy_id": facts["strategy_id"], "symbol": signal.symbol},
+        )
+
+    return await _persist_signal(
+        signal,
+        sb=sb,
+        user=user,
+        deployment=session,
+        environment=ExecutionEnvironment.PAPER.value,
+        paper_session_id=resolved_session_id,
+    )
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════════
@@ -6778,6 +7406,118 @@ def resolve_lifecycle_state_filter(
     return tuple(states), tuple(unrecognised)
 
 
+def resolve_environment_filter(
+    value: Any,
+) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """A requested ``environment`` filter, validated. ``(environments, unrecognised)``.
+
+    ONE MORE OF THE SAME (task 29.3, Requirements 23.4, 23.6)
+        Declared, resolved and applied exactly as Requirement 17.2's other filter categories
+        are: a list of values, ``()`` for "category not active", OR within the category
+        through :func:`_apply_column_filter`, and AND against every other category. So
+        ``?environment=PAPER&environment=LIVE`` collects into both, and no environment
+        filter at all leaves the default of Requirement 23.6 - the caller's own signals
+        across all environments - exactly as it was.
+
+    THE VOCABULARY IS THE PLATFORM'S ONE RESOLVER, WITH CASE FOLDED FIRST
+        Resolution goes through ``execution_environment.parse_execution_environment``, so
+        the three words are not re-spelled here. Case and surrounding whitespace ARE folded
+        before it is called, which that function deliberately does not do for the live-order
+        guard - and the difference is safe in exactly one direction: this value becomes a
+        SELECT predicate. It cannot promote a simulated intent to a real order, and a
+        bookmarked or hand-typed ``?environment=paper`` is a URL a user legitimately sends
+        (the same allowance ``normalise_export_format`` already makes for ``"CSV"``).
+
+    A value that still does not resolve is returned in ``unrecognised`` rather than dropped;
+    the callers raise :class:`SignalEnvironmentRefused` for it.
+    """
+    resolved: Dict[str, None] = {}
+    unrecognised: Dict[str, None] = {}
+    for raw in _filter_values(value):
+        member = parse_execution_environment(str(raw).strip().upper())
+        if member is None:
+            unrecognised.setdefault(raw, None)
+        else:
+            resolved.setdefault(member.value, None)
+    return tuple(resolved), tuple(unrecognised)
+
+
+def environment_counts(items: Iterable[Mapping[str, Any]]) -> Dict[str, int]:
+    """How many of ``items`` belong to each Execution_Environment. Requirement 23.4.
+
+    Requirement 23.4 forbids a total, an aggregate or a chart series that mixes ``PAPER``
+    with ``LIVE`` "without an explicit environment label". This is that label, as a fact on
+    the envelope: every count is keyed by the environment it counts, so the page can render
+    one series per environment without deriving the grouping from the rows itself and
+    without a mixed figure being the only figure available.
+
+    A row whose environment is unknown - a pre-010 database, where the column does not
+    exist - is counted under :data:`UNLABELLED_ENVIRONMENT` rather than being assumed to be
+    ``LIVE`` or quietly dropped from the total.
+
+    Ordered ``BACKTEST``, ``PAPER``, ``LIVE``, then ``UNLABELLED``: the check-constraint
+    order, so the series order does not depend on which signal sorted first.
+    """
+    counts: Dict[str, int] = {}
+    for item in items:
+        label = _text(_pick(item, "environment")) or UNLABELLED_ENVIRONMENT
+        counts[label] = counts.get(label, 0) + 1
+
+    order = [member.value for member in EXECUTION_ENVIRONMENTS] + [UNLABELLED_ENVIRONMENT]
+    ranked = sorted(counts, key=lambda label: (order.index(label) if label in order else len(order), label))
+    return {label: counts[label] for label in ranked}
+
+
+def _environment_degradation(
+    with_environment: bool, requested: Tuple[str, ...] = ()
+) -> Optional[Dict[str, Any]]:
+    """The read path's 010 degradation block. ``None`` when the migration is applied.
+
+    WHAT A PRE-010 DATABASE DOES WITH AN ``?environment=`` FILTER, AND WHY (task 29.3)
+        The column does not exist, so the predicate cannot be sent. Three answers were
+        available and two of them are lies:
+
+        * the unfiltered list - it would present ``PAPER`` and ``LIVE`` signals as though
+          they had been filtered to one environment, which is precisely Requirement 23.4's
+          prohibition on an unlabelled mix, and MORE rows than were asked for;
+        * an empty list with nothing said - indistinguishable from "you have no PAPER
+          signals", which is a fabricated fact (there may be many; the column that would
+          identify them is missing);
+        * an empty list that SAYS the filter could not be applied, naming the migration.
+
+        The third is what happens. It is also the disposition this module already takes for
+        the one other unanswerable filter it has - an ``order_lifecycle_state`` the legacy
+        vocabulary cannot express returns :func:`_empty_signal_trace_page` rather than the
+        unfiltered list, because "returning the unfiltered list would be worse than
+        returning none: it would answer a question nobody asked". Same reasoning, same
+        answer, one more time.
+
+    WHY THIS IS NOT A REFUSAL, EITHER
+        The overall disposition to a missing COLUMN in this module is degrade-with-a-warning:
+        an absent column costs an audit FIELD, not the record and not the endpoint. So an
+        unfiltered list on a pre-010 database still answers every signal it always did -
+        with ``count_by_environment`` reporting them all as ``UNLABELLED`` and this block
+        saying why. Only the *filtered* request goes empty, and only because the question it
+        asks cannot be answered from the schema in front of it.
+    """
+    if with_environment:
+        return None
+    return {
+        "migration": SIGNAL_ENVIRONMENT_MIGRATION,
+        "reason": (
+            "public.signals does not carry the environment column, so no signal on this page "
+            "can be attributed to an Execution_Environment (Requirement 23.1) and a PAPER "
+            "signal is not distinguishable from a LIVE one by any column."
+        ),
+        "environment_filter": list(requested),
+        # With no filter requested there is nothing to answer, so this is trivially true and
+        # the page is the full, honestly-unlabelled list. With one requested it is false and
+        # the page is empty FOR THAT REASON - which is what makes the emptiness readable
+        # rather than a claim about how many signals the caller has.
+        "environment_filter_answered": not requested,
+    }
+
+
 def legacy_status_filter_for(
     states: Iterable[OrderLifecycleState],
 ) -> Tuple[Tuple[str, ...], Tuple[OrderLifecycleState, ...]]:
@@ -6937,10 +7677,24 @@ def signal_trace_item(row: Mapping[str, Any]) -> Dict[str, Any]:
     appears here without this function being edited, and so no field this record does not
     have can appear (Requirements 15.3, 15.4, 20.3 - containment holds on the wire because
     there is nothing to omit).
+
+    ``environment`` AND ``paper_session_id`` ARE ON THE ITEM, NOT ON THE RECORD (task 29.3)
+        Both are columns of the ROW rather than fields of :class:`Signal` - a signal record
+        is minted before it is attributed to a store, and ``Signal`` is frozen with a closed
+        field set that 010 does not change. They are read here by name, exactly as
+        :func:`_execution_outcome_of`'s columns are, for the same reason: they are facts the
+        row carries and the record has no field for.
+
+        Both keys are ALWAYS present, ``None`` on a pre-010 database. A reader therefore
+        branches on a VALUE and never on whether a key exists, which is what lets one
+        frontend render a labelled series per environment (Requirement 23.4) against either
+        schema.
     """
     signal = signal_from_row(row)
     item = signal.to_public_dict()
     item["execution"] = _execution_outcome_of(row, signal.order_lifecycle_state)
+    item["environment"] = _text(_pick(row, "environment"))
+    item["paper_session_id"] = _text(_pick(row, "paper_session_id"))
     return item
 
 
@@ -6964,25 +7718,42 @@ async def build_signal_trace_page(
     status: Optional[Any] = None,
     ml_type: Optional[str] = None,
     search: Optional[str] = None,
+    environment: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """One page of ``GET /api/signal-trace/signals``. Requirements 17.1, 17.2, 17.5, 17.7.
 
     Returns
         ``{signals, limit, offset, count, total, total_is_exact, has_more, next_offset,
-        filters_active, active_filters, lifecycle_state_source, degraded}``.
+        filters_active, active_filters, lifecycle_state_source, degraded,
+        environment_source, environment_filter, count_by_environment,
+        environment_degraded}``.
 
         ``filters_active`` is Requirement 17.7's empty-state discriminator: an empty
         ``signals`` with ``filters_active=false`` means "no signals exist yet", and with
         ``filters_active=true`` means "none match the current filter". The page does not
         have to infer it from the query string it sent.
 
+        The last four are task 29.3's, and they are all about labelling rather than
+        filtering: ``count_by_environment`` is Requirement 23.4's explicit environment label
+        on the page's own aggregate, ``environment_source`` says whether the label came from
+        010's column at all, ``environment_filter`` echoes the resolved filter, and
+        ``environment_degraded`` is non-null exactly when 010 has not been applied (see
+        :func:`_environment_degradation` for what the filter does then, and why).
+
     Raises
         :class:`OrderLifecycleRejected` (400) when an ``order_lifecycle_state`` value is
         outside the canonical 9. Never silently ignored - see
         :func:`resolve_lifecycle_state_filter`.
+
+        :class:`SignalEnvironmentRefused` (400) when an ``environment`` value is outside
+        ``BACKTEST``/``PAPER``/``LIVE``, for the same reason and with the same disposition.
     """
     limit = max(1, min(int(limit), SIGNAL_TRACE_PAGE_SIZE))
     offset = max(0, int(offset))
+
+    environments, unrecognised_environments = resolve_environment_filter(environment)
+    if unrecognised_environments:
+        raise SignalEnvironmentRefused(unrecognised_environments)
 
     states, unrecognised = resolve_lifecycle_state_filter(order_lifecycle_state)
     if unrecognised:
@@ -7001,7 +7772,29 @@ async def build_signal_trace_page(
 
     sb = await service._get_supabase(user)
     with_canonical = await signal_lifecycle_columns_supported(sb) if sb is not None else False
+    # The 010 verdict, asked once and cached, so the page can say where its environment
+    # labels came from and can refuse to pretend an unanswerable filter was answered.
+    with_environment = (
+        await signal_environment_columns_supported(sb) if sb is not None else False
+    )
 
+    if environments and not with_environment:
+        # The filter cannot be sent as a predicate, and neither of the two silent answers is
+        # honest - see :func:`_environment_degradation`. An EMPTY page that says so.
+        return _empty_signal_trace_page(
+            limit=limit,
+            offset=offset,
+            filters_active=True,
+            active_filters=("environment",),
+            lifecycle_state_source="canonical" if with_canonical else "legacy_status_map",
+            with_environment=False,
+            environments=environments,
+        )
+
+    # 010's ``environment`` / ``paper_session_id`` are already in SIGNAL_TRACE_COLUMNS
+    # (task 29.1). They are NOT stripped here: :meth:`SignalService.list_signals` asks the
+    # 010 probe and strips them for a database without that migration, so the decision is
+    # made once, at the statement, rather than twice with two chances to disagree.
     columns = SIGNAL_TRACE_COLUMNS
     canonical_filter: Tuple[str, ...] = ()
     legacy_state_filter: Tuple[str, ...] = ()
@@ -7034,6 +7827,8 @@ async def build_signal_trace_page(
                 active_filters=("order_lifecycle_state",),
                 lifecycle_state_source="legacy_status_map",
                 unsupported=unsupported,
+                with_environment=with_environment,
+                environments=environments,
             )
 
     # `side` is filtered on `decision`; see this section's header. Combined with an
@@ -7053,6 +7848,8 @@ async def build_signal_trace_page(
                 active_filters=("side", "decision"),
                 lifecycle_state_source="canonical" if with_canonical else "legacy_status_map",
                 unsupported=unsupported,
+                with_environment=with_environment,
+                environments=environments,
             )
     else:
         decision_filter = side_values or decision_values
@@ -7075,6 +7872,7 @@ async def build_signal_trace_page(
             ("date_to", _filter_values(date_to)),
             ("ml_type", _filter_values(ml_type)),
             ("search", _filter_values(search)),
+            ("environment", environments),
         )
         if values
     )
@@ -7098,13 +7896,15 @@ async def build_signal_trace_page(
         limit=limit + 1,
         offset=offset,
         columns=columns,
+        environment=environments or None,
     )
     rows = list(rows or [])
     has_more = len(rows) > limit
     page = rows[:limit]
+    items = [signal_trace_item(row) for row in page]
 
     return {
-        "signals": [signal_trace_item(row) for row in page],
+        "signals": items,
         "limit": limit,
         "offset": offset,
         "count": len(page),
@@ -7127,6 +7927,13 @@ async def build_signal_trace_page(
             ),
             "unsupported_lifecycle_states": [state.value for state in unsupported],
         },
+        # ── task 29.3: the environment label, and where it came from ──────────
+        "environment_source": ENVIRONMENT_SOURCE_COLUMN
+        if with_environment
+        else ENVIRONMENT_SOURCE_UNAVAILABLE,
+        "environment_filter": list(environments),
+        "count_by_environment": environment_counts(items),
+        "environment_degraded": _environment_degradation(with_environment, environments),
     }
 
 
@@ -7138,12 +7945,16 @@ def _empty_signal_trace_page(
     active_filters: Tuple[str, ...],
     lifecycle_state_source: str,
     unsupported: Tuple[OrderLifecycleState, ...] = (),
+    with_environment: bool = False,
+    environments: Tuple[str, ...] = (),
 ) -> Dict[str, Any]:
     """A page that is empty because the filter cannot match, without querying for it.
 
     Same envelope as :func:`build_signal_trace_page`, so Requirement 17.7's empty state
     reads one shape whether the emptiness came from the database or from the filter being
-    unanswerable.
+    unanswerable. ``count_by_environment`` is ``{}`` here for the same reason ``signals`` is
+    ``[]``: there is nothing to count, which is not the same statement as "you have none in
+    that environment" - ``environment_degraded`` is what distinguishes the two.
     """
     return {
         "signals": [],
@@ -7168,6 +7979,12 @@ def _empty_signal_trace_page(
             ),
             "unsupported_lifecycle_states": [state.value for state in unsupported],
         },
+        "environment_source": ENVIRONMENT_SOURCE_COLUMN
+        if with_environment
+        else ENVIRONMENT_SOURCE_UNAVAILABLE,
+        "environment_filter": list(environments),
+        "count_by_environment": {},
+        "environment_degraded": _environment_degradation(with_environment, environments),
     }
 
 
@@ -7733,8 +8550,356 @@ def _lifecycle_degradation(with_canonical: bool) -> Optional[Dict[str, Any]]:
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+#
+#  TASK 29.4 - the SUBSCRIBER-SAFE projection of one signal's detail
+#
+#  Spec: marketplace-subscriptions-paper-trading. Requirements 7.9, 23.2, 23.3
+#  (and 19.7's disclosure rule, applied to a REST body).
+#
+#  WHO THIS IS ABOUT, CONCRETELY
+#  -----------------------------
+#  A subscriber buys a Listing and runs the creator's strategy in their own
+#  Paper_Session. Every signal that session records is written with
+#  `user_id` = THE SUBSCRIBER (they ran it) and `strategy_id` = THE CREATOR'S
+#  strategy (they wrote it). So the caller who reads it is the owner of the
+#  SIGNAL and not the owner of the STRATEGY - and the full trace detail of
+#  that signal is a description of the creator's Protected_Logic: node ids,
+#  per-node indicator readings, ML inference output and risk-rule internals.
+#  Requirement 23.3 restricts exactly that reader to Requirement 23.2's field
+#  list, and Requirement 7.9 is why: a subscriber may run the strategy and
+#  may not see how it decides.
+#
+#  AN ALLOW-LIST, NEVER A DENY-LIST
+#  -------------------------------
+#  `SUBSCRIBER_SIGNAL_FIELDS` names what a non-owner MAY see, and
+#  `project_subscriber_signal` emits those keys and nothing else. The
+#  alternative - copying the owner's item and deleting the sensitive keys -
+#  fails the moment a field is added anywhere upstream: `to_public_dict` gains
+#  a member, `market_context` gains a key, `signal_trace_item` gains a column
+#  (this very task added two), and a deny-list discloses every one of them
+#  because nobody remembered to add it to the list. With an allow-list a new
+#  field is withheld BY OMISSION, which is the safe direction to be forgotten
+#  in.
+#
+#  THE KEY SET IS CONSTANT, WHICH IS WHAT REQUIREMENT 19.7 NEEDS
+#  ------------------------------------------------------------
+#  Every allow-listed key is present on every non-owner response, `None` where
+#  the fact does not apply. So a subscriber cannot tell a WITHHELD field from
+#  an ABSENT one, and - the part that matters - cannot infer anything about the
+#  strategy from the SHAPE of the answer: an ML strategy and a rule-based one
+#  produce byte-identical key sets, because neither carries an ML key at all.
+#  The same is true of the envelope: `trace`, `lifecycle_transitions` and
+#  `timeline` are omitted for every non-owner, always, rather than emptied for
+#  some of them (an empty `dag_nodes` would still say "this strategy has a
+#  DAG", and a present-but-empty `ml_inference` says whether an ML node ran).
+#
+#  THIS IS A READ RULE. IT NARROWS NOTHING THAT IS STORED
+#  -----------------------------------------------------
+#  Requirement 23.2's thirteen facts are RECORDED in full for every signal, and
+#  `paper_session_service._record_signal` deliberately hands the evaluator's own
+#  object to the recorder so that nothing is lost on the way in. The projection
+#  happens HERE, at the moment of reading, so the owner's audit trail keeps
+#  every field it always had and the restriction cannot destroy evidence.
+#
+#  WHERE THE ROLE COMES FROM (Requirement 21.1)
+#  -------------------------------------------
+#  `resolve_signal_viewer_role` compares the authenticated identity - the one
+#  `get_current_user` resolved from the bearer token, server-side - with
+#  `strategies.user_id` for the signal's own `strategy_id`, read through the
+#  caller's own RLS-scoped client. There is no request field of any kind in
+#  that decision: `routers/signal_trace.py` declares no `viewer_role`,
+#  `is_owner` or `role` query parameter, so there is nothing for a caller to
+#  claim. `build_signal_trace_detail`'s `viewer_role` argument exists for a
+#  caller that has ALREADY resolved ownership server-side (and for the tests
+#  that pin both branches); it is never fed from a request.
+#
+#  AND IT FAILS CLOSED
+#  ------------------
+#  No strategy row, a different `user_id`, an unreadable `strategies` table, an
+#  unidentifiable caller: all four are NOT-the-owner, so an ownership question
+#  that cannot be answered withholds rather than discloses. The single
+#  exception is documented on `resolve_signal_viewer_role` and is not a
+#  judgement call: with no database client at all there is no `strategies`
+#  table in the process and the row can only have come from
+#  `SignalService._local_signals`, which nothing but this process's own
+#  `create_signal` writes.
+#
+# ══════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+
+
+#: The two viewer roles this read path distinguishes. ``subscriber`` is Requirement 23.3's
+#: word for it; it is the role of EVERY non-owner, not only of a paying one, because the
+#: comparison the role is resolved from asks one question - "did you write this strategy?" -
+#: and a reader who did not gets the restricted view whatever their reason for asking.
+VIEWER_ROLE_OWNER = "owner"
+VIEWER_ROLE_SUBSCRIBER = "subscriber"
+VIEWER_ROLES: Tuple[str, ...] = (VIEWER_ROLE_OWNER, VIEWER_ROLE_SUBSCRIBER)
+
+#: Where strategy ownership is decided. One row, one column, read by the caller's own client.
+STRATEGY_OWNER_TABLE = "strategies"
+STRATEGY_OWNER_COLUMN = "user_id"
+
+#: Requirement 23.2's "signal source", as a CLOSED vocabulary rather than as a column.
+#:
+#: ``public.signals`` has two candidate "source" facts and neither can be handed to a
+#: subscriber as it stands: ``market_info.source_node_ids`` is the emitting ACTION node's
+#: identifier, which is Protected_Logic by definition (Requirement 23.3 excludes node-level
+#: trace detail), and ``worker_id`` is the owner's process identifier - not logic, but a
+#: fingerprint of their infrastructure and meaningless to the reader. What Requirement 23.2
+#: asks for that IS safe and IS meaningful is which runtime produced the signal, so that is
+#: what is reported, derived from the Execution_Environment and the deployment mode already
+#: on the record.
+SIGNAL_SOURCE_PAPER_SESSION = "PAPER_SESSION"
+SIGNAL_SOURCE_LIVE_DEPLOYMENT = "LIVE_DEPLOYMENT"
+SIGNAL_SOURCE_BACKTEST = "BACKTEST"
+SIGNAL_SOURCE_UNATTRIBUTED = "UNATTRIBUTED"
+
+#: Requirement 23.2's "safe reason where the signal was not executed", as a closed
+#: vocabulary. NOT ``risk_reason``: that column is free text written by the risk engine and
+#: routinely names the rule and the number it breached ("max drawdown 4.2% exceeded 4%"),
+#: which is a risk-rule internal and is excluded by name. These five words say WHERE the
+#: signal stopped and nothing about why the strategy would stop it.
+SAFE_REASON_RISK_REFUSED = "REFUSED_BEFORE_SUBMISSION"
+SAFE_REASON_REJECTED = "REJECTED"
+SAFE_REASON_FAILED = "EXECUTION_FAILED"
+SAFE_REASON_CANCELLED = "CANCELLED"
+SAFE_REASON_NOT_SUBMITTED = "NOT_YET_SUBMITTED"
+
+#: Requirement 23.2's field list, as the keys a non-owner's ``signal`` carries - and, by
+#: Requirement 23.3 ("only the fields listed in Criterion 2"), as an UPPER bound as much as a
+#: lower one. Fourteen facts, one key each.
+#:
+#: ``session_or_deployment_id`` is ONE key because Requirement 23.2 asks for one fact - "the
+#: Paper_Session or deployment identifier AS APPLICABLE". ``environment`` says which of the
+#: two it is, so nothing is lost by not spelling both: a ``PAPER`` signal has no
+#: ``deployment_id`` (Requirement 23.2, and task 29.2 leaves the column null) and a ``LIVE``
+#: one has no ``paper_session_id``.
+#:
+#: What is NOT here, and why each is missing rather than forgotten:
+#:   * ``indicators`` / ``market_info`` / ``ml_info`` - omitted ENTIRELY (Requirement 23.3);
+#:   * ``risk_reason``, ``drawdown_check``, ``exposure``, ``expected_loss``,
+#:     ``expected_reward`` - the risk-rule internals, named in the design as excluded;
+#:   * ``decision_metadata`` - the node closure and the risk verdict, i.e. the strategy;
+#:   * ``worker_id``, ``venue``, ``exchange_account_id``, ``exchange_id``, ``timeframe`` -
+#:     the owner's infrastructure and account attribution, which Requirement 23.2 does not
+#:     list;
+#:   * ``user_id`` - the reader already knows who they are, and on a subscriber's own signal
+#:     it is themselves;
+#:   * ``id`` - the caller supplied it in the path to ask this question, so echoing it adds
+#:     nothing, and Criterion 2 does not list it.
+SUBSCRIBER_SIGNAL_FIELDS: Tuple[str, ...] = (
+    "strategy_id",
+    "strategy_version",
+    "session_or_deployment_id",
+    "environment",
+    "generated_at",
+    "decision",
+    "symbol",
+    "side",
+    "quantity",
+    "price",
+    "order_lifecycle_state",
+    "order_id",
+    "signal_source",
+    "safe_reason",
+)
+
+
+def signal_source_of(item: Mapping[str, Any]) -> str:
+    """Which runtime produced this signal, from the closed vocabulary above.
+
+    The Execution_Environment first, because 010's column is the authoritative record of it
+    (Requirement 23.1). Then the deployment ``mode`` the record has always carried, so a
+    pre-010 row is still attributed rather than reported as unattributed. Neither reads a
+    node identifier.
+    """
+    environment = parse_execution_environment(_text(_pick(item, "environment")) or "")
+    if environment is ExecutionEnvironment.PAPER:
+        return SIGNAL_SOURCE_PAPER_SESSION
+    if environment is ExecutionEnvironment.LIVE:
+        return SIGNAL_SOURCE_LIVE_DEPLOYMENT
+    if environment is ExecutionEnvironment.BACKTEST:
+        return SIGNAL_SOURCE_BACKTEST
+
+    mode = (_text(_pick(item, "mode")) or "").strip().lower()
+    if mode == "paper":
+        return SIGNAL_SOURCE_PAPER_SESSION
+    if mode == "live":
+        return SIGNAL_SOURCE_LIVE_DEPLOYMENT
+    if mode == "backtest":
+        return SIGNAL_SOURCE_BACKTEST
+    return SIGNAL_SOURCE_UNATTRIBUTED
+
+
+def safe_reason_of(item: Mapping[str, Any]) -> Optional[str]:
+    """Requirement 23.2's safe reason, or ``None`` for a signal that WAS executed.
+
+    Derived from the Order_Lifecycle_State the row reports, plus the risk verdict as a
+    BOOLEAN. ``risk_passed`` is a verdict and not a rule internal - it says that a check
+    refused the signal, never which check or against what threshold - so the one place a
+    reason could disclose a strategy (the free-text ``risk_reason``) is not read at all.
+    """
+    state = normalise_lifecycle_state(_text(_pick(item, "order_lifecycle_state")))
+    if state is OrderLifecycleState.REJECTED:
+        if _flag(_pick(item, "risk_passed")) is False:
+            return SAFE_REASON_RISK_REFUSED
+        return SAFE_REASON_REJECTED
+    if state is OrderLifecycleState.FAILED:
+        return SAFE_REASON_FAILED
+    if state is OrderLifecycleState.CANCELLED:
+        return SAFE_REASON_CANCELLED
+    if state in (OrderLifecycleState.GENERATED, OrderLifecycleState.PENDING):
+        return SAFE_REASON_NOT_SUBMITTED
+    return None
+
+
+def project_subscriber_signal(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """One ``public.signals`` row as the fourteen fields a non-owner may see.
+
+    Built from :func:`signal_trace_item` - the OWNER's own projection - rather than from the
+    row directly, so the two views cannot disagree about a fact they both report: the
+    subscriber sees a strict SUBSET of what the owner sees, not a second rendering of the
+    same columns that could drift from it.
+
+    Every key in :data:`SUBSCRIBER_SIGNAL_FIELDS` is emitted, in that order, ``None`` where
+    the fact does not apply - see this section's header on why the key set is constant.
+
+    ``price`` is the execution price where the venue reported one and the decision price
+    (``market_info.price``, read by that one name) otherwise, which is Requirement 23.2's
+    "the price" for a signal that has not been filled yet. A price is market data, not
+    strategy logic.
+    """
+    item = signal_trace_item(row)
+    execution = item.get("execution") or {}
+    market = (item.get("decision_metadata") or {}).get("market_context") or {}
+
+    projected: Dict[str, Any] = {
+        "strategy_id": _text(_pick(item, "strategy_id")),
+        "strategy_version": _text(_pick(item, "strategy_version")),
+        "session_or_deployment_id": _text(_pick(item, "paper_session_id"))
+        or _text(_pick(item, "deployment_id")),
+        "environment": _text(_pick(item, "environment")),
+        "generated_at": _text(_pick(item, "generated_at")),
+        "decision": _text(_pick(item, "decision")),
+        "symbol": _text(_pick(item, "symbol")),
+        "side": _text(_pick(item, "side")),
+        "quantity": _number(_pick(item, "quantity")),
+        "price": _number(_pick(execution, "execution_price")),
+        "order_lifecycle_state": _text(_pick(item, "order_lifecycle_state")),
+        "order_id": _text(_pick(item, "order_id")),
+        "signal_source": signal_source_of(item),
+        "safe_reason": safe_reason_of(row),
+    }
+    if projected["price"] is None:
+        projected["price"] = _number(_pick(market, "price"))
+
+    # Belt and braces, and cheap: the emitted key set IS the allow-list, so a key added to
+    # the dict above without being declared cannot reach a subscriber, and a declared key
+    # that the dict forgot is emitted as None rather than silently missing.
+    return {name: projected.get(name) for name in SUBSCRIBER_SIGNAL_FIELDS}
+
+
+async def resolve_signal_viewer_role(sb: Any, user: Any, row: Mapping[str, Any]) -> str:
+    """``owner`` or ``subscriber`` for this caller and this signal. Decided server-side.
+
+    ONE comparison: the authenticated identity against ``strategies.user_id`` for the
+    signal's ``strategy_id``, read through the caller's own RLS-scoped client. No request
+    field participates (Requirement 21.1), and no claim from the row participates either -
+    ``signals.user_id`` says who RAN the strategy, which for a subscriber running a
+    purchased Listing is themselves.
+
+    FAILS CLOSED, IN FOUR OF FIVE CASES
+        An unidentifiable caller, a signal with no ``strategy_id``, a ``strategies`` row that
+        cannot be read, and a row whose ``user_id`` differs all resolve to
+        :data:`VIEWER_ROLE_SUBSCRIBER`. A no-row answer is the NORMAL one for a subscriber:
+        RLS on their own client does not admit the creator's ``strategies`` row, so the read
+        succeeds and returns nothing.
+
+    THE ONE EXEMPTION: NO DATABASE CLIENT AT ALL
+        ``sb is None`` means this process resolved no client, so there is no ``strategies``
+        table to consult, no RLS in force and no marketplace in play - and the row it is
+        about cannot have come from Postgres either. It came from
+        :attr:`SignalService._local_signals`, an in-process dict that only this process's own
+        ``create_signal`` writes and whose read is already scoped to the caller's own
+        ``user_id``. Withholding there would restrict an owner's own view of their own signal
+        on the strength of a lookup that was never possible, so the pre-29.4 answer stands.
+    """
+    viewer_id = _text(_pick(user, "id"))
+    strategy_id = _text(_pick(row, "strategy_id"))
+    if viewer_id is None or strategy_id is None:
+        return VIEWER_ROLE_SUBSCRIBER
+    if sb is None:
+        return VIEWER_ROLE_OWNER
+
+    try:
+        result = await _execute(
+            sb.table(STRATEGY_OWNER_TABLE)
+            .select(STRATEGY_OWNER_COLUMN)
+            .eq("id", strategy_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001 - an unanswerable question withholds
+        logger.warning(
+            "Strategy ownership for signal on strategy %s could not be read (%s); the trace "
+            "detail is served with the subscriber-safe projection (Requirement 23.3).",
+            strategy_id,
+            exc,
+        )
+        return VIEWER_ROLE_SUBSCRIBER
+
+    error = getattr(result, "error", None)
+    if error is not None:
+        logger.warning(
+            "Strategy ownership for signal on strategy %s could not be read (%s); the trace "
+            "detail is served with the subscriber-safe projection (Requirement 23.3).",
+            strategy_id,
+            error,
+        )
+        return VIEWER_ROLE_SUBSCRIBER
+
+    data = getattr(result, "data", None)
+    rows = data if isinstance(data, list) else ([data] if data else [])
+    if not rows:
+        return VIEWER_ROLE_SUBSCRIBER
+    owner_id = _text(_pick(rows[0], STRATEGY_OWNER_COLUMN))
+    return VIEWER_ROLE_OWNER if owner_id is not None and owner_id == viewer_id else (
+        VIEWER_ROLE_SUBSCRIBER
+    )
+
+
+def _subscriber_signal_trace_detail(
+    row: Mapping[str, Any], *, with_canonical: bool
+) -> Dict[str, Any]:
+    """The whole answer a non-owner gets: the allow-list, and what it is.
+
+    Four keys, the same four for every non-owner and every strategy.
+    ``lifecycle_state_source`` and ``degraded`` are retained from the owner's envelope
+    because they are facts about this DATABASE (whether 005b is applied), identical for every
+    reader and every strategy, and the reported execution status is coarser without 005b -
+    which a reader of an execution status is entitled to know. ``trace``,
+    ``lifecycle_transitions`` and ``timeline`` are absent: the first two describe the
+    strategy's own evaluation, and the third embeds ``indicators``, ``market_info`` and
+    ``risk_reason`` in its ``data`` members.
+    """
+    return {
+        "signal": project_subscriber_signal(row),
+        "viewer_role": VIEWER_ROLE_SUBSCRIBER,
+        "lifecycle_state_source": "canonical" if with_canonical else "legacy_status_map",
+        "degraded": _lifecycle_degradation(with_canonical),
+    }
+
+
 async def build_signal_trace_detail(
-    service: "SignalService", user: Any, signal_id: str
+    service: "SignalService",
+    user: Any,
+    signal_id: str,
+    *,
+    environment: Optional[Any] = None,
+    viewer_role: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """``GET /api/signal-trace/signals/{signal_id}``. Requirements 17.6, 16.7, 20.1-20.3.
 
@@ -7754,13 +8919,62 @@ async def build_signal_trace_detail(
           was read from;
         * ``lifecycle_transitions`` - Requirement 16.7's persisted history, chronological;
         * ``timeline`` - the pre-spec derived event list SignalTrace.jsx renders today.
+
+        A NON-OWNER gets a different, SMALLER answer - four keys, the fourteen fields of
+        Requirement 23.2 among them - see :func:`_subscriber_signal_trace_detail` and the
+        task 29.4 header above. The owner's five-plus-one keys are untouched by that
+        addition: an owner's view is exactly what it was.
+
+    ``environment`` is task 29.3's filter, applied as a predicate on the read (see
+    :meth:`SignalService.get_signal`). A signal that exists but is not in one of the named
+    environments answers as an unknown identifier does.
+
+    ``viewer_role`` is for a caller that has ALREADY resolved ownership server-side; ``None``
+    - what the router passes, because the router has no business taking a role from a request
+    - resolves it here through :func:`resolve_signal_viewer_role`.
+
+    Raises
+        :class:`SignalEnvironmentRefused` (400) for an environment value outside the three.
+        :class:`SignalEnvironmentFilterUnanswerable` (404) when the filter cannot be applied
+        because migration 010 is absent - before the row is read, so the answer is the same
+        for every identifier and every caller.
     """
-    row = await service.get_signal(user, signal_id)
+    environments, unrecognised_environments = resolve_environment_filter(environment)
+    if unrecognised_environments:
+        raise SignalEnvironmentRefused(unrecognised_environments)
+
+    sb = await service._get_supabase(user)
+    if environments and not await signal_environment_columns_supported(sb):
+        warn_signal_environment_columns_absent(
+            f"an environment filter {list(environments)} was requested on the trace detail "
+            f"for signal {signal_id}, and there is no environment column to answer it with"
+        )
+        raise SignalEnvironmentFilterUnanswerable(environments)
+
+    # The predicate is added to the read ONLY when a filter is active, so an unfiltered
+    # detail read is the same statement, with the same two ownership predicates, that it has
+    # always been.
+    row = (
+        await service.get_signal(user, signal_id, environment=list(environments))
+        if environments
+        else await service.get_signal(user, signal_id)
+    )
     if not row:
         return None
 
-    sb = await service._get_supabase(user)
     with_canonical = await signal_lifecycle_columns_supported(sb) if sb is not None else False
+
+    role = (
+        await resolve_signal_viewer_role(sb, user, row)
+        if viewer_role is None
+        else str(viewer_role)
+    )
+    if role != VIEWER_ROLE_OWNER:
+        # Requirements 7.9, 23.3: not the strategy's author, so not its internals. Nothing
+        # below this line runs - the engine record is not even read, because a trace store
+        # this caller may not see is not worth a lookup.
+        return _subscriber_signal_trace_detail(row, with_canonical=with_canonical)
+
     if not with_canonical:
         warn_signal_lifecycle_columns_absent(
             f"the trace detail for signal {signal_id} is reporting an Order_Lifecycle_State "
@@ -7892,7 +9106,14 @@ SIGNAL_TRACE_EXPORT_COLUMNS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("generated_at", ("generated_at",)),
     ("strategy_id", ("strategy_id",)),
     ("strategy_version", ("strategy_version",)),
+    # Task 29.3, and Requirement 23.4 read at the row level: every exported line carries
+    # its own Execution_Environment, so a spreadsheet cannot total a PAPER pnl and a LIVE
+    # one together without an environment column to group or filter by. ``paper_session_id``
+    # sits beside ``deployment_id`` because for a PAPER signal it is the applicable
+    # identifier and ``deployment_id`` is null (Requirement 23.2).
+    ("environment", ("environment",)),
     ("deployment_id", ("deployment_id",)),
+    ("paper_session_id", ("paper_session_id",)),
     ("exchange_account_id", ("exchange_account_id",)),
     ("venue", ("venue",)),
     ("mode", ("mode",)),
@@ -8046,6 +9267,7 @@ async def build_signal_trace_export(
     status: Optional[Any] = None,
     ml_type: Optional[str] = None,
     search: Optional[str] = None,
+    environment: Optional[Any] = None,
     max_rows: int = SIGNAL_TRACE_EXPORT_MAX_ROWS,
 ) -> Dict[str, Any]:
     """``GET /api/signal-trace/signals/export``. Requirement 17.1.
@@ -8105,6 +9327,7 @@ async def build_signal_trace_export(
             status=status,
             ml_type=ml_type,
             search=search,
+            environment=environment,
         )
         if first_page is None:
             first_page = page
@@ -8136,6 +9359,16 @@ async def build_signal_trace_export(
         "active_filters": list(first_page["active_filters"]),
         "lifecycle_state_source": first_page["lifecycle_state_source"],
         "degraded": first_page["degraded"],
+        # ── task 29.3 ──────────────────────────────────────────────────────────
+        # The three the list reports, carried onto the file. ``count_by_environment``
+        # is recomputed over the WHOLE export rather than copied from the first page:
+        # the first page's counts describe 100 signals and this file describes all of
+        # them, and a per-environment figure that silently covered only the first page
+        # would be exactly the unlabelled-mix Requirement 23.4 forbids, one level up.
+        "environment_source": first_page["environment_source"],
+        "environment_filter": list(first_page["environment_filter"]),
+        "count_by_environment": environment_counts(items),
+        "environment_degraded": first_page["environment_degraded"],
         "signals": items,
     }
 

@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Activity, Hexagon, Cpu, Layers, Link2,
   Shield, CreditCard, BookOpen, HelpCircle, Bell,
-  Zap, ExternalLink, LogOut, BarChart2
+  Zap, ExternalLink, LogOut, BarChart2, FlaskConical
 } from "lucide-react";
 import { C } from "./ui-legacy/primitives";
 import { api } from "../api";
@@ -15,6 +15,7 @@ export const NAV = [
   { id: "strategies",    lbl: "Strategies",       Icon: Layers,          g: "core" },
   { id: "backtest",      lbl: "Backtester",       Icon: BarChart2,       g: "core" },
   { id: "signal-trace",  lbl: "Signal Trace",     Icon: Activity,        g: "core" },
+  { id: "paper-trading", lbl: "Paper Trading",    Icon: FlaskConical,    g: "core" },
   { id: "marketplace",   lbl: "Marketplace",      Icon: Hexagon,         g: "core" },
   { id: "builder",       lbl: "Strategy Builder", Icon: Cpu,             g: "core" },
   { id: "exchange",      lbl: "Exchanges",        Icon: Link2,           g: "vault" },

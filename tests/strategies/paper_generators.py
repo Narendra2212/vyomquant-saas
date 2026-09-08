@@ -744,8 +744,17 @@ def fill_sequences(
         fills.append(
             {
                 "fill_event_id": f"fill-{index}-{quantity_ticks}",
-                # The `paper_fills.market_event_id` back-reference: the id of the
-                # `paper_market_events` row this fill was priced from.
+                # The `paper_fills.market_event_id` back-reference: the identity of the
+                # `paper_market_events` row this fill was priced from — its
+                # `source_event_id`, the value `uq_paper_market_event UNIQUE
+                # (session_id, source_event_id)` de-duplicates on, and NOT that row's
+                # database-generated primary key. That is the same identity production
+                # writes: `paper_simulator.submit_intent` and `check_resting_orders` both
+                # pass `_event_text(event, "source_event_id")` to `apply_fill`, and
+                # `paper_replay._flat_event` copies it into the event it reconstructs so a
+                # replay reproduces the column rather than diverging in it. Built with
+                # `source_event_id_for`, the feed's own identity function, so the generated
+                # value is well-formed rather than a shape only this module recognises.
                 "market_event_id": source_event_id_for(
                     EXCHANGES[0],
                     symbol,

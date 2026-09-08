@@ -40,6 +40,7 @@ import json
 import os
 import sys
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 from unittest.mock import patch
 
@@ -106,6 +107,9 @@ def clear_overrides():
 # ─── Shared strategy IDs ──────────────────────────────────────────────────────
 
 STRATEGY_UUID = str(uuid.uuid4())
+# The single saved, immutable Strategy_Version every eligible Backtest_Evidence row references
+# (Requirement 3.3 — one version across the whole evidence set, checked by EV_ONE_VERSION).
+VERSION_UUID = str(uuid.uuid4())
 
 
 # ─── In-memory fake database ──────────────────────────────────────────────────
@@ -179,6 +183,10 @@ class FakeTable:
         self._upsert_conflict = conflict
         return self
 
+    def delete(self) -> "FakeTable":
+        self._op = "delete"
+        return self
+
     def execute(self):
         # --- INSERT ---
         if self._op == "insert":
@@ -233,6 +241,13 @@ class FakeTable:
                     row.update(self._op_data)
             return _Resp(result)
 
+        # --- DELETE ---
+        if self._op == "delete":
+            ids = {id(r) for r in result}
+            survivors = [r for r in self._rows if id(r) not in ids]
+            self._rows[:] = survivors
+            return _Resp(result)
+
         # --- SELECT ---
         if self._single:
             if not result:
@@ -256,9 +271,20 @@ class FakeDB:
             "library_strategies": [],
             "library_ratings": [],
             "profiles": [],
+            # Task 14.1/14.4 submission flow: the Eligibility_Gate's four reads and the
+            # submission_service's writes land in these tables.
+            "strategy_versions": [],
+            "strategy_backtests": [],
+            "marketplace_submissions": [],
+            "marketplace_backtest_evidence": [],
+            "marketplace_submission_transitions": [],
         }
 
     def table(self, name: str) -> FakeTable:
+        # Any table the production code touches must resolve to a store; a KeyError here
+        # would be a missing seed rather than a genuine test outcome.
+        if name not in self.stores:
+            self.stores[name] = []
         return FakeTable(self.stores[name])
 
 
@@ -300,6 +326,213 @@ def _approved_lib_row(lib_id: str, author_id: str, source_id: str) -> dict:
     row["moderation_status"] = "approved"
     row["moderated_by"] = ADMIN_ID
     return row
+
+
+def _entitling_subscription_row(subscriber_id: str) -> dict:
+    """One `library_subscriptions` row that entitles ``subscriber_id`` right now (task 17.1).
+
+    The Entitlement_Resolver's conditions for reason ``SUBSCRIBED``, and only those: the row is
+    the caller's own (``user_id``), its persisted status is the lowercase ``'active'``
+    ``library_subscriptions.status`` text, and its ``period_expiry`` is in the future. The expiry
+    check is sweep-independent (Requirement 11.7), so a future instant is what makes it entitling
+    — the ``status`` label alone is never enough.
+    """
+    return {
+        "id": str(uuid.uuid4()),
+        "user_id": subscriber_id,
+        "status": "active",
+        "period_expiry": (
+            datetime.now(timezone.utc) + timedelta(days=30)
+        ).isoformat(),
+    }
+
+
+def _cloneable_lib_row(
+    lib_id: str,
+    author_id: str,
+    source_id: str,
+    *,
+    subscriber_id: Optional[str] = None,
+    source_cloning_enabled: bool = True,
+    submission_state: str = "PUBLISHED",
+) -> dict:
+    """An approved listing row as **both** readers of it see it during a clone (task 17.2).
+
+    ``clone_strategy`` reads the flat columns (``is_active``, ``moderation_status``,
+    ``clone_count``, ``author_id``, ``source_strategy_id``, ``name``,
+    ``source_cloning_enabled``); the Entitlement_Resolver reads ``author_id``,
+    ``source_strategy_id`` and the two **embedded** collections its one round trip selects
+    (``marketplace_submissions(submission_state)`` and
+    ``library_subscriptions(id,user_id,status,period_expiry)``). ``FakeTable.select`` is a no-op,
+    so the embeds live on the row exactly as PostgREST returns them — the same shape
+    ``tests/property/test_protected_logic_containment.py`` builds for P-48.
+
+    ``source_cloning_enabled=False`` reproduces the **default** state: migration 007 adds the
+    column defaulted ``FALSE``, so a listing whose owner has never called
+    ``PATCH /api/library/{id}/settings`` is not cloneable (Requirements 7.3, 7.4).
+    """
+    row = _approved_lib_row(lib_id, author_id, source_id)
+    row["source_cloning_enabled"] = source_cloning_enabled
+    row["marketplace_submissions"] = [{"submission_state": submission_state}]
+    row["library_subscriptions"] = (
+        [] if subscriber_id is None else [_entitling_subscription_row(subscriber_id)]
+    )
+    return row
+
+
+def _open_submission_row(
+    source_id: str,
+    owner_id: str,
+    state: str = "SUBMITTED",
+    *,
+    submission_id: Optional[str] = None,
+) -> dict:
+    """One ``marketplace_submissions`` row for a listing's ``source_strategy_id`` (task 14.4/14.5).
+
+    This is the row ``admin_moderate_strategy``'s narrowing guard
+    (``_current_submission_state_for_listing``) reads to decide whether the retained PATCH route
+    may accept a ``moderation_status`` (task 14.5), and it is also the row the six admin
+    submission actions of task 14.4 transition. It carries the minimum columns those two paths
+    read: the identity/ownership columns, the authoritative ``submission_state`` and a
+    ``created_at`` for the "most recent" tie-break in the guard.
+    """
+    return {
+        "id": submission_id or str(uuid.uuid4()),
+        "source_strategy_id": source_id,
+        "owner_id": owner_id,
+        "version_id": VERSION_UUID,
+        "listing_id": None,
+        "submission_state": state,
+        "rejection_reason": None,
+        "reviewed_by": None,
+        "reviewed_at": None,
+        "submitted_at": "2026-07-01T00:00:00+00:00",
+        "published_at": None,
+        "created_at": "2026-07-01T00:00:00+00:00",
+        "updated_at": "2026-07-01T00:00:00+00:00",
+    }
+
+
+# ─── Submission-flow row builders (task 14.1/14.4 Eligibility_Gate) ────────────
+#
+# These build the rows the Eligibility_Gate reads in its four owner-scoped round trips so that
+# every criterion of Requirements 2 and 3 passes and the strategy is *admitted*. The gate
+# derives nothing from ``strategies.backtest_result`` (task 14.10); admission rests entirely on
+# the three ``strategy_backtests`` rows referenced by ``backtest_ids`` plus the saved version.
+
+
+def _saved_version_row(strategy_id: str, version_id: str = VERSION_UUID) -> dict:
+    """One saved, non-draft, VALID Strategy_Version — satisfies MP_VERSION_EXISTS/VALID (Req 2.3)."""
+    return {
+        "id": version_id,
+        "strategy_id": strategy_id,
+        "version": 1,
+        "is_draft": False,
+        # A persisted VALID verdict is the cheapest way _version_graph_is_valid admits a
+        # version (it never has to load the graph), matching Requirement 2.3's reuse of the
+        # Strategy_Builder's own structural validation.
+        "validation_state": "VALID",
+        "blueprint": {"nodes": [{"type": "action", "label": "BUY"}]},
+        "graph_json": {"nodes": [{"type": "action", "label": "BUY"}]},
+    }
+
+
+def _eligible_backtest_row(
+    backtest_id: str,
+    owner_id: str,
+    strategy_id: str,
+    *,
+    start_date: str,
+    end_date: str,
+    dataset: str,
+    dataset_checksum: str,
+    version_id: str = VERSION_UUID,
+) -> dict:
+    """One completed ``strategy_backtests`` row that passes every EV_* and MP_* criterion.
+
+    Windows are >= 90 inclusive days (EV_DURATION), trades >= 20 (EV_TRADES), bars >= 50
+    (EV_BARS), every Requirement 3.4 parameter is recorded and numeric (EV_PARAMS), all seven
+    Requirement 2.6 metrics are present and finite (MP_METRICS_COMPLETE), and each row carries a
+    different ``dataset``/``dataset_checksum`` so every pair is distinct (EV_DISTINCT/EV_CHECKSUMS).
+    """
+    return {
+        "id": backtest_id,
+        "user_id": owner_id,
+        "strategy_id": strategy_id,
+        "version_id": version_id,
+        "status": "completed",
+        "completed_at": "2026-06-01T00:00:00+00:00",
+        "error_message": None,
+        "dataset": dataset,
+        "start_date": start_date,
+        "end_date": end_date,
+        "initial_capital": 10000,
+        "commission": 0.001,
+        "slippage": 0.0005,
+        "dataset_checksum": dataset_checksum,
+        "dag_hash": "dag-" + backtest_id[:8],
+        "total_trades": 120,
+        "executed_bar_count": 500,
+        # The seven display metrics of Requirement 2.6 (MP_METRICS_COMPLETE reads these):
+        "total_return_pct": 42.5,
+        "sharpe_ratio": 1.8,
+        "max_drawdown": -5.2,
+        "win_rate": 61.0,
+        "profit_factor": 1.7,
+        "final_capital": 14250.0,
+    }
+
+
+def _three_eligible_backtests(owner_id: str, strategy_id: str) -> list:
+    """Three eligible, pairwise-distinct Backtest_Evidence rows (Requirement 3.1's minimum)."""
+    return [
+        _eligible_backtest_row(
+            str(uuid.uuid4()), owner_id, strategy_id,
+            start_date="2024-01-01", end_date="2024-06-30",
+            dataset="BTCUSD-2024H1", dataset_checksum="chk-btc-h1",
+        ),
+        _eligible_backtest_row(
+            str(uuid.uuid4()), owner_id, strategy_id,
+            start_date="2024-07-01", end_date="2024-12-31",
+            dataset="ETHUSD-2024H2", dataset_checksum="chk-eth-h2",
+        ),
+        _eligible_backtest_row(
+            str(uuid.uuid4()), owner_id, strategy_id,
+            start_date="2023-01-01", end_date="2023-06-30",
+            dataset="SOLUSD-2023H1", dataset_checksum="chk-sol-h1",
+        ),
+    ]
+
+
+def _seed_eligible_submission(db, owner_id: str, strategy_id: str) -> list:
+    """Seed a strategy's saved version and three eligible backtests; return their ids.
+
+    Leaves ``marketplace_submissions`` and ``library_strategies`` empty for this strategy, so
+    MP_SUBMISSION_OPEN passes (no open Submission, no PUBLISHED Listing) and the Eligibility_Gate
+    admits. The returned ids are exactly what a ``POST /api/library/submissions`` body carries.
+    """
+    db.stores["strategy_versions"].append(_saved_version_row(strategy_id))
+    rows = _three_eligible_backtests(owner_id, strategy_id)
+    db.stores["strategy_backtests"].extend(rows)
+    return [r["id"] for r in rows]
+
+
+class _NoopAuditLogger:
+    """A stand-in for the strategy audit logger used only in the submission-flow tests.
+
+    The Eligibility_Gate writes one audit record on every evaluation via
+    ``record_or_raise`` (Requirement 2.11), which in a live process pushes to Redis. There is
+    no Redis in this test environment — exactly as there is no Supabase — so this double keeps
+    the audit write a no-op, isolating the tests from infrastructure the same way ``FakeDB``
+    isolates them from the database. It asserts nothing about auditing; that is covered by the
+    gate's own unit tests.
+    """
+
+    async def record_or_raise(self, *args, **kwargs):
+        return None
+
+    async def log(self, *args, **kwargs):
+        return None
 
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -357,6 +590,22 @@ def patched_db(db):
         yield db
 
 
+@pytest.fixture
+def patched_audit():
+    """Replace the strategy audit logger with an in-process no-op for submission-flow tests.
+
+    ``eligibility_gate.evaluate`` (via ``record_or_raise``) and
+    ``submission_service.create_submission`` both fetch the singleton logger through
+    ``backend_app.core.audit_trail.get_strategy_audit_logger``; patching it there covers both
+    call sites without touching production code.
+    """
+    with patch(
+        "backend_app.core.audit_trail.get_strategy_audit_logger",
+        return_value=_NoopAuditLogger(),
+    ):
+        yield
+
+
 @pytest.fixture(autouse=True)
 def reset_overrides():
     """Ensures dependency overrides are cleared after every test."""
@@ -371,11 +620,43 @@ def reset_overrides():
 import asyncio
 
 
+def _run_coroutine(coro):
+    """Run ``coro`` to completion **without leaving the thread without an event loop**.
+
+    Not ``asyncio.get_event_loop().run_until_complete(...)``: that is deprecated and raises
+    ``RuntimeError: There is no current event loop in thread 'MainThread'`` when an earlier
+    module in the same session left the thread with no current loop (``asyncio.run`` does
+    exactly that — it closes its loop and then calls ``set_event_loop(None)``). And not
+    ``asyncio.run`` either, for the same reason in reverse: it would break the neighbours that
+    still use the deprecated call.
+
+    Lifted from ``tests/test_checkout_service.py::_run`` (itself lifted from
+    ``tests/test_marketplace_checkout_regression.py::_run_coroutine``), which is where the
+    reasoning was first recorded: the loop that was current is put back, or a fresh usable one
+    installed, before returning.
+    """
+    try:
+        previous = asyncio.get_event_loop_policy().get_event_loop()
+    except RuntimeError:
+        previous = None
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+        if previous is not None and not previous.is_closed():
+            asyncio.set_event_loop(previous)
+        else:
+            asyncio.set_event_loop(asyncio.new_event_loop())
+
+
 class TestGetAdminUserP01Regression:
     """Confirm the P0-1 fix is in place: get_admin_user reads app_metadata.role."""
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return _run_coroutine(coro)
 
     def test_admin_via_app_metadata_allowed(self):
         user = {
@@ -436,31 +717,50 @@ class TestMarketplacePipeline:
     without needing live JWT/Supabase authentication, exactly as test_admin_auth.py does.
     """
 
-    def test_01_publish_strategy(self, patched_db):
-        """User-author publishes a valid strategy; it lands in 'pending'."""
+    def test_01_submit_strategy_with_three_backtests(self, patched_db, patched_audit):
+        """Owner publishes via POST /api/library/submissions with three backtest ids (task 14.10).
+
+        The publish path is no longer ``POST /api/library`` admitting on one
+        ``strategies.backtest_result`` blob and returning ``suggested_price``/``eval_score``. It
+        is the Eligibility_Gate flow: three completed, distinct Backtest_Evidence runs of a
+        saved version. On admission a ``marketplace_submissions`` row is created and advanced to
+        SUBMITTED (Requirements 2.12, 3.1); nothing about a price or an evaluation score is
+        returned.
+        """
+        backtest_ids = _seed_eligible_submission(patched_db, AUTHOR_ID, STRATEGY_UUID)
         with_user(AUTHOR_USER)
+
         resp = client.post(
-            "/api/library",
-            json={
-                "strategy_id": STRATEGY_UUID,
-                "description": "A solid momentum play.",
-                "category": "momentum",
-                "difficulty": "intermediate",
-                "tags": ["crypto", "btc"],
-            },
+            "/api/library/submissions",
+            json={"strategy_id": STRATEGY_UUID, "backtest_ids": backtest_ids},
             headers={"Authorization": "Bearer test-token"},
         )
         assert resp.status_code == 201, resp.text
         body = resp.json()
-        assert "library_id" in body
-        assert body["moderation_status"] == "pending"
 
-        # DB reflects pending status
-        lib_rows = patched_db.stores["library_strategies"]
-        assert len(lib_rows) == 1
-        assert lib_rows[0]["moderation_status"] == "pending"
-        assert lib_rows[0]["is_active"] is True
-        assert lib_rows[0]["author_id"] == AUTHOR_ID
+        # The response is a Submission identifier and its state — not suggested_price/eval_score.
+        assert "submission_id" in body
+        assert body["submission_state"] == "SUBMITTED"
+        assert "suggested_price" not in body
+        assert "eval_score" not in body
+        assert "evaluation_score" not in body
+
+        # DB reflects the created Submission, advanced to SUBMITTED and owned by the author.
+        subs = patched_db.stores["marketplace_submissions"]
+        assert len(subs) == 1
+        assert subs[0]["submission_state"] == "SUBMITTED"
+        assert subs[0]["owner_id"] == AUTHOR_ID
+        assert subs[0]["source_strategy_id"] == STRATEGY_UUID
+
+        # The immutable evidence copy carries one row per referenced backtest (Requirement 3.9).
+        evidence = patched_db.stores["marketplace_backtest_evidence"]
+        assert len(evidence) == len(backtest_ids) == 3
+        # The DRAFT->SUBMITTED transition was recorded (Requirement 4.13).
+        transitions = patched_db.stores["marketplace_submission_transitions"]
+        assert any(
+            t["from_state"] == "DRAFT" and t["to_state"] == "SUBMITTED"
+            for t in transitions
+        )
 
     def test_02_admin_pending_queue_shows_published_strategy(self, patched_db):
         """Admin pending queue returns the newly published strategy."""
@@ -489,15 +789,33 @@ class TestMarketplacePipeline:
         )
         assert resp.status_code == 403
 
-    def test_04_admin_approves_strategy(self, patched_db):
-        """Admin moderates a pending strategy to 'approved'."""
+    def test_04_admin_approves_strategy(self, patched_db, patched_audit):
+        """Admin approves via the submission action; the legacy PATCH cannot (task 14.5/14.4).
+
+        The lifecycle move is no longer ``PATCH /api/library/admin/{id}`` writing
+        ``moderation_status='approved'`` directly. ``admin_moderate_strategy`` is narrowed
+        (task 14.5): for a listing whose open Submission projects a different
+        ``moderation_status`` than the one supplied, the retained PATCH refuses with 409
+        ``MARKETPLACE_USE_SUBMISSION_ACTIONS`` — it can no longer move the effective lifecycle
+        behind the state machine's back (Requirements 4.2, 4.12). Approval now runs through the
+        task-14.4 admin action ``POST /api/library/admin/submissions/{id}/approve``, which walks
+        ``SUBMITTED → UNDER_REVIEW → APPROVED`` and records each edge (Requirement 4.13).
+        """
         lib_id = str(uuid.uuid4())
+        sub_id = str(uuid.uuid4())
         patched_db.stores["library_strategies"].append(
             _pending_lib_row(lib_id, AUTHOR_ID, STRATEGY_UUID)
         )
+        # The listing has an open Submission in SUBMITTED — its projected moderation_status is
+        # 'pending' (MODERATION_STATUS_FOR_STATE[SUBMITTED]).
+        patched_db.stores["marketplace_submissions"].append(
+            _open_submission_row(STRATEGY_UUID, AUTHOR_ID, "SUBMITTED", submission_id=sub_id)
+        )
         with_user(ADMIN_USER)
 
-        resp = client.patch(
+        # The retained PATCH may NOT drive the lifecycle: 'approved' disagrees with the open
+        # Submission's projected 'pending', so it is refused with 409 (the core of task 14.5).
+        refused = client.patch(
             f"/api/library/admin/{lib_id}",
             json={
                 "moderation_status": "approved",
@@ -505,30 +823,75 @@ class TestMarketplacePipeline:
             },
             headers={"Authorization": "Bearer test-token"},
         )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["moderation_status"] == "approved"
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["error"]["code"] == "MARKETPLACE_USE_SUBMISSION_ACTIONS"
+        # The refusal changed nothing: the Submission is still SUBMITTED.
+        assert patched_db.stores["marketplace_submissions"][0]["submission_state"] == "SUBMITTED"
 
-        # DB row updated
-        row = patched_db.stores["library_strategies"][0]
-        assert row["moderation_status"] == "approved"
-        assert row["moderated_by"] == ADMIN_ID
-
-    def test_05_pending_queue_empty_after_approval(self, patched_db):
-        """After approval, admin pending queue returns empty list."""
-        lib_id = str(uuid.uuid4())
-        row = _pending_lib_row(lib_id, AUTHOR_ID, STRATEGY_UUID)
-        patched_db.stores["library_strategies"].append(row)
-        with_user(ADMIN_USER)
-
-        # Approve it
-        client.patch(
-            f"/api/library/admin/{lib_id}",
-            json={"moderation_status": "approved"},
+        # Approval runs through the task-14.4 submission action instead.
+        approved = client.post(
+            f"/api/library/admin/submissions/{sub_id}/approve",
             headers={"Authorization": "Bearer test-token"},
         )
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["submission_state"] == "APPROVED"
 
-        # Pending queue must now be empty
+        # The Submission row advanced to APPROVED, and both edges of the two-step were recorded.
+        sub_row = patched_db.stores["marketplace_submissions"][0]
+        assert sub_row["submission_state"] == "APPROVED"
+        transitions = patched_db.stores["marketplace_submission_transitions"]
+        assert any(
+            t["from_state"] == "SUBMITTED" and t["to_state"] == "UNDER_REVIEW"
+            for t in transitions
+        )
+        assert any(
+            t["from_state"] == "UNDER_REVIEW" and t["to_state"] == "APPROVED"
+            for t in transitions
+        )
+
+    def test_05_pending_queue_empty_after_approval(self, patched_db, patched_audit):
+        """After the Submission is published, the admin pending queue is empty (task 14.4).
+
+        The pending queue reads ``library_strategies.moderation_status == 'pending'``. The
+        listing leaves that queue only once its Submission reaches ``PUBLISHED``, whose projected
+        value is ``'approved'`` (``MODERATION_STATUS_FOR_STATE[PUBLISHED]``); an ``APPROVED``
+        Submission still projects ``'pending'`` and stays in the queue (Requirement 4.7). The
+        lifecycle move now runs through the task-14.4 admin actions
+        (``approve`` then ``publish``), not the narrowed PATCH.
+        """
+        lib_id = str(uuid.uuid4())
+        sub_id = str(uuid.uuid4())
+        row = _pending_lib_row(lib_id, AUTHOR_ID, STRATEGY_UUID)
+        patched_db.stores["library_strategies"].append(row)
+        patched_db.stores["marketplace_submissions"].append(
+            _open_submission_row(STRATEGY_UUID, AUTHOR_ID, "SUBMITTED", submission_id=sub_id)
+        )
+        with_user(ADMIN_USER)
+
+        # Drive the Submission SUBMITTED → APPROVED → PUBLISHED via the admin actions.
+        approve = client.post(
+            f"/api/library/admin/submissions/{sub_id}/approve",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert approve.status_code == 200, approve.text
+        publish = client.post(
+            f"/api/library/admin/submissions/{sub_id}/publish",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert publish.status_code == 200, publish.text
+        assert publish.json()["submission_state"] == "PUBLISHED"
+
+        # In production the AFTER-UPDATE trigger trg_submission_projects_moderation_status
+        # projects MODERATION_STATUS_FOR_STATE[PUBLISHED] == 'approved' onto the listing. The
+        # in-memory FakeDB has no triggers, so apply that same one shared projection here — this
+        # is the projection under test, not an independent write.
+        from backend_app.backend.marketplace.submission_state import (
+            MODERATION_STATUS_FOR_STATE,
+            SubmissionState,
+        )
+        row["moderation_status"] = MODERATION_STATUS_FOR_STATE[SubmissionState.PUBLISHED]
+
+        # Pending queue must now be empty.
         resp = client.get(
             "/api/library/admin/pending",
             headers={"Authorization": "Bearer test-token"},
@@ -549,16 +912,48 @@ class TestMarketplacePipeline:
         resp = client.get("/api/library")
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        returned_ids = {s["id"] for s in body["items"]}
+        # The catalogue now returns the public projection (task 16.2), which represents the
+        # Listing id as `listing_id` and never leaks `id`/`author_id` (Requirements 6.1, 6.2).
+        returned_ids = {s["listing_id"] for s in body["items"]}
         assert approved_id in returned_ids
         assert pending_id not in returned_ids
 
     def test_07_clone_approved_strategy_succeeds(self, patched_db):
-        """A different user (user-cloner) can clone an approved strategy."""
+        """A different user (user-cloner) can clone an approved strategy (task 17.2/17.8).
+
+        Cloning copies the owner's Protected_Logic into a row the caller owns, so it now takes
+        **two** owner-side conditions, not one: the owner's explicit consent
+        (``library_strategies.source_cloning_enabled``, Requirements 7.3, 7.4 — added by
+        migration 007 defaulted ``FALSE``) *and* an entitling Subscription resolved by
+        ``entitlement_resolver.resolve`` (Requirement 7.2). The fixture therefore sets both, and
+        seeds the saved Strategy_Version the resolver requires ``source_strategy_id`` to resolve
+        to (Requirement 7.11).
+
+        The reason is asserted directly against the resolver first, so this test's premise —
+        "the cloner is entitled" — is established by the single admission decision itself rather
+        than assumed from a 201.
+        """
         lib_id = str(uuid.uuid4())
         patched_db.stores["library_strategies"].append(
-            _approved_lib_row(lib_id, AUTHOR_ID, STRATEGY_UUID)
+            _cloneable_lib_row(
+                lib_id, AUTHOR_ID, STRATEGY_UUID, subscriber_id=CLONER_ID
+            )
         )
+        # The Listing's backing strategy must resolve to a saved, non-draft Strategy_Version or
+        # the resolver answers LISTING_UNAVAILABLE (409) rather than SUBSCRIBED.
+        patched_db.stores["strategy_versions"].append(_saved_version_row(STRATEGY_UUID))
+
+        # Premise check: the fixture is entitling, with reason SUBSCRIBED.
+        from backend_app.backend.marketplace import entitlement_resolver
+
+        entitlement = _run_coroutine(
+            entitlement_resolver.resolve(
+                {"id": CLONER_ID}, lib_id, patched_db, datetime.now(timezone.utc)
+            )
+        )
+        assert entitlement.entitling is True
+        assert entitlement.reason is entitlement_resolver.EntitlementReason.SUBSCRIBED
+
         with_user(CLONER_USER)
 
         resp = client.post(
@@ -581,6 +976,59 @@ class TestMarketplacePipeline:
         )
         assert clone_marker is not None
         assert clone_marker["is_verified_clone"] is True
+
+    def test_07b_clone_refused_when_source_cloning_is_disabled(self, patched_db):
+        """The default-disabled owner-consent path refuses the clone (task 17.2/17.8).
+
+        The companion to test 07: identical fixture in every respect *except* that
+        ``source_cloning_enabled`` carries its migration-007 default of ``FALSE`` — the state
+        every Listing is in until its owner calls ``PATCH /api/library/{id}/settings``. The
+        cloner still holds the same entitling Subscription, so this isolates the consent gate
+        from the entitlement gate: consent alone is enough to refuse (Requirement 7.3).
+
+        The refusal is 403 ``MARKETPLACE_CLONING_DISABLED`` and it happens **before anything is
+        written** (Requirement 7.4): no ``strategies`` row is created, ``clone_count`` is
+        unchanged, and no verified-clone marker appears in ``library_ratings``.
+        """
+        lib_id = str(uuid.uuid4())
+        patched_db.stores["library_strategies"].append(
+            _cloneable_lib_row(
+                lib_id,
+                AUTHOR_ID,
+                STRATEGY_UUID,
+                subscriber_id=CLONER_ID,
+                source_cloning_enabled=False,
+            )
+        )
+        patched_db.stores["strategy_versions"].append(_saved_version_row(STRATEGY_UUID))
+
+        # The only seeded strategy is the author's own; a refused clone must not add to it.
+        strategies_before = len(patched_db.stores["strategies"])
+        with_user(CLONER_USER)
+
+        resp = client.post(
+            f"/api/library/{lib_id}/clone",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["error"]["code"] == "MARKETPLACE_CLONING_DISABLED"
+
+        # No `strategies` row created — neither a clone of this listing nor any other row.
+        assert len(patched_db.stores["strategies"]) == strategies_before
+        assert not [
+            s
+            for s in patched_db.stores["strategies"]
+            if str(s.get("source_library_id")) == lib_id
+        ]
+
+        # clone_count unchanged, and no verified-clone marker written.
+        lib_row = patched_db.stores["library_strategies"][0]
+        assert lib_row["clone_count"] == 0
+        assert not [
+            r
+            for r in patched_db.stores["library_ratings"]
+            if str(r.get("library_id")) == lib_id
+        ]
 
     def test_08_self_clone_prevented(self, patched_db):
         """Author cannot clone their own published strategy (409 Conflict)."""
@@ -698,108 +1146,151 @@ class TestMarketplacePipeline:
         )
         assert clone_resp.status_code == 404
 
-    def test_14_publish_duplicate_rejected(self, patched_db):
-        """Publishing the same strategy twice is rejected with 409."""
-        lib_id = str(uuid.uuid4())
-        # Already has an active publication
-        patched_db.stores["library_strategies"].append(
+    def test_14_submit_with_open_submission_rejected(self, patched_db, patched_audit):
+        """Submitting a strategy that already has an open Submission is refused (task 14.10).
+
+        Publishing the same strategy twice is now caught by the Eligibility_Gate's
+        MP_SUBMISSION_OPEN criterion (Requirement 2.7): an existing open Submission for the
+        strategy means the gate does not admit, so the response is a 422 eligibility failure
+        naming MP_SUBMISSION_OPEN and NO second ``marketplace_submissions`` row is created.
+        """
+        backtest_ids = _seed_eligible_submission(patched_db, AUTHOR_ID, STRATEGY_UUID)
+        # An open Submission already occupies the one-open-Submission-per-strategy slot.
+        patched_db.stores["marketplace_submissions"].append(
             {
-                "id": lib_id,
+                "id": str(uuid.uuid4()),
                 "source_strategy_id": STRATEGY_UUID,
-                "is_active": True,
-                "moderation_status": "pending",
+                "owner_id": AUTHOR_ID,
+                "submission_state": "SUBMITTED",
             }
         )
         with_user(AUTHOR_USER)
 
         resp = client.post(
-            "/api/library",
-            json={
-                "strategy_id": STRATEGY_UUID,
-                "description": "Duplicate attempt",
-                "category": "momentum",
-                "difficulty": "beginner",
-                "tags": [],
-            },
+            "/api/library/submissions",
+            json={"strategy_id": STRATEGY_UUID, "backtest_ids": backtest_ids},
             headers={"Authorization": "Bearer test-token"},
         )
-        assert resp.status_code == 409, resp.text
+        assert resp.status_code == 422, resp.text
+        body = resp.json()
+        assert body["error"]["code"] == "MARKETPLACE_ELIGIBILITY_FAILED"
+        assert "MP_SUBMISSION_OPEN" in body["error"]["details"]["failures"]
 
-    def test_15_publish_strategy_without_backtest_rejected(self, patched_db):
-        """publish_strategy rejects strategies with no backtest_result (400)."""
+        # No new Submission was created — the pre-seeded open one is the only row.
+        assert len(patched_db.stores["marketplace_submissions"]) == 1
+
+    def test_15_submit_without_valid_backtest_evidence_rejected(self, patched_db, patched_audit):
+        """A submission whose referenced runs are not valid evidence is refused (task 14.10).
+
+        The old ``publish_strategy`` admitted on one ``strategies.backtest_result`` blob and
+        rejected only its absence. The new flow admits on three completed, owner-scoped
+        ``strategy_backtests`` runs; a strategy with a saved version but whose referenced runs
+        do not exist as the owner's completed runs is refused by the Eligibility_Gate with a 422
+        naming the failed criteria (Requirements 2.4, 2.5, 3.1) — and NO Submission is created.
+        """
         no_bt_id = str(uuid.uuid4())
         patched_db.stores["strategies"].append(
             {
                 "id": no_bt_id,
                 "user_id": AUTHOR_ID,
-                "name": "No Backtest",
+                "name": "No Valid Evidence",
                 "symbol": "ETH/USD",
                 "timeframe": "1d",
                 "exchange_id": "binance",
-                "buy_logic": json.dumps({"nodes": [{"type": "action"}]}),
-                "sell_logic": json.dumps({"nodes": []}),
-                "risk": None,
-                "indicators": None,
-                "ml_model_path": None,
-                "backtest_result": None,  # ← no backtest
             }
         )
+        # A saved version exists, so MP_VERSION_* pass — the failure is purely the evidence.
+        patched_db.stores["strategy_versions"].append(_saved_version_row(no_bt_id))
+        # Three referenced backtest ids that are not the owner's completed runs (none seeded):
+        # the owner-scoped read returns nothing, exactly as it would for a foreign or absent run.
+        phantom_backtest_ids = [str(uuid.uuid4()) for _ in range(3)]
         with_user(AUTHOR_USER)
 
         resp = client.post(
-            "/api/library",
-            json={
-                "strategy_id": no_bt_id,
-                "description": "No backtest",
-                "category": "other",
-                "difficulty": "beginner",
-                "tags": [],
-            },
+            "/api/library/submissions",
+            json={"strategy_id": no_bt_id, "backtest_ids": phantom_backtest_ids},
             headers={"Authorization": "Bearer test-token"},
         )
-        assert resp.status_code == 400, resp.text
-        assert "backtest" in resp.text.lower()
+        assert resp.status_code == 422, resp.text
+        body = resp.json()
+        assert body["error"]["code"] == "MARKETPLACE_ELIGIBILITY_FAILED"
+        failures = body["error"]["details"]["failures"]
+        # With no completed evidence, execution success and metric completeness cannot hold.
+        assert "MP_EXECUTION_OK" in failures
+        assert "MP_METRICS_COMPLETE" in failures
 
-    def test_16_publish_strategy_without_action_node_rejected(self, patched_db):
-        """publish_strategy rejects strategies whose DAG has no action nodes (400)."""
-        no_action_id = str(uuid.uuid4())
+        # Nothing was persisted — no Submission on a rejected evaluation (Requirement 2.10).
+        assert patched_db.stores["marketplace_submissions"] == []
+
+    def test_16_submit_with_invalid_version_rejected(self, patched_db, patched_audit):
+        """A submission whose saved version does not pass validation is refused (task 14.10).
+
+        The old ``publish_strategy`` rejected a strategy whose DAG carried no action node. The
+        new flow expresses the same "the strategy itself is not fit to publish" refusal through
+        the Eligibility_Gate's MP_VERSION_VALID criterion (Requirement 2.3): the strategy's only
+        saved version does not pass the Strategy_Builder's structural validation, so the gate
+        does not admit — a 422 naming MP_VERSION_VALID, and NO Submission created. The referenced
+        backtests are all valid here, isolating the failure to the version.
+        """
+        bad_version_id = str(uuid.uuid4())
         patched_db.stores["strategies"].append(
             {
-                "id": no_action_id,
+                "id": bad_version_id,
                 "user_id": AUTHOR_ID,
-                "name": "No Action Node",
+                "name": "Invalid Version",
                 "symbol": "ETH/USD",
                 "timeframe": "1d",
                 "exchange_id": "binance",
-                "buy_logic": json.dumps({"nodes": [{"type": "indicator"}]}),
-                "sell_logic": json.dumps({"nodes": []}),
-                "risk": None,
-                "indicators": None,
-                "ml_model_path": None,
-                "backtest_result": json.dumps({"total_return_pct": 10}),
             }
         )
+        # A saved (non-draft) version whose stored verdict is not VALID and whose canonical
+        # graph cannot be parsed (an unsupported schema version), so _version_graph_is_valid
+        # returns False and MP_VERSION_VALID fails.
+        patched_db.stores["strategy_versions"].append(
+            {
+                "id": VERSION_UUID,
+                "strategy_id": bad_version_id,
+                "version": 1,
+                "is_draft": False,
+                "validation_state": "INVALID",
+                "blueprint": None,
+                "graph_json": {"schema_version": 99, "nodes": [], "edges": []},
+            }
+        )
+        # Valid backtest evidence referencing that same version, so only the version is at fault.
+        backtest_rows = _three_eligible_backtests(AUTHOR_ID, bad_version_id)
+        patched_db.stores["strategy_backtests"].extend(backtest_rows)
+        backtest_ids = [r["id"] for r in backtest_rows]
         with_user(AUTHOR_USER)
 
         resp = client.post(
-            "/api/library",
-            json={
-                "strategy_id": no_action_id,
-                "description": "No action node",
-                "category": "other",
-                "difficulty": "beginner",
-                "tags": [],
-            },
+            "/api/library/submissions",
+            json={"strategy_id": bad_version_id, "backtest_ids": backtest_ids},
             headers={"Authorization": "Bearer test-token"},
         )
-        assert resp.status_code == 400, resp.text
-        assert "action" in resp.text.lower()
+        assert resp.status_code == 422, resp.text
+        body = resp.json()
+        assert body["error"]["code"] == "MARKETPLACE_ELIGIBILITY_FAILED"
+        assert "MP_VERSION_VALID" in body["error"]["details"]["failures"]
+
+        # A rejected evaluation creates no Submission (Requirement 2.10).
+        assert patched_db.stores["marketplace_submissions"] == []
 
     def test_17_non_admin_cannot_moderate(self, patched_db):
-        """Non-admin user cannot call admin moderation endpoint (403)."""
+        """Non-admin user cannot call the retained moderation endpoint (403).
+
+        Unaffected by the task-14.5 narrowing: authorization via ``get_admin_user`` runs before
+        the ``moderation_status``-agreement guard, so a non-admin is refused with 403 regardless
+        of what ``moderation_status`` (or open Submission) is involved — the guard is never
+        reached. An open Submission is seeded to prove the 403 wins even when the narrowing guard
+        would otherwise have something to say.
+        """
         lib_id = str(uuid.uuid4())
         patched_db.stores["library_strategies"].append(
             _pending_lib_row(lib_id, AUTHOR_ID, STRATEGY_UUID)
+        )
+        patched_db.stores["marketplace_submissions"].append(
+            _open_submission_row(STRATEGY_UUID, AUTHOR_ID, "SUBMITTED")
         )
         with_user(CLONER_USER)
 
@@ -811,19 +1302,36 @@ class TestMarketplacePipeline:
         assert resp.status_code == 403
 
     def test_18_admin_can_feature_strategy(self, patched_db):
-        """Admin can set is_featured=True."""
+        """The retained PATCH still sets is_featured and moderation_notes (task 14.5).
+
+        Featuring stays exactly what it is today — ``library_strategies.is_featured``, set by
+        the retained ``admin_moderate_strategy`` — and is orthogonal to the Submission lifecycle
+        (design.md § The mapping). ``'featured'`` is reachable only for a PUBLISHED listing, so
+        the listing here has a PUBLISHED open Submission whose projected ``moderation_status`` is
+        ``'approved'`` (``MODERATION_STATUS_FOR_STATE[PUBLISHED]``). Supplying that agreeing value
+        passes the task-14.5 guard, so the route is free to do the one thing it is retained for:
+        set ``is_featured`` (and ``moderation_notes``) without moving the lifecycle.
+        """
         lib_id = str(uuid.uuid4())
-        patched_db.stores["library_strategies"].append(
-            _pending_lib_row(lib_id, AUTHOR_ID, STRATEGY_UUID)
+        row = _pending_lib_row(lib_id, AUTHOR_ID, STRATEGY_UUID)
+        row["moderation_status"] = "approved"  # the projection of the PUBLISHED Submission
+        patched_db.stores["library_strategies"].append(row)
+        patched_db.stores["marketplace_submissions"].append(
+            _open_submission_row(STRATEGY_UUID, AUTHOR_ID, "PUBLISHED")
         )
         with_user(ADMIN_USER)
 
         resp = client.patch(
             f"/api/library/admin/{lib_id}",
-            json={"moderation_status": "approved", "is_featured": True},
+            json={
+                "moderation_status": "approved",
+                "is_featured": True,
+                "moderation_notes": "Editor's pick.",
+            },
             headers={"Authorization": "Bearer test-token"},
         )
         assert resp.status_code == 200, resp.text
 
         row = patched_db.stores["library_strategies"][0]
         assert row.get("is_featured") is True
+        assert row.get("moderation_notes") == "Editor's pick."

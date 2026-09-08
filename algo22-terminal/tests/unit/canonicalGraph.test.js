@@ -407,23 +407,41 @@ describe('canonicalGraph round trip (Requirement 1.4)', () => {
 
 describe('the lossy serializers are gone (SB-05, task 3.4)', () => {
   it('no longer ships src/utils/dagSerializer.js, and nothing references it', async () => {
-    const { existsSync, readdirSync, readFileSync, statSync } = await import('node:fs');
+    const { existsSync, readdirSync, readFileSync } = await import('node:fs');
     const { join, resolve } = await import('node:path');
 
     const root = resolve(__dirname, '..', '..');
     expect(existsSync(join(root, 'src', 'utils', 'dagSerializer.js'))).toBe(false);
 
+    // Directory names that cannot hold a first-party module, pruned rather than walked. None
+    // of them currently exists anywhere under `src/` or `tests/`, so this cannot narrow the
+    // file set the assertion below is made over — it is here so that a future `coverage/` or
+    // `build/` output landing inside either root does not turn this sweep into a walk of
+    // generated code.
+    const PRUNED = new Set(['node_modules', 'dist', 'build', 'coverage', 'archive', '.git', 'target']);
+    const CODE = /\.(js|jsx|ts|tsx)$/;
+    const NAME = 'dagSerializer';
+
     const offenders = [];
     const walk = (dir) => {
-      for (const entry of readdirSync(dir)) {
-        if (entry === 'node_modules' || entry === 'dist' || entry === '.git') continue;
-        const path = join(dir, entry);
-        if (statSync(path).isDirectory()) {
+      // `withFileTypes` answers "file or directory?" from the directory entry the read
+      // already returned, instead of a second `statSync` syscall per entry.
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (PRUNED.has(entry.name)) continue;
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) {
           walk(path);
           continue;
         }
-        if (!/\.(js|jsx|ts|tsx)$/.test(entry)) continue;
-        const source = readFileSync(path, 'utf8');
+        if (!CODE.test(entry.name)) continue;
+        // Read once, as bytes, and reject on a substring search before decoding. Every string
+        // the regex below could match contains `dagSerializer` verbatim, so the prefilter
+        // cannot change the verdict for any file — it only avoids materialising a UTF-8 string
+        // for each of ~200 modules (several megabytes of short-lived heap) when the whole
+        // suite shares one long-lived worker process.
+        const bytes = readFileSync(path);
+        if (!bytes.includes(NAME)) continue;
+        const source = bytes.toString('utf8');
         // Prose may name the deleted module — several files explain why it went. An
         // import of it is what must not exist.
         if (/(?:from\s+|import\s*\(|require\s*\()\s*['"][^'"]*dagSerializer/.test(source)) {

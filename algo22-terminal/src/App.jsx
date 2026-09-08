@@ -44,6 +44,7 @@ const Profile             = lazy(() => import('./pages/Profile'));
 const SecurityLogs        = lazy(() => import('./pages/SecurityLogs'));
 const Portfolio           = lazy(() => import('./pages/Portfolio'));
 const TradeHistory        = lazy(() => import('./pages/TradeHistory'));
+const PaperTrading        = lazy(() => import('./pages/PaperTrading'));
 
 const PAGE_FALLBACK = <div style={{ background: '#080A0E', minHeight: '100vh' }} />;
 const TENANT_ID = "default";
@@ -208,11 +209,8 @@ function PasswordRecoveryHandler() {
     // Subscribe to onAuthStateChange for live session events
     if (supabase?.auth?.onAuthStateChange) {
       const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-        if (session?.access_token) {
+        if (session?.access_token && (sessionStorage.getItem("token") || event === "SIGNED_IN")) {
           sessionStorage.setItem("token", session.access_token);
-          if (window.location.pathname === "/signin" || window.location.pathname === "/signup" || window.location.pathname === "/") {
-            navigate("/app/dashboard", { replace: true });
-          }
         } else if (event === "SIGNED_OUT") {
           sessionStorage.removeItem("token");
         }
@@ -254,6 +252,7 @@ function AppShell() {
       profile: '/app/profile', support: '/app/support',
       notifications: '/app/notifications',
       'signal-trace': '/app/signal-trace', 'security-logs': '/app/security-logs',
+      'paper-trading': '/app/paper-trading',
       landing: '/',
     };
 
@@ -356,6 +355,7 @@ export default function AppWrapper() {
               <Route path="/app/security-logs" element={<Suspense fallback={PAGE_FALLBACK}><SecurityLogs /></Suspense>} />
               <Route path="/app/portfolio" element={<Suspense fallback={PAGE_FALLBACK}><Portfolio /></Suspense>} />
               <Route path="/app/trades" element={<Suspense fallback={PAGE_FALLBACK}><TradeHistory /></Suspense>} />
+              <Route path="/app/paper-trading" element={<Suspense fallback={PAGE_FALLBACK}><PaperTrading /></Suspense>} />
               <Route path="/app/2fa" element={<Suspense fallback={PAGE_FALLBACK}><TwoFA /></Suspense>} />
               <Route path="/app/support" element={<SupportCenter />} />
               <Route path="/app/notifications" element={<NotificationCenter />} />

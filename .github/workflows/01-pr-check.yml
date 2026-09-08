@@ -8,6 +8,10 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
+  # Matches the Node version 06-frontend-deploy.yml builds the shipped bundle with, so the
+  # PR gate and the deploy build agree. Read only by the frontend-tests job below; no
+  # pre-existing job references it.
+  NODE_VERSION: '20'
 
 jobs:
   validate-code:
@@ -115,3 +119,70 @@ jobs:
 
       - name: Automated Docker Validation
         run: python scripts/docker_validation.py
+
+  frontend-tests:
+    name: Frontend Build & Unit Tests
+    runs-on: ubuntu-latest
+    # Budget: the suite runs its 53 files sequentially on purpose (vitest.config.js sets
+    # fileParallelism: false / maxWorkers: 1, because parallel forks workers fail their
+    # startup handshake on constrained hosts and whole files then silently never run), which
+    # costs roughly 14 minutes of wall clock. Add `npm ci` on a cold cache and `vite build`
+    # and an observed run is about 20 minutes. 40 gives ~2x headroom for a slow runner while
+    # still killing a genuine hang far short of the 360-minute default.
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Full history so the base commit of the pull request is available to diff against.
+          fetch-depth: 0
+
+      # This workflow deliberately has no `paths:` filter on its trigger: adding one would
+      # narrow validate-code, unit-tests and docker-check, which must keep running on every
+      # pull request. The frontend path filter therefore lives inside this job. The job always
+      # starts, and on a pull request that touches nothing under algo22-terminal/ every step
+      # below is skipped and the job reports success in seconds -- so it is safe to mark as a
+      # required check without gating backend-only changes.
+      - name: Detect frontend changes
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- \
+            'algo22-terminal' '.github/workflows/01-pr-check.yml')
+          if [ -n "$CHANGED" ]; then
+            echo "Frontend-relevant changes detected:"
+            echo "$CHANGED"
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No changes under algo22-terminal/ — frontend build and tests skipped."
+            echo "frontend=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Node.js
+        if: steps.changes.outputs.frontend == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'algo22-terminal/package-lock.json'
+
+      - name: Install dependencies
+        if: steps.changes.outputs.frontend == 'true'
+        working-directory: ./algo22-terminal
+        run: npm ci
+
+      - name: Build frontend
+        if: steps.changes.outputs.frontend == 'true'
+        working-directory: ./algo22-terminal
+        run: npm run build
+
+      # `npx vitest --run` and never `npm run test`: the `test` script is bare `vitest`, which
+      # is watch mode and would never terminate on a runner. `--run` executes once and exits
+      # non-zero on any failure, which is what makes this job blocking.
+      - name: Run frontend unit tests
+        if: steps.changes.outputs.frontend == 'true'
+        working-directory: ./algo22-terminal
+        run: npx vitest --run

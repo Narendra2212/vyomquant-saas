@@ -305,6 +305,7 @@
     }
   },
   "frontend_bindings": {
+    "_baseline_note_sessions": "AUTHORISED RE-RECORD of `frontend_bindings` \u2014 exactly fourteen ADDED members, `sessions.create`, `sessions.list`, `sessions.get`, `sessions.pause`, `sessions.resume`, `sessions.stop`, `sessions.reset`, `sessions.orders`, `sessions.fills`, `sessions.positions`, `sessions.trades`, `sessions.equity`, `sessions.metrics` and `sessions.events`, and NOTHING ELSE (task 31.3; Requirements 20.2, 30.2). Task 31.3 widens `algo22-terminal/src/api/modules/paper.js` with a `sessions: { \u2026 }` object holding the fourteen Paper_Session routes of `backend_app/routers/paper_trading.py`, and its own text is explicit that this is purely additive: \"The existing eight methods (`getAccount`, `resetAccount`, `getPositions`, `getOrders`, `placeOrder`, `cancelOrder`, `getTrades`, `getSummary`) are **untouched** \u2014 `Portfolio.jsx` and `TradeHistory.jsx` call three of them today.\" That is what this file now records: each of those eight members is byte-identical to what the pre-change baseline recorded, `getSummary` still binds exactly `[{GET, /api/paper/summary}]`, `module_file` is still `api/modules/paper.js`, and no member was removed, renamed or retyped. None of the fourteen is one of the five additive fields `design.md` declares, and ADDITIVE_FIELDS is deliberately NOT widened for them \u2014 this note permits these fourteen members of THIS object and nothing else; a fifteenth member appearing here, or an added member on any other recorded object, is still a failure. WHAT THIS NOTE IS NOT. It is not an authorisation for the *attribution* of these paths. Until the fix that accompanies this re-record, `capture_baseline._METHOD_DEFINITION` scanned for `\\n  name: (` \u2014 a fixed two-space indent \u2014 so it saw no member at `sessions: {`, never descended into the nested object, and (because it sliced each method body from one match to the start of the next) filed all fourteen session paths under `getSummary`, the last top-level method declared before them. `getSummary` calls `get('/api/paper/summary')` and nothing else, so that was not a stale record but a FALSE STATEMENT ABOUT THE SOURCE, and this baseline is meant to be the authority on what the surface calls. That defect was fixed in the capture (`_module_methods` walks the object literal and attributes a nested method to the name a caller writes for it), NOT re-recorded around: had it been left in place, this note would have had to excuse fourteen entries against `getSummary` that `paper.js` does not put there. Asserted by tests/regression/test_baseline_unchanged.py::test_a_nested_api_method_is_attributed_to_its_own_name, which pins `getSummary` to its single path and requires all fourteen `sessions.*` members to be present under their own names. REQUIREMENTS THIS IS AN EXCEPTION TO: 25.7 and 25.8, for these fourteen added members and no others. Requirement 17.12's guarantee is untouched: the six existing `/api/paper/*` endpoints this file freezes are unchanged in `endpoints`, `orders_by_status` and `routes`, and `api.paper`'s eight existing methods still reach them by the same verbs and paths.",
     "cancelOrder": [
       {
         "method": "DELETE",
@@ -352,6 +353,90 @@
       {
         "method": "POST",
         "path_template": "/api/paper/account/reset"
+      }
+    ],
+    "sessions.create": [
+      {
+        "method": "POST",
+        "path_template": "/api/paper/sessions"
+      }
+    ],
+    "sessions.equity": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/sessions/{expr}/equity"
+      }
+    ],
+    "sessions.events": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/sessions/{expr}/events?since_sequence={expr}"
+      }
+    ],
+    "sessions.fills": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/sessions/{expr}/fills"
+      }
+    ],
+    "sessions.get": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/sessions/{expr}"
+      }
+    ],
+    "sessions.list": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/sessions{expr}"
+      }
+    ],
+    "sessions.metrics": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/sessions/{expr}/metrics"
+      }
+    ],
+    "sessions.orders": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/sessions/{expr}/orders"
+      }
+    ],
+    "sessions.pause": [
+      {
+        "method": "POST",
+        "path_template": "/api/paper/sessions/{expr}/pause"
+      }
+    ],
+    "sessions.positions": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/sessions/{expr}/positions"
+      }
+    ],
+    "sessions.reset": [
+      {
+        "method": "POST",
+        "path_template": "/api/paper/sessions/{expr}/reset"
+      }
+    ],
+    "sessions.resume": [
+      {
+        "method": "POST",
+        "path_template": "/api/paper/sessions/{expr}/resume"
+      }
+    ],
+    "sessions.stop": [
+      {
+        "method": "POST",
+        "path_template": "/api/paper/sessions/{expr}/stop"
+      }
+    ],
+    "sessions.trades": [
+      {
+        "method": "GET",
+        "path_template": "/api/paper/sessions/{expr}/trades"
       }
     ]
   },

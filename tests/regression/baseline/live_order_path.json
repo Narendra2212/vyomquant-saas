@@ -5,6 +5,10 @@
     "handler": "execute_with_idempotency",
     "module": "backend_app.core.execution_engine",
     "parameters": {
+      "execution_environment": {
+        "annotation": "Any",
+        "has_default": true
+      },
       "execution_interval_minutes": {
         "annotation": "int",
         "has_default": true

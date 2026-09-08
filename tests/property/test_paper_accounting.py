@@ -1259,3 +1259,151 @@ def test_p29_drawdown_bounds_and_peak_append_invariance(
                 "timestamp order, and the drawdown of a resorted series is not the "
                 "drawdown of the series that was read"
             )
+
+# ══════════════════════════════════════════════════════════════════════════
+# P-30
+# ══════════════════════════════════════════════════════════════════════════
+
+from backend_app.backend.paper.paper_accounting import (  # noqa: E402
+    WIN_RATE_QUANTUM,
+    ClosedTrade,
+    win_rate,
+)
+
+
+#: A drawn ``realized_pnl`` is an exact ``Decimal`` on the Minor_Units grid — positive,
+#: exactly zero and negative are all reachable, because P-30's whole content is the
+#: strict ``> 0`` boundary: a break-even trade (exactly zero) is a loss for the win rate,
+#: not a win, and a negative trade is a loss too. ``scaleb`` shifts the exponent without
+#: touching the coefficient, so no binary ``float`` exists at any point (Requirement 18.1).
+_PNL_TICKS = st.integers(min_value=-10**11, max_value=10**11)
+
+
+def _pnl_of(ticks: int) -> Decimal:
+    """An integer count of Minor_Units as an exact ``Decimal`` at the currency's scale."""
+    return Decimal(int(ticks)).scaleb(-MINOR_UNIT_EXPONENT)
+
+
+@st.composite
+def _closed_trades(draw: Any) -> List[ClosedTrade]:
+    """A list of :class:`ClosedTrade`, its realized PnLs mixing positive, zero and negative.
+
+    The empty list is reachable (``min_size=0``) and asserted specifically below, because
+    the empty closed-trade set is the case P-30 is about: it must report ``None`` (absent),
+    not ``Decimal('0')``. Every other field of a trade is irrelevant to :func:`win_rate`,
+    which reads only ``realized_pnl``, so they are held at fixed exact values rather than
+    drawn — the property is about the PnL sign, nothing else.
+    """
+    pnl_ticks = draw(st.lists(_PNL_TICKS, min_size=0, max_size=8))
+    return [
+        ClosedTrade(
+            symbol="BTC/USDT",
+            side="LONG",
+            quantity=Decimal("1"),
+            entry_price=Decimal("100"),
+            exit_price=Decimal("100"),
+            realized_pnl=_pnl_of(ticks),
+        )
+        for ticks in pnl_ticks
+    ]
+
+
+# Feature: marketplace-subscriptions-paper-trading, Property 30 (invariant, win-rate range):
+# For all generated closed-trade sets: win_rate is in [0, 1] and equals
+# count(realized_pnl > 0) / count(all); and is absent (None), not zero, for an empty
+# closed-trade set.
+@PROPERTY_SETTINGS
+@given(trades=_closed_trades())
+def test_p30_win_rate_range_and_absent_when_no_closed_trades(
+    trades: List[ClosedTrade],
+) -> None:
+    """Win rate is the fraction of winning closed trades in ``[0, 1]``, and absent when none.
+
+    Requirement 18.10 asks for two things at once, and this property asserts both against the
+    same drawn closed-trade set:
+
+    * **The value and its range.** ``win_rate`` is ``count(realized_pnl > 0) / count(all)``,
+      computed here by an independent count over the drawn trades, and it lies in ``[0, 1]``
+      — a fraction of a whole cannot fall outside its own bounds, and quantizing to
+      :data:`WIN_RATE_QUANTUM` rounds a value already inside ``[0, 1]`` so the bound
+      survives. ``> 0`` strictly: a break-even trade (``realized_pnl == 0``) counts toward
+      the denominator but not the numerator, which is why the generator mixes exactly-zero
+      PnLs in — an engine that counted ``>= 0`` as a win would break here.
+
+    * **Absent, not zero, for an empty set.** With no closed trades the rate is ``None`` —
+      the true statement "the session has closed none" rather than the false one "the
+      session lost every trade it made", which is why ``paper_metrics.win_rate`` is
+      nullable. This is the distinction P-30 is about, so it is asserted from both sides: the
+      empty set gives ``None`` specifically, while a non-empty all-losing set gives
+      ``Decimal('0')`` (not ``None``) — a real rate of zero wins is a measurement, absence is
+      not.
+
+    Every figure is an exact ``Decimal``; no ``float`` appears at any point (Requirement 18.1).
+
+    **Validates: Requirements 18.10**
+    """
+    rate = win_rate(trades)
+
+    total = len(trades)
+    # The oracle restates the count independently rather than reusing win_rate's own tally,
+    # so a wrong denominator or a ``>= 0`` win test cannot make the comparison pass by
+    # construction. ``> _ZERO`` strictly — break-even is not a win.
+    wins = sum(1 for trade in trades if trade.realized_pnl > _ZERO)
+
+    where = (
+        f"{total} closed trade(s), {wins} winning "
+        f"(pnls {[str(trade.realized_pnl) for trade in trades]})"
+    )
+
+    # -- absent, not zero, for the empty closed-trade set -------------------------
+    if total == 0:
+        assert rate is None, (
+            f"{where}: win_rate is {rate!r} for an empty closed-trade set - Requirement "
+            "18.10 reports it as absent (None), not Decimal('0'): a session that has closed "
+            "no trades has not lost every trade it made, which is why paper_metrics.win_rate "
+            "is nullable"
+        )
+        return
+
+    # -- non-empty: a real, in-range fraction, never None -------------------------
+    assert rate is not None, (
+        f"{where}: win_rate is None although {total} trade(s) are closed - a rate over a "
+        "non-empty set is a measurement, and only the empty set is absent (Requirement 18.10)"
+    )
+    assert _ZERO <= rate <= Decimal("1"), (
+        f"{where}: win_rate is {rate}, outside [0, 1] - a fraction of winning trades over "
+        "all closed trades cannot fall outside its own bounds, and NUMERIC(6,5) would "
+        "refuse to store it (Requirement 18.10)"
+    )
+
+    # -- the value, against the independent count, at the scale it is reported ----
+    with localcontext() as ctx:
+        ctx.prec = ORACLE_PRECISION
+        expected = (Decimal(wins) / Decimal(total)).quantize(WIN_RATE_QUANTUM)
+    assert rate == expected, (
+        f"{where}: win_rate is {rate} where count(realized_pnl > 0) / count(all) = "
+        f"{wins} / {total} = {expected}, a discrepancy of {rate - expected} "
+        "(Requirement 18.10)"
+    )
+
+    # -- an all-losing non-empty set is zero, not absent: the distinction P-30 owns --
+    all_losing = [
+        ClosedTrade(
+            symbol="BTC/USDT",
+            side="LONG",
+            quantity=Decimal("1"),
+            entry_price=Decimal("100"),
+            exit_price=Decimal("100"),
+            # break-even and strictly-negative are both losses for the win rate; alternate
+            # them so the case is not merely "all negative" but "no strictly-positive trade".
+            realized_pnl=_ZERO if index % 2 == 0 else _pnl_of(-1),
+        )
+        for index in range(total)
+    ]
+    losing_rate = win_rate(all_losing)
+    assert losing_rate == _ZERO, (
+        f"{where}: a non-empty set of {total} losing trade(s) gave win_rate {losing_rate!r} "
+        "- a real rate of zero wins is Decimal('0'), a measurement, not None; only the empty "
+        "closed-trade set is absent (Requirement 18.10). This is the distinction P-30 is "
+        "about: 0 (lost them all) is not the same as absent (closed none)"
+    )

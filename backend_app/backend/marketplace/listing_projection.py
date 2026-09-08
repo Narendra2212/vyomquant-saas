@@ -13,6 +13,7 @@ DENIED_LISTING_COLUMNS             the columns that must never reach a non-owner
 CONDITION_OUTCOME_METRICS          the per-condition metric keys, outcomes only (Req 6.3)
 SUBSCRIPTION_PERIOD_NOMINAL_DAYS   the catalogue label for "one calendar month"
 PROTECTED_LOGIC_TOKEN_MIN_LENGTH   the ``len(text) >= 3`` floor of the token set
+STRUCTURAL_RESPONSE_KEYS           the response's own key vocabulary - schema, not data
 project_listing(...)               row -> public dict, by explicit assignment (Reqs 6.1 … 6.9)
 protected_logic_tokens(...)        every Protected_Logic substring worth searching for (Req 6.8)
 deep_scalars(...)                  every key and every leaf value, at any nesting depth
@@ -118,6 +119,15 @@ node ids, indicator names, parameter names, threshold values and model path segm
 all at least three characters, so the floor excludes nothing real (``design.md`` -> "Mechanical
 Protected_Logic containment").
 
+``STRUCTURAL_RESPONSE_KEYS`` is the other side of that same coin. The check searches every
+*value* in a body at every depth, and it searches the mapping keys too - a key is where a
+``select("*")`` leak surfaces first. But the keys this API emits are enumerated in advance by
+Requirement 6.2 and asserted against the projection's output on every call, so they are
+identical for every Listing and for a caller who asked about no Listing at all. A strategy that
+happens to name an indicator ``details`` does not turn the error envelope's ``details`` key into
+a disclosure. The key vocabulary is schema, not data, and it is exempt by name; no value ever
+is, including the values stored under those keys. See the constant for the full argument.
+
 WHAT IS DELIBERATELY NOT HERE
 -----------------------------
 * The alias read. ``marketplace/aliases.py`` (task 8.2) owns the batched
@@ -155,6 +165,7 @@ __all__ = [
     "CONDITION_OUTCOME_METRICS",
     "SUBSCRIPTION_PERIOD_NOMINAL_DAYS",
     "PROTECTED_LOGIC_TOKEN_MIN_LENGTH",
+    "STRUCTURAL_RESPONSE_KEYS",
     "STRATEGY_PROTECTED_LOGIC_COLUMNS",
     "VERSION_PROTECTED_LOGIC_COLUMNS",
     "BACKTEST_PROTECTED_LOGIC_COLUMNS",
@@ -510,6 +521,43 @@ BACKTEST_PROTECTED_LOGIC_COLUMNS: Tuple[str, ...] = (
     "dataset_checksum",
 )
 
+#: Every key a Marketplace response emits from its own fixed vocabulary, irrespective of which
+#: Listing - or whether any Listing - is being described. One place, so a reader can see the
+#: whole set at once and a new response key has one obvious home.
+#:
+#: WHY A KEY THE API EMITS UNCONDITIONALLY CANNOT BE A DISCLOSURE
+#: -------------------------------------------------------------
+#: Requirement 6.8 is written about what a *field* contains: "no field of any Marketplace_API
+#: … response … contains any part of that Protected_Logic". Requirement 7.1 uses the same
+#: wording ("from every field of every response"). The *names* of those fields are not response
+#: data at all - Requirement 6.2 enumerates them in advance, and :data:`PUBLIC_LISTING_FIELDS`
+#: is that enumeration, checked against the projection's output on every call. A name from that
+#: enumeration appears in the body of every Listing response, including a Listing whose strategy
+#: has no indicator, no node and no model: it is therefore constant across strategies and
+#: carries no information about any of them. If a strategy happens to name an indicator
+#: ``details`` or a node ``avg_rating``, the response's ``details`` and ``avg_rating`` keys still
+#: say nothing the caller did not already know from the published schema, so treating them as a
+#: leak would report a spelling coincidence as a disclosure - and, worse, would train a reader
+#: to discount the check.
+#:
+#: The exemption is for *key positions only*. Every value, at every depth, is searched
+#: unconditionally - including the values stored under these keys. A node identifier returned as
+#: the value of ``name``, or inside ``details``, or embedded in ``message``, is exactly the leak
+#: this check exists to find, and none of them is exempt.
+STRUCTURAL_RESPONSE_KEYS: FrozenSet[str] = frozenset(
+    PUBLIC_LISTING_FIELDS
+    # The nested keys ``project_listing`` builds inside its own fields: the positional
+    # Backtest_Condition label of Requirement 6.3, the per-condition outcome metrics, and the
+    # aggregate performance and risk metric names.
+    | {"label"}
+    | set(CONDITION_OUTCOME_METRICS)
+    | {key for key, _ in _PERFORMANCE_SUMMARY_SOURCES}
+    | {key for key, _ in _RISK_METRIC_SOURCES}
+    # The structured error envelope - ``errors.structured_error_body`` and
+    # ``StructuredError.to_error_object``, the shape Requirement 7.1's bodies take on the wire.
+    | {"error", "code", "message", "details", "request_id"}
+)
+
 
 def protected_logic_tokens(
     strategy_row: Any = None,
@@ -600,7 +648,11 @@ def _walk(value: Any, seen: Set[int]) -> Iterator[Any]:
     yield value
 
 
-def assert_contains_no_protected_logic(response: Any, tokens: Any) -> None:
+def assert_contains_no_protected_logic(
+    response: Any,
+    tokens: Any,
+    structural_keys: Optional[Any] = None,
+) -> None:
     """Assert that no field of ``response`` contains any Protected_Logic token.
 
     The check is *substring* containment, not equality, and it runs at every nesting depth
@@ -608,9 +660,20 @@ def assert_contains_no_protected_logic(response: Any, tokens: Any) -> None:
     message or a list element is a leak just as much as one returned in its own field
     (Requirements 6.8, 7.1).
 
+    Every value is searched. A mapping *key* is searched too unless it is part of the response's
+    own fixed vocabulary - see :data:`STRUCTURAL_RESPONSE_KEYS` for why a key the API emits for
+    every Listing, including one whose strategy has no indicators at all, cannot be a
+    disclosure. The exemption never extends to a value: the value stored *under* a structural
+    key is searched like any other.
+
     Args:
         response: Any response body - a dict, a list, a model dump, a string.
         tokens: The token set from :func:`protected_logic_tokens`.
+        structural_keys: The response's fixed key vocabulary, defaulting to
+            :data:`STRUCTURAL_RESPONSE_KEYS`. A caller asserting over a body this module does
+            not build - the route's authenticated enrichment, a ``paper_events`` envelope - passes
+            that set unioned with its own declared keys. Pass ``frozenset()`` to search keys as
+            well, which is the right thing for a body whose key set is caller-controlled.
 
     Raises:
         AssertionError: A token appears somewhere in ``response``. The message names the token
@@ -622,7 +685,13 @@ def assert_contains_no_protected_logic(response: Any, tokens: Any) -> None:
     if not candidates:
         return
 
-    for path, scalar in _walk_with_path(response, "$", set()):
+    exempt: FrozenSet[str] = (
+        STRUCTURAL_RESPONSE_KEYS
+        if structural_keys is None
+        else frozenset(str(key) for key in structural_keys)
+    )
+
+    for path, scalar in _walk_with_path(response, "$", set(), exempt):
         text = str(scalar)
         for token in candidates:
             if token in text:
@@ -631,8 +700,17 @@ def assert_contains_no_protected_logic(response: Any, tokens: Any) -> None:
                 )
 
 
-def _walk_with_path(value: Any, path: str, seen: Set[int]) -> Iterator[Tuple[str, Any]]:
-    """:func:`deep_scalars` with a path per scalar, for an actionable failure message."""
+def _walk_with_path(
+    value: Any,
+    path: str,
+    seen: Set[int],
+    structural_keys: FrozenSet[str] = frozenset(),
+) -> Iterator[Tuple[str, Any]]:
+    """:func:`deep_scalars` with a path per scalar, for an actionable failure message.
+
+    A mapping key whose text is in ``structural_keys`` is not yielded - it is part of the
+    response schema rather than response data. Its value is still walked and yielded.
+    """
     if isinstance(value, (str, bytes, bytearray)):
         yield path, value
         return
@@ -643,8 +721,9 @@ def _walk_with_path(value: Any, path: str, seen: Set[int]) -> Iterator[Tuple[str
             return
         seen.add(marker)
         for key, item in value.items():
-            yield from _walk_with_path(key, f"{path}.<key>", seen)
-            yield from _walk_with_path(item, f"{path}.{key}", seen)
+            if str(key) not in structural_keys:
+                yield from _walk_with_path(key, f"{path}.<key>", seen, structural_keys)
+            yield from _walk_with_path(item, f"{path}.{key}", seen, structural_keys)
         seen.discard(marker)
         return
 
@@ -654,7 +733,7 @@ def _walk_with_path(value: Any, path: str, seen: Set[int]) -> Iterator[Tuple[str
             return
         seen.add(marker)
         for index, item in enumerate(value):
-            yield from _walk_with_path(item, f"{path}[{index}]", seen)
+            yield from _walk_with_path(item, f"{path}[{index}]", seen, structural_keys)
         seen.discard(marker)
         return
 

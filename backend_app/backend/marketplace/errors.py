@@ -89,6 +89,10 @@ MARKETPLACE_SUBMISSION_ALREADY_OPEN = "MARKETPLACE_SUBMISSION_ALREADY_OPEN"
 MARKETPLACE_SUBMISSION_NOT_FOUND = "MARKETPLACE_SUBMISSION_NOT_FOUND"
 #: ``submission_state.can_transition`` refused the edge, or the guard trigger did (Req 4.2, 4.4).
 MARKETPLACE_SUBMISSION_TRANSITION_REJECTED = "MARKETPLACE_SUBMISSION_TRANSITION_REJECTED"
+#: The legacy ``admin_moderate_strategy`` route was asked to set a ``moderation_status`` that
+#: disagrees with the Submission_State's projected value, i.e. to move the lifecycle behind the
+#: state machine's back; the six submission actions are the only way to do that (Req 4.2, 4.12).
+MARKETPLACE_USE_SUBMISSION_ACTIONS = "MARKETPLACE_USE_SUBMISSION_ACTIONS"
 #: Rejection reason absent, whitespace-only, or longer than the permitted maximum (Req 4.8).
 MARKETPLACE_REJECTION_REASON_REQUIRED = "MARKETPLACE_REJECTION_REASON_REQUIRED"
 #: An attempted mutation of persisted Backtest_Evidence (Requirement 3.14).
@@ -117,6 +121,13 @@ MARKETPLACE_STRATEGY_UNAVAILABLE = "MARKETPLACE_STRATEGY_UNAVAILABLE"
 MARKETPLACE_PAYMENT_REQUIRED = "MARKETPLACE_PAYMENT_REQUIRED"
 #: A restricted subscriber operation on a subscribed strategy (Requirement 12.7).
 MARKETPLACE_OPERATION_NOT_PERMITTED = "MARKETPLACE_OPERATION_NOT_PERMITTED"
+#: A caller-supplied cover image reference whose parsed origin is not on
+#: ``media.ALLOWED_COVER_PREFIXES`` (Requirement 22.7). Raised at WRITE time, by
+#: ``media.validate_cover_reference``, before the reference can reach
+#: ``library_strategies.cover_image``. ``details["reason"]`` carries one of
+#: ``media.REJECTION_REASONS`` - a stable label, never the configured allow-list, which would
+#: turn a rejection into a disclosure of the platform's own storage layout.
+MARKETPLACE_COVER_REFERENCE_REJECTED = "MARKETPLACE_COVER_REFERENCE_REJECTED"
 #: The Audit_Log write failed, so the state change was rolled back (Requirement 5.11).
 MARKETPLACE_ACTION_NOT_RECORDED = "MARKETPLACE_ACTION_NOT_RECORDED"
 #: Any rate limit in ``design.md`` -> "Security design" (Requirement 22.4).
@@ -152,6 +163,16 @@ PAPER_CONCURRENCY_CONFLICT = "PAPER_CONCURRENCY_CONFLICT"
 #: An accounting invariant did not hold, so everything rolled back; ``details["invariant"]``
 #: names it (Requirement 18.14).
 PAPER_INVARIANT_VIOLATION = "PAPER_INVARIANT_VIOLATION"
+#: Any paper Persistence_Layer read or write that DID NOT COMPLETE. The paper counterpart of
+#: :data:`MARKETPLACE_READ_FAILED`, and the caller-facing status for
+#: ``paper_repository.PaperPersistenceError``, which previously had none: ``PaperError`` correctly
+#: refuses a ``MARKETPLACE_*`` code, and ``PAPER_PERSISTENCE_UNAVAILABLE`` means specifically
+#: *the migration is not applied* - answering it for a transient driver failure would name a
+#: migration that IS applied and send an operator to the wrong place. **Never** a zero balance, an
+#: empty position list or an absent order presented as an answer: a broken balance read reported
+#: as a zero is the fabricated figure Requirement 28.3 forbids, and a broken idempotency read
+#: reported as "no such order" would place a second order (Requirements 1.7, 16.8, 17.2, 28.3).
+PAPER_READ_FAILED = "PAPER_READ_FAILED"
 
 # ---- Neither domain ------------------------------------------------------
 #: The live path was reached with a ``PAPER`` or ``BACKTEST`` environment (Requirement 13.9).
@@ -170,6 +191,7 @@ MARKETPLACE_CODES: Tuple[str, ...] = (
     MARKETPLACE_SUBMISSION_ALREADY_OPEN,
     MARKETPLACE_SUBMISSION_NOT_FOUND,
     MARKETPLACE_SUBMISSION_TRANSITION_REJECTED,
+    MARKETPLACE_USE_SUBMISSION_ACTIONS,
     MARKETPLACE_REJECTION_REASON_REQUIRED,
     MARKETPLACE_EVIDENCE_IMMUTABLE,
     MARKETPLACE_EVIDENCE_PERSIST_FAILED,
@@ -184,6 +206,7 @@ MARKETPLACE_CODES: Tuple[str, ...] = (
     MARKETPLACE_STRATEGY_UNAVAILABLE,
     MARKETPLACE_PAYMENT_REQUIRED,
     MARKETPLACE_OPERATION_NOT_PERMITTED,
+    MARKETPLACE_COVER_REFERENCE_REJECTED,
     MARKETPLACE_ACTION_NOT_RECORDED,
     MARKETPLACE_RATE_LIMITED,
     MARKETPLACE_READ_FAILED,
@@ -203,6 +226,7 @@ PAPER_CODES: Tuple[str, ...] = (
     PAPER_IDEMPOTENCY_CONFLICT,
     PAPER_CONCURRENCY_CONFLICT,
     PAPER_INVARIANT_VIOLATION,
+    PAPER_READ_FAILED,
 )
 
 #: The codes either domain may raise: the execution-environment guards, which sit on a path both
@@ -229,6 +253,7 @@ HTTP_STATUS_FOR_CODE: Dict[str, int] = {
     MARKETPLACE_SUBMISSION_ALREADY_OPEN: 409,
     MARKETPLACE_SUBMISSION_NOT_FOUND: 404,
     MARKETPLACE_SUBMISSION_TRANSITION_REJECTED: 409,
+    MARKETPLACE_USE_SUBMISSION_ACTIONS: 409,
     MARKETPLACE_REJECTION_REASON_REQUIRED: 422,
     MARKETPLACE_EVIDENCE_IMMUTABLE: 409,
     MARKETPLACE_EVIDENCE_PERSIST_FAILED: 500,
@@ -243,6 +268,11 @@ HTTP_STATUS_FOR_CODE: Dict[str, int] = {
     MARKETPLACE_STRATEGY_UNAVAILABLE: 409,
     MARKETPLACE_PAYMENT_REQUIRED: 409,
     MARKETPLACE_OPERATION_NOT_PERMITTED: 403,
+    # Requirement 22.7's refusal, and pinned to 422 - absent from
+    # ALLOWED_HTTP_STATUS_FOR_CODE, so no call site can answer 200 and let an unvetted
+    # reference through, and none can answer 404 and turn a validation refusal into a
+    # statement about whether the listing exists.
+    MARKETPLACE_COVER_REFERENCE_REJECTED: 422,
     MARKETPLACE_ACTION_NOT_RECORDED: 500,
     MARKETPLACE_RATE_LIMITED: 429,
     # Requirement 1.5 permits 500 or 503. 503 is the default because the overwhelmingly common
@@ -263,6 +293,14 @@ HTTP_STATUS_FOR_CODE: Dict[str, int] = {
     PAPER_IDEMPOTENCY_CONFLICT: 409,
     PAPER_CONCURRENCY_CONFLICT: 409,
     PAPER_INVARIANT_VIOLATION: 500,
+    # 503, and pinned to it - deliberately NOT given a choice in
+    # ALLOWED_HTTP_STATUS_FOR_CODE the way MARKETPLACE_READ_FAILED is. A paper read or write that
+    # did not complete is a Persistence_Layer that did not answer, which is a dependency
+    # condition; the caller-invisible-but-our-fault cases the marketplace code reserves 500 for
+    # already have their own codes here (PAPER_INVARIANT_VIOLATION 500,
+    # PAPER_SIMULATOR_MISCONFIGURED 500). One status means no call site can turn a failed balance
+    # read into a 200 (Requirements 1.7, 28.3).
+    PAPER_READ_FAILED: 503,
     EXECUTION_ENVIRONMENT_MISMATCH: 409,
     EXECUTION_ENVIRONMENT_UNRESOLVED: 409,
     NOT_FOUND: 404,
@@ -302,6 +340,10 @@ PUBLIC_MESSAGE_FOR_CODE: Dict[str, str] = {
     MARKETPLACE_SUBMISSION_TRANSITION_REJECTED: (
         "That action is not permitted from the submission's current state, "
         "so nothing was changed."
+    ),
+    MARKETPLACE_USE_SUBMISSION_ACTIONS: (
+        "The moderation state of a listing cannot be changed here. "
+        "Use the submission review actions to move it, so nothing was changed."
     ),
     MARKETPLACE_REJECTION_REASON_REQUIRED: (
         "A rejection reason is required, and it must contain visible text and stay within the "
@@ -345,6 +387,10 @@ PUBLIC_MESSAGE_FOR_CODE: Dict[str, str] = {
     ),
     MARKETPLACE_OPERATION_NOT_PERMITTED: (
         "This operation is not permitted on a strategy you subscribe to rather than own."
+    ),
+    MARKETPLACE_COVER_REFERENCE_REJECTED: (
+        "That cover image reference is not one this platform accepts, so nothing was saved. "
+        "Upload the image through the platform and use the reference it gives back."
     ),
     MARKETPLACE_ACTION_NOT_RECORDED: (
         "The action could not be recorded, so it was not applied and nothing was changed."
@@ -402,6 +448,10 @@ PUBLIC_MESSAGE_FOR_CODE: Dict[str, str] = {
         "The operation was undone because an accounting check did not hold. Your balances, "
         "positions and results are unchanged."
     ),
+    PAPER_READ_FAILED: (
+        "Your paper trading information could not be read right now, so no balances, positions "
+        "or figures are being shown. Nothing was changed. Please try again shortly."
+    ),
     EXECUTION_ENVIRONMENT_MISMATCH: (
         "This operation cannot run in the execution environment it was requested for, "
         "so nothing was executed."
@@ -443,6 +493,24 @@ FORBIDDEN_BODY_SUBSTRINGS: Tuple[str, ...] = (
     "c:\\",
     "/usr/",
 )
+
+#: The keys the ``"error"`` member of an error body carries, and the only keys it carries.
+#: ``design.md`` -> "Structured errors" prints the body as ``{"error": {code, message, details},
+#: "request_id"}``; this is that inner object's key set, declared once so
+#: :func:`structured_error_body` and the tests that assert the envelope shape read the same
+#: definition rather than two copies of the same literal (Requirement 30.2).
+ERROR_OBJECT_KEYS: FrozenSet[str] = frozenset({"code", "message", "details"})
+
+#: The keys the error body itself carries, and the only keys it carries. Nothing else is added -
+#: no ``path``, no ``timestamp`` (see :func:`structured_error_body` for why).
+ERROR_ENVELOPE_KEYS: FrozenSet[str] = frozenset({"error", "request_id"})
+
+#: Every key an error body contributes that is *structure* rather than *content*. A test that
+#: walks a response body looking for something that must not be there - a Protected_Logic
+#: substring, an internal identifier - needs to know which keys are the envelope's own scaffolding
+#: and therefore never carry caller data. Declared here, beside the envelope it describes, so
+#: every such test shares one definition.
+STRUCTURAL_RESPONSE_KEYS: FrozenSet[str] = ERROR_ENVELOPE_KEYS | ERROR_OBJECT_KEYS
 
 #: What :func:`redact_details` puts in place of a value that trips the deny-list. A fixed
 #: string rather than the original, and never silently dropped: an omitted key and a redacted
@@ -706,6 +774,8 @@ def structured_error_body(exc: StructuredError, request_id: str) -> Dict[str, An
     Nothing else is added. No ``path``, because an internal route template is of no use to a
     client and Requirement 22.9 lists internal paths among the things a body must not carry;
     no ``timestamp``, because the log record already has one keyed by the same identifier.
+
+    The key sets are :data:`ERROR_ENVELOPE_KEYS` and :data:`ERROR_OBJECT_KEYS`.
     """
     return {"error": exc.to_error_object(), "request_id": request_id}
 
@@ -749,6 +819,8 @@ def register_structured_error_handlers(app: Any) -> None:
 __all__ = [
     "ALLOWED_HTTP_STATUS_FOR_CODE",
     "ERROR_CODES",
+    "ERROR_ENVELOPE_KEYS",
+    "ERROR_OBJECT_KEYS",
     "EXECUTION_ENVIRONMENT_MISMATCH",
     "EXECUTION_ENVIRONMENT_UNRESOLVED",
     "FORBIDDEN_BODY_SUBSTRINGS",
@@ -757,6 +829,7 @@ __all__ = [
     "MARKETPLACE_CHECKOUT_UNAVAILABLE",
     "MARKETPLACE_CLONING_DISABLED",
     "MARKETPLACE_CODES",
+    "MARKETPLACE_COVER_REFERENCE_REJECTED",
     "MARKETPLACE_ELIGIBILITY_FAILED",
     "MARKETPLACE_ELIGIBILITY_UNEVALUABLE",
     "MARKETPLACE_EVIDENCE_IMMUTABLE",
@@ -776,6 +849,7 @@ __all__ = [
     "MARKETPLACE_SUBMISSION_NOT_FOUND",
     "MARKETPLACE_SUBMISSION_TRANSITION_REJECTED",
     "MARKETPLACE_SUBSCRIPTION_EXPIRED",
+    "MARKETPLACE_USE_SUBMISSION_ACTIONS",
     "MarketplaceError",
     "NOT_FOUND",
     "PAPER_CODES",
@@ -787,6 +861,7 @@ __all__ = [
     "PAPER_ORDER_INVALID",
     "PAPER_OVER_FILL",
     "PAPER_PERSISTENCE_UNAVAILABLE",
+    "PAPER_READ_FAILED",
     "PAPER_SESSION_LIMIT_REACHED",
     "PAPER_SESSION_OPERATION_REJECTED",
     "PAPER_SIMULATOR_MISCONFIGURED",
@@ -795,6 +870,7 @@ __all__ = [
     "REDACTED_PLACEHOLDER",
     "REQUEST_ID_HEADER",
     "SHARED_CODES",
+    "STRUCTURAL_RESPONSE_KEYS",
     "StructuredError",
     "assert_messages_carry_no_internals",
     "current_request_id",

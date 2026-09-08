@@ -16,13 +16,38 @@ Channels:
   dashboard    — per-user dashboard realtime updates (PHASE 14)
   strategy     — per-strategy realtime updates (PHASE 14)
   signal_trace — per-user/strategy signal trace realtime updates (PHASE 10)
+  paper        — per-Paper_Session simulated-trading events (task 26.4)
+
+TASK 26.4 (marketplace-subscriptions-paper-trading) ADDED THREE THINGS AND REBUILT NOTHING
+------------------------------------------------------------------------------------------
+Requirements 19.10, 19.11 and 19.12 are answered by extending what is already here rather than
+by a second manager:
+
+1. ``"paper"`` joins :meth:`ConnectionManager._get_store`'s mapping, so ``paper.{session_id}``
+   subscriptions live in the same registry every other channel uses and are swept by the same
+   :meth:`unsubscribe` / :meth:`disconnect` that already sweep ``_all_connections``,
+   ``_user_connections`` and the per-channel stores (Requirement 19.10's "remove a closed
+   connection's subscriptions from every registry it was added to").
+2. :meth:`_stores` replaces the two hard-coded six-store lists that :meth:`disconnect` and
+   :meth:`broadcast` swept. Those lists omitted ``_dashboard``, ``_strategy``,
+   ``_signal_trace`` and ``_admin``, so a disconnect left rows behind in four registries. This
+   only ever removes MORE, never less.
+3. The per-connection PENDING-QUEUE DEPTH counter of Requirement 19.11
+   (:data:`MAX_PENDING_EVENTS_PER_CONNECTION`, :meth:`note_pending`, :meth:`note_delivered`,
+   :meth:`pending_depth`, :meth:`has_fallen_behind`, :meth:`forget_connection`). The counter is
+   here rather than in the paper package because it is a property of a CONNECTION, not of an
+   event vocabulary, and because every channel gets it for free once it lives with the registry.
+
+The HEARTBEAT is deliberately untouched. It lives in ``backend_app/api_ws/ws_routes.py``
+(``_heartbeat_task``, ``_HEARTBEAT_INTERVAL_SECONDS = 10``, ``_HEARTBEAT_TIMEOUT_SECONDS = 30``)
+and closes a socket that has stopped answering; task 26.4 uses it as it stands.
 """
 
 import asyncio
 import json
 import logging
 from collections import defaultdict
-from typing import Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import HTTPException, WebSocket
 
@@ -33,6 +58,15 @@ logger = logging.getLogger("WSManager")
 # STEP 8: Rate limiting constants to prevent IP bans
 MAX_STREAMS_PER_USER = 20  # Maximum streams a single user can open
 MAX_GLOBAL_STREAMS = 1000    # Maximum total streams across all users
+
+#: Requirement 19.11's ceiling: the number of events that may be OUTSTANDING for one connection
+#: before it is classified as having fallen behind.
+#:
+#: "Exceeds 1000" is read strictly - a depth of exactly 1000 is still served, and 1001 is not
+#: (:meth:`ConnectionManager.has_fallen_behind`). The figure is a count of events rather than of
+#: bytes because that is the unit the requirement states and the unit a client resumes on: a
+#: consumer told it fell behind reconnects with a ``last_sequence``, and sequences are counted.
+MAX_PENDING_EVENTS_PER_CONNECTION = 1000
 
 
 class ConnectionManager:
@@ -58,6 +92,9 @@ class ConnectionManager:
         self._strategy: Dict[str, Set[WebSocket]] = defaultdict(set)  # PHASE 14: Strategy channel
         self._signal_trace: Dict[str, Set[WebSocket]] = defaultdict(set)  # PHASE 10: Signal Trace channel
         self._admin: Dict[str, Set[WebSocket]] = defaultdict(set)  # Admin & Staff channel
+        # Task 26.4: per-Paper_Session subscriptions, keyed by session id. The channel NAME
+        # ("paper.{session_id}") is owned by ws_channels.PAPER_FAMILY; this store holds the key.
+        self._paper: Dict[str, Set[WebSocket]] = defaultdict(set)
         self._lock = asyncio.Lock()
         
         # STEP 8: Connection tracking for rate limiting
@@ -65,6 +102,12 @@ class ConnectionManager:
         self._user_connections: Dict[str, Set[WebSocket]] = defaultdict(set)
         # Track all connections globally
         self._all_connections: Set[WebSocket] = set()
+
+        # Task 26.4 / Requirement 19.11: how many events have been handed to each connection and
+        # not yet acknowledged as sent. A plain dict keyed on the connection object (identity
+        # hashing, which is what every other registry here relies on) and erased by
+        # :meth:`forget_connection`, so it cannot outlive the socket it counts for.
+        self._pending: Dict[Any, int] = {}
         
         self._listener_task: Optional[asyncio.Task] = None
 
@@ -106,16 +149,29 @@ class ConnectionManager:
 
     # ── Register / unregister ──────────────────────────────────────────────
 
-    async def subscribe(self, channel: str, key: str, ws: WebSocket):
+    async def subscribe(
+        self, channel: str, key: str, ws: WebSocket, user_id: Optional[str] = None
+    ):
         """
         Add a WebSocket to a channel.
         
         STEP 8: Enforces rate limiting:
         - Max streams per user: MAX_STREAMS_PER_USER
         - Max global streams: MAX_GLOBAL_STREAMS
+
+        ``user_id`` (task 26.4) is the AUTHENTICATED identity of the subscription, passed by
+        callers whose channel key is not itself a user id. ``paper.{session_id}`` is the case that
+        needs it: the key is a Paper_Session id, so :meth:`_extract_user_id` can read nothing from
+        it, and without this the connection would never enter ``_user_connections`` - which is one
+        of the registries Requirement 19.10 requires a closed connection to be removed from, and
+        the registry the per-user stream limit is counted in.
+
+        It is NEVER a client-supplied value: ``paper_channel.subscribe`` takes it from the
+        authenticated user mapping (Requirement 21.1).
         """
         # STEP 8: Extract user_id from channel key for user-specific limits
-        user_id = self._extract_user_id(channel, key)
+        if user_id is None:
+            user_id = self._extract_user_id(channel, key)
         
         async with self._lock:
             # STEP 8: Check global limit
@@ -157,8 +213,19 @@ class ConnectionManager:
             f"{MAX_STREAMS_PER_USER}, global: {len(self._all_connections)}/{MAX_GLOBAL_STREAMS})"
         )
 
-    async def unsubscribe(self, channel: str, key: str, ws: WebSocket):
-        """Remove a WebSocket from a channel (on disconnect)."""
+    async def unsubscribe(
+        self, channel: str, key: str, ws: WebSocket, user_id: Optional[str] = None
+    ):
+        """Remove a WebSocket from a channel (on disconnect).
+
+        ``user_id`` (task 26.4) mirrors :meth:`subscribe`: a subscription that entered
+        ``_user_connections`` under an explicitly passed identity has to leave it under the same
+        one, or Requirement 19.10's "every registry it was added to" would be false for exactly
+        the channels that needed the parameter.
+
+        The pending-event counter is erased here too, because a connection that has left every
+        registry cannot have anything outstanding for it.
+        """
         store = self._get_store(channel)
         async with self._lock:
             store[key].discard(ws)
@@ -167,11 +234,13 @@ class ConnectionManager:
             
             # STEP 8: Clean up connection tracking
             self._all_connections.discard(ws)
-            user_id = self._extract_user_id(channel, key)
+            if user_id is None:
+                user_id = self._extract_user_id(channel, key)
             if user_id and user_id in self._user_connections:
                 self._user_connections[user_id].discard(ws)
                 if not self._user_connections[user_id]:
                     del self._user_connections[user_id]
+            self._pending.pop(ws, None)
         
         logger.info(f"[WS] -sub {channel}/{key}")
 
@@ -284,6 +353,8 @@ class ConnectionManager:
                     self._user_connections[user_id] -= dead
                     if not self._user_connections[user_id]:
                         del self._user_connections[user_id]
+                for corpse in dead:
+                    self._pending.pop(corpse, None)
 
     async def send_to_socket(self, ws: WebSocket, data: dict):
         """Direct send to a single WebSocket (for request-reply patterns)."""
@@ -313,10 +384,73 @@ class ConnectionManager:
             "strategy": self._strategy,    # PHASE 14: Strategy channel
             "signal_trace": self._signal_trace,  # PHASE 10: Signal Trace channel
             "admin": self._admin,          # Admin & Support channel
+            "paper": self._paper,          # Task 26.4: paper.{session_id}
         }
         if channel not in mapping:
             raise ValueError(f"Unknown channel: {channel}")
         return mapping[channel]
+
+    def _stores(self) -> List[Dict[str, Set[WebSocket]]]:
+        """Every per-channel store, so a sweep cannot miss one.
+
+        :meth:`disconnect` and :meth:`broadcast` used to sweep a hard-coded list of six stores
+        that omitted ``_dashboard``, ``_strategy``, ``_signal_trace`` and ``_admin`` - so a
+        disconnected socket stayed registered in four of them. Requirement 19.10 requires removal
+        from **every** registry a connection was added to, and a list written out at two call
+        sites is a list that gets a new store added to it at one.
+        """
+        return [
+            self._ticker,
+            self._orderbook,
+            self._candles,
+            self._user,
+            self._pnl,
+            self._marketplace,
+            self._dashboard,
+            self._strategy,
+            self._signal_trace,
+            self._admin,
+            self._paper,
+        ]
+
+    # ── Pending-queue depth (Requirement 19.11) ───────────────────────────
+
+    def pending_depth(self, ws: Any) -> int:
+        """How many events are outstanding for ``ws`` right now. ``0`` for an unknown socket."""
+        return self._pending.get(ws, 0)
+
+    def note_pending(self, ws: Any, count: int = 1) -> int:
+        """Record ``count`` more events handed to ``ws``, and return the new depth.
+
+        Called BEFORE the send is attempted, which is the only order in which the counter can
+        answer Requirement 19.11's question: a depth measured after the await has already been
+        drained by it, and a consumer that never drains would be measured at zero forever.
+        """
+        depth = self._pending.get(ws, 0) + int(count)
+        self._pending[ws] = depth
+        return depth
+
+    def note_delivered(self, ws: Any, count: int = 1) -> int:
+        """Record ``count`` events as sent, and return the new depth. Never below zero."""
+        depth = self._pending.get(ws, 0) - int(count)
+        if depth <= 0:
+            self._pending.pop(ws, None)
+            return 0
+        self._pending[ws] = depth
+        return depth
+
+    def has_fallen_behind(self, ws: Any) -> bool:
+        """Whether ``ws`` has MORE than :data:`MAX_PENDING_EVENTS_PER_CONNECTION` outstanding.
+
+        Strictly more: Requirement 19.11 says "exceeds 1000", so a connection sitting at exactly
+        the ceiling is still served. A boundary read the other way would close a consumer that is
+        keeping up with the limit it was given.
+        """
+        return self.pending_depth(ws) > MAX_PENDING_EVENTS_PER_CONNECTION
+
+    def forget_connection(self, ws: Any) -> None:
+        """Erase the pending count for ``ws``. Idempotent."""
+        self._pending.pop(ws, None)
 
     def stats(self) -> dict:
         return {
@@ -328,6 +462,8 @@ class ConnectionManager:
             "marketplace_connections": sum(len(v) for v in self._marketplace.values()),
             "dashboard_connections": sum(len(v) for v in self._dashboard.values()),
             "strategy_connections": sum(len(v) for v in self._strategy.values()),
+            "paper_sessions": len(self._paper),
+            "paper_connections": sum(len(v) for v in self._paper.values()),
         }
 
     # ── Validation Suite Compatibility ────────────────────────────────────
@@ -339,7 +475,12 @@ class ConnectionManager:
         logger.info(f"[WS] Connected websocket {ws}")
 
     async def disconnect(self, ws: WebSocket):
-        """Remove a WebSocket from all channels and connection tracking."""
+        """Remove a WebSocket from all channels and connection tracking.
+
+        Requirement 19.10's "remove a closed connection's subscriptions from every registry it was
+        added to" - every registry being :meth:`_stores`, ``_all_connections``,
+        ``_user_connections`` and the pending-event counter.
+        """
         async with self._lock:
             self._all_connections.discard(ws)
             # Remove from user connections
@@ -348,11 +489,12 @@ class ConnectionManager:
                 if not self._user_connections[user_id]:
                     del self._user_connections[user_id]
             # Remove from all other channels
-            for store in [self._ticker, self._orderbook, self._candles, self._user, self._pnl, self._marketplace]:
+            for store in self._stores():
                 for key in list(store.keys()):
                     store[key].discard(ws)
                     if not store[key]:
                         del store[key]
+            self._pending.pop(ws, None)
         logger.info(f"[WS] Disconnected websocket {ws}")
 
     async def broadcast(self, message: str):
@@ -370,11 +512,13 @@ class ConnectionManager:
                     self._user_connections[user_id] -= dead
                     if not self._user_connections[user_id]:
                         del self._user_connections[user_id]
-                for store in [self._ticker, self._orderbook, self._candles, self._user, self._pnl, self._marketplace]:
+                for store in self._stores():
                     for key in list(store.keys()):
                         store[key] -= dead
                         if not store[key]:
                             del store[key]
+                for corpse in dead:
+                    self._pending.pop(corpse, None)
 
     async def send_personal_message(self, message: str, websocket: WebSocket):
         """Send a message to a specific websocket connection."""

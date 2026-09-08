@@ -1,9 +1,82 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Filter, Download, RefreshCw } from "lucide-react";
+import { Filter, Download, RefreshCw, FlaskConical } from "lucide-react";
 import { api } from "../api";
 import { C, SectionH, Tag2 } from "../components/ui-legacy/primitives";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
+
+/**
+ * The two additive provenance fields, read off the paper trades body and nothing else.
+ *
+ * `GET /api/paper/trades` returns `execution_environment: "PAPER"` and `is_simulated: true` on
+ * its envelope beside `trades` and `count` (`backend_app/routers/paper_trading.py`, task 23.3),
+ * and `PaperTradingService._paper_provenance` puts the same two fields on each trade row. The
+ * envelope is what this page already destructures, so the envelope is what the label is read
+ * from. Nothing here defaults either field: a body carrying neither yields `null` and the
+ * indicator reports the label as unavailable rather than manufacturing one (Requirement 28.5).
+ *
+ * @param {any} body - A resolved paper response body.
+ * @returns {{execution_environment: (string|null), is_simulated: boolean}|null}
+ */
+const readPaperProvenance = (body) => {
+  if (!body || typeof body !== "object") return null;
+  const env = typeof body.execution_environment === "string" && body.execution_environment
+    ? body.execution_environment
+    : null;
+  const flagged = body.is_simulated === true;
+  if (!env && !flagged) return null;
+  return { execution_environment: env, is_simulated: flagged };
+};
+
+/**
+ * Requirement 13.6 / 20.6 / 28.1 - the simulated indicator.
+ *
+ * Rendered from the server's own `execution_environment` / `is_simulated` fields, carrying its
+ * meaning in text plus a shape rather than in colour alone, and placed **inside the region
+ * holding the figures it qualifies** - the summary-statistics grid and the ledger table - not
+ * in the page header, which a reader scrolled into a long ledger cannot see.
+ *
+ * A `null` provenance in the PAPER branch means the response arrived without those fields. The
+ * indicator then reports the label as unavailable instead of asserting a server label that was
+ * never sent, and still marks the region, because an unlabelled PAPER figure is what
+ * Requirement 28.4 forbids.
+ */
+function SimulatedIndicator({ provenance, announce = false }) {
+  const env = provenance?.execution_environment ?? null;
+  const flagged = provenance?.is_simulated === true;
+  const known = Boolean(env) || flagged;
+  const label = env && flagged
+    ? `${env} · SIMULATED`
+    : env || (flagged ? "SIMULATED" : "SIMULATED · SERVER LABEL UNAVAILABLE");
+  const tone = known
+    ? { fg: "#818cf8", bg: "rgba(99, 102, 241, 0.12)", border: "rgba(99, 102, 241, 0.45)" }
+    : { fg: "#fbbf24", bg: "rgba(245, 158, 11, 0.12)", border: "rgba(245, 158, 11, 0.45)" };
+
+  return (
+    <span
+      role={announce ? "status" : undefined}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "3px 8px",
+        borderRadius: 6,
+        background: tone.bg,
+        border: `1px solid ${tone.border}`,
+        color: tone.fg,
+        fontFamily: "monospace",
+        fontSize: "0.625rem",
+        fontWeight: 800,
+        letterSpacing: 1.2,
+        textTransform: "uppercase",
+        whiteSpace: "nowrap",
+      }}
+    >
+      <FlaskConical size={11} aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
 
 export default function TradeHistory() {
   const [environment, setEnvironment] = useState("live");
@@ -11,6 +84,9 @@ export default function TradeHistory() {
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState("ALL");
   const [error, setError] = useState(null);
+  // Set only on the PAPER branch, cleared on the LIVE branch. The two branches are mutually
+  // exclusive, so no LIVE total is ever computed from a figure this reader labelled simulated.
+  const [paperProvenance, setPaperProvenance] = useState(null);
 
   const toNumber = (v, fallback = 0) => {
     const n = Number(v);
@@ -38,11 +114,13 @@ export default function TradeHistory() {
     setError(null);
     try {
       if (environment === "live") {
+        setPaperProvenance(null);
         const data = await api.orders.getHistory();
         const rows = Array.isArray(data) ? data : data?.data || data?.trades || [];
         setTrades(normalizeTrades(rows));
       } else {
         const data = await api.paper.getTrades(100);
+        setPaperProvenance(readPaperProvenance(data));
         const rows = Array.isArray(data) ? data : data?.trades || data?.data || [];
         setTrades(normalizeTrades(rows));
       }
@@ -169,6 +247,16 @@ export default function TradeHistory() {
 
       {/* Summary Stats */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8, marginBottom: 14 }}>
+        {/* Requirement 13.6: the indicator is the first cell of the figure grid itself, spanning
+            it, so the trade counts, win rate and total P&L are never read without it. */}
+        {environment === "paper" && (
+          <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <SimulatedIndicator provenance={paperProvenance} announce />
+            <span style={{ color: "#64748b", fontSize: "0.6875rem" }}>
+              Every figure below is simulated. No real capital was traded.
+            </span>
+          </div>
+        )}
         {[
           { l: "Total Trades", v: loading ? "..." : totalTrades, c: "#00d4ff" },
           { l: "Profitable", v: loading ? "..." : profitableTrades, c: "#10b981" },
@@ -198,6 +286,16 @@ export default function TradeHistory() {
 
       {/* Ledger Table */}
       <Card className="bg-[#0c1017] border-[#1e293b]">
+        {/* Requirement 13.6: inside the ledger card, above its own rows, so the entry, exit and
+            P&L columns carry the label wherever the reader has scrolled to. */}
+        {environment === "paper" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px 0", flexWrap: "wrap" }}>
+            <SimulatedIndicator provenance={paperProvenance} />
+            <span style={{ color: "#64748b", fontSize: "0.6875rem" }}>
+              Simulated fills. Entry, exit, P&amp;L, fees and slippage below are not real executions.
+            </span>
+          </div>
+        )}
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", minWidth: 780, borderCollapse: "collapse", fontSize: 10, fontFamily: "monospace" }}>
             <thead>

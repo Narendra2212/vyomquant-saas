@@ -420,6 +420,17 @@ async def test_paper_trading_events_generate_notifications():
     app.dependency_overrides[get_request_supabase] = lambda: None
     client = TestClient(app)
 
+    # The paper endpoints read and write the ``paper_*`` tables as of
+    # marketplace-subscriptions-paper-trading task 23.2, and refuse with 503 rather than falling
+    # back to an in-memory balance when there is no Persistence_Layer (Requirements 17.2, 28.3).
+    # The notifications this test is about are dispatched by the handlers on the success path, so
+    # the handlers are given storage.
+    from backend_app.backend.paper_trading_service import get_paper_trading_service
+    from tests.paper_seed import bind_paper_persistence, release_paper_persistence
+
+    paper_service = get_paper_trading_service()
+    bind_paper_persistence(paper_service)
+
     try:
         # 1. Reset paper account
         res_reset = client.post(
@@ -450,6 +461,7 @@ async def test_paper_trading_events_generate_notifications():
         assert "paper_account_reset" in types
 
     finally:
+        release_paper_persistence(paper_service)
         app.dependency_overrides.clear()
 
 

@@ -1,4 +1,5 @@
 {
+  "_baseline_note_environment_filter_and_subscriber_projection": "Re-recorded for tasks 29.3 and 29.4 (Requirements 23.2, 23.3, 23.4, 23.6). Two ADDITIONS, nothing removed, renamed or retyped: (1) the `environment` query parameter on GET /api/signal-trace/signals and GET /api/signal-trace/signals/{signal_id} \u2014 Requirement 23.4's Execution_Environment filter, declared as a repeatable list like every other Requirement 17.2 filter category, with no default so Requirement 23.6's default (the caller's own signals across all environments) is unchanged; (2) the detail handler's `raises` gains {detail_type: computed, status_code: e.http_status} \u2014 the 400 for an environment value outside BACKTEST/PAPER/LIVE and the 404 an environment filter a pre-010 database cannot answer, both refused explicitly instead of being ignored. The list handler already recorded that entry. No path, method, rate limit or existing filter changed, and no response key was removed.",
   "api_call_count": 2,
   "api_calls": [
     {
@@ -12,6 +13,10 @@
           "handler": "get_signal",
           "module": "backend_app.routers.signal_trace",
           "parameters": {
+            "environment": {
+              "annotation": "Optional",
+              "has_default": true
+            },
             "request": {
               "annotation": "Request"
             },
@@ -24,6 +29,10 @@
             }
           },
           "raises": [
+            {
+              "detail_type": "computed",
+              "status_code": "e.http_status"
+            },
             {
               "detail_type": {
                 "error": "str",
@@ -77,6 +86,10 @@
               "has_default": true
             },
             "deployment_id": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "environment": {
               "annotation": "Optional",
               "has_default": true
             },

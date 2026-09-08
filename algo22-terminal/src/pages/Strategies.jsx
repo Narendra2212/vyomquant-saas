@@ -5,7 +5,7 @@ import {
   BarChart2, Pause, Play, Trash2, PlusCircle, Copy, Settings,
   Activity, Zap, Globe, Server, Clock, Shield, RefreshCw, AlertTriangle
 } from "lucide-react";
-import { endpoints } from "../api";
+import { endpoints, api } from "../api";
 import { CONFIG } from "../config";
 import {
   C, Tag2, StatusDot, ProgressBar
@@ -70,6 +70,163 @@ const normalizeStrategies = (rows = []) =>
     health: computeStrategyHealth(row),
   }));
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Server-derived ownership: GET /api/library/my-strategies (task 32.7)
+// Requirements 12.2, 12.3, 12.4, 12.5, 12.6, 12.8.
+//
+// This read sits BESIDE `endpoints.strategies.list()`, which is untouched: that call is what
+// the owner's card grid below is built from, and nothing about it changes. What is added is
+// the combined owned-and-subscribed list, whose `ownership` label, `subscription` triple,
+// `entitling` flag, `unavailable_reason` code and `allowed_actions` list are all decided by
+// `backend_app/backend/marketplace/library_entries.py` and rendered here EXACTLY as returned.
+//
+// WHY THE AFFORDANCES ARE A LOOKUP AND NOT A CONDITION
+//   The rendered buttons are produced by mapping over `entry.allowed_actions` and looking each
+//   member up in `ACTION_CATALOG`. There is no `ownership === "SUBSCRIBED" ? … : …` anywhere in
+//   the affordance path and no hardcoded button list gated by a flag, so the page is
+//   structurally incapable of offering an action the server did not return — an action absent
+//   from `allowed_actions` is never iterated over, so its button is never constructed. The
+//   catalogue is the page's own vocabulary of what it can DO with an action; an action the
+//   server returns that the catalogue does not describe renders nothing, which narrows the
+//   offer and can never widen it.
+//
+//   `allowed_actions` is an affordance list, never an authorisation: Requirement 12.7's 403 is
+//   each restricted route's own, and the two disabled-execution chips below say so in words.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The three actions that execute the strategy. Requirement 12.5 disables every one of them
+ *  on an entry whose Subscription does not entitle, while still offering renewal. Named once,
+ *  so the disabled state and the catalogue cannot disagree about which actions execute. */
+const EXECUTION_ACTIONS = ["run_backtest", "deploy_live", "start_paper"];
+
+/** `unavailable_reason` — the wire code `library_entries.entitlement_reason` maps the
+ *  Entitlement_Resolver's own reason onto. `null` while the entry entitles. Spelled here as the
+ *  server spells it, so the page's expired / unavailable-strategy states and the eventual
+ *  refusal name the same condition. */
+const REASON_TEXT = {
+  MARKETPLACE_SUBSCRIPTION_EXPIRED:
+    "This subscription period has ended, so it no longer entitles you to run this strategy.",
+  MARKETPLACE_NOT_SUBSCRIBED:
+    "No entitling subscription is held for this listing.",
+  MARKETPLACE_STRATEGY_UNAVAILABLE:
+    "This listing is unavailable — the strategy behind it cannot be resolved right now.",
+  MARKETPLACE_OPERATION_NOT_PERMITTED:
+    "This subscription is suspended, so execution is not permitted right now.",
+};
+
+/** The one place the page decides what a `MARKETPLACE_*` reason code means in words. An
+ *  unrecognised code is reported verbatim rather than being softened into a generic sentence,
+ *  so a code this build has not seen is still visible to the user and to support. */
+const reasonText = (code) =>
+  (code && REASON_TEXT[code]) || (code ? `Refused by the server: ${code}` : null);
+
+/** A subscribed entry's Listing identifier as a query value, or `null`. */
+const listingParam = (entry) =>
+  entry?.listing_id ? encodeURIComponent(String(entry.listing_id)) : null;
+
+/** An owned entry's strategy identifier as a query value, or `null`. */
+const strategyParam = (entry) =>
+  entry?.strategy_id ? encodeURIComponent(String(entry.strategy_id)) : null;
+
+/**
+ * What the page can do with each action name the server may return.
+ *
+ * `to(entry)` returns the in-app destination for the action, or `null` when this entry carries
+ * no identifier the destination needs — in which case the button is not rendered at all, since
+ * a button leading nowhere is worse than an absent one.
+ *
+ * `call` names one of the two real API calls this page performs for a subscription
+ * (`api.library.renewSubscription`, `api.library.cancelSubscription`); `disclose` names a panel
+ * rendered from fields already in this response.
+ *
+ * Actions outside this catalogue — `edit`, `open_in_builder`, `view_graph`, `edit_blocks`, the
+ * indicator- and risk-parameter actions, the export/download actions, `view_model_params`,
+ * `re_version`, `delete` — have no entry here. The owner's card grid below is unchanged and
+ * remains where an owner edits, clones, renames, backtests, deploys and archives their own
+ * strategy; nothing in this section constructs one of those controls, so a `SUBSCRIBED` entry
+ * cannot acquire one however `allowed_actions` is spelled.
+ */
+const ACTION_CATALOG = {
+  view_listing: {
+    label: "View listing",
+    icon: Globe,
+    to: (entry) => {
+      const id = listingParam(entry);
+      return id ? `/app/marketplace?listing_id=${id}` : null;
+    },
+  },
+  run_backtest: {
+    label: "Run backtest",
+    icon: BarChart2,
+    to: (entry) => {
+      const listing = listingParam(entry);
+      if (listing) return `/app/backtest?listing_id=${listing}`;
+      const strategy = strategyParam(entry);
+      return strategy ? `/app/backtest?strategy_id=${strategy}` : null;
+    },
+  },
+  deploy_live: {
+    label: "Deploy live",
+    icon: Play,
+    // A subscribed Listing deploys through `POST /api/library/{id}/deploy`, which takes the
+    // subscriber's own symbol, timeframe and capital. `api.library` exposes no method for it,
+    // and this page constructs no HTTP call of its own, so the affordance leads to the Listing
+    // surface where that form lives rather than inventing a request here.
+    to: (entry) => {
+      const id = listingParam(entry);
+      return id ? `/app/marketplace?listing_id=${id}&intent=deploy_live` : null;
+    },
+  },
+  start_paper: {
+    label: "Start paper trading",
+    icon: Zap,
+    to: (entry) => {
+      const listing = listingParam(entry);
+      if (listing) return `/app/paper-trading?listing_id=${listing}`;
+      const strategy = strategyParam(entry);
+      return strategy ? `/app/paper-trading?strategy_id=${strategy}` : null;
+    },
+  },
+  view_performance: {
+    label: "View performance",
+    icon: TrendingUp,
+    disclose: "performance",
+    // Only offered when this response actually carries figures; an empty panel would be a
+    // fabricated "no results" where the truth is "this read did not fetch them".
+    available: (entry) => Boolean(entry?.listing),
+  },
+  view_subscription: {
+    label: "View subscription",
+    icon: Shield,
+    disclose: "subscription",
+    available: (entry) => Boolean(entry?.subscription),
+  },
+  renew: {
+    label: "Renew",
+    icon: RefreshCw,
+    call: "renew",
+    available: (entry) => Boolean(entry?.subscription_id),
+  },
+  cancel_renewal: {
+    label: "Cancel renewal",
+    icon: Pause,
+    call: "cancel_renewal",
+    available: (entry) => Boolean(entry?.subscription_id),
+  },
+};
+
+/** A timestamp as local text, or the raw value when it is not a parseable instant. Nothing is
+ *  substituted for an absent expiry: the caller renders "not reported" instead. */
+const formatInstant = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
+};
+
+/** The entry's display name — the Listing's for a subscribed entry, the strategy's own for an
+ *  owned one. Rendered as a React text child, never as HTML. */
+const entryName = (entry) => entry?.listing?.name ?? entry?.name ?? null;
+
 export default function Strategies() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -101,6 +258,20 @@ export default function Strategies() {
   const [exchangesLoading, setExchangesLoading] = useState(false);
   const [selectedAccount, setSelectedAccount] = useState(null);
   
+  // ── Task 32.7: the server-derived ownership list (GET /api/library/my-strategies) ──
+  // `null` means "not read yet or the read failed" and is never rendered as a list: an error
+  // clears it, so the section shows the error state rather than the previous entries
+  // (Requirement 12.8 — an error is an error state, never a stale list or a zero).
+  const [ownershipEntries, setOwnershipEntries] = useState(null);
+  const [ownershipMeta, setOwnershipMeta] = useState(null);
+  const [ownershipLoading, setOwnershipLoading] = useState(true);
+  const [ownershipError, setOwnershipError] = useState(null);
+  const [ownershipReloadKey, setOwnershipReloadKey] = useState(0);
+  // Per-entry disclosure of the two read-only panels and the outcome of the two subscription
+  // calls. Keyed by the server's own `entry_id`, so nothing is keyed on an index.
+  const [disclosed, setDisclosed] = useState({});
+  const [subscriptionAction, setSubscriptionAction] = useState({});
+
   const resumeBuilderStrategy = location.state?.resumeBuilderStrategy || null;
 
   useEffect(() => {
@@ -124,6 +295,179 @@ export default function Strategies() {
     loadStrategies();
     return () => controller.abort();
   }, []);
+
+  // ── Task 32.7: the combined owned-and-subscribed read, beside the one above ───────────
+  // It is a second, independent read: `endpoints.strategies.list()` above still owns the
+  // owner's card grid, and neither read's failure blanks or falsifies the other's section.
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadOwnership = async () => {
+      setOwnershipLoading(true);
+      setOwnershipError(null);
+      try {
+        const payload = await api.library.myStrategies();
+        if (cancelled) return;
+        const items = Array.isArray(payload?.items) ? payload.items : null;
+        if (items === null) {
+          // The read completed but carried no `items` array. That is not an empty list — it is
+          // a response this page cannot interpret, so it is reported as an error rather than
+          // rendered as "you own nothing" (Requirement 12.8).
+          setOwnershipEntries(null);
+          setOwnershipMeta(null);
+          setOwnershipError({
+            kind: "error",
+            message:
+              "The ownership list came back in a shape this page cannot read, so nothing is shown for it.",
+          });
+          return;
+        }
+        setOwnershipEntries(items);
+        setOwnershipMeta({
+          total: payload?.total,
+          owned_total: payload?.owned_total,
+          subscribed_total: payload?.subscribed_total,
+          running_paper_sessions_available: payload?.running_paper_sessions_available,
+          as_of: payload?.as_of,
+        });
+      } catch (err) {
+        if (cancelled) return;
+        // Requirement 12.8: the previous entries are dropped, so what renders is the error
+        // state and not a list that is no longer known to be current.
+        setOwnershipEntries(null);
+        setOwnershipMeta(null);
+        setOwnershipError({
+          kind: err?.status === 401 || err?.status === 403 ? "unauthorised" : "error",
+          status: err?.status ?? null,
+          message:
+            typeof err?.getUserMessage === "function"
+              ? err.getUserMessage()
+              : err?.message || "The ownership list could not be read.",
+        });
+      } finally {
+        if (!cancelled) setOwnershipLoading(false);
+      }
+    };
+
+    loadOwnership();
+    return () => {
+      cancelled = true;
+    };
+  }, [ownershipReloadKey]);
+
+  const reloadOwnership = useCallback(() => {
+    setOwnershipReloadKey((k) => k + 1);
+  }, []);
+
+  const toggleDisclosure = useCallback((entryId, panel) => {
+    setDisclosed((prev) => {
+      const current = prev[entryId] || {};
+      return { ...prev, [entryId]: { ...current, [panel]: !current[panel] } };
+    });
+  }, []);
+
+  /**
+   * Renew one Subscription — `POST /api/library/subscriptions/{id}/renew` through `api.library`.
+   *
+   * The endpoint changes no state: it returns a provider session for the renewal amount, and the
+   * transition into ACTIVE happens only when that payment is confirmed. So this handler reports
+   * what came back and, when the provider supplied a `checkout_url`, hands the user to it. It
+   * invents no amount: `amount_minor` is displayed as the integer number of minor units the
+   * server returned, in the currency it named.
+   */
+  const handleRenewSubscription = useCallback(async (entry) => {
+    const key = entry.entry_id;
+    if (!entry.subscription_id) return;
+    setSubscriptionAction((prev) => ({ ...prev, [key]: { busy: true } }));
+    try {
+      const res = await api.library.renewSubscription(entry.subscription_id);
+      if (res?.checkout_url) {
+        setSubscriptionAction((prev) => ({
+          ...prev,
+          [key]: { busy: false, message: "Opening the payment page for the next period." },
+        }));
+        window.location.assign(res.checkout_url);
+        return;
+      }
+      const amount =
+        res?.amount_minor !== undefined && res?.currency
+          ? ` Amount: ${res.amount_minor} ${res.currency} minor units.`
+          : "";
+      setSubscriptionAction((prev) => ({
+        ...prev,
+        [key]: {
+          busy: false,
+          message: `Renewal status: ${res?.status ?? "reported without a status"}.${amount} The subscription becomes active only once the payment is confirmed.`,
+        },
+      }));
+    } catch (err) {
+      setSubscriptionAction((prev) => ({
+        ...prev,
+        [key]: {
+          busy: false,
+          error:
+            typeof err?.getUserMessage === "function"
+              ? err.getUserMessage()
+              : err?.message || "The renewal could not be started.",
+        },
+      }));
+    }
+  }, []);
+
+  /**
+   * Cancel renewal — `POST /api/library/subscriptions/{id}/cancel` through `api.library`.
+   *
+   * This stops the next charge; entitlement runs to the unchanged current expiry. The list is
+   * re-read afterwards so the rendered renewal state is the server's, not an optimistic guess.
+   */
+  const handleCancelRenewal = useCallback(async (entry) => {
+    const key = entry.entry_id;
+    if (!entry.subscription_id) return;
+    setSubscriptionAction((prev) => ({ ...prev, [key]: { busy: true } }));
+    try {
+      const res = await api.library.cancelSubscription(entry.subscription_id);
+      setSubscriptionAction((prev) => ({
+        ...prev,
+        [key]: {
+          busy: false,
+          message: `${res?.status ?? "cancelled"}${res?.message ? ` — ${res.message}` : ""}. Access runs to the unchanged period expiry.`,
+        },
+      }));
+      reloadOwnership();
+    } catch (err) {
+      setSubscriptionAction((prev) => ({
+        ...prev,
+        [key]: {
+          busy: false,
+          error:
+            typeof err?.getUserMessage === "function"
+              ? err.getUserMessage()
+              : err?.message || "The renewal could not be cancelled.",
+        },
+      }));
+    }
+  }, [reloadOwnership]);
+
+  /** The click behaviour for one catalogued action on one entry. */
+  const runOwnershipAction = useCallback(
+    (entry, descriptor) => {
+      if (descriptor.disclose) {
+        toggleDisclosure(entry.entry_id, descriptor.disclose);
+        return;
+      }
+      if (descriptor.call === "renew") {
+        handleRenewSubscription(entry);
+        return;
+      }
+      if (descriptor.call === "cancel_renewal") {
+        handleCancelRenewal(entry);
+        return;
+      }
+      const to = descriptor.to ? descriptor.to(entry) : null;
+      if (to) navigate(to);
+    },
+    [toggleDisclosure, handleRenewSubscription, handleCancelRenewal, navigate],
+  );
 
   // Sync URL search params on change
   useEffect(() => {
@@ -529,6 +873,306 @@ export default function Strategies() {
               </button>
             </div>
           )}
+
+          {/* ── Owned and subscribed, as the server labels them (task 32.7) ────────────
+              Requirements 12.2, 12.3, 12.4, 12.5, 12.6, 12.8. Every label, every
+              subscription field and every button below comes from
+              `api.library.myStrategies()`; the section infers no ownership, no entitlement
+              and no affordance of its own. */}
+          <section
+            aria-label="Owned and subscribed strategies"
+            data-testid="ownership-section"
+            style={{ background: "#0c1017", border: "1px solid #1e293b", borderRadius: 12, padding: 14, marginBottom: 16 }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ color: "#f8fafc", fontSize: 12, fontWeight: 900, letterSpacing: 1, textTransform: "uppercase" }}>
+                  Owned &amp; subscribed
+                </div>
+                <div style={{ color: "#64748b", fontSize: 9, fontFamily: "monospace", marginTop: 3 }}>
+                  Ownership, subscription state and available actions as returned by the server
+                </div>
+              </div>
+              {ownershipMeta && !ownershipError && (
+                <div data-testid="ownership-counts" style={{ color: "#64748b", fontSize: 9, fontFamily: "monospace", textAlign: "right" }}>
+                  {ownershipMeta.owned_total !== undefined && <div>Owned: {ownershipMeta.owned_total}</div>}
+                  {ownershipMeta.subscribed_total !== undefined && <div>Subscribed: {ownershipMeta.subscribed_total}</div>}
+                  {ownershipMeta.as_of && <div>As of {formatInstant(ownershipMeta.as_of)}</div>}
+                </div>
+              )}
+            </div>
+
+            {/* Loading (Requirement 12.8) */}
+            {ownershipLoading && (
+              <div role="status" data-testid="ownership-loading" style={{ color: "#64748b", fontSize: 11, fontFamily: "monospace", padding: "8px 2px" }}>
+                Loading your owned and subscribed strategies...
+              </div>
+            )}
+
+            {/* Unauthorised, and error-with-retry (Requirement 12.8). Nothing of the previous
+                list survives an error: `ownershipEntries` was cleared, so there is no stale
+                list and no zero standing in for a figure that was not read. */}
+            {!ownershipLoading && ownershipError && (
+              <div
+                role="alert"
+                data-testid={ownershipError.kind === "unauthorised" ? "ownership-unauthorised" : "ownership-error"}
+                style={{ background: "rgba(239,68,68,0.12)", border: "1px solid #ef4444", borderRadius: 8, padding: "10px 12px", display: "flex", gap: 8, alignItems: "flex-start" }}
+              >
+                <AlertTriangle size={14} style={{ color: "#ef4444", flexShrink: 0, marginTop: 2 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: "#ef4444", fontSize: 10, fontFamily: "monospace", letterSpacing: 1.5, fontWeight: 900, textTransform: "uppercase", marginBottom: 4 }}>
+                    {ownershipError.kind === "unauthorised" ? "Not authorised" : "Ownership list unavailable"}
+                  </div>
+                  <div style={{ color: "#fca5a5", fontSize: 11, lineHeight: 1.5 }}>
+                    {ownershipError.kind === "unauthorised"
+                      ? "This list is only readable while you are signed in. Sign in again to see your owned and subscribed strategies."
+                      : ownershipError.message}
+                  </div>
+                </div>
+                <Button variant="outline" size="xs" icon={RefreshCw} onClick={reloadOwnership} data-testid="ownership-retry">
+                  Retry
+                </Button>
+              </div>
+            )}
+
+            {/* Empty (Requirement 12.8) — reached only when the read completed */}
+            {!ownershipLoading && !ownershipError && ownershipEntries && ownershipEntries.length === 0 && (
+              <div data-testid="ownership-empty" style={{ color: "#64748b", fontSize: 11, fontFamily: "monospace", padding: "8px 2px" }}>
+                You own no active strategies and hold no marketplace subscriptions.
+              </div>
+            )}
+
+            {!ownershipLoading && !ownershipError && ownershipEntries && ownershipEntries.length > 0 && (
+              <>
+                {ownershipMeta?.running_paper_sessions_available === false && (
+                  <div data-testid="ownership-sessions-unavailable" style={{ color: "#fbbf24", fontSize: 10, fontFamily: "monospace", marginBottom: 10 }}>
+                    The running paper-session count could not be read, so it is not shown. It is
+                    unavailable, not zero.
+                  </div>
+                )}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 10 }}>
+                  {ownershipEntries.map((entry) => {
+                    // Every one of these is read, not derived.
+                    const actions = Array.isArray(entry.allowed_actions) ? entry.allowed_actions : [];
+                    const nonEntitling = entry.entitling === false;
+                    const reason = reasonText(entry.unavailable_reason);
+                    const reasonId = `ownership-reason-${entry.entry_id}`;
+                    const panels = disclosed[entry.entry_id] || {};
+                    const actionState = subscriptionAction[entry.entry_id] || {};
+                    const listing = entry.listing || null;
+                    const performance = listing?.performance_summary || {};
+                    const risk = listing?.risk_metrics || {};
+                    const figures = [
+                      ["Total return %", performance.total_return_pct],
+                      ["Win rate %", performance.win_rate_pct],
+                      ["Profit factor", performance.profit_factor],
+                      ["Trades", performance.total_trades],
+                      ["Sharpe", risk.sharpe_ratio],
+                      ["Max drawdown %", risk.max_drawdown_pct],
+                    ].filter(([, value]) => value !== null && value !== undefined);
+                    // The three execution actions the server did NOT return for this entry.
+                    // They are rendered as programmatically disabled controls with a text
+                    // reason — never as clickable buttons — which is how Requirement 12.5's
+                    // "every execution action disabled" is visible without the page offering
+                    // anything `allowed_actions` withheld: these carry no click handler.
+                    const disabledExecution = nonEntitling
+                      ? EXECUTION_ACTIONS.filter((action) => !actions.includes(action))
+                      : [];
+
+                    return (
+                      <Card
+                        key={entry.entry_id}
+                        className="p-4 bg-[#080a0e] border-[#1e293b]"
+                        data-testid={`ownership-entry-${entry.entry_id}`}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 8 }}>
+                          <span style={{ color: "#f8fafc", fontWeight: 900, fontSize: 12, minWidth: 0, overflowWrap: "anywhere" }}>
+                            {entryName(entry) ?? "Name not reported"}
+                          </span>
+                          {/* The label itself, exactly as the server returned it. */}
+                          <Tag2 c={entry.ownership === "SUBSCRIBED" ? "purple" : "cyan"}>
+                            <span data-testid={`ownership-label-${entry.entry_id}`}>{entry.ownership}</span>
+                          </Tag2>
+                        </div>
+
+                        {/* Descriptive metadata, rendered as text children only. */}
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                          {(listing?.symbol ?? entry.symbol) && <Tag2 c="cyan">{listing?.symbol ?? entry.symbol}</Tag2>}
+                          {entry.timeframe && <Tag2 c="gold">{entry.timeframe}</Tag2>}
+                          {Array.isArray(listing?.supported_timeframes) &&
+                            listing.supported_timeframes.map((tf) => (
+                              <Tag2 key={`tf-${entry.entry_id}-${tf}`} c="gold">{tf}</Tag2>
+                            ))}
+                          {entry.status && <Tag2 c="gray">{entry.status}</Tag2>}
+                        </div>
+
+                        {/* The Subscription_State, the period expiry and the renewal state
+                            (Requirement 12.6). A value the server did not carry reads
+                            "not reported" rather than being defaulted. */}
+                        {entry.subscription && (
+                          <dl
+                            data-testid={`ownership-subscription-${entry.entry_id}`}
+                            style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 8px", margin: "0 0 8px", fontSize: 10, fontFamily: "monospace" }}
+                          >
+                            <dt style={{ color: "#64748b" }}>Subscription</dt>
+                            <dd style={{ color: "#e2e8f0", margin: 0 }}>{entry.subscription.state ?? "not reported"}</dd>
+                            <dt style={{ color: "#64748b" }}>Expires</dt>
+                            <dd style={{ color: "#e2e8f0", margin: 0 }}>
+                              {formatInstant(entry.subscription.period_expiry) ?? "not reported"}
+                            </dd>
+                            <dt style={{ color: "#64748b" }}>Renewal</dt>
+                            <dd style={{ color: "#e2e8f0", margin: 0 }}>{entry.subscription.renewal_state ?? "not reported"}</dd>
+                          </dl>
+                        )}
+
+                        {Object.prototype.hasOwnProperty.call(entry, "running_paper_sessions") && (
+                          <div style={{ color: "#64748b", fontSize: 10, fontFamily: "monospace", marginBottom: 8 }}>
+                            Running paper sessions: {entry.running_paper_sessions}
+                          </div>
+                        )}
+
+                        {/* The explicit expired / unavailable-strategy state (Requirements
+                            12.5, 12.8). Which of the two it is comes from the server's own
+                            `unavailable_reason` code. */}
+                        {nonEntitling && (
+                          <div
+                            role="status"
+                            data-testid={
+                              entry.unavailable_reason === "MARKETPLACE_STRATEGY_UNAVAILABLE"
+                                ? `ownership-unavailable-strategy-${entry.entry_id}`
+                                : `ownership-expired-${entry.entry_id}`
+                            }
+                            style={{ background: "rgba(251,191,36,0.12)", border: "1px solid #fbbf24", borderRadius: 6, padding: "6px 8px", marginBottom: 8 }}
+                          >
+                            <div style={{ color: "#fbbf24", fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 3 }}>
+                              {entry.unavailable_reason === "MARKETPLACE_STRATEGY_UNAVAILABLE"
+                                ? "Strategy unavailable"
+                                : "Subscription does not entitle"}
+                            </div>
+                            <div id={reasonId} style={{ color: "#fde68a", fontSize: 10, lineHeight: 1.5 }}>
+                              {reason ?? "The server reported this entry as non-entitling."}{" "}
+                              Every execution action is disabled until it entitles again; renewal
+                              is offered below.
+                            </div>
+                          </div>
+                        )}
+
+                        {/* The affordances. One button per member of `allowed_actions` the page
+                            can act on — nothing is added to this list and no condition widens
+                            it, so an action the server withheld is never constructed. */}
+                        <div
+                          data-testid={`ownership-actions-${entry.entry_id}`}
+                          style={{ display: "flex", gap: 4, flexWrap: "wrap" }}
+                        >
+                          {actions.map((action) => {
+                            const descriptor = ACTION_CATALOG[action];
+                            if (!descriptor) return null;
+                            if (descriptor.available && !descriptor.available(entry)) return null;
+                            if (descriptor.to && !descriptor.to(entry)) return null;
+                            const busy = Boolean(descriptor.call && actionState.busy);
+                            return (
+                              <Button
+                                key={`${entry.entry_id}-${action}`}
+                                variant={descriptor.call === "renew" ? "success" : "ghost"}
+                                size="xs"
+                                icon={descriptor.icon}
+                                disabled={busy}
+                                data-action={action}
+                                data-testid={`ownership-action-${entry.entry_id}-${action}`}
+                                onClick={() => runOwnershipAction(entry, descriptor)}
+                              >
+                                {busy ? "Working..." : descriptor.label}
+                              </Button>
+                            );
+                          })}
+
+                          {disabledExecution.map((action) => (
+                            <Button
+                              key={`${entry.entry_id}-disabled-${action}`}
+                              variant="ghost"
+                              size="xs"
+                              icon={ACTION_CATALOG[action].icon}
+                              disabled
+                              aria-disabled="true"
+                              aria-describedby={reasonId}
+                              title={reason ?? undefined}
+                              data-action={action}
+                              data-testid={`ownership-disabled-${entry.entry_id}-${action}`}
+                            >
+                              {ACTION_CATALOG[action].label}
+                            </Button>
+                          ))}
+                        </div>
+
+                        {/* `view_performance` — figures already in this response, never
+                            recomputed and never zero-filled. */}
+                        {panels.performance && (
+                          <div data-testid={`ownership-performance-${entry.entry_id}`} style={{ marginTop: 8, borderTop: "1px solid #1e293b", paddingTop: 8 }}>
+                            {figures.length === 0 ? (
+                              <div style={{ color: "#64748b", fontSize: 10, fontFamily: "monospace" }}>
+                                This response carries no performance figures for this listing.
+                              </div>
+                            ) : (
+                              <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 8px", margin: 0, fontSize: 10, fontFamily: "monospace" }}>
+                                {figures.map(([label, value]) => (
+                                  <React.Fragment key={`${entry.entry_id}-fig-${label}`}>
+                                    <dt style={{ color: "#64748b" }}>{label}</dt>
+                                    <dd style={{ color: "#e2e8f0", margin: 0 }}>{String(value)}</dd>
+                                  </React.Fragment>
+                                ))}
+                              </dl>
+                            )}
+                          </div>
+                        )}
+
+                        {/* `view_subscription` — the same server triple, plus the Listing price
+                            exactly as returned (`price_display` when the server rendered one,
+                            otherwise the integer minor units and their currency). */}
+                        {panels.subscription && entry.subscription && (
+                          <div data-testid={`ownership-subscription-panel-${entry.entry_id}`} style={{ marginTop: 8, borderTop: "1px solid #1e293b", paddingTop: 8 }}>
+                            <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 8px", margin: 0, fontSize: 10, fontFamily: "monospace" }}>
+                              <dt style={{ color: "#64748b" }}>State</dt>
+                              <dd style={{ color: "#e2e8f0", margin: 0 }}>{entry.subscription.state ?? "not reported"}</dd>
+                              <dt style={{ color: "#64748b" }}>Period expiry</dt>
+                              <dd style={{ color: "#e2e8f0", margin: 0 }}>{formatInstant(entry.subscription.period_expiry) ?? "not reported"}</dd>
+                              <dt style={{ color: "#64748b" }}>Renewal</dt>
+                              <dd style={{ color: "#e2e8f0", margin: 0 }}>{entry.subscription.renewal_state ?? "not reported"}</dd>
+                              {listing?.price_display !== undefined && (
+                                <>
+                                  <dt style={{ color: "#64748b" }}>Price</dt>
+                                  <dd style={{ color: "#e2e8f0", margin: 0 }}>
+                                    {listing.price_display} {listing.currency ?? ""}
+                                  </dd>
+                                </>
+                              )}
+                              {listing?.price_display === undefined && listing?.price_minor !== undefined && listing?.price_minor !== null && (
+                                <>
+                                  <dt style={{ color: "#64748b" }}>Price</dt>
+                                  <dd style={{ color: "#e2e8f0", margin: 0 }}>
+                                    {listing.price_minor} {listing.currency ?? ""} minor units
+                                  </dd>
+                                </>
+                              )}
+                            </dl>
+                          </div>
+                        )}
+
+                        {(actionState.message || actionState.error) && (
+                          <div
+                            role={actionState.error ? "alert" : "status"}
+                            data-testid={`ownership-action-result-${entry.entry_id}`}
+                            style={{ marginTop: 8, fontSize: 10, fontFamily: "monospace", color: actionState.error ? "#fca5a5" : "#94a3b8", lineHeight: 1.5 }}
+                          >
+                            {actionState.error || actionState.message}
+                          </div>
+                        )}
+                      </Card>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </section>
 
           {/* Strategy Cards */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12 }}>

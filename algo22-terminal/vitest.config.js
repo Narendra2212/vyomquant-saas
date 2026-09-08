@@ -6,7 +6,14 @@ export default defineConfig({
   plugins: [react()],
   test: {
     root: './',
-    include: ['tests/unit/**/*.{test,spec}.{js,jsx,ts,tsx}'],
+    // `tests/unit/**` is where this suite has always lived and stays collected unchanged. The
+    // second pattern is additive: co-located `src/**/__tests__/` suites (the API module
+    // contract tests) would otherwise not be collected at all, and `vitest --run src/api`
+    // would report "No test files found" and exit non-zero -- a green-looking non-run.
+    include: [
+      'tests/unit/**/*.{test,spec}.{js,jsx,ts,tsx}',
+      'src/**/__tests__/**/*.{test,spec}.{js,jsx,ts,tsx}',
+    ],
     exclude: ['**/archive/**', '**/node_modules/**', '**/dist/**', '../**'],
     environment: 'jsdom',
     globals: true,

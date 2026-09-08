@@ -598,6 +598,7 @@ class MetricsCollector:
         )
         
         self._init_strategy_builder_metrics()
+        self._init_marketplace_paper_metrics()
         
         # Track start time for uptime
         self._start_time = time.time()
@@ -735,6 +736,254 @@ class MetricsCollector:
             labels=["state", "reason", "timeframe"],
         )
 
+        # -- marketplace-subscriptions-paper-trading Requirements 14.10, 26.6, 27.6 ----
+        #  The Paper_Session's market-data feed. Requirement 26.6 requires a latency and an
+        #  error-rate metric for "market-data delivery" introduced by that spec, and
+        #  Requirement 14.10 requires the session to measure and expose delivery latency and
+        #  feed health. Declared here, on the one collector, rather than in a second registry
+        #  under `backend/paper/`: /metrics stays the one place the platform is scraped.
+        #
+        #  A `Summary` for the latency, for the same reason `market_data_latency_ms` is one -
+        #  these figures are read as percentiles and a bucket edge would decide them by the
+        #  bucket layout. Counters for the three drop reasons, because Requirement 14.7's
+        #  guarantees are counted events and an operator alerts on any increment.
+        self.paper_feed_latency_ms = Summary(
+            "paper.feed.latency_ms",
+            "Delay in milliseconds between a paper market event's own timestamp and the "
+            "session processing it, by symbol and timeframe",
+            labels=["symbol", "timeframe"],
+        )
+        self.paper_feed_events = Counter(
+            "paper.feed.events",
+            "Paper market-data events accepted and recorded, by symbol and transport",
+            labels=["symbol", "transport"],
+        )
+        self.paper_feed_invalid = Counter(
+            "paper.feed.invalid",
+            "Paper market-data events dropped by normalisation or validation, never "
+            "repaired, by symbol and refusal reason",
+            labels=["symbol", "reason"],
+        )
+        self.paper_feed_duplicates = Counter(
+            "paper.feed.duplicates",
+            "Paper market-data events discarded as an already-processed event identity, by "
+            "symbol and which arbiter caught it (the in-process LRU or the unique index)",
+            labels=["symbol", "arbiter"],
+        )
+        self.paper_feed_out_of_order = Counter(
+            "paper.feed.out_of_order",
+            "Paper market-data events dropped for a timestamp below the last one processed "
+            "for that symbol, by symbol",
+            labels=["symbol"],
+        )
+        self.paper_feed_state = Counter(
+            "paper.feed.state",
+            "Paper session feed-state transitions, by state and the reason measured",
+            labels=["state", "reason"],
+        )
+        self.paper_feed_reconnects = Counter(
+            "paper.feed.reconnects",
+            "Paper market-data reconnection attempts, by outcome",
+            labels=["outcome"],
+        )
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  marketplace-subscriptions-paper-trading task 33.5
+    #  (Requirements 26.6, 27.6 — design.md § "Metrics (Requirement 26.6)")
+    # ══════════════════════════════════════════════════════════════════════
+    #  The rest of that table: the HTTP surfaces, the WebSocket event types, signal
+    #  generation, paper order execution, the database operations and the expiry sweep. The
+    #  seven `paper.feed.*` names above were declared by task 24.x and are NOT redeclared or
+    #  renamed here; this method is purely additive.
+    #
+    #  WHERE THE DESIGN WRITES `{route}`, `{event_type}`, `{operation}` OR `{reason}`
+    #  ----------------------------------------------------------------------------
+    #  Those braces are a DIMENSION, not a name fragment. They become labels, exactly as
+    #  `paper.feed.state{HEALTHY,DEGRADED,FALLBACK_REST}` became a `state` label above and
+    #  `paper.order.rejected{reason}` becomes a `reason` label below. One metric with a label
+    #  rather than one metric per value: a name assembled from a path or a table name would
+    #  create a metric family per value, which is how a metrics layer takes down the process it
+    #  was added to observe.
+    #
+    #  Every dimension used here is drawn from a CLOSED vocabulary: a FastAPI route TEMPLATE
+    #  (never a resolved path, so an id can never become a series), an HTTP status class, a
+    #  `PaperEvent` member, a `rejection_reason` from Requirement 16.5's eight, a
+    #  `paper_repository._execute` `what` literal, a sweep stage name.
+    #
+    #  WHY THE ERROR RATE NEEDS NO SEPARATE DENOMINATOR
+    #  ------------------------------------------------
+    #  Requirement 26.6 asks for "latency and error-rate metrics". `Summary` exports `_count`
+    #  alongside its quantiles, and the latency summary is observed on EVERY request, so the
+    #  rate is `errors / latency_ms_count` and there is no third metric to keep in step with
+    #  the other two.
+
+    def _init_marketplace_paper_metrics(self):
+        # -- each API endpoint introduced or modified ---------------------------
+        #  `Summary` rather than `Histogram`: an endpoint latency is read as a percentile, and
+        #  a bucket edge would be decided by the bucket layout rather than by the population.
+        self.marketplace_http_latency_ms = Summary(
+            "marketplace.http.latency_ms",
+            "Marketplace HTTP request duration in milliseconds, by route template",
+            labels=["route"],
+        )
+        self.marketplace_http_errors = Counter(
+            "marketplace.http.errors",
+            "Marketplace HTTP responses with a 4xx or 5xx status, by route template and "
+            "status class",
+            labels=["route", "status"],
+        )
+        self.paper_http_latency_ms = Summary(
+            "paper.http.latency_ms",
+            "Paper trading HTTP request duration in milliseconds, by route template",
+            labels=["route"],
+        )
+        self.paper_http_errors = Counter(
+            "paper.http.errors",
+            "Paper trading HTTP responses with a 4xx or 5xx status, by route template and "
+            "status class",
+            labels=["route", "status"],
+        )
+
+        # -- each WebSocket event type -----------------------------------------
+        self.paper_ws_emitted = Counter(
+            "paper.ws.emitted",
+            "Paper_Channel frames written to a subscriber, by event type",
+            labels=["event_type"],
+        )
+        self.paper_ws_latency_ms = Summary(
+            "paper.ws.latency_ms",
+            "Wall-clock duration in milliseconds of one Paper_Channel fan-out, by event type",
+            labels=["event_type"],
+        )
+        self.paper_ws_errors = Counter(
+            "paper.ws.errors",
+            "Paper_Channel deliveries that did not reach a subscriber, by event type and "
+            "reason (a failed write, a revoked ownership, a raising handler)",
+            labels=["event_type", "reason"],
+        )
+        #  A Gauge, and unlabelled: Requirement 19.11's bound is per connection, so what an
+        #  operator alerts on is the DEEPEST queue in the process at the last fan-out. A
+        #  per-connection label would make one series per socket.
+        self.paper_ws_queue_depth = Gauge(
+            "paper.ws.queue_depth",
+            "Deepest per-connection pending-event queue observed at the last Paper_Channel "
+            "fan-out (Requirement 19.11's counter)",
+        )
+        self.paper_ws_slow_consumer_disconnects = Counter(
+            "paper.ws.slow_consumer_disconnects",
+            "Paper_Channel subscriptions closed for exceeding the pending-event bound",
+        )
+
+        # -- signal generation --------------------------------------------------
+        self.paper_signal_latency_ms = Summary(
+            "paper.signal.latency_ms",
+            "Delay in milliseconds between the bar a signal was produced from being received "
+            "and the signal being read, by symbol",
+            labels=["symbol"],
+        )
+        self.paper_signal_generated = Counter(
+            "paper.signal.generated",
+            "Signals a Paper_Session read off its strategy runtime, by symbol",
+            labels=["symbol"],
+        )
+        self.paper_signal_errors = Counter(
+            "paper.signal.errors",
+            "Strategy outputs a Paper_Session could not act on, by refusal reason",
+            labels=["reason"],
+        )
+
+        # -- paper order execution ---------------------------------------------
+        #  Unlabelled: these are the two figures an operator compares against a budget for the
+        #  session as a whole, and a label would split the population so that no single series
+        #  answered it - the same reason `builder_validation_duration_ms` is unlabelled.
+        self.paper_order_submit_latency_ms = Summary(
+            "paper.order.submit_latency_ms",
+            "Wall-clock duration in milliseconds of one paper order submission, from intent "
+            "to persisted order",
+        )
+        self.paper_fill_apply_latency_ms = Summary(
+            "paper.fill.apply_latency_ms",
+            "Wall-clock duration in milliseconds of applying one paper fill to the account",
+        )
+        self.paper_order_rejected = Counter(
+            "paper.order.rejected",
+            "Paper order intents refused, by refusal reason - Requirement 16.5's eight names, "
+            "whether the refusal was persisted as a REJECTED order or the intent's own values "
+            "made such a row unrepresentable",
+            labels=["reason"],
+        )
+        self.paper_order_concurrency_conflicts = Counter(
+            "paper.order.concurrency_conflicts",
+            "Paper order write paths that gave up after the bounded retries, by operation",
+            labels=["operation"],
+        )
+        self.paper_order_retries = Counter(
+            "paper.order.retries",
+            "Retryable conflicts on a paper order write path, by operation",
+            labels=["operation"],
+        )
+
+        # -- database operations ------------------------------------------------
+        #  `round_trips` is the one P-57 is about (Requirements 27.1, 27.2): a page whose cost
+        #  grows with its row count shows up here as a count that grows with it. Counted at the
+        #  statement boundary, so it is one increment per statement issued and nothing has to
+        #  remember to count.
+        self.marketplace_db_latency_ms = Summary(
+            "marketplace.db.latency_ms",
+            "Marketplace Persistence_Layer statement duration in milliseconds, by operation",
+            labels=["operation"],
+        )
+        self.marketplace_db_errors = Counter(
+            "marketplace.db.errors",
+            "Marketplace Persistence_Layer statements that did not complete, by operation",
+            labels=["operation"],
+        )
+        self.marketplace_db_round_trips = Counter(
+            "marketplace.db.round_trips",
+            "Marketplace Persistence_Layer statements issued, by operation - the figure "
+            "Requirements 27.1 and 27.2 bound",
+            labels=["operation"],
+        )
+        self.paper_db_latency_ms = Summary(
+            "paper.db.latency_ms",
+            "Paper Persistence_Layer statement duration in milliseconds, by operation",
+            labels=["operation"],
+        )
+        self.paper_db_errors = Counter(
+            "paper.db.errors",
+            "Paper Persistence_Layer statements that did not complete, by operation",
+            labels=["operation"],
+        )
+        self.paper_db_round_trips = Counter(
+            "paper.db.round_trips",
+            "Paper Persistence_Layer statements issued, by operation",
+            labels=["operation"],
+        )
+
+        # -- the expiry sweep ---------------------------------------------------
+        self.marketplace_expiry_sweep_duration_ms = Summary(
+            "marketplace.expiry_sweep.duration_ms",
+            "Wall-clock duration in milliseconds of one Subscription expiry sweep pass",
+        )
+        self.marketplace_expiry_sweep_transitions = Counter(
+            "marketplace.expiry_sweep.transitions",
+            "Subscription_State transitions written by the expiry sweep",
+        )
+        self.marketplace_expiry_sweep_errors = Counter(
+            "marketplace.expiry_sweep.errors",
+            "Expiry sweep steps that failed, by stage",
+            labels=["stage"],
+        )
+        #  A Gauge holding a UNIX timestamp, and the health-check input Requirement 26.6 names.
+        #  It is never set on a pass that failed - see `expiry_sweep.last_run_at` for why a
+        #  permanently broken sweep that stamped this on every attempt would look permanently
+        #  healthy. Unset (`Gauge.get() is None`) therefore means "no pass has ever fully
+        #  succeeded in this process", which is a different fact from a stale timestamp.
+        self.marketplace_expiry_sweep_last_run_at = Gauge(
+            "marketplace.expiry_sweep.last_run_at",
+            "UNIX timestamp of the last FULLY SUCCESSFUL Subscription expiry sweep",
+        )
+
     #: Every strategy-builder metric, in the order Requirements 24.1, 24.2 and 24.3 list
     #: them. Named once so the exporter and any test read the same list.
     STRATEGY_BUILDER_METRIC_ATTRIBUTES: Tuple[str, ...] = (
@@ -758,11 +1007,79 @@ class MetricsCollector:
         "market_data_feed_state",
     )
 
+    #: The Paper_Session market-data feed metrics (marketplace-subscriptions-paper-trading
+    #: Requirements 14.10, 26.6). A SEPARATE tuple from
+    #: :data:`STRATEGY_BUILDER_METRIC_ATTRIBUTES` on purpose: that list is asserted
+    #: element-for-element against the strategy-builder requirement text in
+    #: ``tests/test_task_9_1_builder_metrics.py``, and appending a paper metric to it would make
+    #: that assertion fail for a metric the requirement it checks does not mention. Both lists
+    #: reach the same ``/metrics`` exposition through :meth:`get_prometheus_metrics`.
+    PAPER_FEED_METRIC_ATTRIBUTES: Tuple[str, ...] = (
+        "paper_feed_latency_ms",
+        "paper_feed_events",
+        "paper_feed_invalid",
+        "paper_feed_duplicates",
+        "paper_feed_out_of_order",
+        "paper_feed_state",
+        "paper_feed_reconnects",
+    )
+
     def strategy_builder_metrics(self) -> List[Any]:
         """The metric objects for :data:`STRATEGY_BUILDER_METRIC_ATTRIBUTES`."""
         return [
             getattr(self, attribute)
             for attribute in self.STRATEGY_BUILDER_METRIC_ATTRIBUTES
+        ]
+
+    #: The rest of ``design.md``'s Requirement 26.6 table (task 33.5), in the table's own row
+    #: order: the HTTP surfaces, the WebSocket event types, signal generation, paper order
+    #: execution, the database operations and the expiry sweep. A THIRD tuple for the same
+    #: reason :data:`PAPER_FEED_METRIC_ATTRIBUTES` is a second one - each list is asserted
+    #: against the requirement text that names it, and folding these into either of the other
+    #: two would make that assertion fail for a metric its requirement does not mention. All
+    #: three reach the same ``/metrics`` exposition through :meth:`get_prometheus_metrics`.
+    MARKETPLACE_PAPER_METRIC_ATTRIBUTES: Tuple[str, ...] = (
+        "marketplace_http_latency_ms",
+        "marketplace_http_errors",
+        "paper_http_latency_ms",
+        "paper_http_errors",
+        "paper_ws_emitted",
+        "paper_ws_latency_ms",
+        "paper_ws_errors",
+        "paper_ws_queue_depth",
+        "paper_ws_slow_consumer_disconnects",
+        "paper_signal_latency_ms",
+        "paper_signal_generated",
+        "paper_signal_errors",
+        "paper_order_submit_latency_ms",
+        "paper_fill_apply_latency_ms",
+        "paper_order_rejected",
+        "paper_order_concurrency_conflicts",
+        "paper_order_retries",
+        "marketplace_db_latency_ms",
+        "marketplace_db_errors",
+        "marketplace_db_round_trips",
+        "paper_db_latency_ms",
+        "paper_db_errors",
+        "paper_db_round_trips",
+        "marketplace_expiry_sweep_duration_ms",
+        "marketplace_expiry_sweep_transitions",
+        "marketplace_expiry_sweep_errors",
+        "marketplace_expiry_sweep_last_run_at",
+    )
+
+    def paper_feed_metrics(self) -> List[Any]:
+        """The metric objects for :data:`PAPER_FEED_METRIC_ATTRIBUTES`."""
+        return [
+            getattr(self, attribute)
+            for attribute in self.PAPER_FEED_METRIC_ATTRIBUTES
+        ]
+
+    def marketplace_paper_metrics(self) -> List[Any]:
+        """The metric objects for :data:`MARKETPLACE_PAPER_METRIC_ATTRIBUTES`."""
+        return [
+            getattr(self, attribute)
+            for attribute in self.MARKETPLACE_PAPER_METRIC_ATTRIBUTES
         ]
 
     # -- Requirement 24.1 ---------------------------------------------------
@@ -919,6 +1236,293 @@ class MetricsCollector:
             timeframe=safe_label_value(timeframe or ""),
         )
 
+    # -- marketplace-subscriptions-paper-trading Requirements 14.10, 26.6 ---------------
+
+    @never_fails
+    def record_paper_feed_latency(
+        self, latency_ms: Any, symbol: str = "", timeframe: str = ""
+    ):
+        """One accepted paper market event's delivery delay (Requirement 14.10).
+
+        ``latency_ms`` may arrive as a ``Decimal`` - the feed measures it in exact decimal
+        arithmetic, because the same instants feed a persisted ``NUMERIC(10,3)`` column. It is
+        converted to ``float`` **here and only here**: a percentile is a presentation figure, not
+        a money or price computation, so Requirement 18.1 is not in play, and ``Summary`` retains
+        floats. ``None`` records nothing - an unmeasurable delay and a zero delay are different
+        facts.
+        """
+        if latency_ms is None:
+            return
+        self.paper_feed_latency_ms.observe(
+            float(latency_ms),
+            symbol=safe_label_value(symbol),
+            timeframe=safe_label_value(timeframe),
+        )
+
+    @never_fails
+    def record_paper_feed_event(self, symbol: str = "", transport: str = ""):
+        """One market event accepted, validated and recorded to ``paper_market_events``."""
+        self.paper_feed_events.inc(
+            symbol=safe_label_value(symbol), transport=safe_label_value(transport)
+        )
+
+    @never_fails
+    def record_paper_feed_invalid(self, symbol: str = "", reason: str = ""):
+        """``paper.feed.invalid``: one event dropped rather than repaired (Requirement 14.9)."""
+        self.paper_feed_invalid.inc(
+            symbol=safe_label_value(symbol), reason=safe_label_value(reason)
+        )
+
+    @never_fails
+    def record_paper_feed_duplicate(self, symbol: str = "", arbiter: str = ""):
+        """One already-processed event identity discarded (Requirement 14.7).
+
+        ``arbiter`` distinguishes the in-process LRU from the ``uq_paper_market_event`` unique
+        index, because the two say different things about the deployment: LRU hits are a chatty
+        feed, unique-index hits are a cache miss - a restarted worker, an evicted entry, or two
+        workers on one session - and only the second is worth an operator's attention.
+        """
+        self.paper_feed_duplicates.inc(
+            symbol=safe_label_value(symbol), arbiter=safe_label_value(arbiter)
+        )
+
+    @never_fails
+    def record_paper_feed_out_of_order(self, symbol: str = ""):
+        """``paper.feed.out_of_order``: one event below the symbol's last timestamp."""
+        self.paper_feed_out_of_order.inc(symbol=safe_label_value(symbol))
+
+    @never_fails
+    def record_paper_feed_state(self, state: Any, reason: str = ""):
+        """One paper feed-state transition, with the reason it was measured to be that."""
+        label = getattr(state, "value", state)
+        self.paper_feed_state.inc(
+            state=safe_label_value(label), reason=safe_label_value(reason)
+        )
+
+    @never_fails
+    def record_paper_feed_reconnect(self, outcome: str = ""):
+        """One reconnection attempt after a dropped subscription (Requirement 14.5)."""
+        self.paper_feed_reconnects.inc(outcome=safe_label_value(outcome))
+
+    # -- task 33.5: the rest of Requirement 26.6's table ------------------------------
+    #
+    #  Every method below is `@never_fails` for the reason stated on :func:`never_fails`, and
+    #  that reason is load-bearing HERE in particular: these calls sit inside the delivery loop
+    #  of a WebSocket fan-out, inside the statement boundary of the paper repository and inside
+    #  the order submission path. A recording failure must never be what drops a market event, a
+    #  fill or a response, so it is logged at debug and the measured act carries on.
+
+    @staticmethod
+    def status_class(status_code: Any) -> str:
+        """``503`` -> ``'5xx'``. The bounded form of an HTTP status, for a label.
+
+        A label per distinct status would be bounded anyway, but an error RATE is read per
+        class, and this is the vocabulary the alerting rules use. Anything unreadable as an
+        integer becomes ``'unknown'`` rather than raising inside instrumentation.
+        """
+        try:
+            code = int(status_code)
+        except (TypeError, ValueError):
+            return "unknown"
+        if code < 100 or code > 599:
+            return "unknown"
+        return f"{code // 100}xx"
+
+    @never_fails
+    def record_http_request(
+        self, domain: str, route: str, status_code: Any, duration_ms: Any
+    ):
+        """One request to a route this specification introduced or modified.
+
+        ``domain`` selects the metric family - ``'marketplace'`` or ``'paper'``. An unknown
+        domain records NOTHING rather than being filed under one of the two: a figure attributed
+        to the wrong surface is worse than a missing one, and the caller
+        (``core/http_metrics.py``) only ever passes a route it classified.
+
+        ``route`` is a route TEMPLATE (``/api/paper/sessions/{session_id}``), never a resolved
+        path, so a session identifier cannot become a series - and cannot appear in the
+        exposition at all, which also keeps another user's identifiers out of it
+        (Requirement 26.4).
+        """
+        if domain == "marketplace":
+            latency, errors = self.marketplace_http_latency_ms, self.marketplace_http_errors
+        elif domain == "paper":
+            latency, errors = self.paper_http_latency_ms, self.paper_http_errors
+        else:
+            return
+        label = safe_label_value(route)
+        if duration_ms is not None:
+            latency.observe(float(duration_ms), route=label)
+        status = self.status_class(status_code)
+        if status in ("4xx", "5xx", "unknown"):
+            errors.inc(route=label, status=status)
+
+    @never_fails
+    def record_paper_ws_fanout(
+        self,
+        event_type: str,
+        *,
+        delivered: int = 0,
+        duration_ms: Any = None,
+        queue_depth: Any = None,
+    ):
+        """One Paper_Channel fan-out of one frame: how many got it, and how long it took.
+
+        ``delivered`` is the number of connections the frame was actually WRITTEN to, not the
+        number subscribed: a frame counted for a connection that was closed for falling behind
+        would make the emitted count disagree with what any client received.
+
+        ``queue_depth`` is the deepest pending count seen during the fan-out. ``None`` leaves
+        the gauge alone, which is not the same as setting it to zero - see :meth:`Gauge.get`.
+        """
+        label = safe_label_value(event_type)
+        count = int(delivered)
+        if count > 0:
+            self.paper_ws_emitted.inc(count, event_type=label)
+        if duration_ms is not None:
+            self.paper_ws_latency_ms.observe(float(duration_ms), event_type=label)
+        if queue_depth is not None:
+            depth = float(queue_depth)
+            if depth == depth and depth not in (float("inf"), float("-inf")):
+                self.paper_ws_queue_depth.set(depth)
+
+    @never_fails
+    def record_paper_ws_error(self, event_type: str, reason: str, count: int = 1):
+        """``count`` deliveries of one event type that did not reach their subscriber."""
+        increment = int(count)
+        if increment <= 0:
+            return
+        self.paper_ws_errors.inc(
+            increment,
+            event_type=safe_label_value(event_type),
+            reason=safe_label_value(reason),
+        )
+
+    @never_fails
+    def record_paper_ws_slow_consumer_disconnect(self, count: int = 1):
+        """``count`` subscriptions closed for exceeding the pending-event bound (19.11)."""
+        increment = int(count)
+        if increment > 0:
+            self.paper_ws_slow_consumer_disconnects.inc(increment)
+
+    @never_fails
+    def record_paper_signal_latency(self, symbol: str, duration_ms: Any):
+        """How long one signal-generation step took, by market.
+
+        Separate from :meth:`record_paper_signal_generated` because the two are counted at
+        different rates: one strategy evaluation over one bar is ONE generation step and may
+        produce zero, one or several signals. Multiplying the duration by the signal count would
+        make a two-signal bar look twice as slow as it was.
+        """
+        if duration_ms is None:
+            return
+        self.paper_signal_latency_ms.observe(
+            float(duration_ms), symbol=safe_label_value(symbol)
+        )
+
+    @never_fails
+    def record_paper_signal_generated(self, symbol: str = "", count: int = 1):
+        """``count`` signals a Paper_Session read off its strategy runtime, by market."""
+        increment = int(count)
+        if increment > 0:
+            self.paper_signal_generated.inc(increment, symbol=safe_label_value(symbol))
+
+    @never_fails
+    def record_paper_signal_error(self, reason: str):
+        """One strategy output the session could not act on, by refusal reason."""
+        self.paper_signal_errors.inc(reason=safe_label_value(reason))
+
+    @never_fails
+    def record_paper_order_submitted(self, duration_ms: Any):
+        """How long one order submission took, end to end."""
+        if duration_ms is None:
+            return
+        self.paper_order_submit_latency_ms.observe(float(duration_ms))
+
+    @never_fails
+    def record_paper_fill_applied(self, duration_ms: Any):
+        """How long applying one fill to the account took, end to end."""
+        if duration_ms is None:
+            return
+        self.paper_fill_apply_latency_ms.observe(float(duration_ms))
+
+    @never_fails
+    def record_paper_order_rejected(self, reason: str):
+        """One refused order intent, by the ``rejection_reason`` recorded on it."""
+        self.paper_order_rejected.inc(reason=safe_label_value(reason))
+
+    @never_fails
+    def record_paper_order_retry(self, operation: str):
+        """One retryable conflict on a paper order write path (Requirement 16.10)."""
+        self.paper_order_retries.inc(operation=safe_label_value(operation))
+
+    @never_fails
+    def record_paper_order_concurrency_conflict(self, operation: str):
+        """One write path that used up its bounded retries and gave up with a 409."""
+        self.paper_order_concurrency_conflicts.inc(operation=safe_label_value(operation))
+
+    @never_fails
+    def record_db_statement(
+        self, domain: str, operation: str, *, duration_ms: Any = None, failed: bool = False
+    ):
+        """ONE Persistence_Layer round trip, whether or not it completed.
+
+        Counted for a failed statement too. A statement that was issued and did not complete is
+        still a round trip - it cost the same trip - and excluding it would make
+        ``round_trips`` disagree with what the database actually saw, which is the figure
+        Requirements 27.1 and 27.2 are about.
+
+        ``domain`` is ``'marketplace'`` or ``'paper'``; an unknown domain records nothing, for
+        the reason :meth:`record_http_request` gives.
+        """
+        if domain == "marketplace":
+            trips = self.marketplace_db_round_trips
+            latency = self.marketplace_db_latency_ms
+            errors = self.marketplace_db_errors
+        elif domain == "paper":
+            trips = self.paper_db_round_trips
+            latency = self.paper_db_latency_ms
+            errors = self.paper_db_errors
+        else:
+            return
+        label = safe_label_value(operation)
+        trips.inc(operation=label)
+        if duration_ms is not None:
+            latency.observe(float(duration_ms), operation=label)
+        if failed:
+            errors.inc(operation=label)
+
+    @never_fails
+    def record_expiry_sweep(
+        self,
+        *,
+        duration_ms: Any = None,
+        transitions: int = 0,
+        failures: Any = (),
+        succeeded_at: Any = None,
+    ):
+        """One expiry sweep pass: its duration, what it transitioned, and what failed.
+
+        ``failures`` is an iterable of stage names, so one broken row is counted under the stage
+        that broke rather than under a single undifferentiated total.
+
+        ``succeeded_at`` is a UNIX timestamp and is written ONLY for a pass that completed with
+        no failure - ``expiry_sweep.last_run_at``'s rule, restated here so the exported gauge
+        and the process-local health input cannot disagree about what "last run" means.
+        """
+        if duration_ms is not None:
+            self.marketplace_expiry_sweep_duration_ms.observe(float(duration_ms))
+        written = int(transitions)
+        if written > 0:
+            self.marketplace_expiry_sweep_transitions.inc(written)
+        for stage in failures or ():
+            self.marketplace_expiry_sweep_errors.inc(stage=safe_label_value(stage))
+        if succeeded_at is None:
+            return
+        instant = float(succeeded_at)
+        if instant == instant and instant not in (float("inf"), float("-inf")):
+            self.marketplace_expiry_sweep_last_run_at.set(instant)
+
     def record_trade_executed(self, latency_ms: float, symbol: str = "", side: str = ""):
         """Record a successful trade execution."""
         self.trades_executed_total.inc(symbol=symbol, side=side)
@@ -1033,6 +1637,16 @@ class MetricsCollector:
         metrics.extend(
             metric.to_prometheus() for metric in self.strategy_builder_metrics()
         )
+        # The Paper_Session market-data feed (marketplace-subscriptions-paper-trading task
+        # 24.x). Same exposition, same endpoint; a second list only because the strategy-builder
+        # one is asserted against its own requirement text.
+        metrics.extend(metric.to_prometheus() for metric in self.paper_feed_metrics())
+        # The rest of design.md's Requirement 26.6 table (task 33.5): the HTTP surfaces, the
+        # WebSocket event types, signal generation, paper order execution, the database
+        # operations and the expiry sweep. Same exposition, same endpoint, same collector.
+        metrics.extend(
+            metric.to_prometheus() for metric in self.marketplace_paper_metrics()
+        )
         
         return "\n\n".join(metrics)
     
@@ -1056,6 +1670,49 @@ metrics_collector = MetricsCollector()
 def get_metrics_collector() -> MetricsCollector:
     """Get the global metrics collector instance."""
     return metrics_collector
+
+
+def guarded_collector() -> Optional[MetricsCollector]:
+    """The process collector, or ``None`` when it is unavailable. **Never raises.**
+
+    The one place the guarded-accessor idiom lives (marketplace-subscriptions-paper-trading
+    Requirement 30.2). Before this existed, every module that wanted an instrumentation call it
+    could not be broken by wrote its own two-statement ``_metrics()`` - a lazy
+    ``from backend_app.backend.metrics import metrics_collector`` inside a
+    ``try``/``except Exception: return None``. Five of those copies were byte-identical, which is
+    the duplication 30.2 is about: the collector is one object, so reaching it is one
+    responsibility and belongs in one function.
+
+    Two properties, both of them the reason callers use this instead of touching
+    :data:`metrics_collector` directly:
+
+    * **Late-bound.** The name is read out of this module's globals on every call, so a test that
+      replaces ``metrics.metrics_collector`` with a fresh :class:`MetricsCollector` is seen by
+      every caller immediately - which is what ``tests/test_paper_market_feed_events.py`` and
+      ``tests/test_paper_market_feed_selection.py`` rely on. A caller that bound the collector
+      object at import time would hold whichever one existed then.
+    * **Guarded.** Instrumentation must never be what breaks the path it measures: not a market
+      event dropped, not a bar unevaluated, not a fill lost, not a statement unissued, not a
+      subscriber unwritten-to. So the defined outcome of *any* failure to produce the collector is
+      ``None``, and every caller is written to carry on without one.
+
+    The ``except`` is broad on purpose, and its outcome is defined rather than silent: ``None``, in
+    every case, which is the only extra value a caller has to handle. It is broad because the ways
+    the name can fail to resolve are not worth enumerating - a test that deleted the module
+    attribute raises ``NameError`` here, an import-time failure that left the module half-built
+    would raise something else - and the one disposition that would be wrong is letting any of them
+    reach the caller.
+
+    What this does NOT promise, stated so no caller assumes it: the *returned* collector's own
+    methods are not wrapped. ``guarded_collector()`` never raises; ``guarded_collector().record_x()``
+    raises whatever that collector raises, exactly as it did when each caller inlined this. The
+    recording calls in this repository are counter increments on a lock, and a caller that needs
+    more than that guarantee has to say so at its own call site.
+    """
+    try:
+        return metrics_collector
+    except Exception:  # noqa: BLE001 - defined outcome: None. See the docstring.
+        return None
 
 
 # Convenience functions for easy import
@@ -1089,3 +1746,16 @@ record_deployment_state_transition = metrics_collector.record_deployment_state_t
 record_market_data_latency = metrics_collector.record_market_data_latency
 set_market_data_quality_score = metrics_collector.set_market_data_quality_score
 record_feed_state = metrics_collector.record_feed_state
+
+# The Paper_Session market-data feed (marketplace-subscriptions-paper-trading task 24.x).
+# NOTE for call sites: the paper package reaches the collector through :func:`guarded_collector`,
+# not through these bound names, precisely so a test can replace the module attribute with a fresh
+# collector the way ``tests/test_task_9_1_builder_metrics.py`` does. A name bound here at import
+# time is bound to whichever collector existed then and cannot be swapped.
+record_paper_feed_latency = metrics_collector.record_paper_feed_latency
+record_paper_feed_event = metrics_collector.record_paper_feed_event
+record_paper_feed_invalid = metrics_collector.record_paper_feed_invalid
+record_paper_feed_duplicate = metrics_collector.record_paper_feed_duplicate
+record_paper_feed_out_of_order = metrics_collector.record_paper_feed_out_of_order
+record_paper_feed_state = metrics_collector.record_paper_feed_state
+record_paper_feed_reconnect = metrics_collector.record_paper_feed_reconnect

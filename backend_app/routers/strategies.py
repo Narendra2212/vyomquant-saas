@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from fastapi import (APIRouter, BackgroundTasks, Depends, HTTPException, Query,
                      Request, status)
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend_app.core.dependencies import (create_request_supabase_async,
                                            get_current_user, get_fleet,
@@ -38,6 +39,13 @@ from backend_app.core.rate_limit import limiter
 import ccxt
 from backend_app.backend.optimization_engine import get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
 from backend_app.backend.backtest_runtime import get_backtest_runtime
+# The server half of Requirement 12.7 (design.md -> "Server-side artifact resolution"). It runs
+# BESIDE the owner-scoped predicates in this module, never in place of them: each call site
+# invokes it only where the handler had already decided to refuse, so an owner's behaviour is
+# untouched and a stranger still receives the same 404 a non-existent id gets (Requirement 21.4).
+from backend_app.backend.marketplace import (
+    subscriber_operation_guard as _subscriber_guard,
+)
 
 import inspect
 
@@ -986,6 +994,19 @@ async def get_strategy_route(
     resp = await query.execute()
     
     if not resp.data:
+        # The owner-scoped read above matched nothing. Before answering "not found" — which
+        # would be a false statement to a caller who holds an entitling Subscription to the
+        # Listing that owns this strategy, and who can see it on their own Strategies page —
+        # resolve the caller's relationship to the artifact server-side. An entitled
+        # subscriber gets 403 MARKETPLACE_OPERATION_NOT_PERMITTED and an audited refusal
+        # (Requirements 7.8, 7.12, 12.7); an unrelated caller still gets this 404,
+        # indistinguishable from a non-existent strategy (Requirement 21.4). The predicate
+        # above is unchanged and still decides first, so an owner's answer cannot change.
+        await _subscriber_guard.refuse_if_entitled_subscriber(
+            user,
+            strategy_id=strategy_id,
+            operation=_subscriber_guard.STRATEGY_READ,
+        )
         raise HTTPException(404, "Strategy not found.")
         
     item = resp.data[0]
@@ -1191,8 +1212,17 @@ async def rename_strategy(
         return dict(rows[0])
     if strategy is None:
         # The update matched nothing and the ownership-scoped read found nothing either:
-        # no such strategy belongs to this caller. The same answer a genuinely
-        # non-existent identifier gets, per Requirement 20.2.
+        # no such strategy belongs to this caller. Before that becomes a 404, resolve the
+        # caller's relationship to the artifact server-side — an entitled subscriber is
+        # refused 403 with a stable code and an audited entry (Requirements 7.8, 7.12,
+        # 12.7), because "no such strategy" is false for them. Everyone else still gets the
+        # same answer a genuinely non-existent identifier gets, per Requirements 20.2 and
+        # 21.4. Nothing was written either way: the UPDATE above is still owner-scoped.
+        await _subscriber_guard.refuse_if_entitled_subscriber(
+            user,
+            strategy_id=strategy_id,
+            operation=_subscriber_guard.STRATEGY_RENAME,
+        )
         raise HTTPException(404, "Strategy not found.")
     # The write raised nothing, so it happened; PostgREST returns a representation only
     # when asked to, and an empty body is not evidence the update matched no row when the
@@ -1257,6 +1287,18 @@ async def update_strategy(
         logger.error(f"[STRATEGIES] Failed to update strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to update strategy. Please try again later.")
     if not resp.data:
+        # The owner-scoped UPDATE matched no row, so nothing was written. Requirement 12.7:
+        # a caller holding an entitling Subscription to the Listing that owns this strategy
+        # is told the operation is not permitted (403, stable code, audited) rather than that
+        # the strategy does not exist — this one route performs all four of Requirement
+        # 12.4's edit actions (edit, edit_blocks, edit_indicator_params, edit_risk_config),
+        # and none of them is permitted on a subscribed strategy. Any other caller still
+        # receives this 404 (Requirement 21.4).
+        await _subscriber_guard.refuse_if_entitled_subscriber(
+            user,
+            strategy_id=strategy_id,
+            operation=_subscriber_guard.STRATEGY_UPDATE,
+        )
         raise HTTPException(404, "Strategy not found.")
     return resp.data[0]
 
@@ -1317,6 +1359,18 @@ async def delete_strategy(
             user.get("id"),
             e.code,
         )
+        if e.code == "STRATEGY_NOT_FOUND":
+            # ``archive_strategy`` reports an unowned strategy as absent, which is right for a
+            # stranger (Requirement 21.4) and wrong for a subscriber: deleting the owner's
+            # strategy is forbidden to them (Requirement 12.4), not impossible. Resolve the
+            # relationship server-side and answer 403 with a stable code plus an audited
+            # refusal for an entitled subscriber only (Requirements 7.8, 7.12, 12.7). Nothing
+            # was archived: the refusal was raised before any write.
+            await _subscriber_guard.refuse_if_entitled_subscriber(
+                user,
+                strategy_id=strategy_id,
+                operation=_subscriber_guard.STRATEGY_ARCHIVE,
+            )
         raise HTTPException(status_code=e.http_status, detail=e.to_detail())
 
     if result.get("status") == STATUS_ARCHIVED:
@@ -1874,10 +1928,37 @@ async def validate_strategy(
     return response
 
 
+class BacktestRequest(BaseModel):
+    """Request body for ``POST /api/strategies/backtest``.
+
+    Deliberately permissive (``extra="allow"``): the DAG graph carries node and edge
+    shapes this router does not own and must forward to ``backtest_internal``
+    untouched, so enumerating them here would couple the two. What the model *does*
+    pin down are the scalars that decide how much compute one request can buy —
+    capital, position size, and the symbol/strategy fan-out — because this endpoint
+    dispatches CPU-bound work onto the shared default executor and an unbounded
+    request body is an unbounded amount of that work.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    sync: bool = False
+    initial_capital: Optional[float] = Field(default=None, gt=0, le=1_000_000_000)
+    trade_size_pct: Optional[float] = Field(default=None, gt=0, le=1.0)
+    symbols: Optional[List[str]] = Field(default=None, max_length=50)
+    strategies: Optional[List[str]] = Field(default=None, max_length=50)
+    timeframe: Optional[str] = Field(default=None, max_length=16)
+    strategy_name: Optional[str] = Field(default=None, max_length=200)
+
+
 # ── POST /api/strategies/backtest ────────────────────────────────────────
 @router.post("/backtest")
 @limiter.limit("30/minute")
-async def backtest(request: Request, payload: dict):
+async def backtest(
+    request: Request,
+    payload: BacktestRequest,
+    user: dict = Depends(get_current_user),
+):
     """Enqueue backtest to background worker via Redis Streams or execute directly if sync/fallback."""
     import asyncio
     import uuid
@@ -1886,24 +1967,36 @@ async def backtest(request: Request, payload: dict):
     from backend_app.core.cache import redis_manager
     from backend_app.worker import _write_status
 
+    # Both backtest_internal and the stream envelope take a plain dict. Extra keys
+    # (the DAG graph) survive via extra="allow"; None-valued optionals are dropped so
+    # backtest_internal's own .get() defaults still apply rather than being overridden
+    # with an explicit None.
+    payload_dict = payload.model_dump(exclude_none=True)
+
     # Direct synchronous execution requested
-    is_sync = bool(payload.get("sync", False)) or request.query_params.get("sync", "false").lower() == "true"
+    is_sync = bool(payload_dict.get("sync", False)) or request.query_params.get("sync", "false").lower() == "true"
     if is_sync:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, backtest_internal, payload)
+        return await loop.run_in_executor(None, backtest_internal, payload_dict)
 
     job_id = str(uuid.uuid4())
     
     try:
-        # Write initial queued status hash
+        # Write initial queued status hash.
+        #
+        # user_id is recorded here, before publish_backtest_job, and the ordering is
+        # load-bearing: GET /backtest/{job_id} authorizes against this field, so a job
+        # that reached the stream before its owner was recorded would be readable by
+        # any caller for that window.
         await _write_status(
             redis_manager,
             job_id,
             status="queued",
+            user_id=user["id"],
             submitted_at=datetime.now(timezone.utc).isoformat()
         )
 
-        entry_id = await publish_backtest_job(job_id, payload)
+        entry_id = await publish_backtest_job(job_id, payload_dict)
         if entry_id:
             return {"job_id": job_id, "status": "queued"}
     except Exception as exc:
@@ -1911,11 +2004,11 @@ async def backtest(request: Request, payload: dict):
 
     # Fallback to direct synchronous execution if Redis Stream was unreachable
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, backtest_internal, payload)
+    return await loop.run_in_executor(None, backtest_internal, payload_dict)
 
 
 @router.get("/backtest/{job_id}")
-async def get_backtest_status(job_id: str):
+async def get_backtest_status(job_id: str, user: dict = Depends(get_current_user)):
     """Poll backtest status from Redis status hash."""
     import json
     from backend_app.core.cache import redis_manager
@@ -1931,6 +2024,17 @@ async def get_backtest_status(job_id: str):
         (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
         for k, v in raw_status_data.items()
     }
+
+    # Ownership gate.
+    #
+    # Answers 404 rather than 403 for another user's job, matching the convention the
+    # rest of this codebase uses: a caller with no claim on an id is not told that the
+    # id exists. A job carrying no user_id at all — every job queued before this field
+    # was recorded — is denied on the same branch rather than grandfathered in, since
+    # fail-open is the wrong default for the fix. The status hash has a 24h TTL, so
+    # that set drains without intervention.
+    if status_data.get("user_id") != user["id"]:
+        raise HTTPException(status_code=404, detail="Job not found")
 
     status = status_data.get("status", "queued")
     response = {"job_id": job_id, "status": status}

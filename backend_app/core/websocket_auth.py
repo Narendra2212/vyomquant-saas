@@ -422,6 +422,22 @@ _STRATEGIES_RELATION = _OwnerRelation(
     noun="strategy",
 )
 
+#: ``paper_sessions`` — migration ``009_paper_trading.sql`` section 3, which creates the relation
+#: and its ``user_id``. marketplace-subscriptions-paper-trading task 26.3.
+#:
+#: This is the WHOLE of the Paper_Channel's authorisation change. It adds no resolver: the lookup
+#: below already reads ``id`` and the owner column of whatever relation the family maps to, and
+#: every one of its refusal branches — no client, unloadable service, unmapped family, transport
+#: failure, no visible row, a row with no owner, a row owned by somebody else — already denies. In
+#: particular ``_forbidden`` gives ONE sentence for "another user's paper session" and "no such
+#: paper session", which is exactly what Requirements 19.4 and 21.4 require and is not a property
+#: this entry had to arrange.
+_PAPER_SESSIONS_RELATION = _OwnerRelation(
+    table="paper_sessions",
+    migration="backend_app/migrations/009_paper_trading.sql",
+    noun="paper session",
+)
+
 
 def _owner_relations() -> Dict[str, _OwnerRelation]:
     """``channel namespace -> the relation that records the owner``.
@@ -435,6 +451,7 @@ def _owner_relations() -> Dict[str, _OwnerRelation]:
         BUILDER_VALIDATION_FAMILY,
         DEPLOYMENT_FAMILY,
         EXECUTION_FAMILY,
+        PAPER_FAMILY,
         SIGNAL_FAMILY,
         STRATEGY_FAMILY,
         TRAINING_FAMILY,
@@ -454,6 +471,15 @@ def _owner_relations() -> Dict[str, _OwnerRelation]:
         # inventing a way for the two to disagree about who may watch one running
         # strategy, exactly as task 8.5 declined to do for `execution`.
         SIGNAL_FAMILY.namespace: _DEPLOYMENTS_RELATION,
+        # marketplace-subscriptions-paper-trading task 26.3. `paper.{session_id}` is the first
+        # family keyed on a Paper_Session, so this is the first entry pointing at
+        # `paper_sessions` — and it is still one map entry rather than a lookup. Requirement 19.5
+        # asks for ownership to be RE-VERIFIED at subscription time rather than trusting the
+        # identifier in the subscribe message, and that is what the resolver below does for every
+        # family: it reads the relation, compares the owner to the authenticated identity, and
+        # refuses on anything else. Requirement 21.4's byte-identical refusal is `_forbidden`'s,
+        # unchanged.
+        PAPER_FAMILY.namespace: _PAPER_SESSIONS_RELATION,
     }
 
     try:

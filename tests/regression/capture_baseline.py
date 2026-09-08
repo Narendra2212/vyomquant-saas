@@ -94,7 +94,16 @@ import re  # noqa: E402
 import textwrap  # noqa: E402
 from decimal import Decimal  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple  # noqa: E402
+from typing import (  # noqa: E402
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASELINE_DIR = Path(__file__).resolve().parent / "baseline"
@@ -502,7 +511,17 @@ _VERB_OF_HELPER = {
     "del": "DELETE",
 }
 
-_METHOD_DEFINITION = re.compile(r"\n {2}(\w+):\s*(?:async\s*)?\(")
+#: A ``const name = { … }`` — or ``export const name = { … }`` — at the top level of a module
+#: file. An api module is one of these, and so is each object it splices into itself by
+#: shorthand (``library.js`` defines ``submissions`` and ``admin`` that way). An arrow
+#: function's ``= (`` does not match, so the query-string helpers are not mistaken for objects.
+_TOP_LEVEL_OBJECT = re.compile(r"^(?:export\s+)?const\s+(\w+)\s*=\s*\{", re.MULTILINE)
+
+#: An object member's name, at the point the walker has reached its first character.
+_MEMBER_NAME = re.compile(r"(\w+)\s*:")
+
+_IDENTIFIER = re.compile(r"[A-Za-z_$][\w$]*")
+
 _HELPER_CALL_START = re.compile(r"\b(get|publicGet|post|put|patch|del)\(\s*")
 _API_USAGE = re.compile(r"\bapi\.(\w+)\.(\w+)\s*\(")
 _ENDPOINTS_USAGE = re.compile(r"\bendpoints\.(\w+)\.(\w+)\s*\(")
@@ -681,6 +700,150 @@ def _resolvable(path: str) -> str:
     return re.sub(r"(?<!/)\{[^}]*\}", "", without_query)
 
 
+def _skip_js_comment(source: str, index: int) -> int:
+    """Index just past a comment starting at ``index``, or ``index`` itself if none does.
+
+    Comments have to be skipped structurally rather than ignored: a JSDoc block in these
+    modules carries apostrophes (``the caller's own``), braces (``@returns {Promise<{…}>}``)
+    and commas, every one of which would derail a scanner that read it as code.
+    """
+    if source.startswith("//", index):
+        end = source.find("\n", index)
+        return len(source) if end == -1 else end
+    if source.startswith("/*", index):
+        end = source.find("*/", index + 2)
+        return len(source) if end == -1 else end + 2
+    return index
+
+
+def _skip_js_block(source: str, index: int) -> int:
+    """Index of the ``}`` closing the ``{`` at ``index``. Strings and comments are skipped."""
+    depth = 0
+    while index < len(source):
+        skipped = _skip_js_comment(source, index)
+        if skipped != index:
+            index = skipped
+            continue
+        char = source[index]
+        if char in "'\"`":
+            _, index = _read_js_literal(source, index)
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return index
+
+
+def _member_end(body: str, index: int) -> int:
+    """Index of the comma — or the end of ``body`` — that closes the member at ``index``."""
+    depth = 0
+    while index < len(body):
+        skipped = _skip_js_comment(body, index)
+        if skipped != index:
+            index = skipped
+            continue
+        char = body[index]
+        if char in "'\"`":
+            _, index = _read_js_literal(body, index)
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            if depth == 0:
+                return index
+            depth -= 1
+        elif char == "," and depth == 0:
+            return index
+        index += 1
+    return index
+
+
+def _object_members(body: str) -> List[Tuple[str, str]]:
+    """``[(name, value source)]`` for one object literal body, at its own level only.
+
+    A shorthand member — ``submissions,`` — yields its own name as the value source, which
+    is what lets the caller resolve it against the module's other object literals.
+    """
+    members: List[Tuple[str, str]] = []
+    index = 0
+    while index < len(body):
+        skipped = _skip_js_comment(body, index)
+        if skipped != index:
+            index = skipped
+            continue
+        char = body[index]
+        if char in " \t\r\n,;":
+            index += 1
+            continue
+        if char in "'\"`":
+            # A quoted key, or a value the walker has no member name for. Skipped whole.
+            index = _member_end(body, index)
+            continue
+        named = _MEMBER_NAME.match(body, index)
+        if named is not None:
+            end = _member_end(body, named.end())
+            members.append((named.group(1), body[named.end() : end]))
+            index = end
+            continue
+        shorthand = _IDENTIFIER.match(body, index)
+        end = _member_end(body, index)
+        if shorthand is not None and shorthand.end() == end:
+            members.append((shorthand.group(0), shorthand.group(0)))
+        index = end
+    return members
+
+
+def _object_literals(source: str) -> Dict[str, str]:
+    """``{name: object literal body}`` for every top-level ``const name = { … }``."""
+    literals: Dict[str, str] = {}
+    for match in _TOP_LEVEL_OBJECT.finditer(source):
+        opening = match.end() - 1
+        literals[match.group(1)] = source[opening + 1 : _skip_js_block(source, opening)]
+    return literals
+
+
+def _module_methods(source: str, export_name: str) -> Dict[str, List[Dict[str, str]]]:
+    """``{method name: [{method, path_template}, …]}`` for one api module file.
+
+    The exported object's own methods keep their bare names. A method reached through a
+    nested object keeps the name a *caller* writes for it, qualified by the object it
+    belongs to: ``api.paper.sessions.create`` is recorded as ``sessions.create``, and
+    ``api.library.submissions.get`` as ``submissions.get`` — including when, as in
+    ``library.js``, that object is a separate top-level ``const`` spliced in by shorthand.
+
+    An indentation-blind scan for ``\\n  name: (`` cannot do this. It sees no member at
+    ``sessions: {``, does not descend, and — because it slices each body from one match to
+    the next — files all fourteen nested session paths under ``getSummary``, the last
+    top-level method before the nested object. That is not a stale record; it is a false
+    statement about the source, and the baseline is supposed to be the authority on it.
+    """
+    literals = _object_literals(source)
+    methods: Dict[str, List[Dict[str, str]]] = {}
+
+    def walk(body: str, prefix: str, visiting: FrozenSet[str]) -> None:
+        for name, value in _object_members(body):
+            qualified = f"{prefix}{name}"
+            stripped = value.strip()
+            if stripped.startswith("{"):
+                # A nesting level owns no calls of its own; only its members do.
+                walk(stripped[1 : _skip_js_block(stripped, 0)], f"{qualified}.", visiting)
+                continue
+            if stripped in literals and stripped not in visiting:
+                walk(literals[stripped], f"{qualified}.", visiting | {stripped})
+                continue
+            # Recorded even when no literal path is found: a method whose URL is built by a
+            # helper (``dataQualityApi.forStrategy``) still exists, and reporting it as
+            # "no such method" would be wrong. Its empty binding is the honest answer.
+            methods[qualified] = _helper_calls(value)
+
+    walk(literals.get(export_name, ""), "", frozenset({export_name}))
+    return methods
+
+
 def api_module_index() -> Dict[str, Dict[str, List[Dict[str, str]]]]:
     """``{api key: {method name: [{verb, path_template}, …]}}`` for every module."""
     index_source = (FRONTEND_SRC / "api" / "index.js").read_text(encoding="utf-8")
@@ -693,15 +856,7 @@ def api_module_index() -> Dict[str, Dict[str, List[Dict[str, str]]]]:
             modules[key] = {}
             continue
         source = module_path.read_text(encoding="utf-8")
-        matches = list(_METHOD_DEFINITION.finditer(source))
-        methods: Dict[str, List[Dict[str, str]]] = {}
-        for position, match in enumerate(matches):
-            start = match.end()
-            end = matches[position + 1].start() if position + 1 < len(matches) else len(source)
-            # Recorded even when no literal path is found: a method whose URL is built by a
-            # helper (``dataQualityApi.forStrategy``) still exists, and reporting it as
-            # "no such method" would be wrong. Its empty binding is the honest answer.
-            methods[match.group(1)] = _helper_calls(source[start:end])
+        methods = _module_methods(source, f"{module_name}Api")
         modules[key] = {"module_file": f"api/modules/{module_name}.js", **methods}
     return modules
 
@@ -2063,6 +2218,46 @@ def _surface_capture(surface: str) -> Callable[[], Dict[str, Any]]:
 # ══════════════════════════════════════════════════════════════════════════
 
 
+#: The instant the seeded positions were opened and last priced at. A fixed value, because a
+#: capture has to be reproducible and a clock read is not.
+_PAPER_SEED_INSTANT = "2024-05-01T12:00:00+00:00"
+
+
+def _bound_paper_service() -> Any:
+    """The paper service singleton, bound to a fresh in-memory Persistence_Layer.
+
+    Paper trading is persisted as of task 23.2: the service holds no balance, no position and no
+    order in process memory, and an absent ``paper_accounts`` is answered with 503 rather than
+    with a remembered figure (Requirements 17.2, 28.3). A capture therefore has to give it
+    storage, and it uses the double from ``tests/test_paper_repository.py`` - which enforces the
+    five unique indexes ``009_paper_trading.sql`` declares - so that the account this harness
+    seeds is single and located the same way the real one is.
+
+    **The recorded numbers are unchanged.** The seeding below writes exactly the balances and
+    positions the pre-change harness assigned to ``service._accounts`` and
+    ``service._positions``; it writes them to rows instead of to dictionaries, and the endpoints
+    then compute the same figures from them. That is the whole point of the capture: the
+    arithmetic of ``routers/risk.py`` is asserted to be untouched by where its inputs came from.
+    """
+    from backend_app.backend.paper import paper_repository as paper_repo
+    from backend_app.backend.paper_trading_service import get_paper_trading_service
+    from tests.test_paper_repository import FakeSupabase
+
+    paper_repo.reset_persistence_probe()
+    service = get_paper_trading_service()
+    service.bind_persistence(FakeSupabase())
+    return service
+
+
+def _release_paper_service() -> None:
+    """Unbind the double, so no later capture or test inherits this one's rows."""
+    from backend_app.backend.paper import paper_repository as paper_repo
+    from backend_app.backend.paper_trading_service import get_paper_trading_service
+
+    get_paper_trading_service().bind_persistence(None)
+    paper_repo.reset_persistence_probe()
+
+
 def _known_paper_account(user_id: str) -> Any:
     """A paper account with numbers chosen so every branch of the arithmetic is exercised.
 
@@ -2071,37 +2266,56 @@ def _known_paper_account(user_id: str) -> Any:
     * two open positions against a ``max_positions`` of 10 put position utilisation at
       20 %.
     * a locked balance makes ``margin_ratio`` and ``free_margin`` non-trivial.
-    """
-    from backend_app.backend.paper_trading_service import get_paper_trading_service
 
-    service = get_paper_trading_service()
+    The figures are seeded into ``paper_accounts`` and ``paper_positions`` through the
+    repository. ``side`` is written as ``LONG`` / ``SHORT`` because ``chk_paper_position_side``
+    spells it that way; the response body lower-cases it back, which is what the recorded shape
+    has always carried.
+    """
+    from backend_app.backend.paper import paper_repository as paper_repo
+
+    service = _bound_paper_service()
     service.reset_account(user_id, capital=100_000.0)
     account = service.get_or_create_account(user_id)
-    account["realized_pnl"] = "-300.00"
-    account["available_balance"] = "70000.00"
-    account["locked_balance"] = "10000.00"
-    service._positions[str(user_id)] = {
-        "BTC-USDT": {
-            "symbol": "BTC-USDT",
-            "side": "long",
-            "size": "0.25",
-            "entry_price": "60000.00",
-            "current_price": "61000.00",
-            "unrealized_pnl": "250.00",
-            "created_at": "2024-05-01T12:00:00+00:00",
-            "updated_at": "2024-05-01T12:00:00+00:00",
+    supabase = service._supabase
+    account_id = account["account_id"]
+
+    for symbol, side, size, entry, current, unrealized in (
+        ("BTC-USDT", "LONG", "0.25", "60000.00", "61000.00", "250.00"),
+        ("ETH-USDT", "SHORT", "2.0", "3500.00", "3400.00", "200.00"),
+    ):
+        paper_repo.upsert_position(
+            supabase,
+            account_id=account_id,
+            user_id=str(user_id),
+            symbol=symbol,
+            side=side,
+            size=size,
+            entry_price=entry,
+            opened_at=_PAPER_SEED_INSTANT,
+            current_price=current,
+            unrealized_pnl=unrealized,
+            price_at=_PAPER_SEED_INSTANT,
+        )
+
+    locked = paper_repo.lock_account_for_update(supabase, str(user_id), account_id=account_id)
+    paper_repo.bump_version(
+        supabase,
+        user_id=str(user_id),
+        account_id=account_id,
+        expected_version=locked["version"],
+        payload={
+            "available_balance": "70000.00",
+            "locked_balance": "10000.00",
+            "realized_pnl": "-300.00",
+            # available + locked + (0.25 * 61000) + (2 * (2 * 3500 - 3400)) = 102450.00, which
+            # is the identity Requirement 18.3 holds to zero tolerance. Written from the sum
+            # rather than guessed, so the seeded row is itself consistent.
+            "total_equity": "102450.00",
+            "last_price_at": _PAPER_SEED_INSTANT,
+            "stale": True,
         },
-        "ETH-USDT": {
-            "symbol": "ETH-USDT",
-            "side": "short",
-            "size": "2.0",
-            "entry_price": "3500.00",
-            "current_price": "3400.00",
-            "unrealized_pnl": "200.00",
-            "created_at": "2024-05-01T12:00:00+00:00",
-            "updated_at": "2024-05-01T12:00:00+00:00",
-        },
-    }
+    )
     return service
 
 
@@ -2144,7 +2358,11 @@ def capture_risk_utilisation() -> Dict[str, Any]:
 
     status_body = status.json()
     margin_body = margin.json()
-    account = service.get_or_create_account(user_id)
+    try:
+        account = service.get_or_create_account(user_id)
+        open_position_count = len(service.get_positions(user_id))
+    finally:
+        _release_paper_service()
 
     return {
         "capture": "risk_utilisation",
@@ -2158,7 +2376,7 @@ def capture_risk_utilisation() -> Dict[str, Any]:
             "total_equity": account["total_equity"],
             "realized_pnl": account["realized_pnl"],
             "unrealized_pnl": account["unrealized_pnl"],
-            "open_position_count": len(service.get_positions(user_id)),
+            "open_position_count": open_position_count,
         },
         "risk_settings": {
             "max_daily_loss": settings["max_daily_loss"],
@@ -2232,10 +2450,11 @@ def capture_paper_api_shape() -> Dict[str, Any]:
     — an empty list would freeze no element shape at all, and the element shape is the
     part a later change is most likely to disturb.
     """
-    from backend_app.backend.paper_trading_service import get_paper_trading_service
-
     user_id = f"{CAPTURE_USER_ID}-paper"
-    service = get_paper_trading_service()
+    # Bound to an in-memory Persistence_Layer for the reason ``_bound_paper_service`` documents:
+    # the six endpoints read persisted rows as of task 23.2 and refuse rather than remember, so a
+    # capture without storage would record six 503s instead of six shapes.
+    service = _bound_paper_service()
     service.reset_account(user_id, capital=100_000.0)
 
     # An open long, a partial close (which realises PnL and writes a trade), and one
@@ -2271,6 +2490,7 @@ def capture_paper_api_shape() -> Dict[str, Any]:
             orders_by_status[status] = response_shape(body)
     finally:
         _clear_overrides()
+        _release_paper_service()
 
     return {
         "capture": "paper_api_shape",

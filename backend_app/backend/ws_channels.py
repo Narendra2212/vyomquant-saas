@@ -11,6 +11,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, FrozenSet, Mapping, Optional, Set, Tuple
 
+# The ONE backend import at module scope in this file, and the reason it is here rather than
+# duplicated: see "THE SEVENTH PARAMETERISED CHANNEL — `paper.{session_id}`" below. Requirement
+# 19.2's sixteen event types are also ``paper_events.event_type``'s permitted values, so the
+# vocabulary lives with the payload models and the migration CHECK that already enumerate it.
+# ``paper_events`` imports nothing from this module at module scope, so this direction is acyclic.
+from backend_app.backend.paper.paper_events import PAPER_CHANNEL_EVENTS
+
 
 class ChannelType(str, Enum):
     """
@@ -443,6 +450,39 @@ EXECUTION_FAMILY = OwnedChannelFamily(
     events=frozenset(EXECUTION_CHANNEL_EVENTS),
 )
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  THE SEVENTH PARAMETERISED CHANNEL — `paper.{session_id}`
+#
+#  marketplace-subscriptions-paper-trading task 26.3 / `design.md` § "`paper/paper_events.py`
+#  and the Paper_Channel". Requirements 19.1, 19.2, 19.4, 19.5, 21.4, 21.6.
+#
+#  WHY THE VOCABULARY IS IMPORTED AND NOT DECLARED HERE
+#  ---------------------------------------------------
+#  Every family above declares its own ``*Event`` enum in this module, and this one deliberately
+#  does not. Requirement 19.2's sixteen event types are ALSO the permitted values of
+#  ``paper_events.event_type`` — ``chk_paper_event_type`` in
+#  ``backend_app/migrations/009_paper_trading.sql`` enumerates them, and 009's own comment says
+#  they "MUST equal the type set backend_app/backend/paper/paper_events.py emits". A seventeenth
+#  member declared here would be a ``23514`` at insert time rather than a routing bug, so the
+#  enum lives with the payload models that validate against it and this module imports the
+#  derived set. One definition, three importers (this module, ``paper_repository``,
+#  ``paper_market_feed``); ``tests/test_paper_event_schemas.py`` asserts set equality with the
+#  migration.
+#
+#  ``paper_events`` imports nothing from this module at module scope — it reaches
+#  :data:`PAPER_FAMILY` through a function-local import inside ``paper_channel()`` — so this
+#  import direction carries no cycle.
+#
+#  AUTHORISATION IS STILL NOT HERE
+#  -------------------------------
+#  Same as the six families above. ``core/websocket_auth`` gains ONE ``_OwnerRelation`` entry
+#  naming ``paper_sessions``; ``authorize_channel_subscription`` already parses through
+#  :func:`parse_owned_channel`, resolves ``user_id`` and refuses through the shared
+#  ``_forbidden`` / ``_unresolved`` frames — which is why another user's session and a
+#  nonexistent one are already indistinguishable (Requirements 19.4, 21.4). No authorisation
+#  code is written for this family.
+# ═══════════════════════════════════════════════════════════════════════════
+
 #: ``signal.{deployment_id}`` — trading-lifecycle-integration task 14.1. The third
 #: family keyed on ``deployment_id`` and therefore the third to resolve through
 #: ``strategy_deployments.user_id``, which is the point: ``core/websocket_auth``
@@ -457,6 +497,29 @@ SIGNAL_FAMILY = OwnedChannelFamily(
     namespace="signal",
     resource="deployment_id",
     events=frozenset(SIGNAL_CHANNEL_EVENTS),
+)
+
+#: ``paper.{session_id}`` — marketplace-subscriptions-paper-trading task 26.3, and Requirement
+#: 19.1's "parameterised, ownership-authorised channel family following the existing
+#: ``OwnedChannelFamily`` pattern ... keyed by Paper_Session identifier ... registered in the
+#: existing WebSocket infrastructure rather than in a new server".
+#:
+#: Follows :data:`SIGNAL_FAMILY` exactly: one descriptor, one entry in
+#: :data:`OWNED_CHANNEL_FAMILIES`, one ``_OwnerRelation`` in ``core/websocket_auth``. The resource
+#: is ``session_id`` and it resolves through ``paper_sessions.user_id``, which is the FIRST family
+#: to read that relation — every other family here resolves through ``strategies`` or
+#: ``strategy_deployments``. That is one map entry, not a new resolver: the lookup, the six refusal
+#: branches and the indistinguishable ``_forbidden`` frame are the shared ones, so a paper session
+#: belonging to another tenant and a paper session that does not exist are the same answer for the
+#: same reason they already are on the other six (Requirements 19.4, 21.4).
+#:
+#: The vocabulary is :data:`PAPER_CHANNEL_EVENTS`, imported from
+#: ``backend_app.backend.paper.paper_events`` rather than declared here — the only family whose
+#: event set is also a database CHECK constraint's value list.
+PAPER_FAMILY = OwnedChannelFamily(
+    namespace="paper",
+    resource="session_id",
+    events=frozenset(PAPER_CHANNEL_EVENTS),
 )
 
 #: Every parameterised, owner-authorised family, longest namespace first.
@@ -475,6 +538,7 @@ OWNED_CHANNEL_FAMILIES: Tuple[OwnedChannelFamily, ...] = tuple(
             DEPLOYMENT_FAMILY,
             EXECUTION_FAMILY,
             SIGNAL_FAMILY,
+            PAPER_FAMILY,
         ),
         key=lambda family: len(family.namespace),
         reverse=True,

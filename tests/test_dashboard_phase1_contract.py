@@ -30,6 +30,33 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend_app.backend.dashboard_aggregation_service import DashboardAggregationService
 from backend_app.backend.paper_trading_service import get_paper_trading_service, PaperTradingService
+from tests.paper_seed import (
+    bind_paper_persistence,
+    release_paper_persistence,
+    seed_account,
+    seed_fill,
+    seed_position,
+)
+
+
+@pytest.fixture(autouse=True)
+def _paper_persistence():
+    """Give the paper service the storage it now requires.
+
+    The paper branch of the dashboard reads the paper account, its positions and its fill
+    history. As of marketplace-subscriptions-paper-trading task 23.2 none of those is held in
+    process memory: they are rows in the ``paper_*`` tables, and an absent ``paper_accounts`` is
+    a 503 rather than a remembered balance (Requirements 17.2, 28.3). So each test gets a fresh
+    in-memory Persistence_Layer, and the state these tests used to assign to
+    ``paper_svc._trades`` / ``._positions`` is written through the repository instead - see
+    ``tests/paper_seed.py``. Every asserted figure below is unchanged.
+    """
+    service = get_paper_trading_service()
+    bind_paper_persistence(service)
+    try:
+        yield service
+    finally:
+        release_paper_persistence(service)
 
 
 @pytest.fixture
@@ -83,38 +110,40 @@ async def test_paper_today_realized_pnl_vs_cumulative_pnl(mock_user, dashboard_s
     yesterday_ts = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     today_ts = datetime.now(timezone.utc).isoformat()
     
-    paper_svc._trades[mock_user["id"]] = [
-        {
-            "execution_id": "exec_old_1",
-            "order_id": "ord_old_1",
-            "user_id": mock_user["id"],
-            "symbol": "BTC/USDT",
-            "side": "sell",
-            "quantity": "0.1",
-            "price": "60000.0",
-            "fee": "1.0",
-            "realized_pnl": "500.00",
-            "executed_at": yesterday_ts
-        },
-        {
-            "execution_id": "exec_today_1",
-            "order_id": "ord_today_1",
-            "user_id": mock_user["id"],
-            "symbol": "ETH/USDT",
-            "side": "sell",
-            "quantity": "1.0",
-            "price": "3500.0",
-            "fee": "0.5",
-            "realized_pnl": "150.00",
-            "executed_at": today_ts
-        }
-    ]
+    seed_fill(
+        paper_svc,
+        mock_user["id"],
+        symbol="BTC/USDT",
+        side="sell",
+        quantity="0.1",
+        price="60000.0",
+        fee="1.0",
+        realized_pnl="500.00",
+        executed_at=yesterday_ts,
+        execution_id="exec_old_1",
+    )
+    seed_fill(
+        paper_svc,
+        mock_user["id"],
+        symbol="ETH/USDT",
+        side="sell",
+        quantity="1.0",
+        price="3500.0",
+        fee="0.5",
+        realized_pnl="150.00",
+        executed_at=today_ts,
+        execution_id="exec_today_1",
+    )
     
-    # Update account total realized PnL and available balance to reflect both trades ($650.00)
-    acct = paper_svc.get_or_create_account(mock_user["id"])
-    acct["realized_pnl"] = "650.00"
-    acct["available_balance"] = "50650.00"
-    acct["total_equity"] = "50650.00"
+    # Update account total realized PnL and available balance to reflect both trades ($650.00).
+    # Written to the row, because the dict the reads return is a projection of it now.
+    seed_account(
+        paper_svc,
+        mock_user["id"],
+        realized_pnl="650.00",
+        available_balance="50650.00",
+        total_equity="50650.00",
+    )
     
     overview = await dashboard_service.get_portfolio_overview(mock_user, environment="paper")
     
@@ -135,17 +164,16 @@ async def test_paper_open_positions_normalization(mock_user, dashboard_service):
     paper_svc = get_paper_trading_service()
     paper_svc.reset_account(mock_user["id"])
     
-    paper_svc._positions[mock_user["id"]] = {
-        "BTC/USDT": {
-            "symbol": "BTC/USDT",
-            "side": "long",
-            "size": "0.5",
-            "entry_price": "64000.0",
-            "current_price": "65000.0",
-            "unrealized_pnl": "500.0",
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
-    }
+    seed_position(
+        paper_svc,
+        mock_user["id"],
+        symbol="BTC/USDT",
+        side="long",
+        size="0.5",
+        entry_price="64000.0",
+        current_price="65000.0",
+        unrealized_pnl="500.0",
+    )
     
     positions = await dashboard_service.get_open_positions(mock_user, environment="paper")
     
@@ -306,30 +334,30 @@ async def test_paper_recent_executions_normalization(mock_user, dashboard_servic
     t1 = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
     t2 = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
     
-    paper_svc._trades[mock_user["id"]] = [
-        {
-            "execution_id": "exec_p1",
-            "order_id": "ord_p1",
-            "symbol": "BTC/USDT",
-            "side": "buy",
-            "quantity": "0.25",
-            "price": "64000.0",
-            "fee": "0.5",
-            "realized_pnl": "0.0",
-            "executed_at": t1
-        },
-        {
-            "execution_id": "exec_p2",
-            "order_id": "ord_p2",
-            "symbol": "SOL/USDT",
-            "side": "sell",
-            "quantity": "10.0",
-            "price": "150.0",
-            "fee": "0.1",
-            "realized_pnl": "45.0",
-            "executed_at": t2
-        }
-    ]
+    seed_fill(
+        paper_svc,
+        mock_user["id"],
+        symbol="BTC/USDT",
+        side="buy",
+        quantity="0.25",
+        price="64000.0",
+        fee="0.5",
+        realized_pnl="0.0",
+        executed_at=t1,
+        execution_id="exec_p1",
+    )
+    seed_fill(
+        paper_svc,
+        mock_user["id"],
+        symbol="SOL/USDT",
+        side="sell",
+        quantity="10.0",
+        price="150.0",
+        fee="0.1",
+        realized_pnl="45.0",
+        executed_at=t2,
+        execution_id="exec_p2",
+    )
     
     executions = await dashboard_service.get_recent_executions(mock_user, environment="paper", limit=5)
     

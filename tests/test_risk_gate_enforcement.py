@@ -19,11 +19,37 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from backend_app.main import app
+from backend_app.backend.paper import paper_repository as paper_repo
 from backend_app.backend.paper_trading_service import get_paper_trading_service
 from backend_app.routers.risk import (
     _user_risk_settings, _user_strategy_limits, _user_kill_switch_state,
     get_user_risk_settings_store, is_user_kill_switched
 )
+from tests.test_paper_repository import FakeSupabase
+
+
+@pytest.fixture(autouse=True)
+def _paper_persistence():
+    """Give the paper service the storage it now requires.
+
+    The risk gates below are evaluated inside ``PaperTradingService.place_order``, and as of
+    marketplace-subscriptions-paper-trading task 23.2 that service keeps no balance, no position
+    and no order in process memory: it reads and writes the ``paper_*`` tables, and an absent
+    ``paper_accounts`` is answered with 503 ``PAPER_PERSISTENCE_UNAVAILABLE`` rather than with a
+    remembered figure (Requirements 17.2, 28.3). So each test gets a fresh in-memory
+    Persistence_Layer - the double from ``tests/test_paper_repository.py``, which enforces the
+    five unique indexes ``009_paper_trading.sql`` declares - and the gates are asserted against
+    persisted balances and persisted positions. Not one threshold, message or outcome below
+    changed.
+    """
+    paper_repo.reset_persistence_probe()
+    service = get_paper_trading_service()
+    service.bind_persistence(FakeSupabase())
+    try:
+        yield service
+    finally:
+        service.bind_persistence(None)
+        paper_repo.reset_persistence_probe()
 
 
 def get_test_auth_token(user_id: str = "test-risk-user-12345", tenant_id: str = "tenant-risk-1"):
@@ -45,6 +71,28 @@ def get_test_auth_token(user_id: str = "test-risk-user-12345", tenant_id: str = 
 @pytest.fixture
 def auth_client():
     return TestClient(app)
+
+
+def _seed_realized_pnl(paper_svc, user_id: str, realized_pnl: str) -> None:
+    """Persist ``realized_pnl`` on the user's default paper account.
+
+    The daily-loss gate reads ``paper_accounts.realized_pnl``, so a test that wants a realized
+    loss has to write one. Only that column moves: ``realized_pnl`` is not part of the equity
+    identity (``total_equity = available + locked + position_market_value``), so the seeded row
+    stays consistent and ``verify_accounting_invariants`` still holds.
+    """
+    supabase = paper_svc._supabase
+    account = paper_svc.get_or_create_account(user_id)
+    locked = paper_repo.lock_account_for_update(
+        supabase, str(user_id), account_id=account["account_id"]
+    )
+    paper_repo.bump_version(
+        supabase,
+        user_id=str(user_id),
+        account_id=account["account_id"],
+        expected_version=locked["version"],
+        payload={"realized_pnl": realized_pnl},
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -113,9 +161,12 @@ async def test_max_daily_loss_runtime_gate_enforcement(auth_client):
     # Set restrictive max_daily_loss = $200
     auth_client.put("/api/risk/settings", json={"max_daily_loss": 200.0, "max_positions": 10}, headers=headers)
 
-    # Simulate realized loss of -$250
-    acct = paper_svc.get_or_create_account(user_id)
-    acct["realized_pnl"] = "-250.00"
+    # Simulate realized loss of -$250, in the row the gate reads.
+    #
+    # The old form of this line assigned to the dict ``get_or_create_account`` returned, which
+    # was the store itself. It is a projection of a ``paper_accounts`` row now, so the loss is
+    # seeded where the gate looks for it - through the repository, under the version guard.
+    _seed_realized_pnl(paper_svc, user_id, "-250.00")
 
     # Attempt order -> MUST BE REJECTED
     with pytest.raises(ValueError, match="Risk limit exceeded: Max Daily Loss limit reached"):

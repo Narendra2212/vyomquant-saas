@@ -137,8 +137,9 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` (task 21.3). The baseline recorded one entry: `HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str)`, raised by `except Exception:` around the pending-queue read. It is gone because Requirement 1.5 requires a Marketplace read that did not complete to answer a structured error carrying a STABLE MACHINE-READABLE code at 500 or 503, and an `HTTPException` carries none: it answers the legacy `{error, message, status_code, path, timestamp}` envelope, whose `error` member is an ad-hoc sentence a reviewer's client can only branch on by string-matching, and whose `path` member is an internal route Requirement 22.9 excludes from a response body. The handler now raises `MarketplaceError(MARKETPLACE_READ_FAILED)` (503), which the AST capture does not record under `raises` because the code is a module constant rather than a literal status - so this is a re-record of the CAPTURE SHAPE, not the removal of a refusal: the failure is still refused, at a status the catalogue permits for that code (`errors.ALLOWED_HTTP_STATUS_FOR_CODE[MARKETPLACE_READ_FAILED] == {500, 503}`), in the declared `{error: {code, message, details}, request_id}` envelope, with the driver's message logged for an operator and never put in the body. Nothing else about this handler moved: the response is still `{items, total}` with the batched `author_alias`, and a read that COMPLETED and matched no pending strategy still answers 200 with an empty `items` and `total: 0` - that zero was measured. What the old shape could not do, and the reason it had to change, is let an Admin_Reviewer's client tell a failed read from an empty queue. Authorising requirements: 1.5, 1.7, 22.9, 28.2, 30.5. Asserted by tests/test_marketplace_error_surface.py (the `admin_pending_strategies` cases of `test_read_failure_carries_the_stable_marketplace_read_failed_code`, `test_read_failure_body_is_exactly_the_declared_envelope` and `test_a_successful_read_still_answers_exactly_what_it_answered_before`).",
           "decorators": [
-            "router.get('/admin/pending', status_code=status.HTTP_200_OK)"
+            "literal_router.get('/admin/pending', status_code=status.HTTP_200_OK)"
           ],
           "handler": "admin_pending_strategies",
           "module": "backend_app.routers.library",
@@ -148,12 +149,7 @@
               "depends_on": "get_admin_user"
             }
           },
-          "raises": [
-            {
-              "detail_type": "str",
-              "status_code": "status.HTTP_500_INTERNAL_SERVER_ERROR"
-            }
-          ],
+          "raises": [],
           "returns": [
             {
               "items": "computed",

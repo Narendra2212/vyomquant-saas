@@ -69,6 +69,7 @@ from backend_app.backend.order_lifecycle_state import (
     ORDER_LIFECYCLE_STATE_VALUES,
     OrderLifecycleRejected,
 )
+from backend_app.backend.execution_environment import EXECUTION_ENVIRONMENTS
 from backend_app.backend.signal_service import (
     SIGNAL_TRACE_PAGE_SIZE,
     SignalDecision,
@@ -81,6 +82,12 @@ from backend_app.core.rate_limit import limiter
 
 router = APIRouter()
 logger = logging.getLogger("SignalTraceRouter")
+
+#: The three Execution_Environment values, for the ``environment`` filter's description.
+#: Read from the platform's own vocabulary rather than transcribed, so the three words are
+#: spelled in exactly one place (``backend/execution_environment.py``) — the same discipline
+#: ``order_lifecycle_state`` gets two lines above.
+ENVIRONMENT_FILTER_VALUES = [member.value for member in EXECUTION_ENVIRONMENTS]
 
 #: Literal (non-parameterised) sub-paths of ``/signals`` this router serves. Every one of
 #: these MUST be registered before ``/signals/{signal_id}`` or it becomes unreachable —
@@ -214,6 +221,14 @@ async def list_signals(request: Request,
     order_lifecycle_state: Optional[List[str]] = Query(
         None, description=f"One of {list(ORDER_LIFECYCLE_STATE_VALUES)}"
     ),
+    # ── Requirement 23.4's Execution_Environment filter (task 29.3). ONE MORE OF THE SAME:
+    #    declared as a LIST exactly like the categories above, so
+    #    ?environment=PAPER&environment=LIVE collects into both instead of keeping only the
+    #    last. No default, so the default behaviour is Requirement 23.6's - the caller's own
+    #    signals across ALL environments.
+    environment: Optional[List[str]] = Query(
+        None, description=f"One of {ENVIRONMENT_FILTER_VALUES}; repeatable"
+    ),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
     # ── Requirement 17.5: at most 100 per page, and the bound is the service's own
@@ -270,6 +285,7 @@ async def list_signals(request: Request,
             symbol=symbol,
             side=side,
             order_lifecycle_state=order_lifecycle_state,
+            environment=environment,
             date_from=date_from,
             date_to=date_to,
             limit=limit,
@@ -281,7 +297,11 @@ async def list_signals(request: Request,
             ml_type=ml_type,
             search=search,
         )
-    except OrderLifecycleRejected as e:
+    except (SignalRejected, OrderLifecycleRejected) as e:
+        # `SignalRejected` covers task 29.3's SIGNAL_ENVIRONMENT_UNRECOGNISED, spelled as the
+        # export handler below already spells its own pair: one clause, the refusal's own
+        # status, and the same `{error, message, …}` body every other refusal on this router
+        # produces.
         raise HTTPException(status_code=e.http_status, detail=e.to_detail())
     except HTTPException:
         raise
@@ -313,6 +333,12 @@ async def export_signals(request: Request,
     side: Optional[List[str]] = Query(None, description="BUY or SELL; filters the `decision` column"),
     order_lifecycle_state: Optional[List[str]] = Query(
         None, description=f"One of {list(ORDER_LIFECYCLE_STATE_VALUES)}"
+    ),
+    # ── Task 29.3's environment filter, declared EXACTLY as the list declares it, for the
+    #    same reason every other category is: "export what I am looking at" has to include
+    #    the environment I am looking at.
+    environment: Optional[List[str]] = Query(
+        None, description=f"One of {ENVIRONMENT_FILTER_VALUES}; repeatable"
     ),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
@@ -367,6 +393,7 @@ async def export_signals(request: Request,
             symbol=symbol,
             side=side,
             order_lifecycle_state=order_lifecycle_state,
+            environment=environment,
             date_from=date_from,
             date_to=date_to,
             exchange_id=exchange_id,
@@ -418,6 +445,12 @@ async def export_signals(request: Request,
 @limiter.limit("200/minute")
 async def get_signal(request: Request, 
     signal_id: str,
+    # ── Task 29.3's environment filter, declared as a LIST here too, so one URL shape works
+    #    across all three read paths. On a detail view it is a predicate on the read: a
+    #    signal outside the named environments answers exactly as an unknown one does.
+    environment: Optional[List[str]] = Query(
+        None, description=f"One of {ENVIRONMENT_FILTER_VALUES}; repeatable"
+    ),
     user: dict = Depends(get_current_user)
 ):
     """One signal's FULL trace detail. Requirements 17.6, 16.7, 20.1, 20.2, 20.3.
@@ -462,11 +495,20 @@ async def get_signal(request: Request,
         **500** ``SIGNAL_GET_FAILED``. Reserved for a genuine failure: neither an
         unapplied migration 005b nor an unreadable trace store reaches it. Both degrade,
         and say so on the response (see ``degraded``).
+
+    WHAT A NON-OWNER OF THE STRATEGY GETS (task 29.4, Requirements 7.9, 23.2, 23.3)
+        A caller who owns this SIGNAL but did not write the STRATEGY - a subscriber running
+        a purchased Listing in their own Paper_Session - is served
+        ``{signal, viewer_role, lifecycle_state_source, degraded}``, where ``signal`` is
+        exactly ``signal_service.SUBSCRIBER_SIGNAL_FIELDS``. The role is resolved
+        SERVER-SIDE from the authenticated identity and ``strategies.user_id``; this route
+        declares no parameter that could carry a role, and there is nothing here for a
+        caller to claim.
     """
     try:
         service = await get_signal_service()
 
-        detail = await service.get_signal_trace(user, signal_id)
+        detail = await service.get_signal_trace(user, signal_id, environment=environment)
         if not detail:
             raise HTTPException(
                 status_code=404,
@@ -474,6 +516,10 @@ async def get_signal(request: Request,
             )
 
         return detail
+    except (SignalRejected, OrderLifecycleRejected) as e:
+        # Task 29.3: SIGNAL_ENVIRONMENT_UNRECOGNISED (400) and the 404 an environment filter
+        # this database cannot answer produces. Same clause, same body shape as the list.
+        raise HTTPException(status_code=e.http_status, detail=e.to_detail())
     except HTTPException:
         raise
     except Exception as e:

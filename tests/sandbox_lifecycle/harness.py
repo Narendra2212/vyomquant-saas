@@ -193,6 +193,52 @@ MISSING_SIGNAL_ID = "f7a30b62-2222-4a00-8000-000000000005"
 SANDBOX_EXCHANGE_ACCOUNT_ID = "9c1e4d7a-8b23-4f56-91a0-2e7d5c3b6f84"
 SANDBOX_RISK_CONFIG_ID = "1a2b3c4d-5e6f-4708-8192-a3b4c5d6e7f8"
 
+# ── THE PAPER_SESSION-OWNED ROWS (marketplace-subscriptions-paper-trading, task 34.4) ────
+#
+# Requirement 21.8 names ``paper session``, ``paper order``, ``paper account`` and
+# ``paper position`` among its ten resource kinds, and migration ``009_paper_trading.sql``
+# gives a Paper_Session six owned children the cross-tenant suite has to be able to watch:
+# ``paper_orders``, ``paper_fills``, ``paper_positions``, ``paper_events``,
+# ``paper_equity_snapshots`` - and the session row itself. They are seeded by
+# :meth:`SandboxWorld.seed_paper_session_rows` and enumerated once, in
+# :data:`PAPER_SESSION_OWNED_TABLES`, so a test that watches "the Paper_Session's rows"
+# cannot watch five of the six.
+#
+# Same shape and same length as the five identifiers above, for the same reason: a response
+# that echoes the identifier the caller supplied must not differ by ``Content-Length``.
+OWNED_PAPER_SESSION_ID = "b1d4c8e0-1111-4a00-8000-000000000006"
+OWNED_PAPER_ACCOUNT_ID = "b1d4c8e0-1111-4a00-8000-000000000007"
+OWNED_PAPER_ORDER_ID = "b1d4c8e0-1111-4a00-8000-000000000008"
+OWNED_PAPER_FILL_ID = "b1d4c8e0-1111-4a00-8000-000000000009"
+OWNED_PAPER_POSITION_ID = "b1d4c8e0-1111-4a00-8000-000000000010"
+OWNED_PAPER_EVENT_ID = "b1d4c8e0-1111-4a00-8000-000000000011"
+OWNED_PAPER_SNAPSHOT_ID = "b1d4c8e0-1111-4a00-8000-000000000012"
+
+MISSING_PAPER_SESSION_ID = "f7a30b62-2222-4a00-8000-000000000006"
+MISSING_PAPER_ORDER_ID = "f7a30b62-2222-4a00-8000-000000000008"
+
+#: Every table a Paper_Session owns rows in, as one list. The write-nothing assertion and the
+#: unobservable-collection assertion both read it, so "the Paper_Session's rows" has ONE
+#: definition in this package and a table added to 009 later is added in one place.
+PAPER_SESSION_OWNED_TABLES: Tuple[str, ...] = (
+    "paper_sessions",
+    "paper_accounts",
+    "paper_orders",
+    "paper_fills",
+    "paper_positions",
+    "paper_events",
+    "paper_equity_snapshots",
+)
+
+#: The Paper_Session's market. The same pair the rest of this harness runs on (SB-06): a second
+#: symbol here would be a second market fact in one world.
+SANDBOX_PAPER_CURRENCY = "USD"
+
+#: One hundred thousand US dollars, as exact integer Minor_Units. Money is never a float in this
+#: repository (Requirement 18.1), and ``paper_sessions.initial_capital_minor`` is the column that
+#: records it.
+SANDBOX_PAPER_CAPITAL_MINOR = 10_000_000
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # 1. THE SEEDED SYNTHETIC FEED (Requirement 26.1)
@@ -960,6 +1006,9 @@ class SandboxWorld:
     version_label: Optional[str] = None
     backtest_id: Optional[str] = None
     deployment_id: Optional[str] = None
+    #: Filled in by :meth:`seed_paper_session_rows` (task 34.4), so a test can name the
+    #: Paper_Session the world holds without repeating the literal.
+    paper_session_id: Optional[str] = None
 
     # ── the owner's own rows the deploy gate reads ───────────────────────
     def seed_owner_rows(self) -> None:
@@ -1144,6 +1193,199 @@ class SandboxWorld:
         self.backtest_id = OWNED_BACKTEST_ID
         self.deployment_id = OWNED_DEPLOYMENT_ID
 
+    # ── the owner's Paper_Session and its six owned children (task 34.4) ──
+    def seed_paper_session_rows(self) -> None:
+        """One Paper_Session of the owner's, with a row in every table 009 gives it.
+
+        Requirement 21.8 names ``paper session``, ``paper account``, ``paper order`` and
+        ``paper position`` among its ten resource kinds, and Requirement 25.8 requires
+        ``tests/sandbox_lifecycle/`` to keep passing while covering what this specification
+        added. The cross-tenant suite next door asserts that a stranger's whole matrix of
+        requests leaves the owner's rows exactly as they were - and until this method existed
+        that claim was made about seven tables that held no ``paper_*`` row at all, so a write
+        that reached one of them would not have been noticed.
+
+        Written straight into :class:`SandboxDatabase` rather than driven through
+        ``paper_session_service``, for the reason :meth:`seed_cross_tenant_rows` gives about
+        itself: the subject of that suite is what a *stranger* is told about rows that
+        demonstrably exist, and the owner's own create/start/stop chain is
+        ``test_paper_session_lifecycle.py``'s, which drives the real pipeline over the
+        repository's own Persistence_Layer double.
+
+        Every row carries ``user_id`` = this world's owner, and every child carries the
+        ``session_id`` of the session above it, because those are the two columns 009's
+        row-level-security predicates and the routers' ownership scopes filter on.
+        :class:`SandboxQuery` applies those predicates, so a scope that went missing selects
+        the row here and the suite notices.
+
+        The columns are 009's own, in 009's spelling. Money is exact: ``initial_capital_minor``
+        is an integer count of Minor_Units and the ``NUMERIC(28, 10)`` columns are decimal TEXT,
+        never a float (Requirement 18.1).
+        """
+        owner = self.user["id"]
+        moment = SANDBOX_FIRST_BAR.isoformat()
+
+        self.db.seed(
+            "paper_sessions",
+            [
+                {
+                    "id": OWNED_PAPER_SESSION_ID,
+                    "user_id": owner,
+                    # A Paper_Session started from the owner's OWN strategy names no Listing:
+                    # ``listing_id`` is nullable precisely because an owned start is entitled by
+                    # ownership rather than by a Subscription.
+                    "listing_id": None,
+                    "source_strategy_id": OWNED_STRATEGY_ID,
+                    "version_id": OWNED_VERSION_ID,
+                    "environment": "PAPER",
+                    "session_state": "RUNNING",
+                    "exchange_id": SANDBOX_VENUE,
+                    "symbol": SANDBOX_SYMBOL,
+                    "timeframe": SANDBOX_TIMEFRAME,
+                    "initial_capital_minor": SANDBOX_PAPER_CAPITAL_MINOR,
+                    "currency": SANDBOX_PAPER_CURRENCY,
+                    # ``config`` is the FROZEN session configuration and is Protected_Logic
+                    # adjacent (Requirement 19.7): no route may project it, so the seed carries
+                    # the smallest well-formed object rather than a plan a leak could be read
+                    # off.
+                    "config": {"frozen": True},
+                    "market_data_source": "mds",
+                    "feed_state": "HEALTHY",
+                    "feed_transport": "WEBSOCKET",
+                    "event_sequence": 1,
+                    "started_at": moment,
+                    "created_at": moment,
+                    "updated_at": moment,
+                }
+            ],
+        )
+        self.db.seed(
+            "paper_accounts",
+            [
+                {
+                    "id": OWNED_PAPER_ACCOUNT_ID,
+                    "user_id": owner,
+                    "session_id": OWNED_PAPER_SESSION_ID,
+                    "currency": SANDBOX_PAPER_CURRENCY,
+                    "initial_capital": "100000.0000000000",
+                    "available_balance": "100000.0000000000",
+                    "locked_balance": "0.0000000000",
+                    "realized_pnl": "0.0000000000",
+                    "total_equity": "100000.0000000000",
+                    "version": 1,
+                    "stale": False,
+                    "created_at": moment,
+                    "updated_at": moment,
+                }
+            ],
+        )
+        self.db.seed(
+            "paper_orders",
+            [
+                {
+                    "id": OWNED_PAPER_ORDER_ID,
+                    "session_id": OWNED_PAPER_SESSION_ID,
+                    "account_id": OWNED_PAPER_ACCOUNT_ID,
+                    "user_id": owner,
+                    "symbol": SANDBOX_SYMBOL,
+                    "side": "buy",
+                    "order_type": "market",
+                    "quantity": "0.2500000000",
+                    "filled_quantity": "0.2500000000",
+                    "avg_fill_price": "100.0000000000",
+                    "reference_price": "100.0000000000",
+                    "fee_minor": 0,
+                    "slippage_minor": 0,
+                    "order_state": "FILLED",
+                    "legacy_status": "FILLED",
+                    "fingerprint": "sandbox-paper-order-fingerprint",
+                    "created_at": moment,
+                    "updated_at": moment,
+                }
+            ],
+        )
+        self.db.seed(
+            "paper_fills",
+            [
+                {
+                    "id": OWNED_PAPER_FILL_ID,
+                    "order_id": OWNED_PAPER_ORDER_ID,
+                    "session_id": OWNED_PAPER_SESSION_ID,
+                    "user_id": owner,
+                    "fill_event_id": "sandbox-paper-fill-event",
+                    "quantity": "0.2500000000",
+                    "price": "100.0000000000",
+                    "fee_minor": 0,
+                    "slippage_minor": 0,
+                    "filled_at": moment,
+                    "created_at": moment,
+                    "updated_at": moment,
+                }
+            ],
+        )
+        self.db.seed(
+            "paper_positions",
+            [
+                {
+                    "id": OWNED_PAPER_POSITION_ID,
+                    "session_id": OWNED_PAPER_SESSION_ID,
+                    "account_id": OWNED_PAPER_ACCOUNT_ID,
+                    "user_id": owner,
+                    "symbol": SANDBOX_SYMBOL,
+                    "side": "LONG",
+                    "size": "0.2500000000",
+                    "entry_price": "100.0000000000",
+                    "current_price": "100.0000000000",
+                    "unrealized_pnl": "0.0000000000",
+                    "price_at": moment,
+                    "opened_at": moment,
+                    "version": 1,
+                    "created_at": moment,
+                    "updated_at": moment,
+                }
+            ],
+        )
+        self.db.seed(
+            "paper_events",
+            [
+                {
+                    "id": OWNED_PAPER_EVENT_ID,
+                    "session_id": OWNED_PAPER_SESSION_ID,
+                    "user_id": owner,
+                    "sequence": 1,
+                    "event_id": "sandbox-paper-event-1",
+                    "event_type": "paper_session_started",
+                    "schema_version": "1.0.0",
+                    "payload": {"session_id": OWNED_PAPER_SESSION_ID, "actor_id": owner},
+                    "emitted_at": moment,
+                    "created_at": moment,
+                    "updated_at": moment,
+                }
+            ],
+        )
+        self.db.seed(
+            "paper_equity_snapshots",
+            [
+                {
+                    "id": OWNED_PAPER_SNAPSHOT_ID,
+                    "session_id": OWNED_PAPER_SESSION_ID,
+                    "user_id": owner,
+                    "series_index": 0,
+                    "total_equity": "100000.0000000000",
+                    "available_balance": "100000.0000000000",
+                    "locked_balance": "0.0000000000",
+                    "position_market_value": "0.0000000000",
+                    "stale": False,
+                    "cause": "SESSION_START",
+                    "taken_at": moment,
+                    "created_at": moment,
+                    "updated_at": moment,
+                }
+            ],
+        )
+
+        self.paper_session_id = OWNED_PAPER_SESSION_ID
+
     # ── reading the world back ───────────────────────────────────────────
     def strategy_row(self) -> Optional[Dict[str, Any]]:
         return self.db.row("strategies", self.strategy_id)
@@ -1163,6 +1405,18 @@ class SandboxWorld:
 
     def signal_rows(self) -> List[Dict[str, Any]]:
         return self.db.rows("signals")
+
+    def paper_session_row(self) -> Optional[Dict[str, Any]]:
+        return self.db.row("paper_sessions", self.paper_session_id)
+
+    def paper_rows(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Every Paper_Session-owned table, as rows. One reader for the whole group.
+
+        Used by the cross-tenant suite's write-nothing assertion, so "the Paper_Session's rows"
+        is read through :data:`PAPER_SESSION_OWNED_TABLES` in one place rather than through a
+        table list written at each call site.
+        """
+        return {table: self.db.rows(table) for table in PAPER_SESSION_OWNED_TABLES}
 
     def transitions(self, signal_id: str) -> List[Dict[str, Any]]:
         return [

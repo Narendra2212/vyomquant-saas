@@ -69,8 +69,20 @@ const APP = 'App.jsx';
 /** Extensions whose contents are parsed for further imports. */
 const CODE_EXTENSIONS = Object.freeze(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs']);
 
-/** Directories never walked when enumerating the tree. */
-const SKIPPED_DIRS = Object.freeze(['node_modules', 'dist', '.git', 'archive']);
+/**
+ * Directories never walked when enumerating the tree. `build`, `coverage` and `target` are
+ * listed for the same reason as `dist`: none of them exists under `src/` today, so the module
+ * set here is unchanged, but a generated tree landing there must not become part of it.
+ */
+const SKIPPED_DIRS = Object.freeze([
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  '.git',
+  'archive',
+  'target',
+]);
 
 // ---------------------------------------------------------------------------
 // Specifier extraction
@@ -108,18 +120,59 @@ const isCode = (absolute) => CODE_EXTENSIONS.includes(path.extname(absolute));
 
 const readSource = (relative) => readFileSync(path.join(SRC_ROOT, relative), 'utf8');
 
+// ---------------------------------------------------------------------------
+// Memoisation
+// ---------------------------------------------------------------------------
+//
+// Every cache below is keyed on a path relative to `src/` and holds the answer for a tree that
+// cannot change while the file is running. Nine tests in this file each resolve one or more
+// import closures, and the reverse-direction check resolves one per Backtester module; without
+// memoisation the same modules were re-read and re-scanned dozens of times, which on a suite
+// that runs all its files through one long-lived worker is megabytes of short-lived string
+// allocation per test rather than a few hundred kilobytes once.
+
+/** Specifiers of one module, parsed at most once. */
+const specifierCache = new Map();
+
+/** Resolved specifier targets, keyed `from\0specifier`. Caches misses (`null`) too. */
+const resolutionCache = new Map();
+
+/** Whole closures, keyed on entry module. */
+const closureCache = new Map();
+
+/** Every module under `src/`, enumerated at most once. */
+let moduleCache = null;
+
 /** Resolve one relative specifier the way the bundler does, or `null`. */
 const resolveRelative = (fromRelative, specifier) => {
+  const key = `${fromRelative}\u0000${specifier}`;
+  if (resolutionCache.has(key)) return resolutionCache.get(key);
+
   const base = path.resolve(path.dirname(path.join(SRC_ROOT, fromRelative)), specifier);
   const candidates = [
     base,
     ...CODE_EXTENSIONS.map((extension) => `${base}${extension}`),
     ...CODE_EXTENSIONS.map((extension) => path.join(base, `index${extension}`)),
   ];
+  let resolved = null;
   for (const candidate of candidates) {
-    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+    if (existsSync(candidate) && statSync(candidate).isFile()) {
+      resolved = candidate;
+      break;
+    }
   }
-  return null;
+  resolutionCache.set(key, resolved);
+  return resolved;
+};
+
+/** The specifiers of one module by path, read and parsed at most once per file run. */
+const specifiersOf = (relative) => {
+  let found = specifierCache.get(relative);
+  if (found === undefined) {
+    found = specifiersIn(readSource(relative));
+    specifierCache.set(relative, found);
+  }
+  return found;
 };
 
 /**
@@ -130,6 +183,10 @@ const resolveRelative = (fromRelative, specifier) => {
  *   edges: Map<string, Set<string>> }}
  */
 const importClosure = (entry) => {
+  const cached = closureCache.get(entry);
+  // Callers only read the result, so one shared answer per entry is safe.
+  if (cached !== undefined) return cached;
+
   const modules = new Set();
   const external = new Set();
   const unresolved = [];
@@ -144,7 +201,7 @@ const importClosure = (entry) => {
 
     const out = new Set();
     edges.set(current, out);
-    for (const specifier of specifiersIn(readSource(current))) {
+    for (const specifier of specifiersOf(current)) {
       if (!isRelative(specifier)) {
         external.add(specifier);
         continue;
@@ -161,21 +218,27 @@ const importClosure = (entry) => {
   }
 
   modules.delete(entry);
-  return { modules, external, unresolved, edges };
+  const closure = { modules, external, unresolved, edges };
+  closureCache.set(entry, closure);
+  return closure;
 };
 
 /** Every module under `src/`, relative to it. */
 const allModules = () => {
+  if (moduleCache !== null) return moduleCache;
+
   const found = [];
   const walk = (dir) => {
-    for (const name of readdirSync(dir)) {
-      if (SKIPPED_DIRS.includes(name)) continue;
-      const absolute = path.join(dir, name);
-      if (statSync(absolute).isDirectory()) walk(absolute);
+    // The directory entry already says whether it is a directory, so no `statSync` per name.
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (SKIPPED_DIRS.includes(entry.name)) continue;
+      const absolute = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(absolute);
       else found.push(toRelative(absolute));
     }
   };
   walk(SRC_ROOT);
+  moduleCache = found;
   return found;
 };
 
@@ -319,7 +382,7 @@ describe('Property 24 (structural): the builder imports nothing from the Backtes
   it('names no backtest module among its own direct imports either', () => {
     // The narrow check as well as the transitive one, so a direct import is reported against
     // the builder itself rather than as a path through a helper.
-    const direct = specifiersIn(readSource(BUILDER));
+    const direct = specifiersOf(BUILDER);
 
     expect(direct.filter((specifier) => /backtest/i.test(specifier))).toEqual([]);
   });

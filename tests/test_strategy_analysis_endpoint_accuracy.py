@@ -10,10 +10,12 @@ Author: Principal Software Architect
 Date: 2025-08-02
 """
 
+import asyncio
 import sys
 import os
+from typing import Any, Dict, List, Optional, Tuple
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -182,15 +184,129 @@ class TestWalkForwardEndpointAccuracy:
         assert result["robustness_score"] == 0.0
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# The signal-replay doubles (see TestSignalReplayEndpointAccuracy's docstring)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _run_coroutine(coro: Any) -> Any:
+    """Run ``coro`` to completion **without leaving the thread without an event loop**.
+
+    ``asyncio.run`` closes the loop it creates and leaves the thread with no current loop,
+    which breaks modules collected afterwards. The same helper as
+    ``tests/test_settlement_service.py::_run_coroutine``, where the reasoning was recorded.
+    """
+    previous: Optional[asyncio.AbstractEventLoop]
+    try:
+        previous = asyncio.get_event_loop_policy().get_event_loop()
+    except RuntimeError:
+        previous = None
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+        if previous is not None and not previous.is_closed():
+            asyncio.set_event_loop(previous)
+        else:
+            asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+class _FakeResponse:
+    """What an awaited PostgREST ``execute()`` resolves to: an object carrying ``.data``."""
+
+    def __init__(self, data: List[Dict[str, Any]]) -> None:
+        self.data = data
+
+
+class _FakeQuery:
+    """One fluent PostgREST query. ``execute`` is ``async``, as the real client's is."""
+
+    def __init__(self, client: "_FakeAsyncSupabase", table: str) -> None:
+        self._client = client
+        self._table = table
+        self._filters: List[Tuple[str, Any]] = []
+
+    def select(self, *columns: str) -> "_FakeQuery":
+        return self
+
+    def eq(self, column: str, value: Any) -> "_FakeQuery":
+        self._filters.append((column, value))
+        return self
+
+    async def execute(self) -> _FakeResponse:
+        self._client.executed.append((self._table, tuple(self._filters)))
+        return _FakeResponse(list(self._client.rows.get(self._table, [])))
+
+
+class _FakeAsyncSupabase:
+    """The async PostgREST client ``_sb`` resolves to, keyed by table name.
+
+    Rows are looked up by table rather than handed out in call order, so the fallback test
+    asserts *which table* answered rather than how many calls had been made before it.
+    """
+
+    def __init__(self, rows: Dict[str, List[Dict[str, Any]]]) -> None:
+        self.rows = rows
+        self.executed: List[Tuple[str, Tuple[Tuple[str, Any], ...]]] = []
+
+    def table(self, name: str) -> _FakeQuery:
+        return _FakeQuery(self, name)
+
+    @property
+    def tables_queried(self) -> Tuple[str, ...]:
+        return tuple(table for table, _filters in self.executed)
+
+    def filters_for(self, table: str) -> Tuple[Tuple[str, Any], ...]:
+        for name, filters in self.executed:
+            if name == table:
+                return filters
+        return ()
+
+
+def _patched_sb(client: _FakeAsyncSupabase):
+    """``backend_app.routers.signals._sb`` replaced by a coroutine function.
+
+    ``new=AsyncMock(...)`` rather than ``return_value=...``: ``_sb`` is ``async def`` and the
+    handler does ``sb = await _sb(user)``, so the replacement has to be awaitable.
+    """
+    return patch("backend_app.routers.signals._sb", new=AsyncMock(return_value=client))
+
+
 class TestSignalReplayEndpointAccuracy:
-    """Test signal replay endpoint accuracy and honest labeling as audit retrieval."""
+    """Test signal replay endpoint accuracy and honest labeling as audit retrieval.
+
+    WHY THESE THREE TESTS USED TO FAIL — A STALE MOCK, NOT A PRODUCTION DEFECT
+    -------------------------------------------------------------------------
+    ``backend_app/routers/signals.py`` reads through the async PostgREST client:
+
+        sb = await _sb(user)
+        res = await sb.table("signals").select("*").eq(...).eq(...).execute()
+
+    ``_sb`` is ``async def`` and ``create_request_supabase_async`` resolves to a
+    ``_PooledAsyncPostgrestClient`` whose ``execute()`` is a coroutine function, so both
+    ``await``s are correct — that is what commit ea5a667 ("remediate async postgrest
+    coroutine execution across all backend endpoints") put there on purpose.
+
+    These tests were not moved with it. They patched ``_sb`` with
+    ``patch(..., return_value=MagicMock())``, which makes ``_sb`` a *synchronous* mock, so
+    ``await _sb(user)`` raised ``TypeError: object MagicMock can't be used in 'await'
+    expression``; the handler's ``except Exception`` reported it as a 500
+    ``SIGNAL_RETRIEVAL_FAILED`` and all three assertions never got near the payload. The
+    same applied one line down, where ``execute()`` returned a plain ``MagicMock``.
+
+    So the doubles are what changed here: ``_sb`` is replaced with an ``AsyncMock`` and the
+    client's ``execute`` is ``async``. ``signals.py`` is untouched — accommodating the mock
+    by dropping an ``await`` would have broken the endpoint against the real client.
+    """
 
     def test_signal_replay_audit_retrieval_functionality(self):
         """Test that signal replay performs audit retrieval, not DAG re-execution."""
-        import asyncio
         from backend_app.routers.signals import replay_signal_trace
         
-        # Mock Supabase response from signals table
+        # Stored record the signals table answers with
         mock_signal_record = {
             "id": "test-signal-id",
             "user_id": "test-user-id",
@@ -202,14 +318,15 @@ class TestSignalReplayEndpointAccuracy:
             "market_info": {"price": 50100.0}
         }
         
-        mock_supabase = MagicMock()
-        mock_table = MagicMock()
-        mock_table.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [mock_signal_record]
-        mock_supabase.table.return_value = mock_table
+        supabase = _FakeAsyncSupabase({"signals": [mock_signal_record]})
         
-        with patch('backend_app.routers.signals._sb', return_value=mock_supabase):
+        with _patched_sb(supabase):
             mock_user = {"id": "test-user-id"}
-            result = asyncio.run(replay_signal_trace("test-signal-id", mock_user))
+            result = _run_coroutine(replay_signal_trace("test-signal-id", mock_user))
+            
+            # The read is scoped to the caller: an audit retrieval that dropped the
+            # ``user_id`` filter would hand one tenant another tenant's signal.
+            assert ("user_id", "test-user-id") in supabase.filters_for("signals")
             
             # Verify it's labeled as audit retrieval, not replay
             assert result["replay_implemented"] == False
@@ -226,10 +343,9 @@ class TestSignalReplayEndpointAccuracy:
 
     def test_signal_replay_execution_records_fallback(self):
         """Test that signal replay falls back to execution_records table if signals table doesn't have record."""
-        import asyncio
         from backend_app.routers.signals import replay_signal_trace
         
-        # First call returns empty from signals table, second call returns from execution_records
+        # The signals table holds nothing for this id; execution_records does
         mock_execution_record = {
             "id": "test-signal-id",
             "user_id": "test-user-id",
@@ -240,23 +356,17 @@ class TestSignalReplayEndpointAccuracy:
             "indicators": {"rsi": 55.0}
         }
         
-        mock_supabase = MagicMock()
-        mock_table = MagicMock()
+        supabase = _FakeAsyncSupabase(
+            {"signals": [], "execution_records": [mock_execution_record]}
+        )
         
-        # First call (signals table) returns empty
-        first_call_response = MagicMock()
-        first_call_response.data = []
-        
-        # Second call (execution_records table) returns data
-        second_call_response = MagicMock()
-        second_call_response.data = [mock_execution_record]
-        
-        mock_table.select.return_value.eq.return_value.eq.return_value.execute.side_effect = [first_call_response, second_call_response]
-        mock_supabase.table.return_value = mock_table
-        
-        with patch('backend_app.routers.signals._sb', return_value=mock_supabase):
+        with _patched_sb(supabase):
             mock_user = {"id": "test-user-id"}
-            result = asyncio.run(replay_signal_trace("test-signal-id", mock_user))
+            result = _run_coroutine(replay_signal_trace("test-signal-id", mock_user))
+            
+            # Both tables were read, signals first, and both reads were tenant-scoped
+            assert supabase.tables_queried == ("signals", "execution_records")
+            assert ("user_id", "test-user-id") in supabase.filters_for("execution_records")
             
             # Verify it falls back to execution_records
             assert result["stored_decision"] == "SELL"
@@ -265,7 +375,6 @@ class TestSignalReplayEndpointAccuracy:
 
     def test_signal_replay_honest_limitation_documentation(self):
         """Test that signal replay honestly documents its limitations."""
-        import asyncio
         from backend_app.routers.signals import replay_signal_trace
         
         mock_signal_record = {
@@ -277,14 +386,11 @@ class TestSignalReplayEndpointAccuracy:
             "generated_at": "2025-08-02T12:00:00Z"
         }
         
-        mock_supabase = MagicMock()
-        mock_table = MagicMock()
-        mock_table.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [mock_signal_record]
-        mock_supabase.table.return_value = mock_table
+        supabase = _FakeAsyncSupabase({"signals": [mock_signal_record]})
         
-        with patch('backend_app.routers.signals._sb', return_value=mock_supabase):
+        with _patched_sb(supabase):
             mock_user = {"id": "test-user-id"}
-            result = asyncio.run(replay_signal_trace("test-signal-id", mock_user))
+            result = _run_coroutine(replay_signal_trace("test-signal-id", mock_user))
             
             # Verify honest limitation documentation
             assert result["replay_implemented"] == False

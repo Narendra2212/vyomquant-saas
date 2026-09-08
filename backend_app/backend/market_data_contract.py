@@ -679,34 +679,18 @@ class ClosedBarIngest:
 
     @staticmethod
     def _parse(candle: Any) -> Optional[Tuple[Any, List[float], Optional[bool]]]:
-        """``(open_time, [o, h, l, c, v], is_closed_flag)`` or ``None`` if unreadable."""
-        if isinstance(candle, Mapping):
-            stamp = None
-            for key in _TIMESTAMP_KEYS:
-                if key in candle:
-                    stamp = candle[key]
-                    break
-            if stamp is None:
-                return None
-            try:
-                raw = [candle[name] for name in OHLCV_COLUMNS]
-            except KeyError:
-                return None
-            flag = candle.get("is_closed")
-            feed_says_closed = None if flag is None else bool(flag)
-        else:
-            try:
-                row = list(candle)
-            except TypeError:
-                return None
-            if len(row) < 6:
-                return None
-            stamp, raw = row[0], row[1:6]
-            feed_says_closed = None
+        """``(open_time, [o, h, l, c, v], is_closed_flag)`` or ``None`` if unreadable.
 
-        open_time = ClosedBarIngest._parse_timestamp(stamp)
-        if open_time is None:
+        The **float** conversion this class's frame needs, layered over
+        :func:`normalise_candle`, which does the shape reading. Splitting the two changed
+        nothing about which candles are readable: a shape :func:`normalise_candle` refuses
+        short-circuits here exactly as the inline reading did, and a value that cannot be
+        read as a finite float is refused below exactly as it was.
+        """
+        parsed = normalise_candle(candle)
+        if parsed is None:
             return None
+        open_time, raw, feed_says_closed = parsed
 
         values: List[float] = []
         for item in raw:
@@ -725,6 +709,68 @@ class ClosedBarIngest:
     @staticmethod
     def _parse_timestamp(stamp: Any) -> Optional[Any]:
         return to_utc_naive(stamp)
+
+
+def normalise_candle(
+    candle: Any,
+) -> Optional[Tuple[Any, List[Any], Optional[bool]]]:
+    """One candle read into this module's canonical shape, **without converting its values**.
+
+    ``(open_time, [open, high, low, close, volume], feed_says_closed)``, or ``None`` when the
+    row cannot be read at all. ``open_time`` is a tz-naive UTC ``pandas.Timestamp`` through
+    :func:`to_utc_naive` - the single interpretation of "when" on this path. The five values
+    are handed back **exactly as they arrived**, unconverted.
+
+    WHY THE VALUES ARE NOT CONVERTED HERE
+    -------------------------------------
+    :meth:`ClosedBarIngest._parse` converts them to ``float``, because the frame the
+    executors read is a float frame and always has been. The paper feed
+    (``backend/paper/paper_market_feed.py``) must not: a paper fill is priced from the close,
+    and Requirement 18.1 forbids a binary floating-point money computation, so a
+    ``Decimal`` decoded from the feed's JSON has to survive to storage unrounded. Both callers
+    need the same *shape reading* - which timestamp key, which five columns, the CCXT row form,
+    the ``is_closed`` flag - and that reading is what lives here, once, rather than being
+    written a second time in the paper package.
+
+    Extracted from :meth:`ClosedBarIngest._parse` by
+    marketplace-subscriptions-paper-trading task 24.3 (Requirement 14.2: the Paper_Session
+    normalises through ``market_data_contract`` and opens no second normalisation path). The
+    accepted shapes are documented on :class:`ClosedBarIngest`; nothing about them changed.
+
+    A caller that wants the float frame's readability rule as well - finite floats only -
+    should use :class:`ClosedBarIngest`, which applies it on top of this. A caller carrying
+    exact decimals applies its own admissibility rule to the returned values; this function
+    asserts only that the five names and the timestamp were present and that the instant was
+    readable.
+    """
+    if isinstance(candle, Mapping):
+        stamp = None
+        for key in _TIMESTAMP_KEYS:
+            if key in candle:
+                stamp = candle[key]
+                break
+        if stamp is None:
+            return None
+        try:
+            raw = [candle[name] for name in OHLCV_COLUMNS]
+        except KeyError:
+            return None
+        flag = candle.get("is_closed")
+        feed_says_closed = None if flag is None else bool(flag)
+    else:
+        try:
+            row = list(candle)
+        except TypeError:
+            return None
+        if len(row) < 6:
+            return None
+        stamp, raw = row[0], list(row[1:6])
+        feed_says_closed = None
+
+    open_time = to_utc_naive(stamp)
+    if open_time is None:
+        return None
+    return open_time, list(raw), feed_says_closed
 
 
 def closed_bar_frame(
