@@ -68,6 +68,9 @@ try {
   supabase = {
     auth: {
       signInWithPassword: () => ({ data: null, error: new Error('Supabase not configured') }),
+      signInWithOtp: () => ({ data: null, error: new Error('Supabase not configured') }),
+      verifyOtp: () => ({ data: null, error: new Error('Supabase not configured') }),
+      signInWithOAuth: () => ({ data: null, error: new Error('Supabase not configured') }),
       signUp: () => ({ data: null, error: new Error('Supabase not configured') }),
       signOut: () => ({ error: null }),
       getUser: () => ({ data: { user: null }, error: new Error('Supabase not configured') }),

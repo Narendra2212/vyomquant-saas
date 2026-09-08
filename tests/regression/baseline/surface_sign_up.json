@@ -67,6 +67,7 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_parameters": "AUTHORISED RE-RECORD of `parameters` on THIS handler only (`backend_app.routers.strategies.get_backtest_status`, GET /api/strategies/backtest/{job_id}). Exactly one difference is covered: the key `user` was ADDED, as `{annotation: dict, depends_on: get_current_user}`. It is NOT one of the five additive fields `design.md` declares, and ADDITIVE_FIELDS is deliberately NOT widened for it - this note permits an added `user` parameter HERE, on THIS handler, and nowhere else; an added `user` on any other handler in any other baseline entry is still a failure. THE PRE-CHANGE SURFACE THIS BASELINE RECORDED WAS UNAUTHENTICATED, and a future reader must not mistake this movement for a regression. The recorded `parameters` was `{job_id: {annotation: str}}` and nothing else; `router = APIRouter()` in backend_app/routers/strategies.py carries no `dependencies=`, and backend_app/main.py includes it as `app.include_router(strategies.router, prefix='/api/strategies', tags=['Strategies'])` with no `dependencies=` either. So this endpoint resolved NO IDENTITY AT ALL: any caller holding - or guessing - a `job_id` read that job's `status`, its `result` blob and its `error` string, whichever tenant had queued it. The handler is now `async def get_backtest_status(job_id: str, user: dict = Depends(get_current_user))` and answers 404 `Job not found` when `status_data.get('user_id') != user['id']`. THE MOVEMENT IS A STRENGTHENING: a cross-tenant read was closed. Nothing was removed, renamed, retyped or re-meaninged - `job_id` is still `{annotation: str}`, `decorators` is still `[\"router.get('/backtest/{job_id}')\"]`, `returns` is still `['computed']` for the one `return response`, and `raises` is still the single `{detail_type: str, status_code: 404}` entry, because the ownership refusal deliberately reuses the same 404-with-a-string-detail shape the missing-job branch already raised (`_raised_status_codes` dedupes identical entries, which is why a second refusal adds no entry - and that sameness is the point, not an accident of the capture). AUTHORISING REQUIREMENTS: 21.1 - the acting identity is derived from the authenticated server-side session, and an identity supplied in a path parameter is ignored for authorisation purposes, which a bare `job_id` with no session was; 21.4 - a caller referencing a record whose owning user is not the authenticated identity is refused with a response byte-identical in shape and content to the response for an identifier that exists in no tenant, which is why the gate answers 404 rather than 403, and why a status hash carrying no `user_id` at all is denied on the same branch rather than grandfathered in; 21.6 - a request carrying no valid authenticated session is refused before any data access; 21.8 - the Verification_Suite attempts a second account's identifiers against every endpoint this specification modified; 22.1 - authentication is required on every non-catalogue endpoint, applied through the platform's existing authorisation dependency rather than an inline role check, and `get_current_user` is that dependency. REQUIREMENTS THIS IS AN EXCEPTION TO: 25.7 and 25.8, for this one added key and no other. 25.7's guarantee is that a recorded surface contract does not drift unannounced; this note is the announcement. Requirement 25.4's \"SHALL remain functional\" still holds for the sign_up surface: the call it makes through `api.strategies.backtest` still resolves and still answers 200 `{job_id, status}` (plus `result` when completed, `error` when failed) to the caller who queued the job. What changed is only that a non-owner is refused. ASSERTED BY tests/test_backtest_job_tenant_isolation.py (`test_a_stranger_holding_a_valid_job_id_is_refused_404_and_not_200`, `test_the_stranger_is_told_exactly_what_an_unknown_job_id_is_told`, `test_the_owners_job_is_unchanged_by_the_refused_read`, `test_a_status_hash_carrying_no_owner_is_refused_rather_than_grandfathered`, `test_the_owner_of_a_queued_job_still_reads_its_status`), all of which were observed to fail against this handler with the ownership gate removed and to pass with it restored. Restoring the recorded `parameters` would mean deleting the dependency, which would re-open the cross-tenant read; a control may not be weakened to keep a baseline green, which is why this entry was re-recorded rather than the handler changed back.",
           "decorators": [
             "router.get('/backtest/{job_id}')"
           ],
@@ -75,6 +76,10 @@
           "parameters": {
             "job_id": {
               "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
             }
           },
           "raises": [
@@ -155,6 +160,7 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_parameters": "AUTHORISED RE-RECORD of `parameters` on THIS handler only (`backend_app.routers.strategies.backtest`, POST /api/strategies/backtest). Exactly two differences are covered: (a) the key `user` was ADDED, as `{annotation: dict, depends_on: get_current_user}`; (b) `payload.annotation` CHANGED from `dict` to `BacktestRequest`. The added key is NOT one of the five additive fields `design.md` declares, and ADDITIVE_FIELDS is deliberately NOT widened for it - this note permits an added `user` parameter HERE, on THIS handler, and nowhere else; an added `user` on any other handler in any other baseline entry is still a failure. THE PRE-CHANGE SURFACE THIS BASELINE RECORDED WAS UNAUTHENTICATED, and a future reader must not mistake this movement for a regression. The recorded `parameters` was `{payload: {annotation: dict}, request: {annotation: Request}}` and nothing else; `router = APIRouter()` in backend_app/routers/strategies.py carries no `dependencies=`, and backend_app/main.py includes it as `app.include_router(strategies.router, prefix='/api/strategies', tags=['Strategies'])` with no `dependencies=` either. So `async def backtest(request: Request, payload: dict)` had NO AUTHENTICATION WHATSOEVER: any caller could dispatch a CPU-bound backtest onto the shared default executor (`loop.run_in_executor(None, backtest_internal, payload)`), write a job status hash and publish a stream entry, with an unbounded request body, throttled by nothing but the per-address `limiter.limit('30/minute')`. THE MOVEMENT IS A STRENGTHENING: authentication was added to a compute-triggering endpoint, and input validation to the same handler. Nothing was removed, renamed or re-meaninged - `request` is still `{annotation: Request}`, `decorators` is still `[\"router.post('/backtest')\", \"limiter.limit('30/minute')\"]`, `raises` is still `[]`, and `returns` is still `['computed', {job_id: computed, status: str}, 'computed']`: the sync branch, the queued acknowledgement and the Redis-unreachable fallback, in the same order and with the same shapes. `payload` is not a different parameter - it is the same body in the same position, now declared. AUTHORISING REQUIREMENTS FOR (a): 21.1 - the acting identity is derived from the authenticated server-side session and any identity supplied in a request body is ignored for authorisation purposes; this handler records `user_id=user['id']` into the job status hash BEFORE `publish_backtest_job`, and that ordering is what makes the ownership gate on GET /api/strategies/backtest/{job_id} (api_calls[2] of this file) enforceable at all - a job that reached the stream before its owner was recorded would have been readable by any caller for that window; 21.6 - a request carrying no valid authenticated session is refused before any data access and performs zero writes, which an anonymous caller writing a status hash and publishing a stream entry violated on both counts; 21.8 - the Verification_Suite attempts a second account's identifiers against every endpoint this specification modified; 22.1 - authentication is required on every non-catalogue endpoint, applied through the platform's existing authorisation dependency rather than an inline role check, and `get_current_user` is that dependency. AUTHORISING REQUIREMENT FOR (b): 22.2 - every request body is validated against a DECLARED SCHEMA covering type, range and length before any database access. `BacktestRequest` (backend_app/routers/strategies.py) is that schema. It is `extra='allow'`, so every DAG node, edge and unenumerated key the graph carries still reaches `backtest_internal` untouched and no existing caller's body is rejected for a field this model does not name; what it constrains are the scalars that decide how much compute one request buys - `initial_capital` (>0, <=1e9), `trade_size_pct` (>0, <=1.0), `symbols` and `strategies` (<=50 entries each), `timeframe` (<=16 chars), `strategy_name` (<=200 chars). It is dumped with `exclude_none=True`, so `backtest_internal`'s own `.get()` defaults still apply rather than being overridden with an explicit `None`. The response contract for a valid body is therefore unchanged. REQUIREMENTS THIS IS AN EXCEPTION TO: 25.7 and 25.8, for these two differences and no others. Requirement 25.4's \"SHALL remain functional\" still holds for the sign_up surface: it calls this endpoint through `api.strategies.backtest` with a session in hand and still receives `{job_id, status: 'queued'}`. ASSERTED BY tests/test_backtest_job_tenant_isolation.py (`test_the_queued_status_hash_records_the_session_identity_before_publishing`, `test_an_owner_identity_in_the_request_body_is_not_the_recorded_owner`, `test_the_owner_of_a_queued_job_still_reads_its_status`), which were observed to fail against this handler with `user_id=user['id']` removed from the status write and to pass with it restored. Restoring either recorded value would re-open an unauthenticated, compute-triggering endpoint or drop the input validation on it; a control may not be weakened to keep a baseline green, which is why this entry was re-recorded rather than the handler changed back.",
           "decorators": [
             "router.post('/backtest')",
             "limiter.limit('30/minute')"
@@ -163,10 +169,14 @@
           "module": "backend_app.routers.strategies",
           "parameters": {
             "payload": {
-              "annotation": "dict"
+              "annotation": "BacktestRequest"
             },
             "request": {
               "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
             }
           },
           "raises": [],
@@ -197,10 +207,11 @@
   "supabase_auth_calls": [
     "getUser",
     "mfa.getAuthenticatorAssuranceLevel",
-    "resetPasswordForEmail",
     "signInWithOAuth",
+    "signInWithOtp",
     "signInWithPassword",
-    "signUp"
+    "signUp",
+    "verifyOtp"
   ],
   "surface": "sign_up",
   "unresolved_usages": []

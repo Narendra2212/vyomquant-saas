@@ -7,10 +7,11 @@
     "pages/AuthPage.jsx"
   ],
   "supabase_auth_calls": [
-    "resetPasswordForEmail",
     "signInWithOAuth",
+    "signInWithOtp",
     "signInWithPassword",
-    "signUp"
+    "signUp",
+    "verifyOtp"
   ],
   "surface": "sign_in",
   "unresolved_usages": []
