@@ -36,26 +36,12 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 import wsClient from '../websocketClient';
-
 // ═══════════════════════════════════════════════════════════════════════════
-// COLOR PALETTE
+// COLOR PALETTE — Requirement 1.1: the single token source.
+// This page used to declare a competing local `C`. The layout is unchanged,
+// only the token source is corrected (design.md §17.2).
 // ═══════════════════════════════════════════════════════════════════════════
-const C = {
-  bg: "#0a0a0a",
-  bg2: "#0f1115",
-  bg3: "#13161c",
-  border: "#1f2937",
-  t1: "#f1f5f9",
-  t2: "#94a3b8",
-  t3: "#64748b",
-  cyan: "#00d4ff",
-  accent: "#00d4ff",
-  green: "#00ff88",
-  red: "#ff3366",
-  orange: "#ff9500",
-  purple: "#8b5cf6",
-  yellow: "#fbbf24"
-};
+import { C } from './ui-legacy/primitives';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CATEGORY CONFIGURATION

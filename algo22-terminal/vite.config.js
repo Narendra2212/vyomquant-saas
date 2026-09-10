@@ -68,17 +68,11 @@ export default defineConfig(async () => ({
       output: {
         manualChunks: (id) => {
           if (id.includes('node_modules')) {
-            if (id.includes('ag-grid-community') || id.includes('ag-grid-react')) {
-              return 'vendor-ag-grid';
-            }
             if (id.includes('reactflow') || id.includes('@reactflow')) {
               return 'vendor-reactflow';
             }
             if (id.includes('recharts')) {
               return 'vendor-recharts';
-            }
-            if (id.includes('lightweight-charts')) {
-              return 'vendor-charts';
             }
           }
         },

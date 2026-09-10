@@ -5,7 +5,8 @@
  * extracted from App.jsx (was ~lines 208-1488).
  *
  * DO NOT add page-level logic here. This file should only contain:
- *   - The C (theme colours/spacing) token object
+ *   - The C compatibility shim (DERIVED from src/design/tokens.js — not a token
+ *     source; see the comment on the object itself)
  *   - Stateless and lightly-stateful micro-components
  *   - Shared hooks (usePolling)
  *   - Error/loading utilities
@@ -17,83 +18,148 @@ import {
   AlertTriangle, RefreshCw, Zap
 } from "lucide-react";
 import { Button } from "../ui/Button";
+import { token } from "../../design/tokens";
 
 // Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 //  DESIGN SYSTEM - PROFESSIONAL TRADING THEME
 // Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
-export const C = {
-  // Background hierarchy (reconciled with DESIGN_SYSTEM_V2)
-  bg: "#080A0E",
-  bg0: "#080A0E",
-  bg1: "#0F1117",
-  bg2: "#151821",
-  bg3: "#1A202C",
-  bg4: "#222C3A",
+/**
+ * The px root font size the token rem values are expressed against.
+ *
+ * Not a design token: `tokens.css` declares no `font-size` on `:root`, so this
+ * is the browser default, and it exists here only to project a rem token onto
+ * the unitless numbers the legacy inline styles below still pass to React.
+ */
+const REM_PX = 16;
 
-  // Border system (reconciled with DESIGN_SYSTEM_V2)
-  border: "#1E2530",
-  borderLight: "#2A3441",
-  borderHover: "#3D4D5C",
+/**
+ * Project a token length (`'0.75rem'`, `'6px'`) onto the unitless px number the
+ * legacy `C.space` / `C.radius` scales have always exposed.
+ *
+ * These two scales stay numeric on purpose. `C.space.*` is consumed
+ * arithmetically (`PaperTrading.jsx` computes `clientWidth - 2 * C.space.xl`)
+ * and interpolated (`` `${C.space.sm}px 0` ``), so handing back a rem string
+ * would produce `NaN` and `'0.5rempx'` respectively. The *values* are still
+ * derived from `tokens.css`; only the unit is legacy.
+ */
+const legacyPx = (length) =>
+  length.endsWith("rem") ? Math.round(parseFloat(length) * REM_PX) : parseInt(length, 10);
 
-  // Accent colors (cyan primary brand + blue accent)
-  cyan: "#00D4FF",
-  cyanL: "#67E8F9",
-  cyanD: "#0083B0",
-  cyanDim: "rgba(0, 212, 255, 0.15)",
-  accent: "#00D4FF",
-  accentHover: "#33E0FF",
-  accentMuted: "#0083B0",
-  blue: "#2962FF",
+/**
+ * COMPATIBILITY SHIM — Requirement 1.1.
+ *
+ * `C` is no longer a token source. Every value below is DERIVED from
+ * `src/design/tokens.js`, which is generated from `src/styles/tokens.css`.
+ * There is not one colour, shadow, radius or spacing literal in this object,
+ * so `C.profit` and `var(--color-status-profit)` cannot disagree.
+ *
+ * This object is FROZEN and CLOSED: adding a key is a lint error (see the
+ * `vyom/no-new-legacy-token` rule in `eslint.config.js`). It shrinks as pages
+ * migrate to `components/ds/*` and is deleted at the end of step M9.
+ *
+ * DO NOT import `C` into any new component. Import `token` or use a Tailwind
+ * utility.
+ *
+ * Deliberate collapses, all from design.md §3.4 — each of these was two values
+ * that carried no semantic distinction, and is now one:
+ *   - `bg3`/`bg4` → `surface.inset`; `borderLight`/`borderHover` → `line.strong`
+ *   - `cyanD`/`accentMuted`/`blue` → `brand.base` (`#2962FF` is retired)
+ *   - `greenD`/`profitDark` → `status.profit.fg`; `lossDark` → `status.loss.fg`
+ *   - `t3`/`t4` → `content.muted` (NON-TEXT ONLY at 3.2:1)
+ *   - `warning`/`gold`/`orange` → `status.warning.fg`: one amber, `#FFB74D` retired
+ *   - `purple` → `status.neutral.fg`: the decorative hue is retired
+ *
+ * `glow.*` and `gradient.*` are all `'none'`. That is Requirement 1.5 satisfied
+ * app-wide from this one edit, with no page touched: every decorative glow and
+ * shine gradient stops rendering at each of its ~700 call sites at once.
+ */
+export const C = Object.freeze({
+  // Background hierarchy → surface
+  bg: token.surface.canvas,
+  bg0: token.surface.canvas,
+  bg1: token.surface.panel,
+  bg2: token.surface.raised,
+  bg3: token.surface.inset,
+  bg4: token.surface.inset,
 
-  // Profit / Loss (reconciled with DESIGN_SYSTEM_V2)
-  profit: "#26A69A",
-  green: "#26A69A",
-  greenD: "#00897B",
-  profitDark: "#00897B",
-  profitBg: "rgba(38, 166, 154, 0.12)",
+  // Border system → line
+  border: token.line.default,
+  borderLight: token.line.strong,
+  borderHover: token.line.strong,
 
-  loss: "#EF5350",
-  red: "#EF5350",
-  lossDark: "#E53935",
-  lossBg: "rgba(239, 83, 80, 0.12)",
+  // Accent colours → brand
+  cyan: token.brand.base,
+  cyanL: token.brand.hover,
+  cyanD: token.brand.base,
+  cyanDim: token.brand.wash,
+  accent: token.brand.base,
+  accentHover: token.brand.hover,
+  accentMuted: token.brand.base,
+  blue: token.brand.base,
 
-  // Text hierarchy
-  t1: "#F0F2F5",
-  t2: "#8B95A5",
-  t3: "#5A6578",
-  t4: "#3E4856",
+  // Profit / Loss → semantic status
+  profit: token.status.profit.fg,
+  green: token.status.profit.fg,
+  greenD: token.status.profit.fg,
+  profitDark: token.status.profit.fg,
+  profitBg: token.status.profit.wash,
 
-  // Utility colors
-  warning: "#FFB74D",
-  gold: "#F59E0B",
-  purple: "#A855F7",
-  orange: "#F97316",
+  loss: token.status.loss.fg,
+  red: token.status.loss.fg,
+  lossDark: token.status.loss.fg,
+  lossBg: token.status.loss.wash,
 
-  // Shadows & Glows
-  shadow: "0 2px 4px rgba(0,0,0,0.25)",
-  shadowMd: "0 4px 12px rgba(0,0,0,0.35)",
-  shadowLg: "0 8px 24px rgba(0,0,0,0.5)",
+  // Text hierarchy → content
+  t1: token.content.primary,
+  t2: token.content.secondary,
+  t3: token.content.muted,
+  t4: token.content.muted,
 
-  glow: {
-    profit: "0 0 20px rgba(38, 166, 154, 0.3), 0 0 40px rgba(38, 166, 154, 0.1)",
-    loss: "0 0 20px rgba(239, 83, 80, 0.3), 0 0 40px rgba(239, 83, 80, 0.1)",
-    accent: "0 0 20px rgba(0, 212, 255, 0.3), 0 0 40px rgba(0, 212, 255, 0.1)",
-    warning: "0 0 20px rgba(255, 183, 77, 0.3)",
-    gold: "0 0 20px rgba(245, 158, 11, 0.3)",
-    purple: "0 0 20px rgba(168, 85, 247, 0.3)",
-  },
+  // Utility colours → semantic status
+  warning: token.status.warning.fg,
+  gold: token.status.warning.fg,
+  purple: token.status.neutral.fg,
+  orange: token.status.warning.fg,
 
-  gradient: {
-    profit: "linear-gradient(135deg, rgba(38,166,154,0.15) 0%, rgba(38,166,154,0.05) 100%)",
-    loss: "linear-gradient(135deg, rgba(239,83,80,0.15) 0%, rgba(239,83,80,0.05) 100%)",
-    accent: "linear-gradient(135deg, rgba(0,212,255,0.15) 0%, rgba(0,212,255,0.05) 100%)",
-    card: "linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 100%)",
-    shine: "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.1) 50%, transparent 100%)",
-  },
+  // Elevation → shadow. No coloured glows.
+  shadow: token.shadow.panel,
+  shadowMd: token.shadow.raised,
+  shadowLg: token.shadow.overlay,
 
-  space: { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 24 },
-  radius: { sm: 4, md: 6, lg: 8, xl: 12 }
-};
+  // Requirement 1.5: retired, kept only so existing call sites resolve.
+  glow: Object.freeze({
+    profit: "none",
+    loss: "none",
+    accent: "none",
+    warning: "none",
+    gold: "none",
+    purple: "none",
+  }),
+
+  gradient: Object.freeze({
+    profit: "none",
+    loss: "none",
+    accent: "none",
+    card: "none",
+    shine: "none",
+  }),
+
+  space: Object.freeze({
+    xs: legacyPx(token.space["1"]),
+    sm: legacyPx(token.space["2"]),
+    md: legacyPx(token.space["3"]),
+    lg: legacyPx(token.space["4"]),
+    xl: legacyPx(token.space["5"]),
+    xxl: legacyPx(token.space["6"]),
+  }),
+
+  radius: Object.freeze({
+    sm: legacyPx(token.radius.sm),
+    md: legacyPx(token.radius.md),
+    lg: legacyPx(token.radius.lg),
+    xl: legacyPx(token.radius.xl),
+  }),
+});
 
 // Ã¢â€â‚¬Ã¢â€â‚¬ Micro Components Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 export const Tag2 = ({ c = "accent", children, interactive = false }) => {

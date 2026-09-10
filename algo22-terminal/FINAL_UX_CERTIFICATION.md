@@ -1,3 +1,8 @@
+> **SUPERSEDED 2026-09-09.** The direction in this document — gamification, dopamine loops,
+> leaderboards, achievement tiers, market-ticker "aliveness" — is explicitly rejected by
+> `.kiro/specs/vyomquant-ui-redesign/`. VyomQuant is a calm professional trading cockpit.
+> Do not implement anything below. Retained as historical record only.
+
 # FINAL UX CERTIFICATION - ALGO22 TERMINAL
 
 ## Phase 1 Certification: Platform Architecture & Navigation

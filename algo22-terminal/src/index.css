@@ -1,81 +1,41 @@
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   VyomQuant â€” Unified Stylesheet (Tailwind CSS v4)
-   Merged from: existing App.css + ZIP index.css design tokens
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+/* ===========================================================================
+   VyomQuant -- application stylesheet (Tailwind CSS v4)
+
+   Design tokens live in ./styles/tokens.css and NOWHERE else (Requirement 1.1).
+   This file carries only:
+     1. Tailwind's entry point,
+     2. the import of the token source,
+     3. genuine base resets that are not token declarations,
+     4. the landing-page @utility compositions, which are out of scope for v1.
+
+   Import order matters. `tailwindcss` must come first so its `@layer theme`
+   exists before tokens.css contributes the single `@theme static` block; the
+   token import must come second so nothing can be declared ahead of it.
+
+   This file used to declare two further palettes of its own ("existing app
+   palette" + "landing page design system") and a third surface set inside
+   three `@utility` blocks. Under Tailwind v4 the last-declared block wins, so
+   profit and loss each resolved to whichever of their two values came last.
+   All three are gone; every name that had a real call site is carried forward
+   by the COMPATIBILITY ALIASES section of tokens.css.
+   =========================================================================== */
 
 @import "tailwindcss";
+@import "./styles/tokens.css";
 
-/* â”€â”€ Theme tokens (Tailwind v4 CSS-first configuration) â”€â”€ */
-@theme {
-  /* â”€â”€ Existing app palette â”€â”€ */
-  --color-bg-0: #080A0E;
-  --color-bg-1: #0F1117;
-  --color-bg-2: #151821;
-  --color-bg-3: #1A202C;
-  --color-text-1: #F0F2F5;
-  --color-text-2: #8B95A5;
-  --color-text-3: #5A6578;
-  --color-border: #1E2530;
-  --color-cyan: #00D4FF;
-  --color-green: #26A69A;
-  --color-red: #EF5350;
-  --color-purple: #a855f7;
-  --color-orange: #f97316;
-  --color-gold: #F59E0B;
+/* -- Base resets ---------------------------------------------------------- */
 
-  /* â”€â”€ Landing page design system tokens (from ZIP) â”€â”€ */
-  --color-void: #050608;
-  --color-bg-primary: #080A0E;
-  --color-bg-surface: #0F1117;
-  --color-bg-elevated: #151821;
-  --color-bg-overlay: rgba(8, 10, 14, 0.85);
-  --color-border-subtle: #141922;
-  --color-border-default: #1E2530;
-  --color-border-active: #2A3441;
-  --color-text-primary: #F0F2F5;
-  --color-text-secondary: #8B95A5;
-  --color-text-muted: #5A6578;
-  --color-text-inverse: #080A0E;
-  --color-accent-cyan: #00D4FF;
-  --color-accent-cyan-dim: rgba(0, 212, 255, 0.15);
-  --color-accent-profit: #10B981;
-  --color-accent-profit-dim: rgba(16, 185, 129, 0.12);
-  --color-accent-gold: #F59E0B;
-  --color-accent-gold-dim: rgba(245, 158, 11, 0.12);
-  --color-accent-loss: #EF4444;
-  --color-accent-loss-dim: rgba(239, 68, 68, 0.12);
-
-  /* â”€â”€ Typography â”€â”€ */
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', 'SF Mono', Menlo, Consolas, monospace;
-
-  /* â”€â”€ Spacing extensions â”€â”€ */
-  --spacing-18: 4.5rem;
-  --spacing-22: 5.5rem;
-  --spacing-88: 22rem;
-
-  /* â”€â”€ Animations â”€â”€ */
-  --animate-pulse-glow: pulse-glow 3s ease-in-out infinite;
-  --animate-gradient-sweep: gradient-sweep 2s linear infinite;
-  --animate-shimmer: shimmer 1.5s infinite;
-
-  @keyframes pulse-glow {
-    0%, 100% { box-shadow: 0 0 20px rgba(0, 212, 255, 0.15); }
-    50% { box-shadow: 0 0 40px rgba(0, 212, 255, 0.3); }
-  }
-
-  @keyframes gradient-sweep {
-    0% { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
-  }
-
-  @keyframes shimmer {
-    0% { background-position: -1000px 0; }
-    100% { background-position: 1000px 0; }
-  }
+/* Moved out of the inline `<style>` that `AppShell` rendered in src/App.jsx
+   (design.md §6.6). An inline `<style>` inside a rendered component is
+   re-evaluated on every render of that component, and a global reset has no
+   reason to be render-coupled. */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* â”€â”€ Base resets â”€â”€ */
 html {
   scroll-behavior: smooth;
   -webkit-font-smoothing: auto;
@@ -87,16 +47,10 @@ html {
   color: #F0F2F5;
 }
 
-/* Reduced motion */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
+/* The `prefers-reduced-motion` block that used to sit here is now in
+   tokens.css, declared identically and imported above. */
 
-/* â”€â”€ Layout utilities â”€â”€ */
+/* -- Layout utilities ----------------------------------------------------- */
 @utility section-container {
   width: 100%;
   padding-left: 1rem;
@@ -117,7 +71,7 @@ html {
   margin-right: auto;
 }
 
-/* â”€â”€ Navigation â”€â”€ */
+/* -- Navigation ----------------------------------------------------------- */
 @utility glass-nav {
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
@@ -125,7 +79,7 @@ html {
   border-bottom: 1px solid rgba(30, 37, 48, 0.5);
 }
 
-/* â”€â”€ Buttons â”€â”€ */
+/* -- Buttons -------------------------------------------------------------- */
 @utility btn-primary {
   display: inline-flex;
   align-items: center;
@@ -178,7 +132,7 @@ html {
   }
 }
 
-/* â”€â”€ Cards â”€â”€ */
+/* -- Cards ---------------------------------------------------------------- */
 @utility card-surface {
   background-color: #0F1117;
   border: 1px solid #1E2530;
@@ -197,7 +151,7 @@ html {
   }
 }
 
-/* â”€â”€ Typography â”€â”€ */
+/* -- Typography ----------------------------------------------------------- */
 @utility text-gradient-cyan {
   background: linear-gradient(to right, #00D4FF, #67e8f9);
   -webkit-background-clip: text;
@@ -206,7 +160,7 @@ html {
   color: transparent;
 }
 
-/* â”€â”€ Terminal chrome frame â”€â”€ */
+/* -- Terminal chrome frame ------------------------------------------------ */
 @utility terminal-frame {
   position: relative;
   border-radius: 0.75rem;
@@ -215,7 +169,7 @@ html {
   overflow: hidden;
 }
 
-/* ── Scrollbar ── */
+/* -- Scrollbar ------------------------------------------------------------ */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -245,47 +199,7 @@ html {
   &::-webkit-scrollbar { display: none; }
 }
 
-/* ── Quantitative Terminal Utilities ── */
-@utility kpi-card {
-  background-color: #0C1017;
-  border: 1px solid #1A2332;
-  border-radius: 0.75rem;
-  padding: 1.25rem;
-  transition: all 0.2s ease;
-  &:hover {
-    border-color: #243247;
-    background-color: #0F151F;
-  }
-}
-
-@utility table-container {
-  width: 100%;
-  overflow-x: auto;
-  border: 1px solid #1A2332;
-  border-radius: 0.75rem;
-  background-color: #0C1017;
-}
-
-@utility input-institutional {
-  background-color: #0F151F;
-  border: 1px solid #1A2332;
-  color: #F0F4F8;
-  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
-  font-size: 0.875rem;
-  border-radius: 0.5rem;
-  padding: 0.625rem 0.875rem;
-  transition: all 0.15s ease;
-  &:focus {
-    outline: none;
-    border-color: #00D4FF;
-    box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.15);
-  }
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-}
-
+/* -- Status badge --------------------------------------------------------- */
 @utility badge-status {
   display: inline-flex;
   align-items: center;

@@ -7,13 +7,9 @@ import {
   Send, Archive, RefreshCw, Loader2, HelpCircle, Shield,
   FileText, Activity, Layers, Link2, Paperclip, Check, ArrowLeft
 } from "lucide-react";
-
-// Institutional Design System Palette
-const C = {
-  bg: "#010608", bg0: "#010608", bg1: "#040d14", bg2: "#071018", bg3: "#0b1724", bg4: "#0f1e2e",
-  border: "#0f2035", cyan: "#00d4ff", t1: "#e8f4ff", t2: "#6b9bb8", t3: "#2a4a5e", t4: "#152535",
-  green: "#00d4aa", yellow: "#ffd700", red: "#ff4757", orange: "#ff8c00"
-};
+// Requirement 1.1: the single token source. This page used to declare a competing
+// local `C`; the layout is unchanged, only the token source is corrected (§17.2).
+import { C } from "./ui-legacy/primitives";
 
 const STATUS_CONFIG = {
   open: { bg: "rgba(255, 71, 87, 0.12)", text: "#ff4757", label: "OPEN", icon: AlertCircle },

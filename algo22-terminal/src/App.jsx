@@ -282,9 +282,13 @@ function AppShell() {
     <DesktopOnlyOverlay>
       <div style={{ background: C.bg0, minHeight: "100vh", width: "100%", display: "flex", flex: 1, fontFamily: "'IBM Plex Mono', 'Fira Code', monospace" }}>
         <ToastContainer toasts={toasts} onRemove={removeToast} />
+        {/* The global `*` reset that used to sit here now lives in the base-resets
+            section of src/index.css. An inline <style> re-evaluates on every render
+            of this component, and a global reset has no reason to be render-coupled
+            (design.md §6.6). The font @import stays until tasks 3.2/3.3 move font
+            loading into index.html. */}
         <style>{`
           @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
-          * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
         `}</style>
         <Sidebar />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>

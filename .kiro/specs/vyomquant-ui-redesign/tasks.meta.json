@@ -1,0 +1,744 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Create `algo22-terminal/src/styles/tokens.css` as the sole `@theme` token source": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961421300
+      },
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961462337
+      },
+      {
+        "executionId": "7482ea48-dfb8-491b-9769-92ea636d9fe0",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788967333427
+      },
+      {
+        "executionId": "7482ea48-dfb8-491b-9769-92ea636d9fe0",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788967340748
+      },
+      {
+        "executionId": "b1308ec6-4baf-4df0-920f-00b672212afb",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788971203445
+      }
+    ],
+    "1.2 Create `scripts/gen-tokens.mjs` and the generated `src/design/tokens.js`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961421809
+      },
+      {
+        "executionId": "b1308ec6-4baf-4df0-920f-00b672212afb",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788971214564
+      },
+      {
+        "executionId": "b1308ec6-4baf-4df0-920f-00b672212afb",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788972062933
+      }
+    ],
+    "1.3 Rewrite `C` in `src/components/ui-legacy/primitives.jsx` as a derived frozen shim": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961422128
+      },
+      {
+        "executionId": "b1308ec6-4baf-4df0-920f-00b672212afb",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788972070977
+      },
+      {
+        "executionId": "b30c3d9a-acb2-42b9-a073-6d9efb4a6c5e",
+        "chatSessionId": "sess_b7bb650a-a9d4-4c01-883c-43726402c6af",
+        "timestamp": 1789017805159
+      }
+    ],
+    "1.4 Rewire `src/index.css` onto the single source": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961422339
+      },
+      {
+        "executionId": "b1308ec6-4baf-4df0-920f-00b672212afb",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788972071940
+      }
+    ],
+    "1.5 Delete `algo22-terminal/tailwind.config.js`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961422665
+      },
+      {
+        "executionId": "b1308ec6-4baf-4df0-920f-00b672212afb",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788972072870
+      }
+    ],
+    "1.6 Delete the two page-local `C` objects": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961422934
+      },
+      {
+        "executionId": "5c134dc6-5d60-4796-aa47-5c00ff159910",
+        "chatSessionId": "sess_b7bb650a-a9d4-4c01-883c-43726402c6af",
+        "timestamp": 1789010795494
+      }
+    ],
+    "1.7 Dependency and build-tooling hygiene": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961423188
+      },
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961469990
+      },
+      {
+        "executionId": "7482ea48-dfb8-491b-9769-92ea636d9fe0",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788967333977
+      },
+      {
+        "executionId": "7482ea48-dfb8-491b-9769-92ea636d9fe0",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788967341974
+      },
+      {
+        "executionId": "b1308ec6-4baf-4df0-920f-00b672212afb",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788971213999
+      }
+    ],
+    "1.8 Reconcile the design documentation with this initiative's direction": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961423400
+      },
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961470784
+      },
+      {
+        "executionId": "7482ea48-dfb8-491b-9769-92ea636d9fe0",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788967334789
+      },
+      {
+        "executionId": "7482ea48-dfb8-491b-9769-92ea636d9fe0",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788967343337
+      },
+      {
+        "executionId": "b1308ec6-4baf-4df0-920f-00b672212afb",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788971204385
+      }
+    ],
+    "2. Checkpoint — M1 is independently shippable": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961423624
+      }
+    ],
+    "3.1 Replace the 143 dead typography classes with live token classes": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961423894
+      }
+    ],
+    "3.2 Move font loading into `algo22-terminal/index.html`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961424113
+      }
+    ],
+    "3.3 Switch the shell default from monospace to Inter, reserving mono for numerics": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961424404
+      }
+    ],
+    "4. Checkpoint — M2 is independently shippable": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961424719
+      }
+    ],
+    "5.1 Create `src/design/semantic.js` — the one state→colour mapping": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961425049
+      }
+    ],
+    "5.3 Create `src/design/errorCopy.js` with `translateError`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961425297
+      }
+    ],
+    "5.5 Create `src/hooks/usePanelState.js`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961425522
+      }
+    ],
+    "5.6 Create `src/hooks/useConnectionStatus.js`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961425791
+      }
+    ],
+    "5.7 Create `src/hooks/useLiveChannel.js`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961427032
+      }
+    ],
+    "5.8 Create `src/design/notificationPolicy.js`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961427529
+      }
+    ],
+    "6.1 Build `Panel`, `LoadingState`, `EmptyState`, `ErrorState` and `Skeleton`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961427820
+      }
+    ],
+    "6.4 Build `Metric`, `PnLDisplay` and the `Reported<T>` accessor": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961428657
+      }
+    ],
+    "6.6 Build `StatusBadge`, `StrategyStatus`, `RiskIndicator` and `ExchangeStatus`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961429001
+      }
+    ],
+    "6.7 Build `TradingEnvironmentBadge`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961429286
+      }
+    ],
+    "6.9 Build `ds/DataTable.jsx`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961429620
+      }
+    ],
+    "6.14 Build `ds/FilterBar.jsx`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961429979
+      }
+    ],
+    "6.15 Build `ds/Field.jsx` and the advanced-settings accordion": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961430212
+      }
+    ],
+    "6.18 Build `ds/Chart.jsx`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961430430
+      }
+    ],
+    "6.20 Build `ds/ConfirmDialog.jsx`, `ds/Drawer.jsx`, the overlay registry and `useFocusTrap`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961430645
+      }
+    ],
+    "6.23 Build the remaining primitives and the `ds/index.js` barrel": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961431103
+      }
+    ],
+    "6.24 Retoken `components/ui/{Button,Badge,Card,Accordion}.jsx` in place": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961431412
+      }
+    ],
+    "6.25 Rewrite `src/components/ErrorBoundary.jsx`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961431610
+      }
+    ],
+    "6.26 Delete the decorative primitives from `ui-legacy/primitives.jsx`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961431819
+      }
+    ],
+    "6.27 Raise the accessibility lint rules from warn to error": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961432015
+      }
+    ],
+    "7. Checkpoint — M3 is independently shippable": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961432293
+      }
+    ],
+    "8.1 Create `src/components/shell/navigation.js`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961432562
+      }
+    ],
+    "8.4 Create `src/components/shell/ResponsiveGate.jsx`, replacing `DesktopOnlyOverlay`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961432744
+      }
+    ],
+    "8.5 Rebuild the shell layout in `src/App.jsx`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961432930
+      }
+    ],
+    "8.6 Rebuild `src/components/Sidebar.jsx` against the new IA": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961433129
+      }
+    ],
+    "8.7 Rebuild `src/components/TopBar.jsx` with a real connection indicator": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961433320
+      }
+    ],
+    "8.8 Add `src/components/shell/AccountMenu.jsx` and one shared unread-count hook": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961433523
+      }
+    ],
+    "9. Checkpoint — M4 is independently shippable": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961433865
+      }
+    ],
+    "10.1 Create `src/hooks/useNotificationStream.js` as the single toast transport for backend events": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961434083
+      }
+    ],
+    "10.3 Replace the two native dialogs in `src/pages/Strategies.jsx`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961434294
+      }
+    ],
+    "10.4 Replace the four native dialogs in `src/pages/StrategyDetail.jsx` and delete its placeholder panel": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961434569
+      }
+    ],
+    "10.5 Build the `Deploy_Confirmation_Flow`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961434760
+      }
+    ],
+    "10.8 Delete `extractErrorMessage` and `getErrorType` from `ui-legacy/primitives.jsx`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961434962
+      }
+    ],
+    "10.9 Delete `LoadingProvider`'s full-screen blocking overlay": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961435154
+      }
+    ],
+    "10.10 Remove the six dead methods from `src/api/modules/portfolio.js`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961435381
+      }
+    ],
+    "11. Checkpoint — M5 is independently shippable": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961435570
+      }
+    ],
+    "12.1 BC-1 — compute current drawdown honestly": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961435770
+      }
+    ],
+    "12.2 BC-2 — stop swallowing read failures into empties": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961435983
+      }
+    ],
+    "12.3 BC-3 — add `last_signal_at` to the strategies list projection": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961436215
+      }
+    ],
+    "12.4 BC-4 — add `last_execution_at` to the strategies list projection": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961436533
+      }
+    ],
+    "12.5 BC-5 — expose lifetime `realized_pnl` on the portfolio overview": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961436749
+      }
+    ],
+    "12.6 BC-6 — record the position change resulting from a signal": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961436982
+      }
+    ],
+    "13.1 Re-point Portfolio's positions read and remove the last two dead API methods": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961437314
+      }
+    ],
+    "13.2 Stop reading `/api/dashboard/overview` anywhere in the frontend": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961437498
+      }
+    ],
+    "13.3 Declare per-page field availability as data": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961437668
+      }
+    ],
+    "14. Checkpoint — M6 is independently shippable": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961437965
+      }
+    ],
+    "15.1 Rebuild `src/pages/TradeHistory.jsx` on `DataTable`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961438151
+      }
+    ],
+    "15.2 Extract the filter and search predicate into `src/pages/tradeHistoryFilters.js`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961438360
+      }
+    ],
+    "16.1 Create `src/design/pageHierarchy.js` and rebuild Portfolio's tier 1": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961438580
+      }
+    ],
+    "16.2 Rebuild Portfolio's positions and chart regions": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961438783
+      }
+    ],
+    "17.1 Rebuild `src/pages/Strategies.jsx` as a table": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961439001
+      }
+    ],
+    "17.2 Render the action set from `allowed_actions` with the destructive partition": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961439216
+      }
+    ],
+    "18. Checkpoint — M7 is independently shippable": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961439416
+      }
+    ],
+    "19.1 Rebuild `src/pages/Dashboard.jsx` on the tier hierarchy": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961439650
+      }
+    ],
+    "19.2 Add the Requirement 3.3 alert strip": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961439911
+      }
+    ],
+    "19.3 Apply tick isolation to the Dashboard": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961440126
+      }
+    ],
+    "19.4 Remove the gamified and unrequired surfaces from the Dashboard": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961440336
+      }
+    ],
+    "20.1 Create `src/pages/LiveTrading.jsx` and repoint the route": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961440546
+      }
+    ],
+    "20.2 Extract the shared position, order and execution panels": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961440759
+      }
+    ],
+    "20.3 Wire the live destructive actions": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961440970
+      }
+    ],
+    "21.1 Create the canonical nine-stage projection in `src/lib/signalTraceStages.js`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961441299
+      }
+    ],
+    "21.4 Rebuild `src/pages/SignalTrace.jsx` with collapsed independent rows": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961441566
+      }
+    ],
+    "21.6 Retoken `src/components/SignalTraceVisualization.jsx`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961441856
+      }
+    ],
+    "22. Checkpoint — M8 is independently shippable": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961442302
+      }
+    ],
+    "23.1 Rebuild the configuration flow in `src/pages/Backtester.jsx`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961442947
+      }
+    ],
+    "23.2 Rebuild the results region": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961443155
+      }
+    ],
+    "23.3 Derive the drawdown curve in `src/lib/drawdownSeries.js`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961443383
+      }
+    ],
+    "24.1 Apply the five-stage visual grammar to the canvas": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961443661
+      }
+    ],
+    "24.2 Make the inspector a sibling grid track": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961444239
+      }
+    ],
+    "24.4 Rework the four validation surfaces": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961444582
+      }
+    ],
+    "24.7 Implement the tablet review mode": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961444958
+      }
+    ],
+    "24.8 Wire the builder header actions and the save confirmation": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961445431
+      }
+    ],
+    "25.1 Retoken `src/pages/PaperTrading.jsx` and deduplicate the environment indicator": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961445739
+      }
+    ],
+    "25.2 Point Paper Trading at the shared trading panels": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961446117
+      }
+    ],
+    "26.1 Implement the 7→4 subscription-state mapping": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961446436
+      }
+    ],
+    "27.1 Retoken `src/pages/StrategyDetail.jsx`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961446727
+      }
+    ],
+    "27.2 Delete the `C` shim and `src/components/ui-legacy/primitives.jsx`": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961447050
+      }
+    ],
+    "27.3 Delete `DesktopOnlyOverlay` and close out the guard budgets": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961447345
+      }
+    ],
+    "28. Final checkpoint — the full v1 redesign": [
+      {
+        "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1788961447643
+      }
+    ]
+  }
+}
