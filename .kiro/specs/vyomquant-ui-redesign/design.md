@@ -2192,9 +2192,11 @@ Runner: `vitest` + `fast-check`, minimum **100 iterations** per property. Each t
 
 ### Property 1: The status colour mapping is total and its semantic groups are distinct
 
-*For any* value — including every member of the declared status vocabulary and any arbitrary string, empty string, `null` or non-string — `statusToken(value)` returns a defined `{group, fg, wash}` whose tokens exist in the generated token set; a value outside the vocabulary always resolves to the `neutral` group; and the six semantic groups named by the requirement (live/running, connected/paired, profitable/buy, loss/sell, error/disconnected, warning) resolve to six tokens that are pairwise distinct in at least one of `fg` or `wash`.
+*For any* value — including every member of the declared status vocabulary and any arbitrary string, empty string, whitespace-only string, `null` or non-string — `statusToken(value)` returns a defined `{group, fg, wash}` whose tokens exist in the generated token set; a value outside the vocabulary always resolves to the `neutral` group; and the six semantic groups named by the requirement (live/running, connected/paired, profitable/buy, loss/sell, error/disconnected, warning) resolve to six **distinct group names**, each backed by a declared `token.status.*` entry — so a consumer can always tell them apart even where two share a hue.
 
 **Validates: Requirements 1.4**
+
+**Why distinctness is asserted on the group name, not the colour value.** An earlier wording of this property asked for six tokens "pairwise distinct in at least one of `fg` or `wash`". That clause is unsatisfiable against the palette as designed, and deliberately so: §3.2 gives `--color-status-live`, `--color-status-connected` and `--color-status-profit` one green (`#26A69A`) and `--color-status-loss` and `--color-status-error` one red (`#EF5350`), so four of the fifteen pairs collide on **both** `fg` and `wash`. That collapse is intentional — two hue families read faster than six, which is the same argument §3.2 and §4.2 use to defend `--color-env-live` reusing the loss hue. Requirement 1.4's text is about single-sourcing ("exactly one semantic color mapping **each**"), not about visual distinctness, so the property asserts what the mapping actually guarantees: one distinct `group` name per state, each backed by its own declared token. Do not restore the value-distinctness clause without first changing `tokens.css`.
 
 ### Property 2: Shell geometry is invariant across route changes
 

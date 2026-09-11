@@ -23,6 +23,14 @@
 @import "tailwindcss";
 @import "./styles/tokens.css";
 
+/* Test files must not contribute class candidates to the production bundle.
+   Tailwind v4's content detection is a project-wide *text* scan, so a class
+   name written as a string in a test file — or merely named in a comment —
+   is emitted into dist/ as if it had a real call site. That inflates the
+   bundle with classes the app never uses, and it defeats the `dead-tailwind`
+   guard, which lists class names in order to assert they are absent. */
+@source not "../tests";
+
 /* -- Base resets ---------------------------------------------------------- */
 
 /* Moved out of the inline `<style>` that `AppShell` rendered in src/App.jsx

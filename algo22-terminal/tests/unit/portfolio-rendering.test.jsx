@@ -59,12 +59,16 @@ describe('Portfolio Page CSS and Typography Validation', () => {
     const portfolioFilePath = path.resolve(__dirname, '../../src/pages/Portfolio.jsx');
     const portfolioContent = fs.readFileSync(portfolioFilePath, 'utf-8');
     
-    // Check for proper Tailwind typography classes
+    // Check for proper Tailwind typography classes.
+    //
+    // These are the live steps of the `styles/tokens.css` scale. The names this test used to
+    // assert - `text-heading-lg`, `text-caption-sm` and `text-caption` - were declared only in
+    // the deleted `tailwind.config.js`, which Tailwind v4 never loaded, so they compiled to
+    // nothing and the elements carrying them rendered at the inherited size. Task 3.1 re-pointed
+    // them onto this scale by intended size: 18px -> `text-section`, 10px and 9px -> `text-micro`.
     const expectedClasses = [
-      'text-heading-lg',
-      'text-caption-sm', 
+      'text-section',
       'text-body',
-      'text-caption',
       'text-micro',
     ];
     

@@ -469,7 +469,7 @@ function ParameterField({
             <input {...commonProps} {...textProps('text')} />
             <p
               role="status"
-              className="mt-1 font-mono text-caption text-accent-gold"
+              className="mt-1 font-mono text-micro text-accent-gold"
               data-testid={`unsupported-${spec.key}`}
               data-unsupported-param-type={String(spec.type)}
             >
@@ -495,18 +495,18 @@ function ParameterField({
       <div className="mb-1 flex items-baseline gap-1.5">
         <label
           htmlFor={controlId}
-          className="font-mono text-caption uppercase tracking-wider text-text-secondary"
+          className="font-mono text-micro uppercase tracking-wider text-text-secondary"
         >
           {spec.label}
         </label>
         {spec.required ? (
-          <span className="font-mono text-caption text-accent-cyan" data-testid={`required-${spec.key}`}>
+          <span className="font-mono text-micro text-accent-cyan" data-testid={`required-${spec.key}`}>
             required
           </span>
         ) : null}
         {field.showingDefault ? (
           <span
-            className="rounded border border-border-default bg-bg-elevated px-1 font-mono text-caption text-text-muted"
+            className="rounded border border-border-default bg-bg-elevated px-1 font-mono text-micro text-text-muted"
             data-testid={`default-badge-${spec.key}`}
             title={`Block default: ${formatScalar(spec.default)}`}
           >
@@ -516,7 +516,7 @@ function ParameterField({
         {hasHelp ? (
           <button
             type="button"
-            className="ml-auto rounded border border-border-default px-1 font-mono text-caption text-text-muted focus:outline-none focus:ring-2 focus:ring-accent-cyan"
+            className="ml-auto rounded border border-border-default px-1 font-mono text-micro text-text-muted focus:outline-none focus:ring-2 focus:ring-accent-cyan"
             aria-expanded={helpOpen}
             aria-controls={helpId}
             aria-label={`Help for ${spec.label}`}
@@ -538,7 +538,7 @@ function ParameterField({
           data-open={helpOpen ? 'true' : 'false'}
           className={
             helpOpen
-              ? 'mt-1 rounded border border-border-default bg-bg-elevated p-1.5 text-caption text-text-secondary'
+              ? 'mt-1 rounded border border-border-default bg-bg-elevated p-1.5 text-micro text-text-secondary'
               : 'sr-only'
           }
         >
@@ -547,13 +547,13 @@ function ParameterField({
       ) : null}
 
       {constraints ? (
-        <p id={constraintsId} className="mt-1 font-mono text-caption text-text-muted">
+        <p id={constraintsId} className="mt-1 font-mono text-micro text-text-muted">
           {constraints}
         </p>
       ) : null}
 
       {optionSetPending ? (
-        <p className="mt-1 font-mono text-caption text-text-muted">
+        <p className="mt-1 font-mono text-micro text-text-muted">
           Options resolved from the graph ({spec.options_source}).
         </p>
       ) : null}
@@ -564,7 +564,7 @@ function ParameterField({
             <p
               key={`${issue.code || 'issue'}-${index}`}
               role={normaliseSeverity(issue.severity) === SEVERITY_ERROR ? 'alert' : 'status'}
-              className={`mt-1 text-caption ${
+              className={`mt-1 text-micro ${
                 normaliseSeverity(issue.severity) === SEVERITY_ERROR
                   ? 'text-accent-loss'
                   : 'text-accent-gold'
@@ -584,7 +584,7 @@ function ParameterField({
           ))}
         </div>
       ) : field.blocking ? (
-        <p id={statusId} className="mt-1 font-mono text-caption text-accent-loss">
+        <p id={statusId} className="mt-1 font-mono text-micro text-accent-loss">
           Required · not set
           {field.behaviourChanging
             ? ' — this parameter changes how the strategy trades, so it has no default.'
@@ -595,7 +595,7 @@ function ParameterField({
       {field.canResetToDefault && !disabled ? (
         <button
           type="button"
-          className="mt-1 font-mono text-caption text-text-muted underline focus:outline-none focus:ring-2 focus:ring-accent-cyan"
+          className="mt-1 font-mono text-micro text-text-muted underline focus:outline-none focus:ring-2 focus:ring-accent-cyan"
           data-testid={`reset-default-${spec.key}`}
           onClick={() => onChange && onChange(spec.key, spec.default, spec)}
         >
@@ -689,7 +689,7 @@ export function ParameterForm({
 
   if (!specs.length) {
     return (
-      <div className="p-2 font-mono text-caption text-text-muted" data-testid="parameter-form-empty">
+      <div className="p-2 font-mono text-micro text-text-muted" data-testid="parameter-form-empty">
         This block declares no parameters.
       </div>
     );
@@ -709,7 +709,7 @@ export function ParameterForm({
       {blocking.length ? (
         <p
           role="status"
-          className="mb-1 rounded border border-accent-loss bg-bg-elevated p-1.5 font-mono text-caption text-accent-loss"
+          className="mb-1 rounded border border-accent-loss bg-bg-elevated p-1.5 font-mono text-micro text-accent-loss"
           data-testid="parameter-form-blocking"
           data-blocking-keys={blocking.join(',')}
         >
@@ -730,7 +730,7 @@ export function ParameterForm({
         <div className="mt-2">
           <button
             type="button"
-            className="flex w-full items-center gap-1 border-t border-border-default pt-2 font-mono text-caption uppercase tracking-wider text-text-secondary focus:outline-none focus:ring-2 focus:ring-accent-cyan"
+            className="flex w-full items-center gap-1 border-t border-border-default pt-2 font-mono text-micro uppercase tracking-wider text-text-secondary focus:outline-none focus:ring-2 focus:ring-accent-cyan"
             aria-expanded={advancedOpen}
             aria-controls={advancedId}
             data-testid="advanced-toggle"
@@ -756,7 +756,7 @@ export function ParameterForm({
             <p
               key={`${issue.code || 'issue'}-${index}`}
               role="alert"
-              className="font-mono text-caption text-accent-gold"
+              className="font-mono text-micro text-accent-gold"
               data-field={issue.field}
             >
               {issue.field}: {issue.fix_hint ? issue.fix_hint : issue.message}

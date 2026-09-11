@@ -464,13 +464,25 @@ export default function Dashboard() {
   const isDense = layoutDensity === "dense";
 
   return (
-    <div style={{
+    // TEMPORARY page-level mono (task 3.3). The shell no longer sets a font family, so
+    // this page would otherwise render in Inter — and it has essentially no mono of its
+    // own: its two tables (the positions ledger and the signal log) and its whole
+    // figure grid inherited mono from the shell wrapper. `font-mono` here holds the
+    // page as it looks today rather than shipping it half-migrated.
+    //
+    // REMOVE in task 19.1, which rebuilds this page on the tier hierarchy and puts mono
+    // on the numeric cells that should carry it. This component also serves
+    // /app/live-trading, so task 20.1 must clear it too if 20.1 lands first.
+    //
+    // Replaces a hardcoded `'IBM Plex Mono', 'Fira Code', monospace` that no longer
+    // matched anything loaded: task 3.2 swapped the web fonts to Inter + JetBrains Mono,
+    // so that stack was falling through to the browser's default mono.
+    <div className="font-mono" style={{
       flex: 1,
       overflowY: "auto",
       padding: isDense ? "0.875rem 1.25rem" : "1.25rem 1.75rem",
       background: "#080a0e",
       color: "#e2e8f0",
-      fontFamily: "'IBM Plex Mono', 'Fira Code', monospace",
       transition: "padding 0.15s ease"
     }}>
 

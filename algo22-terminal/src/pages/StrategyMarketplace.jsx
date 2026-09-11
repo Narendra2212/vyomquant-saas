@@ -544,7 +544,7 @@ const StrategyMarketplace = () => {
       <div
         key={strat.listing_id}
         onClick={() => loadDetail(strat.listing_id)}
-        className="relative bg-gradient-to-br from-[#131722] to-[#0d1117] border border-[#00D4FF]30 rounded-2xl p-6 cursor-pointer group hover:border-[#00D4FF] transition-all overflow-hidden"
+        className="relative bg-gradient-to-br from-[#131722] to-[#0d1117] border border-[#00D4FF]/30 rounded-2xl p-6 cursor-pointer group hover:border-[#00D4FF] transition-all overflow-hidden"
       >
         <div className="absolute top-0 right-0 bg-gradient-to-l from-[#00D4FF] to-transparent w-32 h-32 opacity-10 group-hover:opacity-20 transition-opacity" />
         <div className="absolute top-3 right-3 bg-[#FFB74D] text-[#080A0D] text-[10px] font-bold px-3 py-1 rounded-full font-mono uppercase flex items-center gap-1">
@@ -609,7 +609,7 @@ const StrategyMarketplace = () => {
       <div
         key={strat.listing_id}
         onClick={() => loadDetail(strat.listing_id)}
-        className="bg-[#131722] border border-[#202938] rounded-xl p-5 cursor-pointer group hover:border-[#00D4FF]50 transition-all relative overflow-hidden"
+        className="bg-[#131722] border border-[#202938] rounded-xl p-5 cursor-pointer group hover:border-[#00D4FF]/50 transition-all relative overflow-hidden"
       >
         <div className="flex justify-between items-start mb-4">
           <div>
@@ -769,8 +769,8 @@ const StrategyMarketplace = () => {
                   disabled={cloneLoading || subscribeLoading}
                   className={`px-8 py-3 rounded-xl text-sm font-bold font-mono flex items-center gap-2 transition-colors disabled:opacity-50 ${
                     price.state === 'paid'
-                      ? 'bg-[#26A69A] hover:bg-[#26A69A]90 text-white shadow-[0_0_20px_rgba(38,166,154,0.3)]'
-                      : 'bg-[#00D4FF] hover:bg-[#00D4FF]90 text-white shadow-[0_0_20px_rgba(0,212,255,0.3)]'
+                      ? 'bg-[#26A69A] hover:bg-[#26A69A]/90 text-white shadow-[0_0_20px_rgba(38,166,154,0.3)]'
+                      : 'bg-[#00D4FF] hover:bg-[#00D4FF]/90 text-white shadow-[0_0_20px_rgba(0,212,255,0.3)]'
                   }`}
                 >
                   {price.state === 'paid' ? 'Subscribe' : 'Clone Free'} <ArrowRight size={16} />
@@ -872,7 +872,7 @@ const StrategyMarketplace = () => {
 
         {/* Hero Section */}
         <div className="relative bg-gradient-to-br from-[#131722] to-[#0d1117] border border-[#202938] rounded-2xl p-8 overflow-hidden">
-          <div className="absolute top-0 right-0 w-96 h-96 bg-[#00D4FF]5 rounded-full blur-3xl" />
+          <div className="absolute top-0 right-0 w-96 h-96 bg-[#00D4FF]/5 rounded-full blur-3xl" />
           <div className="relative z-10">
             <div className="flex items-center gap-3 mb-4">
               <Hexagon className="text-[#00D4FF]" size={32} />
@@ -897,7 +897,7 @@ const StrategyMarketplace = () => {
         </div>
 
         {error && (
-          <div className="bg-[#EF5350]20 border border-[#EF5350] text-[#EF5350] p-4 rounded-lg flex items-center gap-3 font-mono text-sm">
+          <div className="bg-[#EF5350]/20 border border-[#EF5350] text-[#EF5350] p-4 rounded-lg flex items-center gap-3 font-mono text-sm">
             <AlertTriangle size={18} /> {error}
           </div>
         )}
@@ -907,8 +907,8 @@ const StrategyMarketplace = () => {
           <div
             className={`p-4 rounded-lg flex items-center justify-between gap-3 font-mono text-sm border ${
               notice.type === 'error'
-                ? 'bg-[#EF5350]20 border-[#EF5350] text-[#EF5350]'
-                : 'bg-[#26A69A]20 border-[#26A69A] text-[#26A69A]'
+                ? 'bg-[#EF5350]/20 border-[#EF5350] text-[#EF5350]'
+                : 'bg-[#26A69A]/20 border-[#26A69A] text-[#26A69A]'
             }`}
           >
             <span>{notice.message}</span>

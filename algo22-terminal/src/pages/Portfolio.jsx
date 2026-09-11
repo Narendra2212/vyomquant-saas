@@ -582,10 +582,10 @@ export default function Portfolio() {
 
         <Card className="p-4 relative overflow-hidden hover:border-cyan-500/20 transition-all bg-[#0c1017] border-[#1e293b]">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-            <span className="text-caption-sm" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Total Equity</span>
+            <span className="text-micro" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Total Equity</span>
             <DollarSign size={13} style={{ color: "#00d4ff" }} />
           </div>
-          <div className="text-heading-lg" style={{ color: "#f8fafc", fontWeight: 900, fontFamily: "monospace" }}>
+          <div className="text-section" style={{ color: "#f8fafc", fontWeight: 900, fontFamily: "monospace" }}>
             <CardFigure
               isLoading={isLoading}
               readFailed={Boolean(summaryError)}
@@ -597,10 +597,10 @@ export default function Portfolio() {
 
         <Card className="p-4 relative overflow-hidden hover:border-cyan-500/20 transition-all bg-[#0c1017] border-[#1e293b]">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-            <span className="text-caption-sm" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Unrealized P&L</span>
+            <span className="text-micro" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Unrealized P&L</span>
             <SignIcon value={summaryError ? null : summary?.unrealized_pnl ?? null} />
           </div>
-          <div className="text-heading-lg" style={{ color: signTone(summaryError ? null : summary?.unrealized_pnl ?? null), fontWeight: 900, fontFamily: "monospace" }}>
+          <div className="text-section" style={{ color: signTone(summaryError ? null : summary?.unrealized_pnl ?? null), fontWeight: 900, fontFamily: "monospace" }}>
             <CardFigure
               isLoading={isLoading}
               readFailed={Boolean(summaryError)}
@@ -612,10 +612,10 @@ export default function Portfolio() {
 
         <Card className="p-4 relative overflow-hidden hover:border-cyan-500/20 transition-all bg-[#0c1017] border-[#1e293b]">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-            <span className="text-caption-sm" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Realized P&L</span>
+            <span className="text-micro" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Realized P&L</span>
             <SignIcon value={summaryError ? null : summary?.realized_pnl ?? null} />
           </div>
-          <div className="text-heading-lg" style={{ color: signTone(summaryError ? null : summary?.realized_pnl ?? null), fontWeight: 900, fontFamily: "monospace" }}>
+          <div className="text-section" style={{ color: signTone(summaryError ? null : summary?.realized_pnl ?? null), fontWeight: 900, fontFamily: "monospace" }}>
             <CardFigure
               isLoading={isLoading}
               readFailed={Boolean(summaryError)}
@@ -627,10 +627,10 @@ export default function Portfolio() {
 
         <Card className="p-4 relative overflow-hidden hover:border-cyan-500/20 transition-all bg-[#0c1017] border-[#1e293b]">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-            <span className="text-caption-sm" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Available Cash</span>
+            <span className="text-micro" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Available Cash</span>
             <DollarSign size={13} style={{ color: "#00d4ff" }} />
           </div>
-          <div className="text-heading-lg" style={{ color: "#f8fafc", fontWeight: 900, fontFamily: "monospace" }}>
+          <div className="text-section" style={{ color: "#f8fafc", fontWeight: 900, fontFamily: "monospace" }}>
             <CardFigure
               isLoading={isLoading}
               readFailed={Boolean(summaryError)}
@@ -724,7 +724,7 @@ export default function Portfolio() {
             <div style={{ height: 240, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#64748b", fontFamily: "monospace" }}>
               <TrendingUp size={32} style={{ color: "#334155", marginBottom: "12px", opacity: 0.5 }} />
               <span className="text-body">No equity curve data available</span>
-              <span className="text-caption-sm" style={{ color: "#475569", marginTop: "4px" }}>Connect an exchange and launch a strategy to track growth</span>
+              <span className="text-micro" style={{ color: "#475569", marginTop: "4px" }}>Connect an exchange and launch a strategy to track growth</span>
             </div>
           ) : (
             <ResponsiveContainer width="100%" height={240}>
@@ -759,7 +759,7 @@ export default function Portfolio() {
             <div style={{ height: 240, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#64748b", fontFamily: "monospace" }}>
               <Target size={32} style={{ color: "#334155", marginBottom: "12px", opacity: 0.5 }} />
               <span className="text-body">No allocation data</span>
-              <span className="text-caption-sm" style={{ color: "#475569", marginTop: "4px" }}>Open positions will appear here</span>
+              <span className="text-micro" style={{ color: "#475569", marginTop: "4px" }}>Open positions will appear here</span>
             </div>
           ) : (
             <>
@@ -774,9 +774,9 @@ export default function Portfolio() {
                 {allocation.map((a, i) => (
                   <li key={a.asset} style={{ display: "flex", alignItems: "center", gap: "8px" }} role="listitem">
                     <div style={{ width: 8, height: 8, borderRadius: 2, background: COLORS[i % COLORS.length], flexShrink: 0 }} aria-hidden="true" />
-                    <span className="text-caption" style={{ color: "#94a3b8", fontFamily: "monospace", flex: 1 }}>{a.asset}</span>
+                    <span className="text-micro" style={{ color: "#94a3b8", fontFamily: "monospace", flex: 1 }}>{a.asset}</span>
                     <span
-                      className="text-caption"
+                      className="text-micro"
                       style={{
                         color: a.percentage === null ? "#64748b" : "#f8fafc",
                         fontFamily: "monospace",
@@ -800,7 +800,7 @@ export default function Portfolio() {
           <div style={{ height: 160, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#64748b", fontFamily: "monospace" }}>
             <Activity size={28} style={{ color: "#334155", marginBottom: "10px", opacity: 0.5 }} />
             <span className="text-body">No daily trade P&L records</span>
-            <span className="text-caption-sm" style={{ color: "#475569", marginTop: "4px" }}>Executed trades and trade history from live and paper bots will appear here</span>
+            <span className="text-micro" style={{ color: "#475569", marginTop: "4px" }}>Executed trades and trade history from live and paper bots will appear here</span>
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: "4px", marginTop: 8 }}>

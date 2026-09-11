@@ -14,7 +14,7 @@ export function Card({
     border border-border-default
     rounded-xl
     transition-all duration-300
-    ${hover ? 'hover:border-cyan-500/40 hover:shadow-glow hover:-translate-y-0.5 cursor-pointer' : ''}
+    ${hover ? 'hover:border-cyan-500/40 hover:-translate-y-0.5 cursor-pointer' : ''}
     ${onClick ? 'cursor-pointer' : ''}
     p-6
     ${className} ${cls}

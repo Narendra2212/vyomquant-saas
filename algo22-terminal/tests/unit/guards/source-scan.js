@@ -92,7 +92,20 @@ const SAME_LINE_QUOTED = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"/g;
  * comment at all.
  */
 export function stripComments(source, { lineComments = true } = {}) {
-  const chars = [...source];
+  // `source.split('')`, NOT `[...source]`. Every index used below — the `/*`
+  // scan, `blank(i, j)`, and the line-comment pass's `offset + k` — is a UTF-16
+  // offset taken from `source` or from `String.prototype.length`. The spread
+  // operator iterates *code points*, so it collapses each surrogate pair into
+  // one element and the two index spaces drift apart by one per pair.
+  //
+  // That is not theoretical. `pages/Strategies.jsx` holds 18 emoji, so with the
+  // spread form every blank after the first one landed 1..18 characters to the
+  // left of its comment: the comment survived (its contents got counted) and an
+  // equal run of real code was blanked instead (its contents got missed). Both
+  // directions of miscount, in the one place every guard here trusts blindly.
+  // `split('')` splits by code unit, so the spaces land where they are aimed,
+  // and `join('')` still reassembles the pairs intact.
+  const chars = source.split('');
   const blank = (from, to) => {
     for (let k = from; k < to && k < chars.length; k += 1) {
       if (chars[k] !== '\n') chars[k] = ' ';

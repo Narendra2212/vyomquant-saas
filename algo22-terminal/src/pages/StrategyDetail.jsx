@@ -215,7 +215,15 @@ export default function StrategyDetail() {
   const backtests = strategy.backtests || [];
 
   return (
-    <div style={{ padding: 20, overflowY: "auto", flex: 1 }}>
+    // TEMPORARY page-level mono (task 3.3). The shell no longer sets a font family. This
+    // page declares mono on its LABELS but not on its VALUES — the Overview and
+    // Performance metric grids, and the health grids inside DeploymentConsole and
+    // ResearchConsole, all render a mono caption above a figure that inherited mono from
+    // the shell. Without this, every one of those pairs would change family mid-readout.
+    //
+    // REMOVE in task 27.1, which retokens this page (and the two consoles) and puts mono
+    // on the figures themselves.
+    <div className="font-mono" style={{ padding: 20, overflowY: "auto", flex: 1 }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

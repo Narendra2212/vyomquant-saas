@@ -40,11 +40,25 @@
  * all reproduce exactly under the test's `countLegacyC`, which is how that
  * counting method was validated — see the test file's METHOD note.
  *
- * Scope is all of `src/**` (not just the in-scope pages), restricted to `.js`
- * and `.jsx`, because `C.` is a JavaScript member expression. `styles/tokens.css`
- * mentions `C.bg0`, `C.t1` and friends eleven times in explanatory comments;
- * those are documentation, not references, and are excluded by both the file-type
- * restriction and the comment strip.
+ * Scope is all of `src/**` (not just the in-scope pages), restricted to
+ * JavaScript — `.js`, `.jsx`, `.ts`, `.tsx` — because `C.` is a JavaScript
+ * member expression. `styles/tokens.css` mentions `C.bg0`, `C.t1` and friends
+ * eleven times in explanatory comments; those are documentation, not references,
+ * and are excluded by both the file-type restriction and the comment strip.
+ *
+ * ---------------------------------------------------------------------------
+ * RE-MEASURED AFTER M2 (tasks 3.1, 3.2, 3.3)
+ * ---------------------------------------------------------------------------
+ * Those three tasks edited 14 files. Nine carry an entry below — `App.jsx`,
+ * `Sidebar.jsx`, `TopBar.jsx`, `Strategies.jsx`, `StrategyDetail.jsx`,
+ * `Portfolio.jsx`, `StrategyBuilder.jsx`, `builder/NodeTrace.jsx`,
+ * `builder/NodePreview.jsx` — and the other five (`Dashboard.jsx`,
+ * `ui/Card.jsx`, `builder/AssetSelector.jsx`, `builder/ParameterForm.jsx`,
+ * `builder/TimeframeSelector.jsx`) read the shim not at all. Every edit swapped a
+ * dead `className` for a live one or moved a font declaration; none added or
+ * removed a `C.` reference. All 32 numbers below re-measure exactly, so none of
+ * them moved. Recorded because "still passing" and "re-checked against the
+ * current tree" are different claims.
  */
 
 /** Paths are relative to `src/`, forward-slashed, matching the spec's notation. */

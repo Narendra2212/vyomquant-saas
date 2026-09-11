@@ -163,7 +163,11 @@ function AdminGuard() {
   if (status === 'loading') {
     return (
       <div style={{ background: C.bg0, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <span style={{ color: C.t3, fontFamily: 'monospace', fontSize: 12 }}>Verifying access…</span>
+        {/* `font-mono` rather than the bare `monospace` keyword this carried before:
+            the keyword resolves to whatever the browser defaults to, while the class
+            resolves `--font-mono` and so actually reaches the JetBrains Mono that
+            index.html loads. */}
+        <span className="font-mono" style={{ color: C.t3, fontSize: 12 }}>Verifying access…</span>
       </div>
     );
   }
@@ -172,7 +176,9 @@ function AdminGuard() {
       <div style={{ background: C.bg0, minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
         <Lock size={32} style={{ color: C.red }} />
         <div style={{ color: C.t1, fontWeight: 700, fontSize: 16 }}>Access Denied</div>
-        <div style={{ color: C.t3, fontFamily: 'monospace', fontSize: 11 }}>Administrator credentials required.</div>
+        {/* Same correction as the loading branch above: the real mono stack, not the
+            bare `monospace` keyword. */}
+        <div className="font-mono" style={{ color: C.t3, fontSize: 11 }}>Administrator credentials required.</div>
       </div>
     );
   }
@@ -280,16 +286,21 @@ function AppShell() {
 
   return (
     <DesktopOnlyOverlay>
-      <div style={{ background: C.bg0, minHeight: "100vh", width: "100%", display: "flex", flex: 1, fontFamily: "'IBM Plex Mono', 'Fira Code', monospace" }}>
+      {/* No `fontFamily` on this wrapper. It used to carry
+          `'IBM Plex Mono', 'Fira Code', monospace`, which made EVERY authenticated
+          page render entirely in monospace. The shell now inherits `--font-sans`
+          (Inter) from Tailwind's preflight, which reads `--font-sans` out of
+          styles/tokens.css, and mono is applied locally — via `font-mono` — to
+          numeric cells, identifiers, timestamps and code only (design.md §6.6,
+          and what DESIGN_SYSTEM_V2.md already specified). Nothing may
+          reintroduce a shell-wide mono default here. */}
+      <div style={{ background: C.bg0, minHeight: "100vh", width: "100%", display: "flex", flex: 1 }}>
         <ToastContainer toasts={toasts} onRemove={removeToast} />
-        {/* The global `*` reset that used to sit here now lives in the base-resets
-            section of src/index.css. An inline <style> re-evaluates on every render
-            of this component, and a global reset has no reason to be render-coupled
-            (design.md §6.6). The font @import stays until tasks 3.2/3.3 move font
-            loading into index.html. */}
-        <style>{`
-          @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
-        `}</style>
+        {/* No inline <style> here. The global `*` reset lives in the base-resets
+            section of src/index.css and web-font loading lives in index.html's
+            <head>; an inline <style> re-evaluates on every render of this
+            component, and an @import inside one also blocks rendering
+            (design.md §6.6). */}
         <Sidebar />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
           <TopBar />

@@ -38,7 +38,7 @@ const SELECT_CLASS =
   'focus:outline-none focus:ring-2 focus:ring-accent-cyan disabled:opacity-50';
 
 const LINK_CLASS =
-  'font-mono text-caption text-text-muted underline focus:outline-none focus:ring-2 ' +
+  'font-mono text-micro text-text-muted underline focus:outline-none focus:ring-2 ' +
   'focus:ring-accent-cyan';
 
 const describedBy = (...ids) => {
@@ -150,14 +150,14 @@ export function TimeframeSelector({
         id={statusId}
         role="status"
         aria-live="polite"
-        className="mt-1 font-mono text-caption text-text-muted"
+        className="mt-1 font-mono text-micro text-text-muted"
         data-testid="timeframe-selector-status"
       >
         {statusText()}
       </p>
 
       {unsupportedSelection ? (
-        <p role="alert" className="mt-1 font-mono text-caption text-accent-loss" data-testid="timeframe-unsupported">
+        <p role="alert" className="mt-1 font-mono text-micro text-accent-loss" data-testid="timeframe-unsupported">
           {`This block holds “${selected}”, which the data pipeline no longer publishes. Choose a supported interval.`}
         </p>
       ) : null}
@@ -174,9 +174,9 @@ export function TimeframeSelector({
           {/* The client's own sentence here, because this failure is a transport outcome the
               registry endpoint did not author a body for; the code is carried so the cause is
               still machine-readable. */}
-          <p className="font-mono text-caption text-accent-loss">{error.message}</p>
+          <p className="font-mono text-micro text-accent-loss">{error.message}</p>
           {error.authExpired ? (
-            <p className="font-mono text-caption text-text-muted">
+            <p className="font-mono text-micro text-text-muted">
               Sign in again — retrying will not help.
             </p>
           ) : (

@@ -533,7 +533,7 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
         <CategoryIcon size={10} />
         <span className="text-micro">{(category || 'UNRESOLVED').replace(/_/g, ' ')}</span>
       </div>
-      <div className="text-body-lg" style={{ fontWeight: 900 }}>{data.label || data.block_id}</div>
+      <div className="text-body" style={{ fontWeight: 900 }}>{data.label || data.block_id}</div>
       <div className="text-micro" style={{ color: C.t3 }}>{data.block_id}</div>
 
       {/*
@@ -707,24 +707,24 @@ const PaletteErrorPanel = ({ error, onRetry, retrying }) => (
   >
     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: C.red }}>
       <AlertTriangle size={14} />
-      <span className="text-caption" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
+      <span className="text-micro" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
         Block palette unavailable
       </span>
     </div>
-    <p className="text-caption-sm" style={{ color: C.t2, margin: 0 }}>
+    <p className="text-micro" style={{ color: C.t2, margin: 0 }}>
       {error ? error.message : 'The block registry could not be loaded.'}
     </p>
-    <p className="text-caption-sm" style={{ color: C.t3, margin: 0, fontFamily: 'monospace' }}>
+    <p className="text-micro" style={{ color: C.t3, margin: 0, fontFamily: 'monospace' }}>
       {error ? error.code : 'REGISTRY_UNAVAILABLE'}
       {error && error.status ? ` · HTTP ${error.status}` : ''}
     </p>
     {error && error.authExpired ? (
-      <p className="text-caption-sm" style={{ color: C.t2, margin: 0 }}>
+      <p className="text-micro" style={{ color: C.t2, margin: 0 }}>
         This session is no longer signed in. Signing in again is the fix; the registry itself may
         be healthy.
       </p>
     ) : null}
-    <p className="text-caption-sm" style={{ color: C.t3, margin: 0 }}>
+    <p className="text-micro" style={{ color: C.t3, margin: 0 }}>
       No blocks are shown while the registry is unreachable. The palette never substitutes a
       local list, because a stale catalogue is how a block the engine cannot run reaches a
       strategy.
@@ -806,7 +806,7 @@ const ValidationIssueRow = ({ issue, onFocus }) => {
   };
 
   return (
-    <li style={{ borderTop: `1px solid ${C.border}`, padding: '4px 0' }} className="text-caption">
+    <li style={{ borderTop: `1px solid ${C.border}`, padding: '4px 0' }} className="text-micro">
       {onFocus ? (
         <button
           type="button"
@@ -846,11 +846,11 @@ const ValidationIssuePanel = ({ markers, stale, onFocusNode, onFocusEdge }) => {
       data-override-count={markers.overrides.length}
       style={{ borderTop: `1px solid ${C.border}`, padding: '8px 12px', overflowY: 'auto', maxHeight: 260 }}
     >
-      <h3 className="text-caption" style={{ color: C.t2, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: 1 }}>
+      <h3 className="text-micro" style={{ color: C.t2, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: 1 }}>
         Validation issues
       </h3>
       {stale ? (
-        <p role="status" data-testid="validation-issues-stale" className="text-caption-sm" style={{ color: C.gold, margin: '0 0 4px' }}>
+        <p role="status" data-testid="validation-issues-stale" className="text-micro" style={{ color: C.gold, margin: '0 0 4px' }}>
           This report describes an earlier version of this graph. The canvas has changed since,
           so these markers are not shown on it.
         </p>
@@ -2225,7 +2225,7 @@ function StrategyBuilderCanvas({
           style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', background: `${C.red}20`, borderBottom: `1px solid ${C.red}` }}
         >
           <AlertTriangle size={16} style={{ color: C.red }} aria-hidden="true" />
-          <span className="text-body-sm" style={{ color: C.red, fontFamily: 'monospace' }}>
+          <span className="text-small" style={{ color: C.red, fontFamily: 'monospace' }}>
             {errors.length} error{errors.length !== 1 ? 's' : ''}: {errors[0]?.message}
             {' '}(local check — the backend has not validated this version yet)
           </span>
@@ -2240,20 +2240,20 @@ function StrategyBuilderCanvas({
           data-code={validation.error ? validation.error.code : undefined}
           data-status={validation.error && validation.error.status !== null ? validation.error.status : undefined}
           style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }}
-          className="text-body-sm"
+          className="text-small"
         >
           {summary.headline} — {summary.detail}
         </div>
       )}
 
       {canonical.error && (
-        <div role="alert" data-testid="serializer-error" style={{ padding: '8px 16px', background: `${C.red}20`, borderBottom: `1px solid ${C.red}`, color: C.red, fontFamily: 'monospace' }} className="text-body-sm">
+        <div role="alert" data-testid="serializer-error" style={{ padding: '8px 16px', background: `${C.red}20`, borderBottom: `1px solid ${C.red}`, color: C.red, fontFamily: 'monospace' }} className="text-small">
           {canonical.error.code}: {canonical.error.message}
         </div>
       )}
 
       {canvasNotice && (
-        <div role="status" data-testid="canvas-notice" style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }} className="text-body-sm">
+        <div role="status" data-testid="canvas-notice" style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }} className="text-small">
           {canvasNotice}
         </div>
       )}
@@ -2272,7 +2272,7 @@ function StrategyBuilderCanvas({
           data-lifecycle-state={deployedLock.lifecycleState || undefined}
           data-frozen-fields={deployedLock.frozenFields.join(' ')}
           style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }}
-          className="text-body-sm"
+          className="text-small"
         >
           <span aria-hidden="true">🔒</span>
           <span>
@@ -2299,7 +2299,7 @@ function StrategyBuilderCanvas({
           {subscriptionRefusals.map((refusal) => (
             <div
               key={refusal.channel}
-              className="text-body-sm"
+              className="text-small"
               style={{ color: C.gold, fontFamily: 'monospace' }}
               data-channel={refusal.channel}
               data-code={refusal.code}
@@ -2311,7 +2311,7 @@ function StrategyBuilderCanvas({
       )}
 
       {connectionIssue && (
-        <div role="alert" data-testid="connection-issue" style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }} className="text-body-sm">
+        <div role="alert" data-testid="connection-issue" style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }} className="text-small">
           Connection refused — {connectionIssue.message}
           {connectionIssue.fix_hint ? ` ${connectionIssue.fix_hint}` : ''}
         </div>
@@ -2322,7 +2322,7 @@ function StrategyBuilderCanvas({
           {saveIssues.map((issue, index) => (
             <div
               key={`${issue.code}-${issue.node_id || 'graph'}-${issue.field || index}`}
-              className="text-body-sm"
+              className="text-small"
               style={{ color: C.red, fontFamily: 'monospace' }}
               data-code={issue.code}
               data-node-id={issue.node_id || undefined}
@@ -2357,7 +2357,7 @@ function StrategyBuilderCanvas({
               data-node-id={block.nodeId || undefined}
               data-block-id={block.blockId || undefined}
               data-quantity-count={block.quantities.length}
-              className="text-body-sm"
+              className="text-small"
               style={{ color: C.gold, fontFamily: 'monospace', display: 'flex', flexDirection: 'column', gap: '2px' }}
             >
               <span data-testid="training-block-message">
@@ -2410,7 +2410,7 @@ function StrategyBuilderCanvas({
             <div style={{ padding: '12px', borderBottom: `1px solid ${C.border}` }}>
               <label
                 htmlFor="palette-search"
-                className="text-caption-sm"
+                className="text-micro"
                 style={{ color: C.t3, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', display: 'block', marginBottom: '6px' }}
               >
                 Search blocks
@@ -2424,7 +2424,7 @@ function StrategyBuilderCanvas({
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   aria-describedby="palette-search-result-count"
-                  className="text-body-sm"
+                  className="text-small"
                   style={{
                     width: '100%',
                     background: C.bg3,
@@ -2439,7 +2439,7 @@ function StrategyBuilderCanvas({
               <p
                 id="palette-search-result-count"
                 role="status"
-                className="text-caption-sm"
+                className="text-micro"
                 style={{ color: C.t3, margin: '6px 0 0', fontFamily: 'monospace' }}
               >
                 {registry.isReady
@@ -2454,9 +2454,9 @@ function StrategyBuilderCanvas({
               {registry.isError ? (
                 <PaletteErrorPanel error={registry.error} onRetry={handleRetryRegistry} retrying={retryingRegistry} />
               ) : registry.isLoading && !registry.isReady ? (
-                <p className="text-caption" style={{ color: C.t3, fontFamily: 'monospace' }}>Loading blocks…</p>
+                <p className="text-micro" style={{ color: C.t3, fontFamily: 'monospace' }}>Loading blocks…</p>
               ) : visibleSections.length === 0 ? (
-                <p className="text-caption" style={{ color: C.t3, fontFamily: 'monospace' }} data-testid="palette-empty">
+                <p className="text-micro" style={{ color: C.t3, fontFamily: 'monospace' }} data-testid="palette-empty">
                   {searchQuery.trim() === '' ? 'No blocks available.' : `Nothing matches “${searchQuery}”.`}
                 </p>
               ) : (
@@ -2486,10 +2486,10 @@ function StrategyBuilderCanvas({
                       >
                         {isCollapsed ? <ChevronRight size={14} aria-hidden="true" style={{ color: C.t3 }} /> : <ChevronDown size={14} aria-hidden="true" style={{ color: C.t3 }} />}
                         <CategoryIcon size={14} aria-hidden="true" style={{ color: getCategoryColor(section.id) }} />
-                        <span className="text-caption" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
+                        <span className="text-micro" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
                           {section.display_name}
                         </span>
-                        <span className="text-caption-sm" style={{ marginLeft: 'auto', color: C.t3 }} data-testid="palette-category-count">
+                        <span className="text-micro" style={{ marginLeft: 'auto', color: C.t3 }} data-testid="palette-category-count">
                           {section.matches.length}
                         </span>
                       </button>
@@ -2515,14 +2515,14 @@ function StrategyBuilderCanvas({
                                 cursor: 'grab',
                               }}
                             >
-                              <div className="text-body-sm" style={{ fontWeight: 600, color: C.t1 }}>
+                              <div className="text-small" style={{ fontWeight: 600, color: C.t1 }}>
                                 {block.display_name || block.block_id}
                               </div>
-                              <div className="text-caption-sm" style={{ color: C.t3, fontFamily: 'monospace' }}>
+                              <div className="text-micro" style={{ color: C.t3, fontFamily: 'monospace' }}>
                                 {block.block_id}
                               </div>
                               {block.description ? (
-                                <div className="text-caption-sm" style={{ color: C.t3 }}>{block.description}</div>
+                                <div className="text-micro" style={{ color: C.t3 }}>{block.description}</div>
                               ) : null}
                               <PortChips ports={block.inputs} direction="in" />
                               <PortChips ports={block.outputs} direction="out" />
@@ -2577,7 +2577,7 @@ function StrategyBuilderCanvas({
           </DragLegalityContext.Provider>
 
           {nodes.length === 0 && (
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', color: C.t3, fontFamily: 'monospace', textAlign: 'center', padding: '0 24px' }} className="text-body-sm">
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', color: C.t3, fontFamily: 'monospace', textAlign: 'center', padding: '0 24px' }} className="text-small">
               Drag a block from the palette to start. A strategy needs a DATA block — its symbol
               and timeframe are the market this strategy trades.
             </div>
@@ -2595,11 +2595,11 @@ function StrategyBuilderCanvas({
               {selectedNode ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   <div>
-                    <div className="text-caption-sm" style={{ color: C.t3, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', marginBottom: '8px' }}>
+                    <div className="text-micro" style={{ color: C.t3, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', marginBottom: '8px' }}>
                       Block
                     </div>
                     <Tag2>{selectedNode.data.block_id}</Tag2>
-                    <div className="text-caption-sm" style={{ color: C.t3, marginTop: '4px' }}>
+                    <div className="text-micro" style={{ color: C.t3, marginTop: '4px' }}>
                       {selectedNode.data.category}
                     </div>
                     <PortChips ports={selectedNode.data.inputs} direction="in" />
@@ -2607,7 +2607,7 @@ function StrategyBuilderCanvas({
 
                     {/* Node status: the same marker the canvas draws, in words. */}
                     <p
-                      className="text-caption-sm"
+                      className="text-micro"
                       data-testid="inspector-node-status"
                       data-node-id={selectedNode.id}
                       data-severity={selectedNode.data.validation ? selectedNode.data.validation.severity : undefined}
@@ -2639,7 +2639,7 @@ function StrategyBuilderCanvas({
                       onBlockingChange={handleInspectorBlocking}
                     />
                   ) : (
-                    <p className="text-caption" style={{ color: C.t3, fontFamily: 'monospace' }}>
+                    <p className="text-micro" style={{ color: C.t3, fontFamily: 'monospace' }}>
                       The registry publishes no descriptor for “{selectedNode.data.block_id}”, so its
                       parameters cannot be shown.
                     </p>
@@ -2676,7 +2676,7 @@ function StrategyBuilderCanvas({
                   </Button>
                 </div>
               ) : (
-                <div className="text-body-sm" style={{ color: C.t3, fontFamily: 'monospace', textAlign: 'center', padding: '20px' }}>
+                <div className="text-small" style={{ color: C.t3, fontFamily: 'monospace', textAlign: 'center', padding: '20px' }}>
                   Click a node to inspect
                 </div>
               )}
@@ -2704,7 +2704,7 @@ function StrategyBuilderCanvas({
         aria-live="polite"
         aria-label="Builder status"
         data-testid="status-strip"
-        className="text-caption"
+        className="text-micro"
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px', background: C.bg2, borderTop: `1px solid ${C.border}`, fontFamily: 'monospace', color: C.t3, gap: 12, flexWrap: 'wrap' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>

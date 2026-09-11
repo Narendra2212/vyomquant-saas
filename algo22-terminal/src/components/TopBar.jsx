@@ -59,7 +59,10 @@ export default function TopBar() {
     <div style={{ background: C.bg1, borderBottom: `1px solid ${C.border}`, height: 44, display: "flex", alignItems: "center", justifyContent: "flex-end", padding: "0 16px", gap: 16, flexShrink: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
         <LiveStatusV2 status="running" />
-        <span style={{ color: C.t3, fontSize: 9, fontFamily: "monospace" }}>{t.toUTCString().slice(17, 25)} UTC</span>
+        {/* A ticking timestamp: mono, and via the token stack rather than the bare
+            `monospace` keyword, so the digits are the same width from second to
+            second (design.md §6.6). */}
+        <span className="font-mono" style={{ color: C.t3, fontSize: 9 }}>{t.toUTCString().slice(17, 25)} UTC</span>
         
         {/* Notifications Bell with Dynamic Badge */}
         <button
@@ -72,8 +75,9 @@ export default function TopBar() {
           className="focus:outline-none focus:ring-2 focus:ring-cyan-400 rounded"
         >
           <Bell size={14} aria-hidden="true" />
+          {/* A count, so mono. */}
           {unreadCount > 0 && (
-            <span style={{
+            <span className="font-mono" style={{
               position: "absolute",
               top: -4,
               right: -4,
@@ -109,7 +113,8 @@ export default function TopBar() {
           <div style={{ background: C.bg4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 24, height: 24, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900, color: C.accent }}>
             {userInitial}
           </div>
-          <span style={{ fontSize: 11, fontFamily: "monospace", fontWeight: 600 }}>Profile</span>
+          {/* A word, not a figure, so it takes the shell's sans default. */}
+          <span style={{ fontSize: 11, fontWeight: 600 }}>Profile</span>
         </button>
       </div>
     </div>

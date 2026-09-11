@@ -139,15 +139,18 @@ export default function Sidebar() {
                     borderLeft: `2px solid ${active ? C.cyan : "transparent"}`,
                     width: "100%", display: "flex", alignItems: "center", gap: 8,
                     padding: "6px 8px", borderRadius: "0 8px 8px 0", fontSize: 11,
-                    fontFamily: "monospace", fontWeight: 600, transition: "all 0.15s",
+                    fontWeight: 600, transition: "all 0.15s",
                     cursor: "pointer", marginBottom: 1,
                   }}
                   className="hover:text-cyan-400 hover:bg-cyan-500/5 focus:outline-none focus:ring-1 focus:ring-cyan-400"
                 >
                   <n.Icon size={12} aria-hidden="true" />
                   <span style={{ flex: 1, textAlign: "left" }}>{n.lbl}</span>
+                  {/* A count, so mono — the one thing in this row that is a figure.
+                      The nav label beside it is a word and stays in the shell's
+                      sans default (design.md §6.6). */}
                   {isNotif && unreadCount > 0 && (
-                    <span style={{
+                    <span className="font-mono" style={{
                       background: C.cyan,
                       color: "#000",
                       fontSize: 9,

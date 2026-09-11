@@ -253,7 +253,8 @@ the decomposition this plan uses instead:
     - Generate the declared vocabulary plus arbitrary strings, the empty string, `null` and
       non-strings; assert every result is a defined `{group, fg, wash}` whose tokens exist in
       `design/tokens.js`, that out-of-vocabulary input is always `neutral`, and that the six
-      requirement-named groups are pairwise distinct in `fg` or `wash`
+      requirement-named groups resolve to six **distinct group names**, each backed by a declared
+      `token.status.*` entry — so a consumer can always tell them apart even where two share a hue
     - Minimum 100 iterations; tag `Feature: vyomquant-ui-redesign, Property 1`
 
   - [~] 5.3 Create `src/design/errorCopy.js` with `translateError`

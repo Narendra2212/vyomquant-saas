@@ -831,7 +831,11 @@ export default function Strategies() {
                   <span style={{ color: "#64748b", fontSize: 9, fontFamily: "monospace", letterSpacing: 2, textTransform: "uppercase" }}>{s.l}</span>
                   <s.I size={12} style={{ color: s.c }} />
                 </div>
-                <div style={{ color: "#f8fafc", fontSize: 20, fontWeight: 900 }}>{s.v}</div>
+                {/* Counts, a P&L percentage and a win rate: mono, like the equivalent
+                    figures on Portfolio, Trade History and Security Logs. Their labels
+                    above already are. Not a temporary fallback — this is the permanent
+                    treatment for a numeric cell (design.md §6.6). */}
+                <div className="font-mono" style={{ color: "#f8fafc", fontSize: 20, fontWeight: 900 }}>{s.v}</div>
               </Card>
             ))}
           </div>
