@@ -298,13 +298,13 @@ describe('legacy-c-budget: the spot check', () => {
     // Hand-verified against the file, so the counting method is pinned to
     // reality and not only to synthetic fixtures. `App.jsx` is a good choice:
     // small enough to enumerate, and it exercises both the template-literal form
-    // (208, 213) and the comment exclusion — `AdminGuard`'s two notes about the real
-    // mono stack sit between counted references, at 295–298 and 308–309.
+    // (212, 217) and the comment exclusion — `AdminGuard`'s two notes about the real
+    // mono stack sit between counted references, at 299–302 and 312–313.
     //
-    // UpdatePasswordPage:  207 C.bg0 · 208 C.bg2, ${C.border} · 209 C.t1
-    // (/reset-password)    213 C.green, ${C.green} · 231 C.red              = 7
-    // AdminGuard:          294 C.bg0 · 299 C.t3 · 305 C.bg0 · 306 C.red
-    //                      307 C.t1 · 310 C.t3                             = 6
+    // UpdatePasswordPage:  211 C.bg0 · 212 C.bg2, ${C.border} · 213 C.t1
+    // (/reset-password)    217 C.green, ${C.green} · 235 C.red              = 7
+    // AdminGuard:          298 C.bg0 · 303 C.t3 · 309 C.bg0 · 310 C.red
+    //                      311 C.t1 · 314 C.t3                             = 6
     //
     // The `AppShell: 297 C.bg0` entry this list used to carry is retired. Task 8.5
     // rewrote `AppShell` into a CSS grid whose wrapper takes `bg-surface-canvas` as
@@ -325,10 +325,18 @@ describe('legacy-c-budget: the spot check', () => {
     // its own 64px header block, so pairing it with a real `PageHeader` reserved
     // 128px of header for a 64px page), across four lines instead of one, under a
     // docblock paragraph recording why. Still no shim reference among them.
+    //
+    // Task 8.8 then added 4 more lines above the first surviving group — the
+    // `shell/AccountMenu` import that fills `Sidebar`'s footer slot, under a
+    // three-line note on why the sidebar is never rendered without it — so every
+    // number is now 4 higher again. None of the four reads the shim, and the six
+    // lines 8.8 added lower down (the `accountMenu` prop and its comment, inside
+    // `ShellGrid`) are below the last counted reference, so they move nothing.
+    // `LEGACY_C_BUDGET['App.jsx']` stays at 13.
     const source = readFileSync(path.join(SRC, 'App.jsx'), 'utf8');
     const lines = findLegacyC(source).map((r) => r.line);
 
-    expect(lines).toEqual([207, 208, 208, 209, 213, 213, 231, 294, 299, 305, 306, 307, 310]);
+    expect(lines).toEqual([211, 212, 212, 213, 217, 217, 235, 298, 303, 309, 310, 311, 314]);
     expect(lines).toHaveLength(13);
     expect(LEGACY_C_BUDGET['App.jsx']).toBe(13);
   });

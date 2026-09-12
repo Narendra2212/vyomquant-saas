@@ -105,14 +105,20 @@
  * address" work on a link and cannot be made to work on a button.
  *
  * ---------------------------------------------------------------------------
- * 5. THE UNREAD COUNT IS READ ONCE IN THE SHELL — FOR NOW
+ * 5. THE UNREAD COUNT IS READ ONCE IN THE SHELL
  * ---------------------------------------------------------------------------
  * `Sidebar.jsx` and this file each fetched `getUnreadCount()` independently. Task 8.6
- * removed the sidebar's (its `notifications` nav entry is gone), so the shell makes
- * exactly one such request today: this one. Task 8.8 adds `hooks/useUnreadNotifications`
- * so the bell and the account menu's `Notifications (3)` row share a single read —
- * {@link NotificationBell}'s effect is the whole of what moves into that hook, and
- * nothing outside it reads the count.
+ * removed the sidebar's (its `notifications` nav entry is gone) and task 8.8 moved this
+ * one into `hooks/useUnreadNotifications`, where the request and the `notification` socket
+ * subscription are shared: {@link NotificationBell} and `shell/AccountMenu`'s
+ * `Notifications (3)` row are two consumers of one store, so the shell still makes exactly
+ * one such request and the two surfaces cannot disagree about the number.
+ *
+ * The honesty semantics did not move an inch, because they are the point of the component
+ * rather than a detail of where the fetch lived. Unknown is `null` — no badge, no number in
+ * the accessible name; a server-reported `0` is a fact and IS announced; a pushed frame
+ * increments a KNOWN count only. The hook now states them, `describeUnread` words them, and
+ * `tests/unit/shell/topBar.test.jsx` still pins every one from out here.
  *
  * ---------------------------------------------------------------------------
  * 6. THE PAGE CONTEXT COMES FROM THE TABLE (Requirement 2.5's sibling, §6.3)
@@ -137,8 +143,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Bell } from 'lucide-react';
 
-import { api } from '../api';
 import { useConnectionStatus } from '../hooks/useConnectionStatus';
+import { useUnreadNotifications } from '../hooks/useUnreadNotifications';
 import wsClient from '../websocketClient';
 
 // Straight from the modules rather than through `ds/index.js`: the shell is in every
@@ -235,43 +241,13 @@ function UtcClock() {
  * the server really reported is a fact and is said out loud ("Notifications, 0 unread");
  * the old code's `useState(0)` said it before anything had been read and kept saying it
  * after a failed read, which is the same sentence as a fabrication (Requirement 14.5).
+ *
+ * The count, that wording and the badge's 99+ cap all come from `useUnreadNotifications`
+ * (task 8.8), which is also where the account menu's Notifications row reads them. This
+ * component chooses none of them, which is why the two surfaces cannot drift apart.
  */
 function NotificationBell() {
-  const [unread, setUnread] = useState(null);
-
-  useEffect(() => {
-    let mounted = true;
-
-    (async () => {
-      try {
-        const res = await api.notifications.getUnreadCount();
-        const count = res?.unread_count;
-        if (mounted && typeof count === 'number' && Number.isFinite(count) && count >= 0) {
-          setUnread(count);
-        }
-      } catch {
-        // Offline, unauthenticated, or the endpoint failed. The count stays unknown; it
-        // does not become zero.
-      }
-    })();
-
-    const unsub = wsClient.subscribe('notification', () => {
-      // A `notification` frame IS a new unread row, so +1 on a known count is a real
-      // increment, not an estimate. From an unknown count it stays unknown: `null + 1`
-      // would invent the base, and the Notification Center holds the real list either way.
-      setUnread((current) => (typeof current === 'number' ? current + 1 : current));
-    });
-
-    return () => {
-      mounted = false;
-      if (typeof unsub === 'function') unsub();
-    };
-  }, []);
-
-  const known = typeof unread === 'number';
-  const label = known
-    ? `Notifications, ${unread} unread`
-    : 'Notifications';
+  const { unread, known, label, badge } = useUnreadNotifications();
 
   return (
     <Link
@@ -288,10 +264,11 @@ function NotificationBell() {
       }
     >
       <Bell size={15} strokeWidth={1.75} aria-hidden="true" />
-      {/* Only when a real count came back and it is not zero. A count is a figure, so it
-          is mono; `aria-hidden` because the link's accessible name already carries it and
-          announcing both would read the number twice. */}
-      {known && unread > 0 ? (
+      {/* Only when a real count came back and it is not zero — `badge` is `null` for both
+          the unknown and the honest-zero cases. A count is a figure, so it is mono;
+          `aria-hidden` because the link's accessible name already carries it and announcing
+          both would read the number twice. */}
+      {badge === null ? null : (
         <span
           aria-hidden="true"
           className={
@@ -300,9 +277,9 @@ function NotificationBell() {
             + 'text-micro font-semibold tabular-nums text-brand'
           }
         >
-          {unread > 99 ? '99+' : unread}
+          {badge}
         </span>
-      ) : null}
+      )}
     </Link>
   );
 }

@@ -14,6 +14,10 @@ import NotificationCenter from './components/NotificationCenter';
 // `shell/ResponsiveGate` instead (task 8.4/8.5). The component FILE still exists;
 // task 27.3 owns deleting it. Keeping a dead import here would only trip no-unused-vars.
 import ResponsiveGate, { SIDEBAR_WIDTH_PX, useViewportAccess } from './components/shell/ResponsiveGate';
+// The sidebar's footer slot (task 8.8). It is the app's ONLY route to the seven pages
+// §6.4 defers out of primary nav — profile, security log, billing, exchanges, risk,
+// notifications, support — and to sign-out, so `Sidebar` is never rendered without it.
+import AccountMenu from './components/shell/AccountMenu';
 // The one route/nav table (task 8.1). Both the `Suspense` fallback's title and the
 // `'navigate'` bridge's id resolution read from it, so neither can disagree with the
 // sidebar about what a route is called or where an id points.
@@ -507,7 +511,12 @@ function ShellGrid({ toasts, removeToast }) {
         {/* Column 1, both rows: the sidebar runs the full height beside the bar, so the
             bar row starts at the content column rather than spanning the grid. */}
         <div style={{ gridColumn: 1, gridRow: '1 / -1', minWidth: 0, overflow: 'hidden' }}>
-          <Sidebar />
+          {/* `accountMenu` is not optional in practice: without it the footer slot is an
+              empty reserved 56px and the seven deferred routes and sign-out have no entry
+              point anywhere in the app (§6.4). The menu's popover is portalled to
+              `document.body` precisely because this wrapper and the sidebar itself both
+              clip their overflow. */}
+          <Sidebar accountMenu={<AccountMenu />} />
         </div>
 
         <div style={{ gridColumn: 2, gridRow: 1, minWidth: 0 }}>

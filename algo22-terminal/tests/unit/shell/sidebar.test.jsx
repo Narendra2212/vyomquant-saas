@@ -41,9 +41,11 @@ afterEach(() => {
 /**
  * Mount the sidebar at `pathname` and at a viewport width.
  *
- * `accountMenu` is supplied by default so the footer's fallback account card — which
- * reads Supabase and the billing entitlements — stays out of every test that is about
- * navigation. One test below omits it deliberately.
+ * `accountMenu` is supplied by default because that is how the shell renders — `App.jsx`
+ * passes `shell/AccountMenu` into the slot (task 8.8). A `<span />` stands in for it here:
+ * what the slot CONTAINS is `accountMenu.test.jsx`'s subject, and none of these tests
+ * should depend on the menu's Supabase and entitlements reads. Two tests below vary it
+ * deliberately.
  */
 function renderSidebar({ pathname = '/app/dashboard', width = 1440, accountMenu = <span /> } = {}) {
   setWidth(width);
@@ -282,8 +284,14 @@ describe('Sidebar: keyboard and geometry', () => {
     expect(SIDEBAR_BRAND_HEIGHT_PX).toBe(56);
     expect(SIDEBAR_FOOTER_HEIGHT_PX).toBe(56);
 
-    // The footer slot keeps sign-out reachable until task 8.8's AccountMenu fills it.
-    expect(within(account).getByRole('button', { name: 'Sign out' })).toBeTruthy();
+    // UPDATED BY TASK 8.8. This used to assert the fallback account card's sign-out
+    // button, which existed only because between 8.6 and 8.8 nothing else in the tree
+    // could log a trader out. `shell/AccountMenu` now owns sign-out (and the profile and
+    // tier reads), `App.jsx` passes it into this slot, and the fallback is deleted — so an
+    // unfilled slot is reserved and EMPTY, which is what this asserts. Sign-out's own
+    // coverage moved to `tests/unit/shell/accountMenu.test.jsx`.
+    expect(account.textContent).toBe('');
+    expect(account.children).toHaveLength(0);
   });
 
   it('hands the account slot to whatever it is given, and reads nothing itself', () => {
@@ -292,7 +300,9 @@ describe('Sidebar: keyboard and geometry', () => {
     });
     const account = container.querySelector('[data-shell="sidebar-account"]');
     expect(within(account).getByRole('button', { name: 'Account menu' })).toBeTruthy();
-    expect(within(account).queryByRole('button', { name: 'Sign out' })).toBeNull();
+    // Nothing of the sidebar's own is in there beside it: this component reads no user,
+    // no entitlements and no notification count (task 8.8 moved all three out).
+    expect(account.children).toHaveLength(1);
     // Same reserved height either way, so mounting the menu shifts nothing above it.
     expect(account.style.height).toBe('56px');
   });

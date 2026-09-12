@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ═══════════════════════════════════════════════════════════════════════════
  * src/components/Sidebar.jsx — the shell's primary navigation
  * ═══════════════════════════════════════════════════════════════════════════
@@ -112,30 +112,33 @@
  * order and stay announced (§11.6).
  *
  * ---------------------------------------------------------------------------
- * THE FOOTER IS A SLOT (task 8.8)
+ * THE FOOTER IS A SLOT, AND TASK 8.8 HAS FILLED IT
  * ---------------------------------------------------------------------------
  * §6.1 pins an `AccountMenu` trigger to the bottom at 56px, and §6.4 anchors that
- * popover to "the sidebar's bottom user card". `shell/AccountMenu.jsx` is task 8.8, so
- * this file reserves the block and renders whatever it is handed through
- * {@link Sidebar}'s `accountMenu` prop. The block is the same height whether or not
- * anything is in it, so mounting the menu later cannot move the nav above it
+ * popover to "the sidebar's bottom user card". This file reserves the block and renders
+ * whatever it is handed through {@link Sidebar}'s `accountMenu` prop. The block is the
+ * same height whether or not anything is in it, so filling it moves nothing above it
  * (Requirement 2.2).
  *
- * Until 8.8 supplies it, the slot falls back to the account card this file already had
- * — name, plan tier and sign-out — retokened and rail-aware. Sign-out is the only route
- * out of the authenticated app and it exists nowhere else in `src/`; dropping it here
- * and waiting for 8.8 would leave the tree with no way to log out. The fallback's reads
- * are skipped entirely when `accountMenu` is supplied, so 8.8 costs no duplicate
- * request.
+ * Between 8.6 and 8.8 the slot fell back to an inline account card — name, plan tier and
+ * sign-out — because sign-out is the only route out of the authenticated app and it
+ * exists nowhere else in `src/`, so an empty slot would have left the tree with no way to
+ * log out. `shell/AccountMenu.jsx` now carries that card, the profile and tier reads and
+ * sign-out itself (moved verbatim), and `App.jsx` passes it in, so the fallback is gone:
+ * the only render of this component in `src/` supplies the slot, and keeping a second
+ * copy of a sign-out implementation nothing reaches is precisely the dead control
+ * Requirement 19.4 is about. An unfilled slot is now an empty reserved 56px, which is
+ * what a focused test that does not care about the footer wants.
+ *
+ * Consequently this file reads NOTHING. No Supabase call, no billing entitlements, no
+ * notification count, no timer — it renders a frozen table and one `useLocation()`.
  */
 
-import { useEffect, useId, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LogOut, Zap } from 'lucide-react';
+import { useId } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { Zap } from 'lucide-react';
 
-import { api } from '../api';
 import { cssVar } from '../design/tokens';
-import { supabase } from '../supabase';
 
 import { NAV_GROUPS, activeNavId } from './shell/navigation';
 import { SIDEBAR_WIDTH_PX, useViewportAccess } from './shell/ResponsiveGate';
@@ -235,123 +238,17 @@ function NavEntry({ entry, active, rail }) {
 }
 
 /**
- * The account card that fills the footer slot until task 8.8's `AccountMenu` replaces
- * it. Its one job is that sign-out stays reachable; see the docblock.
- *
- * The reads live here rather than in `Sidebar` so that they do not run at all once
- * `accountMenu` is supplied — an unmounted component issues no request.
- */
-function SidebarAccount({ rail }) {
-  const navigate = useNavigate();
-  const [profile, setProfile] = useState({ name: null, tier: null, initial: '·' });
-
-  useEffect(() => {
-    let mounted = true;
-
-    // `[]`, not `[location.pathname]`. The old effect re-read the profile and the
-    // billing entitlements on EVERY navigation — two requests per route change for a
-    // name and a plan word that cannot have changed.
-    (async () => {
-      try {
-        const { data } = await supabase.auth.getUser();
-        const user = data?.user;
-        if (!mounted || !user) return;
-
-        const name = user.user_metadata?.full_name || user.email?.split('@')[0] || null;
-
-        let tier = null;
-        try {
-          const entitlements = await api.billing.getEntitlements();
-          if (entitlements?.plan?.name) tier = `${entitlements.plan.name.toUpperCase()} TIER`;
-        } catch {
-          // A plan we could not read is left unstated rather than defaulted to "FREE
-          // TIER" — that guess was wrong for every paying account whose read failed
-          // (Requirement 14.5).
-        }
-
-        if (mounted) {
-          setProfile({
-            name,
-            tier,
-            initial: name ? name.charAt(0).toUpperCase() : '·',
-          });
-        }
-      } catch {
-        // Signed out, or Supabase unconfigured. The card renders its unknown state.
-      }
-    })();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  const signOut = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch {
-      // A failed remote sign-out must not strand the session locally.
-    }
-    sessionStorage.clear();
-    localStorage.removeItem(`sb-${import.meta.env.VITE_SUPABASE_URL || ''}-auth-token`);
-    navigate('/signin');
-  };
-
-  const signOutButton = (
-    <button
-      type="button"
-      onClick={signOut}
-      aria-label="Sign out"
-      title="Sign out"
-      className={
-        'flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-content-secondary '
-        + 'transition-colors hover:bg-surface-raised hover:text-content-primary'
-      }
-    >
-      <LogOut size={14} strokeWidth={1.75} aria-hidden="true" />
-    </button>
-  );
-
-  if (rail) return <div className="flex h-full items-center justify-center">{signOutButton}</div>;
-
-  return (
-    <div className="flex h-full items-center gap-2 px-3">
-      <span
-        aria-hidden="true"
-        className={
-          'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border '
-          + 'border-line-default bg-surface-inset text-micro font-semibold text-content-secondary'
-        }
-      >
-        {profile.initial}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-small text-content-primary">
-          {/* Not a placeholder name. Whose account this is either came back from the
-              server or did not, and "Quant Trader" — the old default — read as a fact.  */}
-          {profile.name ?? 'Signed in'}
-        </span>
-        {profile.tier === null ? null : (
-          <span className="truncate font-mono text-micro tracking-wider text-content-secondary">
-            {profile.tier}
-          </span>
-        )}
-      </span>
-      {signOutButton}
-    </div>
-  );
-}
-
-/**
  * The primary navigation sidebar.
  *
- * Takes no required props, so `<Sidebar />` is a complete mount — which is what
- * `App.jsx` renders today and what task 8.5 keeps rendering inside the shell grid.
+ * Takes no required props, so `<Sidebar />` is a complete mount — which is what a focused
+ * test renders and what `App.jsx`'s shell grid renders with the slot filled.
  *
  * @param {Object} props
  * @param {React.ReactNode} [props.accountMenu] Fills the reserved 56px footer slot.
- *   Task 8.8 passes `<AccountMenu />`; until then the slot falls back to the account
- *   card. The block's height does not depend on this, so supplying it shifts nothing.
+ *   `App.jsx` passes `shell/AccountMenu`'s `<AccountMenu />`, which is the app's only
+ *   route to the seven deferred pages and to sign-out (§6.4). Omitting it leaves the
+ *   block reserved and empty; the block's height does not depend on it either way, so
+ *   supplying it shifts nothing (Requirement 2.2).
  * @param {string} [props.className] Appended. Cannot change the tier's width.
  */
 export default function Sidebar({ accountMenu = null, className = '', style, ...rest }) {
@@ -455,7 +352,7 @@ export default function Sidebar({ accountMenu = null, className = '', style, ...
         className="shrink-0 border-t border-line-default"
         style={{ height: `${SIDEBAR_FOOTER_HEIGHT_PX}px` }}
       >
-        {accountMenu ?? <SidebarAccount rail={rail} />}
+        {accountMenu}
       </div>
     </aside>
   );
