@@ -72,6 +72,15 @@
  * `` `mt-1 text-micro ${…}` `` keeps both of its real tokens. `'a ' + 'b'`
  * between two literals is plain concatenation and is joined verbatim.
  *
+ * Not every literal at such a site is class text, and the position it sits in is
+ * what decides: `userOS === 'windows'` is a comparison, `fmt('flex', x)` is a call
+ * argument, and `SIZE_CLASS[known ? size : 'sm']` is a lookup key — a *ternary
+ * branch*, which is class text anywhere else, inside a subscript, which is never
+ * class text. `[`-depth is tracked for that last one, because looking one token
+ * backwards cannot see the `SIZE_CLASS[` that changes the answer. See
+ * `flattenClassExpression`, which also records why array literals get no
+ * exemption from it.
+ *
  * WHAT IT CANNOT SEE, stated plainly because a guard that overstates its reach
  * is worse than one that admits a gap:
  *
@@ -84,6 +93,16 @@
  *     to "every string that looks like a class list" was rejected: it would start
  *     failing on prose, ids and API paths, and a guard that cries wolf gets
  *     deleted.
+ *   * Anything inside `[` … `]`. A subscript's contents are a key, not a class —
+ *     `SIZE_CLASS[known ? size : 'sm']` asks for the class list *at* `sm`, and
+ *     `sm` is not a class — so no literal at `[`-depth is read. Array literals
+ *     are inside that blind spot too, deliberately: an element of
+ *     `['a', 'b'].join(' ')` was already unreadable (it follows `[` or `,`), and
+ *     the branch forms this rule newly hides, `[cond ? 'a' : 'b'].join(' ')` and
+ *     `[base, cond && 'p-2'].filter(Boolean)`, appear nowhere in `src/`. The
+ *     alternative — guessing array-literal from subscript by the token before the
+ *     `[` — trades a lost harvest for a possible false failure, which is the
+ *     wrong way round here.
  *   * Classes applied outside `src/` — `index.html`, and anything a library adds
  *     at runtime.
  *
@@ -434,7 +453,14 @@ const COMPARISON_AFTER = /^\s*(?:[=!]==?|\.|\?\.)/;
  * The positions in which a string literal is a class list: a ternary branch, an
  * operand of `+`/`&&`/`||`/`??`, an object value, an arrow body, or the whole
  * expression. Notably absent are `(`, `,` and `[`, which is what keeps a call
- * argument or a property key out.
+ * argument, an array element or a property key out.
+ *
+ * This looks at the *immediately* preceding token only, which is why it is not
+ * the whole story. `SIZE_CLASS[known ? size : 'sm']` puts `'sm'` one character
+ * after a `:` and several tokens after a `[` — the branch of a ternary that is
+ * itself a subscript. Reading backwards one token says "class text"; reading the
+ * enclosing brackets says "index". `flattenClassExpression` tracks `[`-depth for
+ * exactly that reason and settles it before asking this question at all.
  */
 const CLASS_TEXT_BEFORE = /(?:\?|:|\+|&&|\|\||\?\?|=|\{|^)\s*$/;
 
@@ -466,11 +492,47 @@ function isClassTextPosition(before, after) {
  * whole alternatives. Two literals joined by nothing but `+` are simply
  * concatenated, which is what `AssetSelector.jsx`'s three-line `INPUT_CLASS`
  * needs in order to keep `placeholder:text-text-muted`.
+ *
+ * INSIDE `[` … `]` NOTHING IS CLASS TEXT. `[`-depth is tracked as the expression
+ * is scanned and any literal at depth above zero is folded into the code, whatever
+ * token happens to precede it. `isClassTextPosition` sees one token back, and one
+ * token back from `'sm'` in `SIZE_CLASS[known ? size : 'sm']` is a `:` — a ternary
+ * branch, which is a class-text position everywhere else and is emphatically not
+ * one here. `'sm'` is a key into a map whose *values* are the class strings
+ * (`'gap-1 px-1.5 py-0.5 text-micro'`), and this guard reported it as a dead class
+ * called `sm` for as long as depth went untracked. `variants['primary']` and
+ * `map[cond ? 'a' : 'b']` are the same shape. A subscript is a lookup; the classes
+ * are at the other end of it, in the object literal, which this reader either sees
+ * there or does not see at all.
+ *
+ * NO EXEMPTION FOR ARRAY LITERALS, and that is a measurement rather than a
+ * shrug. `['a', 'b'].join(' ')` is a genuine class-list idiom, and the usual way
+ * to tell that `[` from a subscript's is to look at what precedes it — an
+ * identifier, `]` or `)` means member access, anything else means a literal. It
+ * is not applied here for two reasons. First, it would buy nothing: an element in
+ * that array sits directly after `[` or `,`, and neither is in
+ * `CLASS_TEXT_BEFORE`, so `['a', 'b'].join(' ')` already contributed no tokens
+ * before this change and still contributes none. The only form the depth rule
+ * newly hides is a *branch* inside an array literal —
+ * `[cond ? 'a' : 'b'].join(' ')`, `[base, cond && 'p-2'].filter(Boolean)` — and
+ * `src/` contains no such class list (every `].join(` in `src/` builds CSV rows,
+ * a selector list or prose). Second, the cost is not symmetric: the heuristic's
+ * failure mode is calling a subscript a literal — `SIZE_CLASS?.[known ? size :
+ * 'sm']`, a `[` after a comment or a line break — and each of those hands back
+ * the exact false failure this rule exists to remove. Losing harvest is the
+ * direction this guard is allowed to be wrong in; see the header.
  */
 function flattenClassExpression(expr) {
   const pieces = [];
   let code = '';
   let i = 0;
+  // `[`-depth. Brackets are counted only where they appear as *code*: one inside
+  // a string is consumed whole by `readQuoted`/`readTemplate` and never reaches
+  // the counter, so `x === '[' ? 'p-2' : 'p-4'` still reads as class text and
+  // `"text-[10px] min-w-[220px]"` is untouched. Clamped at zero so a stray `]` —
+  // an unbalanced bracket in a regex, a span this reader mis-sliced — cannot bank
+  // negative depth and then let a later real `[` look like depth zero.
+  let subscript = 0;
 
   const pushCode = () => {
     if (code.trim()) pieces.push({ kind: 'code', value: code });
@@ -481,7 +543,7 @@ function flattenClassExpression(expr) {
     const ch = expr[i];
     if (ch === '"' || ch === "'") {
       const { text, end } = readQuoted(expr, i);
-      if (!isClassTextPosition(code, expr.slice(end, end + 6))) {
+      if (subscript > 0 || !isClassTextPosition(code, expr.slice(end, end + 6))) {
         code += expr.slice(i, end); // data: keep it as code, contribute no tokens
         i = end;
         continue;
@@ -492,12 +554,19 @@ function flattenClassExpression(expr) {
       continue;
     }
     if (ch === '`') {
-      pushCode();
       const { text, end } = readTemplate(expr, i);
+      if (subscript > 0) {
+        code += expr.slice(i, end); // `map[`${a}-${b}`]` is a key too
+        i = end;
+        continue;
+      }
+      pushCode();
       pieces.push({ kind: 'text', value: text });
       i = end;
       continue;
     }
+    if (ch === '[') subscript += 1;
+    else if (ch === ']') subscript = Math.max(0, subscript - 1);
     code += ch;
     i += 1;
   }
@@ -825,6 +894,68 @@ describe('dead-tailwind: the extraction method', () => {
       'bg-x', 'border-y',
     ]);
     expect(tokensOf("const rowClass = (r) => 'text-right';")).toEqual(['text-right']);
+  });
+
+  it('reads a subscript as a lookup key, not as class text', () => {
+    // THE REGRESSION THIS PINS. `ds/StatusBadge.jsx` renders
+    //   `… tracking-wide ${SIZE_CLASS[known ? size : 'sm']} ${className}`.trim()
+    // and this guard reported a dead class called `sm`. It is a key into a map
+    // whose values are the class lists (`'gap-1 px-1.5 py-0.5 text-micro'`), so
+    // the class names are at the other end of the lookup and `sm` is not one of
+    // them. One token back from `'sm'` is a `:`, which is a class-text position
+    // everywhere else — only the enclosing `[` says otherwise.
+    expect(
+      tokensOf("<span className={`rounded-sm border ${SIZE_CLASS[known ? size : 'sm']} ${className}`.trim()} />"),
+    ).toEqual(['border', 'rounded-sm']);
+    expect(tokensOf("<div className={SIZE_CLASS[known ? size : 'sm']} />")).toEqual([]);
+    expect(tokensOf("<div className={variants['primary']} />")).toEqual([]);
+    expect(tokensOf("<div className={map[cond ? 'a' : 'b']} />")).toEqual([]);
+    // Seen and dropped, not silently skipped: the site still registers as
+    // unknowable, which is what keeps `text-${size}` honest as well.
+    expect(droppedOf("<div className={map[cond ? 'a' : 'b']} />")).toContain('…');
+  });
+
+  it('closes the subscript again, and does not open one inside a string', () => {
+    // `[`-depth, not "there is a `[` somewhere". A lookup that is only the
+    // *condition* leaves the branches readable.
+    expect(tokensOf("const aClass = obj[key] ? 'p-2' : 'p-4';")).toEqual(['p-2', 'p-4']);
+    expect(tokensOf("<div className={props['aria-invalid'] ? 'border-x' : 'border-y'} />")).toEqual([
+      'border-x', 'border-y',
+    ]);
+    // A bracket inside a literal is text, and must not count as depth — otherwise
+    // one `'['` would silence the rest of the file, and arbitrary-value classes
+    // are made of brackets.
+    expect(tokensOf("<div className={x === '[' ? 'p-2' : 'p-4'} />")).toEqual(['p-2', 'p-4']);
+    expect(tokensOf("<div className={`text-[10px] ${c ? 'min-w-[220px]' : 'w-full'}`} />")).toEqual([
+      'min-w-[220px]', 'text-[10px]', 'w-full',
+    ]);
+  });
+
+  it('still reads every class-text position the subscript rule must not swallow', () => {
+    // The four forms the fix had to leave alone, asserted together so a widening
+    // of the bracket rule fails here rather than going quiet in `src/`.
+    expect(tokensOf("<div className={cond ? 'a' : 'b'} />")).toEqual(['a', 'b']);
+    expect(tokensOf("const variantClasses = { cyan: 'bg-x border-y' };")).toEqual([
+      'bg-x', 'border-y',
+    ]);
+    expect(tokensOf("<div className={`flex ${cond ? 'p-2' : 'p-4'}`} />")).toEqual([
+      'flex', 'p-2', 'p-4',
+    ]);
+    expect(tokensOf("const aClass = 'a ' + 'b';")).toEqual(['a', 'b']);
+  });
+
+  it('reads nothing out of an array literal, which is a loss and not a defect', () => {
+    // `['a', 'b'].join(' ')` is a real class-list idiom and this reader never
+    // read it: an element follows `[` or `,`, and neither is a class-text
+    // position, so both of these returned nothing before `[`-depth existed too.
+    expect(tokensOf("const aClass = ['flex', 'p-2'].join(' ');")).toEqual([]);
+    // What the depth rule newly hides is a branch inside the array. Pinned as a
+    // known blind spot rather than left to be discovered: no class list in `src/`
+    // is written this way, and telling this `[` from a subscript's by the token
+    // before it risks handing back the `sm` false failure. See
+    // `flattenClassExpression`.
+    expect(tokensOf("const aClass = [cond ? 'a' : 'b'].join(' ');")).toEqual([]);
+    expect(tokensOf("const aClass = [base, cond && 'p-2'].filter(Boolean).join(' ');")).toEqual([]);
   });
 
   it('sees nothing in a fully computed className, and says nothing about it', () => {

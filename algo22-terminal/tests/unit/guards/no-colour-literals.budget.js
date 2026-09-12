@@ -55,8 +55,9 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // #607D8B) plus GitHub greys. Rewritten by task 20.x.
   'components/SignalTraceVisualization.jsx': 138,
   'pages/TradeHistory.jsx': 62,
-  // Also renders a stack trace today; rewritten in M3 (task 6.x).
-  'components/ErrorBoundary.jsx': 20,
+  // Cleared by task 6.25, which rewrote it: the copy is `ds/ErrorState`'s, the
+  // chrome is token utilities, and the stack it used to print is Sentry-only.
+  'components/ErrorBoundary.jsx': 0,
 
   // -- In-scope pages, migrated M6-M9 ---------------------------------------
   // Includes the single `border-[#ef4444]` arbitrary-value utility task 1.4

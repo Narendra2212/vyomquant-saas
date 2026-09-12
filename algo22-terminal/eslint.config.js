@@ -3,6 +3,11 @@ import globals from "globals";
 import jsxA11y from "eslint-plugin-jsx-a11y-x";
 import reactHooks from "eslint-plugin-react-hooks";
 import vyom from "./eslint-rules/index.js";
+import {
+  A11Y_ENFORCED_GLOBS,
+  A11Y_PAGE_WAIVERS,
+  a11yRules,
+} from "./eslint-rules/a11y-ratchet.js";
 
 export default [
   js.configs.recommended,
@@ -40,6 +45,40 @@ export default [
       "no-implied-eval": "error",
       "no-console": "off",
     },
+  },
+  {
+    // ── The accessibility ratchet, half one (task 6.27, Requirements 18.1, 18.4) ──
+    //
+    // Every `jsx-a11y-x` rule at `error` for `src/components/ds/**` and
+    // `src/pages/**`, keeping the preset's options and adding the rules it
+    // leaves off — two of which, `control-has-associated-label` and
+    // `no-aria-hidden-on-focusable`, ARE Requirement 18's criteria. See
+    // eslint-rules/a11y-ratchet.js for what was measured before this landed and
+    // why the exemption list is a deny-list rather than an allowlist.
+    //
+    // `ds/` is clean under this set and stays clean: the guard at
+    // tests/unit/guards/a11y-ratchet.test.js asserts zero, so a `div onClick`
+    // added to a primitive fails the suite as well as the lint.
+    files: A11Y_ENFORCED_GLOBS,
+    rules: a11yRules("error"),
+  },
+  {
+    // ── The accessibility ratchet, half two: the shrinking waiver ──
+    //
+    // These five in-scope pages carry 25 findings between them and are rebuilt
+    // in M7-M9. `warn` keeps every one of them in the report — they are not
+    // ignored, and the count is recorded per file in `A11Y_PAGE_WAIVERS` — while
+    // keeping the debt of a page that has not been migrated yet out of the
+    // build's error count. The page tasks own these; task 6.27 does not.
+    //
+    // A page NOT listed here is at `error`, which is the whole point: a page
+    // rebuilt by its migration task is held to the rule the moment its waiver
+    // line goes, and a page added tomorrow is held to it with no action at all.
+    // The guard requires each recorded count to be exact and forbids a `0`
+    // entry, so a cleared page must have its line deleted in the same commit.
+    // When the last line goes, delete this block.
+    files: Object.keys(A11Y_PAGE_WAIVERS),
+    rules: a11yRules("warn"),
   },
   {
     // The `C` compatibility shim is CLOSED and DERIVED (design.md §3.4,
