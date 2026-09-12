@@ -90,12 +90,18 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // -- Shell and cross-cutting components -----------------------------------
   'components/DeployPreflightPanel.jsx': 30,
   'components/DashboardUpgrades.jsx': 6,
-  'components/Sidebar.jsx': 5,
+  // Cleared by task 8.6, which rebuilt it against `shell/navigation.js`. The five were
+  // the brand tile's `linear-gradient(135deg,#00d4ff,#0055ff)` and its `#000` glyph, the
+  // notification badge's `#000`, and the active row's `rgba(0,212,255,0.07)`. The
+  // gradient went for a second reason: Requirement 1.5 retires gradient washes.
+  'components/Sidebar.jsx': 0,
   'components/CopilotChat.jsx': 3,
   'components/FirstTradeWizard.jsx': 3,
   // Replaced by `ResponsiveGate` in M4 (task 12.x); entry goes with the file.
   'components/DesktopOnlyOverlay.jsx': 1,
-  'components/TopBar.jsx': 1,
+  // Cleared by task 8.7. The one literal was the notification badge's `#000` text on a
+  // `C.cyan` circle; the badge now takes `text-brand` on `bg-surface-raised`.
+  'components/TopBar.jsx': 0,
 
   // -- Deferred pages: retokened by M1, layouts stay older (§14.4) ----------
   'pages/ExchangeManager.jsx': 128,

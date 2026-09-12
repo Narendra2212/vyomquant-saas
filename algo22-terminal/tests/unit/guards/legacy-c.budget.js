@@ -104,12 +104,20 @@ export const LEGACY_C_BUDGET = Object.freeze({
   'components/builder/NodeTrace.jsx': 27,
   'components/builder/NodePreview.jsx': 24,
   'components/FirstTradeWizard.jsx': 23,
-  // Replaced by the new grid shell / `navigation.js` in M4.
-  'components/Sidebar.jsx': 21,
+  // Cleared by task 8.6: rebuilt against `shell/navigation.js`, with colour taken from
+  // `cssVar()` and token utility classes instead of the shim.
+  'components/Sidebar.jsx': 0,
   'pages/SecurityLogs.jsx': 21,
   // The `AppShell` wrapper and the auth gates live here (task 3.3 touches it).
-  'App.jsx': 14,
-  'components/TopBar.jsx': 14,
+  // 14 -> 13 at task 8.5: the shell's `return` became a CSS grid on
+  // `bg-surface-canvas`, which retired the wrapper's `background: C.bg0`. The
+  // remaining 13 are all in `UpdatePasswordPage` (7) and `AdminGuard` (6) — both
+  // outside task 8.5's scope, which is why `C` is still imported here.
+  'App.jsx': 13,
+  // Cleared by task 8.7: rebuilt against `shell/navigation.js` and `ds/`, with every
+  // colour coming from a token utility class. The `LiveStatusV2` import went with the
+  // hardcoded `status="running"` (§1.3), and `C` went with it.
+  'components/TopBar.jsx': 0,
   // Replaced by `ResponsiveGate` in M4; entry goes with the file.
   'components/DesktopOnlyOverlay.jsx': 9,
   // Not a page: the block-category presentation map. Colours the builder

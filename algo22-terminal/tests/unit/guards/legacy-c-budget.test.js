@@ -66,7 +66,7 @@
  * And one thing that MUST be counted, which is where a careless string strip
  * destroys the measurement: `` `1px solid ${C.border}` ``. Template-literal
  * interpolations are code, and in this codebase they are the *dominant* form of
- * legacy usage — `App.jsx` alone gets 3 of its 14 that way, `primitives.jsx`
+ * legacy usage — `App.jsx` alone gets 2 of its 13 that way, `primitives.jsx`
  * dozens. So backticks are deliberately NOT masked, and only complete
  * same-line `'…'` / `"…"` spans are.
  *
@@ -81,7 +81,7 @@
  * failure rather than a number silently drifting down.
  *
  * The self-tests in "the counting method" pin all of the above, and
- * "the spot check" reproduces `App.jsx`'s 14 by hand, occurrence by occurrence.
+ * "the spot check" reproduces `App.jsx`'s 13 by hand, occurrence by occurrence.
  * They are not decoration: a silently broken pattern makes this whole guard
  * pass vacuously and turns every number in the budget file into fiction.
  *
@@ -227,7 +227,7 @@ describe('legacy-c-budget: the counting method', () => {
 
   it('counts references inside template-literal interpolations', () => {
     // The dominant legacy form in this codebase, and the one a naive string
-    // strip destroys. App.jsx gets 3 of its 14 this way.
+    // strip destroys. App.jsx gets 2 of its 13 this way.
     expect(countLegacyC('border: `1px solid ${C.border}`')).toBe(1);
     expect(countLegacyC('background: `${C.green}12`')).toBe(1);
     expect(countLegacyC('`1px solid ${isFocused ? C.accent : C.border}`')).toBe(2);
@@ -294,24 +294,31 @@ describe('legacy-c-budget: the counting method', () => {
 // ---------------------------------------------------------------------------
 
 describe('legacy-c-budget: the spot check', () => {
-  it("reproduces App.jsx's 14 references occurrence by occurrence", () => {
+  it("reproduces App.jsx's 13 references occurrence by occurrence", () => {
     // Hand-verified against the file, so the counting method is pinned to
     // reality and not only to synthetic fixtures. `App.jsx` is a good choice:
-    // small enough to enumerate, touched by task 3.3, and it exercises both the
-    // template-literal form and the comment exclusion (task 3.3 added three
-    // docblocks to it that name `--font-mono`).
+    // small enough to enumerate, and it exercises both the template-literal form
+    // (82, 87) and the comment exclusion — `AdminGuard`'s two notes about the real
+    // mono stack sit between counted references, at 169–172 and 182–183.
     //
-    // ResetPassword:  78 C.bg0 · 79 C.bg2, ${C.border} · 80 C.t1
-    //                 84 C.green, ${C.green} · 102 C.red                    = 7
-    // AdminGuard:    165 C.bg0 · 170 C.t3 · 176 C.bg0 · 177 C.red
-    //                178 C.t1 · 181 C.t3                                    = 6
-    // AppShell:      297 C.bg0                                              = 1
+    // UpdatePasswordPage:   81 C.bg0 · 82 C.bg2, ${C.border} · 83 C.t1
+    // (/reset-password)     87 C.green, ${C.green} · 105 C.red              = 7
+    // AdminGuard:          168 C.bg0 · 173 C.t3 · 179 C.bg0 · 180 C.red
+    //                      181 C.t1 · 184 C.t3                             = 6
+    //
+    // The `AppShell: 297 C.bg0` entry this list used to carry is retired. Task 8.5
+    // rewrote `AppShell` into a CSS grid whose wrapper takes `bg-surface-canvas` as
+    // a token class, so the shell reads nothing off the shim any more — which is
+    // also why the committed budget is 13 rather than 14. The same task's edits
+    // above the two surviving groups (the note explaining the dropped
+    // `DesktopOnlyOverlay` import) net out to three extra lines, so every number
+    // here is exactly 3 higher than the number it replaces.
     const source = readFileSync(path.join(SRC, 'App.jsx'), 'utf8');
     const lines = findLegacyC(source).map((r) => r.line);
 
-    expect(lines).toEqual([78, 79, 79, 80, 84, 84, 102, 165, 170, 176, 177, 178, 181, 297]);
-    expect(lines).toHaveLength(14);
-    expect(LEGACY_C_BUDGET['App.jsx']).toBe(14);
+    expect(lines).toEqual([81, 82, 82, 83, 87, 87, 105, 168, 173, 179, 180, 181, 184]);
+    expect(lines).toHaveLength(13);
+    expect(LEGACY_C_BUDGET['App.jsx']).toBe(13);
   });
 });
 
