@@ -65,7 +65,12 @@
 export const LEGACY_C_BUDGET = Object.freeze({
   // -- The shim itself ------------------------------------------------------
   // Reaches 0 only by being deleted (task 27.2), which also deletes the guard.
-  'components/ui-legacy/primitives.jsx': 178,
+  // 178 -> 176 at task 10.9: `LoadingProvider`'s full-screen blocking overlay is
+  // deleted (design.md §5.1, Requirement 14.2), and it carried exactly two shim
+  // references — the scrim's `background: `${C.bg0}80`` and the message row's
+  // `color: C.t2`. The provider, its context API and `anyLoading` all stay, so
+  // nothing else in the file moved.
+  'components/ui-legacy/primitives.jsx': 176,
 
   // -- In-scope pages, the six task 1.12 names ------------------------------
   // M9 — the two largest and most behaviourally sensitive files, migrated last.

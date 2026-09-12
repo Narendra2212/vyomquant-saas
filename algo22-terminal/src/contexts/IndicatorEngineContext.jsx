@@ -1,5 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { endpoints } from '../api';
+// Task 10.8. `extractErrorMessage` is deleted from `ui-legacy/primitives.jsx` — it fell through
+// to `JSON.stringify(detail)` and then `err.message`, so a backend traceback reached the screen
+// verbatim (Requirement 14.4). The words now come from `design/errorCopy.js`.
+import { errorLine } from '../design/errorLine';
 import { useDataPipeline } from './DataPipelineContext';
 import { getMinDataLength } from '../utils/engineHelpers';
 
@@ -96,8 +100,10 @@ export const IndicatorEngineProvider = ({ children }) => {
 
       return result;
     } catch (err) {
-      // 🔴 STEP 11: Extract clear error message
-      const errorMsg = extractErrorMessage(err, 'Indicator computation failed');
+      // STEP 11: the failure in authored words, from `design/errorCopy.js`. The `builder` context
+      // is the last-resort copy family, which is what the bare `throw new Error(...)` branches
+      // above land on — `translateError` never reads the message off them.
+      const errorMsg = errorLine(err, 'builder');
       setComputationError({
         indicator,
         message: errorMsg,

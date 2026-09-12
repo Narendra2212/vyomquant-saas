@@ -1,5 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { endpoints } from '../api';
+// Task 10.8. `extractErrorMessage` is deleted from `ui-legacy/primitives.jsx` — it fell through
+// to `JSON.stringify(detail)` and then `err.message`, so a backend traceback reached the screen
+// verbatim (Requirement 14.4). The words now come from `design/errorCopy.js`.
+import { errorLine } from '../design/errorLine';
 import { useIndicatorEngine } from './IndicatorEngineContext';
 import { validateConditions } from '../utils/engineHelpers';
 
@@ -80,8 +84,10 @@ export const LogicEngineProvider = ({ children }) => {
 
       return result;
     } catch (err) {
-      // 🔴 STEP 11: Extract clear error message
-      const errorMsg = extractErrorMessage(err, 'Logic evaluation failed');
+      // STEP 11: the failure in authored words, from `design/errorCopy.js`. The `builder` context
+      // is the last-resort copy family, which is what a bare `throw new Error(...)` from the
+      // validation branch above lands on — `translateError` never reads the message off it.
+      const errorMsg = errorLine(err, 'builder');
       setEvaluationError({
         message: errorMsg,
         conditions,

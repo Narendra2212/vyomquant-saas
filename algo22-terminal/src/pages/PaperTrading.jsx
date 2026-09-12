@@ -165,7 +165,12 @@ import {
   XCircle,
 } from 'lucide-react';
 
-import { C, PanelTitle, Spinner, extractErrorMessage } from '../components/ui-legacy/primitives';
+import { C, PanelTitle, Spinner } from '../components/ui-legacy/primitives';
+// Task 10.8: every failure on this page is worded by `design/errorCopy.js` and nothing else.
+// `extractErrorMessage` used to fill these slots and fell through to `JSON.stringify(detail)`
+// and then `err.message`, so an axios message and a FastAPI dump reached the screen verbatim
+// (Requirement 14.4). `errorLine` is the one-line form of `translateError`'s authored copy.
+import { errorLine } from '../design/errorLine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { useAppState } from '../AppState';
@@ -1130,7 +1135,7 @@ export default function PaperTrading() {
       setStrategies({
         status: 'error',
         data: null,
-        error: extractErrorMessage(err, 'Your strategy list could not be read.'),
+        error: errorLine(err, 'strategies'),
         failure: classifyReadFailure(err),
       });
     }
@@ -1147,7 +1152,7 @@ export default function PaperTrading() {
       setSessionList({
         status: 'error',
         data: null,
-        error: extractErrorMessage(err, 'Your paper sessions could not be read.'),
+        error: errorLine(err, 'paper-trading'),
         failure: classifyReadFailure(err),
       });
     }
@@ -1170,7 +1175,7 @@ export default function PaperTrading() {
         [key]: {
           status: 'error',
           data: null,
-          error: extractErrorMessage(err, 'This read did not complete.'),
+          error: errorLine(err, 'paper-trading'),
           failure: classifyReadFailure(err),
         },
       }));
@@ -1280,7 +1285,7 @@ export default function PaperTrading() {
         if (!mounted.current) return;
         setGapCloseError({
           reason,
-          message: extractErrorMessage(err, 'The replay after the reconnect did not complete.'),
+          message: errorLine(err, 'paper-trading'),
           failure: classifyReadFailure(err),
         });
       }
@@ -1572,9 +1577,9 @@ export default function PaperTrading() {
       const failure = classifyReadFailure(err);
       setStartRefusal({
         ...failure,
-        message: failure.message || extractErrorMessage(err, 'The session could not be started.'),
+        message: failure.message || errorLine(err, 'paper-trading'),
       });
-      toast('error', extractErrorMessage(err, 'The session could not be started.'));
+      toast('error', errorLine(err, 'paper-trading'));
     } finally {
       if (mounted.current) setBusy(null);
     }
@@ -1591,7 +1596,7 @@ export default function PaperTrading() {
       loadSessionList();
     } catch (err) {
       if (!mounted.current) return;
-      toast('error', extractErrorMessage(err, 'The session could not be paused.'));
+      toast('error', errorLine(err, 'paper-trading'));
     } finally {
       if (mounted.current) setBusy(null);
     }
@@ -1608,7 +1613,7 @@ export default function PaperTrading() {
       loadSessionList();
     } catch (err) {
       if (!mounted.current) return;
-      toast('error', extractErrorMessage(err, 'The session could not be resumed.'));
+      toast('error', errorLine(err, 'paper-trading'));
     } finally {
       if (mounted.current) setBusy(null);
     }
@@ -1642,7 +1647,7 @@ export default function PaperTrading() {
       loadSessionList();
     } catch (err) {
       if (!mounted.current) return;
-      toast('error', extractErrorMessage(err, 'The stop request did not complete.'));
+      toast('error', errorLine(err, 'paper-trading'));
     } finally {
       if (mounted.current) setBusy(null);
     }
@@ -1661,7 +1666,7 @@ export default function PaperTrading() {
       loadSessionList();
     } catch (err) {
       if (!mounted.current) return;
-      toast('error', extractErrorMessage(err, 'The session could not be reset.'));
+      toast('error', errorLine(err, 'paper-trading'));
     } finally {
       if (mounted.current) setBusy(null);
     }

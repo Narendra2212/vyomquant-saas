@@ -1,9 +1,31 @@
 /**
  * Portfolio API Module
- * 
+ *
  * Endpoints: /api/portfolio/*
+ *
+ * ---------------------------------------------------------------------------
+ * SIX DEAD METHODS REMOVED — vyomquant-ui-redesign task 10.10
+ * design.md §1.4, §7.6. Requirement 19.4.
+ * ---------------------------------------------------------------------------
+ * `getPosition`, `closePosition`, `getPositionHistory`, `getBalance`, `getPnL`
+ * and `getPerformance` are gone. `backend_app/routers/portfolio.py` registers
+ * exactly six routes — `/summary`, `/equity-curve`, `/allocation`, `/heatmap`,
+ * `/recent-transactions`, `/close-all` — so every one of those six always 404d,
+ * and none had a call site anywhere in `src/`. A documented client method that
+ * cannot succeed is a non-functional API surface (Requirement 19.4).
+ *
+ * `closePosition` was the one that mattered: it read as a working position-close
+ * and was not one. The only `POST /positions/{id}/close` in the tree belongs to
+ * `backend_app/backend/portfolio_management.py`, mounted at
+ * `/api/internal/portfolio-mgmt` behind `Depends(get_admin_user)` — a different
+ * prefix, and unreachable for a trader either way.
+ *
+ * `getPositions` and `getOpenPositions` are equally routeless but stay for now;
+ * see the note on `getOpenPositions` below.
+ *
+ * This module is a read surface. `get` is the only verb it needs.
  */
-import { get, post, put, del } from '../../apiClient';
+import { get } from '../../apiClient';
 
 /**
  * @typedef {Object} Position
@@ -51,72 +73,14 @@ export const portfolioApi = {
   },
 
   /**
-   * Get position by ID
-   * @param {string} positionId - Position ID
-   * @returns {Promise<Position>}
-   */
-  getPosition: async (positionId) => {
-    return get(`/api/portfolio/positions/${positionId}`);
-  },
-
-  /**
-   * Close a position
-   * @param {string} positionId - Position ID
-   * @param {Object} [options] - Optional parameters
-   * @param {number} [options.quantity] - Quantity to close (default: all)
-   * @returns {Promise<{success: boolean, message: string}>}
-   */
-  closePosition: async (positionId, options = {}) => {
-    return post(`/api/portfolio/positions/${positionId}/close`, options);
-  },
-
-  /**
-   * Get position history
-   * @param {Object} [filters] - Optional filters
-   * @param {string} [filters.symbol] - Filter by symbol
-   * @param {string} [filters.startDate] - Start date
-   * @param {string} [filters.endDate] - End date
-   * @param {number} [filters.limit] - Limit results
-   * @returns {Promise<Position[]>}
-   */
-  getPositionHistory: async (filters = {}) => {
-    const params = new URLSearchParams(filters);
-    return get(`/api/portfolio/positions/history?${params}`);
-  },
-
-  /**
-   * Get portfolio balance
-   * @returns {Promise<{balance: number, available: number, used: number}>}
-   */
-  getBalance: async () => {
-    return get('/api/portfolio/balance');
-  },
-
-  /**
-   * Get portfolio PnL
-   * @param {Object} [filters] - Optional filters
-   * @param {string} [filters.startDate] - Start date
-   * @param {string} [filters.endDate] - End date
-   * @returns {Promise<{realizedPnl: number, unrealizedPnl: number, totalPnl: number}>}
-   */
-  getPnL: async (filters = {}) => {
-    const params = new URLSearchParams(filters);
-    return get(`/api/portfolio/pnl?${params}`);
-  },
-
-  /**
-   * Get portfolio performance metrics
-   * @param {Object} [filters] - Optional filters
-   * @param {string} [filters.period] - Time period: '1d', '1w', '1m', '1y'
-   * @returns {Promise<Object>}
-   */
-  getPerformance: async (filters = {}) => {
-    const params = new URLSearchParams(filters);
-    return get(`/api/portfolio/performance?${params}`);
-  },
-
-  /**
    * Get open positions only
+   *
+   * NOTE: no such route exists — `/api/portfolio/positions/open` 404s, as does
+   * `getPositions` above. Both are kept only because `pages/Portfolio.jsx` still
+   * calls them; task 13.1 removes them in the same change that re-points that
+   * read at `/api/dashboard`. Deleting them here would turn a 404 into a
+   * `TypeError`, which is the worse failure.
+   *
    * @returns {Promise<Position[]>}
    */
   getOpenPositions: async () => {

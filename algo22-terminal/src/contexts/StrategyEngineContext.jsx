@@ -1,5 +1,11 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { endpoints } from '../api';
+// Task 10.8. `extractErrorMessage` and `getErrorType` are deleted from
+// `ui-legacy/primitives.jsx`: the first fell through to `JSON.stringify(detail)` and then
+// `err.message`, so a backend traceback reached the screen verbatim (Requirement 14.4). The
+// words now come from `design/errorCopy.js` and no branch below reads `err.message`.
+import { resolveCategory } from '../design/errorCopy';
+import { errorLine } from '../design/errorLine';
 import { useDataPipeline } from './DataPipelineContext';
 import { useIndicatorEngine } from './IndicatorEngineContext';
 import { useLogicEngine } from './LogicEngineContext';
@@ -310,9 +316,22 @@ export const StrategyEngineProvider = ({ children }) => {
 
       return executionResult;
     } catch (err) {
-      // 🔴 STEP 11: Extract clear error message from backend response
-      const errorMsg = extractErrorMessage(err, 'Strategy execution failed');
-      const errorType = getErrorType(err);
+      // STEP 11: the failure in authored words, from `design/errorCopy.js`.
+      const errorMsg = errorLine(err, 'builder');
+      /**
+       * `type` was `getErrorType`'s HTTP-status vocabulary — `validation`, `missing_data`,
+       * `backend_failure`, `auth`, `rate_limit`, `unknown`. It is now `resolveCategory`'s:
+       * `RATE_LIMIT`, `NETWORK_ERROR`, `SERVER_ERROR`, `AUTH_ERROR`, `CLIENT_ERROR`, with
+       * `UNKNOWN_ERROR` — `ApiError`'s own name for an unclassified failure — standing where
+       * `getErrorType` said `unknown`, so the field stays total.
+       *
+       * The vocabulary swap breaks no branch: `executionError` leaves this provider only on the
+       * context value, and nothing in `src/` calls `useStrategyEngine`, so there is no consumer
+       * reading these strings. `grep` for the six old labels finds them nowhere but the deleted
+       * function itself. The field is kept rather than dropped because removing it would change
+       * the state shape, and task 10.8 is a message-translation change and nothing else.
+       */
+      const errorType = resolveCategory(err) ?? 'UNKNOWN_ERROR';
 
       setExecutionError({
         type: errorType,
