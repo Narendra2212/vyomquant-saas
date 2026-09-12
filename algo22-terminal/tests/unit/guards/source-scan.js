@@ -139,5 +139,60 @@ export function stripComments(source, { lineComments = true } = {}) {
   return chars.join('');
 }
 
+/**
+ * A complete same-line `'…'` / `"…"` span whose opening quote could actually open
+ * a string.
+ *
+ * Not the same pattern as `SAME_LINE_QUOTED` above, and the difference is the
+ * whole point: this one carries a `(?<![\w$])` lookbehind, so the apostrophe in
+ * JSX prose (`Don't`) cannot be read as a string opener. That is the exact
+ * failure this file's header records — an earlier tokeniser swallowed the rest of
+ * `StrategyBuilder.jsx` from one apostrophe and lost 33 of its 148 `C.`
+ * references, seeding a budget 22% low. A prose apostrophe is preceded by a
+ * letter; a real string opener is not. `SAME_LINE_QUOTED` can do without the
+ * lookbehind because it is only ever used to decide where a `//` starts on a line
+ * that is about to be blanked anyway; this one decides what gets *measured*.
+ *
+ * Backticks are deliberately absent. `${C.border}` and `${window.confirm}` are
+ * code, and in this codebase template interpolation is the dominant form of the
+ * things these guards look for.
+ */
+const STRING_SPAN = /(?<![\w$])'(?:[^'\\\n]|\\.)*'|(?<![\w$])"(?:[^"\\\n]|\\.)*"/g;
+
+/**
+ * Blank out complete same-line quoted spans, preserving length and line breaks so
+ * reported line numbers still line up with the file on disk.
+ *
+ * Use this when the thing being detected is a *code construct* and a mention of
+ * it inside a string literal — an error message, a test fixture, a label — is not
+ * an instance of it. Do NOT use it when the thing being detected lives inside
+ * strings by nature (`no-colour-literals`' `"#ef4444"`, `dead-tailwind`'s
+ * `className="…"`); those guards leave strings intact on purpose.
+ *
+ * Masking can only ever remove matches, which makes it the one step here that
+ * could quietly undercount. `legacy-c-budget.test.js`'s
+ * "does not lose references to the string mask" asserts that it removes nothing
+ * across the whole tree, so a mask that starts eating real code is a named
+ * failure rather than a number drifting down. A guard that adopts this should
+ * carry the same cross-check.
+ *
+ * `legacy-c-budget.test.js` still holds a private copy of this pattern from
+ * before it lived here; it is character-for-character the same and should be
+ * collapsed onto this export the next time that file is edited.
+ */
+export const maskStrings = (code) => code.replace(STRING_SPAN, (m) => ' '.repeat(m.length));
+
+/**
+ * `source` with comments blanked and quoted strings masked — i.e. only the parts
+ * that actually execute, at their original offsets.
+ *
+ * The composition every "is this construct present?" guard wants: prose that
+ * *documents* a forbidden construct is not a use of it, and neither is a string
+ * that names it. Both halves matter. A rule that reads raw file text punishes the
+ * comment explaining what was removed and why, which is the one piece of a
+ * migration worth keeping.
+ */
+export const codeOnly = (source, options) => maskStrings(stripComments(source, options));
+
 /** Indent a list of report lines under a failure message. */
 export const list = (rows) => rows.map((r) => `  ${r}`).join('\n');

@@ -12,10 +12,14 @@ import {
 } from "../components/ui-legacy/primitives";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
+// Task 10.3: the two confirmation surfaces. Imported from the modules directly rather than
+// through `components/ds/index.js` — this page charts nothing, and the barrel is what would
+// otherwise put `ds/Chart`'s recharts dependency in its import graph (see ds/index.js).
+import { ConfirmDialog } from "../components/ds/ConfirmDialog";
+import { Field } from "../components/ds/Field";
 import StrategyBuilder from "./StrategyBuilder";
 import { computeStrategyHealth } from "../lib/strategyHealth";
 import {
-  archiveConfirmMessage,
   describeArchiveFailure,
   describeBlockingDeployment,
 } from "../lib/strategyArchive";
@@ -227,6 +231,87 @@ const formatInstant = (value) => {
  *  owned one. Rendered as a React text child, never as HTML. */
 const entryName = (entry) => entry?.listing?.name ?? entry?.name ?? null;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Rename validation (task 10.3) — Requirements 15.1, 15.2, 18.3
+//
+// `window.prompt("Enter new strategy name:", currentName)` returned a bare string with
+// nowhere to put a label and nowhere to put a verdict, so the only thing the page could do
+// with a bad name was drop it silently (`if (!newName || newName.trim() === "" …) return`)
+// or let it round-trip to a 422. Requirements 15.1 and 15.2 are exactly that gap: a labelled
+// control, and a message naming the field and the reason it is invalid.
+//
+// WHERE THESE BOUNDS COME FROM — they are the server's, read off the endpoint, not invented:
+//
+//   `backend_app/routers/strategies.py` :: `_validated_strategy_name`
+//     STRATEGY_NAME_MIN_LENGTH = 1, STRATEGY_NAME_MAX_LENGTH = 100, both measured on the
+//     name AFTER `raw.strip()`. Its four refusal reasons are `name_missing`,
+//     `name_not_a_string`, `empty_after_trim` and `longer_than_max_length`, all under one
+//     422 `STRATEGY_NAME_INVALID`. The first two are unreachable from a text input, which
+//     always submits a string under the key the client module sends; the other two are the
+//     two rules below.
+//
+// WHAT IS DELIBERATELY *NOT* VALIDATED HERE
+//   **Uniqueness.** `rename_strategy` writes `strategies.name` with no uniqueness check and
+//   there is no unique constraint behind it, so two strategies may legitimately share a
+//   name. Rejecting a duplicate here would be this page inventing a rule the platform does
+//   not have, and would block a rename the server would have accepted.
+//   **Character sets.** The server accepts any string within the length bounds.
+//
+// The submitted string is sent EXACTLY as typed (`api/modules/strategies.js`: "Sent as
+// submitted; the server trims it and stores the trimmed form"). Nothing here trims on the
+// way out — trimming client-side would change the payload — so the bounds are measured on
+// the trimmed form and the untrimmed form is what travels.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** `strategies.py::STRATEGY_NAME_MIN_LENGTH`, measured after trimming. */
+export const STRATEGY_NAME_MIN_LENGTH = 1;
+
+/** `strategies.py::STRATEGY_NAME_MAX_LENGTH`, measured after trimming. */
+export const STRATEGY_NAME_MAX_LENGTH = 100;
+
+/**
+ * Why this submitted name cannot be sent, or `null` when it can.
+ *
+ * Pure, and exported so the inline message, the gate on the confirm handler and the tests
+ * all read one implementation rather than three restatements of the same rule.
+ *
+ * The third rule is not the server's: an unchanged name is a request with no effect, and
+ * `handleRenameStrategy` has always refused it (`newName === currentName`). It is kept
+ * exactly as it was — an identical comparison on the raw strings — so that this change
+ * alters nothing about which renames reach the backend. It is now *stated* instead of
+ * silently dropped, which is the whole point of Requirement 15.2.
+ *
+ * @param {string} submitted The string in the field, untrimmed.
+ * @param {string} [currentName] The strategy's present name.
+ * @returns {string|null} A message naming the field and the reason, or `null`.
+ */
+export function strategyNameRefusal(submitted, currentName) {
+  const raw = typeof submitted === "string" ? submitted : "";
+  const trimmed = raw.trim();
+
+  if (trimmed.length < STRATEGY_NAME_MIN_LENGTH) {
+    return (
+      "A strategy name needs at least one visible character. Leading and trailing " +
+      "whitespace is removed before the name is measured and stored, so spaces alone " +
+      "are an empty name. The current name is unchanged."
+    );
+  }
+
+  if (trimmed.length > STRATEGY_NAME_MAX_LENGTH) {
+    return (
+      `A strategy name may be at most ${STRATEGY_NAME_MAX_LENGTH} characters once leading ` +
+      `and trailing whitespace is removed; this one is ${trimmed.length}. The current name ` +
+      "is unchanged."
+    );
+  }
+
+  if (typeof currentName === "string" && raw === currentName) {
+    return "This is already this strategy's name, so there is nothing to rename.";
+  }
+
+  return null;
+}
+
 export default function Strategies() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -239,6 +324,16 @@ export default function Strategies() {
   // specific error it is — each blocking deployment by identifier and state (Requirement
   // 3.1) — instead of being logged to the console and lost (Requirement 2.10).
   const [archiveError, setArchiveError] = useState(null);
+  // ── Task 10.3: the two confirmation surfaces that replaced `window.confirm` and
+  // `window.prompt` (Requirements 15.1, 15.2, 18.3, design.md §1.8, §8.4).
+  //
+  // Each one is `null` until the trader asks for the action, and *holds the whole request*
+  // until the dialog's own confirm action fires. That is the structural half of Property 13:
+  // neither `endpoints.strategies.delete` nor `endpoints.strategies.rename` is reachable from
+  // the card's button — the button only ever sets one of these two objects — so there is no
+  // code path on which the mutation precedes the confirmation.
+  const [archiveDialog, setArchiveDialog] = useState(null);
+  const [renameDialog, setRenameDialog] = useState(null);
   const [editingStrategy, setEditingStrategy] = useState(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [filterStatus, setFilterStatus] = useState("all");
@@ -669,10 +764,46 @@ export default function Strategies() {
    * The optimistic removal is retained — an accepted archive does take the strategy out of
    * the default list (Requirement 3.3) — and so is the restore on failure, which is what
    * makes a refusal leave the list exactly as it was (Requirement 3.1).
+   *
+   * ── Task 10.3: the confirmation moved, the request did not ────────────────────────────
+   * The handler is split in two. `requestArchiveStrategy` is the *whole* of what the card's
+   * archive button does — it opens the dialog and issues nothing. `handleConfirmArchive`
+   * below is the dialog's confirm action and is the only place `endpoints.strategies.delete`
+   * is called from. Under `window.confirm` the button and the request were one statement, so
+   * "no request before the confirmation" was a property of `confirm`'s return value; it is
+   * now a property of this page's structure, which is what Property 13 can check.
+   *
+   * The endpoint, the payload, the optimistic removal, the restore-on-failure and
+   * `describeArchiveFailure`'s reading of the refusal are all untouched.
    */
-  const handleArchiveStrategy = async (id, name) => {
+  const requestArchiveStrategy = (strategy) => {
+    const id = strategy?.id;
+    if (id === undefined || id === null) return;
     if (isProcessing[id]) return;
-    if (!window.confirm(archiveConfirmMessage(name))) return;
+    // A previous refusal is about a previous attempt; it is cleared as the next one opens,
+    // which is the behaviour the old handler had at exactly this point.
+    setArchiveError(null);
+    // The review grid is read off the row here rather than looked up at render time, so the
+    // dialog keeps describing the strategy the trader clicked even if the list re-reads
+    // underneath it. Every field is the row's own; nothing is defaulted into existence — an
+    // absent one renders `ConfirmDialog`'s not-available marker.
+    setArchiveDialog({
+      id,
+      name: strategy.name ?? null,
+      status: strategy.status ?? null,
+      version: strategy.current_version ?? null,
+      environment: strategy.environment ?? null,
+    });
+  };
+
+  const handleConfirmArchive = async () => {
+    if (!archiveDialog) return;
+    const { id, name } = archiveDialog;
+    if (isProcessing[id]) return;
+    // Closed before the request: the refusal renders in the page's own `archive-error`
+    // alert (below), which is where it has always rendered, and a dialog left open over it
+    // would hide the list the alert is talking about.
+    setArchiveDialog(null);
     const prevStrategies = strategies;
     setProcessingFor(id, true);
     setArchiveError(null);
@@ -723,10 +854,62 @@ export default function Strategies() {
     }
   };
 
-  const handleRenameStrategy = async (id, currentName) => {
+  /**
+   * Ask to rename. Task 10.3, Requirements 15.1, 15.2, 18.3.
+   *
+   * `window.prompt("Enter new strategy name:", currentName)` used to be the whole interaction.
+   * It cannot carry a label, cannot show a validation message, cannot be focus-trapped and
+   * hands back a bare string with no way to refuse it in place — so the page's only options
+   * were to drop a bad name silently or to let it round-trip to a 422. This opens the dialog
+   * and issues nothing; {@link handleConfirmRename} is the only caller of
+   * `endpoints.strategies.rename`.
+   *
+   * The field opens pre-filled with the current name, as `window.prompt`'s second argument
+   * did, so the trader edits rather than retypes.
+   */
+  const requestRenameStrategy = (id, currentName) => {
     if (isProcessing[id]) return;
-    const newName = window.prompt("Enter new strategy name:", currentName);
-    if (!newName || newName.trim() === "" || newName === currentName) return;
+    const present = typeof currentName === "string" ? currentName : "";
+    setRenameDialog({
+      id,
+      currentName: present,
+      // The exact string in the field. Never trimmed here — see `strategyNameRefusal`.
+      value: present,
+      // Requirement 15.2's second trigger: the message shows on blur, and unconditionally
+      // once a submit has been attempted.
+      submitted: false,
+      error: null,
+    });
+  };
+
+  /**
+   * Rename, from the dialog's confirm action and from nowhere else.
+   *
+   * The endpoint and the payload are byte-for-byte what they were: `endpoints.strategies
+   * .rename(id, <the string as typed>)` → `PUT /api/strategies/{id}/rename` with
+   * `{ name }`. The reload afterwards, the `console.error` on failure and the per-strategy
+   * processing flag are all unchanged too. What is new is that an invalid name is refused
+   * *here*, with the reason on screen, instead of being dropped without a word.
+   */
+  const handleConfirmRename = async () => {
+    if (!renameDialog) return;
+    const { id, currentName, value } = renameDialog;
+    if (isProcessing[id]) return;
+
+    /*
+     * ═══ THE GATE — Requirement 15.2, Property 13 ═══
+     * The refusal is checked here, in the handler, not only where the message is rendered.
+     * A stray `.click()` on the confirm control, or a future refactor of the dialog, must
+     * not be able to put an empty or over-long name on the wire. `submitted` is raised so
+     * the reason is on screen for a trader who reached this by pressing Enter without ever
+     * blurring the field.
+     */
+    if (strategyNameRefusal(value, currentName) !== null) {
+      setRenameDialog((prev) => (prev ? { ...prev, submitted: true } : prev));
+      return;
+    }
+
+    setRenameDialog((prev) => (prev ? { ...prev, submitted: true, error: null } : prev));
     setProcessingFor(id, true);
     try {
       console.log(`📊 RENAME STRATEGY: PUT /api/strategies/${id}/rename`);
@@ -737,18 +920,35 @@ export default function Strategies() {
       // and the server's own refusal message (`STRATEGY_NAME_INVALID` with the reason,
       // `STRATEGY_ARCHIVED`, or a 404 for a strategy that is not the caller's) onto
       // `err.message` below (Requirement 2.6).
-      const data = await endpoints.strategies.rename(id, newName);
+      const data = await endpoints.strategies.rename(id, value);
       console.log("📊 RENAME RESPONSE:", data);
       // Reload strategies
       const payload = await endpoints.strategies.list();
       const rows = Array.isArray(payload) ? payload : payload?.data || payload?.strategies || [];
       if (Array.isArray(rows)) setStrategies(normalizeStrategies(rows));
+      setRenameDialog(null);
     } catch (err) {
       console.error("📊 RENAME ERROR:", err.message);
+      // The dialog stays open carrying the failure. `ConfirmDialog` renders it through
+      // `translateError`, so what reaches the screen is authored copy — including
+      // `STRATEGY_NAME_INVALID`'s, for a name this page's bounds let through and the
+      // server's did not — and never `err.message`, a status code or a traceback
+      // (Requirements 14.3, 14.4). The `console.error` above is unchanged.
+      setRenameDialog((prev) => (prev ? { ...prev, error: err } : prev));
     } finally {
       setProcessingFor(id, false);
     }
   };
+
+  /**
+   * Why the open rename cannot be submitted, or `null`. Computed once per render so the
+   * `Field`'s `invalid`, its `error`, the standing note beside it and
+   * `handleConfirmRename`'s own guard are four readings of one value rather than four
+   * chances to disagree.
+   */
+  const renameRefusal = renameDialog === null
+    ? null
+    : strategyNameRefusal(renameDialog.value, renameDialog.currentName);
 
   if (view === "builder") return <StrategyBuilder onBack={() => setView("library")} strategy={editingStrategy} onBacktest={(payload) => navigate("/app/backtest", { state: { strategy: payload } })} />;
 
@@ -1288,13 +1488,13 @@ export default function Strategies() {
                   <div style={{ display: "flex", gap: 4, marginTop: 10, flexWrap: "wrap" }}>
                     <Button variant="ghost" size="xs" icon={Edit2} onClick={e => { e.stopPropagation(); setEditingStrategy(s); setView("builder"); }} disabled={!!isProcessing[s.id]}>Edit</Button>
                     <Button variant="ghost" size="xs" icon={Copy} onClick={e => { e.stopPropagation(); handleCloneStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Clone</Button>
-                    <Button variant="ghost" size="xs" icon={Settings} onClick={e => { e.stopPropagation(); handleRenameStrategy(s.id, s.name); }} disabled={!!isProcessing[s.id]}>Rename</Button>
+                    <Button variant="ghost" size="xs" icon={Settings} onClick={e => { e.stopPropagation(); requestRenameStrategy(s.id, s.name); }} disabled={!!isProcessing[s.id]}>Rename</Button>
                     <Button variant="ghost" size="xs" icon={BarChart2} onClick={e => { e.stopPropagation(); navigate(`/app/backtest?strategy_id=${s.id}`, { state: { strategy: s } }); }} disabled={!!isProcessing[s.id]}>Backtest</Button>
                     <Button variant="ghost" size="xs" icon={Activity} onClick={e => { e.stopPropagation(); navigate(`/app/signal-trace?strategy_id=${s.id}`); }} disabled={!!isProcessing[s.id]}>Trace</Button>
                     {s.status === "running"
                       ? <Button variant="ghost" size="xs" icon={Pause} onClick={e => { e.stopPropagation(); handlePauseStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Pause</Button>
                       : <Button variant="success" size="xs" icon={Play} onClick={e => { e.stopPropagation(); handleOpenDeployModal(s); }} disabled={!!isProcessing[s.id]}>Deploy</Button>}
-                    <Button variant="danger" size="xs" icon={Trash2} cls="ml-auto" title="Archive strategy" aria-label={`Archive ${s.name}`} onClick={e => { e.stopPropagation(); handleArchiveStrategy(s.id, s.name); }} disabled={!!isProcessing[s.id]} />
+                    <Button variant="danger" size="xs" icon={Trash2} cls="ml-auto" title="Archive strategy" aria-label={`Archive ${s.name}`} onClick={e => { e.stopPropagation(); requestArchiveStrategy(s); }} disabled={!!isProcessing[s.id]} />
                   </div>
                 </Card>
               );
@@ -1475,6 +1675,122 @@ export default function Strategies() {
           </div>
         </div>
       )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════════════
+          Task 10.3 — the two confirmations that replaced `window.confirm` and
+          `window.prompt` (design.md §1.8, §8.4; Requirements 15.1, 15.2, 18.3, 19.4).
+
+          Both render through `ds/ConfirmDialog`, so both get the focus trap, `Escape`,
+          initial focus on **cancel**, `role="dialog"` / `aria-modal` / `aria-labelledby`
+          and the single-overlay claim (Requirement 18.3, 17.3) that neither native dialog
+          could be given. Only one of the two can be open: each button clears nothing and
+          sets its own state, and the two states are only ever set from separate handlers.
+          ══════════════════════════════════════════════════════════════════════════════════ */}
+
+      {/* ── Archive. `intent="destructive"`, and NO acknowledgement checkbox ──────────────
+          §8.4's inventory: "Delete / archive strategy … Acknowledgement: No — reversible
+          via archive". Task 5.1 turned this route into a soft archive, so the row and every
+          version, backtest, deployment and signal behind it survive. The checkbox is
+          reserved for the irreversible and the live-funds cases in the same table (deploy
+          to live, cancel all orders, kill switch); spending it on a reversible action is
+          how a trader learns to tick one without reading it, which is precisely what makes
+          it worthless on the deploy that matters. */}
+      <ConfirmDialog
+        open={archiveDialog !== null}
+        onCancel={() => setArchiveDialog(null)}
+        onConfirm={handleConfirmArchive}
+        title="Archive strategy"
+        intent="destructive"
+        description={
+          "Archiving removes this strategy from your library list. Nothing is deleted: its "
+          + "versions, backtests, deployments and signals are all kept and stay inspectable "
+          + "for history and audit. Archiving is refused while any of its deployments is "
+          + "still deploying, running or paused."
+        }
+        review={[
+          { label: "Strategy", value: archiveDialog?.name ?? null },
+          { label: "Identifier", value: archiveDialog?.id ?? null },
+          { label: "Current status", value: archiveDialog?.status ?? null },
+          { label: "Version", value: archiveDialog?.version ?? null },
+          { label: "Environment", value: archiveDialog?.environment ?? null },
+          { label: "Removed from", value: "Your strategy library list" },
+          { label: "Kept", value: "Versions, backtests, deployments, signals" },
+        ]}
+        confirmLabel="Archive strategy"
+        cancelLabel="Keep it in the list"
+      />
+
+      {/* ── Rename. A labelled `ds/Field` with inline validation (Requirements 15.1, 15.2)
+          `window.prompt` could carry neither. The field's label is visible and associated
+          by `htmlFor`; the message names the field and the reason; and the reason is
+          computed by `strategyNameRefusal`, which is the same function
+          `handleConfirmRename` refuses on — so what the trader is told and what the page
+          enforces cannot drift apart. */}
+      <ConfirmDialog
+        open={renameDialog !== null}
+        onCancel={() => setRenameDialog(null)}
+        onConfirm={handleConfirmRename}
+        title="Rename strategy"
+        intent="neutral"
+        description={
+          "Renaming changes the strategy's display name and nothing else. Its versions, "
+          + "backtests, deployments and signals are all left as they are."
+        }
+        review={[
+          { label: "Strategy", value: renameDialog?.currentName ?? null },
+          { label: "Identifier", value: renameDialog?.id ?? null },
+          // The name that will actually be stored: the server trims before it writes, so
+          // this is the trimmed form even though the untrimmed string is what is sent. Blank
+          // renders the not-available marker rather than an empty row.
+          { label: "New name", value: (renameDialog?.value ?? "").trim() || null },
+        ]}
+        confirmLabel="Rename strategy"
+        cancelLabel="Cancel"
+        busy={renameDialog !== null && !!isProcessing[renameDialog.id]}
+        busyLabel="Renaming…"
+        error={renameDialog?.error ?? null}
+        errorContext="strategies"
+      >
+        {renameDialog === null ? null : (
+          <>
+            <Field
+              id="strategy-rename-name"
+              label="New strategy name"
+              required
+              value={renameDialog.value}
+              placeholder="e.g. RSI reversion — BTC 15m"
+              hint={
+                `Between ${STRATEGY_NAME_MIN_LENGTH} and ${STRATEGY_NAME_MAX_LENGTH} `
+                + "characters once leading and trailing whitespace is removed. Names do not "
+                + "have to be unique."
+              }
+              // Both halves of Requirement 15.2 come from one value, so an error treatment
+              // with no message is not a state this page can reach.
+              invalid={renameRefusal !== null}
+              error={renameRefusal ?? undefined}
+              submitted={renameDialog.submitted}
+              onChange={(event) => {
+                const next = event.target.value;
+                setRenameDialog((prev) => (prev ? { ...prev, value: next } : prev));
+              }}
+            />
+            {/* Why the rename cannot proceed, stated outside the field's blur/submit gate as
+                well as inside it. `role="status"` rather than `alert`: it is the standing
+                condition of the form, not an event, and it sits beside the control it is
+                about. */}
+            {renameRefusal === null ? null : (
+              <p
+                role="status"
+                data-testid="rename-blocked-reason"
+                className="text-micro text-content-secondary"
+                style={{ margin: 0 }}
+              >
+                {`Renaming is not possible yet: ${renameRefusal}`}
+              </p>
+            )}
+          </>
+        )}
+      </ConfirmDialog>
     </div>
   );
 }

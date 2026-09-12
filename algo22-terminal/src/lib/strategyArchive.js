@@ -236,26 +236,18 @@ export function describeArchiveFailure(error) {
 }
 
 // ── The confirmation (Requirements 2.8, 2.9, 3.2) ───────────────────────────────────────
-
-/**
- * The confirmation text for the archive action.
- *
- * Names the action ("Archive"), and its consequence in both directions: the strategy leaves
- * the list (Requirement 2.9, 3.3) and its records survive (Requirements 3.2, 3.5). It also
- * states the refusal the user is most likely to meet, so a blocked archive is not a
- * surprise. It deliberately does not say "delete": nothing is deleted.
- *
- * @param {string} [name] The strategy's display name, when the caller has it.
- * @returns {string}
- */
-export function archiveConfirmMessage(name) {
-  const subject = text(name) ? `"${text(name)}"` : 'this strategy';
-  return (
-    `Archive ${subject}?\n\n` +
-    'It will be removed from your strategy list. Nothing is deleted: its versions, ' +
-    'backtests, deployments and signals are all kept, and stay inspectable for history ' +
-    'and audit.\n\n' +
-    'Archiving is refused while any of its deployments is still deploying, running or ' +
-    'paused — stop those first.'
-  );
-}
+//
+// `archiveConfirmMessage(name)` used to live here: one `\n\n`-separated string built for
+// `window.confirm`, which is one string and two buttons and can hold nothing else.
+// vyomquant-ui-redesign task 10.3 replaced that call site with `ds/ConfirmDialog
+// intent="destructive"`, whose title, `description` and `review` grid carry the same three
+// statements as separate, addressable content — the action, both halves of the consequence
+// (it leaves the list; its versions, backtests, deployments and signals are kept) and the
+// refusal a blocked archive meets. A function returning one pre-joined string with embedded
+// blank lines has no use in that surface: the title would repeat the question and the
+// newlines would collapse. It had no other call site, so it was removed rather than left as
+// a second, divergent copy of the confirmation copy.
+//
+// Everything above this line — the codes, `describeArchiveFailure` and
+// `describeBlockingDeployment` — is unchanged and is still what the page renders a refusal
+// from.
