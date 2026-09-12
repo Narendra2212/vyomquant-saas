@@ -298,25 +298,37 @@ describe('legacy-c-budget: the spot check', () => {
     // Hand-verified against the file, so the counting method is pinned to
     // reality and not only to synthetic fixtures. `App.jsx` is a good choice:
     // small enough to enumerate, and it exercises both the template-literal form
-    // (82, 87) and the comment exclusion — `AdminGuard`'s two notes about the real
-    // mono stack sit between counted references, at 169–172 and 182–183.
+    // (208, 213) and the comment exclusion — `AdminGuard`'s two notes about the real
+    // mono stack sit between counted references, at 295–298 and 308–309.
     //
-    // UpdatePasswordPage:   81 C.bg0 · 82 C.bg2, ${C.border} · 83 C.t1
-    // (/reset-password)     87 C.green, ${C.green} · 105 C.red              = 7
-    // AdminGuard:          168 C.bg0 · 173 C.t3 · 179 C.bg0 · 180 C.red
-    //                      181 C.t1 · 184 C.t3                             = 6
+    // UpdatePasswordPage:  207 C.bg0 · 208 C.bg2, ${C.border} · 209 C.t1
+    // (/reset-password)    213 C.green, ${C.green} · 231 C.red              = 7
+    // AdminGuard:          294 C.bg0 · 299 C.t3 · 305 C.bg0 · 306 C.red
+    //                      307 C.t1 · 310 C.t3                             = 6
     //
     // The `AppShell: 297 C.bg0` entry this list used to carry is retired. Task 8.5
     // rewrote `AppShell` into a CSS grid whose wrapper takes `bg-surface-canvas` as
     // a token class, so the shell reads nothing off the shim any more — which is
-    // also why the committed budget is 13 rather than 14. The same task's edits
-    // above the two surviving groups (the note explaining the dropped
-    // `DesktopOnlyOverlay` import) net out to three extra lines, so every number
-    // here is exactly 3 higher than the number it replaces.
+    // also why the committed budget is 13 rather than 14.
+    //
+    // The same task's second half added 109 lines above the first surviving group
+    // and removed none, so every number here was exactly 109 higher than the number
+    // it replaced: the two route `Suspense` fallbacks (`PUBLIC_FALLBACK` and
+    // `ShellRouteFallback`) and `navigationTargetForId`, which replaced the
+    // one-line `PAGE_FALLBACK` const, the unused `TENANT_ID` and `AppShell`'s
+    // 15-entry `PATH_MAP`. The COUNT did not move — none of those lines read the
+    // shim, which is the point — so `LEGACY_C_BUDGET['App.jsx']` stays at 13.
+    //
+    // Task 8.5's follow-up then added a further 17 lines in the same region, so
+    // every number is now 17 higher again: `ShellRouteFallback`'s `LoadingState`
+    // went from `kind="page"` to `kind="skeleton-table"` (the `page` shape carries
+    // its own 64px header block, so pairing it with a real `PageHeader` reserved
+    // 128px of header for a 64px page), across four lines instead of one, under a
+    // docblock paragraph recording why. Still no shim reference among them.
     const source = readFileSync(path.join(SRC, 'App.jsx'), 'utf8');
     const lines = findLegacyC(source).map((r) => r.line);
 
-    expect(lines).toEqual([81, 82, 82, 83, 87, 87, 105, 168, 173, 179, 180, 181, 184]);
+    expect(lines).toEqual([207, 208, 208, 209, 213, 213, 231, 294, 299, 305, 306, 307, 310]);
     expect(lines).toHaveLength(13);
     expect(LEGACY_C_BUDGET['App.jsx']).toBe(13);
   });

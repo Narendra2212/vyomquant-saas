@@ -817,10 +817,10 @@ Deleted outright as decorative (Requirement 1.5): `PremiumCard`, `MiniSparkline`
 ```mermaid
 graph TD
   A["AppShell — App.jsx"] --> B["ResponsiveGate<br/>replaces DesktopOnlyOverlay (§11.6)"]
-  B --> C["div.shell — grid: 216px 1fr / 48px 1fr"]
-  C --> D["Sidebar (grid-area: nav)<br/>fixed 216px · position: sticky · h: 100dvh"]
-  C --> E["TopBar (grid-area: bar)<br/>fixed 48px"]
-  C --> F["main (grid-area: content)<br/>overflow-y: auto · scrollbar-gutter: stable"]
+  B --> C["div.shell — grid-template rows / columns:<br/>min-content 1fr / SIDEBAR_WIDTH_PX by tier 1fr · h: 100%"]
+  C --> D["Sidebar (grid-column 1, grid-row 1 / -1)<br/>216px expanded · 56px rail (§11.6)"]
+  C --> E["TopBar (grid-column 2, grid-row 1)<br/>bar row pinned at TOPBAR_HEIGHT_PX = 56px"]
+  C --> F["main (grid-column 2, grid-row 2)<br/>overflow-y: auto · scrollbar-gutter: stable"]
   D --> D1["Brand block — 56px"]
   D --> D2["nav — 3 workflow groups, 10 entries"]
   D --> D3["AccountMenu trigger — pinned bottom, 56px"]
@@ -833,14 +833,21 @@ graph TD
   C --> I["ConfirmDialog portal — z-modal"]
 ```
 
+`grid-template` is `<rows> / <columns>` in that order, so the row track is the bar and the column track is the sidebar. The sidebar is a grid item spanning both rows (`grid-row: 1 / -1`) rather than `position: sticky` — spanning is what makes the sticky unnecessary, and it is why the brand block's 56px and the bar row's height have to be the same number (§6.2 (1)).
+
 ### 6.2 Zero layout shift (Requirement 2.2)
 
 Four mechanisms, all structural:
 
-1. **CSS Grid with fixed track sizes.** `grid-template: 48px 1fr / 216px 1fr` on the shell. The sidebar and top bar can only be the size of their track; nothing a page renders can change them. This replaces the current nested flexbox where `Sidebar`'s `minHeight: 100vh` and the content column's `overflow: hidden` interact.
+1. **CSS Grid with shell-owned track sizes.** `grid-template: min-content 1fr / SIDEBAR_WIDTH_PX[sidebarMode] 1fr` on the shell — rows then columns. The sidebar and top bar can only be the size of their track; nothing a page renders can change them. Three of those figures are not literals, each for a reason:
+   - **The bar row is 56px, not 48px.** §6.1 puts the sidebar's brand block at 56px and the sidebar across both rows, so a 48px bar row would leave the brand block's bottom border and the bar's on different pixels — a mis-seam across the full shell width, on every route. The height comes from `TOPBAR_HEIGHT_PX`, and `tests/unit/shell/topBar.test.jsx` asserts `TOPBAR_HEIGHT_PX === SIDEBAR_BRAND_HEIGHT_PX` so the two cannot drift apart again.
+   - **The bar row track is `min-content`, not a fixed height.** `TopBar` renders its disconnected-state `Alert` strip inside its own `<header>`, below the bar row, and a fixed track would clip that strip exactly when it matters. This does not weaken the guarantee above: the bar row itself is still pinned inside `TopBar` (`height` + `minHeight` + `maxHeight` on a `border-box` element), so `min-content` resolves to 56px plus that strip when the connection is down, and a page still cannot resize the chrome.
+   - **The sidebar column is tier-driven, not a fixed 216px.** At tablet width `Sidebar` renders a 56px icon rail (§11.6), so the column reads `SIDEBAR_WIDTH_PX[sidebarMode]` from `useViewportAccess()`; a hardcoded 216px would leave a 160px empty gutter at that width.
+
+   This replaces the current nested flexbox where `Sidebar`'s `minHeight: 100vh` and the content column's `overflow: hidden` interact.
 2. **`scrollbar-gutter: stable`** on `main`. Today, navigating from a short page to a long one adds a 6px scrollbar and moves the entire content column left. This is the single most visible shift in the app.
-3. **`h: 100dvh`** rather than `100vh` on the shell, so mobile-browser chrome does not resize the grid.
-4. **`PageHeader` reserves a fixed 64px block.** Route-level `Suspense` fallback renders `<PageHeader title={routeTitle} /><LoadingState kind="page" />` instead of `App.jsx`'s current bare `<div style={{background:'#080A0E',minHeight:'100vh'}} />`, so the lazy chunk boundary does not produce a blank-then-populate jump. `routeTitle` comes from the route table in §6.3.
+3. **`h: 100dvh` on `ResponsiveGate`, `h: 100%` on the grid.** `100vh` is still the wrong unit — mobile-browser chrome resizes it — and that is why the gate uses `dvh`. The gate is the outermost shell element and the one that establishes viewport height; it may also render a route-restriction strip above the grid, so `100dvh` on the grid itself would overflow the document by that strip's height. The grid takes the remainder with `height: 100%`.
+4. **`PageHeader` reserves a fixed 64px block.** Route-level `Suspense` fallback renders `<PageHeader title={routeTitle} /><LoadingState kind="skeleton-table" />` instead of `App.jsx`'s current bare `<div style={{background:'#080A0E',minHeight:'100vh'}} />`, so the lazy chunk boundary does not produce a blank-then-populate jump. `routeTitle` comes from the route table in §6.3. **Not `kind="page"`** alongside a real `PageHeader`, which is what this item prescribed until the task 8.5 follow-up: `page` renders `PageSkeleton`, which already opens with its own 64px header block (`SKELETON_GEOMETRY.page.headerHeight`) and is therefore the ALTERNATIVE to a real header, not a companion to one. The pair reserves 128px of header for a page that resolves to 64px, which reintroduces the same 64px shift at every chunk boundary — inverted — that this item exists to remove. `skeleton-table` is `PageSkeleton`'s own body without the duplicate block.
 
 ### 6.3 Sidebar information architecture (Requirements 2.1, 2.3, 2.4)
 
@@ -1943,7 +1950,7 @@ Already sound: `App.jsx` lazy-loads one chunk per route, and `vite.config.js` ma
 
 - **Remove `ag-grid-community`, `ag-grid-react`, `react-grid-layout` and `lightweight-charts` from `package.json`** — `grep` finds zero imports of any of them in `src/`. Their `manualChunks` entries go with them. This is the largest single bundle win available and it carries no risk.
 - `components/ds/index.js` is a barrel, so a page importing one primitive pulls the module graph of all of them. Since every page imports several and the total is small (no heavy dependencies in `ds/`), the barrel stays for ergonomics. `Chart` is the exception: it is lazy so that recharts stays out of the chunk of pages that do not chart (Strategies, Trade History, Signal Trace).
-- Route `Suspense` fallbacks become `PageHeader` + `LoadingState kind="page"` (§6.2) instead of a bare dark div, which removes the blank-flash on first navigation to each route.
+- Route `Suspense` fallbacks become `PageHeader` + `LoadingState kind="skeleton-table"` (§6.2 (4), which records why not `kind="page"` beside a real header) instead of a bare dark div, which removes the blank-flash on first navigation to each route.
 - `bundle-analysis.html` (1.4MB, committed) and the 17 `fix_*.cjs` / `rescue.cjs` / `simple_direct_fix.cjs` one-off repair scripts at the `algo22-terminal` root are build detritus and should be deleted or gitignored. Not a requirement — but they are the kind of thing that makes a contributor unsure what the build actually runs.
 
 ---

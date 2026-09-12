@@ -14,6 +14,14 @@ import NotificationCenter from './components/NotificationCenter';
 // `shell/ResponsiveGate` instead (task 8.4/8.5). The component FILE still exists;
 // task 27.3 owns deleting it. Keeping a dead import here would only trip no-unused-vars.
 import ResponsiveGate, { SIDEBAR_WIDTH_PX, useViewportAccess } from './components/shell/ResponsiveGate';
+// The one route/nav table (task 8.1). Both the `Suspense` fallback's title and the
+// `'navigate'` bridge's id resolution read from it, so neither can disagree with the
+// sidebar about what a route is called or where an id points.
+import { NAV_ENTRIES, routeTitle } from './components/shell/navigation';
+// Direct module paths, not `components/ds/index.js`: the barrel pulls the module graph
+// of every primitive, and the shell needs exactly these two (design.md §26).
+import { PageHeader } from './components/ds/PageHeader';
+import { LoadingState } from './components/ds/LoadingState';
 import {
   C, Inp, ToastContainer,
   LoadingProvider,
@@ -49,8 +57,126 @@ const Portfolio           = lazy(() => import('./pages/Portfolio'));
 const TradeHistory        = lazy(() => import('./pages/TradeHistory'));
 const PaperTrading        = lazy(() => import('./pages/PaperTrading'));
 
-const PAGE_FALLBACK = <div style={{ background: '#080A0E', minHeight: '100vh' }} />;
-const TENANT_ID = "default";
+/**
+ * The route `Suspense` fallback for the PUBLIC and AUTH routes — `/`, `/download`, the
+ * five `/legal/*`, the public `/marketplace`, `/admin/waitlist`, `/signin`, `/signup`,
+ * `/2fa` and `/wizard`.
+ *
+ * DELIBERATELY NOT `ShellRouteFallback`. Those routes render outside the shell, and
+ * `routeTitle` answers for `/app/*` only — so a page header here would either carry no
+ * title at all or, worse, a sidebar route title over the sign-in screen, labelling a
+ * page that has no shell to label. This reserves the viewport and claims nothing else.
+ *
+ * `bg-surface-canvas` rather than the `background: '#080A0E'` literal this carried
+ * before: the token resolves to that exact colour in `styles/tokens.css`, which is the
+ * one place the value is written down (Requirement 1.1). `min-h-screen` replaces the
+ * inline `minHeight: '100vh'` for the same reason of staying in the utility layer.
+ *
+ * `role="status"` with an `sr-only` name, because a blank screen announces nothing: a
+ * screen-reader user waiting on a chunk otherwise gets silence.
+ */
+const PUBLIC_FALLBACK = (
+  <div className="min-h-screen w-full bg-surface-canvas" role="status" aria-busy="true">
+    <span className="sr-only">Loading</span>
+  </div>
+);
+
+/**
+ * The route `Suspense` fallback for the authenticated `/app/*` routes (design.md §6.2 (4)).
+ *
+ * A COMPONENT and not a module-level element, which is the whole reason the two
+ * fallbacks are not one: the title depends on the current pathname, and `useLocation()`
+ * can only be called from a component rendered inside the router.
+ *
+ * REQUIREMENT 2.2 IS WHY THIS EXISTS. The bare `<div style={{background:'#080A0E'}} />`
+ * it replaces reserved no structure, so every lazy chunk boundary was a blank content
+ * column that then populated — the page header appearing and pushing the content down
+ * one frame after the route had already changed. `PageHeader` is a fixed
+ * `PAGE_HEADER_HEIGHT_PX` (64px) for every combination of its props, so rendering it
+ * here with the SAME title the page will render means the heading is identical before
+ * and after the chunk resolves and nothing moves.
+ *
+ * `routeTitle` returns `null` for a path the table does not know. `/app/*`'s catch-all
+ * redirects those to the dashboard, so the header is omitted rather than given an
+ * invented heading (Requirement 19.4) — and `PageHeader` requires a real `title`,
+ * throwing in development on a blank one, so this is also the honest call.
+ *
+ * NOT `kind="page"`, which is what §6.2 (4) prescribed alongside the real header before
+ * this correction. `page` renders `LoadingState`'s `PageSkeleton`, and that shape OPENS
+ * with its own `SKELETON_GEOMETRY.page.headerHeight` (64px) block — two bars standing in
+ * for a title and a subtitle. It is the ALTERNATIVE to a real header, not a companion to
+ * one. Rendering both stacked 64 + 64 = 128px of header above a page that resolves to
+ * 64px, so every chunk boundary shifted the content down 64px on arrival: the exact
+ * Requirement 2.2 defect this fallback exists to remove, inverted.
+ *
+ * `skeleton-table` is that shape minus the duplicate block — `PageSkeleton` renders
+ * `TableSkeleton` as its own body, on the same 5×4 default counts — so the content this
+ * reserves is unchanged and only the second heading is gone. `gap-4` is 16px, which is
+ * `SKELETON_GEOMETRY.page.gap`: the gap `PageSkeleton` itself puts between its header
+ * and its table.
+ */
+function ShellRouteFallback() {
+  const { pathname } = useLocation();
+  const title = routeTitle(pathname);
+
+  return (
+    <div className="flex w-full min-w-0 flex-col gap-4 p-6">
+      {title === null ? null : <PageHeader title={title} />}
+      {/* `label` rather than the default `'Loading'`: a route change announces which
+          page is arriving, not that something unnamed is. */}
+      <LoadingState
+        kind="skeleton-table"
+        label={title === null ? 'Loading page' : `Loading ${title}`}
+      />
+    </div>
+  );
+}
+
+/** One element, so the ~20 shell routes below share it rather than each allocating one. */
+const SHELL_FALLBACK = <ShellRouteFallback />;
+
+/**
+ * The route an `id` dispatched on the `'navigate'` DOM event resolves to, or `null`.
+ *
+ * Replaces `AppShell`'s 15-entry `PATH_MAP` plus its `|| \`/app/${e.detail}\`` fallback.
+ * That fallback was the actual problem: it turned ANY string any caller dispatched into
+ * a route push, so a typo or a stale id pushed `/app/<nonsense>` and the `/app/*`
+ * catch-all silently bounced the user to the dashboard. `null` here means "not a route",
+ * and the listener does nothing with it (Requirement 19.4).
+ *
+ * Three sources, in order, all of them `shell/navigation.js`'s tables rather than a
+ * second copy of the route list:
+ *
+ *   1. `NAV_ENTRIES` — the ten sidebar entries, by id, giving the entry's own canonical
+ *      `path`. This is why `backtest` resolves to `/app/backtest` and not to a string
+ *      rebuilt from the id.
+ *   2. `routeTitle('/app/<id>')` — the seven routes §6.4 moved into the account menu
+ *      (`exchange`, `risk`, `billing`, `profile`, `support`, `notifications`,
+ *      `security-logs`) plus `/app/2fa`. `PATH_MAP` carried all seven and their routes
+ *      are untouched, so they must stay reachable; a lookup against `NAV_ENTRIES` alone
+ *      would have broken every one of them. `SECONDARY_ROUTE_TITLES` is keyed by exactly
+ *      those paths, so a non-`null` title IS the recognition test — no separate list.
+ *   3. `landing`, the one id that does not name an `/app/*` route. `navigation.js` is the
+ *      AUTHENTICATED table and has no public routes in it, so this cannot come from
+ *      there; it is one named branch rather than a table, so it cannot grow back into
+ *      `PATH_MAP`.
+ *
+ * @param {unknown} id A `CustomEvent.detail`, so genuinely unknown.
+ * @returns {string | null}
+ */
+function navigationTargetForId(id) {
+  if (typeof id !== 'string' || id === '') return null;
+
+  const entry = NAV_ENTRIES.find((navEntry) => navEntry.id === id);
+  if (entry) return entry.path;
+
+  const appPath = `/app/${id}`;
+  if (routeTitle(appPath) !== null) return appPath;
+
+  if (id === 'landing') return '/';
+
+  return null;
+}
 
 // PASSWORD RESET PAGE
 function UpdatePasswordPage() {
@@ -255,21 +381,22 @@ function AppShell() {
   }, [addToast]);
 
   useEffect(() => {
-    const PATH_MAP = {
-      dashboard: '/app/dashboard', strategies: '/app/strategies',
-      builder: '/app/builder', backtest: '/app/backtest',
-      marketplace: '/app/marketplace', exchange: '/app/exchange',
-      risk: '/app/risk', billing: '/app/billing',
-      profile: '/app/profile', support: '/app/support',
-      notifications: '/app/notifications',
-      'signal-trace': '/app/signal-trace', 'security-logs': '/app/security-logs',
-      'paper-trading': '/app/paper-trading',
-      landing: '/',
-    };
-
     const handleNavigate = (e) => {
       if (!e.detail) return;
-      navigate(PATH_MAP[e.detail] || `/app/${e.detail}`);
+      const target = navigationTargetForId(e.detail);
+      // An unrecognised id does NOT navigate. The old `|| \`/app/${e.detail}\`` turned
+      // every one into a push that the `/app/*` catch-all then bounced to the dashboard,
+      // which reads to the user as the app deciding to go somewhere else on its own. A
+      // console warning naming the id is the honest outcome: nothing moves, and the
+      // caller that dispatched a dead id is identifiable.
+      if (target === null) {
+        console.warn(
+          `[App] Ignoring 'navigate' event: "${e.detail}" is not a route id in `
+            + 'components/shell/navigation.js.',
+        );
+        return;
+      }
+      navigate(target);
     };
     const handleAuthExpired = () => {
       sessionStorage.removeItem("token");
@@ -422,58 +549,61 @@ export default function AppWrapper() {
       <AppStateProvider>
         <PasswordRecoveryHandler />
         <Routes>
-          {/* Public landing */}
-          <Route path="/" element={<Suspense fallback={PAGE_FALLBACK}><LandingPage /></Suspense>} />
-          <Route path="/download" element={<Suspense fallback={PAGE_FALLBACK}><DownloadPage /></Suspense>} />
+          {/* Public landing. Every route from here to `/wizard` renders OUTSIDE the shell,
+              so all of them take `PUBLIC_FALLBACK` — no page header, no route title. */}
+          <Route path="/" element={<Suspense fallback={PUBLIC_FALLBACK}><LandingPage /></Suspense>} />
+          <Route path="/download" element={<Suspense fallback={PUBLIC_FALLBACK}><DownloadPage /></Suspense>} />
           {/* Legal */}
-          <Route path="/legal" element={<Suspense fallback={PAGE_FALLBACK}><LegalPage /></Suspense>} />
-          <Route path="/legal/privacy" element={<Suspense fallback={PAGE_FALLBACK}><LegalPageRoute type="privacy" /></Suspense>} />
-          <Route path="/legal/terms" element={<Suspense fallback={PAGE_FALLBACK}><LegalPageRoute type="terms" /></Suspense>} />
-          <Route path="/legal/risk" element={<Suspense fallback={PAGE_FALLBACK}><LegalPageRoute type="risk" /></Suspense>} />
-          <Route path="/legal/refund" element={<Suspense fallback={PAGE_FALLBACK}><LegalPageRoute type="refund" /></Suspense>} />
+          <Route path="/legal" element={<Suspense fallback={PUBLIC_FALLBACK}><LegalPage /></Suspense>} />
+          <Route path="/legal/privacy" element={<Suspense fallback={PUBLIC_FALLBACK}><LegalPageRoute type="privacy" /></Suspense>} />
+          <Route path="/legal/terms" element={<Suspense fallback={PUBLIC_FALLBACK}><LegalPageRoute type="terms" /></Suspense>} />
+          <Route path="/legal/risk" element={<Suspense fallback={PUBLIC_FALLBACK}><LegalPageRoute type="risk" /></Suspense>} />
+          <Route path="/legal/refund" element={<Suspense fallback={PUBLIC_FALLBACK}><LegalPageRoute type="refund" /></Suspense>} />
 
           {/* Marketplace accessible publicly */}
-          <Route path="/marketplace" element={<Suspense fallback={PAGE_FALLBACK}><StrategyMarketplace /></Suspense>} />
+          <Route path="/marketplace" element={<Suspense fallback={PUBLIC_FALLBACK}><StrategyMarketplace /></Suspense>} />
 
           {/* Admin-only: AdminGuard verifies Supabase session + app_metadata.role === 'admin' */}
           <Route element={<AdminGuard />}>
-            <Route path="/admin/waitlist" element={<Suspense fallback={PAGE_FALLBACK}><AdminDashboard /></Suspense>} />
+            <Route path="/admin/waitlist" element={<Suspense fallback={PUBLIC_FALLBACK}><AdminDashboard /></Suspense>} />
           </Route>
 
           {/* Guest-only: redirect to /app/dashboard if already authenticated */}
           <Route element={<GuestGuard />}>
-            <Route path="/signin" element={<Suspense fallback={PAGE_FALLBACK}><AuthPage mode="signin" /></Suspense>} />
-            <Route path="/signup" element={<Suspense fallback={PAGE_FALLBACK}><AuthPage mode="signup" /></Suspense>} />
+            <Route path="/signin" element={<Suspense fallback={PUBLIC_FALLBACK}><AuthPage mode="signin" /></Suspense>} />
+            <Route path="/signup" element={<Suspense fallback={PUBLIC_FALLBACK}><AuthPage mode="signup" /></Suspense>} />
           </Route>
 
           {/* Password reset / onboarding (auth-agnostic) */}
           <Route path="/reset-password" element={<UpdatePasswordPage />} />
-          <Route path="/2fa" element={<Suspense fallback={PAGE_FALLBACK}><TwoFA /></Suspense>} />
-          <Route path="/wizard" element={<Suspense fallback={PAGE_FALLBACK}><Wizard /></Suspense>} />
+          <Route path="/2fa" element={<Suspense fallback={PUBLIC_FALLBACK}><TwoFA /></Suspense>} />
+          <Route path="/wizard" element={<Suspense fallback={PUBLIC_FALLBACK}><Wizard /></Suspense>} />
 
           {/* Authenticated app shell */}
           <Route element={<AuthGuard />}>
             <Route element={<LoadingProvider><AppShell /></LoadingProvider>}>
+              {/* Inside the shell, so every fallback here is `SHELL_FALLBACK` — the
+                  reserved 64px `PageHeader` carrying this route's own title. */}
               <Route path="/app" element={<Navigate to="/app/dashboard" replace />} />
-              <Route path="/app/dashboard" element={<Suspense fallback={PAGE_FALLBACK}><Dashboard /></Suspense>} />
-              <Route path="/app/live-trading" element={<Suspense fallback={PAGE_FALLBACK}><Dashboard /></Suspense>} />
-              <Route path="/app/strategies" element={<Suspense fallback={PAGE_FALLBACK}><Strategies /></Suspense>} />
-              <Route path="/app/strategies/:strategyId" element={<Suspense fallback={PAGE_FALLBACK}><StrategyDetail /></Suspense>} />
-              <Route path="/app/signal-trace" element={<Suspense fallback={PAGE_FALLBACK}><SignalTrace /></Suspense>} />
-              <Route path="/app/signal-trace/:signalId" element={<Suspense fallback={PAGE_FALLBACK}><SignalTrace /></Suspense>} />
-              <Route path="/app/builder" element={<Suspense fallback={PAGE_FALLBACK}><StrategyBuilder /></Suspense>} />
-              <Route path="/app/backtest" element={<Suspense fallback={PAGE_FALLBACK}><Backtester /></Suspense>} />
-              <Route path="/app/backtester" element={<Suspense fallback={PAGE_FALLBACK}><Backtester /></Suspense>} />
-              <Route path="/app/marketplace" element={<Suspense fallback={PAGE_FALLBACK}><StrategyMarketplace /></Suspense>} />
-              <Route path="/app/exchange" element={<Suspense fallback={PAGE_FALLBACK}><ExchangeManager /></Suspense>} />
-              <Route path="/app/risk" element={<Suspense fallback={PAGE_FALLBACK}><RiskSettings /></Suspense>} />
-              <Route path="/app/billing" element={<Suspense fallback={PAGE_FALLBACK}><Billing /></Suspense>} />
-              <Route path="/app/profile" element={<Suspense fallback={PAGE_FALLBACK}><Profile /></Suspense>} />
-              <Route path="/app/security-logs" element={<Suspense fallback={PAGE_FALLBACK}><SecurityLogs /></Suspense>} />
-              <Route path="/app/portfolio" element={<Suspense fallback={PAGE_FALLBACK}><Portfolio /></Suspense>} />
-              <Route path="/app/trades" element={<Suspense fallback={PAGE_FALLBACK}><TradeHistory /></Suspense>} />
-              <Route path="/app/paper-trading" element={<Suspense fallback={PAGE_FALLBACK}><PaperTrading /></Suspense>} />
-              <Route path="/app/2fa" element={<Suspense fallback={PAGE_FALLBACK}><TwoFA /></Suspense>} />
+              <Route path="/app/dashboard" element={<Suspense fallback={SHELL_FALLBACK}><Dashboard /></Suspense>} />
+              <Route path="/app/live-trading" element={<Suspense fallback={SHELL_FALLBACK}><Dashboard /></Suspense>} />
+              <Route path="/app/strategies" element={<Suspense fallback={SHELL_FALLBACK}><Strategies /></Suspense>} />
+              <Route path="/app/strategies/:strategyId" element={<Suspense fallback={SHELL_FALLBACK}><StrategyDetail /></Suspense>} />
+              <Route path="/app/signal-trace" element={<Suspense fallback={SHELL_FALLBACK}><SignalTrace /></Suspense>} />
+              <Route path="/app/signal-trace/:signalId" element={<Suspense fallback={SHELL_FALLBACK}><SignalTrace /></Suspense>} />
+              <Route path="/app/builder" element={<Suspense fallback={SHELL_FALLBACK}><StrategyBuilder /></Suspense>} />
+              <Route path="/app/backtest" element={<Suspense fallback={SHELL_FALLBACK}><Backtester /></Suspense>} />
+              <Route path="/app/backtester" element={<Suspense fallback={SHELL_FALLBACK}><Backtester /></Suspense>} />
+              <Route path="/app/marketplace" element={<Suspense fallback={SHELL_FALLBACK}><StrategyMarketplace /></Suspense>} />
+              <Route path="/app/exchange" element={<Suspense fallback={SHELL_FALLBACK}><ExchangeManager /></Suspense>} />
+              <Route path="/app/risk" element={<Suspense fallback={SHELL_FALLBACK}><RiskSettings /></Suspense>} />
+              <Route path="/app/billing" element={<Suspense fallback={SHELL_FALLBACK}><Billing /></Suspense>} />
+              <Route path="/app/profile" element={<Suspense fallback={SHELL_FALLBACK}><Profile /></Suspense>} />
+              <Route path="/app/security-logs" element={<Suspense fallback={SHELL_FALLBACK}><SecurityLogs /></Suspense>} />
+              <Route path="/app/portfolio" element={<Suspense fallback={SHELL_FALLBACK}><Portfolio /></Suspense>} />
+              <Route path="/app/trades" element={<Suspense fallback={SHELL_FALLBACK}><TradeHistory /></Suspense>} />
+              <Route path="/app/paper-trading" element={<Suspense fallback={SHELL_FALLBACK}><PaperTrading /></Suspense>} />
+              <Route path="/app/2fa" element={<Suspense fallback={SHELL_FALLBACK}><TwoFA /></Suspense>} />
               <Route path="/app/support" element={<SupportCenter />} />
               <Route path="/app/notifications" element={<NotificationCenter />} />
               <Route path="/app/*" element={<Navigate to="/app/dashboard" replace />} />

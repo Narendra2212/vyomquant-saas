@@ -113,6 +113,10 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // `bg-surface-canvas`, which retired the wrapper's `background: C.bg0`. The
   // remaining 13 are all in `UpdatePasswordPage` (7) and `AdminGuard` (6) — both
   // outside task 8.5's scope, which is why `C` is still imported here.
+  // Task 8.5's second half (the two route `Suspense` fallbacks, the narrowed
+  // `'navigate'` bridge, the deleted `TENANT_ID`) moved all 13 down by 109 lines
+  // without touching one of them, so this number is unchanged and only the spot
+  // check's line array in `legacy-c-budget.test.js` moved.
   'App.jsx': 13,
   // Cleared by task 8.7: rebuilt against `shell/navigation.js` and `ds/`, with every
   // colour coming from a token utility class. The `LiveStatusV2` import went with the

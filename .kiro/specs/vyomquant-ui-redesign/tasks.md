@@ -626,15 +626,23 @@ the decomposition this plan uses instead:
     - _Requirements: 17.1, 17.4_
 
   - [~] 8.5 Rebuild the shell layout in `src/App.jsx`
-    - CSS Grid `grid-template: 48px 1fr / 216px 1fr` with `height: 100dvh`, replacing the nested
-      flexbox where `Sidebar`'s `minHeight: 100vh` and the content column's `overflow: hidden`
-      interact (`§6.2`)
+    - CSS Grid `grid-template: min-content 1fr / SIDEBAR_WIDTH_PX[sidebarMode] 1fr` (rows then
+      columns) with `height: 100%`, replacing the nested flexbox where `Sidebar`'s
+      `minHeight: 100vh` and the content column's `overflow: hidden` interact (`§6.2`). Not literal
+      tracks: the bar row is `min-content` because `TopBar` renders its disconnected-state `Alert`
+      strip below that row, which a fixed track would clip (the row itself is pinned at
+      `TOPBAR_HEIGHT_PX` = 56px, matching the sidebar's brand block); the column is tier-driven
+      because tablet width collapses the sidebar to a 56px rail (`§11.6`); and `100dvh` belongs on
+      `ResponsiveGate`, which establishes viewport height and may add a restriction strip above the
+      grid
     - `scrollbar-gutter: stable` and `min-width: 0` on `main` — the gutter fixes the single most
       visible shift in the app today (a short→long route transition moves the whole content column
       left) and `min-width: 0` is the usual cause of shell-level horizontal overflow
     - Replace the route `Suspense` fallback's bare `<div style={{background:'#080A0E'}} />` with
-      `<PageHeader title={routeTitle} /><LoadingState kind="page" />`, `routeTitle` resolved from
-      `navigation.js`
+      `<PageHeader title={routeTitle} /><LoadingState kind="skeleton-table" />`, `routeTitle`
+      resolved from `navigation.js`. NOT `kind="page"`: `PageSkeleton` already includes its own
+      64px header block, so it is the alternative to a real `PageHeader` rather than a companion
+      to one, and the pair reserves 128px of header for a 64px page (`§6.2` (4))
     - Narrow the `'navigate'` DOM-event bridge to a `navigation.js` lookup and delete its
       `PATH_MAP`; delete the unused `TENANT_ID` const; keep `window.showToast` (~40 call sites,
       `§6.6`) but make `ToastContainer` `aria-live="polite"` and retokened
