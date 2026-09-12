@@ -95,7 +95,14 @@ export const LEGACY_C_BUDGET = Object.freeze({
   'pages/Profile.jsx': 160,
   'components/DashboardUpgrades.jsx': 135,
   'pages/Landing.jsx': 122,
-  'pages/StrategyDetail.jsx': 122,
+  // 122 -> 121 at task 10.4. The one reference was `AuditTab`'s
+  // `style={{ textAlign: "center", color: C.t3 }}` — the whole component was a single
+  // centred placeholder line, and it went with the tab that reached it (design.md §1.9,
+  // §7.3, Requirement 19.4). The four `ConfirmDialog`s that replaced this page's four
+  // `window.confirm` calls in the same task add none: `ds/ConfirmDialog` is tokens-only,
+  // so a confirmation surface costs zero shim references. The page's other 121 are
+  // untouched and are task 27.1's, which takes this entry to zero.
+  'pages/StrategyDetail.jsx': 121,
   'pages/Billing.jsx': 111,
   'components/NotificationCenter.jsx': 77,
   'components/ResearchConsole.jsx': 60,

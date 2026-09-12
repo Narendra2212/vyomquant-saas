@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  ArrowLeft, Activity, BarChart2, Zap, Clock, Shield,
+  ArrowLeft, Activity, BarChart2, Zap, Shield,
   Layers, Settings, Globe, Server, Play, Pause, Trash2,
   Copy, ExternalLink, Download, RefreshCw, CheckCircle,
   AlertTriangle, FileText, TrendingUp, Target, PieChart, Edit2
@@ -11,6 +11,12 @@ import { CONFIG } from "../config";
 import { get, post } from "../apiClient";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
+// Imported from the modules directly rather than through `components/ds/index.js` — this
+// page charts nothing, and the barrel is what would otherwise put `ds/Chart`'s recharts
+// dependency in its import graph. Same reason `pages/Strategies.jsx` gives.
+import { Alert } from "../components/ds/Alert";
+import { ConfirmDialog } from "../components/ds/ConfirmDialog";
+import { deployPresentation } from "../lib/deployFlow";
 import ResearchConsole from "../components/ResearchConsole";
 import DeploymentConsole from "../components/DeploymentConsole";
 
@@ -33,9 +39,92 @@ import DeploymentConsole from "../components/DeploymentConsole";
  * - Marketplace
  * - Subscribers
  * - Revenue
- * - Audit History
  * - Realtime Status
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * TASK 10.4 — the four native dialogs, and the placeholder tab
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * vyomquant-ui-redesign task 10.4. `design.md` §1.8, §1.9, §7.3, §8.3, §8.4.
+ * Requirements 7.6, 18.3, 19.4. Property P13.
+ *
+ * §1.8 recorded four `window.confirm` calls here — deploy, delete, restore version,
+ * deploy version. None of them could be focus-trapped, given an accessible name, or
+ * given the review grid Requirement 8.1 asks for, so all four now render through
+ * `ds/ConfirmDialog`. Every one of the four handlers was split in two: the control's
+ * handler now *only* opens a dialog, and the request lives in a `handleConfirm*`
+ * function that nothing but `ConfirmDialog`'s `onConfirm` reaches. That split is what
+ * makes P13 ("a destructive action reaches the backend only after explicit
+ * confirmation") a statement about which code paths exist rather than about a return
+ * value someone remembered to check.
+ *
+ * **No request changed.** Same four endpoints, same bodies, same query strings, same
+ * `isProcessing` / `busy` optimistic flags, same `setActionError` / `setError` failure
+ * handling, same `navigate` and same re-reads. This task replaced confirmation
+ * surfaces and nothing else.
+ *
+ * §1.9's `Audit history …` placeholder panel and the tab that reached it are gone
+ * (Requirement 19.4). §7.3 decided between wiring it to
+ * `GET /api/signal-trace/signals?strategy_id=` and removing it, and chose removal:
+ * Signal Trace owns that data. The header now carries a `Signal Trace` action to
+ * `/app/signal-trace?strategy_id=…` — the same route `SignalsTab` and
+ * `pages/Strategies.jsx` already link to. `activeTab` is keyed by string id and every
+ * tab is rendered from `tabs.map` with `key={tab.id}`, so there is no positional
+ * index to go stale, and the default (`"overview"`) was never the removed tab.
  */
+
+/**
+ * The deployment target both of this page's deploy requests carry.
+ *
+ * ═══ WHERE THIS PAGE'S DEPLOY TARGET COMES FROM ═══
+ *
+ * From here, and from nowhere else. Both requests hard-code it — `handleConfirmDeploy`
+ * sends `{environment: "paper"}` in its body and `handleConfirmDeployVersion` sends
+ * `?environment=paper` in its query string — and this page offers no control that
+ * changes either one. There is no exchange-account selector, no risk-configuration
+ * selector and no sizing form on this page; §8.3's step 1 lives on
+ * `pages/Strategies.jsx`, which is where a trader picks Live, Paper or Backtest and
+ * where the preflight gate is polled.
+ *
+ * So the constant is declared once and read by both the request and the dialog. That
+ * is the point of it: §1.8's complaint was that this page's confirmations *asserted* a
+ * destination in prose ("Deploy \"X\" to paper trading?") while `Strategies.jsx`
+ * deployed through the real gate — the two pages disagreed about what deploy means.
+ * The prose claim is gone. The target is now **shown**, from this one value, as
+ * `ConfirmDialog`'s environment badge (Requirement 8.5) and as a review row, and the
+ * dialog and the request cannot drift apart because there is only one string.
+ *
+ * @see PAGE_DEPLOY_PRESENTATION
+ */
+const PAGE_DEPLOY_ENVIRONMENT = "paper";
+
+/**
+ * Title, confirm intent, confirm label and resolved environment id for that target.
+ *
+ * Read from `lib/deployFlow.js` rather than authored here, so this page's deploy
+ * confirmation is titled and coloured by the same table that titles and colours
+ * §8.3's flow. `deployPresentation` resolves the target through
+ * `design/semantic.js`'s vocabulary and is total: it answers
+ * `UNCONFIRMED_PRESENTATION` for anything outside `LIVE`/`PAPER`/`BACKTEST` rather
+ * than guessing, which is also why the resolved id — not the raw `"paper"` — is what
+ * is handed to `ConfirmDialog`'s `environment` prop.
+ *
+ * `confirmIntent` is `neutral` for Paper, which is `ConfirmDialog`'s brand treatment.
+ * There is no acknowledgement checkbox and no real-funds statement anywhere in this
+ * file: `deployFlow.js` constructs those only on the `LIVE` branch (Requirement 8.4,
+ * P14), and no path from this page resolves to Live.
+ */
+const PAGE_DEPLOY_PRESENTATION = deployPresentation(PAGE_DEPLOY_ENVIRONMENT);
+
+/**
+ * Why the deploy dialogs carry a row naming a target the trader cannot change.
+ *
+ * Stating it is the honest form of a surface that does not offer the choice. Omitting
+ * it would leave the trader to infer the destination, and inferring is what the old
+ * confirmations made them do.
+ */
+const DEPLOY_TARGET_NOTE = "Fixed by this page — not selectable here";
+const DEPLOY_ELSEWHERE_NOTE = "Choose Live or Backtest from the Strategies page";
 
 export default function StrategyDetail() {
   const navigate = useNavigate();
@@ -45,6 +134,20 @@ export default function StrategyDetail() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState({});
   const [actionError, setActionError] = useState(null);
+  /*
+   * Task 10.4. Each holds a *snapshot* of the strategy as it read when the control was
+   * activated, or `null` when the dialog is closed, so the dialog keeps describing what
+   * the trader clicked even if `loadStrategyDetail` re-reads underneath it. Nothing is
+   * defaulted into existence — an absent field renders `ConfirmDialog`'s not-available
+   * marker (Requirements 14.5, 19.3).
+   *
+   * Two states rather than one discriminated union: the two dialogs are opened from
+   * separate handlers and neither clears the other, so a bug that opened both would be
+   * caught by `ConfirmDialog`'s single-overlay registry (Requirement 17.3) rather than
+   * silently confirming the wrong action.
+   */
+  const [deployDialog, setDeployDialog] = useState(null);
+  const [deleteDialog, setDeleteDialog] = useState(null);
 
   const API_BASE = CONFIG.apiBaseUrl;
   const token = sessionStorage.getItem("token");
@@ -113,16 +216,40 @@ export default function StrategyDetail() {
     }
   };
 
-  const handleDeploy = async () => {
+  /**
+   * Opens the deploy confirmation. **Issues nothing** (Requirement 7.6, P13).
+   *
+   * The `isProcessing.deploy` guard stays where it was, so a second activation while a
+   * deploy is in flight does not even open a dialog.
+   */
+  const handleDeploy = () => {
     if (isProcessing.deploy) return;
-    const stratName = strategy?.strategy?.name || strategy?.name || "Strategy";
-    if (!window.confirm(`Deploy "${stratName}" to paper trading?`)) return;
+    const strat = strategy?.strategy || strategy || {};
+    setDeployDialog({
+      name: strat.name || "Strategy",
+      id: strategyId,
+      version: strat.current_version ?? null,
+      symbol: strat.symbol ?? null,
+      timeframe: strat.timeframe ?? null,
+    });
+  };
+
+  /**
+   * The deploy request, reachable only from `ConfirmDialog`'s explicit confirm.
+   *
+   * Byte-for-byte the request the `window.confirm` version issued: same path, same
+   * method, same body, same `isProcessing` flag, same `setActionError`, same re-read.
+   * The only change is what has to happen before it runs.
+   */
+  const handleConfirmDeploy = async () => {
+    setDeployDialog(null);
+    if (isProcessing.deploy) return;
     setBusy("deploy", true);
     setActionError(null);
     try {
       const res = await authedFetch(`/api/strategies/${strategyId}/deploy`, {
         method: "POST",
-        body: JSON.stringify({ environment: "paper" }),
+        body: JSON.stringify({ environment: PAGE_DEPLOY_ENVIRONMENT }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || data.detail || `Deploy failed (HTTP ${res.status})`);
@@ -152,10 +279,29 @@ export default function StrategyDetail() {
     }
   };
 
-  const handleDelete = async () => {
+  /** Opens the delete confirmation. **Issues nothing** (Requirement 7.6, P13). */
+  const handleDelete = () => {
     if (isProcessing.delete) return;
-    const stratName = strategy?.strategy?.name || strategy?.name || "Strategy";
-    if (!window.confirm(`Delete "${stratName}"? This cannot be undone.`)) return;
+    const strat = strategy?.strategy || strategy || {};
+    setDeleteDialog({
+      name: strat.name || "Strategy",
+      id: strategyId,
+      status: strat.status ?? null,
+      version: strat.current_version ?? null,
+      environment: strat.environment ?? null,
+    });
+  };
+
+  /**
+   * The delete request, reachable only from `ConfirmDialog`'s explicit confirm.
+   *
+   * Unchanged: same `DELETE /api/strategies/{id}`, same navigation to the library on
+   * success, and the same asymmetric `setBusy` — cleared only on failure, because the
+   * success path leaves this page and clearing it would set state on an unmounted tree.
+   */
+  const handleConfirmDelete = async () => {
+    setDeleteDialog(null);
+    if (isProcessing.delete) return;
     setBusy("delete", true);
     setActionError(null);
     try {
@@ -187,7 +333,9 @@ export default function StrategyDetail() {
     { id: "marketplace", label: "Marketplace", Icon: Globe },
     { id: "subscribers", label: "Subscribers", Icon: PieChart },
     { id: "revenue", label: "Revenue", Icon: TrendingUp },
-    { id: "audit", label: "Audit History", Icon: Clock },
+    // Task 10.4: the `audit` entry is gone with `AuditTab` (§1.9, Requirement 19.4). A
+    // tab is a control, and one that promises audit history the product does not serve
+    // here is an inert control. Signal Trace owns that data and the header links to it.
   ];
 
   if (isLoading) {
@@ -239,6 +387,19 @@ export default function StrategyDetail() {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <Button variant="ghost" size="sm" icon={RefreshCw} onClick={loadStrategyDetail}>Refresh</Button>
+          {/* Task 10.4 — what replaced the `Audit History` tab (§7.3, Requirement 19.4).
+              The tab rendered a placeholder line; Signal Trace is the page that
+              owns the per-strategy signal, order and execution record, and this is the
+              same route `SignalsTab` below and `pages/Strategies.jsx` already link to,
+              with the same `strategy_id` filter `SignalTrace.jsx` reads. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={Activity}
+            onClick={() => navigate(`/app/signal-trace?strategy_id=${strategyId}`)}
+          >
+            Signal Trace
+          </Button>
           <Button variant="ghost" size="sm" icon={Copy} onClick={handleClone} disabled={!!isProcessing.clone}>
             {isProcessing.clone ? "Cloning…" : "Clone"}
           </Button>
@@ -335,8 +496,93 @@ export default function StrategyDetail() {
         {activeTab === "marketplace" && <MarketplaceTab strategy={strategy} />}
         {activeTab === "subscribers" && <SubscribersTab strategyId={strategyId} />}
         {activeTab === "revenue" && <RevenueTab strategyId={strategyId} />}
-        {activeTab === "audit" && <AuditTab strategyId={strategyId} />}
       </div>
+
+      {/* ══════════════════════════════════════════════════════════════════════════════════
+          Task 10.4 — the two page-level confirmations that replaced `window.confirm`
+          (design.md §1.8, §8.4; Requirements 7.6, 18.3, 19.4; Property P13).
+
+          Both render through `ds/ConfirmDialog`, so both get the focus trap with initial
+          focus on **cancel**, `Escape`, `role="dialog"` / `aria-modal` / `aria-labelledby`
+          and the single-overlay claim (Requirements 18.3, 17.3) that `window.confirm`
+          could not be given. Neither dialog issues anything: the request lives in the
+          `onConfirm` target and in no other reachable path.
+          ══════════════════════════════════════════════════════════════════════════════════ */}
+
+      {/* ── Deploy. Titled, coloured and badged from `lib/deployFlow.js` ──────────────────
+          `PAGE_DEPLOY_PRESENTATION` supplies the title ("Start paper session", §8.3's own
+          words), the confirm intent and the resolved environment id, so this page and
+          §8.3's flow describe a paper deployment identically. What is gone is the prose
+          claim: the old copy asked "Deploy \"X\" to paper trading?" as though the trader
+          had picked the destination, when the request hard-codes it. The destination is
+          now shown — badge plus two review rows — and named as not selectable here.
+
+          No acknowledgement checkbox, and no real-funds statement: §8.4 reserves those
+          for the Live path and for bulk irreversible actions, and `deployFlow.js`
+          constructs them only inside its `LIVE` branch. Nothing on this page resolves to
+          Live. */}
+      <ConfirmDialog
+        open={deployDialog !== null}
+        onCancel={() => setDeployDialog(null)}
+        onConfirm={handleConfirmDeploy}
+        title={PAGE_DEPLOY_PRESENTATION.title}
+        intent={PAGE_DEPLOY_PRESENTATION.confirmIntent}
+        environment={PAGE_DEPLOY_PRESENTATION.environment}
+        description={
+          "A paper session runs this strategy's current version against the live feed with "
+          + "simulated money. No real order is placed and no real funds are committed."
+        }
+        review={[
+          { label: "Strategy", value: deployDialog?.name ?? null },
+          { label: "Identifier", value: deployDialog?.id ?? null },
+          { label: "Version", value: deployDialog?.version ?? null },
+          { label: "Market", value: deployDialog?.symbol ?? null },
+          { label: "Timeframe", value: deployDialog?.timeframe ?? null },
+          { label: "Target", value: DEPLOY_TARGET_NOTE },
+          { label: "Other targets", value: DEPLOY_ELSEWHERE_NOTE },
+        ]}
+        confirmLabel={PAGE_DEPLOY_PRESENTATION.confirmLabel}
+        cancelLabel="Cancel"
+      />
+
+      {/* ── Delete. `intent="destructive"`, and NO acknowledgement checkbox ──────────────
+          §8.4's inventory: "Delete / archive strategy … Acknowledgement: No — reversible
+          via archive". `DELETE /api/strategies/{id}` performs `archive_strategy` (a soft
+          archive) and has done since the lifecycle work; the row and every version,
+          backtest, deployment and signal behind it survive. So the old copy — "This
+          cannot be undone." — was simply false, and it is the sentence this dialog most
+          needed to stop saying.
+
+          Same judgement task 10.3 made for the same route on `pages/Strategies.jsx`, in
+          the same words: the checkbox is reserved for the irreversible and the live-funds
+          cases, and spending it on a reversible action is how a trader learns to tick one
+          without reading it. The title stays "Delete strategy" because that is the
+          control the trader activated; the description is where it says what Delete
+          actually does. */}
+      <ConfirmDialog
+        open={deleteDialog !== null}
+        onCancel={() => setDeleteDialog(null)}
+        onConfirm={handleConfirmDelete}
+        title="Delete strategy"
+        intent="destructive"
+        description={
+          "Deleting archives this strategy and removes it from your library list. Nothing "
+          + "is destroyed: its versions, backtests, deployments and signals are all kept "
+          + "and stay inspectable for history and audit. It is refused while any of its "
+          + "deployments is still deploying, running or paused."
+        }
+        review={[
+          { label: "Strategy", value: deleteDialog?.name ?? null },
+          { label: "Identifier", value: deleteDialog?.id ?? null },
+          { label: "Current status", value: deleteDialog?.status ?? null },
+          { label: "Version", value: deleteDialog?.version ?? null },
+          { label: "Environment", value: deleteDialog?.environment ?? null },
+          { label: "Removed from", value: "Your strategy library list" },
+          { label: "Kept", value: "Versions, backtests, deployments, signals" },
+        ]}
+        confirmLabel="Delete strategy"
+        cancelLabel="Keep it in the list"
+      />
     </div>
   );
 }
@@ -476,6 +722,13 @@ function VersionsTab({ strategyId }) {
   const [comparison, setComparison] = useState(null);
   const [busy, setBusy] = useState({});
   const [error, setError] = useState(null);
+  /*
+   * Task 10.4. A snapshot of the version row as it read when the control was activated,
+   * or `null` when closed — `loadVersions` re-reads after every mutation, so holding the
+   * row itself would let the dialog start describing a different version.
+   */
+  const [restoreDialog, setRestoreDialog] = useState(null);
+  const [deployDialog, setDeployDialog] = useState(null);
   const API_BASE = CONFIG.apiBaseUrl;
   const token = sessionStorage.getItem("token");
 
@@ -533,8 +786,23 @@ function VersionsTab({ strategyId }) {
     }
   };
 
-  const handleRestore = async (ver) => {
-    if (!window.confirm(`Restore version ${ver.version}? This creates a new version based on it.`)) return;
+  /** Opens the restore confirmation. **Issues nothing** (Requirement 7.6, P13). */
+  const handleRestore = (ver) => {
+    setRestoreDialog({
+      id: ver.id,
+      version: ver.version ?? null,
+      createdAt: ver.created_at ? new Date(ver.created_at).toLocaleString() : null,
+    });
+  };
+
+  /**
+   * The restore request, reachable only from `ConfirmDialog`'s explicit confirm.
+   * Unchanged endpoint, method, query string, busy key and error handling.
+   */
+  const handleConfirmRestore = async () => {
+    const ver = restoreDialog;
+    setRestoreDialog(null);
+    if (!ver) return;
     setVerBusy(ver.id, "restore", true);
     setError(null);
     try {
@@ -553,13 +821,34 @@ function VersionsTab({ strategyId }) {
     }
   };
 
-  const handleDeployVersion = async (ver) => {
-    if (!window.confirm(`Deploy version ${ver.version} to paper trading?`)) return;
+  /** Opens the deploy-version confirmation. **Issues nothing** (Requirement 7.6, P13). */
+  const handleDeployVersion = (ver) => {
+    setDeployDialog({
+      id: ver.id,
+      version: ver.version ?? null,
+      isCurrent: ver.is_current === true,
+      isDraft: ver.is_draft === true,
+    });
+  };
+
+  /**
+   * The deploy-version request, reachable only from `ConfirmDialog`'s explicit confirm.
+   *
+   * The query string is assembled from `PAGE_DEPLOY_ENVIRONMENT`, the same constant the
+   * dialog's badge and review rows read, so the environment shown and the environment
+   * sent are one value. `encodeURIComponent("paper")` is `"paper"`, so the request on the
+   * wire is identical to the one the `window.confirm` version issued.
+   */
+  const handleConfirmDeployVersion = async () => {
+    const ver = deployDialog;
+    setDeployDialog(null);
+    if (!ver) return;
     setVerBusy(ver.id, "deploy", true);
     setError(null);
     try {
       const res = await authedFetch(
-        `/api/strategies/${strategyId}/versions/${encodeURIComponent(ver.version)}/deploy?environment=paper`,
+        `/api/strategies/${strategyId}/versions/${encodeURIComponent(ver.version)}`
+        + `/deploy?environment=${encodeURIComponent(PAGE_DEPLOY_ENVIRONMENT)}`,
         { method: "POST" }
       );
       const data = await res.json().catch(() => ({}));
@@ -662,6 +951,86 @@ function VersionsTab({ strategyId }) {
           ))}
         </div>
       )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════════════
+          Task 10.4 — the other two confirmations that replaced `window.confirm`
+          (design.md §1.8, §8.4; Requirements 7.6, 18.3; Property P13).
+          ══════════════════════════════════════════════════════════════════════════════════ */}
+
+      {/* ── Restore version. `intent="neutral"`, and NO acknowledgement checkbox ──────────
+          Restoring is **additive**: it writes a new version whose content is copied from
+          the older one, and the older one and every version between them are left exactly
+          as they are. Nothing is overwritten and nothing is removed, so `destructive` would
+          be the wrong treatment — reserving that hue for the actions that actually remove
+          something is what keeps it meaningful — and §8.4 reserves the acknowledgement for
+          the irreversible and live-funds rows, which this is neither of.
+
+          The old copy already said the right thing ("This creates a new version based on
+          it"); it is kept, moved into the description and into a review row that names the
+          outcome, because that sentence is the entire reason no acknowledgement is
+          warranted. */}
+      <ConfirmDialog
+        open={restoreDialog !== null}
+        onCancel={() => setRestoreDialog(null)}
+        onConfirm={handleConfirmRestore}
+        title="Restore version"
+        intent="neutral"
+        description={
+          "Restoring copies this version's contents into a new version and makes that the "
+          + "current one. This version is not modified and no version is removed, so the "
+          + "history stays complete and the restore itself can be reversed by restoring "
+          + "another version."
+        }
+        review={[
+          { label: "Restoring from version", value: restoreDialog?.version ?? null },
+          { label: "Saved", value: restoreDialog?.createdAt ?? null },
+          { label: "Result", value: "A new version, copied from this one" },
+          { label: "Kept", value: "Every existing version, unchanged" },
+        ]}
+        confirmLabel="Restore version"
+        cancelLabel="Cancel"
+      />
+
+      {/* ── Deploy version. Same `lib/deployFlow.js` presentation as the page-level deploy,
+          because it is the same target: this request hard-codes `?environment=paper` too.
+          The old copy asked "Deploy version N to paper trading?"; the destination is now
+          the dialog's environment badge and two review rows, and the rows say plainly that
+          the target is not chosen here. No acknowledgement, for the reason on the
+          page-level dialog above. */}
+      <ConfirmDialog
+        open={deployDialog !== null}
+        onCancel={() => setDeployDialog(null)}
+        onConfirm={handleConfirmDeployVersion}
+        title={PAGE_DEPLOY_PRESENTATION.title}
+        intent={PAGE_DEPLOY_PRESENTATION.confirmIntent}
+        environment={PAGE_DEPLOY_PRESENTATION.environment}
+        description={
+          "A paper session runs this exact version against the live feed with simulated "
+          + "money. No real order is placed and no real funds are committed. A deployment "
+          + "always binds one immutable version, so later edits do not change what runs."
+        }
+        review={[
+          { label: "Version", value: deployDialog?.version ?? null },
+          { label: "Strategy", value: strategyId ?? null },
+          {
+            // Read off the row's own two flags. A version that is neither the current one
+            // nor a draft is a saved, non-current version — stating that is a fact the row
+            // carries, and it is worth stating here because deploying a non-current version
+            // is the case a trader is most likely to have reached by mistake.
+            label: "Version state",
+            value: deployDialog === null
+              ? null
+              : [
+                deployDialog.isCurrent ? "Current" : "Not current",
+                deployDialog.isDraft ? "Draft" : null,
+              ].filter(Boolean).join(" · "),
+          },
+          { label: "Target", value: DEPLOY_TARGET_NOTE },
+          { label: "Other targets", value: DEPLOY_ELSEWHERE_NOTE },
+        ]}
+        confirmLabel={PAGE_DEPLOY_PRESENTATION.confirmLabel}
+        cancelLabel="Cancel"
+      />
     </div>
   );
 }
@@ -1020,6 +1389,23 @@ function MarketplaceTab({ strategy }) {
   const isPublished = strat.is_published || false;
   const [loading, setLoading] = useState(false);
   const [libraryStatus, setLibraryStatus] = useState(null);
+  /*
+   * Task 10.4, found by the guard rather than by §1.8's table.
+   *
+   * `publishToLibrary` used to report both of its outcomes with `window.alert` — one for
+   * the success and one carrying `err.message`. §1.8 lists only this page's four
+   * `window.confirm` calls, but `guards/native-dialogs.js` matches `alert(` as well, and
+   * task 10.11's repo-wide guard allowlists exactly `pages/TwoFA.jsx` and
+   * `components/NotificationCenter.jsx` — so these two had to go for this page to reach
+   * zero. `window.alert` is unstyled, unfocusable, unreadable to assistive technology in
+   * context and blocks the whole tab (Requirement 18.3).
+   *
+   * Reported inline instead, beside the control that caused it, in the same shape the
+   * page's own `actionError` and `VersionsTab`'s `error` banners already use. The publish
+   * request itself is untouched: same `POST /api/library`, same payload, same
+   * `checkLibraryStatus` re-read, same `loading` flag.
+   */
+  const [notice, setNotice] = useState(null);
 
   const checkLibraryStatus = async () => {
     try {
@@ -1045,12 +1431,11 @@ function MarketplaceTab({ strategy }) {
         subscription_tier: 'free'
       };
       await post('/api/library', payload);
-      alert('Strategy submitted for review!');
+      setNotice({ kind: 'ok', text: 'Strategy submitted for review.' });
       checkLibraryStatus();
     } catch (err) {
       console.error(err);
-      const detail = err?.message || 'Failed to publish';
-      alert(detail);
+      setNotice({ kind: 'error', text: err?.message || 'Failed to publish' });
     } finally {
       setLoading(false);
     }
@@ -1067,6 +1452,25 @@ function MarketplaceTab({ strategy }) {
   return (
     <div>
       <h3 style={{ color: C.t1, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Marketplace Status</h3>
+
+      {/* What replaced the two `window.alert` calls.
+          `ds/Alert` rather than a hand-rolled banner: it already owns the severity token,
+          the icon, the border treatment and — the part that matters where an `alert` used
+          to be — the live-region role, `status` for the accepted case and `alert` for the
+          refusal, so the outcome is still announced without blocking the tab (Requirement
+          18.3). It also takes its hue from `statusToken` rather than from the `C` shim, so
+          this notice adds no legacy token reference and no colour literal. */}
+      {notice !== null && (
+        <div style={{ marginBottom: 12 }} data-testid="marketplace-notice">
+          <Alert
+            severity={notice.kind === "error" ? "error" : "info"}
+            title={notice.text}
+            onDismiss={() => setNotice(null)}
+            dismissLabel="Dismiss this message"
+          />
+        </div>
+      )}
+
       <Card className="p-4">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
@@ -1181,10 +1585,11 @@ function RevenueTab({ strategy }) {
   );
 }
 
-function AuditTab({ strategyId }) {
-  return (
-    <Card className="p-8" style={{ textAlign: "center", color: C.t3 }}>
-      Audit history coming soon
-    </Card>
-  );
-}
+/*
+ * `AuditTab` was here (§1.9, Requirement 19.4). It rendered one centred line of
+ * placeholder text and nothing else — a tab, in the primary tab row, promising a record
+ * this page never fetched. §7.3 chose removal over wiring it up, because Signal Trace
+ * already owns the per-strategy signal / order / execution record and serves it from
+ * `GET /api/signal-trace/signals?strategy_id=`. The header's `Signal Trace` action is
+ * where that promise is now kept.
+ */
