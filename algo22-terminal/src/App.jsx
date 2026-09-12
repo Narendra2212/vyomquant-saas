@@ -26,6 +26,11 @@ import { NAV_ENTRIES, routeTitle } from './components/shell/navigation';
 // of every primitive, and the shell needs exactly these two (design.md §26).
 import { PageHeader } from './components/ds/PageHeader';
 import { LoadingState } from './components/ds/LoadingState';
+// The ONE toast transport for BACKEND events (task 10.1, Requirements 16.1/16.2). Mounted
+// in `ShellGrid` below, once. It holds a ref-counted module subscription, so a second
+// mount anywhere cannot double a toast, and it decides nothing: every frame goes through
+// `design/notificationPolicy`, which is default-closed.
+import { useNotificationStream } from './hooks/useNotificationStream';
 import {
   C, Inp, ToastContainer,
   LoadingProvider,
@@ -448,6 +453,17 @@ function ShellGrid({ toasts, removeToast }) {
   // The tier decision, not a width: the breakpoint that chooses rail vs expanded is
   // `sidebarModeFor` in the gate, derived from `token.breakpoint.*` (Requirement 1.1).
   const { sidebarMode } = useViewportAccess();
+
+  /*
+    The product's single subscription from backend event to toast (§11.5). HERE and not in
+    `AppShell` for one reason: below 768px `ResponsiveGate` renders its own screen and
+    `ShellGrid` never enters the tree, so an unsupported viewport does not sit on the socket
+    raising toasts over a gate screen that has no toast host to show them.
+
+    It renders nothing and returns nothing — a frame must not re-render the shell. The toast
+    host below is where a notification becomes visible, and it holds its own state.
+  */
+  useNotificationStream();
 
   return (
     <>

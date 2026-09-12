@@ -298,13 +298,13 @@ describe('legacy-c-budget: the spot check', () => {
     // Hand-verified against the file, so the counting method is pinned to
     // reality and not only to synthetic fixtures. `App.jsx` is a good choice:
     // small enough to enumerate, and it exercises both the template-literal form
-    // (212, 217) and the comment exclusion — `AdminGuard`'s two notes about the real
-    // mono stack sit between counted references, at 299–302 and 312–313.
+    // (217, 222) and the comment exclusion — `AdminGuard`'s two notes about the real
+    // mono stack sit between counted references, at 304–307 and 317–318.
     //
-    // UpdatePasswordPage:  211 C.bg0 · 212 C.bg2, ${C.border} · 213 C.t1
-    // (/reset-password)    217 C.green, ${C.green} · 235 C.red              = 7
-    // AdminGuard:          298 C.bg0 · 303 C.t3 · 309 C.bg0 · 310 C.red
-    //                      311 C.t1 · 314 C.t3                             = 6
+    // UpdatePasswordPage:  216 C.bg0 · 217 C.bg2, ${C.border} · 218 C.t1
+    // (/reset-password)    222 C.green, ${C.green} · 240 C.red              = 7
+    // AdminGuard:          303 C.bg0 · 308 C.t3 · 314 C.bg0 · 315 C.red
+    //                      316 C.t1 · 319 C.t3                             = 6
     //
     // The `AppShell: 297 C.bg0` entry this list used to carry is retired. Task 8.5
     // rewrote `AppShell` into a CSS grid whose wrapper takes `bg-surface-canvas` as
@@ -333,10 +333,17 @@ describe('legacy-c-budget: the spot check', () => {
     // lines 8.8 added lower down (the `accountMenu` prop and its comment, inside
     // `ShellGrid`) are below the last counted reference, so they move nothing.
     // `LEGACY_C_BUDGET['App.jsx']` stays at 13.
+    //
+    // Task 10.1 then added 5 more lines above the first surviving group — the
+    // `hooks/useNotificationStream` import under a four-line note on why the toast
+    // transport is mounted once — so every number is now 5 higher again. None of the
+    // five reads the shim, and the 13 lines 10.1 added lower down (the
+    // `useNotificationStream()` call and its comment, inside `ShellGrid`) are below the
+    // last counted reference, so they move nothing. The budget stays at 13.
     const source = readFileSync(path.join(SRC, 'App.jsx'), 'utf8');
     const lines = findLegacyC(source).map((r) => r.line);
 
-    expect(lines).toEqual([211, 212, 212, 213, 217, 217, 235, 298, 303, 309, 310, 311, 314]);
+    expect(lines).toEqual([216, 217, 217, 218, 222, 222, 240, 303, 308, 314, 315, 316, 319]);
     expect(lines).toHaveLength(13);
     expect(LEGACY_C_BUDGET['App.jsx']).toBe(13);
   });
