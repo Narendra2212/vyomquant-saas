@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import Portfolio from '../../src/pages/Portfolio';
 import TradeHistory from '../../src/pages/TradeHistory';
@@ -118,35 +118,49 @@ describe('Phase 3 — Trading Platform Operational Completion Tests', () => {
     });
   });
 
-  describe('3.2 Trade History Ledger Venue Column & Environment Filter', () => {
-    it('displays Venue column in execution log and filters by environment', async () => {
+  // vyomquant-ui-redesign task 15.1 rewrote this case. The `Venue` column is gone
+  // (design.md §7.7): neither `GET /api/orders/history` nor `GET /api/paper/trades` reports
+  // an exchange, and the page it replaces filled the cell with `"binance"` on live and
+  // `"paper"` on paper — which is what the old `expect(getByText('paper'))` was asserting.
+  // Both fixtures are now the real response shapes: a seven-column `executions` row for
+  // live, and the `{trades, count, execution_environment, is_simulated}` envelope
+  // `PaperTradingService` returns for paper. What the switch is checked to do is switch
+  // ledgers and label the paper one (Requirement 12.2).
+  describe('3.2 Trade History Ledger Environment Switch & Paper Labelling', () => {
+    it('reads the live ledger by default and switches to the labelled paper ledger', async () => {
       vi.spyOn(ordersModule.ordersApi, 'getHistory').mockResolvedValue([
         {
-          id: 101,
-          time: '2026-08-26T14:00:00Z',
-          pair: 'SOL/USDT',
-          exchange_id: 'bybit',
+          timestamp: '2026-08-26T14:00:00Z',
+          user_id: 'user_phase3',
+          symbol: 'SOL_USDT',
           side: 'buy',
-          entry_price: 140,
-          exit_price: 145,
-          quantity: 10,
-          profit_loss: 50,
-          fee: 1.5,
-          slippage: 0.02,
-          strategy: 'SOL Momentum'
+          status: 'filled',
+          amount: 10,
+          price: 140
         }
       ]);
-      vi.spyOn(paperModule.paperApi, 'getTrades').mockResolvedValue([
-        {
-          id: 201,
-          time: '2026-08-26T14:30:00Z',
-          symbol: 'ETH/USDT',
-          side: 'buy',
-          price: 3200,
-          amount: 2,
-          realized_pnl: 0
-        }
-      ]);
+      vi.spyOn(paperModule.paperApi, 'getTrades').mockResolvedValue({
+        trades: [
+          {
+            execution_id: 'exec_201',
+            order_id: 'order_201',
+            user_id: 'user_phase3',
+            strategy_id: null,
+            symbol: 'ETH/USDT',
+            side: 'buy',
+            quantity: '2.0000000000',
+            price: '3200.0000000000',
+            fee: '1.6000000000',
+            realized_pnl: '0.0000000000',
+            status: 'FILLED',
+            executed_at: '2026-08-26T14:30:00Z'
+          }
+        ],
+        count: 1,
+        execution_environment: 'PAPER',
+        is_simulated: true,
+        session_id: 'sess_phase3'
+      });
 
       render(
         <MemoryRouter>
@@ -154,19 +168,20 @@ describe('Phase 3 — Trading Platform Operational Completion Tests', () => {
         </MemoryRouter>
       );
 
-      // Live ledger
-      expect(await screen.findByText('Trade Ledger')).toBeDefined();
-      expect(screen.getByText('SOL/USDT')).toBeDefined();
-      expect(screen.getByText('bybit')).toBeDefined();
+      // Live ledger. Scoped to the table because the market select offers the same label.
+      expect(await screen.findByRole('heading', { name: 'Trade History' })).toBeDefined();
+      const liveTable = await screen.findByRole('table');
+      expect(within(liveTable).getByText('SOL/USDT')).toBeDefined();
+      expect(screen.queryByText('bybit')).toBeNull();
 
-      // Switch to Paper ledger
-      const paperBtn = screen.getByRole('button', { name: /PAPER/i });
-      fireEvent.click(paperBtn);
+      // Switch to the paper ledger.
+      fireEvent.click(screen.getByRole('radio', { name: 'Paper' }));
 
       await waitFor(() => {
-        expect(screen.getByText('ETH/USDT')).toBeDefined();
-        expect(screen.getByText('paper')).toBeDefined();
+        expect(within(screen.getByRole('table')).getByText('ETH/USDT')).toBeDefined();
       });
+      // Requirement 12.2: the server's own label, not the switch's position.
+      expect(screen.getAllByText('PAPER TRADING').length).toBeGreaterThan(0);
     });
   });
 

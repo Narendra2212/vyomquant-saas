@@ -54,7 +54,12 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // Material Design palette (#2196F3 #00BCD4 #FFAB00 #9C27B0 #FF5722 #00C853
   // #607D8B) plus GitHub greys. Rewritten by task 20.x.
   'components/SignalTraceVisualization.jsx': 138,
-  'pages/TradeHistory.jsx': 62,
+  // Cleared by task 15.1, which rebuilt the page on `ds/DataTable`, `ds/FilterBar`,
+  // `ds/Panel` and `ds/Metric`. The 62 were the LIVE/PAPER toggle's six literals, the
+  // five summary-card hues, the four filter-chip states, the twelve cell colours and the
+  // duplicate `SimulatedIndicator`'s two four-literal palettes — every one of which is
+  // now a token utility class or comes from `design/semantic.js` inside a primitive.
+  'pages/TradeHistory.jsx': 0,
   // Cleared by task 6.25, which rewrote it: the copy is `ds/ErrorState`'s, the
   // chrome is token utilities, and the stack it used to print is Sentry-only.
   'components/ErrorBoundary.jsx': 0,

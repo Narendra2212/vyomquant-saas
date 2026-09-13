@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, cleanup } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import Dashboard from '../../src/pages/Dashboard';
 import Portfolio from '../../src/pages/Portfolio';
@@ -222,42 +222,61 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
     expect(screen.getByText('Strategy execution halted due to error.')).toBeDefined();
   });
 
-  // 13 & 14 & 17: Authoritative Exchange ID in Trade History & CSV
-  it('13, 14, 17: Trade history ledger renders canonical venue and rejects placeholder fabrication', async () => {
+  // 13 & 14 & 17: no fabricated venue, strategy or P&L in the Trade History ledger.
+  //
+  // vyomquant-ui-redesign task 15.1 rewrote the assertions this test makes, because the
+  // page it was written against fabricated the value it was checking for. The fixture is
+  // now a real `executions` telemetry row — `telemetry_engine` creates that table with
+  // exactly `(timestamp, user_id, symbol, side, status, amount, price)` — instead of the
+  // `pair`/`entry_price`/`exit_price`/`profit_loss`/`fee`/`slippage`/`strategy` keys the
+  // old fixture invented so that the old alias chains would resolve.
+  //
+  // The `Venue` column is gone with the rebuild (design.md §7.7): neither read reports an
+  // exchange, and the page used to default the cell to `"binance"` on live and `"paper"` on
+  // paper. So "renders the canonical venue" is no longer a claim the data can support, and
+  // what is asserted instead is that no venue, strategy or P&L placeholder appears at all.
+  it('13, 14, 17: Trade history ledger renders recorded fields only, with no fabricated venue, strategy or P&L', async () => {
     vi.spyOn(ordersModule.ordersApi, 'getHistory').mockResolvedValue([
       {
-        id: 777,
-        time: '2026-08-26T15:00:00Z',
-        pair: 'AVAX/USDT',
-        exchange_id: 'binance',
+        timestamp: '2026-08-26T15:00:00Z',
+        user_id: 'user_adversarial',
+        symbol: 'AVAX_USDT',
         side: 'buy',
-        entry_price: 25,
-        exit_price: 26,
-        quantity: 100,
-        profit_loss: 100,
-        fee: 0.5,
-        slippage: 0.01,
-        strategy: 'AVAX Swing'
+        status: 'filled',
+        amount: 100,
+        price: 25
       }
     ]);
 
     render(<MemoryRouter><TradeHistory /></MemoryRouter>);
 
-    expect(await screen.findByText('AVAX/USDT')).toBeDefined();
-    expect(screen.getByText('binance')).toBeDefined();
+    // Scoped to the table: the market select offers the same label as an option.
+    const table = await screen.findByRole('table');
+    expect(within(table).getByText('AVAX/USDT')).toBeDefined();
+    expect(within(table).getByText('Filled')).toBeDefined();
+
+    expect(screen.queryByText('binance')).toBeNull();
     expect(screen.queryByText('live_exchange')).toBeNull();
     expect(screen.queryByText('paper_exchange')).toBeNull();
+    // `routers/orders.py` refuses manual execution outright, so "Direct" cannot be true of
+    // any row — it was the old page's `?? "Direct"` default for a field nothing reports.
+    expect(screen.queryByText('Direct')).toBeNull();
   });
 
   // 15 & 16: Empty State Verification in Portfolio & Trade History
-  it('15 & 16: Empty state displays clean zero/empty notices without NaN or missing keys', async () => {
+  //
+  // Task 15.1: the two zero assertions became `queryByText(...)).toBeNull()`. `0.0%` and
+  // `$0.00` over a ledger with no rows are the fabricated zeros Requirement 14.5 forbids —
+  // the win rate and the totals derive from fields the live read does not report at all —
+  // so the summary now renders the not-available marker with its reason.
+  it('15 & 16: Empty state displays an explained empty notice with no fabricated zeros', async () => {
     vi.spyOn(ordersModule.ordersApi, 'getHistory').mockResolvedValue([]);
 
     render(<MemoryRouter><TradeHistory /></MemoryRouter>);
 
-    expect(await screen.findByText('No trades found for LIVE mode.')).toBeDefined();
-    expect(screen.getByText('0.0%')).toBeDefined();
-    expect(screen.getByText('$0.00')).toBeDefined();
+    expect(await screen.findByText('No trades recorded')).toBeDefined();
+    expect(screen.queryByText('0.0%')).toBeNull();
+    expect(screen.queryByText('$0.00')).toBeNull();
   });
 
   // 18, 19, 20: Kill Switch WebSocket Activation, Recovery, and Cleanup

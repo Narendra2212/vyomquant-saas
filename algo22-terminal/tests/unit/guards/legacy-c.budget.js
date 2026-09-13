@@ -84,6 +84,12 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // catches. Both guards clear on the same edit.
   'pages/Portfolio.jsx': 5,
   'pages/Strategies.jsx': 1,
+  // M7. Added at 0 by task 15.1 rather than lowered: the page imported `C` from the shim
+  // but never read a member off it, so it never carried a reference for the seeding pass
+  // to record. The rebuild dropped the import along with `SectionH` and `Tag2`, and the
+  // entry is here for the reason `Sidebar.jsx: 0` and `TopBar.jsx: 0` are — it records
+  // that the file is clean and holds it there until the shim is deleted (task 27.2).
+  'pages/TradeHistory.jsx': 0,
 
   // -- Files beyond task 1.12's list ---------------------------------------
   // Task 1.12 seeds from the in-scope pages. These carry 1470 further
