@@ -17,7 +17,7 @@ import os
 import re
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend_app.core.dependencies import get_telemetry, create_request_supabase
 
@@ -215,6 +215,171 @@ def positions_degradation(error: Optional[BaseException], environment: str) -> O
             "(Requirement 14.5). Any position held is still held."
         ),
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#
+#  BC-5 - lifetime REALISED P&L, which nothing on the portfolio overview reported
+#
+#  Spec: vyomquant-ui-redesign task 12.5. design.md §7.6, §16. Requirements 10.1, 19.1, 19.2.
+#
+#  Requirement 10.1 asks the Portfolio page for realised P&L. Two figures on this response look
+#  like it and neither is it:
+#    * ``today_realized_pnl`` IS realised, but only since 00:00 UTC. It is not a lifetime figure.
+#    * ``cumulative_pnl`` IS lifetime, but it is TOTAL P&L - realised plus the mark-to-market on
+#      positions still open. Labelling it "realised" would report unbanked money as banked.
+#  So the page had no source and rendered not-available.
+#
+#  THE FIGURE: the same ``executions.pnl`` sum ``today_realized_pnl`` already comes from, with
+#  the day filter removed. Derived from ONE expression rather than a second definition of
+#  "realised" - the two figures cannot disagree about what realised means, because they read the
+#  same column of the same table and differ only in the window.
+#
+#  ONE ROUND TRIP: the day-filtered sum used to be its own query with the cutoff in its
+#  ``WHERE``. It is now a conditional aggregate inside the same ``SELECT`` as the lifetime sum
+#  (:func:`executions_realized_pnl_query`), so the read that produced one figure produces both.
+#  The cost that did change is the scan: the lifetime sum has to see the user's whole execution
+#  history where the day-filtered one saw today's partition. That is inherent to a lifetime
+#  figure - a separate second query would pay the same scan AND a second round trip.
+#
+#  UNREADABLE IS ``None``; NET-ZERO IS ``0.0`` (Requirement 19.2, and BC-1/BC-2's rule)
+#    An account that has closed trades netting exactly nothing has a realised P&L of zero, and
+#    that is a fact a trader is entitled to read. So ``0.0`` is reserved for it and for the
+#    successfully-read empty ledger, and every case where the figure was NOT read reports
+#    ``None``:
+#      * the query raised, or returned no row                       -> ``None``
+#      * the row carries no ``realized_pnl`` column                 -> ``None``
+#      * the sum is SQL NULL over a ledger that HAS rows            -> ``None`` (the ``pnl``
+#        column is not reporting for those rows, so no sum of it can be published)
+#      * the sum is SQL NULL over a ledger with zero rows           -> ``0.0`` (read fine, and
+#        an account that has never executed has realised nothing)
+#      * the sum is a number, including ``0.0``                     -> that number
+#    ``None`` on the field is the whole honesty channel here, exactly as BC-1's
+#    ``current_drawdown_pct_v2`` is - a nullable FIGURE needs no ``degraded`` block, which BC-2
+#    added only because a LIST has nowhere to put a null. This is those two conventions applied,
+#    not a third one.
+#
+#  ADDITIVE (Requirement 19.1): ``today_realized_pnl`` and ``cumulative_pnl`` keep their names,
+#  their types and their exact values, including the ``0.0`` that ``today_realized_pnl`` has
+#  always published for an unreadable day sum. No consumer is repointed by BC-5.
+#
+# ══════════════════════════════════════════════════════════════════════════
+
+#: Column alias for the day-filtered realised sum. Selected FIRST so a caller reading the row
+#: positionally - which is how the single-figure query it replaces was read, ``dataset[0][0]`` -
+#: still finds today's figure where it has always been.
+TODAY_REALIZED_PNL_COLUMN = "today_realized_pnl"
+
+#: Column alias for the lifetime realised sum (BC-5). Read BY NAME only, never positionally: an
+#: unnamed column is a response whose shape we are guessing at, and a guessed money figure is
+#: the fabrication Requirement 19.2 forbids. ``None`` is the honest answer there.
+REALIZED_PNL_COLUMN = "realized_pnl"
+
+#: Column alias for the row count behind the sums. Not published - it exists so a SQL NULL sum
+#: over an EMPTY ledger can be told from a NULL sum over a ledger that has rows, which is the
+#: difference between "realised nothing" and "cannot say".
+EXECUTION_COUNT_COLUMN = "execution_count"
+
+
+def executions_realized_pnl_query(safe_uid: str, today_date_str: str) -> str:
+    """One QuestDB read yielding the day-filtered realised sum AND the lifetime one.
+
+    BC-5. Both figures are ``sum(pnl)`` over the same ``executions`` rows for this user; the
+    day-filtered one narrows to ``timestamp >= today 00:00 UTC`` as a conditional aggregate
+    rather than in the ``WHERE``, so one round trip answers both.
+
+    Args:
+        safe_uid: A user id ALREADY through :meth:`DashboardAggregationService._safe_uid`. This
+            function interpolates it and validates nothing - callers must not pass raw input.
+        today_date_str: ``YYYY-MM-DD`` for the UTC day whose realised P&L is wanted.
+
+    The day-filtered branch carries ``else 0.0`` rather than falling through to SQL NULL: a row
+    outside today contributes nothing either way, and the published figure is identical, but the
+    ``ELSE``-present form is the one this repository already runs against QuestDB
+    (``routers/analytics.py``).
+    """
+    day_cutoff = (
+        f"to_timestamp('{today_date_str}T00:00:00.000000Z', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ')"
+    )
+    return (
+        f"SELECT "
+        f"sum(case when timestamp >= {day_cutoff} then pnl else 0.0 end) AS {TODAY_REALIZED_PNL_COLUMN}, "
+        f"sum(pnl) AS {REALIZED_PNL_COLUMN}, "
+        f"count(*) AS {EXECUTION_COUNT_COLUMN} "
+        f"FROM executions "
+        f"WHERE user_id = '{safe_uid}';"  # nosec: B608
+    )
+
+
+def _finite_float(raw: Any) -> Optional[float]:
+    """``raw`` as a finite float, or ``None`` if it is not a number. Booleans are not money."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value != value or value in (float("inf"), float("-inf")):  # NaN / infinity
+        return None
+    return value
+
+
+def realized_pnl_from_execution_totals(
+    result: Optional[Dict[str, Any]],
+) -> Tuple[float, Optional[float]]:
+    """Read ``(today_realized_pnl, realized_pnl)`` off :func:`executions_realized_pnl_query`.
+
+    Returns:
+        A 2-tuple of
+
+        * ``today_realized_pnl`` - a ``float``, ``0.0`` when unreadable. Its historical
+          behaviour, preserved exactly: this field has always published ``0.0`` for a failed or
+          empty day sum and BC-5 is additive, so it is not the field that gets a null now.
+        * ``realized_pnl`` - the lifetime figure, or ``None`` when it was not read. ``0.0`` only
+          for a ledger that WAS read: one whose closed trades net to zero, or one with no rows
+          at all. See the BC-5 block above for the case-by-case rule.
+
+    Never raises for a malformed ``result``; an unrecognisable response is an unread one.
+    """
+    today = 0.0
+    lifetime: Optional[float] = None
+
+    if not isinstance(result, dict):
+        return today, lifetime
+    dataset = result.get("dataset")
+    if not dataset:
+        return today, lifetime
+    row = dataset[0]
+    if not isinstance(row, (list, tuple)) or not row:
+        return today, lifetime
+
+    columns = [
+        col.get("name")
+        for col in (result.get("columns") or [])
+        if isinstance(col, dict)
+    ]
+    by_name = dict(zip(columns, row))
+
+    # Today: by name where the response names it, else index 0 - the exact cell the query this
+    # replaced read (``pnl_res["dataset"][0][0]``), so no reader of this figure sees a change.
+    today_cell = by_name[TODAY_REALIZED_PNL_COLUMN] if TODAY_REALIZED_PNL_COLUMN in by_name else row[0]
+    today_value = _finite_float(today_cell)
+    if today_value is not None:
+        today = today_value
+
+    # Lifetime: named only. A missing column means this response is not the one this function
+    # describes, and no figure can be taken from it.
+    if REALIZED_PNL_COLUMN in by_name:
+        lifetime = _finite_float(by_name[REALIZED_PNL_COLUMN])
+        if lifetime is None:
+            # SQL NULL. Zero rows -> the ledger was read and it is empty, so nothing has been
+            # realised: that is 0.0. Rows present -> ``pnl`` is not reporting for them, and a
+            # sum of what is not reported cannot be published.
+            count = _finite_float(by_name.get(EXECUTION_COUNT_COLUMN))
+            if count is not None and count == 0:
+                lifetime = 0.0
+
+    return today, lifetime
 
 
 class DashboardAggregationService:
@@ -744,7 +909,25 @@ class DashboardAggregationService:
                     for t in trades
                     if (t.get("executed_at") or "") >= today_utc_cutoff
                 )
-                
+
+                # BC-5: lifetime realised P&L. The SAME per-fill expression as
+                # ``today_realized_pnl`` above with the day window removed, for the same reason
+                # the live branch derives both figures from one ``sum(pnl)``: the lifetime figure
+                # must not be a second definition of "realised". Deliberately NOT
+                # ``acct["realized_pnl"]`` - that is the account row's own running total, a
+                # different producer that is free to drift from the fill ledger this response
+                # already reports today's figure from.
+                #
+                # ``None`` if any fill's realised figure is unreadable: dropping it would publish
+                # the sum of a DIFFERENT set of fills under this name (the rule BC-1 applies to
+                # an equity series). An empty ledger read fine is ``0.0`` - nothing realised.
+                paper_realized = [_finite_float(t.get("realized_pnl")) for t in trades]
+                lifetime_realized_pnl: Optional[float] = (
+                    None
+                    if any(value is None for value in paper_realized)
+                    else float(sum(paper_realized))
+                )
+
                 today_pnl = today_realized_pnl + unrealized_pnl
                 today_return_pct = round((today_pnl / initial_capital * 100), 2) if initial_capital > 0 else 0.0
                 cumulative_pnl = realized_pnl + unrealized_pnl
@@ -757,6 +940,10 @@ class DashboardAggregationService:
                     "used_balance": used_balance,
                     "today_pnl": today_pnl,
                     "today_realized_pnl": today_realized_pnl,
+                    # BC-5 (Requirement 10.1). Same key, same meaning, both environments - a
+                    # page cannot have a lifetime realised figure in one mode and no such field
+                    # in the other.
+                    "realized_pnl": lifetime_realized_pnl,
                     "today_return_pct": today_return_pct,
                     "unrealized_pnl": unrealized_pnl,
                     "cumulative_pnl": cumulative_pnl,
@@ -775,6 +962,11 @@ class DashboardAggregationService:
                     "used_balance": 0.0,
                     "today_pnl": 0.0,
                     "today_realized_pnl": 0.0,
+                    # BC-5: the paper read failed, so there is no lifetime realised figure to
+                    # report. ``None``, not the 0.0 its neighbours carry - those are pre-existing
+                    # and left untouched here (BC-2 dealt with the route that published them as
+                    # a portfolio), but a field added today does not join them.
+                    "realized_pnl": None,
                     "today_return_pct": 0.0,
                     "unrealized_pnl": 0.0,
                     "cumulative_pnl": 0.0,
@@ -837,20 +1029,23 @@ class DashboardAggregationService:
             free_balance = available_balance
             used_balance = total_exposure
 
-        # Calculate today's realized PnL from QuestDB executions table since 00:00 UTC
+        # Realized PnL from the QuestDB executions table: today's (since 00:00 UTC) and, as of
+        # BC-5, the lifetime figure. ONE query for both - the day filter moved out of the
+        # ``WHERE`` and into a conditional aggregate, so the lifetime sum comes off the same read
+        # rather than a second round trip and cannot disagree about what "realised" means.
         today_realized_pnl = 0.0
+        realized_pnl: Optional[float] = None
         try:
             today_date_str = now_utc.strftime("%Y-%m-%d")
-            pnl_query = (
-                f"SELECT sum(pnl) as today_realized_pnl FROM executions "
-                f"WHERE user_id = '{safe_uid}' "
-                f"AND timestamp >= to_timestamp('{today_date_str}T00:00:00.000000Z', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ');"  # nosec: B608
+            pnl_res = await telemetry.execute_query(
+                executions_realized_pnl_query(safe_uid, today_date_str)
             )
-            pnl_res = await telemetry.execute_query(pnl_query)
-            if pnl_res and pnl_res.get("dataset") and pnl_res["dataset"][0][0] is not None:
-                today_realized_pnl = float(pnl_res["dataset"][0][0])
+            today_realized_pnl, realized_pnl = realized_pnl_from_execution_totals(pnl_res)
         except Exception as exec_err:
-            logger.debug(f"QuestDB executions today PnL query error: {exec_err}")
+            logger.debug(f"QuestDB executions PnL query error: {exec_err}")
+            # ``today_realized_pnl`` keeps the 0.0 it has always published for this failure
+            # (BC-5 is additive). ``realized_pnl`` stays ``None``: the read failed, so there is
+            # no lifetime realised figure, and 0.0 would assert one (Requirement 19.2).
 
         # Calculate open positions unrealized PnL from Redis live positions
         unrealized_pnl = 0.0
@@ -882,6 +1077,11 @@ class DashboardAggregationService:
             "used_balance": used_balance,
             "today_pnl": today_pnl,
             "today_realized_pnl": today_realized_pnl,
+            # BC-5: lifetime realised P&L (Requirement 10.1). Distinct from
+            # ``today_realized_pnl`` (same figure, today's window only) and from
+            # ``cumulative_pnl`` (realised PLUS open-position mark-to-market). ``None`` when the
+            # executions read could not produce it - never 0.0 as a stand-in.
+            "realized_pnl": realized_pnl,
             "today_return_pct": today_return_pct,
             "unrealized_pnl": unrealized_pnl,
             "cumulative_pnl": cumulative_pnl,
@@ -1496,6 +1696,8 @@ class DashboardAggregationService:
                     "used_balance": 0.0,
                     "today_pnl": 0.0,
                     "today_realized_pnl": 0.0,
+                    # BC-5: the portfolio read failed, so no lifetime realised figure was read.
+                    "realized_pnl": None,
                     "today_return_pct": 0.0,
                     "unrealized_pnl": 0.0,
                     "cumulative_pnl": 0.0,
@@ -1604,6 +1806,10 @@ class DashboardAggregationService:
                     "used_balance": float(portfolio.get("used_balance", 0.0)),
                     "today_pnl": float(portfolio.get("today_pnl", 0.0)),
                     "today_realized_pnl": float(portfolio.get("today_realized_pnl", 0.0)),
+                    # BC-5: lifetime realised P&L, carried through as read - ``None`` stays
+                    # ``None`` rather than being coerced to 0.0 by the ``float()`` its neighbours
+                    # get, which is the entire point of the field (Requirements 10.1, 19.2).
+                    "realized_pnl": _finite_float(portfolio.get("realized_pnl")),
                     "today_return_pct": float(portfolio.get("today_return_pct", 0.0)),
                     "unrealized_pnl": float(portfolio.get("unrealized_pnl", 0.0)),
                     "cumulative_pnl": float(portfolio.get("cumulative_pnl", 0.0)),
