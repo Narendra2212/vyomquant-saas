@@ -521,26 +521,88 @@ describe('the table region\'s states', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 7. The row still acts (Requirement 4.2) — task 17.2 repartitions these
+// 7. The row still acts, and its destructive pair is separated
+//    (Requirements 4.2, 4.3) — task 17.1 moved these into the row, 17.2 partitioned them
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe('the row\'s actions survive the rebuild', () => {
-  it('offers the same seven controls the card carried', async () => {
+  it('renders the non-destructive controls inline', async () => {
     const { table } = await mountWith([strategyRow({ status: 'stopped' })]);
     const actions = within(cell(bodyRows(table)[0], 'actions'));
 
-    for (const label of ['Edit', 'Clone', 'Rename', 'Backtest', 'Trace', 'Deploy']) {
+    // Requirement 4.2's own words for two of them: "Duplicate", not the endpoint's "clone";
+    // "Signal Trace", not the card's abbreviated "Trace".
+    for (const label of ['Backtest', 'Edit', 'Duplicate', 'Rename', 'Signal Trace']) {
       expect(actions.getByRole('button', { name: label }), label).toBeTruthy();
     }
-    expect(actions.getByRole('button', { name: 'Archive Momentum v2' })).toBeTruthy();
   });
 
-  it('offers Pause instead of Deploy while the strategy is running', async () => {
+  it('keeps Deploy live and the archive OUT of the inline set (Requirement 4.3)', async () => {
+    const { table } = await mountWith([strategyRow({ status: 'stopped' })]);
+    const actions = within(cell(bodyRows(table)[0], 'actions'));
+
+    // Not merely styled differently — not constructed inline at all. Both live behind the
+    // row's overflow trigger, below a divider.
+    expect(actions.queryByRole('button', { name: 'Deploy live' })).toBeNull();
+    expect(actions.queryByRole('button', { name: 'Archive strategy' })).toBeNull();
+    expect(actions.getByRole('button', { name: 'More actions for Momentum v2' })).toBeTruthy();
+  });
+
+  it('opens the two separated actions below a divider, in a named group', async () => {
+    const { table } = await mountWith([strategyRow({ status: 'stopped' })]);
+    const actions = within(cell(bodyRows(table)[0], 'actions'));
+
+    await userEvent.setup()
+      .click(actions.getByRole('button', { name: 'More actions for Momentum v2' }));
+
+    const menu = within(screen.getByRole('menu'));
+    expect(menu.getByRole('separator')).toBeTruthy();
+
+    const group = menu.getByRole('group', { name: /destructive and live-trading actions/i });
+    const deploy = within(group).getByRole('menuitem', { name: 'Deploy live' });
+    const archive = within(group).getByRole('menuitem', { name: 'Archive strategy' });
+
+    // §7.2's treatments: `env.live` for the deployment, `status.error` for the archive.
+    expect(deploy.getAttribute('data-menu-intent')).toBe('live');
+    expect(archive.getAttribute('data-menu-intent')).toBe('destructive');
+    // The archive still describes ARCHIVAL, because `DELETE /api/strategies/{id}` is a soft
+    // archive — a menu entry saying "Delete" would describe an operation the backend stopped
+    // performing at task 5.1.
+    expect(archive.textContent).toMatch(/archive/i);
+    expect(archive.textContent).not.toMatch(/delete/i);
+  });
+
+  it('archives only after the confirmation, never from the menu entry', async () => {
+    // Property 13 at this call site: the menu entry opens the dialog and issues nothing.
+    const { table } = await mountWith([strategyRow({ status: 'stopped' })]);
+    const user = userEvent.setup();
+    const actions = within(cell(bodyRows(table)[0], 'actions'));
+
+    await user.click(actions.getByRole('button', { name: 'More actions for Momentum v2' }));
+    await user.click(within(screen.getByRole('menu'))
+      .getByRole('menuitem', { name: 'Archive strategy' }));
+
+    const dialog = await screen.findByRole('dialog', { name: /archive strategy/i });
+    expect(within(dialog).getByText(/Nothing is deleted/i)).toBeTruthy();
+    expect(mockApi.strategies.delete).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole('button', { name: /archive strategy/i }));
+    await waitFor(() => expect(mockApi.strategies.delete).toHaveBeenCalledWith('s-1'));
+  });
+
+  it('offers Pause inline instead of the deployment while the strategy is running', async () => {
     const { table } = await mountWith([strategyRow({ status: 'running' })]);
     const actions = within(cell(bodyRows(table)[0], 'actions'));
 
     expect(actions.getByRole('button', { name: 'Pause' })).toBeTruthy();
-    expect(actions.queryByRole('button', { name: 'Deploy' })).toBeNull();
+
+    // Pause is neither destructive nor a live transition, so it is inline; and a running
+    // strategy is not offered a second deployment at all.
+    await userEvent.setup()
+      .click(actions.getByRole('button', { name: 'More actions for Momentum v2' }));
+    const menu = within(screen.getByRole('menu'));
+    expect(menu.queryByRole('menuitem', { name: 'Deploy live' })).toBeNull();
+    expect(menu.getByRole('menuitem', { name: 'Archive strategy' })).toBeTruthy();
   });
 
   it('links the row to its detail page from the name cell', async () => {

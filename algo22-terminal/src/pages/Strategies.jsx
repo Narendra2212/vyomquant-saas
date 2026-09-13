@@ -11,9 +11,10 @@ import { Tag2 } from "../components/ui-legacy/primitives";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 // Task 10.3: the two confirmation surfaces. Task 17.1: the table, the filter row and the
-// four states. Imported from the modules directly rather than through
-// `components/ds/index.js` — this page charts nothing, and the barrel is what would
-// otherwise put `ds/Chart`'s recharts dependency in its import graph (see ds/index.js).
+// four states. Task 17.2: the row's overflow menu. Imported from the modules directly
+// rather than through `components/ds/index.js` — this page charts nothing, and the barrel
+// is what would otherwise put `ds/Chart`'s recharts dependency in its import graph (see
+// ds/index.js).
 import { Alert } from "../components/ds/Alert";
 import { CommandButton } from "../components/ds/CommandButton";
 import { ConfirmDialog } from "../components/ds/ConfirmDialog";
@@ -22,6 +23,7 @@ import { EmptyState } from "../components/ds/EmptyState";
 import { Field } from "../components/ds/Field";
 import { FilterBar } from "../components/ds/FilterBar";
 import { NotAvailableMarker } from "../components/ds/Metric";
+import { OverflowMenu } from "../components/ds/OverflowMenu";
 import { PageHeader } from "../components/ds/PageHeader";
 import { Panel } from "../components/ds/Panel";
 import { StatusBadge, humaniseState } from "../components/ds/StatusBadge";
@@ -39,6 +41,13 @@ import {
   describeBlockingDeployment,
 } from "../lib/strategyArchive";
 import { deploymentRequest } from "../lib/deployPreflight";
+import { deployPresentation } from "../lib/deployFlow";
+import {
+  ROW_ACTION,
+  ownerRowActions,
+  partitionRowActions,
+  separationOf,
+} from "../lib/rowActions";
 import { useDeployPreflight } from "../hooks/useDeployPreflight";
 import DeployPreflightPanel from "../components/DeployPreflightPanel";
 
@@ -236,6 +245,25 @@ const NO_STRATEGIES_STATE = Object.freeze({
     + "until then.",
   action: Object.freeze({ label: "Open the strategy builder", to: "/app/builder" }),
 });
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * The deploy target the row's control opens on — task 17.2
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * The deploy modal has always opened with `environment: "live"` selected, so the row's
+ * deploy control is, by default, the start of a Live transition. That is what earns it
+ * Requirement 4.3's separated treatment and `intent="live"`; the trader can change the
+ * target inside the modal, and the label describes what happens if they change nothing.
+ *
+ * The label and the intent are READ from `lib/deployFlow.js` rather than authored here, so
+ * this control and §8.3's flow are titled by the same table — the precedent task 10.4 set
+ * on `pages/StrategyDetail.jsx`, which reads `deployPresentation` for exactly this and
+ * deliberately does not mount `DeployConfirmation`. Nothing about the request changes:
+ * `intent` is a presentation treatment on a menu entry, and the POST is still
+ * `endpoints.strategies.deployVersion` with `deploymentRequest`'s own body and query.
+ */
+const ROW_DEPLOY_ENVIRONMENT = "live";
+const ROW_DEPLOY_PRESENTATION = deployPresentation(ROW_DEPLOY_ENVIRONMENT);
 
 /** `undetermined` has no entry: it is an absence, not a verdict. Mirrors `ds/StrategyStatus`. */
 const HEALTH_BADGE_STATE = Object.freeze({
@@ -615,7 +643,9 @@ export default function Strategies() {
   const [deployModalStrategy, setDeployModalStrategy] = useState(null);
   const [deployConfig, setDeployConfig] = useState({
     exchange: "binance",
-    environment: "live",
+    // The same value it has always held, read from the constant the row's control is
+    // labelled from so the two cannot drift apart. See ROW_DEPLOY_ENVIRONMENT.
+    environment: ROW_DEPLOY_ENVIRONMENT,
     capital: "10000",
     tradeSizePct: "10",
     maxDrawdown: "15",
@@ -1273,113 +1303,156 @@ export default function Strategies() {
     : strategyNameRefusal(renameDialog.value, renameDialog.currentName);
 
   /* ══════════════════════════════════════════════════════════════════════════
-   * THE ROW'S ACTIONS (Requirement 4.2)
+   * THE ROW'S ACTIONS (Requirements 4.2, 4.3) — task 17.2
    * ══════════════════════════════════════════════════════════════════════════
    *
-   * The same seven controls the card carried, the same handlers, the same endpoints — moved
-   * into the row and nothing else. Task 17.2 repartitions them into the inline set plus
-   * `Deploy live` and `Delete` below a divider in the row's overflow menu, each behind a
-   * `ConfirmDialog`; this task deliberately does not pre-empt that, because a page left with
-   * no actions between the two is a page a trader cannot use.
+   * The same seven controls, the same handlers, the same endpoints, the same payloads.
+   * What changed is the partition: task 17.1 left them as seven flat `ui/Button`s in the
+   * eleventh column, and §7.2 asks for the non-destructive five (six while running) inline
+   * with `Deploy live` and the archive below a divider in the row's overflow menu.
+   *
+   * WHERE THE PARTITION IS DECIDED, AND WHY NOT HERE
+   * -----------------------------------------------
+   * `lib/rowActions.js`. Requirement 4.3's "visually separated" and Requirement 4.2's "the
+   * offer never exceeds what the server permitted" are both claims about *construction*, and
+   * a cell that filtered a fixed button list at render time would satisfy neither: the
+   * control for an action nobody offered would have been built and merely not painted, and
+   * the separation would be a fact about a border colour. So the ids are partitioned by a
+   * pure function of (offered ids, catalogue) — Properties P6 and P7 are assertable against
+   * that function alone — and this cell renders what it returns.
+   *
+   * `partitionRowActions` iterates the CATALOGUE's own keys and emits one only when the
+   * offered list contains it, so this cell is structurally incapable of rendering a control
+   * for an id that is not in both. Declaration order below is therefore §7.2's render order:
+   * Backtest · Edit · Duplicate · Rename · Signal Trace · [Pause] inline, then the two
+   * separated entries. "View" is §7.2's sixth inline action and is already the row itself —
+   * `rowHref` makes the name cell a link to `/app/strategies/{id}` (Requirement 18.1), so a
+   * second control to the same place would be a duplicate tab stop per row.
    */
   const BUSY_TITLE = "An action on this strategy is still in progress.";
 
   /*
-   * Declared per render, not memoised, and neither is the column list below it.
-   * `DataTable` memoises a row on its projected cell values PLUS the `columns` identity, and
-   * everything this cell reads that is not a projected value — `isProcessing`, and five
-   * handlers that close over `strategies` — changes without any cell value changing. A
-   * memo keyed on a subset of that is a row showing a stale disabled state; a memo keyed on
-   * all of it recomputes every render anyway. So the identity moves every render, which is
-   * what the card grid did, and the page has no WebSocket ticks for it to cost anything on.
+   * The catalogue and the cell are both declared per render, not memoised, and neither is
+   * the column list below them. `DataTable` memoises a row on its projected cell values PLUS
+   * the `columns` identity, and everything the cell reads that is not a projected value —
+   * `isProcessing`, and the seven handlers that close over `strategies` — changes without any
+   * cell value changing. A memo keyed on a subset of that is a row showing a stale disabled
+   * state; a memo keyed on all of it recomputes every render anyway. So the identity moves
+   * every render, which is what the card grid did, and the page has no WebSocket ticks for it
+   * to cost anything on.
    */
+  /**
+   * What this page can DO with each action id — the catalogue `partitionRowActions` narrows.
+   *
+   * Every entry names one handler that already existed, and no entry constructs a request:
+   * `onSelect` calls the page handler, and the two separated ones open a surface that holds
+   * the request until its own confirm action fires. So neither `endpoints.strategies.delete`
+   * nor `endpoints.strategies.deployVersion` is reachable from a menu entry (Property 13).
+   *
+   * The labels are Requirement 4.2's own words — it names the action "Duplicate", which the
+   * card grid called "Clone" after the endpoint (`POST /api/strategies/{id}/clone`, still the
+   * endpoint), and "Signal Trace", which the card abbreviated to "Trace".
+   */
+  const rowActionCatalog = {
+    [ROW_ACTION.RUN_BACKTEST]: {
+      label: "Backtest",
+      icon: BarChart2,
+      onSelect: (row) =>
+        navigate(`/app/backtest?strategy_id=${row.id}`, { state: { strategy: row } }),
+    },
+    [ROW_ACTION.EDIT]: {
+      label: "Edit",
+      icon: Edit2,
+      onSelect: (row) => { setEditingStrategy(row); setView("builder"); },
+    },
+    [ROW_ACTION.CLONE]: {
+      label: "Duplicate",
+      icon: Copy,
+      onSelect: (row) => handleCloneStrategy(row.id),
+    },
+    [ROW_ACTION.RENAME]: {
+      label: "Rename",
+      icon: Settings,
+      onSelect: (row) => requestRenameStrategy(row.id, row.name),
+    },
+    [ROW_ACTION.SIGNAL_TRACE]: {
+      label: "Signal Trace",
+      icon: Activity,
+      onSelect: (row) => navigate(`/app/signal-trace?strategy_id=${row.id}`),
+    },
+    // Pausing a running strategy stops it placing new orders. That is the safe direction of
+    // a live transition and destroys nothing, so it stays inline — `lib/rowActions.js`'s
+    // classifier rejects it, and this entry does not get to disagree.
+    [ROW_ACTION.PAUSE]: {
+      label: "Pause",
+      icon: Pause,
+      onSelect: (row) => handlePauseStrategy(row.id),
+    },
+    // ── The separated pair. `intent` is read from the classifier, not written here ──────
+    [ROW_ACTION.DEPLOY_LIVE]: {
+      label: ROW_DEPLOY_PRESENTATION.confirmLabel,
+      icon: Play,
+      onSelect: (row) => handleOpenDeployModal(row),
+    },
+    // §7.2's sketch calls this "Delete". The endpoint is `DELETE /api/strategies/{id}`, which
+    // task 5.1 rewired into `archive_strategy` — a SOFT archive that keeps every version,
+    // backtest, deployment and signal. So the label says archive: a control promising a
+    // delete would describe an operation the backend stopped performing, and the dialog it
+    // opens (below) has said "Archive strategy" since task 10.3.
+    [ROW_ACTION.ARCHIVE]: {
+      label: "Archive strategy",
+      icon: Trash2,
+      onSelect: (row) => requestArchiveStrategy(row),
+    },
+  };
+
   const ActionsCell = function StrategyActionsCell({ row }) {
     const busy = Boolean(isProcessing[row.id]);
     const title = busy ? BUSY_TITLE : undefined;
+    const { inline, separated } = partitionRowActions(ownerRowActions(row), rowActionCatalog);
+    const rowLabel = row.name ? row.name : `strategy ${row.id}`;
+
     return (
       <span className="inline-flex flex-wrap items-center gap-1">
-        <Button
-          variant="ghost"
-          size="xs"
-          icon={Edit2}
-          title={title}
-          disabled={busy}
-          onClick={() => { setEditingStrategy(row); setView("builder"); }}
-        >
-          Edit
-        </Button>
-        <Button
-          variant="ghost"
-          size="xs"
-          icon={Copy}
-          title={title}
-          disabled={busy}
-          onClick={() => handleCloneStrategy(row.id)}
-        >
-          Clone
-        </Button>
-        <Button
-          variant="ghost"
-          size="xs"
-          icon={Settings}
-          title={title}
-          disabled={busy}
-          onClick={() => requestRenameStrategy(row.id, row.name)}
-        >
-          Rename
-        </Button>
-        <Button
-          variant="ghost"
-          size="xs"
-          icon={BarChart2}
-          title={title}
-          disabled={busy}
-          onClick={() => navigate(`/app/backtest?strategy_id=${row.id}`, { state: { strategy: row } })}
-        >
-          Backtest
-        </Button>
-        <Button
-          variant="ghost"
-          size="xs"
-          icon={Activity}
-          title={title}
-          disabled={busy}
-          onClick={() => navigate(`/app/signal-trace?strategy_id=${row.id}`)}
-        >
-          Trace
-        </Button>
-        {row.status === "running" ? (
-          <Button
-            variant="ghost"
-            size="xs"
-            icon={Pause}
-            title={title}
-            disabled={busy}
-            onClick={() => handlePauseStrategy(row.id)}
-          >
-            Pause
-          </Button>
-        ) : (
-          <Button
-            variant="success"
-            size="xs"
-            icon={Play}
-            title={title}
-            disabled={busy}
-            onClick={() => handleOpenDeployModal(row)}
-          >
-            Deploy
-          </Button>
+        {inline.map((id) => {
+          const action = rowActionCatalog[id];
+          return (
+            <Button
+              key={id}
+              variant="ghost"
+              size="xs"
+              icon={action.icon}
+              title={title}
+              disabled={busy}
+              onClick={() => action.onSelect(row)}
+            >
+              {action.label}
+            </Button>
+          );
+        })}
+        {separated.length === 0 ? null : (
+          <OverflowMenu
+            // Named per row: forty menus all called "More actions" are forty
+            // indistinguishable controls to a screen-reader user (Requirement 18.4).
+            label={`More actions for ${rowLabel}`}
+            items={separated.map((id) => {
+              const action = rowActionCatalog[id];
+              return {
+                id,
+                label: action.label,
+                icon: action.icon,
+                // The treatment comes from the same classifier that decided the entry
+                // belongs here, so `env.live` / `status.error` cannot be attached to the
+                // wrong one (Requirement 4.3).
+                intent: separationOf(id),
+                separated: true,
+                disabled: busy,
+                disabledReason: busy ? BUSY_TITLE : undefined,
+                onSelect: () => action.onSelect(row),
+              };
+            })}
+          />
         )}
-        <Button
-          variant="danger"
-          size="xs"
-          icon={Trash2}
-          title={busy ? BUSY_TITLE : "Archive strategy"}
-          aria-label={row.name ? `Archive ${row.name}` : `Archive strategy ${row.id}`}
-          disabled={busy}
-          onClick={() => requestArchiveStrategy(row)}
-        />
       </span>
     );
   };

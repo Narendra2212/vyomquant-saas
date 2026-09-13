@@ -53,14 +53,18 @@
  * 6.23 names that had no module yet. They are here now, and each one is listed
  * below in its alphabetical slot.
  *
+ * `OverflowMenu` was the fifth (task 17.2): §7.2 draws a row whose destructive
+ * and live-transition actions sit below a divider in a trailing `⋮`, and nothing
+ * in `ds/` rendered one. It is listed below in its alphabetical slot.
+ *
  * `readTrail` is exported alongside `Breadcrumb` because the shell (task 8.7)
  * resolves its trail from `shell/navigation.js` and has to know whether anything
  * survived cleaning before it reserves space for a breadcrumb row.
- * `nextTabIndex` and `alertRole` are exported for the same class of reason: they
- * are the pure decisions inside `Tabs` and `Alert` — which tab an arrow key moves
- * to, and whether a severity earns an assertive or a polite live region — and a
- * consumer or a test asserting either of them should read the one implementation
- * rather than restate it.
+ * `nextTabIndex`, `nextMenuIndex` and `alertRole` are exported for the same class
+ * of reason: they are the pure decisions inside `Tabs`, `OverflowMenu` and `Alert`
+ * — which tab or menu entry an arrow key moves to, and whether a severity earns an
+ * assertive or a polite live region — and a consumer or a test asserting any of
+ * them should read the one implementation rather than restate it.
  *
  * ═══ NAMED RE-EXPORTS, NOT `export *` ═══
  *
@@ -133,6 +137,14 @@ export {
   NotAvailableMarker,
   tierClasses,
 } from './Metric';
+
+export {
+  MENU_INTENTS,
+  MENU_NAVIGATION_KEYS,
+  nextMenuIndex,
+  OverflowMenu,
+  SEPARATED_GROUP_LABEL,
+} from './OverflowMenu';
 
 export { PAGE_HEADER_HEIGHT_PX, PageHeader } from './PageHeader';
 
