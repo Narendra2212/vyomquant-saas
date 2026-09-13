@@ -365,6 +365,20 @@ class SignalService:
     ) -> Dict:
         """
         Update signal with execution and PnL information.
+
+        BC-6 (vyomquant-ui-redesign task 12.6; Requirements 9.1, 9.2, 19.1, 19.2)
+            THIS IS THE POINT AT WHICH REQUIREMENT 9.1'S STAGE 9 IS RECORDED. Writing
+            ``executed_at`` is what makes :data:`POSITION_UPDATED_EVENT` appear on the
+            timeline, because :func:`signal_event_timeline` derives that event from this
+            row - see :func:`_position_updated_event`. So the position change is recorded
+            by the same statement that records the execution, in the same transaction,
+            with no second write to fail on its own.
+
+            NOTHING ABOUT THIS METHOD'S CONTRACT MOVED. The signature, the four written
+            columns and the return value are unchanged, and
+            ``ExecutionUpdateRequest`` gains no field. A REPEAT call is safe by
+            construction: it overwrites the same ``executed_at`` rather than appending,
+            so the timeline still carries exactly one ``POSITION_UPDATED``.
         """
         user_id = str(user.get("id", "")) if isinstance(user, dict) else ""
         
@@ -8102,6 +8116,135 @@ TRACE_SOURCE_ENGINE = "signal_trace_engine"
 TRACE_SOURCE_ROW = "signals_row"
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#
+#  BC-6 (vyomquant-ui-redesign task 12.6) - STAGE 9, THE POSITION CHANGE
+#
+#  Requirements 9.1, 9.2, 19.1, 19.2. design.md §10.1's stage table, §16's
+#  BC-6 row.
+#
+#  THE GAP. Requirement 9.1 names nine stages. Eight had a backing record and
+#  the ninth - "position update" - had none: `PUT /signals/{id}/execution`
+#  accepts `trade_id`, `pnl` and `realized_pnl`, which is a P&L OUTCOME, not a
+#  position TRANSITION. So the page's last stage rendered permanently
+#  not-available.
+#
+#  WHY A SIXTH DERIVED EVENT RATHER THAN A NEW STORE. This timeline is a
+#  DERIVATION from the persisted `public.signals` row (see the docstring
+#  below); it is not an append log. Extending the derivation buys three things
+#  a parallel write would not:
+#
+#    * EXACTLY-ONCE FOR FREE. A derivation from a column cannot duplicate, so
+#      a repeated `PUT .../execution` - which overwrites `executed_at` - still
+#      yields exactly one POSITION_UPDATED. An append-on-write design would
+#      need its own idempotency guard on a production execution path.
+#    * NO NEW FAILURE MODE ON THE EXECUTION WRITE. `update_execution` gains no
+#      second statement that could fail after the first one committed.
+#    * NO RETENTION BOUND. `signal_trace_engine` is in-memory with
+#      `retention_seconds=3600`, which is why design.md §10.1 has stage 4
+#      degrade after an hour. Deriving stage 9 from the ROW instead means it
+#      lasts as long as the signal does.
+#
+#  WHAT IT MAY AND MAY NOT CLAIM. The row records the position CHANGE - the
+#  instrument, the direction the signal decided, the quantity that filled and
+#  the price it filled at. It records NO absolute holding: nothing in this
+#  domain reports the position a signal left behind. `position_size` is the
+#  risk-approved INTENDED size from `update_risk_decision`, not an outcome, and
+#  is deliberately not read here. So `resulting_position` is reported as
+#  not-available WITH ITS REASON rather than reconstructed from the change. An
+#  event asserting a holding nobody reported would be worse than a missing
+#  stage (Requirement 19.2).
+#
+# ══════════════════════════════════════════════════════════════════════════
+
+#: The sixth ``timeline`` event type. Named as a constant so the router, the service and
+#: the tests spell it in exactly one place - the discipline `MANUAL_RECONCILIATION_EVENT`
+#: already gets. There is no enum to extend and no collision to avoid: the other five names
+#: were inline string literals in :func:`signal_event_timeline` and remain byte-identical,
+#: and ``public.signal_events.event_type`` (a SEPARATE, persisted vocabulary whose only
+#: member this repository writes is ``MANUAL_RECONCILIATION_REQUIRED``) is untouched.
+POSITION_UPDATED_EVENT = "POSITION_UPDATED"
+
+#: Every ``timeline`` event type this function can emit, in derivation order. Declared so a
+#: consumer (and design.md §10.1's stage table) can name the vocabulary instead of
+#: re-deriving it from the source. The first five are the pre-spec five, in their pre-spec
+#: order; BC-6 appends the sixth and reorders nothing.
+SIGNAL_TIMELINE_EVENTS = (
+    "SIGNAL_GENERATED",
+    "RISK_EVALUATED",
+    "ORDER_CREATED",
+    "EXCHANGE_RESPONSE",
+    "EXECUTED",
+    POSITION_UPDATED_EVENT,
+)
+
+#: The members of ``POSITION_UPDATED.data`` that describe the transition itself. Any one of
+#: them the row did not report is named in ``not_available`` rather than defaulted, because
+#: a zero fill and an unreported fill are different facts about a trader's position.
+POSITION_TRANSITION_FIELDS = ("symbol", "direction", "quantity_delta", "average_price")
+
+#: The absolute holding the change produced. ALWAYS ``None`` on every current database, and
+#: always named in ``not_available``: no column, no request field and no other record in
+#: this domain carries it. Kept as a present key so a consumer destructures a declared
+#: absence instead of a missing one (Requirement 19.2).
+POSITION_RESULTING_FIELD = "resulting_position"
+
+#: Why ``resulting_position`` is not available. One sentence, on the event, so the page
+#: renders the server's own reason rather than a hardcoded frontend string.
+POSITION_RESULTING_UNREPORTED_REASON = (
+    "The execution update reports the position CHANGE only - instrument, direction, filled "
+    "quantity and fill price. No record in the signal-trace domain carries the absolute "
+    "position a signal left behind, so it is reported as not available rather than "
+    "reconstructed from the change."
+)
+
+
+def _position_updated_event(row: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """BC-6's ``POSITION_UPDATED``, or ``None`` when no execution was recorded.
+
+    THE GATE IS ``executed_at``, WHICH IS ``EXECUTED``'S OWN GATE
+        Deliberately the same column, so the two events are structurally paired: this event
+        exists if and only if ``EXECUTED`` does. That is what makes design.md §10.1's
+        "exactly one POSITION_UPDATED after EXECUTED" and "none for a signal that never
+        executed" properties of the shape rather than of a code path - and it is why the
+        event cannot be emitted speculatively, since ``executed_at`` is written only by
+        :meth:`SignalService.update_execution`, at the moment the execution is recorded.
+    """
+    executed_at = row.get("executed_at")
+    if not executed_at:
+        return None
+
+    # Only what the row actually reports. `filled` and `average_price` are the order
+    # update's own record of what moved and at what price; `decision` is the direction the
+    # signal committed to. Nothing here is defaulted - `.get` returning None means "not
+    # reported", and that is carried through to `not_available` below.
+    data: Dict[str, Any] = {
+        "symbol": row.get("symbol"),
+        "direction": row.get("decision"),
+        "quantity_delta": row.get("filled"),
+        "average_price": row.get("average_price"),
+        # Repeated from EXECUTED rather than moved off it: Requirement 19.1 forbids changing
+        # an existing event's payload, and a stage-9 reader should not have to join to
+        # stage 8 to know which trade the change belongs to.
+        "trade_id": row.get("trade_id"),
+        "realized_pnl": row.get("realized_pnl"),
+        POSITION_RESULTING_FIELD: None,
+    }
+
+    unavailable = [field for field in POSITION_TRANSITION_FIELDS if data.get(field) is None]
+    # The absolute holding is unavailable on every current database, so it is appended
+    # unconditionally rather than tested for.
+    unavailable.append(POSITION_RESULTING_FIELD)
+
+    data["not_available"] = unavailable
+    data["not_available_reason"] = POSITION_RESULTING_UNREPORTED_REASON
+    return {
+        "event": POSITION_UPDATED_EVENT,
+        "timestamp": executed_at,
+        "data": data,
+    }
+
+
 def signal_event_timeline(row: Mapping[str, Any]) -> List[Dict[str, Any]]:
     """The pre-spec event timeline for one ``public.signals`` row, chronologically.
 
@@ -8109,6 +8252,13 @@ def signal_event_timeline(row: Mapping[str, Any]) -> List[Dict[str, Any]]:
     detail view can build it from a row it already holds. A DERIVATION from timestamp
     columns, not an audit record - :func:`load_lifecycle_transitions` is the audit record
     (Requirement 16.7) and the two are reported separately for that reason.
+
+    BC-6 (task 12.6) appends a sixth event type, ``POSITION_UPDATED``, for Requirement
+    9.1's stage 9. Purely additive: the five pre-spec events keep their names, their
+    gates, their order and their ``data`` payloads byte-for-byte, and the new event is
+    appended AFTER ``EXECUTED`` carrying ``EXECUTED``'s own timestamp - the sort below is
+    stable, so equal timestamps keep insertion order and stage 9 can never sort ahead of
+    stage 8. See :func:`_position_updated_event`.
     """
     timeline: List[Dict[str, Any]] = [
         {
@@ -8165,6 +8315,16 @@ def signal_event_timeline(row: Mapping[str, Any]) -> List[Dict[str, Any]]:
             }
         )
 
+    # BC-6's stage 9, appended immediately after stage 8 and gated on the same column, so
+    # `EXECUTED` and `POSITION_UPDATED` are present or absent together.
+    position_updated = _position_updated_event(row)
+    if position_updated is not None:
+        timeline.append(position_updated)
+
+    # STABLE, so the append order above survives equal timestamps. `POSITION_UPDATED`
+    # carries `executed_at` - the same value `EXECUTED` carries - and Python's sort is
+    # stable, which is what keeps stage 9 after stage 8 without inventing a later
+    # timestamp for it.
     timeline.sort(key=lambda event: event.get("timestamp") or "")
     return timeline
 

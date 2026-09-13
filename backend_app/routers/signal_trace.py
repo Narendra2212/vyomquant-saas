@@ -538,13 +538,32 @@ async def get_signal_timeline(request: Request,
 ):
     """
     Get complete signal timeline.
-    
-    Returns all events in chronological order:
+
+    Returns all events in chronological order. The vocabulary is
+    ``signal_service.SIGNAL_TIMELINE_EVENTS``, named there rather than transcribed here so
+    the six words are spelled in one place:
+
     - SIGNAL_GENERATED
     - RISK_EVALUATED
     - ORDER_CREATED
     - EXCHANGE_RESPONSE
     - EXECUTED
+    - POSITION_UPDATED
+
+    BC-6 (vyomquant-ui-redesign task 12.6; Requirements 9.1, 9.2, 19.1, 19.2)
+        ``POSITION_UPDATED`` is the sixth, added for Requirement 9.1's ninth stage, which
+        had no backing record at all (design.md §10.1). It is derived from the same
+        ``executed_at`` column ``EXECUTED`` is derived from, so it appears exactly once,
+        always immediately after ``EXECUTED``, and never for a signal that has not
+        executed. The five pre-spec events are unchanged in name, gate, order and payload.
+
+        Its ``data`` reports the position CHANGE the row actually carries -
+        ``symbol``, ``direction``, ``quantity_delta``, ``average_price``, ``trade_id``,
+        ``realized_pnl`` - plus ``resulting_position``, which is ``null`` on every current
+        database because nothing in this domain records the absolute holding a signal left
+        behind. Every unreported member is named in ``data.not_available`` with a
+        ``data.not_available_reason``, so the page renders a declared absence rather than a
+        computed guess.
     """
     try:
         service = await get_signal_service()
@@ -651,8 +670,24 @@ async def update_execution(
 ):
     """
     Update signal with execution and PnL information.
-    
+
     Execution event in the execution audit trail.
+
+    BC-6 (vyomquant-ui-redesign task 12.6; Requirements 9.1, 9.2, 19.1, 19.2)
+        THIS IS ALSO WHERE REQUIREMENT 9.1'S STAGE 9 IS RECORDED. The same write that
+        records the execution makes the timeline's ``POSITION_UPDATED`` event appear, because
+        that event is derived from this row's ``executed_at`` (``signal_service``'s
+        :func:`~backend_app.backend.signal_service._position_updated_event`). There is no
+        second write, so this endpoint gained no new way to fail.
+
+        THE REQUEST CONTRACT IS UNCHANGED. ``ExecutionUpdateRequest`` still declares
+        exactly ``trade_id``, ``pnl`` and ``realized_pnl``; no field was added, required or
+        optional. A position the caller does not report is reported as not-available on the
+        event rather than solicited here or invented downstream.
+
+        A REPEAT CALL IS SAFE. This is an overwrite of ``executed_at``, not an append, and
+        the timeline is a derivation from the row - so calling it twice for the same signal
+        leaves exactly one ``POSITION_UPDATED``, not two.
     """
     try:
         service = await get_signal_service()

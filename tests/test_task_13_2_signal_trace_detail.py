@@ -781,13 +781,41 @@ async def test_an_absent_transition_table_degrades_rather_than_erroring(engine, 
 
 @pytest.mark.asyncio
 async def test_the_derived_timeline_is_retained_beside_the_audit_history(engine):
-    """SignalTrace.jsx renders `timeline` today; task 19 is what re-points the page."""
+    """SignalTrace.jsx renders `timeline` today; task 19 is what re-points the page.
+
+    AUTHORISED UPDATE - vyomquant-ui-redesign BC-6 (task 12.6; Requirements 9.1, 9.2,
+    19.1, 19.2). This assertion was a CLOSED-WORLD one: it pinned the derived timeline to
+    exactly the five pre-spec events. BC-6 appends a sixth, `POSITION_UPDATED`, because
+    Requirement 9.1's ninth stage - the position change a signal produced - had no backing
+    record at all (design.md §10.1's stage table registers it as the one place the
+    requirement asked for something the backend did not track). Task 12.6's own
+    verification is that this timeline carries it.
+
+    What this test still guards is what it was written to guard, and BC-6 changed none of
+    it: the derived timeline is RETAINED beside `lifecycle_transitions` rather than
+    replaced by it, and the five pre-spec events keep their names and their order. Those
+    five are asserted separately below so a rename or a reorder of them still fails here,
+    which an assertion over the six as one list would not distinguish from an append.
+
+    BC-6's own behaviour - exactly-once, always after `EXECUTED`, absent for a signal that
+    never executed, and nothing fabricated in the payload - is covered by
+    tests/test_position_updated_projection.py.
+    """
     service, _ = service_for([signal_row()], transitions=transition_rows())
 
     detail = await service.get_signal_trace(OWNER, SIGNAL_ID)
 
     events = [event["event"] for event in detail["timeline"]]
     assert events == [
+        "SIGNAL_GENERATED",
+        "RISK_EVALUATED",
+        "ORDER_CREATED",
+        "EXCHANGE_RESPONSE",
+        "EXECUTED",
+        svc.POSITION_UPDATED_EVENT,
+    ]
+    # The pre-spec five, unchanged in name and relative order (Requirement 19.1).
+    assert [event for event in events if event != svc.POSITION_UPDATED_EVENT] == [
         "SIGNAL_GENERATED",
         "RISK_EVALUATED",
         "ORDER_CREATED",
