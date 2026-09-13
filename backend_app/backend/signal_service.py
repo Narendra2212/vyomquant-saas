@@ -49,6 +49,12 @@ from backend_app.core.distributed_idempotency import (  # noqa: F401
     idempotency_key_for,
 )
 
+# BC-3's producer (vyomquant-ui-redesign task 12.3's follow-up, Requirements 4.1, 19.2).
+# Pure standard library at module scope, like the two imports above, so it cannot cycle and
+# costs nothing to import. ``schedule_last_signal_at`` is fire-and-forget by construction -
+# see that module's docstring for why the signal path schedules rather than awaits it.
+from backend_app.backend.strategy_last_signal import schedule_last_signal_at
+
 logger = logging.getLogger("SignalService")
 
 
@@ -241,6 +247,18 @@ class SignalService:
                 result = await query_res if inspect.isawaitable(query_res) else query_res
                 if result and hasattr(result, "data") and result.data:
                     self._local_signals[signal_id] = result.data[0]
+                    # BC-3's producer, on this path too (task 12.3's follow-up,
+                    # Requirements 4.1, 19.2). Inside the `if`, so it runs only when the
+                    # INSERT actually returned a row: the in-memory fallback below is not
+                    # persistence, and a signal only this process knows about must not move
+                    # a timestamp every other reader can see. Scheduled, never awaited -
+                    # nothing here can fail or delay the signal.
+                    schedule_last_signal_at(
+                        sb,
+                        strategy_id=strategy_id,
+                        user_id=user_id,
+                        generated_at=signal_data["generated_at"],
+                    )
                     return result.data[0]
         except Exception as e:
             logger.debug(f"Supabase signal insert fallback for {signal_id}: {e}")
@@ -2599,6 +2617,20 @@ async def _persist_signal(
             signal.id,
         )
         signal = replace(signal, id=stored_id)
+
+    # ── the strategy row's last_signal_at (BC-3's producer) ─────────────
+    # vyomquant-ui-redesign task 12.3's follow-up, Requirements 4.1, 19.2. Scheduled, NOT
+    # awaited, and only from HERE - after the row above is confirmed persisted. Nothing on
+    # this path waits for it or can be failed by it: a signal recorded without its
+    # denormalised timestamp is acceptable, the reverse is not. See
+    # ``strategy_last_signal``'s module docstring for the isolation this relies on, and
+    # ``015_strategy_last_signal_at.sql`` for why the column is written rather than derived.
+    schedule_last_signal_at(
+        client,
+        strategy_id=signal.strategy_id,
+        user_id=signal.user_id,
+        generated_at=signal.generated_at,
+    )
 
     logger.info(
         "Generated signal %s: %s %s on %s (deployment %s, strategy %s %s) at %s",

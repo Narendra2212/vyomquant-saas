@@ -56,6 +56,7 @@ WHAT THIS FILE CANNOT PROVE
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
 import sys
@@ -593,3 +594,414 @@ def _instant(value: Optional[str]) -> Optional[datetime]:
     if value is None:
         return None
     return _naive(datetime.fromisoformat(value))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 4. BC-3's PRODUCER — ``last_signal_at`` IS NOW A REAL FIGURE
+#    (task 12.3's follow-up; Requirements 4.1, 19.1, 19.2)
+#
+# Everything above this line tests the READER, and the reader was never the problem: it
+# published ``last_signal_at`` correctly and reported ``null`` honestly. The problem was
+# that ``null`` was the answer FOREVER — no migration in this repository declared
+# ``strategies.last_signal_at`` and nothing wrote it, so the Strategies page's "Last signal"
+# column had a permanent not-available state, which is the one outcome Task 12's preamble
+# rules out.
+#
+# The producer is ``015_strategy_last_signal_at.sql`` (the column) plus
+# ``backend_app/backend/strategy_last_signal.py`` (the write). This section drives the REAL
+# signal-recording path — ``signal_service.generate_signal`` — against the same PostgREST
+# double the listing is tested through, so one store holds both the ``signals`` row that was
+# written and the ``strategies`` row that was updated, and the assertion is end to end:
+# a strategy that signalled reports the instant it signalled at, through
+# ``GET /api/strategies``.
+#
+# WHY THE WRITE IS SCHEDULED AND NOT AWAITED, AND WHY THAT IS TESTED HERE
+#     The signal write path must not become able to fail. ``schedule_last_signal_at`` calls
+#     ``asyncio.create_task`` and returns, so nothing on the signal path awaits the update:
+#     it cannot raise into it and cannot slow it down. Both halves of that are asserted
+#     below rather than asserted in a comment — a raising update and a HANGING update both
+#     have to leave ``generate_signal`` returning a persisted signal.
+# ══════════════════════════════════════════════════════════════════════════
+
+#: The instant the signal under test is generated at. Fixed and passed to
+#: ``generate_signal(now=...)``, so "the strategy reports the instant it signalled" is a
+#: comparison against a stated value rather than against whatever the clock said.
+SIGNAL_GENERATED_AT = datetime(2024, 5, 3, 11, 22, 33, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def fresh_last_signal_probe():
+    """The "015 is unapplied" verdict is cached per process; no test may inherit another's."""
+    from backend_app.backend import signal_service as signal_module
+    from backend_app.backend import strategy_last_signal as producer
+
+    producer.reset_last_signal_column_support()
+    signal_module.reset_signal_lifecycle_column_support()
+    yield
+    producer.reset_last_signal_column_support()
+    signal_module.reset_signal_lifecycle_column_support()
+
+
+def _signal_store(*, absent_columns=(), failing_tables=(), extra: int = 0) -> Any:
+    """The two strategies and an empty ``signals`` table, in one PostgREST double.
+
+    Neither strategy row carries ``last_signal_at``, which is the state of a database the
+    moment 015 is applied: the column exists and every row is ``NULL``.
+    """
+    store = _store(extra=extra)
+    store.rows["signals"] = []
+    store.absent_columns = set(absent_columns)
+    store.failing_tables = set(failing_tables)
+    return store
+
+
+def _generate_signal_for(
+    store: Any,
+    *,
+    strategy_id: str = BUSY_ID,
+    user_id: str = TENANT,
+    now: Optional[datetime] = SIGNAL_GENERATED_AT,
+) -> Any:
+    """One signal through the real ``generate_signal``, with its scheduled update drained.
+
+    ``deployment_row`` / ``action_output`` are task 10.1's own fixtures, imported rather than
+    re-implemented, so this exercises the attribution the live path actually mints from.
+
+    The drain is what makes the fire-and-forget write observable: the production path
+    deliberately does not await it, so a test that did not drain would be asserting against
+    a race. Draining is a *test* affordance and not a production one — nothing on the signal
+    path calls it.
+    """
+    from backend_app.backend.signal_service import generate_signal
+    from backend_app.backend.strategy_last_signal import drain_last_signal_at_writes
+    from tests.test_task_10_1_generate_signal import action_output, deployment_row
+
+    async def _go() -> Any:
+        signal = await generate_signal(
+            deployment_row(user_id=user_id, strategy_id=strategy_id),
+            action_output(),
+            sb=store,
+            now=now,
+        )
+        await drain_last_signal_at_writes()
+        return signal
+
+    return asyncio.run(_go())
+
+
+def _signals_in(store: Any) -> List[Dict[str, Any]]:
+    return list(store.rows.get("signals", []))
+
+
+def test_a_strategy_that_has_signalled_reports_the_real_instant_end_to_end(execution_db):
+    """THE CLAIM THIS FOLLOW-UP IS ACCOUNTABLE FOR.
+
+    Generate one signal for ``BUSY_ID`` through the real recording path, then read
+    ``GET /api/strategies``. The busy strategy reports the instant it signalled at, and the
+    quiet one — which produced no signal — still reports ``null``. Before this change the
+    first of those was ``null`` too, on every database, permanently.
+    """
+    _seed_executions(execution_db)
+    store = _signal_store()
+
+    signal = _generate_signal_for(store)
+
+    body = _listing(store, execution_db)
+    busy = _entry(body, BUSY_ID)
+
+    assert busy["last_signal_at"] is not None, (
+        "the strategy signalled and the list still reports null; the producer did not write "
+        "the column, so BC-3's field is still permanently not-available"
+    )
+    assert _instant(busy["last_signal_at"]) == _naive(SIGNAL_GENERATED_AT)
+    # The value is the SIGNAL ROW's own generated_at, not a second clock read taken while
+    # updating the strategy. One instant, recorded once, published twice.
+    assert busy["last_signal_at"] == signal.generated_at
+    assert _signals_in(store)[0]["generated_at"] == signal.generated_at
+
+    # And nothing was applied to the whole page: the strategy that did not signal is null.
+    assert _entry(body, QUIET_ID)["last_signal_at"] is None
+
+
+def test_a_strategy_that_has_not_signalled_keeps_no_last_signal_at_at_all(execution_db):
+    """Requirement 19.2. The quiet row is not written to — not even with ``NULL``.
+
+    A producer that touched every row would make "never signalled" and "signalled, value
+    unknown" the same state in the database. The update is addressed by strategy id, so the
+    quiet row is left exactly as it was.
+    """
+    _seed_executions(execution_db)
+    store = _signal_store()
+
+    _generate_signal_for(store)
+
+    quiet_row = store.row("strategies", QUIET_ID)
+    assert "last_signal_at" not in quiet_row, (
+        f"the producer touched a strategy that did not signal: {quiet_row.get('last_signal_at')!r}"
+    )
+    assert _entry(_listing(store, execution_db), QUIET_ID)["last_signal_at"] is None
+
+
+def test_the_signal_is_persisted_even_when_the_timestamp_update_cannot_be_written(
+    execution_db,
+):
+    """015 UNAPPLIED. The signal survives; only the denormalised timestamp is skipped.
+
+    This is the state of every database until 015 is applied by hand, reproduced the way
+    PostgREST really reports it: an UPDATE naming a column the schema cache does not have
+    fails with ``PGRST204``. The signal row must still be written and returned, and the
+    listing must still answer 200 with ``last_signal_at`` present and ``null`` — never a
+    guessed instant, and never a 500.
+    """
+    _seed_executions(execution_db)
+    store = _signal_store(absent_columns={"last_signal_at"})
+
+    signal = _generate_signal_for(store)
+
+    assert signal is not None
+    assert len(_signals_in(store)) == 1, "the signal row was lost to a failed side write"
+    assert _signals_in(store)[0]["id"] == signal.id
+
+    body = _listing(store, execution_db)
+    for entry in body["strategies"]:
+        assert "last_signal_at" in entry, entry["id"]
+        assert entry["last_signal_at"] is None, entry["id"]
+
+
+def test_the_signal_is_persisted_even_when_the_strategies_table_is_unreachable(
+    execution_db,
+):
+    """A real outage on the strategy row, not a missing column. Same outcome.
+
+    ``failing_tables`` makes every statement against ``strategies`` raise. The signal write
+    goes to ``signals`` and is unaffected, which is the whole point of scheduling the update
+    off the path rather than awaiting it inside a ``try``.
+    """
+    _seed_executions(execution_db)
+    store = _signal_store(failing_tables={"strategies"})
+
+    signal = _generate_signal_for(store)
+
+    assert signal is not None
+    assert len(_signals_in(store)) == 1
+    assert _signals_in(store)[0]["id"] == signal.id
+
+
+def test_the_signal_is_persisted_even_when_the_update_raises_outright(execution_db):
+    """Belt and braces: the producer itself blows up, and the signal is still recorded.
+
+    ``record_last_signal_at`` is written not to raise, so this replaces it with one that
+    does. The signal path must not notice, because it never awaits the task.
+    """
+    from backend_app.backend import strategy_last_signal as producer
+
+    _seed_executions(execution_db)
+    store = _signal_store()
+
+    async def _explode(*_args: Any, **_kwargs: Any) -> bool:
+        raise RuntimeError("the producer is broken")
+
+    with patch.object(producer, "record_last_signal_at", _explode):
+        signal = _generate_signal_for(store)
+
+    assert signal is not None
+    assert len(_signals_in(store)) == 1
+    assert store.row("strategies", BUSY_ID).get("last_signal_at") is None
+
+
+def test_a_hanging_timestamp_update_does_not_hold_the_signal_up(execution_db):
+    """THE CONSTRAINT THAT SHAPED THE DESIGN: the update cannot DELAY the signal either.
+
+    "Cannot fail" is not enough on this path. An awaited update — even one wrapped in a
+    total ``try/except`` — would still let a hanging PostgREST request sit between a
+    generated signal and risk validation. So the update is *scheduled*, and this test proves
+    it by making it never finish: ``generate_signal`` still returns a persisted signal.
+    """
+    from backend_app.backend import strategy_last_signal as producer
+    from backend_app.backend.signal_service import generate_signal
+    from tests.test_task_10_1_generate_signal import action_output, deployment_row
+
+    _seed_executions(execution_db)
+    store = _signal_store()
+    started = asyncio.Event()
+
+    async def _never_returns(*_args: Any, **_kwargs: Any) -> bool:
+        started.set()
+        await asyncio.sleep(3600)
+        return False
+
+    async def _go() -> Any:
+        with patch.object(producer, "record_last_signal_at", _never_returns):
+            signal = await asyncio.wait_for(
+                generate_signal(
+                    deployment_row(user_id=TENANT, strategy_id=BUSY_ID),
+                    action_output(),
+                    sb=store,
+                    now=SIGNAL_GENERATED_AT,
+                ),
+                timeout=5,
+            )
+            # Let the scheduled task actually start, so this is a hang and not merely a
+            # task that never ran, then abandon it the way a shutdown would.
+            await asyncio.wait_for(started.wait(), timeout=5)
+            for task in tuple(producer._pending):
+                task.cancel()
+            return signal
+
+    signal = asyncio.run(_go())
+
+    assert signal is not None, "generate_signal waited on the timestamp update"
+    assert len(_signals_in(store)) == 1
+
+
+def test_the_producer_cannot_move_another_tenants_strategy(execution_db):
+    """The UPDATE is addressed by strategy id AND owner, beside RLS.
+
+    A signal whose ``user_id`` is not the strategy row's owner updates zero rows rather than
+    writing a timestamp onto someone else's strategy.
+    """
+    from backend_app.backend.strategy_last_signal import record_last_signal_at
+
+    _seed_executions(execution_db)
+    store = _signal_store()
+
+    wrote = asyncio.run(
+        record_last_signal_at(
+            store,
+            strategy_id=BUSY_ID,
+            user_id=FOREIGN_TENANT,
+            generated_at=SIGNAL_GENERATED_AT.isoformat(),
+        )
+    )
+
+    assert wrote is False, "the producer reported a write it was not allowed to make"
+    assert "last_signal_at" not in store.row("strategies", BUSY_ID)
+    assert _entry(_listing(store, execution_db), BUSY_ID)["last_signal_at"] is None
+
+
+def test_the_producer_never_substitutes_a_clock_read():
+    """Requirement 19.2 at the one place a fabricated instant could enter the column.
+
+    ``_instant`` has no default, so an absent ``generated_at`` writes nothing rather than
+    "now". Asserted as behaviour *and* off the source, because a fallback added later would
+    satisfy neither reading.
+    """
+    from backend_app.backend import strategy_last_signal as producer
+
+    assert producer._instant(None) is None
+    assert producer._instant("   ") is None
+    assert producer._instant(SIGNAL_GENERATED_AT) == SIGNAL_GENERATED_AT.isoformat()
+
+    store = _signal_store()
+    for missing in (None, "", "   "):
+        assert (
+            asyncio.run(
+                producer.record_last_signal_at(
+                    store, strategy_id=BUSY_ID, user_id=TENANT, generated_at=missing
+                )
+            )
+            is False
+        )
+    assert "last_signal_at" not in store.row("strategies", BUSY_ID)
+    assert not [write for write in store.writes if write[1] == "strategies"]
+
+    source = inspect.getsource(producer._instant)
+    for forbidden in ("now(", "utcnow", "time.time", "today("):
+        assert forbidden not in source, f"_instant reaches for {forbidden}"
+
+
+def test_the_producer_writes_the_same_column_the_projection_reads():
+    """One spelling of "last signal" across the migration, the writer and the reader."""
+    from backend_app.backend import strategy_last_signal as producer
+
+    assert producer.LAST_SIGNAL_AT_COLUMN == router_module.LAST_SIGNAL_AT_COLUMN
+    assert producer.STRATEGIES_TABLE == "strategies"
+    # The degradation warning has to name the file an operator must apply, or a null field
+    # is indistinguishable from a broken one in the logs.
+    assert producer.STRATEGY_LAST_SIGNAL_MIGRATION.endswith(
+        "015_strategy_last_signal_at.sql"
+    )
+
+
+def test_the_signal_path_schedules_the_update_and_never_awaits_it():
+    """The isolation is structural, so it is asserted structurally as well as behaviourally.
+
+    ``_persist_signal`` must call ``schedule_last_signal_at`` — which returns a task — and
+    must not ``await`` the producer. An edit that changed the call to ``await
+    record_last_signal_at(...)`` would keep every value assertion above passing while
+    reintroducing the failure mode this whole design exists to avoid.
+    """
+    from backend_app.backend import signal_service as signal_module
+
+    source = inspect.getsource(signal_module._persist_signal)
+
+    assert "schedule_last_signal_at(" in source
+    assert "await schedule_last_signal_at" not in source
+    assert "record_last_signal_at" not in source, (
+        "_persist_signal reaches the producer directly instead of scheduling it; the "
+        "signal path must not be able to wait on the timestamp update"
+    )
+
+
+def test_the_page_costs_no_read_per_strategy_for_last_signal_at(execution_db):
+    """No N+1, and no second query at all: the column travels on the row already read.
+
+    ``list_strategies`` reads ``select("*")``, so ``last_signal_at`` arrives with the
+    strategy row. There is nothing to aggregate and nothing to join — unlike BC-4, which
+    needs one grouped aggregate against a different store. Four strategies here, and the
+    ``signals`` table is not read even once.
+    """
+    _seed_executions(execution_db)
+    store = _signal_store(extra=2)
+
+    _generate_signal_for(store)
+    reads_before = len(store.selects)
+    writes_before = len(store.writes)
+
+    body = _listing(store, execution_db)
+
+    assert body["total"] == 4
+    listing_reads = store.selects[reads_before:]
+    assert [table for table, _ in listing_reads] == ["strategies"], (
+        f"a 4-strategy page issued {listing_reads} against PostgREST; last_signal_at must "
+        "cost no read of its own"
+    )
+    assert store.writes[writes_before:] == [], "the listing wrote to the database"
+
+
+def test_the_producer_does_not_swallow_its_own_cancellation():
+    """"Never raises" means never raises a FAILURE — not "refuses to be cancelled".
+
+    A fire-and-forget task that ate its own ``CancelledError`` would hang an orderly
+    shutdown while every other task wound down. Cancellation cannot reach the signal path
+    from here, because the signal path never awaits this task.
+    """
+    from backend_app.backend import strategy_last_signal as producer
+
+    class _Cancelling:
+        def table(self, _name: str) -> "_Cancelling":
+            return self
+
+        def update(self, _payload: Any) -> "_Cancelling":
+            return self
+
+        def eq(self, *_args: Any) -> "_Cancelling":
+            return self
+
+        async def execute(self) -> Any:
+            raise asyncio.CancelledError()
+
+    async def _go() -> None:
+        await producer.record_last_signal_at(
+            _Cancelling(),
+            strategy_id=BUSY_ID,
+            user_id=TENANT,
+            generated_at=SIGNAL_GENERATED_AT.isoformat(),
+        )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(_go())
+
+    # And a cancellation is not misfiled as "015 is unapplied", which would stop the
+    # producer re-attempting for the whole re-check window.
+    assert producer.last_signal_column_is_absent() is False

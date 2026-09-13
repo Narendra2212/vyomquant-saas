@@ -886,19 +886,49 @@ the decomposition this plan uses instead:
       projection in `backend_app/routers/strategies.py` (`§7.2`)
     - Verification: assert the list response carries `last_signal_at` and that it is `null`, not
       absent and not a fabricated timestamp, for a strategy that has never signalled
-    - **Recorded as owed: the column BC-3 publishes has no producer.** `last_signal_at` is
-      declared by **no migration in this repository** — zero occurrences under
-      `backend_app/migrations/`, and nothing anywhere writes it to `strategies`. So the projection
-      reports `null` on every current database, and will keep doing so until something writes the
-      column. The projection itself is correct and additive: `list_strategies` already reads
-      `select("*")`, so the key travels with the row the moment the schema has it, and it reports
-      exactly what the dashboard strategy projection already reports from the same key on the same
-      table (`dashboard_aggregation_service.py:1077`, published as `last_signal_time`). Nothing is
-      fabricated and no field is absent (Requirement 19.2), so this is honest rather than broken —
-      but the frontend's not-available state for this field is its permanent outcome today, which
-      is the condition Task 12's preamble says must not stand. **The follow-up is a producer, not
-      another reader:** a migration adding the column plus a write at the point a signal is
-      recorded. Adding a second consumer would not move it off `null`.
+    - **The producer that was owed here has landed; `last_signal_at` is now a real figure.**
+      The debt recorded under this task was that `last_signal_at` was declared by no migration in
+      this repository and written by nothing, so BC-3's projection — correct and additive as it was
+      — reported `null` on every database permanently, which is the condition Task 12's preamble
+      rules out. Two things closed it:
+      - **`backend_app/migrations/015_strategy_last_signal_at.sql`** adds
+        `public.strategies.last_signal_at TIMESTAMPTZ NULL` — nullable, **no default**, so a
+        strategy that has never signalled is `NULL` and never an epoch or a creation time
+        (Requirement 19.2). Follows 005a statement for statement: RLS preflight that refuses
+        rather than enables, `ADD COLUMN IF NOT EXISTS`, a column-shape assertion (a `DEFAULT
+        now()` here would make every new draft claim it had just fired), one transaction,
+        additive-only, no back-fill, and a postflight proving policies, triggers, indexes and
+        every foreign-key `ON DELETE` action are unchanged. **No index**, unlike 005a: nothing
+        filters or orders by this column, so one would add a write to the signal path for no
+        read. Applied by hand, like every migration here.
+      - **`backend_app/backend/strategy_last_signal.py`** writes it, called from the two places a
+        signal row is created — `signal_service._persist_signal` (the live and paper path) and
+        `SignalService.create_signal` (the legacy path behind `POST /api/signal-trace/signals`
+        and `master_executor`) — **after** the row is confirmed persisted.
+    - **Why a stored column and not BC-4's derived `MAX(generated_at)`.** `public.signals` has no
+      SQLAlchemy model (`backend_app/core/models/` holds no signals model), so BC-4's route — hand
+      a grouped aggregate to a session — has no session; PostgREST's grouped aggregates are off
+      unless an operator sets `db-aggregates-enabled`, which nothing here does, so a derived read
+      would report `null` on every database whose operator had not flipped an undocumented server
+      flag — the same permanent-`null` defect moved from "no column" to "no flag"; and a view over
+      `signals` would execute with the view owner's privileges and bypass that table's RLS, since
+      `security_invoker` is PostgreSQL 15 and this repository's baseline predates PG14 (007/008/009
+      all record that `CREATE OR REPLACE TRIGGER` is unavailable). A trigger loses because it would
+      sit inside the signal INSERT's own transaction, taking a lock on `strategies` that
+      serialises signals for one strategy and that `statement_timeout` can turn into a failed
+      INSERT — a lock wait is not an exception, so an in-trigger handler does not contain it.
+    - **The signal write path did not become able to fail.** `schedule_last_signal_at` calls
+      `asyncio.create_task` and returns; nothing on the signal path awaits the update, so it can
+      neither raise into it nor delay it. `record_last_signal_at` additionally catches
+      `BaseException` around every statement and returns a bool. Tested four ways: 015 unapplied
+      (`PGRST204`), the `strategies` table unreachable, the producer raising outright, and the
+      producer **hanging forever** — the signal is persisted and returned in all four.
+    - **Frozen baselines `signal_generation` and `signal_trace_live` now differ by exactly one
+      entry each and are deliberately NOT re-recorded** — see the report under this task's
+      execution. Both gained `{"call": "postgrest.update", "columns": ["last_signal_at"], "table":
+      "strategies"}` in their collaborator sequence, which is precisely the producer this
+      follow-up required; nothing else in either capture moved. Re-recording needs a
+      `_baseline_note*` authorisation decided by whoever owns those captures, not by this task.
     - _Requirements: 4.1, 19.1, 19.2_
 
   - [~] 12.4 BC-4 — add `last_execution_at` to the strategies list projection
