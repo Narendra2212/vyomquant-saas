@@ -498,6 +498,12 @@ describe('Chart: the lazy-loading contract (design.md §13.3)', () => {
      * it fails if a NEW importer appears, and it fails again when a page migrates
      * and the list is not lowered with it.
      */
+    /*
+     * `pages/Portfolio.jsx` left this list at task 16.2: its three charts now go through
+     * `ds/Chart`, imported with `lazy(() => import(...))` rather than statically, so
+     * recharts is no longer in that route's static graph. Five remain, all owned by the
+     * page tasks (14.x, 19.x, 23.x, 25.x).
+     */
     expect(importers).toEqual([
       'components/DashboardUpgrades.jsx',
       'components/ResearchConsole.jsx',
@@ -505,7 +511,6 @@ describe('Chart: the lazy-loading contract (design.md §13.3)', () => {
       'pages/Backtester.jsx',
       'pages/Dashboard.jsx',
       'pages/PaperTrading.jsx',
-      'pages/Portfolio.jsx',
     ]);
   });
 });

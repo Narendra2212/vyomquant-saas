@@ -269,9 +269,17 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
     // Not an assertion about quality — a checked-in figure so the milestone that inherits
     // this debt cannot be surprised by its size. Waived in-scope pages only; the
     // out-of-scope pages' findings are pre-existing and belong to no task here.
+    //
+    // 25 -> 23 at task 16.2, which deleted `src/pages/Portfolio.jsx`'s entry rather than
+    // lowering it. Its two findings were both `no-redundant-roles`, on the allocation legend's
+    // `<ul role="list">` / `<li role="listitem">`; the legend is now a `ds/DataTable`, which is
+    // not a list and carries no role attribute. The page lints at `error` from here.
     const waived = Object.values(A11Y_PAGE_WAIVERS).reduce((sum, e) => sum + e.count, 0);
     const measured = Object.keys(A11Y_PAGE_WAIVERS).reduce((sum, f) => sum + PAGES[f].count, 0);
     expect(measured).toBe(waived);
-    expect(waived).toBe(25);
+    expect(waived).toBe(23);
+    // And the cleared page is really clean, at `error`, with no line left behind.
+    expect(A11Y_PAGE_WAIVERS['src/pages/Portfolio.jsx']).toBeUndefined();
+    expect(PAGES['src/pages/Portfolio.jsx'].count).toBe(0);
   });
 });

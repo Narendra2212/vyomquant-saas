@@ -182,14 +182,13 @@ export const A11Y_ENFORCED_GLOBS = Object.freeze([
  * `task` is the task that deletes the entry. There is no entry without one.
  */
 export const A11Y_PAGE_WAIVERS = Object.freeze({
-  // M7. Retargeted from 16.1 to 16.2 rather than lowered, because task 16.1 cleared none of
-  // the two: both are `no-redundant-roles` on the allocation legend's `<ul role="list">` /
-  // `<li role="listitem">`, and that legend is tier 3 — the chart region task 16.2 rebuilds on
-  // `ds/Chart`. Task 16.1 rebuilt tier 1, which contributed no finding before or after: it is
-  // now eight `ds/Metric`s inside a `ds/Panel`, and both primitives are held to zero findings
-  // by the `ds/**` half of this ratchet. So the count is unchanged and honest, and the entry
-  // names the task that can actually delete it.
-  'src/pages/Portfolio.jsx': Object.freeze({ count: 2, task: '16.2' }),
+  // `src/pages/Portfolio.jsx` was here with 2 findings, retargeted from 16.1 to 16.2. Both
+  // were `no-redundant-roles` on the allocation legend's `<ul role="list">` /
+  // `<li role="listitem">`, and task 16.2 deleted that legend: the allocation's tabular
+  // equivalent is a `ds/DataTable`, which is not a list and carries no role attributes at
+  // all. The entry is REMOVED rather than lowered to 0, because a `0` entry is what this
+  // guard forbids — a cleared page belongs at `error` with every other page nobody has
+  // waived, which is what deleting the line does.
   // M7. Task 17.1 replaces the card grid with `ds/DataTable`.
   'src/pages/Strategies.jsx': Object.freeze({ count: 5, task: '17.1' }),
   // M8. Task 21.4 rebuilds the page on collapsed independent rows. The largest entry,

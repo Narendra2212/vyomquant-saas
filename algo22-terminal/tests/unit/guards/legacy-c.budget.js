@@ -79,10 +79,17 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // M8
   'pages/SignalTrace.jsx': 92,
   'pages/Backtester.jsx': 66,
-  // M7. The 5 here are one line: `const COLORS = [C.orange, C.purple, C.cyan,
-  // C.gold, C.t3]` — which is also the `no-local-tokens` violation task 1.11
-  // catches. Both guards clear on the same edit.
-  'pages/Portfolio.jsx': 5,
+  // M7. 5 -> 0 at task 16.2. The 5 were one line: `const COLORS = [C.orange,
+  // C.purple, C.cyan, C.gold, C.t3]` — five entries rendering four colours, since
+  // M1 collapsed `C.orange`/`C.gold` onto the one amber and `C.purple` onto
+  // neutral. It is not repaired with five distinct tokens: `styles/tokens.css` has
+  // no fifth CATEGORICAL hue (every non-brand hue already means live, profit, loss,
+  // warning or paper), and `ds/Chart` has no `pie` kind and no colour prop. The
+  // allocation is a bar chart with one `brand` series instead, so assets are told
+  // apart by position on a labelled axis and no palette is needed. The array is
+  // gone, the `C` import with it, and `no-local-tokens`' one scheduled exception
+  // clears on the same edit — exactly as task 1.11 predicted.
+  'pages/Portfolio.jsx': 0,
   'pages/Strategies.jsx': 1,
   // M7. Added at 0 by task 15.1 rather than lowered: the page imported `C` from the shim
   // but never read a member off it, so it never carried a reference for the seeding pass

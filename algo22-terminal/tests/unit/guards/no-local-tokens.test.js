@@ -33,8 +33,15 @@
  * task 1.12's `legacy-c-budget.test.js` counts down its call sites.
  *
  * ===========================================================================
- * FINDING: THIS GUARD DOES NOT PASS CLEAN TODAY — `pages/Portfolio.jsx`
+ * FINDING: RESOLVED AT TASK 16.2 — `pages/Portfolio.jsx`
  * ===========================================================================
+ * The account below is kept because it records WHY the quarantine existed and
+ * what closed it, which a deleted comment would not. As of task 16.2 the guard
+ * PASSES CLEAN with no exception at all: the M7 Portfolio migration removed the
+ * `const COLORS` array exactly as this note predicted, so `SCHEDULED_EXCEPTIONS`
+ * is `{}` and `legacy-c` for that file is 0. Everything from here to the end of
+ * this docblock is the historical record.
+ *
  * Task 1.11 was written on the expectation that tasks 1.3 and 1.6 had cleared
  * every page-local declaration, leaving the shim as the only one. They cleared
  * the two `const C =` objects. They did not clear this, at `Portfolio.jsx:284`:
@@ -62,6 +69,14 @@
  * to 0 in task 1.12's `legacy-c` budget. Both guards clear together. When it
  * does, delete the entry — the test fails if the exception is stale, so this
  * cannot be forgotten.
+ *
+ * WHAT ACTUALLY HAPPENED (task 16.2). The chart did move onto the series palette,
+ * and the array was not re-pointed onto five design-system tokens — it was
+ * deleted. `ds/Chart` has no `pie` kind and exposes no colour prop, and
+ * `styles/tokens.css` has no fifth CATEGORICAL hue to give a five-slice pie
+ * (every non-brand hue already means live, profit, loss, warning or paper). The
+ * allocation is a bar chart with one `brand` series, so assets are distinguished
+ * by position on a labelled axis and no series ordering exists to declare.
  *
  * Two related notes recorded while measuring, not fixed here (task 1.11 adds no
  * source edits):
@@ -104,9 +119,12 @@ const SHIM = 'components/ui-legacy/primitives.jsx';
  * that clears the declaration.
  */
 const SCHEDULED_EXCEPTIONS = Object.freeze({
-  // Allocation pie series ordering, all five elements shim references.
-  // Cleared by the M7 Portfolio migration, with `legacy-c` 5 -> 0.
-  'pages/Portfolio.jsx': 'COLORS',
+  // `pages/Portfolio.jsx: 'COLORS'` was here — the allocation pie's five-element series
+  // ordering, every element a shim reference. Task 16.2 deleted it exactly as the FINDING
+  // above predicted: the allocation renders through `ds/Chart`, whose series palette comes
+  // from `design/semantic.js` and which exposes no colour prop, so there is no array to
+  // order. `legacy-c` went 5 -> 0 in the same change, and this guard now passes clean with
+  // no exception at all.
 });
 
 /** `C`, `COLORS`, `THEME` — case-sensitive, exactly as §15.1 names them. */
@@ -295,11 +313,15 @@ describe('no-local-tokens: no second token source', () => {
 // ---------------------------------------------------------------------------
 
 describe('no-local-tokens: the scheduled exceptions', () => {
-  it('is exactly the one known declaration, and cannot grow unnoticed', () => {
+  it('is empty, and cannot grow unnoticed', () => {
     // Widening this is the easy way to make the guard stop complaining, so the
     // list is pinned by value. Changing it means changing this assertion, which
     // means saying so in the diff.
-    expect(SCHEDULED_EXCEPTIONS).toEqual({ 'pages/Portfolio.jsx': 'COLORS' });
+    //
+    // Empty as of task 16.2, which removed `pages/Portfolio.jsx`'s `const COLORS`.
+    // §15.1's guard now holds with no quarantine: the shim is the only declaration
+    // of `C` in `src/`, and there is no `COLORS` or `THEME` anywhere.
+    expect(SCHEDULED_EXCEPTIONS).toEqual({});
   });
 
   it('names only declarations that are really still there', () => {

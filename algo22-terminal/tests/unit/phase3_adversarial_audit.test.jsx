@@ -124,27 +124,32 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
 
     // No `$` prefix on a tier-1 figure any more: `ds/Metric` groups the digits and the
     // denomination comes from the server's own `overview.currency`.
+    //
+    // Task 16.2: the market is counted rather than fetched singly, because BTC/USDT now appears
+    // TWICE on the live page — once in the positions table and once above it, in Requirement
+    // 10.3's "Largest position" summary figure. Counting is also the stronger assertion for what
+    // this invariant is about: on the PAPER switch every occurrence has to go, not just the
+    // first one a query happens to find.
     expect(await screen.findByText('50,000.00')).toBeDefined();
-    expect(screen.getByText('BTC/USDT')).toBeDefined();
+    expect(screen.getAllByText('BTC/USDT').length).toBeGreaterThan(0);
 
-    // Switch to Paper
-    const paperBtn = screen.getByRole('button', { name: /PAPER/i });
-    fireEvent.click(paperBtn);
+    // Switch to Paper. A labelled radio group as of task 16.2, not two buttons the selected one
+    // of which did nothing when pressed (Requirement 19.4).
+    fireEvent.click(screen.getByRole('radio', { name: 'Paper' }));
 
     await waitFor(() => {
       expect(screen.getAllByText('100,000.00').length).toBeGreaterThan(0);
-      expect(screen.queryByText('BTC/USDT')).toBeNull();
+      expect(screen.queryAllByText('BTC/USDT')).toHaveLength(0);
     });
     // No bleed the other way either: the live equity is gone from the screen entirely.
     expect(screen.queryByText('50,000.00')).toBeNull();
 
     // Switch back to Live
-    const liveBtn = screen.getByRole('button', { name: /LIVE/i });
-    fireEvent.click(liveBtn);
+    fireEvent.click(screen.getByRole('radio', { name: 'Live' }));
 
     await waitFor(() => {
       expect(screen.getByText('50,000.00')).toBeDefined();
-      expect(screen.getByText('BTC/USDT')).toBeDefined();
+      expect(screen.getAllByText('BTC/USDT').length).toBeGreaterThan(0);
     });
   });
 
@@ -171,10 +176,20 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
 
     // Requirement 14.4 / 28.5: the failure is stated in translated copy, and NO figure of any
     // kind is shown for it -- not a zero, and not a row of markers.
+    //
+    // `getAllByText` as of task 16.2: that ONE rejection puts BOTH regions it serves into
+    // `error`, and each renders `ds/ErrorState` with the `portfolio` context copy. Two
+    // statements of one failure is the correct outcome here — tier 1 and the positions ledger
+    // are two view models over one read, and neither may show a figure.
     await waitFor(() => {
-      expect(screen.getByText('Could not load your portfolio')).toBeDefined();
+      expect(screen.getAllByText('Could not load your portfolio').length).toBeGreaterThan(0);
     });
-    expect(screen.getByText(/Open positions could not be read/)).toBeDefined();
+    // The positions region says so too, and says nothing about the account: task 13.1 rendered
+    // the transport error verbatim here, and 16.2 replaced that with the translation, so what
+    // is asserted is the region's state and the absence of any claim of an empty ledger.
+    expect(document.querySelector('[data-region="positions"]').dataset.panelState).toBe('error');
+    expect(screen.queryByText('No open positions')).toBeNull();
+    expect(document.querySelectorAll('table')).toHaveLength(0);
     expect(screen.queryByText('0.00')).toBeNull();
     expect(document.querySelectorAll('[data-metric-tier]')).toHaveLength(0);
     // Invariant 4, unchanged: a failed LIVE read never reaches for the paper account.

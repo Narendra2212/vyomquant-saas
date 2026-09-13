@@ -68,13 +68,16 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // Includes the single `border-[#ef4444]` arbitrary-value utility task 1.4
   // recorded, plus 24 further #10b981/#ef4444 occurrences in inline styles.
   'pages/Strategies.jsx': 144,
-  // 112 -> 86 at task 16.1, which rebuilt tier 1 only. The 26 were the four summary cards'
-  // slate/cyan/white chrome, `signTone`'s three hues, `SignIcon`'s three, and `CardFigure`'s
-  // amber failure and muted absence states — every one of them replaced by `ds/Metric` and
-  // `ds/Panel`, which take their colour from `design/semantic.js`. The remaining 86 are the
-  // positions ledger, the three charts and the LIVE/PAPER toggle, which task 16.2 takes to zero
-  // along with this page's five `C.` references.
-  'pages/Portfolio.jsx': 86,
+  // 112 -> 86 at task 16.1, which rebuilt tier 1 only; 86 -> 0 at task 16.2, which rebuilt
+  // tiers 2 and 3. The 86 were the positions ledger's own palette (the two side chips, the
+  // signed P&L cell, the row rules and the venue chip), the equity curve's `#10B981` stroke
+  // and its `<linearGradient>` stops, the allocation legend's slate/white text, the P&L
+  // heatmap's six `#10B981aa`/`#EF444455` cell washes and their six borders, the page canvas
+  // and the LIVE/PAPER toggle's twelve. Every one is now a token utility class, or comes from
+  // `design/semantic.js` inside `ds/DataTable`, `ds/StatusBadge`, `ds/PnLDisplay`, `ds/Alert`
+  // or `ds/Chart`'s series palette. Cleared with this page's five `C.` references in the same
+  // change, as §14.4 requires of a page task.
+  'pages/Portfolio.jsx': 0,
   'pages/SignalTrace.jsx': 20,
   'pages/Backtester.jsx': 4,
   'pages/StrategyBuilder.jsx': 3,

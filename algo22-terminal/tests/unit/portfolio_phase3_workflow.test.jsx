@@ -126,20 +126,34 @@ describe('Phase 3 — Trading Platform Operational Completion Tests', () => {
       // Verify Live header and position row. The tier-1 figure has no currency prefix any
       // more: `ds/Metric` groups the digits and renders the server's own `overview.currency`
       // beside them, in place of the hardcoded `$` the old cards carried on a USDT account.
-      expect(await screen.findByText('Portfolio Analytics')).toBeDefined();
+      //
+      // ── vyomquant-ui-redesign task 16.2 rewrote the four assertions below ──────────────
+      // The `<h1>` is `ds/PageHeader`'s and reads "Portfolio": it is the ROUTE's title, and
+      // "Portfolio Analytics" was a claim about the page rather than a name for it (§6.2). The
+      // market is asserted inside the table because it now ALSO appears above it, in
+      // Requirement 10.3's "Largest position" summary figure. And `Venue` is gone from the
+      // column list (§7.6 names ten columns and a venue is not among them) — the cell it
+      // occupied was defaulted to `"binance"` for every live row and `"paper"` for every paper
+      // one, which is the same defect task 15.1 removed from Trade History.
+      expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeDefined();
       expect(screen.getByText('65,000.00')).toBeDefined();
-      expect(screen.getByText('BTC/USDT')).toBeDefined();
-      expect(screen.getByText('binance')).toBeDefined();
+      const liveTable = await screen.findByRole('table');
+      expect(within(liveTable).getByText('BTC/USDT')).toBeDefined();
+      expect(screen.queryByText('binance')).toBeNull();
 
-      // Click Paper button
-      const paperBtn = screen.getByRole('button', { name: /PAPER/i });
-      fireEvent.click(paperBtn);
+      // Switch to the paper ledger — a labelled radio group as of task 16.2, not two buttons
+      // the selected one of which did nothing when pressed (Requirement 19.4).
+      fireEvent.click(screen.getByRole('radio', { name: 'Paper' }));
 
       await waitFor(() => {
         const matchingValues = screen.getAllByText('100,000.00');
         expect(matchingValues.length).toBeGreaterThan(0);
-        expect(screen.getByText('No open positions currently held in PAPER mode.')).toBeDefined();
+        // `ds/EmptyState` through `ds/Panel`, which is Requirement 10.4's empty state. The
+        // environment is on the panel's own badge rather than inside the sentence.
+        expect(screen.getByText('No open positions')).toBeDefined();
       });
+      expect(document.querySelector('[data-region="positions"]').dataset.panelState)
+        .toBe('empty');
     });
   });
 
