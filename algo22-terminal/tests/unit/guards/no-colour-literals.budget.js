@@ -65,9 +65,25 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   'components/ErrorBoundary.jsx': 0,
 
   // -- In-scope pages, migrated M6-M9 ---------------------------------------
-  // Includes the single `border-[#ef4444]` arbitrary-value utility task 1.4
-  // recorded, plus 24 further #10b981/#ef4444 occurrences in inline styles.
-  'pages/Strategies.jsx': 144,
+  // Included the single `border-[#ef4444]` arbitrary-value utility task 1.4 recorded, plus
+  // 24 further #10b981/#ef4444 occurrences in inline styles.
+  //
+  // 144 -> 81 at task 17.1, which rebuilt SECTION ONE only — the owner's card grid, the
+  // filter dropdown, the four-figure stats row and the archive-refusal box. Those 63 were
+  // the card's own palette (the focus ring and banner, the failure banner and its Trace
+  // button, the three metric tiles, the timeline and health rows, the progress bar), the
+  // status/environment dropdown's per-option `rgba(0,212,255,…)` selection washes, the stats
+  // row's four accent hues, the dashed "Create New Strategy" tile and the hand-rolled red
+  // alert. Every one is now a token utility class or comes from `design/semantic.js` inside
+  // `ds/DataTable`, `ds/StatusBadge`, `ds/StrategyStatus`, `ds/Alert`, `ds/Panel` or
+  // `ds/EmptyState`.
+  //
+  // The remaining 81 are SECTION TWO's — the marketplace ownership cards from
+  // `api.library.myStrategies()` — plus the deploy modal's. Task 17.2 owns them; task 17.1
+  // was scoped to leave that section's markup, its `ACTION_CATALOG` and its `data-action`
+  // attributes byte-for-byte alone, and lowering this to 0 is exactly what that scope
+  // forbids.
+  'pages/Strategies.jsx': 81,
   // 112 -> 86 at task 16.1, which rebuilt tier 1 only; 86 -> 0 at task 16.2, which rebuilt
   // tiers 2 and 3. The 86 were the positions ledger's own palette (the two side chips, the
   // signed P&L cell, the row rules and the venue chip), the equity curve's `#10B981` stroke

@@ -274,10 +274,17 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
     // lowering it. Its two findings were both `no-redundant-roles`, on the allocation legend's
     // `<ul role="list">` / `<li role="listitem">`; the legend is now a `ds/DataTable`, which is
     // not a list and carries no role attribute. The page lints at `error` from here.
+    //
+    // 23 -> 21 at task 17.1, which rebuilt `src/pages/Strategies.jsx`'s owner card grid: the
+    // two that went were `click-events-have-key-events` and `no-static-element-interactions`
+    // on the dashed "Create New Strategy" tile, a `div onClick` that the `ds/EmptyState`'s
+    // own action and the header's `New strategy` command replace. Its entry is LOWERED rather
+    // than deleted — the remaining 3 are the deploy modal's `label-has-associated-control`
+    // cluster, which task 17.2 owns.
     const waived = Object.values(A11Y_PAGE_WAIVERS).reduce((sum, e) => sum + e.count, 0);
     const measured = Object.keys(A11Y_PAGE_WAIVERS).reduce((sum, f) => sum + PAGES[f].count, 0);
     expect(measured).toBe(waived);
-    expect(waived).toBe(23);
+    expect(waived).toBe(21);
     // And the cleared page is really clean, at `error`, with no line left behind.
     expect(A11Y_PAGE_WAIVERS['src/pages/Portfolio.jsx']).toBeUndefined();
     expect(PAGES['src/pages/Portfolio.jsx'].count).toBe(0);

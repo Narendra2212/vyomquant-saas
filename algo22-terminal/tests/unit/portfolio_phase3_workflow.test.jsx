@@ -258,9 +258,25 @@ describe('Phase 3 — Trading Platform Operational Completion Tests', () => {
         </MemoryRouter>
       );
 
-      expect(await screen.findByText('Strategy Library')).toBeDefined();
-      expect(screen.getByText('ETH Arbitrage Delta')).toBeDefined();
-      expect(screen.getByText('★ FOCUSED TARGET STRATEGY')).toBeDefined();
+      // vyomquant-ui-redesign task 17.1 rebuilt this page on `ds/DataTable`, and three of
+      // this test's four assertions named things the card grid rendered rather than facts
+      // about the deep link:
+      //
+      //   * the `<h1>` is `Strategies` now, which is what design.md §7.2's layout draws and
+      //     what the route is called; `Strategy Library` was the card grid's own heading.
+      //   * the focus marker is a badge in the row's Name cell, not the card's
+      //     `★ FOCUSED TARGET STRATEGY` banner. It is asserted by its text, so the claim —
+      //     the deep-linked strategy is marked, and only that one — is unchanged.
+      //   * the failure reason is summarised once above the table instead of inside each
+      //     failed card, because a table row is not the place for a sentence. It is still
+      //     the row's own `error_message`, verbatim.
+      expect(await screen.findByRole('heading', { name: 'Strategies' })).toBeDefined();
+      // Scoped to the table: this strategy is `failed`, so its name is also in the failure
+      // summary above the table, and an unscoped `getByText` would throw on the ambiguity.
+      // Scoping keeps the claim about the ROW rather than relaxing it to `getAllByText`.
+      const table = within(screen.getByRole('table'));
+      expect(table.getByText('ETH Arbitrage Delta')).toBeDefined();
+      expect(table.getByText('Focused target')).toBeDefined();
       expect(screen.getByText('Exchange connection timeout on Bybit')).toBeDefined();
     });
   });

@@ -1,24 +1,39 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import {
-  Filter, Plus, Layers, Radio, TrendingUp, Target, Edit2,
-  BarChart2, Pause, Play, Trash2, PlusCircle, Copy, Settings,
-  Activity, Zap, Globe, Server, Clock, Shield, RefreshCw, AlertTriangle
+  Plus, Layers, TrendingUp, Edit2,
+  BarChart2, Pause, Play, Trash2, Copy, Settings,
+  Activity, Zap, Globe, Shield, RefreshCw, AlertTriangle
 } from "lucide-react";
 import { endpoints, api } from "../api";
 import { CONFIG } from "../config";
-import {
-  C, Tag2, StatusDot, ProgressBar
-} from "../components/ui-legacy/primitives";
+import { Tag2 } from "../components/ui-legacy/primitives";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
-// Task 10.3: the two confirmation surfaces. Imported from the modules directly rather than
-// through `components/ds/index.js` — this page charts nothing, and the barrel is what would
+// Task 10.3: the two confirmation surfaces. Task 17.1: the table, the filter row and the
+// four states. Imported from the modules directly rather than through
+// `components/ds/index.js` — this page charts nothing, and the barrel is what would
 // otherwise put `ds/Chart`'s recharts dependency in its import graph (see ds/index.js).
+import { Alert } from "../components/ds/Alert";
+import { CommandButton } from "../components/ds/CommandButton";
 import { ConfirmDialog } from "../components/ds/ConfirmDialog";
+import { DataTable } from "../components/ds/DataTable";
+import { EmptyState } from "../components/ds/EmptyState";
 import { Field } from "../components/ds/Field";
+import { FilterBar } from "../components/ds/FilterBar";
+import { NotAvailableMarker } from "../components/ds/Metric";
+import { PageHeader } from "../components/ds/PageHeader";
+import { Panel } from "../components/ds/Panel";
+import { StatusBadge, humaniseState } from "../components/ds/StatusBadge";
+import { STRATEGY_STATUSES, StrategyStatus } from "../components/ds/StrategyStatus";
+import { PAGES, PAGE_FIELDS_BY_PAGE, VERDICT } from "../design/pageFields";
+import { PANEL_STATES } from "../hooks/usePanelState";
 import StrategyBuilder from "./StrategyBuilder";
-import { computeStrategyHealth } from "../lib/strategyHealth";
+import {
+  HEALTH_ERROR,
+  HEALTH_UNDETERMINED,
+  computeStrategyHealth,
+} from "../lib/strategyHealth";
 import {
   describeArchiveFailure,
   describeBlockingDeployment,
@@ -28,9 +43,23 @@ import { useDeployPreflight } from "../hooks/useDeployPreflight";
 import DeployPreflightPanel from "../components/DeployPreflightPanel";
 
 // ── Normaliser helpers — module scope so action handlers can reference them ──
-const _toNumber = (v, fallback = 0) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
+
+/**
+ * A recorded scalar as non-blank text, or `null`.
+ *
+ * Task 17.1 replaced this normaliser's placeholder defaults — `"N/A"` for a market and a
+ * timeframe, `"Custom"` for a type, `"1.0"` for a version, `"paper"` for an environment,
+ * `0` for P&L, win rate and drawdown — with `null`, because every one of them was a value
+ * the list projection does not carry. `"N/A"` in a cell is indistinguishable from a market
+ * literally called N/A, and a `0%` P&L reads as a strategy that has never made money
+ * (Requirement 14.5). `null` reaches the table's not-available marker, which says so and
+ * carries `pageFields`' reason.
+ */
+const _text = (value) => {
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : null;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
 };
 
 const _normalizeStatus = (value = "") => {
@@ -44,25 +73,57 @@ const _normalizeStatus = (value = "") => {
   return "stopped";
 };
 
+/**
+ * §7.2's "Market / exchange" cell, as one projected string.
+ *
+ * The three keys `pageFields`' `market` entry names — `symbol`, `deployed_exchange` and
+ * `timeframe` — joined, rather than rendered from three unprojected reads off `row`.
+ * `DataTable` memoises a row on its PROJECTED cell values and deliberately excludes the row
+ * object from that compare, so a cell that reaches past the projection can hold a stale
+ * value; one value per column is what keeps the cell and the memo agreeing.
+ */
+const _marketLabel = (row) => {
+  const parts = [
+    _text(row.symbol) ?? _text(row.pair),
+    _text(row.deployed_exchange),
+    _text(row.timeframe) ?? _text(row.tf),
+  ].filter((part) => part !== null);
+  return parts.length === 0 ? null : parts.join(" · ");
+};
+
 const normalizeStrategies = (rows = []) =>
   (Array.isArray(rows) ? rows : []).map((row, i) => ({
     id: row.id ?? row.strategy_id ?? i + 1,
-    name: row.name ?? row.strategy_name ?? `Strategy #${i + 1}`,
-    pair: row.pair ?? row.symbol ?? "N/A",
+    name: _text(row.name) ?? _text(row.strategy_name),
+    pair: _text(row.symbol) ?? _text(row.pair),
+    market: _marketLabel(row),
+    // The server's spelling, verbatim, for `ds/StrategyStatus` — which reports "Status not
+    // reported" for a row carrying none rather than claiming `stopped`, the way
+    // `_normalizeStatus` has to for the filter's closed vocabulary.
+    statusRaw: _text(row.status),
     status: _normalizeStatus(row.status),
+    // Requirement 3.3 / `pageFields`' `status` entry: an archived row is history, not an
+    // actionable status, so the flag is read beside the status rather than folded into it.
+    isArchived: row.is_archived === true,
     errorMessage: row.error_message || row.error || row.reason || null,
-    pnl: _toNumber(row.pnl ?? row.pnl_percent ?? row.return_pct, 0),
-    wr: _toNumber(row.wr ?? row.win_rate ?? row.winRate, 0),
-    dd: _toNumber(row.dd ?? row.max_dd ?? row.maxDrawdown, 0),
-    tf: row.tf ?? row.timeframe ?? "N/A",
-    type: row.type ?? row.strategy_type ?? "Custom",
-    current_version: row.current_version ?? row.version ?? "1.0",
-    environment: row.environment ?? "paper",
+    tf: _text(row.timeframe) ?? _text(row.tf),
+    current_version: _text(row.current_version) ?? _text(row.version),
+    // `_LIST_COLUMNS` carries no `environment`. Kept as a nullable read for the archive
+    // confirmation's review grid, which renders the not-available marker for it; the filter
+    // row does not offer an environment control at all (see WITHHELD_FILTERS).
+    environment: _text(row.environment),
     created_at: row.created_at,
     updated_at: row.updated_at,
-    is_running: row.is_running ?? false,
-    worker_region: row.worker_region,
-    exchange_status: row.exchange_status,
+    // BC-3 and BC-4, landed in task 12. Both keys are ALWAYS present on the response and
+    // `null` when there is nothing to report, so neither is defaulted here.
+    last_signal_at: row.last_signal_at ?? null,
+    last_execution_at: row.last_execution_at ?? null,
+    // `is_active` is the row's own deployment flag. It reports whether the strategy is
+    // marked active and claims no live worker — the deployment RECORD is a separate read
+    // this page does not make. Absent reads not-available, never "inactive".
+    deploymentState:
+      row.is_active === true ? "active" : row.is_active === false ? "inactive" : null,
+    is_running: row.is_running === true,
     // Requirements 1.8/1.9: health is computed from this row's own most-recent deployment
     // status and most-recent backtest outcome, and from nothing else. It was
     // `row.health ?? "healthy"`, which reported every strategy as healthy — including one
@@ -73,6 +134,212 @@ const normalizeStrategies = (rows = []) =>
     most_recent_backtest: row.most_recent_backtest ?? null,
     health: computeStrategyHealth(row),
   }));
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * §7.2's TEN COLUMNS — labels and reasons READ from `design/pageFields.js`
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * Task 17.1. Requirements 4.1, 4.4, 4.5, 14.5, 19.3.
+ *
+ * The card grid this replaced is what Requirement 4.5 forbids: one 220px-tall card per
+ * strategy carrying eight tags, three metric tiles, a progress bar and seven buttons, for
+ * ten fields. `DataTable` rows satisfy 4.5 by construction.
+ *
+ * THREE OF THE TEN HAVE NOTHING BEHIND THEM, AND SAY SO
+ * ----------------------------------------------------
+ * `pageFields` declares `performance` and `riskState` ❌ on this read, and `market`'s and
+ * `deploymentState`'s notes record that §7.2's `row.pnl` / `row.win_rate` / `row.max_dd` /
+ * `row.health` / `row.is_running` / `row.most_recent_deployment` are on no strategy
+ * projection at all. So:
+ *
+ *   * **Performance** renders the marker for every row, carrying the declaration's own
+ *     sentence. Not `0`: a zero P&L reads as a strategy that has never made money, which is
+ *     a different claim from "this list does not report performance" (Requirement 14.5).
+ *   * **Risk** is `computeStrategyHealth(row)`, whose `undetermined` — the answer for every
+ *     row today, because both permitted sources are absent from the listing — renders the
+ *     marker. The `row.health ?? "healthy"` default it replaced reported every strategy as
+ *     healthy, including one whose only deployment had failed.
+ *   * **Last signal** (BC-3) and **Last execution** (BC-4) are real keys, always present and
+ *     `null` when unreported, and render the marker with each entry's own reason.
+ */
+
+const STRATEGY_FIELDS = PAGE_FIELDS_BY_PAGE[PAGES.STRATEGIES] ?? [];
+
+/** One field's declaration, or `null`. */
+const fieldEntry = (field) => STRATEGY_FIELDS.find((e) => e.field === field) ?? null;
+
+/** The column header §7.2 names for a field. Read, not restated. */
+const labelFor = (field) => fieldEntry(field)?.label ?? field;
+
+/**
+ * The sentence rendered instead of a value, from the declaration.
+ *
+ * `undefined` rather than `null` when a field declares none, so `NotAvailableMarker` falls
+ * back to its own `UNREPORTED_REASON` instead of being handed an empty reason.
+ */
+const reasonFor = (field) => fieldEntry(field)?.reason ?? undefined;
+
+/** Whether the read reports the field at all. */
+const isReported = (field) => fieldEntry(field)?.verdict === VERDICT.AVAILABLE;
+
+/** Requirement 11.4 — a page of strategies, not a page of trades. */
+const PAGE_SIZE = 25;
+
+/** Newest first: the strategy a trader touched last is the one they are looking for. */
+const DEFAULT_SORT = Object.freeze({ key: "updated_at", direction: "desc" });
+
+/** What the filter row's live region counts. */
+const COUNT_NOUN = "strategies";
+
+/** An example, never a label (Requirement 15.1). */
+const SEARCH_PLACEHOLDER = "BTC/USDT";
+
+/**
+ * The status segments: "All", then `ds/StrategyStatus`'s own six-state vocabulary.
+ *
+ * Read from the primitive rather than re-listed, so the segments and the badge cannot
+ * disagree about which states exist. §7.2's sketch draws five of the six; `backtesting` and
+ * `stopped` are included because `_normalizeStatus` can produce both, and a state a row can
+ * hold with no segment to select it is a row a trader cannot filter to.
+ */
+const STATUS_FILTER_ALL = "all";
+const STATUS_FILTER_OPTIONS = Object.freeze([
+  Object.freeze({ value: STATUS_FILTER_ALL, label: "All" }),
+  ...STRATEGY_STATUSES.map((state) =>
+    Object.freeze({ value: state, label: humaniseState(state) })),
+]);
+
+/**
+ * The controls §7.2 sketches that this read cannot support, each with the declaration's
+ * reason.
+ *
+ * §7.2 draws an `[Environment ▾]` select. `GET /api/strategies` reports no environment —
+ * `_LIST_COLUMNS` has no such key — so the select is **not rendered** and this sentence is
+ * shown in its place. An environment control over the `row.environment ?? "paper"` default
+ * it would have had to read would match every row or none, and Requirement 11.2 asks for
+ * filters that work rather than for filters.
+ */
+const WITHHELD_FILTERS = Object.freeze([
+  Object.freeze({
+    id: "environment",
+    label: labelFor("environment"),
+    reason: reasonFor("environment"),
+  }),
+]);
+
+/** Requirement 4.4's empty state. The body says what an empty list means, not that it is empty. */
+const NO_STRATEGIES_STATE = Object.freeze({
+  icon: Layers,
+  headline: "No strategies yet",
+  body: "A strategy is the thing that places orders for you — the platform refuses manual "
+    + "ones. Nothing trades until you build one and deploy it, so this list stays empty "
+    + "until then.",
+  action: Object.freeze({ label: "Open the strategy builder", to: "/app/builder" }),
+});
+
+/** `undetermined` has no entry: it is an absence, not a verdict. Mirrors `ds/StrategyStatus`. */
+const HEALTH_BADGE_STATE = Object.freeze({
+  healthy: "healthy",
+  degraded: "degraded",
+  error: "error",
+});
+
+/* ── The cells ─────────────────────────────────────────────────────────── */
+
+/**
+ * The name, plus the deep-link marker.
+ *
+ * `focusedId` is closed over rather than read from a column, which is why the column list
+ * is memoised on it: `DataTable`'s row memo compares projected cell values and the
+ * `columns` identity, so a focus change has to move one of the two.
+ */
+const nameCell = (focusedId) => function NameCell({ value, row }) {
+  const focused = focusedId !== null && String(row.id) === String(focusedId);
+  return (
+    <span className="inline-flex min-w-0 items-center gap-2">
+      <span className="min-w-0">
+        {value === null || value === undefined
+          ? <NotAvailableMarker label={labelFor("name")} />
+          : value}
+      </span>
+      {/* The card grid's "★ FOCUSED TARGET STRATEGY" banner, at row scale. `focused` is
+          outside `statusToken`'s vocabulary, so it resolves to the neutral group: a
+          deep-link marker is not a status and must not read as one. */}
+      {focused ? (
+        <StatusBadge state="focused" label="Focused target" size="sm" />
+      ) : null}
+    </span>
+  );
+};
+
+/** Status through `ds/StrategyStatus`, with `is_archived` read beside it. */
+function StatusCell({ row }) {
+  return (
+    <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
+      <StrategyStatus
+        status={row.statusRaw}
+        isRunning={row.is_running}
+        health={row}
+        compact
+      />
+      {row.isArchived ? <StatusBadge state="archived" label="Archived" size="sm" /> : null}
+    </span>
+  );
+}
+
+/**
+ * The risk state, from `computeStrategyHealth`'s already-computed answer.
+ *
+ * `undetermined` renders the marker carrying the declaration's sentence. There is no path
+ * to a healthy badge that does not originate in that function.
+ */
+function RiskCell({ value }) {
+  // `undetermined` is named explicitly, and anything outside the vocabulary lands in the
+  // same arm — never in a cheerful one. There is no path from an unrecognised string to a
+  // healthy badge, which is the defect `row.health ?? "healthy"` was.
+  const badge = value === HEALTH_UNDETERMINED ? undefined : HEALTH_BADGE_STATE[value];
+  return badge === undefined
+    ? <NotAvailableMarker label={labelFor("riskState")} reason={reasonFor("riskState")} />
+    : <StatusBadge state={badge} label={humaniseState(value)} size="sm" />;
+}
+
+/** The deployment flag as text. Absent reads not-available, never "inactive". */
+function DeploymentCell({ value }) {
+  if (value === "active") return <StatusBadge state="active" label="Active" size="sm" />;
+  if (value === "inactive") return <StatusBadge state="idle" label="Not active" size="sm" />;
+  return (
+    <NotAvailableMarker
+      label={labelFor("deploymentState")}
+      reason={reasonFor("deploymentState")}
+    />
+  );
+}
+
+/** Plain recorded text, or the marker with the field's own reason. */
+const textCell = (field) => function TextCell({ value }) {
+  return value === null || value === undefined || value === ""
+    ? <NotAvailableMarker label={labelFor(field)} reason={reasonFor(field)} />
+    : value;
+};
+
+/** The marker a column renders for every row when the read reports nothing for it. */
+const unreportedCell = (field) => function UnreportedCell() {
+  return <NotAvailableMarker label={labelFor(field)} reason={reasonFor(field)} />;
+};
+
+/**
+ * A recorded instant as local text, or the marker with the field's own reason.
+ *
+ * `formatInstant` is declared below and reached at RENDER time, not at module evaluation,
+ * which is what lets the cells stay together here. It returns the raw value for a string
+ * that is not a parseable instant, so a malformed timestamp is shown rather than hidden.
+ */
+const instantCell = (field) => function InstantCell({ value }) {
+  const text = formatInstant(value);
+  return text === null
+    ? <NotAvailableMarker label={labelFor(field)} reason={reasonFor(field)} />
+    : text;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Server-derived ownership: GET /api/library/my-strategies (task 32.7)
@@ -319,6 +586,11 @@ export default function Strategies() {
   const [view, setView] = useState("library");
   const [strategies, setStrategies] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  // Task 17.1 / Requirement 14.5: a failed owner read is an ERROR STATE, never an empty
+  // table. The rejection itself is kept — `ds/Panel` hands it to `ds/ErrorState`, which
+  // renders authored copy through `translateError` and never `err.message`.
+  const [listError, setListError] = useState(null);
+  const [listReloadKey, setListReloadKey] = useState(0);
   const [isProcessing, setIsProcessing] = useState({});
   // Task 16.3: the archive endpoint's refusal, kept so a 409 can be rendered as the
   // specific error it is — each blocking deployment by identifier and state (Requirement
@@ -335,9 +607,10 @@ export default function Strategies() {
   const [archiveDialog, setArchiveDialog] = useState(null);
   const [renameDialog, setRenameDialog] = useState(null);
   const [editingStrategy, setEditingStrategy] = useState(null);
-  const [filterOpen, setFilterOpen] = useState(false);
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [filterEnvironment, setFilterEnvironment] = useState(() => searchParams.get("environment") || "all");
+  const [filterStatus, setFilterStatus] = useState(STATUS_FILTER_ALL);
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState(DEFAULT_SORT);
+  const [page, setPage] = useState(1);
   const [focusedStrategyId, setFocusedStrategyId] = useState(() => searchParams.get("strategy_id") || null);
   const [deployModalStrategy, setDeployModalStrategy] = useState(null);
   const [deployConfig, setDeployConfig] = useState({
@@ -369,8 +642,11 @@ export default function Strategies() {
 
   const resumeBuilderStrategy = location.state?.resumeBuilderStrategy || null;
 
+  /** Re-read the owner list. The retry action on the error state, and nothing else. */
+  const reloadStrategies = useCallback(() => setListReloadKey((k) => k + 1), []);
+
   useEffect(() => {
-    const controller = new AbortController();
+    let cancelled = false;
 
     const loadStrategies = async () => {
       try {
@@ -378,18 +654,29 @@ export default function Strategies() {
         console.log("📊 API CALL: GET /api/strategies");
         const payload = await endpoints.strategies.list();
         console.log("📊 API RESPONSE:", payload);
+        if (cancelled) return;
         const rows = Array.isArray(payload) ? payload : payload?.data || payload?.strategies || [];
-        if (Array.isArray(rows)) setStrategies(normalizeStrategies(rows));
+        setStrategies(Array.isArray(rows) ? normalizeStrategies(rows) : []);
+        setListError(null);
       } catch (err) {
-        console.error("📊 API ERROR: Failed to load strategies:", err.message);
+        console.error("📊 API ERROR: Failed to load strategies:", err?.message);
+        if (cancelled) return;
+        // Requirement 14.5: the rows are dropped with the failure, because nobody knows
+        // they are still current — and an empty table over a failed read is the one
+        // rendering that reads as "you have no strategies" when the truth is "we could not
+        // ask". `listError` puts the page in the error state instead.
+        setStrategies([]);
+        setListError(err);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
 
     loadStrategies();
-    return () => controller.abort();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [listReloadKey]);
 
   // ── Task 32.7: the combined owned-and-subscribed read, beside the one above ───────────
   // It is a second, independent read: `endpoints.strategies.list()` above still owns the
@@ -564,12 +851,12 @@ export default function Strategies() {
     [toggleDisclosure, handleRenewSubscription, handleCancelRenewal, navigate],
   );
 
-  // Sync URL search params on change
+  // Sync URL search params on change. `?environment=` is deliberately NOT read: the list
+  // projection carries no environment, so honouring it would filter on the
+  // `row.environment ?? "paper"` default this page no longer writes. See WITHHELD_FILTERS.
   useEffect(() => {
     const stratId = searchParams.get("strategy_id");
-    const env = searchParams.get("environment");
     if (stratId) setFocusedStrategyId(stratId);
-    if (env) setFilterEnvironment(env);
   }, [searchParams]);
 
   // Handle resume from StrategyBuilder
@@ -579,21 +866,56 @@ export default function Strategies() {
     setView("builder");
   }, [resumeBuilderStrategy]);
 
-  // Memoised aggregates – only recompute when strategies or filter change
-  const totalStrategies = useMemo(() => Array.isArray(strategies) ? strategies.length : 0, [strategies]);
-  const runningStrategies = useMemo(() => Array.isArray(strategies) ? strategies.filter((s) => s.status === "running").length : 0, [strategies]);
-  const totalPnl = useMemo(() => Array.isArray(strategies) ? strategies.reduce((sum, s) => sum + (Number.isFinite(Number(s.pnl)) ? Number(s.pnl) : 0), 0) : 0, [strategies]);
-  const avgWinRate = useMemo(() => totalStrategies
-    ? strategies.reduce((sum, s) => sum + (Number.isFinite(Number(s.wr)) ? Number(s.wr) : 0), 0) / totalStrategies
-    : 0, [strategies, totalStrategies]);
+  /*
+   * ── The filter row's answer (Requirements 11.2, 11.5) ─────────────────────
+   *
+   * The four fabricated aggregates that stood here — "Total P&L" as a sum over
+   * `_toNumber(row.pnl ?? …, 0)` and "Avg Win Rate" as a mean over `row.wr` — are gone with
+   * the card grid. Neither key is on the list projection, so both were sums over zeros
+   * presented as account figures (Requirement 14.5). What replaces them is the filter row's
+   * `n of m` count, which counts rows that were actually read.
+   */
+  const query = search.trim().toLowerCase();
+
   const visibleStrategies = useMemo(() => {
     if (!Array.isArray(strategies)) return [];
     return strategies.filter((s) => {
-      const statusMatch = filterStatus === "all" || s.status === filterStatus;
-      const envMatch = filterEnvironment === "all" || s.environment === filterEnvironment;
-      return statusMatch && envMatch;
+      if (filterStatus !== STATUS_FILTER_ALL && s.status !== filterStatus) return false;
+      if (query === "") return true;
+      // Name and market: the two columns this read really carries text for.
+      return [s.name, s.market].some(
+        (text) => typeof text === "string" && text.toLowerCase().includes(query),
+      );
     });
-  }, [strategies, filterStatus, filterEnvironment]);
+  }, [strategies, filterStatus, query]);
+
+  /** Requirement 4.1's failure reporting, hoisted out of the row (see the Alert below). */
+  const failedStrategies = useMemo(
+    () => visibleStrategies.filter((s) => s.status === "failed" || s.health === HEALTH_ERROR),
+    [visibleStrategies],
+  );
+
+  const totalCount = Array.isArray(strategies) ? strategies.length : 0;
+  const resultCount = visibleStrategies.length;
+  const hasActiveFilters = filterStatus !== STATUS_FILTER_ALL || query !== "";
+
+  /**
+   * Requirement 11.5's two empty states, told apart by the same comparison
+   * `ds/FilterBar.emptyVariantFor` makes: `no-data` when there is nothing to find, and
+   * `no-match` — the only case that offers clear-filters — when rows exist and a filter is
+   * hiding them.
+   */
+  const emptyVariant = resultCount > 0 ? null : (totalCount > 0 ? "no-match" : "no-data");
+
+  /** §11.1's states for the table region. An error is never an empty table. */
+  const listState = listError !== null
+    ? PANEL_STATES.ERROR
+    : isLoading
+      ? PANEL_STATES.LOADING
+      : totalCount === 0
+        ? PANEL_STATES.EMPTY
+        : PANEL_STATES.READY;
+
   const API_BASE = CONFIG.apiBaseUrl;
 
   const setProcessingFor = (id, value) =>
@@ -950,135 +1272,293 @@ export default function Strategies() {
     ? null
     : strategyNameRefusal(renameDialog.value, renameDialog.currentName);
 
+  /* ══════════════════════════════════════════════════════════════════════════
+   * THE ROW'S ACTIONS (Requirement 4.2)
+   * ══════════════════════════════════════════════════════════════════════════
+   *
+   * The same seven controls the card carried, the same handlers, the same endpoints — moved
+   * into the row and nothing else. Task 17.2 repartitions them into the inline set plus
+   * `Deploy live` and `Delete` below a divider in the row's overflow menu, each behind a
+   * `ConfirmDialog`; this task deliberately does not pre-empt that, because a page left with
+   * no actions between the two is a page a trader cannot use.
+   */
+  const BUSY_TITLE = "An action on this strategy is still in progress.";
+
+  /*
+   * Declared per render, not memoised, and neither is the column list below it.
+   * `DataTable` memoises a row on its projected cell values PLUS the `columns` identity, and
+   * everything this cell reads that is not a projected value — `isProcessing`, and five
+   * handlers that close over `strategies` — changes without any cell value changing. A
+   * memo keyed on a subset of that is a row showing a stale disabled state; a memo keyed on
+   * all of it recomputes every render anyway. So the identity moves every render, which is
+   * what the card grid did, and the page has no WebSocket ticks for it to cost anything on.
+   */
+  const ActionsCell = function StrategyActionsCell({ row }) {
+    const busy = Boolean(isProcessing[row.id]);
+    const title = busy ? BUSY_TITLE : undefined;
+    return (
+      <span className="inline-flex flex-wrap items-center gap-1">
+        <Button
+          variant="ghost"
+          size="xs"
+          icon={Edit2}
+          title={title}
+          disabled={busy}
+          onClick={() => { setEditingStrategy(row); setView("builder"); }}
+        >
+          Edit
+        </Button>
+        <Button
+          variant="ghost"
+          size="xs"
+          icon={Copy}
+          title={title}
+          disabled={busy}
+          onClick={() => handleCloneStrategy(row.id)}
+        >
+          Clone
+        </Button>
+        <Button
+          variant="ghost"
+          size="xs"
+          icon={Settings}
+          title={title}
+          disabled={busy}
+          onClick={() => requestRenameStrategy(row.id, row.name)}
+        >
+          Rename
+        </Button>
+        <Button
+          variant="ghost"
+          size="xs"
+          icon={BarChart2}
+          title={title}
+          disabled={busy}
+          onClick={() => navigate(`/app/backtest?strategy_id=${row.id}`, { state: { strategy: row } })}
+        >
+          Backtest
+        </Button>
+        <Button
+          variant="ghost"
+          size="xs"
+          icon={Activity}
+          title={title}
+          disabled={busy}
+          onClick={() => navigate(`/app/signal-trace?strategy_id=${row.id}`)}
+        >
+          Trace
+        </Button>
+        {row.status === "running" ? (
+          <Button
+            variant="ghost"
+            size="xs"
+            icon={Pause}
+            title={title}
+            disabled={busy}
+            onClick={() => handlePauseStrategy(row.id)}
+          >
+            Pause
+          </Button>
+        ) : (
+          <Button
+            variant="success"
+            size="xs"
+            icon={Play}
+            title={title}
+            disabled={busy}
+            onClick={() => handleOpenDeployModal(row)}
+          >
+            Deploy
+          </Button>
+        )}
+        <Button
+          variant="danger"
+          size="xs"
+          icon={Trash2}
+          title={busy ? BUSY_TITLE : "Archive strategy"}
+          aria-label={row.name ? `Archive ${row.name}` : `Archive strategy ${row.id}`}
+          disabled={busy}
+          onClick={() => requestArchiveStrategy(row)}
+        />
+      </span>
+    );
+  };
+
+  /* ── §7.2's ten columns, in §7.2's order, plus the row's actions ────────── */
+  const columns = [
+    {
+      key: "name",
+      header: labelFor("name"),
+      sortable: true,
+      priority: 1,
+      render: nameCell(focusedStrategyId),
+    },
+    { key: "status", header: labelFor("status"), priority: 1, render: StatusCell },
+    {
+      key: "current_version",
+      header: labelFor("version"),
+      priority: 2,
+      render: textCell("version"),
+    },
+    {
+      key: "market",
+      header: labelFor("market"),
+      format: "symbol",
+      sortable: true,
+      priority: 1,
+      render: textCell("market"),
+    },
+    {
+      key: "deploymentState",
+      header: labelFor("deploymentState"),
+      priority: 2,
+      render: DeploymentCell,
+    },
+    {
+      key: "performance",
+      header: labelFor("performance"),
+      align: "numeric",
+      // A dead sort header over a column of markers is a control that does nothing.
+      sortable: false,
+      priority: 3,
+      render: unreportedCell("performance"),
+    },
+    { key: "health", header: labelFor("riskState"), priority: 2, render: RiskCell },
+    {
+      key: "last_signal_at",
+      header: labelFor("lastSignalAt"),
+      format: "timestamp",
+      sortable: isReported("lastSignalAt"),
+      priority: 3,
+      render: instantCell("lastSignalAt"),
+    },
+    {
+      key: "last_execution_at",
+      header: labelFor("lastExecutionAt"),
+      format: "timestamp",
+      sortable: isReported("lastExecutionAt"),
+      priority: 3,
+      render: instantCell("lastExecutionAt"),
+    },
+    {
+      key: "updated_at",
+      header: labelFor("updatedAt"),
+      format: "timestamp",
+      sortable: true,
+      priority: 2,
+      render: instantCell("updatedAt"),
+    },
+    // The eleventh column is the row's action set, not one of Requirement 4.1's ten fields
+    // — §7.2's sketch draws it as the trailing `⋯`.
+    { key: "actions", header: "Actions", priority: 1, render: ActionsCell },
+  ];
+
+  /* ── Handlers. Every one that changes the row set returns to page 1, or a
+   *    stale page number renders an empty table over rows that exist. ────── */
+
+  const handleFilterChange = useCallback((id, value) => {
+    if (id === "status") setFilterStatus(value);
+    setPage(1);
+  }, []);
+
+  const handleSearchChange = useCallback((text) => {
+    setSearch(text);
+    setPage(1);
+  }, []);
+
+  const clearFilters = useCallback(() => {
+    setFilterStatus(STATUS_FILTER_ALL);
+    setSearch("");
+    setPage(1);
+  }, []);
+
   if (view === "builder") return <StrategyBuilder onBack={() => setView("library")} strategy={editingStrategy} onBacktest={(payload) => navigate("/app/backtest", { state: { strategy: payload } })} />;
 
   return (
-    <div style={{ padding: 20, overflowY: "auto", flex: 1, background: "#080a0e", color: "#e2e8f0" }}>
-      {isLoading && (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: C.t3, fontFamily: "monospace" }}>
-          Loading strategies...
-        </div>
-      )}
-      {!isLoading && (
-        <>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-            <div>
-              <h1 style={{ color: "#f8fafc", fontWeight: 900, fontSize: 20, letterSpacing: -0.5, margin: 0 }}>Strategy Library</h1>
-              <p style={{ color: "#64748b", fontSize: 10, fontFamily: "monospace", marginTop: 3 }}>Manage, backtest, and deploy your algorithmic strategies</p>
-            </div>
-            <div style={{ display: "flex", gap: 8, position: "relative" }}>
-              <Button variant="outline" size="sm" icon={Filter} onClick={() => setFilterOpen(v => !v)}>Filter</Button>
-              {filterOpen && (
-                <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 20, background: "#0c1017", border: `1px solid #1e293b`, borderRadius: 8, padding: 6, minWidth: 180 }}>
-                  <div style={{ marginBottom: 8, borderBottom: `1px solid #1e293b`, paddingBottom: 4 }}>
-                    <span style={{ color: "#64748b", fontSize: 9, fontFamily: "monospace" }}>STATUS</span>
-                  </div>
-                  {[
-                    { id: "all", label: "All" },
-                    { id: "running", label: "Running" },
-                    { id: "paused", label: "Paused" },
-                    { id: "draft", label: "Draft" },
-                    { id: "backtesting", label: "Backtesting" },
-                    { id: "stopped", label: "Stopped" },
-                    { id: "failed", label: "Failed" },
-                  ].map(opt => (
-                    <button
-                      key={opt.id}
-                      onClick={() => {
-                        setFilterStatus(opt.id);
-                        setFilterOpen(false);
-                      }}
-                      style={{ width: "100%", textAlign: "left", background: filterStatus === opt.id ? "rgba(0,212,255,0.15)" : "transparent", color: filterStatus === opt.id ? "#00d4ff" : "#94a3b8", border: `1px solid ${filterStatus === opt.id ? "rgba(0,212,255,0.3)" : "transparent"}`, borderRadius: 6, padding: "5px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", marginBottom: 4 }}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                  <div style={{ marginTop: 8, marginBottom: 8, borderBottom: `1px solid #1e293b`, paddingBottom: 4 }}>
-                    <span style={{ color: "#64748b", fontSize: 9, fontFamily: "monospace" }}>ENVIRONMENT</span>
-                  </div>
-                  {[
-                    { id: "all", label: "All" },
-                    { id: "paper", label: "Paper" },
-                    { id: "live", label: "Live" },
-                  ].map(opt => (
-                    <button
-                      key={`env-${opt.id}`}
-                      onClick={() => {
-                        setFilterEnvironment(opt.id);
-                        setFilterOpen(false);
-                      }}
-                      style={{ width: "100%", textAlign: "left", background: filterEnvironment === opt.id ? "rgba(0,212,255,0.15)" : "transparent", color: filterEnvironment === opt.id ? "#00d4ff" : "#94a3b8", border: `1px solid ${filterEnvironment === opt.id ? "rgba(0,212,255,0.3)" : "transparent"}`, borderRadius: 6, padding: "5px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", marginBottom: 4 }}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <Button variant="primary" size="sm" icon={Plus} onClick={() => setView("builder")}>New Strategy</Button>
-            </div>
-          </div>
-
-          {/* Stats row */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, marginBottom: 16 }}>
-            {[
-              { l: "Total Strategies", v: String(totalStrategies), I: Layers, c: "#00d4ff" },
-              { l: "Running", v: String(runningStrategies), I: Radio, c: "#10b981" },
-              { l: "Total P&L", v: `${totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(2)}%`, I: TrendingUp, c: totalPnl >= 0 ? "#10b981" : "#ef4444" },
-              { l: "Avg Win Rate", v: `${avgWinRate.toFixed(1)}%`, I: Target, c: "#8b5cf6" },
-            ].map(s => (
-              <Card key={s.l} className="p-4 bg-[#0c1017] border-[#1e293b]">
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                  <span style={{ color: "#64748b", fontSize: 9, fontFamily: "monospace", letterSpacing: 2, textTransform: "uppercase" }}>{s.l}</span>
-                  <s.I size={12} style={{ color: s.c }} />
-                </div>
-                {/* Counts, a P&L percentage and a win rate: mono, like the equivalent
-                    figures on Portfolio, Trade History and Security Logs. Their labels
-                    above already are. Not a temporary fallback — this is the permanent
-                    treatment for a numeric cell (design.md §6.6). */}
-                <div className="font-mono" style={{ color: "#f8fafc", fontSize: 20, fontWeight: 900 }}>{s.v}</div>
-              </Card>
-            ))}
-          </div>
-
-          {/* Archive refusal (task 16.3). Requirement 3.1 makes the server identify every
-              blocking deployment by identifier and state; Requirement 2.10 makes the page
-              say those deployments must be stopped first. Both are rendered from the
-              response itself — the message is the server's own wording, and the list below
-              it is the `blocking_deployments` it named. */}
-          {archiveError && (
-            <div
-              role="alert"
-              data-testid="archive-error"
-              style={{ background: "rgba(239,68,68,0.12)", border: "1px solid #ef4444", borderRadius: 8, padding: "10px 12px", marginBottom: 16, display: "flex", gap: 8, alignItems: "flex-start" }}
+    <div className="flex min-w-0 flex-col gap-4 overflow-y-auto bg-surface-canvas p-5 text-content-primary">
+      <PageHeader
+        title="Strategies"
+        subtitle="Manage, backtest and deploy your algorithmic strategies"
+        actions={(
+          <>
+            <CommandButton
+              intent="secondary"
+              icon={RefreshCw}
+              loading={isLoading}
+              loadingLabel="Reading strategies"
+              onClick={reloadStrategies}
             >
-              <AlertTriangle size={14} style={{ color: "#ef4444", flexShrink: 0, marginTop: 2 }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ color: "#ef4444", fontSize: 10, fontFamily: "monospace", letterSpacing: 1.5, fontWeight: 900, textTransform: "uppercase", marginBottom: 4 }}>
-                  {archiveError.blocked ? "ARCHIVE BLOCKED" : "ARCHIVE FAILED"}
-                  {archiveError.strategyName ? ` — ${archiveError.strategyName}` : ""}
-                </div>
-                <div style={{ color: "#fca5a5", fontSize: 11, lineHeight: 1.5 }}>{archiveError.message}</div>
-                {archiveError.blockingDeployments.length > 0 && (
-                  <ul data-testid="archive-blocking-deployments" style={{ margin: "8px 0 0", paddingLeft: 18, color: "#fca5a5", fontSize: 10, fontFamily: "monospace", lineHeight: 1.7 }}>
-                    {archiveError.blockingDeployments.map((d, i) => (
-                      <li key={d.deploymentId ?? `${d.source || "own"}-${i}`}>
-                        {describeBlockingDeployment(d)}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-              <button
-                onClick={() => setArchiveError(null)}
-                aria-label="Dismiss archive error"
-                style={{ background: "transparent", border: "1px solid rgba(239,68,68,0.4)", color: "#ef4444", borderRadius: 4, padding: "2px 8px", fontSize: 9, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, flexShrink: 0 }}
-              >
-                Dismiss
-              </button>
-            </div>
-          )}
+              Refresh
+            </CommandButton>
+            <CommandButton intent="primary" icon={Plus} onClick={() => setView("builder")}>
+              New strategy
+            </CommandButton>
+          </>
+        )}
+      />
 
-          {/* ── Owned and subscribed, as the server labels them (task 32.7) ────────────
+      {/* Archive refusal (task 16.3). Requirement 3.1 makes the server identify every
+          blocking deployment by identifier and state; Requirement 2.10 makes the page say
+          those deployments must be stopped first. Both are rendered from the response
+          itself — the message is the server's own wording, and the list below it is the
+          `blocking_deployments` it named. Task 17.1 moved the hand-rolled red box this was
+          onto `ds/Alert`, which takes the hue, the icon, the border style and the
+          live-region role from `severity` (Requirement 1.4); the copy, the testids and the
+          dismiss control are unchanged. */}
+      {archiveError && (
+        <Alert
+          severity="error"
+          variant="strip"
+          data-testid="archive-error"
+          title={`${archiveError.blocked ? "ARCHIVE BLOCKED" : "ARCHIVE FAILED"}`
+            + `${archiveError.strategyName ? ` — ${archiveError.strategyName}` : ""}`}
+          onDismiss={() => setArchiveError(null)}
+          dismissLabel="Dismiss archive error"
+        >
+          <p>{archiveError.message}</p>
+          {archiveError.blockingDeployments.length > 0 && (
+            <ul data-testid="archive-blocking-deployments" className="mt-2 flex flex-col gap-0.5 font-mono">
+              {archiveError.blockingDeployments.map((d, i) => (
+                <li key={d.deploymentId ?? `${d.source || "own"}-${i}`}>
+                  {describeBlockingDeployment(d)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Alert>
+      )}
+
+      {/* Requirement 4.1's failure reporting, hoisted out of the row. The card grid put this
+          banner inside each failed card; a table row is not the place for a sentence, and
+          `DataTable`'s memo does not observe a field no column projects — so the condition
+          is summarised once, above the table, from the rows in view. The reason is the row's
+          own `error_message` when it carries one. */}
+      {failedStrategies.length > 0 && (
+        <Alert
+          severity="error"
+          variant="strip"
+          data-testid="strategy-failures"
+          title={failedStrategies.length === 1
+            ? "1 strategy reported a failure"
+            : `${failedStrategies.length} strategies reported a failure`}
+          action={{
+            label: "Open Signal Trace",
+            to: `/app/signal-trace?strategy_id=${failedStrategies[0].id}`,
+          }}
+        >
+          <ul data-testid="strategy-failure-reasons" className="flex flex-col gap-0.5">
+            {failedStrategies.map((s) => (
+              <li key={s.id}>
+                <span className="font-medium">{s.name ?? `Strategy ${s.id}`}</span>
+                {": "}
+                <span>{s.errorMessage || "Strategy execution halted due to error."}</span>
+              </li>
+            ))}
+          </ul>
+        </Alert>
+      )}
+
+      {/* ── Owned and subscribed, as the server labels them (task 32.7) ────────────
               Requirements 12.2, 12.3, 12.4, 12.5, 12.6, 12.8. Every label, every
               subscription field and every button below comes from
               `api.library.myStrategies()`; the section infers no ownership, no entitlement
@@ -1378,136 +1858,80 @@ export default function Strategies() {
             )}
           </section>
 
-          {/* Strategy Cards */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12 }}>
-            {Array.isArray(visibleStrategies) && visibleStrategies.map(s => {
-              const isTarget = focusedStrategyId && String(s.id) === String(focusedStrategyId);
-              const isFailed = s.status === "failed" || s.health === "error";
+      {/* ══════════════════════════════════════════════════════════════════════════════
+          §7.2's table (task 17.1). Requirements 4.1, 4.4, 4.5, 11.2, 11.4, 11.5, 14.5.
+          ══════════════════════════════════════════════════════════════════════════════ */}
+      <Panel
+        title="Your strategies"
+        state={listState}
+        loading={{ kind: "skeleton-table", rows: 6, columns: columns.length }}
+        empty={NO_STRATEGIES_STATE}
+        error={{ error: listError, context: "strategies", onRetry: reloadStrategies }}
+      >
+        <div className="flex min-w-0 flex-col gap-3">
+          <FilterBar
+            filters={[{
+              id: "status",
+              label: labelFor("status"),
+              kind: "segmented",
+              options: STATUS_FILTER_OPTIONS,
+            }]}
+            values={{ status: filterStatus }}
+            onChange={handleFilterChange}
+            search={search}
+            onSearchChange={handleSearchChange}
+            searchLabel="Search name or market"
+            searchPlaceholder={SEARCH_PLACEHOLDER}
+            resultCount={resultCount}
+            totalCount={totalCount}
+            countNoun={COUNT_NOUN}
+            actions={hasActiveFilters ? (
+              <CommandButton intent="ghost" onClick={clearFilters}>
+                Clear filters
+              </CommandButton>
+            ) : null}
+          />
 
-              return (
-                <Card
-                  key={s.id}
-                  className={`p-4 transition-all cursor-pointer bg-[#0c1017] ${isTarget ? 'border-[#00d4ff] ring-1 ring-[#00d4ff]' : isFailed ? 'border-[#ef4444]' : 'border-[#1e293b] hover:border-cyan-500/20'}`}
-                  onClick={() => navigate(`/app/strategies/${s.id}`)}
-                >
-                  {/* Target Focus Banner */}
-                  {isTarget && (
-                    <div style={{ background: "rgba(0,212,255,0.15)", border: "1px solid #00d4ff", borderRadius: 4, padding: "2px 8px", fontSize: 9, fontFamily: "monospace", color: "#00d4ff", fontWeight: 800, marginBottom: 8, textAlign: "center" }}>
-                      ★ FOCUSED TARGET STRATEGY
-                    </div>
-                  )}
+          {/* A control that is not offered is explained rather than simply absent —
+              Requirement 19.3's rule, applied to a filter instead of a figure. */}
+          {WITHHELD_FILTERS.length > 0 ? (
+            <ul data-testid="withheld-filters" className="flex flex-col gap-1 text-micro text-content-secondary">
+              {WITHHELD_FILTERS.map((withheld) => (
+                <li key={withheld.id}>
+                  <span className="font-medium text-content-primary">{`${withheld.label}: `}</span>
+                  {withheld.reason}
+                </li>
+              ))}
+            </ul>
+          ) : null}
 
-                  {/* Header: Name, Status, Version */}
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <StatusDot status={s.status} />
-                      <span style={{ color: "#f8fafc", fontWeight: 900, fontSize: 12 }}>{s.name}</span>
-                    </div>
-                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                      <Tag2 c="gray" style={{ fontSize: 9 }}>v{s.current_version || "1.0"}</Tag2>
-                      <Tag2 c={s.status === "running" ? "green" : s.status === "backtesting" ? "cyan" : s.status === "paused" ? "orange" : s.status === "draft" ? "gray" : "red"}>
-                        {s.status}
-                      </Tag2>
-                    </div>
-                  </div>
-
-                  {/* Failure Alert Banner */}
-                  {isFailed && (
-                    <div style={{ background: "rgba(239,68,68,0.12)", border: "1px solid #ef4444", borderRadius: 6, padding: "6px 8px", marginBottom: 10, fontSize: 10, fontFamily: "monospace", color: "#ef4444", display: "flex", alignItems: "center", gap: 6 }}>
-                      <AlertTriangle size={14} />
-                      <span style={{ flex: 1 }}>{s.errorMessage || "Strategy execution halted due to error."}</span>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); navigate(`/app/signal-trace?strategy_id=${s.id}`); }}
-                        style={{ background: "#ef4444", border: "none", color: "#fff", borderRadius: 4, padding: "2px 6px", fontSize: 9, cursor: "pointer", fontWeight: 700 }}
-                      >
-                        Trace
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Meta Tags: Exchange, Pair, Timeframe, Environment */}
-                  <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
-                    <Tag2 c="cyan">{s.pair}</Tag2>
-                    <Tag2 c="purple">{s.type}</Tag2>
-                    <Tag2 c="gold">{s.tf}</Tag2>
-                    <Tag2 c={s.environment === "live" ? "red" : "green"}>{s.environment || "paper"}</Tag2>
-                    {s.worker_region && <Tag2 c="blue"><Globe size={10} style={{ marginRight: 2 }} />{s.worker_region}</Tag2>}
-                  </div>
-
-                  {/* Health and Worker Status */}
-                  <div style={{ display: "flex", gap: 6, marginBottom: 10, fontSize: 9, fontFamily: "monospace", color: "#64748b" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                      <Activity size={10} />
-                      {/* Always a computed value, so no `|| "healthy"` default: that
-                          fallback was a second fabrication of the same kind. */}
-                      <span>Health: {s.health}</span>
-                    </div>
-                    {s.is_running && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                        <Server size={10} />
-                        <span>Worker: Active</span>
-                      </div>
-                    )}
-                    {s.exchange_status && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                        <Shield size={10} />
-                        <span>Exchange: {s.exchange_status}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Performance Metrics */}
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 6, marginBottom: 10 }}>
-                    {[
-                      { l: "P&L", v: `${s.pnl >= 0 ? "+" : ""}${s.pnl}%`, c: s.pnl >= 0 ? "#10b981" : "#ef4444" },
-                      { l: "Win Rate", v: `${s.wr}%`, c: "#00d4ff" },
-                      { l: "Max DD", v: `${s.dd}%`, c: "#ef4444" },
-                    ].map(m => (
-                      <div key={m.l} style={{ background: "#080a0e", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
-                        <div style={{ color: "#64748b", fontSize: 8, fontFamily: "monospace", letterSpacing: 2, marginBottom: 2 }}>{m.l}</div>
-                        <div style={{ color: m.c, fontSize: 12, fontWeight: 900, fontFamily: "monospace" }}>{m.v}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Timeline */}
-                  <div style={{ display: "flex", gap: 12, marginBottom: 10, fontSize: 9, fontFamily: "monospace", color: "#64748b" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                      <Clock size={10} />
-                      <span>Created: {s.created_at ? new Date(s.created_at).toLocaleDateString() : "N/A"}</span>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                      <RefreshCw size={10} />
-                      <span>Updated: {s.updated_at ? new Date(s.updated_at).toLocaleDateString() : "N/A"}</span>
-                    </div>
-                  </div>
-
-                  <ProgressBar v={s.wr} max={100} color={s.pnl >= 0 ? "#10b981" : "#ef4444"} h={3} />
-
-                  {/* Action Buttons */}
-                  <div style={{ display: "flex", gap: 4, marginTop: 10, flexWrap: "wrap" }}>
-                    <Button variant="ghost" size="xs" icon={Edit2} onClick={e => { e.stopPropagation(); setEditingStrategy(s); setView("builder"); }} disabled={!!isProcessing[s.id]}>Edit</Button>
-                    <Button variant="ghost" size="xs" icon={Copy} onClick={e => { e.stopPropagation(); handleCloneStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Clone</Button>
-                    <Button variant="ghost" size="xs" icon={Settings} onClick={e => { e.stopPropagation(); requestRenameStrategy(s.id, s.name); }} disabled={!!isProcessing[s.id]}>Rename</Button>
-                    <Button variant="ghost" size="xs" icon={BarChart2} onClick={e => { e.stopPropagation(); navigate(`/app/backtest?strategy_id=${s.id}`, { state: { strategy: s } }); }} disabled={!!isProcessing[s.id]}>Backtest</Button>
-                    <Button variant="ghost" size="xs" icon={Activity} onClick={e => { e.stopPropagation(); navigate(`/app/signal-trace?strategy_id=${s.id}`); }} disabled={!!isProcessing[s.id]}>Trace</Button>
-                    {s.status === "running"
-                      ? <Button variant="ghost" size="xs" icon={Pause} onClick={e => { e.stopPropagation(); handlePauseStrategy(s.id); }} disabled={!!isProcessing[s.id]}>Pause</Button>
-                      : <Button variant="success" size="xs" icon={Play} onClick={e => { e.stopPropagation(); handleOpenDeployModal(s); }} disabled={!!isProcessing[s.id]}>Deploy</Button>}
-                    <Button variant="danger" size="xs" icon={Trash2} cls="ml-auto" title="Archive strategy" aria-label={`Archive ${s.name}`} onClick={e => { e.stopPropagation(); requestArchiveStrategy(s); }} disabled={!!isProcessing[s.id]} />
-                  </div>
-                </Card>
-              );
-            })}
-            {/* Add new card */}
-            <div style={{ background: "#0c1017", border: `2px dashed #1e293b`, borderRadius: 12, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 32, cursor: "pointer", minHeight: 220, transition: "all 0.2s" }}
-              onClick={() => setView("builder")} className="hover:border-cyan-500/30 hover:bg-cyan-500/3">
-              <PlusCircle size={24} style={{ color: "#64748b" }} />
-              <span style={{ color: "#64748b", fontSize: 11, fontFamily: "monospace" }}>Create New Strategy</span>
-            </div>
-          </div>
-        </>
-      )}
+          {emptyVariant === "no-match" ? (
+            <EmptyState
+              {...NO_STRATEGIES_STATE}
+              variant="no-match"
+              headline="No strategies match these filters"
+              body={`You have ${totalCount} ${COUNT_NOUN}, and none of them matches the `
+                + "current status filter and search. Widen them to see the rows again."}
+              clearFiltersAction={{ label: "Clear filters", onClick: clearFilters }}
+            />
+          ) : (
+            <DataTable
+              columns={columns}
+              rows={visibleStrategies}
+              getRowId={(row) => row.id}
+              rowHref={(row) => `/app/strategies/${row.id}`}
+              totalCount={resultCount}
+              page={page}
+              pageSize={PAGE_SIZE}
+              onPageChange={setPage}
+              sort={sort}
+              onSortChange={setSort}
+              stickyHeader
+              caption="Your strategies, with status, deployment and activity per row"
+            />
+          )}
+        </div>
+      </Panel>
 
       {/* Deployment Modal */}
       {deployModalStrategy && (

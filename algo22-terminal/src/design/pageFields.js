@@ -638,6 +638,28 @@ const STRATEGIES_FIELDS = [
     path: 'strategies[].updated_at',
     documentedIn: STRATEGIES_MODULE,
   }),
+  entry({
+    page: PAGES.STRATEGIES,
+    field: 'environment',
+    label: 'Environment',
+    requirement: '4.1',
+    read: STRATEGIES_READ,
+    endpoint: STRATEGIES_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'The strategies list does not report an execution environment. A strategy reaches '
+      + 'paper or live through a deployment, and the deployment record is a separate read this '
+      + 'page does not make.',
+    documentedIn: STRATEGIES_MODULE,
+    note: 'Not one of Requirement 4.1\'s ten columns — it is declared because §7.2\'s layout '
+      + 'sketch draws an `[Environment ▾]` control in the filter row, and `_LIST_COLUMNS` '
+      + 'carries no `environment` key for it to filter on. `Strategies.jsx` used to write '
+      + '`row.environment ?? "paper"`, which labelled every strategy a paper strategy, and a '
+      + 'select over that default would have been a control that either matches every row or '
+      + 'none. So the control is NOT RENDERED and this reason is shown in its place — '
+      + 'Requirement 19.3\'s rule applied to a control rather than to a figure. `deployed_'
+      + 'exchange` is the nearest real key and it names a venue, not an environment.',
+  }),
 ];
 
 /*

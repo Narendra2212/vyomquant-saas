@@ -236,9 +236,15 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByText('Strategy Library')).toBeDefined();
+    // vyomquant-ui-redesign task 17.1: the page is a `ds/DataTable` now. The `<h1>` is
+    // `Strategies` (design.md §7.2) and the focus marker is a badge in the Name cell rather
+    // than the card's `★ FOCUSED TARGET STRATEGY` banner. The claim is the same one — a
+    // `strategy_id` matching no row marks no row — and it is still asserted with the
+    // selector that DOES match when a row is focused (see 3.3 in
+    // `portfolio_phase3_workflow.test.jsx`), so it cannot pass vacuously.
+    expect(await screen.findByRole('heading', { name: 'Strategies' })).toBeDefined();
     expect(screen.getByText('Real Bot')).toBeDefined();
-    expect(screen.queryByText('★ FOCUSED TARGET STRATEGY')).toBeNull();
+    expect(screen.queryByText('Focused target')).toBeNull();
   });
 
   // 12: Failed Strategy with Missing Error Reason renders safe fallback
@@ -253,7 +259,10 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByText('Crashing Bot')).toBeDefined();
+    // Task 17.1: the row is a table row and the fallback reason is stated once above the
+    // table, so the name appears in both places — hence the scoped lookup for the row.
+    expect(await screen.findByRole('table')).toBeDefined();
+    expect(within(screen.getByRole('table')).getByText('Crashing Bot')).toBeDefined();
     expect(screen.getByText('Strategy execution halted due to error.')).toBeDefined();
   });
 

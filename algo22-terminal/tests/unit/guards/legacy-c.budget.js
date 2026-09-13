@@ -90,7 +90,11 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // gone, the `C` import with it, and `no-local-tokens`' one scheduled exception
   // clears on the same edit — exactly as task 1.11 predicted.
   'pages/Portfolio.jsx': 0,
-  'pages/Strategies.jsx': 1,
+  // 1 -> 0 at task 17.1. The single reference was `color: C.t3` on the page-level "Loading
+  // strategies..." div, and the rebuild has no page-level loading state to put it in:
+  // `ds/Panel` owns §11.1's eight states for the table region, so the skeleton and the
+  // header arrive together. The `C` import went with it.
+  'pages/Strategies.jsx': 0,
   // M7. Added at 0 by task 15.1 rather than lowered: the page imported `C` from the shim
   // but never read a member off it, so it never carried a reference for the seeding pass
   // to record. The rebuild dropped the import along with `SectionH` and `Tag2`, and the
