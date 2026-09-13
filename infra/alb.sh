@@ -12,6 +12,16 @@ ALB_NAME="${ALB_NAME:-vyomquant-alb}"
 TG_API_NAME="${TG_API_NAME:-vyomquant-api-tg}"
 TG_WEB_NAME="${TG_WEB_NAME:-vyomquant-web-tg}"
 DOMAIN_NAME="${DOMAIN_NAME:-vyomquant.in}"
+
+# The frontend is served by CloudFront + S3 (distribution EEOXECPHQ8SR0 over bucket
+# vyomquant-frontend), NOT by an ECS service behind this ALB:
+#   * `aws ecs describe-services … vyomquant-frontend-service` returns MISSING
+#   * target group vyomquant-web-tg is orphaned — LoadBalancerArns = [], no registered targets
+# Sending vyomquant.in / www.vyomquant.in to that target group would therefore serve 503 to
+# every visitor. The web target group and its host rule are opt-in, for the day a containerised
+# frontend service actually exists. See infra/dns.md §2 for the intended split:
+#   vyomquant.in / www / app  -> CloudFront      api.vyomquant.in -> this ALB
+ENABLE_WEB_TARGET_GROUP="${ENABLE_WEB_TARGET_GROUP:-false}"
 VPC_ID="${VPC_ID:-}"
 SUBNET_IDS="${SUBNET_IDS:-}"
 CERT_ARN="${CERT_ARN:-}"
@@ -57,18 +67,32 @@ if [ -z "$SUBNET_IDS" ]; then
 fi
 echo "[SUCCESS] Using Subnet IDs: $SUBNET_IDS"
 
-# 3. Discover ACM Certificate ARN & Status if available
+# 3. Discover ACM Certificate ARN & Status if available.
+#
+#    Restricted to ISSUED/PENDING_VALIDATION for the same reason as infra/acm.sh: this account
+#    holds FAILED vyomquant.in certificates, and picking one up here would pin CERT_STATUS to
+#    FAILED so the HTTPS listener below is skipped on every run, with a misleading
+#    "waiting for DNS validation" message.
 CERT_STATUS="NONE"
 if [ -z "$CERT_ARN" ]; then
-    EXISTING_CERTS=$(aws acm list-certificates --region "$AWS_REGION" --output json 2>/dev/null || echo "")
+    EXISTING_CERTS=$(aws acm list-certificates \
+        --region "$AWS_REGION" \
+        --certificate-statuses ISSUED PENDING_VALIDATION \
+        --output json 2>/dev/null || echo "")
     if [ -n "$EXISTING_CERTS" ]; then
         CERT_ARN=$($PYTHON_BIN -c "
 import json
 data = json.loads('''$EXISTING_CERTS''')
-for cert in data.get('CertificateSummaryList', []):
-    if cert.get('DomainName') == '$DOMAIN_NAME':
-        print(cert.get('CertificateArn'))
-        break
+# Prefer an ISSUED certificate; only fall back to PENDING_VALIDATION so the operator still
+# gets an accurate 'still validating' message rather than silence.
+candidates = [
+    c for c in data.get('CertificateSummaryList', [])
+    if c.get('DomainName') == '$DOMAIN_NAME'
+    and c.get('Status') in ('ISSUED', 'PENDING_VALIDATION')
+]
+candidates.sort(key=lambda c: 0 if c.get('Status') == 'ISSUED' else 1)
+if candidates:
+    print(candidates[0].get('CertificateArn'))
 " 2>/dev/null || true)
     fi
 fi
@@ -154,6 +178,11 @@ else
 fi
 
 # 7. Create or Reuse Frontend Target Group (Port 3000, /)
+#
+# This target group is created/reused unconditionally so the ARN is available, but it is only
+# wired into a listener when ENABLE_WEB_TARGET_GROUP=true (see the note at the top of this file).
+# As it stands in production it is deliberately orphaned: nothing registers targets in it, because
+# the SPA is served from S3 through CloudFront rather than from a container.
 TG_WEB_ARN=$(aws elbv2 describe-target-groups --region "$AWS_REGION" --names "$TG_WEB_NAME" --query "TargetGroups[0].TargetGroupArn" --output text 2>/dev/null || true)
 if [ -z "$TG_WEB_ARN" ] || [ "$TG_WEB_ARN" == "None" ]; then
     echo "[INFO] Creating Frontend Target Group $TG_WEB_NAME (Port 3000, /)..."
@@ -200,13 +229,21 @@ if [ "$CERT_STATUS" == "ISSUED" ]; then
     HTTPS_LISTENER_ARN=$(aws elbv2 describe-listeners --region "$AWS_REGION" --load-balancer-arn "$ALB_ARN" --query "Listeners[?Port==\`443\`].ListenerArn" --output text 2>/dev/null || true)
 
     if [ -z "$HTTPS_LISTENER_ARN" ] || [ "$HTTPS_LISTENER_ARN" == "None" ]; then
+        # Default action forwards to the API target group, matching the :80 listener. The web
+        # target group is only used as the default when it has actually been enabled — otherwise
+        # every unmatched host would fall through to an empty target group and return 503.
+        if [ "$ENABLE_WEB_TARGET_GROUP" == "true" ]; then
+            HTTPS_DEFAULT_TG_ARN="$TG_WEB_ARN"
+        else
+            HTTPS_DEFAULT_TG_ARN="$TG_API_ARN"
+        fi
         echo "[INFO] Creating HTTPS Listener (Port 443) using ISSUED ACM Certificate..."
         HTTPS_LISTENER_ARN=$(aws elbv2 create-listener \
             --load-balancer-arn "$ALB_ARN" \
             --protocol HTTPS \
             --port 443 \
             --certificates CertificateArn="$CERT_ARN" \
-            --default-actions "Type=forward,TargetGroupArn=$TG_WEB_ARN" \
+            --default-actions "Type=forward,TargetGroupArn=$HTTPS_DEFAULT_TG_ARN" \
             --region "$AWS_REGION" \
             --query "Listeners[0].ListenerArn" --output text)
         echo "[SUCCESS] Created HTTPS Listener: $HTTPS_LISTENER_ARN"
@@ -215,32 +252,46 @@ if [ "$CERT_STATUS" == "ISSUED" ]; then
     # Host-based routing rules on HTTPS listener
     echo "[INFO] Checking Host-based Routing Rules on HTTPS Listener..."
     
-    # Rule 1: api.vyomquant.in -> TG_API
-    RULE_API_EXISTS=$(aws elbv2 describe-rules --listener-arn "$HTTPS_LISTENER_ARN" --region "$AWS_REGION" --query "Rules[?Conditions[0].HostHeaderConfig.Values[0]==\`api.vyomquant.in\`].RuleArn" --output text 2>/dev/null || true)
+    # Rule 1: api.<domain> -> TG_API
+    #
+    # NOTE: this rule only matches traffic that arrives with the real viewer Host header, i.e.
+    # clients hitting api.<domain> directly. It does NOT match CloudFront-proxied /api/* traffic:
+    # distribution EEOXECPHQ8SR0 uses the managed AllViewerExceptHostHeader origin request policy,
+    # so the ALB sees Host: vyomquant-alb-….elb.amazonaws.com and falls through to the listener's
+    # default action instead.
+    API_HOST="api.${DOMAIN_NAME}"
+    RULE_API_EXISTS=$(aws elbv2 describe-rules --listener-arn "$HTTPS_LISTENER_ARN" --region "$AWS_REGION" --query "Rules[?Conditions[0].HostHeaderConfig.Values[0]==\`$API_HOST\`].RuleArn" --output text 2>/dev/null || true)
     if [ -z "$RULE_API_EXISTS" ] || [ "$RULE_API_EXISTS" == "None" ]; then
         aws elbv2 create-rule \
             --listener-arn "$HTTPS_LISTENER_ARN" \
             --priority 10 \
-            --conditions "Field=host-header,HostHeaderConfig={Values=['api.vyomquant.in']}" \
+            --conditions "Field=host-header,HostHeaderConfig={Values=['$API_HOST']}" \
             --actions "Type=forward,TargetGroupArn=$TG_API_ARN" \
             --region "$AWS_REGION" >/dev/null
-        echo "[SUCCESS] Added Host-based Rule: api.vyomquant.in -> Backend TG"
+        echo "[SUCCESS] Added Host-based Rule: $API_HOST -> Backend TG"
     else
-        echo "[INFO] Rule for api.vyomquant.in already exists"
+        echo "[INFO] Rule for $API_HOST already exists"
     fi
 
-    # Rule 2: vyomquant.in / www.vyomquant.in -> TG_WEB
-    RULE_WEB_EXISTS=$(aws elbv2 describe-rules --listener-arn "$HTTPS_LISTENER_ARN" --region "$AWS_REGION" --query "Rules[?Conditions[0].HostHeaderConfig.Values[0]==\`vyomquant.in\`].RuleArn" --output text 2>/dev/null || true)
-    if [ -z "$RULE_WEB_EXISTS" ] || [ "$RULE_WEB_EXISTS" == "None" ]; then
-        aws elbv2 create-rule \
-            --listener-arn "$HTTPS_LISTENER_ARN" \
-            --priority 20 \
-            --conditions "Field=host-header,HostHeaderConfig={Values=['vyomquant.in','www.vyomquant.in']}" \
-            --actions "Type=forward,TargetGroupArn=$TG_WEB_ARN" \
-            --region "$AWS_REGION" >/dev/null
-        echo "[SUCCESS] Added Host-based Rule: vyomquant.in, www.vyomquant.in -> Frontend TG"
+    # Rule 2: <domain> / www.<domain> -> TG_WEB.
+    # Skipped unless ENABLE_WEB_TARGET_GROUP=true, because vyomquant-web-tg currently has no
+    # backing ECS service and would answer 503. The apex and www are served by CloudFront.
+    if [ "$ENABLE_WEB_TARGET_GROUP" == "true" ]; then
+        RULE_WEB_EXISTS=$(aws elbv2 describe-rules --listener-arn "$HTTPS_LISTENER_ARN" --region "$AWS_REGION" --query "Rules[?Conditions[0].HostHeaderConfig.Values[0]==\`$DOMAIN_NAME\`].RuleArn" --output text 2>/dev/null || true)
+        if [ -z "$RULE_WEB_EXISTS" ] || [ "$RULE_WEB_EXISTS" == "None" ]; then
+            aws elbv2 create-rule \
+                --listener-arn "$HTTPS_LISTENER_ARN" \
+                --priority 20 \
+                --conditions "Field=host-header,HostHeaderConfig={Values=['$DOMAIN_NAME','www.$DOMAIN_NAME']}" \
+                --actions "Type=forward,TargetGroupArn=$TG_WEB_ARN" \
+                --region "$AWS_REGION" >/dev/null
+            echo "[SUCCESS] Added Host-based Rule: $DOMAIN_NAME, www.$DOMAIN_NAME -> Frontend TG"
+        else
+            echo "[INFO] Rule for $DOMAIN_NAME already exists"
+        fi
     else
-        echo "[INFO] Rule for vyomquant.in already exists"
+        echo "[SKIP] ENABLE_WEB_TARGET_GROUP=false - not routing $DOMAIN_NAME/www to $TG_WEB_NAME."
+        echo "[SKIP] The apex, www and app hostnames are served by CloudFront (EEOXECPHQ8SR0)."
     fi
 else
     echo "[NOTICE] ACM Certificate status is '$CERT_STATUS'. HTTPS Listener (Port 443) will be attached automatically once GoDaddy DNS validation completes and certificate becomes ISSUED."

@@ -13,6 +13,7 @@ Referral, Signal Trace, Support, Health
 import asyncio
 import inspect
 import logging
+import os
 import re
 import time
 from datetime import datetime
@@ -21,6 +22,18 @@ from typing import Any, Dict, List, Optional
 from backend_app.core.dependencies import get_telemetry, create_request_supabase
 
 logger = logging.getLogger("DashboardAggregationService")
+
+#: Fallback used only when neither APP_URL nor FRONTEND_URL is set. Referral links are
+#: user-facing and get pasted into chats and emails, so a stale hostname here outlives any
+#: deployment. Kept deliberately identical to ``routers.referral._get_referral_link`` - the two
+#: are duplicated rather than shared to avoid importing a router module into a service layer, so
+#: they must be changed together.
+_DEFAULT_APP_URL = "https://app.vyomquant.in"
+
+
+def _app_base_url() -> str:
+    """Public base URL of the frontend, for links rendered into user-visible payloads."""
+    return os.getenv("APP_URL", os.getenv("FRONTEND_URL", _DEFAULT_APP_URL)).rstrip("/")
 
 
 class DashboardAggregationService:
@@ -337,7 +350,7 @@ class DashboardAggregationService:
             if not sb:
                 return {
                     "referral_code": default_ref,
-                    "referral_link": f"https://vyomquant.com/ref/{default_ref}",
+                    "referral_link": f"{_app_base_url()}/ref/{default_ref}",
                     "total_referrals": 0,
                     "active_referrals": 0,
                     "pending_earnings": 0.0,
@@ -352,7 +365,7 @@ class DashboardAggregationService:
             
             return {
                 "referral_code": ref_code,
-                "referral_link": f"https://vyomquant.com/ref/{ref_code}",
+                "referral_link": f"{_app_base_url()}/ref/{ref_code}",
                 "total_referrals": profile.get("total_referrals", 0),
                 "active_referrals": profile.get("active_referrals", 0),
                 "pending_earnings": float(profile.get("pending_earnings", 0.0)),
