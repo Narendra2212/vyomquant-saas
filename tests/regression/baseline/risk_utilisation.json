@@ -1,4 +1,5 @@
 {
+  "_baseline_note_bc1_drawdown_pct": "AUTHORISED RE-RECORD of `drawdown_pct`, at all THREE places this file records it (vyomquant-ui-redesign task 12.1, BC-1; `design.md` \u00a71.5, \u00a716, \u00a717.1; Requirements 3.1, 10.2, 19.1, 19.2). `routers/risk.py::get_risk_status` returned a literal `0.0`, which asserts the account is sitting at its equity peak \u2014 a claim nothing on that path measured, and the one figure a trader reads to decide whether to cut size. It now returns `current_drawdown_pct_from_equity_curve(equity_curve_in_hand)`, which is `None`: current drawdown is peak-to-trough and needs an equity *series*, this handler holds none, and BC-1 adds no query. `null` is the honest answer where `0.0` was not. \u00a717.1 names exactly this change as the sole permitted exception to \"no change to `routers/risk.py`\" \u2014 it is a read projection, and the limits, the kill switch and the circuit breakers are untouched. THE THREE SITES: `routes[0].handlers[0].returns[0].drawdown_pct` `float` \u2192 `computed`; `status_endpoint.type_map.drawdown_pct` `float` \u2192 `null`; `status_endpoint.values.drawdown_pct` `0.0` \u2192 `null`. NOTHING ELSE MOVED: every other figure the two endpoints compute is as captured, including the 60.0 daily-loss utilisation and the `WARNING` rung of the ladder it lands on, which is what Requirement 25.5 pins.",
   "capture": "risk_utilisation",
   "known_account": {
     "available_balance": "70000.00",
@@ -42,6 +43,7 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_returns": "AUTHORISED RE-RECORD of `returns[0].drawdown_pct` \u2014 `float` \u2192 `computed` (task 12.1, BC-1; see `_baseline_note_bc1_drawdown_pct` at the top of this file for the authorisation). This entry is an AST inference off the handler's own `return` dict, not a called value, so the spelling here differs from the `null` recorded under `status_endpoint`: `0.0` was an `ast.Constant` and `capture_baseline._inferred_type` read it as `float`, whereas `\"drawdown_pct\": drawdown_pct` is an `ast.Name` and falls through to `computed`. Same one change, read two ways. Every other key in this `returns` map is unchanged.",
           "decorators": [
             "router.get('/status')"
           ],
@@ -62,7 +64,7 @@
                 "max": "computed",
                 "utilization_pct": "computed"
               },
-              "drawdown_pct": "float",
+              "drawdown_pct": "computed",
               "kill_switch_active": "computed",
               "leverage": {
                 "configured_max": "computed",
@@ -159,7 +161,7 @@
         "max": "float",
         "utilization_pct": "float"
       },
-      "drawdown_pct": "float",
+      "drawdown_pct": "null",
       "kill_switch_active": "bool",
       "leverage": {
         "configured_max": "int",
@@ -180,7 +182,7 @@
         "max": 500.0,
         "utilization_pct": 60.0
       },
-      "drawdown_pct": 0.0,
+      "drawdown_pct": null,
       "kill_switch_active": false,
       "leverage": {
         "configured_max": 3,

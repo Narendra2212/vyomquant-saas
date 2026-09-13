@@ -725,6 +725,79 @@
       "via": "api.library.renewSubscription"
     },
     {
+      "_baseline_note_entry": "AUTHORISED RE-RECORD of this entry \u2014 `api.strategies.deployVersion`'s POST path, `/api/strategy-operations/strategies/{expr}/versions/{expr}/deploy` \u2192 `/api/strategies/{expr}/versions/{expr}/deploy`, and with it `resolved` FALSE \u2192 TRUE (commit b3771c3, \"fix(api): deploy and deployments paths resolve to routes the backend registers\"). ONE CHANGE, REPORTED AS TWO: the differ matches `api_calls` on (`via`, `method`, `path_template`), so correcting a path reads as a removal plus an addition of the same `via`. THE OLD PATH RESOLVED TO NOTHING, and this file is the evidence: the pre-change capture froze `\"resolved\": false` for this call, i.e. the capture tool had already recorded that the path matched no backend route. `strategy_operations.py:2835` declares only `@router.post(\"/strategies/{strategy_id}/versions/{version}/deploy\")` and `main.py:644` mounts that router at `prefix=\"/api\"`, so `/api/strategy-operations/\u2026/deploy` was never registered. What made the prefixed spelling look correct is that the siblings either side of it register both: `preflight_deploy_version` registers both spellings of the preflight GET (`_PREFLIGHT_PATHS`, strategy_operations.py:2954\u20132961) and `execute_backtest` carries two `@router.post` decorators (strategy_operations.py:1332\u20131333). CONSEQUENCE OF THE DEFECT: the preflight GET answered, the deploy gate passed, the Deploy button enabled, and the POST the user then pressed 404'd. The correction the user reviewed and approved is frontend-only (`api/modules/strategies.js`, `lib/deployFlow.js`); no backend route, handler or gate was touched. It is strictly an improvement in the captured contract: where an unresolved entry recorded nothing beyond a path, this entry now resolves to `backend_app.routers.strategy_operations.deploy_version` and records its decorators, parameters, `raises` and `returns`, which is why re-recording it is safe rather than a regression papered over. SCOPE: this note covers this one entry. `api_call_count` is unchanged at 15 \u2014 one entry out, one in \u2014 and no other call on this surface moved; an unresolved-to-resolved re-record anywhere else in this file is a failure in its own right, whether or not this note sits nearby.",
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/strategies/{strategy_id}/versions/{version}/deploy')",
+            "limiter.limit('50/minute')"
+          ],
+          "handler": "deploy_version",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "body": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "environment": {
+              "annotation": "str",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "version": {
+              "annotation": "str"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str",
+                "missing_prerequisite": "computed"
+              },
+              "error_code": "DEPLOY_PREREQUISITE_NOT_MET",
+              "status_code": 409
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "VERSION_DEPLOY_FAILED",
+              "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "VERSION_NOT_FOUND",
+              "status_code": 404
+            }
+          ],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/strategies/{strategy_id}/versions/{version}/deploy"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/strategies/{expr}/versions/{expr}/deploy",
+      "path_template": "/api/strategies/{expr}/versions/{expr}/deploy",
+      "resolved": true,
+      "via": "api.strategies.deployVersion"
+    },
+    {
       "handler_count": 2,
       "handlers": [
         {
@@ -952,13 +1025,6 @@
       "path_template": "/api/strategies/{id}/pause",
       "resolved": true,
       "via": "api.strategies.pause"
-    },
-    {
-      "method": "POST",
-      "path": "/api/strategy-operations/strategies/{expr}/versions/{expr}/deploy",
-      "path_template": "/api/strategy-operations/strategies/{expr}/versions/{expr}/deploy",
-      "resolved": false,
-      "via": "api.strategies.deployVersion"
     },
     {
       "handler_count": 1,

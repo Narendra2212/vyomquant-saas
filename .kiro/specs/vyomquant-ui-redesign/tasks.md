@@ -588,9 +588,9 @@ the decomposition this plan uses instead:
     change is small: `ui/Badge`'s green/red shift to the trading palette and the error boundary
     stops showing stack traces.
 
-- [ ] 8. M4 — Application shell
+- [x] 8. M4 — Application shell
 
-  - [~] 8.1 Create `src/components/shell/navigation.js`
+  - [x] 8.1 Create `src/components/shell/navigation.js`
     - `NAV_GROUPS` with the four workflow groups and **exactly the ten** Requirement 2.1 entries
       (`§6.3`), each with `id`, `label`, `icon`, `path` and a `matches` regex array
     - `activeNavId(pathname)` returning at most one id, matching aliases (`/app/backtester`) and
@@ -614,7 +614,7 @@ the decomposition this plan uses instead:
       segments, and arbitrary strings; assert at most one id always, and exactly one for any
       in-scope route, alias or child; minimum 100 iterations
 
-  - [~] 8.4 Create `src/components/shell/ResponsiveGate.jsx`, replacing `DesktopOnlyOverlay`
+  - [x] 8.4 Create `src/components/shell/ResponsiveGate.jsx`, replacing `DesktopOnlyOverlay`
     - Declare `VIEWPORT` and `ROUTE_MIN_VIEWPORT` from `§11.6` — only `/app/builder` needs more
       than tablet
     - ≥1024px: everything available. 768–1023px: the shell collapses the sidebar to a 56px icon
@@ -625,7 +625,7 @@ the decomposition this plan uses instead:
       behaviour for all pages" into a per-route capability gate (`§1.11`, `§11.6`)
     - _Requirements: 17.1, 17.4_
 
-  - [~] 8.5 Rebuild the shell layout in `src/App.jsx`
+  - [x] 8.5 Rebuild the shell layout in `src/App.jsx`
     - CSS Grid `grid-template: min-content 1fr / SIDEBAR_WIDTH_PX[sidebarMode] 1fr` (rows then
       columns) with `height: 100%`, replacing the nested flexbox where `Sidebar`'s
       `minHeight: 100vh` and the content column's `overflow: hidden` interact (`§6.2`). Not literal
@@ -651,7 +651,7 @@ the decomposition this plan uses instead:
     - _Requirements: 2.2, 17.1, 17.3_
     - _Property: P2_
 
-  - [~] 8.6 Rebuild `src/components/Sidebar.jsx` against the new IA
+  - [x] 8.6 Rebuild `src/components/Sidebar.jsx` against the new IA
     - Render the four groups from `NAV_GROUPS`; every entry is a react-router `NavLink` producing a
       real `<a>`, not a `<button>` calling `navigate()`, so middle-click, Ctrl-click and native
       focus/hover semantics work (`§6.3`)
@@ -663,7 +663,7 @@ the decomposition this plan uses instead:
     - Brand block 56px, `AccountMenu` trigger pinned bottom at 56px
     - _Requirements: 2.1, 2.3, 2.4_
 
-  - [~] 8.7 Rebuild `src/components/TopBar.jsx` with a real connection indicator
+  - [x] 8.7 Rebuild `src/components/TopBar.jsx` with a real connection indicator
     - Delete the hardcoded `<LiveStatusV2 status="running" />` on line 61 — the literal string that
       makes the indicator claim LIVE with a pulsing green dot whether or not a socket exists
       (`§1.3`); it is both a Requirement 2.5/2.6 gap and a Requirement 14.5 fabrication today
@@ -676,7 +676,7 @@ the decomposition this plan uses instead:
     - Left: breadcrumb/page context. Right: connection indicator, notification bell, UTC clock
     - _Requirements: 2.5, 2.6, 14.5_
 
-  - [~] 8.8 Add `src/components/shell/AccountMenu.jsx` and one shared unread-count hook
+  - [x] 8.8 Add `src/components/shell/AccountMenu.jsx` and one shared unread-count hook
     - The `§6.4` popover keeping the seven deferred routes reachable: Profile, Security log, Billing
       & plan, Exchange accounts, Risk settings, Notifications (with count), Support, Documentation
       (external, `rel="noopener noreferrer"`, **omitted if the URL is not live**), Sign out
@@ -732,7 +732,7 @@ the decomposition this plan uses instead:
 
 - [ ] 10. M5 — Cross-cutting wiring
 
-  - [~] 10.1 Create `src/hooks/useNotificationStream.js` as the single toast transport for backend events
+  - [x] 10.1 Create `src/hooks/useNotificationStream.js` as the single toast transport for backend events
     - Subscribe to `wsClient.subscribe('notification')` plus the relevant channels, pass **every**
       event through `notificationFor`, and call `window.showToast` only on a non-null result
       (`§11.5`)
@@ -758,7 +758,7 @@ the decomposition this plan uses instead:
     - _Requirements: 15.1, 15.2, 18.3, 19.4_
     - _Property: P13_
 
-  - [~] 10.4 Replace the four native dialogs in `src/pages/StrategyDetail.jsx` and delete its placeholder panel
+  - [x] 10.4 Replace the four native dialogs in `src/pages/StrategyDetail.jsx` and delete its placeholder panel
     - All four `window.confirm` calls (deploy, delete, restore version, deploy version) become
       `ConfirmDialog`; the two deploy confirmations route through Task 10.5's flow and **stop
       claiming "Deploy to paper trading?"** when the target is chosen elsewhere — the two pages
@@ -767,7 +767,7 @@ the decomposition this plan uses instead:
       to Signal Trace instead — that page owns the data (`§7.3`, Requirement 19.4)
     - _Requirements: 7.6, 18.3, 19.4_
 
-  - [~] 10.5 Build the `Deploy_Confirmation_Flow`
+  - [x] 10.5 Build the `Deploy_Confirmation_Flow`
     - `src/components/deploy/DeployConfirmation.jsx` implementing `§8.3`'s three-step state machine
       inside one `ConfirmDialog`: Configure → Review → (Live only) AckLive → Submitting
     - `Review` renders all eight Requirement 8.1 fields as `Reported<T>`; a field the configuration
@@ -798,20 +798,20 @@ the decomposition this plan uses instead:
       assert the acknowledgement step is **constructed** iff the resolved environment is Live;
       minimum 100 iterations
 
-  - [~] 10.8 Delete `extractErrorMessage` and `getErrorType` from `ui-legacy/primitives.jsx`
+  - [x] 10.8 Delete `extractErrorMessage` and `getErrorType` from `ui-legacy/primitives.jsx`
     - `extractErrorMessage` falls back to `JSON.stringify(detail)` and then `err.message`, which is
       precisely how an axios message or a backend traceback reaches the screen today (`§12`)
     - Re-point every call site at `translateError`
     - _Requirements: 14.3, 14.4_
 
-  - [~] 10.9 Delete `LoadingProvider`'s full-screen blocking overlay
+  - [x] 10.9 Delete `LoadingProvider`'s full-screen blocking overlay
     - It currently covers the whole app whenever any keyed loading state is true, which is the
       opposite of the per-element loading Requirement 14.2 asks for (`§5.1`)
     - Keep `LoadingProvider` itself — removing it would touch out-of-scope pages — and delete only
       its overlay render
     - _Requirements: 14.2_
 
-  - [~] 10.10 Remove the six dead methods from `src/api/modules/portfolio.js`
+  - [x] 10.10 Remove the six dead methods from `src/api/modules/portfolio.js`
     - Remove `getPosition`, `closePosition`, `getPositionHistory`, `getBalance`, `getPnL` and
       `getPerformance`: none has a backend route (`§1.4`) and `grep` confirms none has a call site.
       A documented client method that always 404s is a non-functional API surface, and
@@ -886,6 +886,19 @@ the decomposition this plan uses instead:
       projection in `backend_app/routers/strategies.py` (`§7.2`)
     - Verification: assert the list response carries `last_signal_at` and that it is `null`, not
       absent and not a fabricated timestamp, for a strategy that has never signalled
+    - **Recorded as owed: the column BC-3 publishes has no producer.** `last_signal_at` is
+      declared by **no migration in this repository** — zero occurrences under
+      `backend_app/migrations/`, and nothing anywhere writes it to `strategies`. So the projection
+      reports `null` on every current database, and will keep doing so until something writes the
+      column. The projection itself is correct and additive: `list_strategies` already reads
+      `select("*")`, so the key travels with the row the moment the schema has it, and it reports
+      exactly what the dashboard strategy projection already reports from the same key on the same
+      table (`dashboard_aggregation_service.py:1077`, published as `last_signal_time`). Nothing is
+      fabricated and no field is absent (Requirement 19.2), so this is honest rather than broken —
+      but the frontend's not-available state for this field is its permanent outcome today, which
+      is the condition Task 12's preamble says must not stand. **The follow-up is a producer, not
+      another reader:** a migration adding the column plus a write at the point a signal is
+      recorded. Adding a second consumer would not move it off `null`.
     - _Requirements: 4.1, 19.1, 19.2_
 
   - [~] 12.4 BC-4 — add `last_execution_at` to the strategies list projection

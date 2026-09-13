@@ -13,6 +13,7 @@ Referral, Signal Trace, Support, Health
 import asyncio
 import inspect
 import logging
+import os
 import re
 import time
 from datetime import datetime
@@ -21,6 +22,115 @@ from typing import Any, Dict, List, Optional
 from backend_app.core.dependencies import get_telemetry, create_request_supabase
 
 logger = logging.getLogger("DashboardAggregationService")
+
+#: Fallback used only when neither APP_URL nor FRONTEND_URL is set. Referral links are
+#: user-facing and get pasted into chats and emails, so a stale hostname here outlives any
+#: deployment. Kept deliberately identical to ``routers.referral._get_referral_link`` - the two
+#: are duplicated rather than shared to avoid importing a router module into a service layer, so
+#: they must be changed together.
+_DEFAULT_APP_URL = "https://app.vyomquant.in"
+
+
+def _app_base_url() -> str:
+    """Public base URL of the frontend, for links rendered into user-visible payloads."""
+    return os.getenv("APP_URL", os.getenv("FRONTEND_URL", _DEFAULT_APP_URL)).rstrip("/")
+
+
+def _equity_of(point: Any) -> Optional[float]:
+    """The equity figure carried by one point of an equity curve, or ``None`` if it carries none.
+
+    Accepts what ``get_equity_curve`` actually returns - a mapping keyed by the QuestDB column
+    names (``timestamp``, ``equity``) - and, for callers holding a plainer series, a bare number.
+    ``total_equity`` is accepted as an alias because that is the column name the paper equity
+    snapshots use.
+
+    Returns ``None`` rather than ``0.0`` for an unreadable point. Zero is a real equity: an
+    account can be flat, and a wiped account is the case a drawdown figure matters most for, so
+    substituting zero for "not reported" would invent the very reading it is standing in for.
+    """
+    if isinstance(point, bool):  # bool is an int subclass; an equity is never a flag
+        return None
+    if isinstance(point, (int, float)):
+        return float(point)
+    if isinstance(point, dict):
+        raw = point.get("equity")
+        if raw is None:
+            raw = point.get("total_equity")
+    else:
+        raw = getattr(point, "equity", None)
+        if raw is None:
+            raw = getattr(point, "total_equity", None)
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value != value or value in (float("inf"), float("-inf")):  # NaN / infinity
+        return None
+    return value
+
+
+def current_drawdown_pct_from_equity_curve(equity_curve: Optional[List[Any]]) -> Optional[float]:
+    """Current drawdown as a **percentage** of the series' peak, or ``None`` if unmeasurable.
+
+    vyomquant-ui-redesign BC-1 (`design.md` §1.5, §16). Drawdown is a peak-to-trough decline.
+    The field the dashboard has published until now carries ``today_return_pct`` instead, so a
+    profitable day renders as a positive "drawdown" - the figure a trader reads to decide whether
+    to cut size. This is the honest computation, taken over the equity series the aggregation
+    service already reads; it opens no connection and issues no query of its own.
+
+    The figure is ``(peak_equity - current_equity) / peak_equity * 100``, where ``peak_equity``
+    is the maximum over the series up to and including its last point and ``current_equity`` is
+    that last point. Note this is *current* drawdown, not *maximum* drawdown: it measures the
+    decline still outstanding right now, not the worst decline the series ever suffered. It is
+    therefore a different quantity from ``backend/paper/paper_accounting.max_drawdown``, which
+    answers Requirement 18.9's question about a paper session's worst historical decline, and the
+    two are deliberately not shared.
+
+    Args:
+        equity_curve: The series in ascending time order, as ``get_equity_curve`` returns it.
+            It is read as given and **not** sorted here: the drawdown of a resorted series is
+            the drawdown of a different series, and the read is already ordered by
+            ``ORDER BY timestamp ASC``.
+
+    Returns:
+        A non-negative percentage rounded to two decimals, or ``None``.
+
+        ``None`` - not ``0.0`` - whenever no decline can be measured:
+
+        * an absent or empty series: nothing was read;
+        * a single point: one observation describes no decline. A peak needs something to fall
+          from;
+        * any point whose equity is unreadable: dropping it would silently measure a different
+          series, and the dropped point may have been the peak;
+        * a peak at or below zero: there is no positive base to express the decline against.
+
+        ``0.0`` is reserved for its one honest meaning - a series that was read, that has a
+        positive peak, and whose latest point is at or above that peak. A series that only ever
+        rose is at its peak and its drawdown is zero. The result is clamped at zero for that
+        reason: a gain is not a negative drawdown, it is no drawdown.
+    """
+    if not equity_curve:
+        return None
+
+    equities: List[float] = []
+    for point in equity_curve:
+        equity = _equity_of(point)
+        if equity is None:
+            return None
+        equities.append(equity)
+
+    if len(equities) < 2:
+        return None
+
+    peak = max(equities)
+    if peak <= 0.0:
+        return None
+
+    current = equities[-1]
+    decline_pct = (peak - current) / peak * 100.0
+    return round(max(0.0, decline_pct), 2)
 
 
 class DashboardAggregationService:
@@ -337,7 +447,7 @@ class DashboardAggregationService:
             if not sb:
                 return {
                     "referral_code": default_ref,
-                    "referral_link": f"https://vyomquant.com/ref/{default_ref}",
+                    "referral_link": f"{_app_base_url()}/ref/{default_ref}",
                     "total_referrals": 0,
                     "active_referrals": 0,
                     "pending_earnings": 0.0,
@@ -352,7 +462,7 @@ class DashboardAggregationService:
             
             return {
                 "referral_code": ref_code,
-                "referral_link": f"https://vyomquant.com/ref/{ref_code}",
+                "referral_link": f"{_app_base_url()}/ref/{ref_code}",
                 "total_referrals": profile.get("total_referrals", 0),
                 "active_referrals": profile.get("active_referrals", 0),
                 "pending_earnings": float(profile.get("pending_earnings", 0.0)),
@@ -374,7 +484,12 @@ class DashboardAggregationService:
     async def get_risk_data(self, user: dict, portfolio: Optional[Dict] = None, sb: Optional[Any] = None) -> Dict:
         """
         Get risk management data.
-        
+
+        NOTE: a second ``get_risk_data`` is defined later in this class and, being later in the
+        class body, is the one bound to the attribute - so this definition is unreachable through
+        ``DashboardAggregationService.get_risk_data``. Left as found; BC-1 changed nothing here
+        beyond adding the new field so the two bodies agree in shape.
+
         Args:
             user: User dict
             portfolio: Optional portfolio data (to avoid duplicate query if already fetched)
@@ -408,7 +523,14 @@ class DashboardAggregationService:
             
             return {
                 "risk_level": risk_level,
+                # DEPRECATED (BC-1, design.md §1.5): ``abs()`` of a P&L percentage, so a
+                # profitable day reads as a positive "drawdown". Unchanged - see the note on the
+                # later definition of this method.
                 "current_drawdown_pct": current_drawdown,
+                # BC-1: this body holds no equity series, so there is nothing to measure a
+                # peak-to-trough decline over and ``None`` is the honest answer. Present so the
+                # two ``get_risk_data`` bodies below and above agree in shape.
+                "current_drawdown_pct_v2": None,
                 "max_daily_loss": max_daily_loss,
                 "max_positions": settings.get("max_positions", 10),
                 "max_leverage": settings.get("max_leverage", 3),
@@ -421,6 +543,7 @@ class DashboardAggregationService:
             return {
                 "risk_level": "low",
                 "current_drawdown_pct": 0.0,
+                "current_drawdown_pct_v2": None,
                 "max_daily_loss": 500,
                 "max_positions": 10,
                 "max_leverage": 3,
@@ -1068,9 +1191,23 @@ class DashboardAggregationService:
             "order_state_sync_status": "synchronized" if environment == "paper" else "active"
         }
     
-    async def get_risk_data(self, user: dict, environment: str = "live", portfolio: Optional[Dict] = None, sb: Optional[Any] = None) -> Dict:
+    async def get_risk_data(
+        self,
+        user: dict,
+        environment: str = "live",
+        portfolio: Optional[Dict] = None,
+        sb: Optional[Any] = None,
+        equity_curve: Optional[List[Any]] = None,
+    ) -> Dict:
         """
         Get authoritative risk management data with synchronized risk_score and risk_level.
+
+        Args:
+            equity_curve: The series ``get_equity_curve`` already produced for this request, for
+                BC-1's ``current_drawdown_pct_v2``. Passed in rather than fetched so this method
+                issues no additional read; ``get_dashboard_data`` hands over the series it
+                gathered. Omitted, ``current_drawdown_pct_v2`` is ``None``, which is what a
+                caller holding no series honestly reports.
         """
         from backend_app.routers.risk import get_user_risk_settings_store, is_user_kill_switched
         uid = str(user["id"])
@@ -1136,7 +1273,15 @@ class DashboardAggregationService:
         return {
             "risk_score": risk_score,
             "risk_level": risk_level,
+            # DEPRECATED (BC-1, design.md §1.5): this is ``today_return_pct``, not a drawdown, so
+            # a profitable day reads as a positive "drawdown". Left in place unchanged for its
+            # deprecation window - BC-1 is an additive read projection (Requirement 19.1) and no
+            # existing consumer is repointed by it. Read ``current_drawdown_pct_v2`` instead.
             "current_drawdown_pct": round(float((portfolio or {}).get("today_return_pct", 0.0)), 2),
+            # BC-1: the honest peak-to-trough figure, from the equity series this request already
+            # read. ``None`` when no drawdown can be measured - never 0.0 as a stand-in
+            # (Requirements 3.1, 10.2, 19.2).
+            "current_drawdown_pct_v2": current_drawdown_pct_from_equity_curve(equity_curve),
             "max_daily_loss": max_daily_loss,
             "daily_loss_utilized": round(daily_loss_utilized, 2),
             "max_positions": max_positions,
@@ -1263,8 +1408,13 @@ class DashboardAggregationService:
                 logger.error(f"Marketplace data fetch failed: {marketplace}")
                 marketplace = {"available_count": 0, "user_publications": 0, "total_subscribers": 0, "featured": []}
 
-            # Fetch authoritative risk data
-            risk_data = await self.get_risk_data(user, environment=norm_env, portfolio=portfolio, sb=sb)
+            # Fetch authoritative risk data. ``equity`` is the series already gathered above, and
+            # is handed over so BC-1's ``current_drawdown_pct_v2`` is computed without a second
+            # read. It is ``[]`` when the equity read failed, which yields ``None`` rather than a
+            # fabricated zero.
+            risk_data = await self.get_risk_data(
+                user, environment=norm_env, portfolio=portfolio, sb=sb, equity_curve=equity
+            )
             
             active_strategies = [s for s in strategies if s["status"] == "active"]
             paused_strategies = [s for s in strategies if s["status"] == "paused"]

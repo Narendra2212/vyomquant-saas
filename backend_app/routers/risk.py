@@ -330,7 +330,33 @@ async def get_risk_status(user: dict = Depends(get_current_user)):
     pos_utilization_pct = round((open_pos_count / max_pos * 100), 2) if max_pos > 0 else 0.0
     
     kill_active = is_user_kill_switched(uid)
-    
+
+    # vyomquant-ui-redesign BC-1 (design.md §1.5, §16, Requirement 19.2). ``drawdown_pct`` was a
+    # literal ``0.0`` here, which asserts "this account has no drawdown" - a claim nothing on this
+    # path measured. A trader reads drawdown to decide whether to reduce size, so a fabricated
+    # zero is worse than no answer.
+    #
+    # Current drawdown is peak-to-trough and therefore needs an equity *series*. This endpoint
+    # reads the paper performance summary and the open positions, and neither carries one: the
+    # summary reports ``total_equity``, ``initial_capital`` and ``roi_pct``, all single figures.
+    # A peak cannot be reconstructed from them - an account that peaked at 150k and now sits at
+    # 90k on 100k of capital would report 10% against ``initial_capital`` instead of its real 40%,
+    # which is the same class of error BC-1 exists to remove. No series is fetched here on
+    # purpose: BC-1 is a read projection and adds no query, and this handler's reads are the ones
+    # whose refusals are already catalogued above.
+    #
+    # So the series in hand is empty and the honest answer is ``null``. It is routed through the
+    # dashboard projection's function rather than hardcoded, so there is one definition of this
+    # figure in the codebase: the day a series does reach this handler, only the argument changes.
+    # ``GET /status`` declares no ``response_model``, so the returned dict is serialised as-is and
+    # ``None`` reaches the client as JSON ``null``.
+    from backend_app.backend.dashboard_aggregation_service import (
+        current_drawdown_pct_from_equity_curve,
+    )
+
+    equity_curve_in_hand: List[Dict[str, Any]] = []
+    drawdown_pct: Optional[float] = current_drawdown_pct_from_equity_curve(equity_curve_in_hand)
+
     # Status calculation
     if kill_active:
         risk_level = "BLOCKED"
@@ -360,7 +386,7 @@ async def get_risk_status(user: dict = Depends(get_current_user)):
             "configured_max": settings["max_leverage"],
             "current": 1.0
         },
-        "drawdown_pct": 0.0,
+        "drawdown_pct": drawdown_pct,
         "circuit_breaker_armed": settings.get("circuit_breaker_armed", True),
         "timestamp": datetime.now(timezone.utc).isoformat()
     }

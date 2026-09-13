@@ -16,6 +16,25 @@ WHAT IS ASSERTED, AND WHY EACH PART IS HERE
    seeded through the **repository** here, which is the whole point - the same numbers have to
    come out of rows that they used to come out of dictionaries. Requirements 25.5, 25.7.
 
+   ONE FROZEN FIGURE HAS DELIBERATELY BEEN RE-FROZEN: ``drawdown_pct``.
+       The capture pinned ``type_map.drawdown_pct = "float"`` and ``values.drawdown_pct = 0.0``.
+       vyomquant-ui-redesign BC-1 (that spec's task 12.1) replaced the hardcoded literal in
+       ``routers/risk.py::get_risk_status`` with an honest ``null``: no equity series reaches
+       that handler, and a literal zero claims "this account is sitting at its peak" about
+       something nothing measured. That one change is explicitly carved out of that spec's
+       do-not-touch list - vyomquant-ui-redesign ``design.md`` §17.1 reads "No change to
+       ``backend_app/routers/risk.py``'s limits, kill switch, or circuit breakers, **beyond
+       BC-1's honest null in place of a hardcoded 0.0 in one read projection**" - so the
+       baseline was updated to ``"null"`` / ``null`` rather than the change being reverted or
+       this assertion weakened. ``"null"`` is the spelling ``capture_baseline.shape_of`` emits
+       for ``None``, so the type map stays in the capture's own vocabulary.
+
+       **Nothing else in ``risk_utilisation.json`` moved.** Requirement 25.5's semantics claim
+       is about the arithmetic of the utilisation figures - ``margin_ratio``, ``free_margin``,
+       ``risk_score``, the two utilisation percentages and which rung of the risk ladder they
+       land on - and BC-1 touched none of them. ``drawdown_pct`` was never computed from the
+       paper account at all, which is exactly why it could not honestly be a number.
+
 2. **A ``size = 0`` row must not be counted.** A fully closed position persists at ``size = 0``
    rather than being deleted (Requirement 18.5), which is the one place the storage change could
    otherwise move a reported figure: the in-memory dictionary expressed "closed" structurally by
@@ -233,6 +252,10 @@ def test_risk_status_reports_the_frozen_utilisation_figures() -> None:
         "the response key set changed; Requirement 25.5 permits no removal, rename or addition "
         "here - only where the numbers come from was allowed to change"
     )
+    # ``drawdown_pct`` is ``"null"`` / ``null`` in the baseline rather than ``"float"`` / ``0.0``
+    # as captured. That is vyomquant-ui-redesign BC-1, sanctioned in that spec's design.md §17.1
+    # ("...beyond BC-1's honest null in place of a hardcoded 0.0 in one read projection"). See
+    # this module's docstring, item 1. Every other frozen figure below is the original capture.
     assert shape["type_map"] == frozen["type_map"]
 
     for key, expected in frozen["values"].items():

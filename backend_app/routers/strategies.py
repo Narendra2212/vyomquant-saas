@@ -14,6 +14,7 @@ import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 import pandas as pd
 from fastapi import (APIRouter, BackgroundTasks, Depends, HTTPException, Query,
@@ -677,6 +678,121 @@ _LIST_COLUMNS: tuple = (
 )
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# BC-3 / BC-4 — TWO ADDITIVE TIMESTAMPS ON THE LIST PROJECTION
+#
+# vyomquant-ui-redesign tasks 12.3 and 12.4, design.md §7.2, Requirements 4.1,
+# 19.1, 19.2. The Strategies table renders a "Last signal" and a "Last execution"
+# column; §7.2 recorded that the first existed only on the *dashboard* projection
+# and the second existed nowhere at all, so both rendered as not-available.
+#
+# Both are published for EVERY row, always, and are ``None`` -> JSON ``null``
+# when there is nothing to report. Never absent: a reader that has to infer
+# "never signalled" from a missing key cannot tell it from "this build does not
+# report signal times", which is the same reasoning ``is_archived`` is always
+# present for (Requirement 19.2 — no fabricated figure, and no silent omission
+# standing in for one). And never a substituted clock read: a fabricated
+# "last execution" is worse than no answer, because a trader uses it to decide
+# whether a strategy is actually running.
+#
+# Neither key is added to :data:`_LIST_COLUMNS`. That tuple is a *row-narrowing*
+# filter — ``if column in row`` — so a name added to it would be silently DROPPED
+# on a database whose ``strategies`` table has no such column, i.e. exactly the
+# "absent rather than null" outcome forbidden above. They are assigned
+# explicitly instead, the way ``is_archived`` and ``archived_at`` already are.
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: BC-3. The strategy row's own column, which is the identical source the dashboard
+#: strategy projection reads (``dashboard_aggregation_service.get_strategies`` publishes
+#: ``s.get("last_signal_at") or None`` as ``last_signal_time``). Reading the same key off
+#: the same table keeps one definition of "last signal" in the codebase.
+#:
+#: ``list_strategies`` already reads ``select("*")``, so this column travels with the row
+#: the moment the schema has it — no join, no second query, and no change whatsoever to
+#: which rows the listing returns or in what order. Where the column does not exist the
+#: key is simply not on the row and the projection reports ``null``, which is the honest
+#: answer and the same one the dashboard projection gives today.
+LAST_SIGNAL_AT_COLUMN = "last_signal_at"
+
+#: BC-4. The response key for the per-strategy max execution timestamp.
+LAST_EXECUTION_AT_FIELD = "last_execution_at"
+
+
+def _iso(value: Any) -> Optional[str]:
+    """A timestamp as an ISO-8601 string, or ``None``. Never a clock read.
+
+    ``created_at`` on ``execution_records`` arrives as a ``datetime`` from SQLAlchemy while
+    every other timestamp on this projection arrives from Supabase already stringified, so
+    the two are normalised to one wire type here. ``None`` in, ``None`` out — this function
+    has no default and cannot substitute "now" for a missing value.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _read_last_execution_at_by_strategy(user_id: str) -> Dict[str, Any]:
+    """``strategy_id`` -> last execution instant, for one tenant. BC-4, blocking.
+
+    Delegates to :meth:`ExecutionRecordRepository.get_last_execution_at_by_strategy`, which
+    is ``MAX(created_at) … GROUP BY strategy_id`` — the same expression ``get_stats`` already
+    uses for its tenant-wide summary, so this router defines no second notion of "last
+    execution". One grouped aggregate for the whole page; no per-strategy query.
+
+    ``execution_records`` lives in the SQLAlchemy/Postgres half of this application while the
+    strategy rows come from Supabase, so this is a separate read rather than a join. It is
+    scoped by ``tenant_id`` and by nothing else, and the caller then indexes the map with ids
+    it has *already* authorised — so a strategy this user does not own cannot be reached
+    through it, and the listing's own ownership predicate remains the only access decision.
+
+    Returns ``{}`` when there is no execution store to read: an unconfigured or unreachable
+    database yields "nothing to report" for every row rather than taking the Strategies page
+    down over an optional column. The failure is logged, not swallowed silently.
+    """
+    try:
+        tenant_id = UUID(str(user_id))
+    except (TypeError, ValueError):
+        # BC-4 is keyed on ``execution_records.tenant_id``, a UUID column. A non-UUID
+        # identity addresses no tenant there, so there is nothing to report — and nothing
+        # is interpolated into a statement either way (the id is bound, never formatted).
+        logger.debug(
+            "[STRATEGIES] last_execution_at not read: %r is not a tenant UUID", user_id
+        )
+        return {}
+
+    from backend_app.core.database import get_db_context
+    from backend_app.core.models.execution_record import ExecutionRecordRepository
+
+    try:
+        with get_db_context() as session:
+            return dict(
+                ExecutionRecordRepository(session).get_last_execution_at_by_strategy(
+                    tenant_id
+                )
+            )
+    except Exception as exc:  # noqa: BLE001 — an optional read must not fail the listing
+        logger.warning(
+            "[STRATEGIES] last_execution_at unavailable for user %s (%s: %s); every row "
+            "reports null rather than a guessed timestamp.",
+            user_id,
+            type(exc).__name__,
+            exc,
+        )
+        return {}
+
+
+async def _last_execution_at_by_strategy(user_id: str) -> Dict[str, Any]:
+    """The BC-4 map, off the event loop.
+
+    The execution store is read through a synchronous SQLAlchemy session, so it runs in a
+    worker thread: a blocking read inside this handler would stall every other request on
+    the loop, including the ones that place orders.
+    """
+    return await asyncio.to_thread(_read_last_execution_at_by_strategy, user_id)
+
+
 @router.get("")
 @router.get("/")
 async def list_strategies(
@@ -754,6 +870,10 @@ async def list_strategies(
 
         rows = resp.data or [] if resp and hasattr(resp, "data") else []
 
+        # BC-4: one grouped aggregate for the whole page, read once before the loop. Inside
+        # the loop this would be an N+1 — one statement per strategy the user owns.
+        last_execution_at = await _last_execution_at_by_strategy(user["id"])
+
         results: List[Dict[str, Any]] = []
         archived_total = 0
         for row in rows:
@@ -769,6 +889,14 @@ async def list_strategies(
             # such, so the caller renders them as history rather than as actionable rows.
             item["is_archived"] = archived
             item[ARCHIVED_AT_COLUMN] = archived_at_of(row)
+            # BC-3 / BC-4 (Requirements 4.1, 19.1, 19.2). Both always present, both ``null``
+            # when unreported. ``row.get`` and ``.get`` on the map, so a strategy that has
+            # never signalled or never executed reports ``null`` rather than dropping the key.
+            item[LAST_SIGNAL_AT_COLUMN] = _iso(row.get(LAST_SIGNAL_AT_COLUMN))
+            strategy_id = row.get("id")
+            item[LAST_EXECUTION_AT_FIELD] = _iso(
+                last_execution_at.get(str(strategy_id)) if strategy_id is not None else None
+            )
             results.append(item)
 
         if include_archived and rows and not any(ARCHIVED_AT_COLUMN in row for row in rows):

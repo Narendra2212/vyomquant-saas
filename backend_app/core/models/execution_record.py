@@ -762,6 +762,69 @@ class ExecutionRecordRepository:
             last_execution_at=result.last_execution_at,
         )
 
+    def get_last_execution_at_by_strategy(
+        self, tenant_id: UUID
+    ) -> Dict[str, Optional[datetime]]:
+        """``strategy_id`` -> the tenant's most recent execution for it. One query, always.
+
+        vyomquant-ui-redesign BC-4 (that spec's task 12.4, design.md §7.2, Requirements 4.1,
+        19.1, 19.2). ``GET /api/strategies`` publishes ``last_execution_at`` per row and needs
+        this map to do it.
+
+        SAME DEFINITION AS :meth:`get_stats`, NOT A SECOND ONE
+            ``get_stats`` already answers "when did this tenant last execute" as
+            ``MAX(created_at)`` over ``execution_records``. This is that expression with
+            ``strategy_id`` added to the projection and a ``GROUP BY`` under it, so the
+            per-strategy figure and the tenant-wide figure cannot disagree: the tenant-wide
+            one is by construction the maximum of the values returned here. ``created_at`` is
+            the execution's own recorded instant, not a clock read at projection time, so
+            nothing here can invent a timestamp.
+
+        ONE AGGREGATE, NOT ONE QUERY PER STRATEGY
+            The whole map is read in a single grouped statement and the caller indexes into
+            it, rather than asking per row. A per-strategy read would put an N+1 on a list
+            page that renders every strategy a user owns.
+
+        A STRATEGY WITH NO EXECUTIONS IS SIMPLY ABSENT FROM THE RESULT
+            ``GROUP BY`` emits no row for a group with no rows, so the caller reads a missing
+            key as ``None``. This deliberately returns no entry rather than an entry set to
+            ``None``: "never executed" and "executed at an unknown time" are different
+            claims, and only the first one is true here.
+
+        THE RESULT COLUMNS ARE TYPED, UNLIKE :meth:`get_stats`'
+            ``.columns(...)`` is declared so ``last_execution_at`` comes back as a ``datetime``
+            on every driver. A bare ``text()`` leaves an aggregate untyped, and a driver that
+            hands back the stored string then travels all the way onto the wire as one - a
+            silent per-deployment change in the published type of a field. ``get_stats`` can
+            omit this because its value is consumed by a Pydantic model that coerces; this
+            one is projected straight into a JSON response.
+
+        Read-only. Issues no write and opens no transaction of its own beyond the implicit
+        read, so it cannot affect order execution or reconciliation.
+        """
+        statement = text("""
+                SELECT
+                    strategy_id,
+                    MAX(created_at) as last_execution_at
+                FROM execution_records
+                WHERE tenant_id = :tenant_id
+                GROUP BY strategy_id
+            """).bindparams(
+            bindparam("tenant_id", type_=PG_UUID(as_uuid=True))
+        ).columns(
+            strategy_id=String,
+            last_execution_at=DateTime(timezone=True),
+        )
+
+        rows = self.db.execute(statement, {"tenant_id": tenant_id}).fetchall()
+
+        latest: Dict[str, Optional[datetime]] = {}
+        for row in rows:
+            if row.strategy_id is None or row.last_execution_at is None:
+                continue
+            latest[str(row.strategy_id)] = row.last_execution_at
+        return latest
+
 
 # Global instance factory
 def get_execution_record_repository(db_session: Session) -> ExecutionRecordRepository:
