@@ -131,9 +131,54 @@ export const mapBacktestExecutionToUI = (response) => {
   };
 };
 
+/**
+ * One row of `GET /api/strategies`.
+ *
+ * `routers/strategies._LIST_COLUMNS` narrowed to the columns the table actually has, plus the
+ * lifted `_dag_*` keys, the archival pair, and BC-3's / BC-4's two timestamps. Documented
+ * because `design.md §7.2` names four fields that are NOT here — `current_version` (spelled
+ * `version`), `exchange_status` (spelled `deployed_exchange`), `most_recent_deployment`, and
+ * `pnl`/`win_rate`/`max_dd`/`health` (on no strategy projection at all) — and a page pointed
+ * at one of those renders `undefined` or, as `Strategies.jsx` did with
+ * `row.health ?? "healthy"`, a cheerful default for a field nothing reports.
+ * `src/design/pageFields.js` records the verdict for each.
+ *
+ * @typedef {Object} StrategyListRow
+ * @property {string} id
+ * @property {string} name
+ * @property {string} description
+ * @property {string} symbol
+ * @property {string} timeframe
+ * @property {string} status
+ * @property {boolean} is_active
+ * @property {string} deployed_exchange
+ * @property {string} version
+ * @property {Object} buy_logic
+ * @property {Array} tags
+ * @property {string} created_at
+ * @property {string} updated_at
+ * @property {boolean} is_archived
+ * @property {string|null} archived_at
+ * @property {string|null} last_signal_at - BC-3. ISO instant of this strategy's most recent
+ *   signal, off the strategy row's own column — the same key the dashboard strategy
+ *   projection reads. ALWAYS PRESENT, and `null` in three cases a client cannot tell apart:
+ *   the strategy has never signalled, or migration
+ *   `backend_app/migrations/015_strategy_last_signal_at.sql` has not been applied by hand yet
+ *   (the column then does not exist and `backend/strategy_last_signal.py` has nothing to
+ *   write to; the backend logs a warning naming 015).
+ * @property {string|null} last_execution_at - BC-4. `MAX(created_at)` over `execution_records`
+ *   grouped by `strategy_id`, read once per page. ALWAYS PRESENT, and `null` when the strategy
+ *   has never executed and also when that one grouped read failed — the router logs a warning
+ *   and reports `null` for every row rather than a guessed timestamp.
+ */
+
 export const strategiesApi = {
   /**
    * Get all strategies
+   *
+   * `GET /api/strategies` → `{strategies: StrategyListRow[], total, include_archived,
+   * archived_total}`.
+   *
    * @returns {Promise<any[]>}
    */
   list: () => get('/api/strategies'),

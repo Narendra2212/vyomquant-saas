@@ -12,10 +12,26 @@ import { get } from '../../apiClient';
 /**
  * @typedef {Object} DashboardOverview
  * @property {number} total_value
+ * @property {number} total_equity
  * @property {number} today_pnl
  * @property {number} today_return_pct
  * @property {number} unrealized_pnl
  * @property {number} available_balance
+ * @property {number} free_balance
+ * @property {number} used_balance - `total_equity − free_balance` (live) or the account's
+ *   locked balance (paper). The Portfolio page's "Invested (capital in use)" is derived from
+ *   this with a tooltip stating so — there is no "invested capital" field.
+ * @property {number} today_realized_pnl - Closed trades since 00:00 UTC. Today's window
+ *   only, and `0.0` for an unreadable day sum — a pre-existing behaviour BC-5 left alone.
+ * @property {number|null} realized_pnl - BC-5: LIFETIME realised P&L, one sum over the fill
+ *   ledger. Distinct from `today_realized_pnl` (same quantity, today only) and from
+ *   `cumulative_pnl` (realised PLUS the mark-to-market on open positions, so labelling that
+ *   one "realised" would report unbanked money as banked). `null` — never 0.0 — when the
+ *   executions read could not produce it.
+ * @property {number} cumulative_pnl - Lifetime TOTAL P&L: realised plus unrealised.
+ * @property {number} total_exposure
+ * @property {string} currency
+ * @property {string} updated_at
  */
 
 /**
