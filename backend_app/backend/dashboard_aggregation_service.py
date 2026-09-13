@@ -133,6 +133,90 @@ def current_drawdown_pct_from_equity_curve(equity_curve: Optional[List[Any]]) ->
     return round(max(0.0, decline_pct), 2)
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#
+#  BC-2 - a positions read that FAILED is not a positions read that found NONE
+#
+#  Spec: vyomquant-ui-redesign task 12.2. design.md §1.6, §16. Requirements 14.5, 19.1, 19.2.
+#
+#  ``get_open_positions`` used to log a Redis (or paper-store) failure and ``return []``.
+#  That is the one answer a caller cannot tell apart from the truthful one: an empty list
+#  IS what an account with no open positions returns, so an outage rendered as "you have no
+#  positions" and a trader could act on it. Requirement 14.5 forbids exactly this.
+#
+#  THE DISPOSITION, per site:
+#    * ``get_open_positions`` RAISES :class:`PositionsUnreadable`. It returns a bare list with
+#      no envelope to hang a marker on, so the failure has to leave by the only channel a
+#      list has.
+#    * ``get_dashboard_data`` catches it and publishes ``degraded`` alongside the rest of the
+#      dashboard, because the balances, the equity curve and the executions on that response
+#      are still real reads and a blanket 503 would throw them away. ``positions`` stays
+#      ``[]`` - the LIST does not lie, it is simply empty - and ``degraded`` is what says
+#      WHY it is empty. That is the same discriminator ``signal_service`` already uses for
+#      the same problem (``signals: []`` + ``degraded`` vs ``signals: []`` + ``degraded:
+#      None``), so this is one convention rather than a second one.
+#    * ``routers/dashboard.py::get_dashboard_overview`` raises 503 instead, because EVERY
+#      figure it returns is a headline money figure. There is no partial truth left to carry.
+#
+#  HOW A CLIENT TELLS THE TWO APART (this is the whole point of BC-2):
+#    * ``degraded is None``            -> ``positions`` is the truth. ``[]`` means none open.
+#    * ``degraded["positions"]``       -> ``positions`` is ``[]`` because it could not be read.
+#      ``== "unreadable"``               Render the error state, never an empty table.
+#    Redundantly, and from the other end of the response: ``risk.open_positions_count`` is an
+#    ``int`` when counted and ``None`` when unreadable - never ``0`` as a stand-in.
+#
+# ══════════════════════════════════════════════════════════════════════════
+
+#: The value of ``degraded["positions"]`` when the positions read failed. A string rather than
+#: a bare ``True`` so the key can name other position-read degradations later without a second
+#: shape, and so a log line carrying it reads as a sentence.
+POSITIONS_UNREADABLE = "unreadable"
+
+
+class PositionsUnreadable(RuntimeError):
+    """The open-positions read failed, and no list can honestly be returned for it.
+
+    Raised by :meth:`DashboardAggregationService.get_open_positions` where it used to
+    ``return []``. Callers that can degrade catch this and publish
+    :func:`positions_degradation`; callers that cannot let it propagate to the route's 503.
+
+    Deliberately NOT an ``HTTPException``: this is a service-layer fact, and which status
+    code it deserves depends on how much of the response survives without it - a judgement
+    only the route can make.
+    """
+
+    def __init__(self, environment: str, cause: BaseException) -> None:
+        self.environment = environment
+        self.cause = cause
+        super().__init__(
+            f"open positions for the {environment} environment could not be read: {cause}"
+        )
+
+
+def positions_degradation(error: Optional[BaseException], environment: str) -> Optional[Dict[str, Any]]:
+    """The ``degraded`` block for an unreadable positions read, or ``None`` when it read fine.
+
+    Shape and spelling follow ``signal_service._lifecycle_degradation`` /
+    ``_environment_degradation``: a top-level ``degraded`` key that is ``None`` in the healthy
+    case and, in the degraded one, a dict naming what is degraded plus a prose ``reason`` a
+    page can render verbatim.
+
+    ``None`` in / ``None`` out, so the caller writes one expression for both cases and cannot
+    forget the healthy one.
+    """
+    if error is None:
+        return None
+    return {
+        "positions": POSITIONS_UNREADABLE,
+        "environment": environment,
+        "reason": (
+            "Open positions could not be read for this account, so the empty positions list on "
+            "this response is the absence of a reading and not the absence of positions "
+            "(Requirement 14.5). Any position held is still held."
+        ),
+    }
+
+
 class DashboardAggregationService:
     """
     Single source of truth for all Dashboard data.
@@ -810,8 +894,16 @@ class DashboardAggregationService:
     async def get_open_positions(self, user: dict, environment: str = "live") -> List[Dict]:
         """
         Get normalized open trading positions with strict environment isolation.
-        
-        Returns canonical NormalizedPosition list.
+
+        Returns canonical NormalizedPosition list. ``[]`` means, and now only means, that the
+        account holds no open positions.
+
+        Raises
+            :class:`PositionsUnreadable` when the read itself failed (BC-2, Requirement 14.5).
+            Both environments raise: the live branch when the Redis read behind it does, the
+            paper branch when the paper store does. Callers that can publish the rest of their
+            response catch it and attach :func:`positions_degradation`; callers that cannot let
+            it reach their route's 503. What no caller gets any more is ``[]``.
         """
         from datetime import timezone
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -858,7 +950,10 @@ class DashboardAggregationService:
                 return pos_list
             except Exception as paper_pos_err:
                 logger.error(f"Failed to fetch paper positions for {user['id']}: {paper_pos_err}")
-                return []
+                # BC-2: was ``return []``. An empty list is what a paper account with no open
+                # positions returns, so returning it here published an outage as a fact about
+                # the account (Requirement 14.5).
+                raise PositionsUnreadable("paper", paper_pos_err) from paper_pos_err
 
         # LIVE Environment
         try:
@@ -918,7 +1013,9 @@ class DashboardAggregationService:
             return pos_list
         except Exception as live_pos_err:
             logger.error(f"Failed to fetch live positions for {user['id']}: {live_pos_err}")
-            return []
+            # BC-2: was ``return []``. The Redis read behind this is the one that goes away in
+            # an outage, and ``[]`` made the outage indistinguishable from a flat account.
+            raise PositionsUnreadable("live", live_pos_err) from live_pos_err
 
     async def get_recent_executions(self, user: dict, environment: str = "live", limit: int = 5) -> List[Dict]:
         """
@@ -1198,6 +1295,7 @@ class DashboardAggregationService:
         portfolio: Optional[Dict] = None,
         sb: Optional[Any] = None,
         equity_curve: Optional[List[Any]] = None,
+        positions: Optional[Any] = None,
     ) -> Dict:
         """
         Get authoritative risk management data with synchronized risk_score and risk_level.
@@ -1208,6 +1306,25 @@ class DashboardAggregationService:
                 issues no additional read; ``get_dashboard_data`` hands over the series it
                 gathered. Omitted, ``current_drawdown_pct_v2`` is ``None``, which is what a
                 caller holding no series honestly reports.
+            positions: BC-2. The positions ``get_dashboard_data`` already gathered - a list, or
+                the :class:`PositionsUnreadable` that gathering it produced (that ``asyncio.
+                gather`` runs with ``return_exceptions=True``, so an exception is a value on
+                that path). Handed over for the same reason ``equity_curve`` is: so this method
+                issues no second read, and so one response cannot report the positions
+                unreadable at the top level while reporting a count for them under ``risk``.
+                ``None`` means "not supplied" - this method then reads them itself, and catches
+                the same failure. Note the ``is None`` test: ``[]`` is a supplied, truthful,
+                empty list.
+
+        POSITIONS UNREADABLE (BC-2, Requirement 14.5)
+            ``open_positions_count`` is ``None`` and ``risk_score`` is ``None``, never ``0``.
+            A count of zero and a utilisation of zero are the *safest* readings this endpoint
+            can publish, which is precisely why publishing them unmeasured is the dangerous
+            option: ``risk_score`` folds position utilisation in at 40% weight, so a swallowed
+            failure reads as headroom. ``risk_level`` says ``unavailable`` - the spelling this
+            same service already uses for an unmeasured reading
+            (``health.exchange_api_latency_status``) - except when the kill switch is active,
+            which is a fact about the switch and stays ``blocked`` regardless of any read.
         """
         from backend_app.routers.risk import get_user_risk_settings_store, is_user_kill_switched
         uid = str(user["id"])
@@ -1250,29 +1367,51 @@ class DashboardAggregationService:
 
         loss_util_pct = (daily_loss_utilized / max_daily_loss * 100) if max_daily_loss > 0 else 0.0
         
-        # Calculate open positions count
-        positions = await self.get_open_positions(user, environment=environment)
-        open_pos_count = len(positions)
-        pos_util_pct = (open_pos_count / max_positions * 100) if max_positions > 0 else 0.0
-        
-        # Calculate deterministic numeric risk score (0-100)
-        risk_score = min(100, int((loss_util_pct * 0.6) + (pos_util_pct * 0.4)))
-        
-        # Standardize risk level
-        if kill_active:
-            risk_level = "blocked"
-        elif loss_util_pct >= 100 or pos_util_pct >= 100:
-            risk_level = "critical"
-        elif loss_util_pct >= 75 or pos_util_pct >= 75:
-            risk_level = "high"
-        elif loss_util_pct >= 40 or pos_util_pct >= 40:
-            risk_level = "medium"
+        # Calculate open positions count. BC-2: `positions` may already be in hand from
+        # `get_dashboard_data`'s gather - including as the failure that gathering it produced.
+        if positions is None:
+            try:
+                positions = await self.get_open_positions(user, environment=environment)
+            except PositionsUnreadable as positions_err:
+                positions = positions_err
+        positions_error = positions if isinstance(positions, BaseException) else None
+
+        if positions_error is not None:
+            # BC-2: nothing here is a figure. A count of zero, a utilisation of zero and the
+            # risk score they feed would all be inventions, and all three would read as safe.
+            # ``pos_util_pct`` is bound though this branch publishes nothing from it, so the
+            # day this projection starts reporting utilisation it reports ``None`` here rather
+            # than raising - the same reason the branches below bind the same four names.
+            open_pos_count = None
+            pos_util_pct = None
+            risk_score = None
+            risk_level = "blocked" if kill_active else "unavailable"
         else:
-            risk_level = "low"
+            open_pos_count = len(positions)
+            pos_util_pct = (open_pos_count / max_positions * 100) if max_positions > 0 else 0.0
+
+            # Calculate deterministic numeric risk score (0-100)
+            risk_score = min(100, int((loss_util_pct * 0.6) + (pos_util_pct * 0.4)))
+
+            # Standardize risk level
+            if kill_active:
+                risk_level = "blocked"
+            elif loss_util_pct >= 100 or pos_util_pct >= 100:
+                risk_level = "critical"
+            elif loss_util_pct >= 75 or pos_util_pct >= 75:
+                risk_level = "high"
+            elif loss_util_pct >= 40 or pos_util_pct >= 40:
+                risk_level = "medium"
+            else:
+                risk_level = "low"
 
         return {
             "risk_score": risk_score,
             "risk_level": risk_level,
+            # BC-2: ``None`` when the positions read failed, mirroring the response-level
+            # ``degraded`` block so a client reading only the risk section can still tell an
+            # unreadable count from a count of zero.
+            "degraded": positions_degradation(positions_error, environment),
             # DEPRECATED (BC-1, design.md §1.5): this is ``today_return_pct``, not a drawdown, so
             # a profitable day reads as a positive "drawdown". Left in place unchanged for its
             # deprecation window - BC-1 is an additive read projection (Requirement 19.1) and no
@@ -1304,6 +1443,14 @@ class DashboardAggregationService:
         
         Returns:
             Comprehensive, environment-isolated dashboard structure.
+
+            BC-2 adds one top-level key, ``degraded``: ``None`` when every read succeeded, and
+            ``{"positions": "unreadable", "environment": ..., "reason": ...}`` when the
+            positions read failed. ``positions`` is ``[]`` in both cases and ``degraded`` is the
+            only thing that tells them apart, so a client MUST consult it before rendering an
+            empty positions state (Requirement 14.5, design.md §1.6). ``risk.degraded`` and a
+            ``null`` ``risk.open_positions_count`` say the same thing from inside the risk
+            section, for a consumer that reads only that.
         """
         from datetime import timezone
         norm_env = environment.lower() if environment in ("live", "paper") else "live"
@@ -1362,8 +1509,17 @@ class DashboardAggregationService:
                 logger.error(f"Equity curve fetch failed: {equity}")
                 equity = []
 
-            if isinstance(positions, Exception):
-                logger.error(f"Open positions fetch failed: {positions}")
+            # BC-2 (design.md §1.6, Requirement 14.5). The fallback below still hands the
+            # response an EMPTY LIST, because a list is all `positions` can be and an empty one
+            # is at least not a fabricated position. What changed is that the emptiness no
+            # longer travels alone: `positions_error` is carried to the `degraded` block at the
+            # bottom of this method, and to `get_risk_data`, so nothing downstream has to guess
+            # whether `[]` means "none open" or "not read". Kept as `[]` rather than `null`
+            # deliberately - a client that iterates it renders an empty table at worst, where a
+            # `null` would throw, and the marker is what stops it rendering that table at all.
+            positions_error = positions if isinstance(positions, BaseException) else None
+            if positions_error is not None:
+                logger.error(f"Open positions fetch failed: {positions_error}")
                 positions = []
 
             if isinstance(executions, Exception):
@@ -1412,8 +1568,17 @@ class DashboardAggregationService:
             # is handed over so BC-1's ``current_drawdown_pct_v2`` is computed without a second
             # read. It is ``[]`` when the equity read failed, which yields ``None`` rather than a
             # fabricated zero.
+            # BC-2 hands over ``positions`` for the same reason: the failure, or the list, that
+            # this request already has. Without it ``get_risk_data`` reads Redis a second time
+            # and one response could report the positions unreadable at the top level while
+            # publishing a count for them under ``risk``.
             risk_data = await self.get_risk_data(
-                user, environment=norm_env, portfolio=portfolio, sb=sb, equity_curve=equity
+                user,
+                environment=norm_env,
+                portfolio=portfolio,
+                sb=sb,
+                equity_curve=equity,
+                positions=positions_error if positions_error is not None else positions,
             )
             
             active_strategies = [s for s in strategies if s["status"] == "active"]
@@ -1503,6 +1668,15 @@ class DashboardAggregationService:
                     "executions": executions
                 },
                 "equity_curve": equity,
+                # BC-2 (Requirement 14.5). ``None`` when every read on this response succeeded;
+                # otherwise the block naming what could not be read. THIS is what makes
+                # ``positions: []`` above unambiguous - with ``degraded`` null it means the
+                # account holds no open positions, and with ``degraded["positions"] ==
+                # "unreadable"`` it means the read failed and the client must show its error
+                # state rather than an empty table. Same top-level key, same ``None``-when-
+                # healthy convention, and the same "name it plus a renderable reason" body as
+                # ``signal_service``'s ``degraded`` (Requirements 16.2, 23.1 there).
+                "degraded": positions_degradation(positions_error, norm_env),
                 "generated_at": datetime.now(timezone.utc).isoformat()
             }
             

@@ -62,10 +62,28 @@ async def get_dashboard(
     - exchange: Exchange connection status and metrics
     - recent_activity: Recent signals, insights, and executions
     - equity_curve: Historical equity performance data
+    - degraded: null when every read succeeded, else a block naming what could not be read
     
     All calculations are performed in the backend. Frontend only renders data.
     
     Rate limited: 100 requests per minute per user.
+
+    HOW TO TELL AN EMPTY ACCOUNT FROM A BROKEN READ (BC-2, Requirement 14.5)
+        `positions` is `[]` both when the account holds none and when the read failed, so the
+        list alone cannot be trusted to mean either. `degraded` is the discriminator:
+
+        * `degraded == null` — `positions` is the truth. `[]` means no open positions; render
+          the empty state.
+        * `degraded == {"positions": "unreadable", "environment": …, "reason": …}` — `positions`
+          is `[]` because it could not be read. Render the ERROR state. Never an empty table:
+          the account may well be holding positions, and this response cannot say.
+
+        `risk.open_positions_count` carries the same distinction as a value — an `int` when
+        counted, `null` when unreadable, never `0` as a stand-in — and `risk.degraded` mirrors
+        the top-level block for a consumer reading only that section.
+
+        A degraded response is not cached, so a client polling this endpoint sees the marker
+        clear on the first request after the read recovers.
     """
     try:
         norm_env = environment.lower() if environment in ("live", "paper") else "live"
@@ -89,13 +107,18 @@ async def get_dashboard(
             environment=norm_env
         )
         
-        # Write to fast cache
-        try:
-            from backend_app.core.cache.redis_manager import redis_manager
-            import json
-            await redis_manager.set(cache_key, json.dumps(dashboard_data), ex=10)
-        except Exception as cache_write_err:
-            logger.debug(f"Dashboard cache write error: {cache_write_err}")
+        # Write to fast cache — but never a degraded one (BC-2). A cached `degraded` block
+        # outlives the outage that produced it: the read recovers, and every request for the
+        # next 10 seconds is still told the positions are unreadable. Claiming an outage that
+        # has ended is the same class of defect as hiding one that has not, so a degraded
+        # response is served once, to the request that observed it, and not stored.
+        if dashboard_data.get("degraded") is None:
+            try:
+                from backend_app.core.cache.redis_manager import redis_manager
+                import json
+                await redis_manager.set(cache_key, json.dumps(dashboard_data), ex=10)
+            except Exception as cache_write_err:
+                logger.debug(f"Dashboard cache write error: {cache_write_err}")
 
         logger.info(f"Dashboard data fetched successfully for user {user['id']} in {norm_env} mode")
         return dashboard_data
@@ -150,6 +173,30 @@ async def get_dashboard_overview(
     Get dashboard overview data only (portfolio summary).
     
     Lightweight endpoint for quick overview updates.
+
+    Returns
+        **200** ``{overview: {total_value, today_pnl, today_return_pct, unrealized_pnl,
+        available_balance}}`` — every figure a real reading of the portfolio.
+        **503** ``DASHBOARD_FETCH_FAILED`` when the portfolio read failed.
+
+    WHY THIS ONE REFUSES RATHER THAN DEGRADING (BC-2, design.md §1.6, Requirement 14.5)
+        This handler used to catch every exception and return ``total_value: 0.0, today_pnl:
+        0.0, …``. A trader with a broken read saw a zeroed portfolio and could act on it —
+        a flat account and an unreachable one are not remotely the same statement, and
+        ``0.0`` asserts the first.
+
+        BC-2 offers two dispositions and this site takes the refusal, not the ``degraded``
+        marker that ``GET /api/dashboard`` takes for its positions list. The difference is
+        what survives the failure: on ``/api/dashboard`` the balances, equity curve and
+        executions are separate reads, so a response carrying those plus an honest marker is
+        more useful than a blanket refusal. Here there is exactly ONE read, and all five
+        figures on the response are headline money figures derived from it. Nothing survives
+        it, so there is no partial truth for a marker to qualify — a 200 whose entire body is
+        unreadable should not be a 200.
+
+        The status and error code are ``GET /api/dashboard``'s own, deliberately: it is the
+        same failure of the same read, and a client that already handles
+        ``DASHBOARD_FETCH_FAILED`` needs no second branch for it.
     """
     try:
         dashboard_service = await get_dashboard_service()
@@ -165,18 +212,20 @@ async def get_dashboard_overview(
                 "available_balance": float(portfolio.get("available_balance", 0))
             }
         }
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.warning(f"Error fetching dashboard overview for user {user['id']}, returning zero-state: {e}")
-        return {
-            "overview": {
-                "total_value": 0.0,
-                "today_pnl": 0.0,
-                "today_return_pct": 0.0,
-                "unrealized_pnl": 0.0,
-                "available_balance": 0.0
+        logger.error(
+            f"Error fetching dashboard overview for user {user['id']}: {e}"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "DASHBOARD_FETCH_FAILED",
+                "message": "Failed to fetch dashboard data. Please try again later."
             }
-        }
+        )
 
 
 @router.get("/dashboard/strategies")
