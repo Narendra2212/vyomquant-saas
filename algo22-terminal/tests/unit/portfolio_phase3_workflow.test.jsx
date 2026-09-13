@@ -11,6 +11,7 @@ import * as paperModule from '../../src/api/modules/paper';
 import * as ordersModule from '../../src/api/modules/orders';
 import * as strategiesModule from '../../src/api/modules/strategies';
 import * as riskModule from '../../src/api/modules/risk';
+import * as dashboardModule from '../../src/api/modules/dashboard';
 
 // Mock Recharts
 vi.mock('recharts', () => ({
@@ -60,18 +61,26 @@ describe('Phase 3 — Trading Platform Operational Completion Tests', () => {
           pnl_pct: 3.5
         }
       });
-      vi.spyOn(portfolioModule.portfolioApi, 'getOpenPositions').mockResolvedValue([
-        {
-          id: 'pos_1',
-          symbol: 'BTC/USDT',
-          exchange: 'binance',
-          side: 'long',
-          size: 0.5,
-          entry_price: 60000,
-          mark_price: 63000,
-          unrealized_pnl: 1500
-        }
-      ]);
+      // Task 13.1: the LIVE positions read is `GET /api/dashboard`, not the two
+      // `/api/portfolio/positions*` methods that 404d and have since been deleted. `degraded:
+      // null` and a counted `risk.open_positions_count` are the healthy readings of BC-2's two
+      // discriminators and are spelled out rather than omitted.
+      vi.spyOn(dashboardModule.dashboardApi, 'getDashboard').mockResolvedValue({
+        positions: [
+          {
+            id: 'pos_1',
+            symbol: 'BTC/USDT',
+            exchange_id: 'binance',
+            side: 'long',
+            contracts: 0.5,
+            entry_price: 60000,
+            mark_price: 63000,
+            unrealized_pnl: 1500
+          }
+        ],
+        degraded: null,
+        risk: { open_positions_count: 1 }
+      });
       vi.spyOn(portfolioModule.portfolioApi, 'getEquityCurve').mockResolvedValue([]);
       vi.spyOn(portfolioModule.portfolioApi, 'getAllocation').mockResolvedValue([]);
       vi.spyOn(portfolioModule.portfolioApi, 'getHeatmap').mockResolvedValue([]);

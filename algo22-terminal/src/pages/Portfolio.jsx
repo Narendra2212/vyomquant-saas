@@ -81,7 +81,11 @@ const readNumber = (...candidates) => {
  *   never to an array. The internal portfolio-management `GET /positions` answers
  *   `{count, positions}` in the same style.
  * * **A bare array.** The live portfolio reads (`allocation`, `equity-curve`, `heatmap`) all
- *   answer bare lists, so `api.portfolio.getOpenPositions()` answering one is entirely plausible.
+ *   answer bare lists, so a positions read answering one is entirely plausible.
+ *
+ * `GET /api/dashboard` - which is where the LIVE positions read now points (task 13.1) - answers
+ * the envelope form: `positions` sits beside `overview`, `risk`, `degraded` and the rest, so it is
+ * read by the same `body.positions` branch the paper envelope uses.
  *
  * `null` for anything else is deliberate: a body that carries neither shape is a read this page
  * cannot interpret, and it is reported as such rather than as "you hold no positions" - an empty
@@ -95,6 +99,71 @@ const readPositionsList = (body) => {
   if (body && typeof body === "object" && Array.isArray(body.positions)) return body.positions;
   return null;
 };
+
+/**
+ * BC-2's `degraded` marker, off a `GET /api/dashboard` body.
+ *
+ * `dashboard_aggregation_service.py` publishes one top-level `degraded` key: `None` when every
+ * read behind the response succeeded, and
+ * `{positions: "unreadable", environment, reason}` when the positions read did not. `positions`
+ * is `[]` in BOTH cases - the list itself does not lie, it is simply empty - so this marker is
+ * the only thing that tells "the account holds nothing" apart from "nobody could find out", and
+ * a client that renders an empty table without consulting it publishes an outage as a fact about
+ * the account (design.md §1.6, Requirement 14.5).
+ *
+ * The returned string is the server's own prose `reason`, rendered verbatim. It is not
+ * paraphrased here: the server knows which environment failed and why, and a sentence composed
+ * on the client would be a second, drifting account of the same event. A marker that arrives
+ * without a reason still yields a failure - the absence of the explanation is reported rather
+ * than filled in.
+ *
+ * @param {unknown} body - A resolved `GET /api/dashboard` body.
+ * @returns {string|null} The reason to render, or `null` when the positions read was fine.
+ */
+const readPositionsDegradation = (body) => {
+  const degraded = body && typeof body === "object" ? body.degraded : null;
+  if (!degraded || typeof degraded !== "object") return null;
+  if (degraded.positions !== "unreadable") return null;
+  const reason = typeof degraded.reason === "string" ? degraded.reason.trim() : "";
+  return reason || "The server reported this positions read as unreadable and gave no reason.";
+};
+
+/**
+ * `risk.open_positions_count` off a `GET /api/dashboard` body, or `null`.
+ *
+ * BC-2's second channel, from the other end of the response: this field is an `int` when the
+ * positions were counted and `null` when they could not be read - never `0` as a stand-in,
+ * because a count of zero is the *safest-looking* reading a broken positions read could publish.
+ * `null` travels to the ledger heading and is rendered as {@link NOT_REPORTED}.
+ *
+ * The count is taken from the server rather than from `positions.length` so the figure on screen
+ * is the one the server computed. The two cannot disagree - BC-2 hands `get_risk_metrics` the
+ * same gathered list `positions` comes from - but reading the reported field is what makes the
+ * `null` case reachable at all.
+ *
+ * @param {unknown} body - A resolved `GET /api/dashboard` body.
+ * @returns {number|null}
+ */
+const readOpenPositionsCount = (body) => {
+  const risk = body && typeof body === "object" ? body.risk : null;
+  const count = risk && typeof risk === "object" ? risk.open_positions_count : null;
+  return typeof count === "number" && Number.isFinite(count) ? count : null;
+};
+
+/**
+ * The positions region's failure sentence: this page's framing, plus the detail it was given.
+ *
+ * Used for a read that did not complete at all, where there is no server account of what
+ * happened - only a transport error. A BC-2 `degraded` marker does NOT go through here: its
+ * `reason` already says both of these things in the server's own words, and wrapping it would
+ * state the same fact twice.
+ *
+ * @param {string} detail
+ * @returns {string}
+ */
+const positionsFailureSentence = (detail) =>
+  "Open positions could not be read, so none are listed. This is not a statement that the " +
+  `account holds none. ${detail}`;
 
 /**
  * A rejected `Promise.allSettled` entry's reason as one sentence.
@@ -276,7 +345,16 @@ export default function Portfolio() {
   // "no open positions currently held". An empty list is a claim about the account; a failed
   // read did not make it, so the two are kept apart here and on screen.
   const [summaryError, setSummaryError] = useState(null);
+  // The complete sentence the positions region renders when it has no ledger to render. Composed
+  // where the read is interpreted rather than at the render site, because only there is it known
+  // whether the server supplied its own account of the failure (BC-2's `degraded.reason`, shown
+  // verbatim) or whether the request simply did not complete (this page's framing plus the
+  // transport error).
   const [positionsError, setPositionsError] = useState(null);
+  // The server's `risk.open_positions_count`: a number when counted, `null` when the server could
+  // not count it, and `null` for a read that did not complete. Never 0 as a stand-in for either
+  // (BC-2, Requirement 19.2).
+  const [positionsCount, setPositionsCount] = useState(null);
   // Per-region provenance: the summary body labels the equity/P&L/cash cards and the
   // allocation figure derived from them, the positions envelope labels the positions ledger.
   // They are kept apart so one region never borrows the other region's label.
@@ -288,6 +366,7 @@ export default function Portfolio() {
     setLoadError(null);
     setSummaryError(null);
     setPositionsError(null);
+    setPositionsCount(null);
 
     try {
       if (environment === "live") {
@@ -297,9 +376,27 @@ export default function Portfolio() {
         setPaperProvenance({ summary: null, positions: null });
 
         // 1. Fetch live portfolio analytics concurrently
-        const [summaryRes, posRes, equityRes, allocRes, heatmapRes] = await Promise.allSettled([
+        //
+        // ── task 13.1: where the LIVE positions read points ──────────────────────────────
+        // It used to be `api.portfolio.getOpenPositions().catch(() => api.portfolio.getPositions())`.
+        // `backend_app/routers/portfolio.py` registers six routes - `/summary`, `/equity-curve`,
+        // `/allocation`, `/heatmap`, `/recent-transactions`, `/close-all` - and neither positions
+        // path is among them, so that chain 404d, then 404d again, and this table was empty for
+        // every trader on every load however many positions they held (design.md §1.4). The only
+        // other `GET /positions` in the tree belongs to `backend_app/backend/portfolio_management.py`,
+        // mounted at `/api/internal/portfolio-mgmt` behind `Depends(get_admin_user)` - a different
+        // prefix, and unreachable for a trader either way.
+        //
+        // `GET /api/dashboard` is the endpoint that actually serves positions to a trader: a real
+        // normalised `positions[]` carrying `symbol side contracts entry_price mark_price notional
+        // leverage unrealized_pnl liquidation_price margin exchange_id environment` (design.md
+        // §7.1, §7.6). This is a re-point, not a workaround and not a new endpoint.
+        //
+        // The other four reads are unchanged. `/summary`, `/equity-curve`, `/allocation` and
+        // `/heatmap` all exist and all answer, so re-pointing them would be churn.
+        const [summaryRes, dashRes, equityRes, allocRes, heatmapRes] = await Promise.allSettled([
           api.portfolio.getSummary(),
-          api.portfolio.getOpenPositions().catch(() => api.portfolio.getPositions()),
+          api.dashboard.getDashboard({ environment: "live" }),
           api.portfolio.getEquityCurve(90),
           api.portfolio.getAllocation(),
           api.portfolio.getHeatmap(3),
@@ -330,10 +427,24 @@ export default function Portfolio() {
 
         // Process Open Positions
         //
-        // `getOpenPositions()` may answer a bare array and `getPositions()` - its fallback - may
-        // answer the `{count, positions}` envelope the portfolio-management router uses, so both
-        // shapes are read. A body carrying neither is a failed read, not an empty ledger.
-        const livePositions = posRes.status === "fulfilled" ? readPositionsList(posRes.value) : null;
+        // Three outcomes, in the order they have to be tested:
+        //
+        //  1. the request did not complete       -> the transport error, framed by this page;
+        //  2. it completed and `degraded` says the positions read failed -> the SERVER's reason.
+        //     `positions` is `[]` on that response and rendering it as an empty ledger would
+        //     publish an outage as a fact about the account, which is the whole reason BC-2
+        //     exists (design.md §1.6, Requirement 14.5). The marker is therefore tested BEFORE
+        //     the list, because the list looks perfectly healthy in this case;
+        //  3. it completed and `degraded` is null -> `positions` is the truth, `[]` included.
+        //
+        // The count in the ledger heading comes from `risk.open_positions_count`, which is `null`
+        // rather than 0 when unreadable - the same distinction from the other end of the response.
+        const liveDegradedReason = dashRes.status === "fulfilled"
+          ? readPositionsDegradation(dashRes.value)
+          : null;
+        const livePositions = dashRes.status === "fulfilled" && liveDegradedReason === null
+          ? readPositionsList(dashRes.value)
+          : null;
         if (livePositions) {
           setPositions(livePositions.map((p, i) => ({
             id: p.id || p.position_id || `pos_${i}`,
@@ -345,13 +456,19 @@ export default function Portfolio() {
             markPrice: parseFloat(p.mark_price || p.currentPrice || p.entry_price || 0),
             unrealizedPnl: parseFloat(p.unrealized_pnl || p.unrealizedPnl || 0),
           })));
+          setPositionsCount(readOpenPositionsCount(dashRes.value));
         } else {
           setPositions([]);
-          setPositionsError(
-            posRes.status === "rejected"
-              ? failureSentence(posRes.reason)
-              : "The response carried no positions list."
-          );
+          setPositionsCount(null);
+          if (liveDegradedReason !== null) {
+            setPositionsError(liveDegradedReason);
+          } else {
+            setPositionsError(positionsFailureSentence(
+              dashRes.status === "rejected"
+                ? failureSentence(dashRes.reason)
+                : "The response carried no positions list."
+            ));
+          }
         }
 
         // Process Equity Curve
@@ -446,13 +563,22 @@ export default function Portfolio() {
             markPrice: parseFloat(p.current_price || p.entry_price || 0),
             unrealizedPnl: parseFloat(p.unrealized_pnl || 0),
           })));
+          // `GET /api/paper/positions` reports `count` beside `positions`. The list this branch
+          // just read is the count when the envelope does not carry one - not a stand-in for a
+          // figure nobody read, but the length of the very list about to be rendered.
+          setPositionsCount(
+            typeof paperPosRes.value?.count === "number" && Number.isFinite(paperPosRes.value.count)
+              ? paperPosRes.value.count
+              : paperPositions.length
+          );
         } else {
           setPositions([]);
-          setPositionsError(
+          setPositionsCount(null);
+          setPositionsError(positionsFailureSentence(
             paperPosRes.status === "rejected"
               ? failureSentence(paperPosRes.reason)
               : "The response carried no positions list."
-          );
+          ));
         }
 
         setEquityCurve([]);
@@ -647,8 +773,15 @@ export default function Portfolio() {
           <div>
             <h2 style={{ fontSize: "0.875rem", fontWeight: 800, color: "#f8fafc", margin: 0, textTransform: "uppercase", letterSpacing: "0.03em" }}>
               {/* A count of 0 for a read that did not complete is a figure nobody measured, so the
-                  heading says the list was not read instead (Requirement 28.5). */}
-              Open Positions Ledger ({positionsError ? "not read" : positions.length})
+                  heading says the list was not read instead (Requirement 28.5).
+
+                  `positionsCount` is the server's `risk.open_positions_count` on the LIVE branch,
+                  which BC-2 publishes as `null` - never 0 - when the positions could not be
+                  counted. A response that carried a ledger but no count for it therefore reads
+                  "Not reported" here rather than claiming a total this page derived itself. */}
+              Open Positions Ledger ({positionsError
+                ? "not read"
+                : positionsCount === null ? NOT_REPORTED : positionsCount})
             </h2>
             <span style={{ fontSize: "0.6875rem", color: "#64748b" }}>
               {environment === "paper" ? "Simulated mark-to-market valuations" : "Live mark-to-market valuations"}
@@ -664,10 +797,12 @@ export default function Portfolio() {
             wording and its own colour and shape rather than borrowing the empty state's. */}
         {positionsError ? (
           <div style={{ padding: "0.75rem 0" }}>
-            <ReadFailureNotice>
-              Open positions could not be read, so none are listed. This is not a statement that the
-              account holds none. {positionsError}
-            </ReadFailureNotice>
+            {/* One complete sentence, composed where the read was interpreted. For a BC-2
+                `degraded` marker it is the server's own `reason`, verbatim; for a request that
+                did not complete it is this page's framing plus the transport error. Either way
+                the ledger below is not rendered, so an unreadable read can never appear as an
+                empty table (Requirement 14.5). */}
+            <ReadFailureNotice>{positionsError}</ReadFailureNotice>
           </div>
         ) : positions.length === 0 ? (
           <div style={{ padding: "1.5rem", textAlign: "center", color: "#64748b", fontSize: "0.75rem" }}>

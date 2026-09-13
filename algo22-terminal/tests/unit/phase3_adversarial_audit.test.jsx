@@ -91,9 +91,16 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
     vi.spyOn(portfolioModule.portfolioApi, 'getSummary').mockResolvedValue({
       account: { total_equity: 50000, unrealized_pnl: 1200, realized_pnl: 400, available_balance: 30000 }
     });
-    vi.spyOn(portfolioModule.portfolioApi, 'getOpenPositions').mockResolvedValue([
-      { id: 'p1', symbol: 'BTC/USDT', exchange: 'binance', side: 'long', size: 1.0, entry_price: 60000, mark_price: 61200, unrealized_pnl: 1200 }
-    ]);
+    // Task 13.1: Portfolio's LIVE positions come from `GET /api/dashboard`. `degraded: null` is
+    // the healthy reading of BC-2's discriminator and is stated, not omitted -- omitting it is
+    // not the healthy case, it is an unreadable response shape.
+    vi.spyOn(dashboardModule.dashboardApi, 'getDashboard').mockResolvedValue({
+      positions: [
+        { id: 'p1', symbol: 'BTC/USDT', exchange_id: 'binance', side: 'long', contracts: 1.0, entry_price: 60000, mark_price: 61200, unrealized_pnl: 1200 }
+      ],
+      degraded: null,
+      risk: { open_positions_count: 1 }
+    });
     vi.spyOn(paperModule.paperApi, 'getSummary').mockResolvedValue({
       total_equity: 100000, unrealized_pnl: 0, realized_pnl: 0, available_balance: 100000
     });
@@ -135,14 +142,13 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
   // Invariant 4 - no fallback to the paper reads - is asserted exactly as before.
   it('3 & 4: Live API failure states the failure instead of a figure and never falls back to paper', async () => {
     vi.spyOn(portfolioModule.portfolioApi, 'getSummary').mockRejectedValue(new Error('Network error 500'));
-    vi.spyOn(portfolioModule.portfolioApi, 'getOpenPositions').mockRejectedValue(new Error('Network error 500'));
-    // `getOpenPositions` rejecting sends the page down its documented fallback,
-    // `.catch(() => api.portfolio.getPositions())`, so this read is part of the failure being
-    // staged and has to be mocked too -- unmocked it went to the real backend, which is the same
-    // load-sensitive stall that broke invariant 1. Its message is deliberately NOT
-    // "Network error 500": the assertion below is a `getByText`, which throws on more than one
-    // match, and both regions render their own failure sentence.
-    vi.spyOn(portfolioModule.portfolioApi, 'getPositions').mockRejectedValue(new Error('Positions read did not complete'));
+    // Task 13.1: one positions read, not a two-step fallback chain. The chain this used to stage
+    // -- `getOpenPositions().catch(() => getPositions())` -- addressed two routes that do not
+    // exist, so both legs 404d and both methods have since been deleted. The read is now
+    // `GET /api/dashboard`. Its rejection message is deliberately NOT "Network error 500": the
+    // assertion below is a `getByText`, which throws on more than one match, and the summary and
+    // positions regions each render their own failure sentence.
+    vi.spyOn(dashboardModule.dashboardApi, 'getDashboard').mockRejectedValue(new Error('Positions read did not complete'));
     const paperSpy = vi.spyOn(paperModule.paperApi, 'getSummary');
 
     render(<MemoryRouter><Portfolio /></MemoryRouter>);

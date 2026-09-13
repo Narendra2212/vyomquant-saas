@@ -4,24 +4,34 @@
  * Endpoints: /api/portfolio/*
  *
  * ---------------------------------------------------------------------------
- * SIX DEAD METHODS REMOVED — vyomquant-ui-redesign task 10.10
+ * EIGHT DEAD METHODS REMOVED — vyomquant-ui-redesign tasks 10.10 and 13.1
  * design.md §1.4, §7.6. Requirement 19.4.
  * ---------------------------------------------------------------------------
- * `getPosition`, `closePosition`, `getPositionHistory`, `getBalance`, `getPnL`
- * and `getPerformance` are gone. `backend_app/routers/portfolio.py` registers
- * exactly six routes — `/summary`, `/equity-curve`, `/allocation`, `/heatmap`,
- * `/recent-transactions`, `/close-all` — so every one of those six always 404d,
- * and none had a call site anywhere in `src/`. A documented client method that
- * cannot succeed is a non-functional API surface (Requirement 19.4).
+ * `backend_app/routers/portfolio.py` registers exactly six routes — `/summary`,
+ * `/equity-curve`, `/allocation`, `/heatmap`, `/recent-transactions`,
+ * `/close-all`. This module now declares exactly the five reads among them that
+ * it has a caller for. Eight further methods used to sit here with no route
+ * behind any of them, so every one of the eight always 404d. A documented client
+ * method that cannot succeed is a non-functional API surface (Requirement 19.4).
  *
- * `closePosition` was the one that mattered: it read as a working position-close
- * and was not one. The only `POST /positions/{id}/close` in the tree belongs to
- * `backend_app/backend/portfolio_management.py`, mounted at
- * `/api/internal/portfolio-mgmt` behind `Depends(get_admin_user)` — a different
+ * Task 10.10 removed the six with no call site: `getPosition`, `closePosition`,
+ * `getPositionHistory`, `getBalance`, `getPnL`, `getPerformance`.
+ * `closePosition` was the one that mattered — it read as a working
+ * position-close and was not one. The only `POST /positions/{id}/close` in the
+ * tree belongs to `backend_app/backend/portfolio_management.py`, mounted at
+ * `/api/internal/portfolio-mgmt` behind `Depends(get_admin_user)`: a different
  * prefix, and unreachable for a trader either way.
  *
- * `getPositions` and `getOpenPositions` are equally routeless but stay for now;
- * see the note on `getOpenPositions` below.
+ * Task 13.1 removes the last two, `getOpenPositions` and `getPositions`. They
+ * had to wait because `pages/Portfolio.jsx` called them —
+ * `getOpenPositions().catch(() => getPositions())`, a chain that 404d twice and
+ * left the live positions table empty for every trader on every load. Deleting
+ * them ahead of that page would have turned a 404 into a `TypeError`, which is
+ * the worse failure. That read now points at `GET /api/dashboard`, which returns
+ * a real normalised `positions[]` (design.md §7.1, §7.6), so the two methods
+ * have no caller and no route and are gone. The internal admin-only
+ * `GET /positions` remains the only other positions route in the tree, and it is
+ * not this module's to expose.
  *
  * This module is a read surface. `get` is the only verb it needs.
  */
@@ -58,33 +68,6 @@ export const portfolioApi = {
    */
   getSummary: async () => {
     return get('/api/portfolio/summary');
-  },
-
-  /**
-   * Get all positions
-   * @param {Object} [filters] - Optional filters
-   * @param {string} [filters.symbol] - Filter by symbol
- * @param {string} [filters.side] - Filter by side
-   * @returns {Promise<Position[]>}
-   */
-  getPositions: async (filters = {}) => {
-    const params = new URLSearchParams(filters);
-    return get(`/api/portfolio/positions?${params}`);
-  },
-
-  /**
-   * Get open positions only
-   *
-   * NOTE: no such route exists — `/api/portfolio/positions/open` 404s, as does
-   * `getPositions` above. Both are kept only because `pages/Portfolio.jsx` still
-   * calls them; task 13.1 removes them in the same change that re-points that
-   * read at `/api/dashboard`. Deleting them here would turn a 404 into a
-   * `TypeError`, which is the worse failure.
-   *
-   * @returns {Promise<Position[]>}
-   */
-  getOpenPositions: async () => {
-    return get('/api/portfolio/positions/open');
   },
 
   /**
