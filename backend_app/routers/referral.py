@@ -136,7 +136,7 @@ class ValidateReferralCodeResponse(BaseModel):
 
 def _get_referral_link(referral_code: str) -> str:
     """Generate referral link from referral code"""
-    app_url = os.getenv("APP_URL", os.getenv("FRONTEND_URL", "https://vyomquant.com")).rstrip("/")
+    app_url = os.getenv("APP_URL", os.getenv("FRONTEND_URL", "https://app.vyomquant.in")).rstrip("/")
     return f"{app_url}/signup?ref={referral_code}"
 
 

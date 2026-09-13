@@ -155,13 +155,33 @@ jobs:
             echo "✅ Security check: ws://localhost:8000 NOT in production build"
           fi
           
-          # Verify production API hostname is present (check for CloudFront or custom domain pattern)
-          if grep -q "d7d88qs4jmch\.cloudfront\.net" "$INDEX_BUNDLE" 2>/dev/null || grep -q "api\.vyomquant\.in" "$INDEX_BUNDLE" 2>/dev/null; then
-            echo "✅ Production API hostname found in build"
+          # Verify a known production API hostname is present, i.e. that VITE_API_URL was
+          # actually substituted rather than silently defaulting.
+          #
+          # This is an allow-list, so it must contain every hostname VITE_API_URL is legitimately
+          # allowed to hold. app.vyomquant.in is the same-origin production host: CloudFront
+          # distribution EEOXECPHQ8SR0 serves the SPA from S3 and reverse-proxies /api/* and /ws/*
+          # to the ALB, so the API shares the app's hostname. Omitting it here would fail this
+          # step the moment the VITE_API_URL secret is cut over to the custom domain, blocking
+          # deploys for what looks like a build error.
+          #
+          # d7d88qs4jmch.cloudfront.net is retained so a rollback to the CloudFront default
+          # domain still passes. api.vyomquant.in is retained for the dedicated-API topology.
+          ALLOWED_API_HOSTS="app.vyomquant.in www.vyomquant.in vyomquant.in api.vyomquant.in d7d88qs4jmch.cloudfront.net"
+          FOUND_API_HOST=""
+          for host in $ALLOWED_API_HOSTS; do
+            if grep -qF "$host" "$INDEX_BUNDLE" 2>/dev/null; then
+              FOUND_API_HOST="$host"
+              break
+            fi
+          done
+
+          if [ -n "$FOUND_API_HOST" ]; then
+            echo "✅ Production API hostname found in build: $FOUND_API_HOST"
           else
             echo "❌ Production API hostname NOT found in build"
             echo "Error: VITE_API_URL not properly substituted - production hostname missing"
-            echo "Expected: d7d88qs4jmch.cloudfront.net or api.vyomquant.in"
+            echo "Expected one of: $ALLOWED_API_HOSTS"
             exit 1
           fi
           

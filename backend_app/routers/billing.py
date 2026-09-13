@@ -36,6 +36,12 @@ from backend_app.core.rate_limit import limiter
 # Subscription tiers and invoice state are stored exclusively in Supabase.
 from sqlalchemy.orm import Session
 
+# MARKETPLACE SETTLEMENT (task 19.2). ``settlement_service`` is the one Settlement_Record writer
+# and the only path that may set ``library_subscriptions.status='active'``; ``money`` owns the
+# 90/10 split and refuses an inexact amount. Both import only the standard library, so neither
+# adds a FastAPI or Persistence_Layer dependency to this module's import cost.
+from backend_app.backend.marketplace import money as marketplace_money
+from backend_app.backend.marketplace import settlement_service
 from backend_app.core.cache import redis_manager
 from backend_app.core.dependencies import (create_request_supabase_async,
                                            get_current_user,
@@ -87,6 +93,11 @@ def _background_sb():
 from backend_app.core.subscription_engine import Plan, SubscriptionEngine
 
 VALID_ITEM_KEYS = {Plan.FREE.value, Plan.STARTER.value, Plan.PRO.value, Plan.ENTERPRISE.value, "ml_addon"}
+
+# The item_key prefix that marks a marketplace Subscription payment, written once. The dispatch in
+# _apply_billing_entitlement keeps its literal spelling deliberately: design.md and
+# checkout_service both name that exact expression as THE one marketplace funnel.
+_MARKETPLACE_ITEM_PREFIX = "marketplace_"
 
 
 # BE-CRITICAL-006 FIX: Payment provider IP allowlists
@@ -277,41 +288,202 @@ def _validate_uuid(value: str, field_name: str) -> str:
         )
 
 
-async def _apply_marketplace_entitlement(user_id: str, library_id: str, subscription_id: str = None) -> None:
+def _exact_minor_units(value: Any) -> Optional[int]:
+    """``value`` as an exact integer number of Minor_Units, or ``None``.
+
+    MARKETPLACE SETTLEMENT (task 19.2), Requirement 10.3: money is integer Minor_Units and nothing
+    else on this path. A provider sends the amount as an integer (Stripe's ``amount_total`` in
+    cents, Razorpay's ``amount`` in paise) and a JSON decoder may hand it back as text; both of
+    those read exactly. A ``float`` returns ``None`` rather than being truncated or rounded, so an
+    inexact value is a refusal to settle instead of a silently laundered ledger row - the same
+    reading ``settlement_service._amount_matches`` applies to the stored side of the comparison.
     """
-    Activate a marketplace subscription after successful payment.
-    
-    Updates library_subscriptions status from 'pending' to 'active'.
-    Called from billing webhooks when item_key format is 'marketplace_{library_id}'.
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _epoch_instant(value: Any) -> Optional[datetime]:
+    """A provider's whole-second epoch timestamp as a UTC datetime, or ``None``.
+
+    Used for the payment confirmation instant the Subscription_Period is computed from
+    (Requirements 11.4, 11.5). Taking it from the provider's own event rather than from a clock
+    read here makes the period reproducible: a redelivery an hour later derives the same two
+    boundaries, so the arithmetic is verifiable after the fact.
+    """
+    seconds = _exact_minor_units(value)
+    if seconds is None or seconds <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _stripe_settlement_metadata(metadata: Optional[dict], session: Any) -> dict:
+    """The Stripe session metadata plus the provider facts a Settlement_Record needs.
+
+    MARKETPLACE SETTLEMENT (task 19.2). ``checkout_service`` puts ``item_key``,
+    ``subscription_id``, ``library_id`` and ``currency`` in the session metadata; what it cannot
+    put there is what the provider actually confirmed - the transaction reference, the charged
+    amount and the settlement currency - and those are exactly the three values Requirement 9.14
+    makes the mismatch guard out of. They are read off the event here, beside the branch that owns
+    the event, and travel through the ONE entitlement funnel
+    (``_apply_billing_entitlement`` -> ``_apply_marketplace_entitlement``) rather than through a
+    second webhook path.
+
+    ``payment_intent`` is preferred over the session id because the refund events carry the payment
+    intent, so a payment and its later reversal deduplicate against the same
+    ``uq_settlement_reference_reversal`` reference. Nothing is added for a plan purchase: the
+    metadata is returned unchanged unless the item is a marketplace item.
+    """
+    enriched = dict(metadata or {})
+    if not str(enriched.get("item_key") or "").startswith(_MARKETPLACE_ITEM_PREFIX):
+        return enriched
+    enriched["provider"] = "stripe"
+    enriched["provider_reference"] = session.get("payment_intent") or session.get("id")
+    enriched["amount_minor"] = session.get("amount_total")
+    enriched["currency"] = session.get("currency") or enriched.get("currency")
+    enriched["confirmed_at_epoch"] = session.get("created")
+    return enriched
+
+
+def _razorpay_settlement_metadata(notes: Optional[dict], payment: Any) -> dict:
+    """The Razorpay ``notes`` plus the provider facts a Settlement_Record needs.
+
+    The Razorpay half of :func:`_stripe_settlement_metadata`, and the same contract:
+    ``notes["item"]`` is this provider's spelling of ``item_key`` (``checkout_service`` writes
+    both halves), ``payment["amount"]`` is already in paise - the Minor_Unit - and
+    ``payment["id"]`` is the reference the ``refund.processed`` event carries as ``payment_id``.
+    """
+    enriched = dict(notes or {})
+    item_key = str(enriched.get("item") or enriched.get("item_key") or "")
+    if not item_key.startswith(_MARKETPLACE_ITEM_PREFIX):
+        return enriched
+    enriched["provider"] = "razorpay"
+    enriched["provider_reference"] = payment.get("id")
+    enriched["amount_minor"] = payment.get("amount")
+    enriched["currency"] = payment.get("currency") or enriched.get("currency")
+    enriched["confirmed_at_epoch"] = payment.get("created_at")
+    return enriched
+
+
+async def _apply_marketplace_entitlement(
+    user_id: str,
+    library_id: str,
+    subscription_id: str = None,
+    *,
+    provider: Optional[str] = None,
+    provider_reference: Optional[str] = None,
+    amount_minor: Any = None,
+    currency: Optional[str] = None,
+    confirmation_instant: Optional[datetime] = None,
+) -> None:
+    """
+    Record a confirmed marketplace payment and activate the Subscription it paid for.
+
+    Called from billing webhooks when item_key format is 'marketplace_{library_id}' — the ONE
+    branch both providers funnel into via ``_apply_billing_entitlement``'s
+    ``item_key.startswith("marketplace_")`` test. There is no second webhook route, no second
+    signature path and no second entitlement funnel; ``_validate_webhook_signature``,
+    ``_validate_webhook_ip``, ``STRIPE_WEBHOOK_IPS``, ``_validate_webhook_timestamp`` and the
+    two-phase Redis idempotency lock are untouched (Requirements 9.1, 9.9, 22.5, 22.6, 25.2).
+
+    WHY THE STATUS UPDATE THAT USED TO BE HERE IS GONE (Requirements 9.5, 10.4, 11.6, 11.14)
+    ----------------------------------------------------------------------------------------
+    This function used to flip ``library_subscriptions.status`` from ``pending`` to ``active``
+    itself, set no period expiry and record no settlement. Three things were wrong with that, and
+    one call replaces all three: the payment left no Settlement_Record, so no owner earning existed
+    and the 90/10 split was never computed (Requirements 10.4, 10.5); the row became ``active``
+    with a null expiry, which ``check_deployment_permission`` read as perpetual access; and it was a
+    second writer of ``status='active'``, which ``trg_subscription_transition_guard`` now refuses
+    outright because no matching ``marketplace_settlements`` row exists at that point.
+
+    ``settlement_service.settle`` is the one Settlement_Record writer and the only path that may
+    set ``status='active'``. It performs the amount/currency match (Requirement 9.14), the exact
+    integer split (Requirements 10.1, 10.2), the ledger insert under
+    ``uq_settlement_reference_reversal`` (Requirements 9.6, 9.7, 10.10), the Subscription_State
+    transition, the Subscription_Period write (Requirements 11.4, 11.5), the history row
+    (Requirement 11.12) and the entitlement grant carrying the period expiry - in that order, with
+    the money recorded before anything is granted, and audits every outcome (Requirements 10.9,
+    10.11).
+
+    Outcomes and the HTTP answer each one produces:
+
+    * ``RECORDED`` / ``DUPLICATE_IGNORED`` - success. A redelivery is a no-op by construction, so
+      the webhook is idempotent whether or not the Redis lock survived (Requirement 9.6).
+    * ``UNMATCHED`` / ``MISMATCHED`` - Requirement 9.14: nothing is written, the Audit_Log entry
+      **is** the response, and the webhook returns success because there is nothing for the
+      provider to retry. A confirmation for an amount nobody agreed to must not become an earning.
+    * ``SettlementPersistFailed`` - Requirement 10.11's budget is exhausted. This raises 500 so the
+      provider redelivers; the ledger is unchanged and the audit line carries the provider
+      reference for reconciliation. Silence here would be a payment that vanished.
     """
     # Validate UUID format for library_id and subscription_id if provided
     _validate_uuid(library_id, "library_id")
     if subscription_id:
         _validate_uuid(subscription_id, "subscription_id")
-    
+
+    confirmed_amount = _exact_minor_units(amount_minor)
+    missing = [
+        name
+        for name, value in (
+            ("subscription_id", subscription_id),
+            ("provider", provider),
+            ("provider_reference", provider_reference),
+            ("amount_minor", confirmed_amount),
+            ("currency", currency),
+        )
+        if not value and value != 0
+    ]
+    if missing:
+        # No settlement context means no Settlement_Record can be written, and Requirement 11.6
+        # admits no activation without one. Activating anyway is precisely the defect this task
+        # removes, so this refuses instead — loudly, because it can only be an integration fault.
+        logger.error(
+            f"Marketplace payment confirmation cannot be settled: missing {', '.join(missing)} "
+            f"(user={user_id} library={library_id})"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Marketplace payment confirmation is missing its settlement context",
+        )
+
     try:
-        sb = _background_sb()
-        now_iso = datetime.now(timezone.utc).isoformat()
-        
-        # Update subscription status from pending to active
-        # Include subscription_id in WHERE clause for additional safety
-        update_query = sb.table("library_subscriptions").update({"status": "active", "started_at": now_iso})
-        update_query = update_query.eq("user_id", user_id).eq("library_id", library_id).eq("status", "pending")
-        if subscription_id:
-            update_query = update_query.eq("id", subscription_id)
-        
-        result = update_query.execute()
-        
-        if not result.data:
-            # Idempotency: subscription already activated by previous webhook
-            logger.info(
-                f"Marketplace subscription already active or not pending (idempotent): "
-                f"user={user_id} library={library_id}"
-            )
-            return  # Don't raise - webhook succeeded idempotently
-        
-        logger.info(f"Marketplace subscription activated: user={user_id} library={library_id}")
-        
+        result = await settlement_service.settle(
+            provider_reference=str(provider_reference),
+            provider=str(provider),
+            amount_minor=confirmed_amount,
+            currency=str(currency),
+            subscription_id=str(subscription_id),
+            confirmation_instant=confirmation_instant or datetime.now(timezone.utc),
+            supabase=_background_sb(),
+        )
+    except settlement_service.SettlementPersistFailed as persist_error:
+        logger.error(
+            f"Marketplace settlement did not persist for provider reference "
+            f"{provider_reference}: {persist_error}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to activate marketplace subscription"
+        )
+    except marketplace_money.InvalidAmount as amount_error:
+        # The confirmed amount is not an admissible integer number of Minor_Units. Refused before
+        # any statement, so nothing is recorded; a redelivery would carry the same amount.
+        logger.error(
+            f"Marketplace payment confirmation carried an inadmissible amount "
+            f"({provider_reference}): {amount_error}"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Marketplace payment confirmation carried an unusable amount",
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -320,6 +492,219 @@ async def _apply_marketplace_entitlement(user_id: str, library_id: str, subscrip
             status_code=500,
             detail="Failed to activate marketplace subscription"
         )
+
+    if result.outcome in (
+        settlement_service.SettlementOutcome.UNMATCHED,
+        settlement_service.SettlementOutcome.MISMATCHED,
+    ):
+        # Requirement 9.14: no transition, no record, no entitlement — and the audit entry
+        # settle() already wrote is the response. Nothing for the provider to retry.
+        logger.error(
+            f"Marketplace payment confirmation {result.outcome.value}: "
+            f"reference={provider_reference} subscription={subscription_id}"
+        )
+        return
+
+    logger.info(
+        f"Marketplace settlement {result.outcome.value}: user={user_id} library={library_id} "
+        f"subscription={subscription_id} status={result.from_status}->{result.to_status} "
+        f"expiry={result.period_expiry}"
+    )
+
+
+async def _settle_marketplace_reversal(
+    *,
+    provider: str,
+    payment_reference: Optional[str],
+    event_metadata: Optional[dict],
+    amount_minor: Any,
+    currency: Optional[str],
+    event_name: str,
+) -> None:
+    """Record a refund of a marketplace payment as a reversal Settlement_Record.
+
+    MARKETPLACE SETTLEMENT (task 19.2), Requirements 10.4, 10.8. Called from the refund branches
+    the webhooks already have — Stripe's ``charge.refunded`` and Razorpay's ``refund.processed`` —
+    which already reverse the referral commission. This adds the ledger half: one
+    ``settle(..., is_reversal=True)`` call, taken **only** when the refunded payment's ``item_key``
+    began with ``marketplace_``, so a plan refund passes through untouched.
+
+    Requirement 10.8 is why this is a second row rather than an edit: a persisted
+    Settlement_Record is never updated or deleted, and the reversal references the original
+    provider transaction reference through ``reverses_reference`` (which defaults to the payment's
+    own reference — the value both providers' refund events carry). ``uq_settlement_reference_
+    reversal`` is on ``(provider_reference, is_reversal)``, so the payment row and its reversal
+    coexist and a redelivered refund is still a no-op.
+
+    A refund we cannot correlate to a Subscription writes nothing and is logged at error level for
+    operator reconciliation: inventing the Subscription a refund belongs to would move an
+    entitlement on a guess.
+
+    WHERE THE CORRELATION COMES FROM (task 19.16, Requirements 10.4, 10.8)
+    ---------------------------------------------------------------------
+    From the ledger, not from the event's metadata. This function used to read
+    ``metadata["subscription_id"]`` off the refund event, and **neither provider carries it
+    there** by default: Stripe copies Checkout Session metadata onto the PaymentIntent/Charge only
+    when the session was created with ``payment_intent_data.metadata``, and a Razorpay refund
+    entity does not reliably carry the payment's ``notes``. The consequence in production was that
+    most marketplace refunds took the "cannot be correlated" branch and wrote no reversal at all -
+    the owner kept an earning for returned money and the refunded subscriber kept the entitlement.
+
+    ``settlement_service.find_settled_payment`` reads the payment's own Settlement_Record back by
+    the reference the refund event carries - Stripe's ``payment_intent``, Razorpay's
+    ``payment_id``, which is exactly what ``settle`` recorded as ``provider_reference``. The
+    Subscription, the currency and the original amount therefore come from a row this system wrote
+    itself: authoritative, and nothing is fabricated. ``checkout_service`` also now sets
+    ``payment_intent_data.metadata`` (and the matching Razorpay ``notes``) so the provider carries
+    the same facts, but that is belt and braces - correlation no longer depends on it.
+
+    Three refusals, all of which write nothing:
+
+    * the ledger read did not complete - 500, so the provider redelivers. A broken read is not
+      "no such payment";
+    * no Settlement_Record exists for that reference - audited as
+      ``MARKETPLACE_SETTLEMENT_UNMATCHED`` and logged at error for reconciliation;
+    * the refunded amount is not an exact integer number of Minor_Units - refused, never
+      truncated or rounded (Requirement 10.3).
+
+    A PARTIAL refund is passed through with the amount the provider actually returned, so
+    ``settle``'s Requirement 9.14 guard sees that it is not the amount the Subscription recorded
+    and answers ``MISMATCHED``: nothing is written and the audit names both figures. Requirement
+    10.8 contemplates a reversal "equal to the refunded portion", which this does not yet record -
+    an open requirements decision, reported rather than silently invented, because a partial
+    reversal also has to decide what happens to the entitlement.
+    """
+    metadata = dict(event_metadata or {})
+    item_key = str(metadata.get("item_key") or metadata.get("item") or "")
+    if item_key and not item_key.startswith(_MARKETPLACE_ITEM_PREFIX):
+        # Positively identified as a plan refund: the marketplace ledger has nothing to say about
+        # it, so it passes through untouched and without a ledger read. An ABSENT item_key is NOT
+        # treated this way — that is the ordinary shape of both providers' refund events, and
+        # treating it as "not marketplace" is the defect this function no longer has.
+        return
+
+    if not payment_reference:
+        logger.error(
+            f"Marketplace refund {event_name} carried no payment reference, so no Settlement_"
+            f"Record can be correlated to it and nothing was recorded"
+        )
+        return
+
+    reference = str(payment_reference)
+    try:
+        payment = settlement_service.find_settled_payment(
+            _background_sb(), provider_reference=reference
+        )
+    except settlement_service.SettlementPersistenceError as read_error:
+        # A read that did not complete is not an answer. Treating it as "no such payment" would
+        # discard a real reversal and keep paying an owner for money that went back.
+        logger.error(
+            f"Marketplace refund {event_name} could not read the settlement ledger for payment "
+            f"{reference}: {read_error}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to record marketplace refund"
+        )
+
+    subscription_id = payment.get("subscription_id") if payment else None
+    if not payment or not subscription_id:
+        # Requirement 9.14, and the reason this is not a guess: no payment was settled under this
+        # reference, so there is no Subscription to reverse. Plan refunds reach here too when the
+        # event carried no item_key at all, which is why the audit line names the reference rather
+        # than asserting a marketplace intent.
+        logger.error(
+            f"Marketplace refund {event_name} cannot be correlated: no settlement record exists "
+            f"for payment {reference}, so no reversal was written (operator reconciliation)"
+        )
+        await settlement_service.audit_uncorrelated_refund(
+            provider_reference=reference,
+            provider=provider,
+            amount_minor=_exact_minor_units(amount_minor),
+            currency=currency,
+            event_name=event_name,
+        )
+        return
+
+    ledger_currency = str(payment.get("currency") or "")
+    original_amount = _exact_minor_units(payment.get("amount_minor"))
+    refunded_amount = _exact_minor_units(amount_minor)
+    if refunded_amount is None:
+        # Requirement 10.3: a float refund amount is refused, not truncated and not rounded.
+        logger.error(
+            f"Marketplace refund {event_name} carried no exact integer amount in Minor_Units "
+            f"({amount_minor!r} for payment {reference}), so no reversal was written"
+        )
+        return
+
+    event_currency = str(currency or "").strip().upper()
+    if event_currency and event_currency != ledger_currency.strip().upper():
+        # A refund denominated in a currency the payment did not settle in is not a refund of this
+        # payment. Nothing is written, and the ledger's own currency is never overwritten.
+        logger.error(
+            f"Marketplace refund {event_name} for payment {reference} reported {event_currency} "
+            f"against a ledger row settled in {ledger_currency}, so no reversal was written"
+        )
+        return
+
+    if original_amount is not None and refunded_amount != original_amount:
+        # Reported, then passed to settle(), whose Requirement 9.14 guard writes nothing and
+        # audits MISMATCHED. Requirement 10.8's "equal to the refunded portion" is an open
+        # decision (see the docstring), so a partial reversal is not invented here.
+        logger.error(
+            f"Marketplace refund {event_name} for payment {reference} is not a full refund: "
+            f"{refunded_amount} of {original_amount} {ledger_currency}. No reversal row is "
+            f"written for a partial refund; it is recorded as a mismatch for reconciliation"
+        )
+
+    try:
+        result = await settlement_service.settle(
+            provider_reference=reference,
+            provider=provider,
+            amount_minor=refunded_amount,
+            currency=ledger_currency,
+            subscription_id=str(subscription_id),
+            confirmation_instant=datetime.now(timezone.utc),
+            supabase=_background_sb(),
+            is_reversal=True,
+            reverses_reference=reference,
+        )
+    except settlement_service.SettlementPersistFailed as persist_error:
+        # Requirement 10.11: raise so the provider redelivers. A refund that silently did not
+        # reach the ledger keeps paying an owner for money that came back.
+        logger.error(
+            f"Marketplace reversal did not persist for payment {reference}: {persist_error}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to record marketplace refund"
+        )
+    except marketplace_money.InvalidAmount as amount_error:
+        logger.error(
+            f"Marketplace refund {event_name} carried an inadmissible amount "
+            f"({reference}): {amount_error}"
+        )
+        return
+
+    if result.outcome in (
+        settlement_service.SettlementOutcome.UNMATCHED,
+        settlement_service.SettlementOutcome.MISMATCHED,
+    ):
+        # Requirement 9.14: nothing written, and settle()'s audit line is the response. Logged at
+        # error because a refund that recorded no reversal leaves an owner credited with money the
+        # purchaser got back, which an operator has to reconcile by hand.
+        logger.error(
+            f"Marketplace reversal {result.outcome.value} for payment {reference}: "
+            f"subscription={subscription_id} refunded={refunded_amount} "
+            f"settled={original_amount} {ledger_currency}"
+        )
+        return
+
+    logger.info(
+        f"Marketplace reversal {result.outcome.value} for payment {reference}: "
+        f"subscription={subscription_id} status={result.from_status}->{result.to_status}"
+    )
+
 
 async def _apply_billing_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: Optional[dict] = None) -> None:
     """
@@ -335,9 +720,32 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
         library_id = item_key.replace("marketplace_", "")
         # Extract subscription_id from metadata if available for additional safety
         subscription_id = None
+        # The settlement context both providers put on the metadata via
+        # _stripe_settlement_metadata / _razorpay_settlement_metadata (task 19.2). This is the ONE
+        # marketplace funnel — the provider facts travel through it rather than through a second
+        # webhook path.
+        provider = None
+        provider_reference = None
+        amount_minor = None
+        currency = None
+        confirmation_instant = None
         if isinstance(metadata, dict):
             subscription_id = metadata.get("subscription_id")
-        await _apply_marketplace_entitlement(user_id, library_id, subscription_id)
+            provider = metadata.get("provider")
+            provider_reference = metadata.get("provider_reference")
+            amount_minor = metadata.get("amount_minor")
+            currency = metadata.get("currency")
+            confirmation_instant = _epoch_instant(metadata.get("confirmed_at_epoch"))
+        await _apply_marketplace_entitlement(
+            user_id,
+            library_id,
+            subscription_id,
+            provider=provider,
+            provider_reference=provider_reference,
+            amount_minor=amount_minor,
+            currency=currency,
+            confirmation_instant=confirmation_instant,
+        )
         return
     
     if item_key not in VALID_ITEM_KEYS:
@@ -879,7 +1287,9 @@ async def create_checkout_session(
                     "reference_id": order["id"],
                     "description": f"Aerora Dynamics - {item_key.upper()}",
                     "customer": {
-                        "email": user.get("email", "user@aerora.io")
+                        # Fallback only reached when the user record carries no email. Razorpay
+                        # requires a syntactically valid address; this one is on a domain we own.
+                        "email": user.get("email", "no-reply@vyomquant.in")
                     },
                     "notes": {
                         "user_id": user["id"], 
@@ -993,7 +1403,7 @@ async def stripe_webhook(
 
             discount_applied = metadata.get("discount_applied") == "true"
             try:
-                await _process_stripe_entitlement(user_id, item_key, discount_applied, metadata)
+                await _process_stripe_entitlement(user_id, item_key, discount_applied, _stripe_settlement_metadata(metadata, session))
                 
                 # Process referral commission on successful payment
                 payment_id = session.get("payment_intent") or session.get("id")
@@ -1206,6 +1616,22 @@ async def stripe_webhook(
                     logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
                     # Don't fail the webhook if commission reversal fails
 
+                # MARKETPLACE SETTLEMENT (task 19.2), Requirements 10.4, 10.8: the ledger half of a
+                # refund. Only ``charge.refunded`` means money actually went back — ``charge.
+                # refund.updated`` also fires when a refund FAILS, and recording a reversal for a
+                # refund that never completed would subtract an owner's earning for money that
+                # never left and cancel a live entitlement. The reference is the payment intent, so
+                # the reversal deduplicates against the same reference the payment settled under.
+                if event["type"] == "charge.refunded":
+                    await _settle_marketplace_reversal(
+                        provider="stripe",
+                        payment_reference=charge_obj.get("payment_intent") or payment_id,
+                        event_metadata=charge_obj.get("metadata") or {},
+                        amount_minor=charge_obj.get("amount_refunded"),
+                        currency=charge_obj.get("currency"),
+                        event_name=event["type"],
+                    )
+
         # Successfully completed — store completed status with 24h TTL
         if idempotency_key:
             await redis_manager.set(idempotency_key, "completed", ex=86400)
@@ -1301,7 +1727,7 @@ async def razorpay_webhook(
 
             discount_applied = notes.get("discount_applied") == "true"
             try:
-                await _process_razorpay_entitlement(user_id, item_key, discount_applied, notes)
+                await _process_razorpay_entitlement(user_id, item_key, discount_applied, _razorpay_settlement_metadata(notes, payment))
                 
                 payment_id = payment.get("id")
                 payment_amount = payment.get("amount", 0) / 100.0  # Convert from paise to INR
@@ -1374,6 +1800,22 @@ async def razorpay_webhook(
                 except Exception as ref_err:
                     logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
                     # Don't fail the webhook if commission reversal fails
+
+                # MARKETPLACE SETTLEMENT (task 19.2), Requirements 10.4, 10.8: the ledger half of a
+                # refund, on the branch that already exists. ``refund.failed`` shares this branch
+                # but is deliberately NOT settled: Razorpay's refund.failed means the refund did
+                # NOT go through, so recording a reversal for it would subtract an owner's earning
+                # for money that never came back and would move a paid Subscription to REFUNDED.
+                # ``refund.processed`` is the event where the money moved.
+                if payload.get("event") == "refund.processed":
+                    await _settle_marketplace_reversal(
+                        provider="razorpay",
+                        payment_reference=payment_id,
+                        event_metadata=refund.get("notes") or {},
+                        amount_minor=refund.get("amount"),
+                        currency=refund.get("currency"),
+                        event_name=payload.get("event"),
+                    )
 
         # Successfully completed — store completed status with 24h TTL
         if idempotency_key:
