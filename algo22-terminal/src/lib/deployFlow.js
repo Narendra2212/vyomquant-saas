@@ -622,9 +622,8 @@ export function deployBlockers(flow) {
 /**
  * The request the `Submitting` transition issues — described, never performed.
  *
- * The route is `pages/Strategies.jsx`'s, unchanged:
- * `POST /api/strategy-operations/strategies/{id}/versions/{version}/deploy`, the gated
- * endpoint Requirement 11.5 names. The body and the `environment` query parameter come
+ * The route is `POST /api/strategies/{id}/versions/{version}/deploy`, the gated endpoint
+ * Requirement 11.5 names. The body and the `environment` query parameter come
  * from `deployPreflight.deploymentRequest`, which owns the server's
  * `DeploymentBindingRequest` shape (`extra="forbid"`) and its `execution_config`
  * allow-list — so this module names no wire field and cannot drift from what the preflight
@@ -633,6 +632,14 @@ export function deployBlockers(flow) {
  * `endpoints.strategies.deployVersion(strategyId, version, body, { environment })` is the
  * call this describes. Nothing is imported from `src/api` here: a pure module that held an
  * HTTP client could place an order, and this one must not be able to.
+ *
+ * `path` below is **descriptive only** — nothing issues a request from it. The
+ * authoritative path is `endpoints.strategies.deployVersion`'s, and that is the one the
+ * `Submitting` transition's caller (`components/DeployConfirmation.jsx`) travels. This
+ * string carried the `/api/strategy-operations/…` spelling that `deployVersion` was just
+ * corrected off; it 404s, and it is fixed here so a reader cannot copy a dead path out of
+ * a module whose job is to describe the request. If the two ever need to differ, the
+ * describing copy is the one that is wrong.
  *
  * @param {Object} config
  * @returns {Object} Frozen.
@@ -645,7 +652,7 @@ function submissionFor(config) {
   return Object.freeze({
     method: 'POST',
     path:
-      `/api/strategy-operations/strategies/${encodeURIComponent(strategyId)}`
+      `/api/strategies/${encodeURIComponent(strategyId)}`
       + `/versions/${encodeURIComponent(version)}/deploy`,
     strategyId,
     version,

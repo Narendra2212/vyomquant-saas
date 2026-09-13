@@ -209,7 +209,7 @@ export const strategiesApi = {
   /**
    * Deploy one immutable version through the Deployment_Gate (task 16.1).
    *
-   * `POST /api/strategy-operations/strategies/{id}/versions/{version}/deploy`
+   * `POST /api/strategies/{id}/versions/{version}/deploy`
    * (`strategy_operations.deploy_version`). This is the endpoint Requirement 11.5 names:
    * it runs `evaluate_binding`, the same gate the preflight below reports on, and it
    * records the Deployment_Binding — version, exchange account, risk configuration,
@@ -226,6 +226,19 @@ export const strategiesApi = {
    * `environment` is the legacy column and rides the query string, because the request
    * model has no field for it; `mode` in the body is the constrained one.
    *
+   * PATH NOTE — deliberately `/api/strategies/...`, not
+   * `/api/strategy-operations/strategies/...`. The router is mounted at `prefix="/api"`
+   * (`backend_app/main.py`) and `deploy_version` declares exactly one route,
+   * `@router.post("/strategies/{strategy_id}/versions/{version}/deploy")`, with no
+   * `strategy-operations` alias — unlike `preflight_deploy_version` below (whose
+   * `_PREFLIGHT_PATHS` registers both spellings) and `execute_backtest` (two decorators).
+   * So the prefixed spelling resolves to nothing. This is the **second** instance of that
+   * trap in this file: see the same note on {@link strategiesApi.listBacktests}, where the
+   * prefixed `/api/strategy-operations/backtests` 404'd on every load and the failure was
+   * silent. Here it was worse than silent-but-symmetric: because the preflight *does*
+   * answer on both spellings, the gate passed and the Deploy button enabled, and only the
+   * POST 404'd.
+   *
    * **No credential travels here.** An exchange account is named by id; its keys are
    * resolved inside the execution process (Requirement 12.5).
    *
@@ -238,7 +251,7 @@ export const strategiesApi = {
    */
   deployVersion: (strategyId, version, body = {}, options = {}) =>
     post(
-      `/api/strategy-operations/strategies/${encodeURIComponent(strategyId)}` +
+      `/api/strategies/${encodeURIComponent(strategyId)}` +
         `/versions/${encodeURIComponent(version)}/deploy`,
       body,
       options.environment ? { params: { environment: options.environment } } : {},
@@ -295,7 +308,7 @@ export const strategiesApi = {
   /**
    * Every deployment one strategy has (task 19.1).
    *
-   * `GET /api/strategy-operations/strategies/{id}/deployments`
+   * `GET /api/strategies/{id}/deployments`
    * (`strategy_operations.list_deployments`) answers `{strategy_id, deployments:
    * [{deployment_id, status, environment, worker, started_at, health}], total}`, scoped
    * to the caller's own deployments.
@@ -313,12 +326,28 @@ export const strategiesApi = {
    * miss one union this with the `deployment_id`s their own data already names; see
    * `lib/signalTraceRealtime.deploymentIdsFromSignals`.
    *
+   * PATH NOTE — deliberately `/api/strategies/...`, not
+   * `/api/strategy-operations/strategies/...`. The router is mounted at `prefix="/api"`
+   * (`backend_app/main.py`) and `list_deployments` declares exactly one route,
+   * `@router.get("/strategies/{strategy_id}/deployments")`, with no `strategy-operations`
+   * alias — so the prefixed spelling resolves to nothing. This is the **third** instance
+   * of that trap in this file: see the same note on {@link strategiesApi.deployVersion}
+   * and on {@link strategiesApi.listBacktests}. Here the 404 surfaced as a Signal_Trace
+   * page that subscribed to no `signal.{deployment_id}` channel at all — the deployment
+   * list came back empty-by-error and the page had nothing to compose subscriptions from.
+   * `components/DeploymentConsole.jsx` already read the unprefixed spelling directly, so
+   * the two callers of the same endpoint disagreed about its address.
+   *
+   * `tests/unit/guards/api-paths.test.js` now checks every `/api/strategy-operations/…`
+   * path in `src/api/modules/**` and `src/lib/**` against the routers' own declarations,
+   * so a fourth instance fails CI rather than shipping.
+   *
    * @param {string} strategyId
    * @returns {Promise<{strategy_id: string, deployments: Array<Object>, total: number}>}
    */
   listDeployments: (strategyId) =>
     get(
-      `/api/strategy-operations/strategies/${encodeURIComponent(strategyId)}/deployments`,
+      `/api/strategies/${encodeURIComponent(strategyId)}/deployments`,
     ),
 
   /**

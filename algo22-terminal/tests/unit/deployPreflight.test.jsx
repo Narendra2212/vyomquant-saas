@@ -5,8 +5,10 @@
  *
  * WHAT IS ASSERTED, AND WHY EACH PART MATTERS
  * ===========================================
- * * **The endpoint.** `POST /api/strategy-operations/strategies/{id}/versions/{version}/
- *   deploy`, addressed to the strategy's own current version, with the
+ * * **The endpoint.** `POST /api/strategies/{id}/versions/{version}/deploy` — the
+ *   unprefixed spelling, which is the only one `deploy_version` registers; see the
+ *   `deploy_version path` block below, which pins it against the router source. Addressed
+ *   to the strategy's own current version, with the
  *   `DeploymentBindingRequest` body — and *only* that model's fields. The legacy
  *   `POST /api/strategies/{id}/deploy` binds no account, no risk configuration and no mode
  *   and travels no gate, so a deploy still reaching it would not satisfy Requirement 11.5;
@@ -354,7 +356,7 @@ describe('strategiesApi.deployVersion', () => {
 
     expect(mockClient.post).toHaveBeenCalledTimes(1);
     const [url, sent, config] = mockClient.post.mock.calls[0];
-    expect(url).toBe('/api/strategy-operations/strategies/s-1/versions/1.2/deploy');
+    expect(url).toBe('/api/strategies/s-1/versions/1.2/deploy');
     expect(sent).toEqual(body);
     // The legacy column rides the query string; the request model has no field for it.
     expect(config).toEqual({ params: { environment: 'live' } });
@@ -364,8 +366,79 @@ describe('strategiesApi.deployVersion', () => {
     mockClient.post.mockResolvedValue({});
     await strategiesApi.deployVersion('a/b', 'v 1', {});
     expect(mockClient.post.mock.calls[0][0]).toBe(
-      '/api/strategy-operations/strategies/a%2Fb/versions/v%201/deploy',
+      '/api/strategies/a%2Fb/versions/v%201/deploy',
     );
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+// THE PATH ↔ THE REGISTRATION — the pin
+// ══════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * The deploy path, asserted against the backend's own route declarations.
+ *
+ * A hardcoded expected string (the two cases above) says "this is the path"; it cannot say
+ * "and it is the path because that is what the server registers". This block derives the
+ * expectation from `backend_app/routers/strategy_operations.py` and the mount prefix in
+ * `backend_app/main.py`, which is the same technique `src/api/modules/__tests__/
+ * libraryApi.test.js` uses against `library.py`. The repository is a monorepo and CI runs a
+ * full `actions/checkout`, so both files are on disk when this runs.
+ *
+ * Why it is worth deriving: `deploy_version` declares **one** route, the unprefixed
+ * `/strategies/{strategy_id}/versions/{version}/deploy`, while its sibling
+ * `preflight_deploy_version` registers *both* spellings (`_PREFLIGHT_PATHS`) and
+ * `execute_backtest` carries two decorators. That asymmetry is what made the frontend's
+ * `strategy-operations`-prefixed POST look right — the preflight GET answered, the gate
+ * passed, the button enabled, and only the POST 404'd. If the backend ever adds the alias,
+ * this fails and says so rather than quietly permitting either spelling.
+ */
+describe('strategiesApi.deployVersion path ↔ strategy_operations.deploy_version', () => {
+  const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
+  const ROUTER = path.join(REPO_ROOT, 'backend_app', 'routers', 'strategy_operations.py');
+  const MAIN = path.join(REPO_ROOT, 'backend_app', 'main.py');
+
+  /** Every declared route path ending in `/versions/{version}/deploy` — `/preflight` excluded. */
+  const declaredDeployPaths = (source) =>
+    [...source.matchAll(/@router\.post\(\s*["']([^"']+)["']/g)]
+      .map((m) => m[1])
+      .filter((p) => /\/versions\/\{version\}\/deploy$/.test(p));
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('registers exactly one spelling, and it is the unprefixed one', () => {
+    const source = readFileSync(ROUTER, 'utf-8');
+    expect(declaredDeployPaths(source)).toEqual([
+      '/strategies/{strategy_id}/versions/{version}/deploy',
+    ]);
+  });
+
+  it('mounts that router at /api', () => {
+    const main = readFileSync(MAIN, 'utf-8');
+    const mount = main.match(
+      /include_router\(\s*strategy_operations\.router\s*,\s*prefix=["']([^"']+)["']/,
+    );
+    expect(mount, 'strategy_operations.router must be mounted in main.py').not.toBeNull();
+    expect(mount[1]).toBe('/api');
+  });
+
+  it('posts to the mount prefix + the declared route, not the strategy-operations alias', async () => {
+    const source = readFileSync(ROUTER, 'utf-8');
+    const main = readFileSync(MAIN, 'utf-8');
+    const prefix = main.match(
+      /include_router\(\s*strategy_operations\.router\s*,\s*prefix=["']([^"']+)["']/,
+    )[1];
+    const expected = `${prefix}${declaredDeployPaths(source)[0]}`
+      .replace('{strategy_id}', 's-1')
+      .replace('{version}', '1.2');
+
+    mockClient.post.mockResolvedValue({ success: true });
+    await strategiesApi.deployVersion('s-1', '1.2', { mode: 'paper' });
+
+    expect(mockClient.post.mock.calls[0][0]).toBe(expected);
+    // Stated literally too, so the intent survives a change to the derivation above.
+    expect(expected).toBe('/api/strategies/s-1/versions/1.2/deploy');
+    expect(mockClient.post.mock.calls[0][0]).not.toContain('/strategy-operations/');
   });
 });
 

@@ -410,9 +410,12 @@ describe('canSubmit', () => {
     const submission = submissionOf(at(DEPLOY_STATE.SUBMITTING, 'LIVE'));
 
     expect(submission.method).toBe('POST');
-    expect(submission.path).toBe(
-      '/api/strategy-operations/strategies/strat-7/versions/1.4/deploy',
-    );
+    // `deploy_version` declares only the unprefixed route (`strategy_operations.py`), so
+    // this is the spelling that resolves. The description is descriptive: the request is
+    // issued by `endpoints.strategies.deployVersion`, which owns the authoritative path
+    // and is pinned against the router's own declaration in `deployPreflight.test.jsx`.
+    expect(submission.path).toBe('/api/strategies/strat-7/versions/1.4/deploy');
+    expect(submission.path).not.toContain('/strategy-operations/');
     expect(submission.body).toEqual({
       mode: 'live',
       exchange_account_id: 'acct-91',
