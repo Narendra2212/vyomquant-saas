@@ -3,11 +3,139 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell
 } from "recharts";
-import { DollarSign, TrendingUp, TrendingDown, Percent, Target, Activity, RefreshCw, FlaskConical, AlertTriangle, Minus } from "lucide-react";
+import { TrendingUp, Target, Activity, RefreshCw, FlaskConical, AlertTriangle } from "lucide-react";
 import { C, SectionH, PanelTitle, CustomTooltip } from "../components/ui-legacy/primitives";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { api } from "../api";
+import { Metric } from "../components/ds/Metric";
+import { Panel } from "../components/ds/Panel";
+import { PAGES, PAGE_FIELDS_BY_PAGE, VERDICT } from "../design/pageFields";
+import {
+  PAGE_HIERARCHY_BY_PAGE,
+  TIER_ATTRIBUTE,
+  TIER_PAGE_ATTRIBUTE,
+} from "../design/pageHierarchy";
+import { fromNullable, unavailable } from "../design/reported";
+import { PANEL_STATES } from "../hooks/usePanelState";
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * TIER 1 — the declaration, and the one read behind it (task 16.1)
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * `design/pageHierarchy.js` says WHICH figures are tier 1 and in what order;
+ * `design/pageFields.js` says where each one's value comes from, what its label is, and
+ * what sentence a trader reads when the server reported nothing. Neither is restated here:
+ * the row below is rendered by walking the declaration, so a figure cannot be dropped from
+ * the row without being dropped from the declaration, and a figure cannot be added to it
+ * without a declared source path.
+ *
+ * That is the whole of what Requirement 10.2 needed. `currentDrawdown` is a tier-1 entry,
+ * so it renders in the tier-1 container beside the exposure it qualifies, rather than in a
+ * lower risk section where a trader deciding whether to cut size has to scroll to find it.
+ */
+
+const PORTFOLIO_FIELDS = PAGE_FIELDS_BY_PAGE[PAGES.PORTFOLIO] ?? [];
+
+/** §7.6's tier 1, in declaration order. */
+const TIER_ONE = (PAGE_HIERARCHY_BY_PAGE[PAGES.PORTFOLIO]?.tiers ?? [])
+  .filter((entry) => entry.tier === 1);
+
+/** One field's declaration. */
+const fieldEntry = (field) => PORTFOLIO_FIELDS.find((entry) => entry.field === field) ?? null;
+
+/**
+ * How each tier-1 figure is formatted. The ONLY per-field thing this page decides.
+ *
+ * Not in `pageFields.js` because a format is a rendering choice and that module holds none;
+ * not derived from the label either, because "Realised P&L (today)" and "Current drawdown"
+ * differ in units and nothing in the name says so. `precision: 2` on the money figures is
+ * this page's existing spelling of a balance; `ds/Metric` rounds only when asked, so
+ * omitting it would print an exchange's ten-decimal figure in full.
+ */
+const TIER_ONE_FORMAT = Object.freeze({
+  totalValue: Object.freeze({ format: "currency", precision: 2 }),
+  availableBalance: Object.freeze({ format: "currency", precision: 2 }),
+  investedCapital: Object.freeze({ format: "currency", precision: 2 }),
+  unrealisedPnl: Object.freeze({ format: "currency", precision: 2 }),
+  realisedPnlToday: Object.freeze({ format: "currency", precision: 2 }),
+  lifetimeRealizedPnl: Object.freeze({ format: "currency", precision: 2 }),
+  totalExposure: Object.freeze({ format: "currency", precision: 2 }),
+  // A percentage, already in percent units on the wire. `ds/Metric` does not multiply by
+  // 100 — a 3.2% drawdown rendered as 320% would be read as a wiped-out account.
+  currentDrawdown: Object.freeze({ format: "percent", precision: 2 }),
+});
+
+/**
+ * The ⚠️ derived figure's operand, spelled once.
+ *
+ * `investedCapital` has no path of its own because no backend field is named "invested
+ * capital"; `pageFields` declares it derived from `overview.used_balance` and carries both
+ * the label ("Invested (capital in use)") and the tooltip stating the derivation. Reading
+ * the operand by name here rather than by position in the entry's `inputs` keeps the page
+ * honest about which of the three inputs it actually reads.
+ */
+const TIER_ONE_DERIVATIONS = Object.freeze({
+  investedCapital: "overview.used_balance",
+});
+
+/**
+ * A dotted path off a response body, or `undefined`.
+ *
+ * `[]` never appears in a tier-1 path — every one of the eight is a scalar under `overview`
+ * or `risk` — so there is no list-element case to handle here.
+ *
+ * @param {unknown} body
+ * @param {string} dottedPath
+ */
+const readPath = (body, dottedPath) =>
+  dottedPath.split(".").reduce(
+    (node, key) => (node && typeof node === "object" ? node[key] : undefined),
+    body,
+  );
+
+/**
+ * `GET /api/dashboard` → the tier-1 view model: one `Reported<T>` per declared field.
+ *
+ * The consumption pattern `pageFields.js`'s header documents, with one addition: a ⚠️
+ * derived field reads its declared operand instead of a path of its own. Nothing here
+ * defaults, and nothing substitutes: a field the response did not carry becomes the
+ * unavailable arm with the entry's own reason, which `ds/Metric` renders as the marker plus
+ * that sentence (Requirements 14.5, 19.3).
+ *
+ * @param {unknown} body A resolved `GET /api/dashboard` body.
+ * @returns {Object<string, {available: boolean}>}
+ */
+const buildTierOne = (body) => {
+  const model = {};
+  for (const { key } of TIER_ONE) {
+    const entry = fieldEntry(key);
+    const path = entry.verdict === VERDICT.AVAILABLE
+      ? entry.path
+      : TIER_ONE_DERIVATIONS[key] ?? null;
+    model[key] = path === null
+      ? unavailable(entry.reason)
+      : fromNullable(readPath(body, path), entry.reason);
+  }
+  return model;
+};
+
+/**
+ * `overview.currency`, or `null`.
+ *
+ * The denomination of the seven money figures in the same `overview` block, rendered beside
+ * them as `ds/Metric`'s `unit`. It replaces the hardcoded `$` these cards used to carry,
+ * which was a claim the response contradicts: the live account reports `USDT` and the paper
+ * account `USD`. `ds/Metric` renders a unit only beside a real figure, so an absent
+ * currency costs nothing and no marker is labelled with a denomination.
+ *
+ * @param {unknown} body
+ * @returns {string|null}
+ */
+const readCurrency = (body) => {
+  const value = readPath(body, "overview.currency");
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+};
 
 /**
  * The two additive provenance fields, read off a paper response body and nothing else.
@@ -42,11 +170,15 @@ const readPaperProvenance = (body) => {
  * table cell; here the figures are headline cards, so the words are written out.
  *
  * The distinction that matters: NOT_REPORTED means the response arrived and carried no such
- * figure; READ_FAILED means the request did not complete, so nothing at all is known. Neither is
- * a zero, and a genuine zero renders as `$0.00`.
+ * figure; a request that did not complete renders a failure notice for its region instead.
+ * Neither is a zero, and a genuine zero renders as `$0.00`.
+ *
+ * TIER 1 NO LONGER USES THIS VOCABULARY. Task 16.1 rebuilt that row on `ds/Metric`, whose
+ * not-available marker carries the reason `pageFields.js` declares for the field — a sentence
+ * about that figure rather than one of two page-wide phrases. What remains here belongs to the
+ * regions task 16.2 rebuilds: the positions ledger heading and the allocation legend.
  */
 const NOT_REPORTED = "Not reported";
-const READ_FAILED = "Unavailable — read failed";
 
 /**
  * The first candidate that is a finite number, or `null`.
@@ -179,73 +311,18 @@ const failureSentence = (reason) => {
   return message || "The request did not complete.";
 };
 
-/** A signed figure's colour. Absent figures get the neutral tone, not the loss tone. */
-const signTone = (value) =>
-  value === null || value === undefined ? "#94a3b8" : value >= 0 ? "#10b981" : "#ef4444";
-
-/**
- * A signed figure's trend icon.
+/*
+ * `signTone`, `SignIcon` and `CardFigure` were here, and task 16.1 deleted all three.
  *
- * An absent figure gets a neutral dash: the previous `value >= 0 ? up : down` test sent every
- * missing figure down the loss branch, which drew a red downward arrow for a number nobody had.
+ * Each was a hand-rolled piece of what `ds/Metric` now does for the tier-1 row: the tone
+ * function coloured every figure whether or not it reported a state (Requirement 1.5's
+ * budget, spent on a portfolio value); the icon drew a trend arrow beside figures that have
+ * no trend; and `CardFigure`'s four-way branch was this page's private version of the one
+ * availability decision `design/reported.readReported` makes for the whole app. The two
+ * absence phrases it rendered — "Not reported" and "Unavailable — read failed" — said the
+ * same two things about every figure on the page; the marker now carries the reason the
+ * field's own declaration gives.
  */
-const SignIcon = ({ value }) => {
-  if (value === null || value === undefined) {
-    return <Minus size={13} style={{ color: "#64748b" }} aria-hidden="true" />;
-  }
-  return value >= 0
-    ? <TrendingUp size={13} style={{ color: "#10b981" }} aria-hidden="true" />
-    : <TrendingDown size={13} style={{ color: "#ef4444" }} aria-hidden="true" />;
-};
-
-/**
- * One summary card's value slot: the figure, or - in text, never an empty cell - why there is
- * none (Requirement 28.5).
- *
- * Four outcomes, each visually and textually distinct, so a failed read can never be mistaken
- * for a measurement:
- *
- * | outcome                          | rendering                                |
- * |----------------------------------|------------------------------------------|
- * | the read is in flight            | "Loading..." with the spinner            |
- * | the read did not complete        | amber "Unavailable — read failed" + icon |
- * | the response carried no figure   | muted "Not reported"                     |
- * | a figure arrived, including zero | the formatted figure                     |
- */
-function CardFigure({ isLoading, readFailed, value, format }) {
-  if (isLoading) {
-    return (
-      <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-        <Activity size={16} className="animate-spin" style={{ color: "#64748b" }} />
-        Loading...
-      </span>
-    );
-  }
-  if (readFailed) {
-    return (
-      <span style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "6px",
-        color: "#fbbf24",
-        fontSize: "0.8125rem",
-        fontWeight: 800,
-        fontFamily: "monospace",
-      }}>
-        <AlertTriangle size={13} aria-hidden="true" />
-        {READ_FAILED}
-      </span>
-    );
-  }
-  if (value === null || value === undefined) {
-    return (
-      <span style={{ color: "#64748b", fontSize: "0.8125rem", fontWeight: 700, fontFamily: "monospace" }}>
-        {NOT_REPORTED}
-      </span>
-    );
-  }
-  return <>{format(value)}</>;
-}
 
 /** A read that did not complete, said in a sentence beside a shape and a word. */
 function ReadFailureNotice({ children, span = false }) {
@@ -272,13 +349,14 @@ function ReadFailureNotice({ children, span = false }) {
   );
 }
 
-/** `$1,234.56` - two fraction digits, as every money figure on this page has always rendered. */
-const money = (value) =>
-  `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-/** A signed P&L figure, keeping this page's existing unprefixed spelling. */
-const signedAmount = (value) =>
-  `${value >= 0 ? "+" : ""}${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/*
+ * `money` and `signedAmount` went with the cards that used them.
+ *
+ * Both called `toLocaleString`, whose separators are locale-dependent — a terminal rendering
+ * `1.234,5` in one panel and `1,234.5` in another manufactures a hazard out of a formatting
+ * default. `ds/Metric` groups by hand for exactly that reason, and rounds only when a
+ * `precision` says to.
+ */
 
 /**
  * Requirement 13.6 / 20.6 / 28.1 - the simulated indicator.
@@ -332,19 +410,24 @@ function SimulatedIndicator({ provenance, announce = false }) {
 
 export default function Portfolio() {
   const [environment, setEnvironment] = useState("live");
-  const [summary, setSummary] = useState(null);
+  // TIER 1 (task 16.1). One `Reported<T>` per declared field, built by `buildTierOne` from the
+  // `GET /api/dashboard` body — or `null` when there is no body to build one from, which is the
+  // panel's error state and not a row of markers: a failed read is a fact about the read, and
+  // eight per-figure "not reported" markers would state it eight times as facts about the
+  // account (§7.4's rule for tier-1 figures on a failure, Requirement 14.5).
+  const [tierOne, setTierOne] = useState(null);
+  // The rejection itself, handed to `ds/Panel` → `ds/ErrorState` → `design/errorCopy`. Not a
+  // message string: Requirement 14.4 forbids surfacing the internals, and the translation is
+  // the only thing allowed to decide what a trader reads.
+  const [tierOneError, setTierOneError] = useState(null);
+  // `overview.currency`, the denomination of tier 1's seven money figures.
+  const [currency, setCurrency] = useState(null);
   const [positions, setPositions] = useState([]);
   const [equityCurve, setEquityCurve] = useState([]);
   const [allocation, setAllocation] = useState([]);
   const [heatmapData, setHeatmapData] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
-  // Requirement 28.5: a read that did not complete is recorded as a failure, per region, and is
-  // rendered as one. Previously both regions fell back to fabricated figures - the summary to a
-  // hardcoded 100000/0, the positions ledger to `[]`, which rendered as the honest-looking
-  // "no open positions currently held". An empty list is a claim about the account; a failed
-  // read did not make it, so the two are kept apart here and on screen.
-  const [summaryError, setSummaryError] = useState(null);
   // The complete sentence the positions region renders when it has no ledger to render. Composed
   // where the read is interpreted rather than at the render site, because only there is it known
   // whether the server supplied its own account of the failure (BC-2's `degraded.reason`, shown
@@ -364,9 +447,36 @@ export default function Portfolio() {
   const loadPortfolioData = useCallback(async () => {
     setIsLoading(true);
     setLoadError(null);
-    setSummaryError(null);
+    setTierOne(null);
+    setTierOneError(null);
+    setCurrency(null);
     setPositionsError(null);
     setPositionsCount(null);
+
+    /**
+     * Tier 1, from one settled `GET /api/dashboard` read.
+     *
+     * Shared by both environments because tier 1's eight paths are the same eight paths in
+     * both: `get_portfolio_overview` and `get_risk_metrics` branch on `environment`
+     * server-side and answer the same key set, so the isolation Requirement 13.6 is about is
+     * the server's and this page cannot get it wrong by mixing two bodies.
+     *
+     * @param {{status: string, value?: unknown, reason?: unknown}} settled
+     */
+    const applyTierOne = (settled) => {
+      const body = settled.status === "fulfilled" ? settled.value : null;
+      if (body && typeof body === "object") {
+        setTierOne(buildTierOne(body));
+        setCurrency(readCurrency(body));
+        setTierOneError(null);
+        return;
+      }
+      setTierOne(null);
+      setCurrency(null);
+      // `null` for a read that resolved to something unreadable: there is no rejection to
+      // translate, and `errorCopy`'s `portfolio` context is the honest last resort.
+      setTierOneError(settled.status === "rejected" ? settled.reason : null);
+    };
 
     try {
       if (environment === "live") {
@@ -394,36 +504,27 @@ export default function Portfolio() {
         //
         // The other four reads are unchanged. `/summary`, `/equity-curve`, `/allocation` and
         // `/heatmap` all exist and all answer, so re-pointing them would be churn.
-        const [summaryRes, dashRes, equityRes, allocRes, heatmapRes] = await Promise.allSettled([
-          api.portfolio.getSummary(),
+        // ── task 16.1: `GET /api/portfolio/summary` is no longer read here ───────────────
+        // Every tier-1 field is declared against the dashboard read, and the two figures the
+        // requirements name that `/summary` cannot serve are why: `available_balance` is not on
+        // that route (it answers `total_equity total_pnl pnl_pct total_exposure` and nothing
+        // else) and neither is the drawdown. Reading `total_equity` from `/summary` and the
+        // other seven from the dashboard would put two readings of one account in one row,
+        // taken at two instants. One read, one row (§7.6). The route and its client method are
+        // untouched — this page simply has nothing left to ask it.
+        const [dashRes, equityRes, allocRes, heatmapRes] = await Promise.allSettled([
           api.dashboard.getDashboard({ environment: "live" }),
           api.portfolio.getEquityCurve(90),
           api.portfolio.getAllocation(),
           api.portfolio.getHeatmap(3),
         ]);
 
-        // Process Summary
-        // Requirement 28.5: each field is the figure the response carried or `null`, and a read
-        // that did not complete leaves no summary at all rather than a grid of zeros. A zero here
-        // now means the server reported zero.
-        if (summaryRes.status === "fulfilled" && summaryRes.value) {
-          const s = summaryRes.value;
-          const acct = s.account || s;
-          setSummary({
-            total_value: readNumber(acct.total_equity, acct.total_value),
-            unrealized_pnl: readNumber(acct.unrealized_pnl, acct.total_pnl),
-            realized_pnl: readNumber(acct.realized_pnl),
-            available_balance: readNumber(acct.available_balance, acct.total_equity),
-            roi_percentage: readNumber(acct.pnl_pct, s.roi_pct),
-          });
-        } else {
-          setSummary(null);
-          setSummaryError(
-            summaryRes.status === "rejected"
-              ? failureSentence(summaryRes.reason)
-              : "The response carried no portfolio figures."
-          );
-        }
+        // TIER 1 and the positions ledger are built from THE SAME settled read. The dashboard
+        // body carries `overview` and `risk` for the row and `positions` / `degraded` /
+        // `risk.open_positions_count` for the ledger below it, so the split is at
+        // interpretation and not at the network: one request, two view models, and no way for
+        // the row and the table to disagree about which instant they describe.
+        applyTierOne(dashRes);
 
         // Process Open Positions
         //
@@ -510,10 +611,27 @@ export default function Portfolio() {
         }
       } else {
         // 2. Fetch Paper Trading portfolio analytics
-        const [paperSumRes, paperPosRes] = await Promise.allSettled([
+        //
+        // ── task 16.1: how tier 1's read splits from the rest on this branch ─────────────
+        // Tier 1 reads `GET /api/dashboard?environment=paper`, because that is where its eight
+        // declared paths are and because three of them are on no paper body at all:
+        // `get_portfolio_overview`'s paper branch computes `used_balance`, `total_exposure` and
+        // BC-5's lifetime `realized_pnl` for the paper account, and `/api/paper/summary` answers
+        // `{account, total_pnl, roi_pct, …counts}` with none of the three. Pointing the row at
+        // the paper summary would mean naming paths §7.6 never audited for figures the response
+        // does not carry.
+        //
+        // The other two reads stay exactly as they were, and they serve the regions task 16.2
+        // owns: `getPositions()` the ledger, and `getSummary()` both the ledger's provenance
+        // label and the allocation row's equity figure. So this branch makes three reads, each
+        // feeding a different region, and no region borrows another's body.
+        const [paperDashRes, paperSumRes, paperPosRes] = await Promise.allSettled([
+          api.dashboard.getDashboard({ environment: "paper" }),
           api.paper.getSummary(),
           api.paper.getPositions(),
         ]);
+
+        applyTierOne(paperDashRes);
 
         setPaperProvenance({
           summary: paperSumRes.status === "fulfilled" ? readPaperProvenance(paperSumRes.value) : null,
@@ -521,27 +639,13 @@ export default function Portfolio() {
         });
 
         // Requirement 28.5: no `?? 100000`. The 100000 was the default opening capital of a paper
-        // account, not a balance anybody read, and rendering it as "Total Equity" stated a
-        // simulated balance the account may never have held. An unread figure is now `null` and
-        // renders as "Not reported"; a read that did not complete renders as a failure.
+        // account, not a balance anybody read, and rendering it as an equity figure stated a
+        // simulated balance the account may never have held. An unread figure stays `null` and
+        // the allocation legend says "Not reported" for it.
         let paperTotalEquity = null;
         if (paperSumRes.status === "fulfilled" && paperSumRes.value) {
           const pSum = paperSumRes.value;
           paperTotalEquity = readNumber(pSum.total_equity, pSum.balance);
-          setSummary({
-            total_value: paperTotalEquity,
-            unrealized_pnl: readNumber(pSum.unrealized_pnl),
-            realized_pnl: readNumber(pSum.realized_pnl),
-            available_balance: readNumber(pSum.available_balance, pSum.balance),
-            roi_percentage: readNumber(pSum.roi_pct),
-          });
-        } else {
-          setSummary(null);
-          setSummaryError(
-            paperSumRes.status === "rejected"
-              ? failureSentence(paperSumRes.reason)
-              : "The response carried no paper account figures."
-          );
         }
 
         // `api.paper.getPositions()` resolves to the response BODY, and `GET /api/paper/positions`
@@ -583,10 +687,11 @@ export default function Portfolio() {
 
         setEquityCurve([]);
         // The row's figure is `paperTotalEquity` - the equity THIS branch just read - or `null`.
-        // It used to be `summary?.total_value`, and `summary` is the closure value from before this
-        // branch ran: on a LIVE -> PAPER flip that was the LIVE equity, a live figure sitting in a
-        // PAPER structure, which is what Requirement 13.6 forbids combining. Its fallback was the
-        // same fabricated 100000. Neither can occur now: the figure is the paper one or absent.
+        // It used to read a `summary` state that this branch had not yet written, so on a
+        // LIVE -> PAPER flip it was the LIVE equity: a live figure sitting in a PAPER structure,
+        // which is what Requirement 13.6 forbids combining. Its fallback was the same fabricated
+        // 100000. Neither can occur now: the figure is the paper one or absent. (That state is
+        // gone entirely as of task 16.1 — tier 1 holds `Reported<T>`s built from one read.)
         setAllocation([
           { asset: "USD (Simulated)", percentage: 100, value_usd: paperTotalEquity }
         ]);
@@ -604,6 +709,19 @@ export default function Portfolio() {
   useEffect(() => {
     loadPortfolioData();
   }, [loadPortfolioData]);
+
+  /*
+   * Tier 1's panel state — three outcomes and no fourth.
+   *
+   * `ready` requires a built model. A read that did not complete, or one that resolved to
+   * something with no figures in it, is `error`: §7.4 states the rule for a tier-1 row
+   * directly — the figures are not rendered AT ALL rather than rendered as zeros — and the
+   * same argument rules out eight not-available markers, which would report a transport
+   * failure as eight facts about the account.
+   */
+  const tierOneState = isLoading
+    ? PANEL_STATES.LOADING
+    : (tierOne === null ? PANEL_STATES.ERROR : PANEL_STATES.READY);
 
   return (
     <div style={{ padding: "20px", overflowY: "auto", flex: 1, background: "#080a0e", color: "#e2e8f0" }}>
@@ -683,89 +801,58 @@ export default function Portfolio() {
         </Button>
       </div>
 
-      {/* Top 4 Summary Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px", marginBottom: "16px" }}>
-        {/* Requirement 13.6: the indicator is the first cell of the figure grid itself, spanning
-            it, so equity, unrealized P&L, realized P&L and cash can never be read without it. */}
-        {environment === "paper" && (
-          <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-            <SimulatedIndicator provenance={paperProvenance.summary} announce />
-            <span style={{ color: "#64748b", fontSize: "0.6875rem" }}>
-              Every figure below is simulated. No real capital is held or at risk.
-            </span>
-          </div>
-        )}
+      {/* ═══ TIER 1 — Requirements 10.1 and 10.2 (task 16.1) ═══════════════════════════
+          ONE container, eight figures, drawdown among them.
 
-        {/* Requirement 28.5: the read that did not complete is said once, in full, in text, and
-            spans the grid whose four figures it accounts for. Each card then reads
-            "Unavailable — read failed" rather than a number. */}
-        {!isLoading && summaryError && (
-          <ReadFailureNotice span>
-            {environment === "paper" ? "Paper account" : "Portfolio"} figures could not be read, so
-            none are shown below. {summaryError}
-          </ReadFailureNotice>
-        )}
+          Requirement 10.1 asks for six figures "as the highest-visual-priority elements" and
+          10.2 asks for the drawdown "alongside" them "rather than in a separate,
+          lower-priority section". Both are ordering claims, so the row is rendered by walking
+          `design/pageHierarchy.js`'s tier-1 list: a figure cannot leave this container without
+          leaving the declaration, and `data-page-tier="1"` marks the single container Property
+          4 (task 16.3) asserts every tier-1 figure is inside.
 
-        <Card className="p-4 relative overflow-hidden hover:border-cyan-500/20 transition-all bg-[#0c1017] border-[#1e293b]">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-            <span className="text-micro" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Total Equity</span>
-            <DollarSign size={13} style={{ color: "#00d4ff" }} />
-          </div>
-          <div className="text-section" style={{ color: "#f8fafc", fontWeight: 900, fontFamily: "monospace" }}>
-            <CardFigure
-              isLoading={isLoading}
-              readFailed={Boolean(summaryError)}
-              value={summary?.total_value ?? null}
-              format={money}
-            />
-          </div>
-        </Card>
+          Eight, not seven, because "Realised P&L" is two quantities — today's window and
+          BC-5's lifetime sum — and `pageFields.js` labels them apart rather than letting one
+          set of words cover both.
 
-        <Card className="p-4 relative overflow-hidden hover:border-cyan-500/20 transition-all bg-[#0c1017] border-[#1e293b]">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-            <span className="text-micro" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Unrealized P&L</span>
-            <SignIcon value={summaryError ? null : summary?.unrealized_pnl ?? null} />
-          </div>
-          <div className="text-section" style={{ color: signTone(summaryError ? null : summary?.unrealized_pnl ?? null), fontWeight: 900, fontFamily: "monospace" }}>
-            <CardFigure
-              isLoading={isLoading}
-              readFailed={Boolean(summaryError)}
-              value={summary?.unrealized_pnl ?? null}
-              format={signedAmount}
-            />
-          </div>
-        </Card>
-
-        <Card className="p-4 relative overflow-hidden hover:border-cyan-500/20 transition-all bg-[#0c1017] border-[#1e293b]">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-            <span className="text-micro" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Realized P&L</span>
-            <SignIcon value={summaryError ? null : summary?.realized_pnl ?? null} />
-          </div>
-          <div className="text-section" style={{ color: signTone(summaryError ? null : summary?.realized_pnl ?? null), fontWeight: 900, fontFamily: "monospace" }}>
-            <CardFigure
-              isLoading={isLoading}
-              readFailed={Boolean(summaryError)}
-              value={summary?.realized_pnl ?? null}
-              format={signedAmount}
-            />
-          </div>
-        </Card>
-
-        <Card className="p-4 relative overflow-hidden hover:border-cyan-500/20 transition-all bg-[#0c1017] border-[#1e293b]">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-            <span className="text-micro" style={{ color: "#64748b", fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>Available Cash</span>
-            <DollarSign size={13} style={{ color: "#00d4ff" }} />
-          </div>
-          <div className="text-section" style={{ color: "#f8fafc", fontWeight: 900, fontFamily: "monospace" }}>
-            <CardFigure
-              isLoading={isLoading}
-              readFailed={Boolean(summaryError)}
-              value={summary?.available_balance ?? null}
-              format={money}
-            />
-          </div>
-        </Card>
-      </div>
+          `ds/Panel` with `money` carries the environment badge, which is Requirement 12.2 for
+          this row and replaces the hand-rolled indicator the old grid spanned itself with. */}
+      <Panel
+        title="Portfolio summary"
+        money
+        environment={environment === "paper" ? "PAPER" : "LIVE"}
+        state={tierOneState}
+        loading={{ kind: "skeleton-metric", rows: 2, columns: 4 }}
+        error={{ error: tierOneError, context: "portfolio", onRetry: loadPortfolioData }}
+        className="mb-4"
+      >
+        <div
+          {...{ [TIER_PAGE_ATTRIBUTE]: PAGES.PORTFOLIO, [TIER_ATTRIBUTE]: 1 }}
+          className="grid grid-cols-4 gap-4"
+        >
+          {TIER_ONE.map(({ key, label }) => {
+            const entry = fieldEntry(key);
+            const { format, precision } = TIER_ONE_FORMAT[key];
+            return (
+              <Metric
+                key={key}
+                tier={1}
+                label={label}
+                value={tierOne?.[key]}
+                format={format}
+                precision={precision}
+                // The denomination as the server reported it, and only beside a real figure.
+                unit={format === "currency" ? currency ?? undefined : undefined}
+                // `investedCapital`'s tooltip states the derivation, which is part of its
+                // declaration: `used_balance` labelled "invested capital" with nothing said
+                // would misrepresent it, because margin locked against a losing position is
+                // in use without being invested (§7.6).
+                hint={entry.tooltip ?? undefined}
+              />
+            );
+          })}
+        </div>
+      </Panel>
 
       {/* Open Positions Deep-Dive Table */}
       <Card className="p-4 mb-4 bg-[#0c1017] border-[#1e293b]">

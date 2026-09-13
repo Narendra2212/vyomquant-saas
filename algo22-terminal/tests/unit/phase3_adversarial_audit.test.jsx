@@ -94,13 +94,27 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
     // Task 13.1: Portfolio's LIVE positions come from `GET /api/dashboard`. `degraded: null` is
     // the healthy reading of BC-2's discriminator and is stated, not omitted -- omitting it is
     // not the healthy case, it is an unreadable response shape.
-    vi.spyOn(dashboardModule.dashboardApi, 'getDashboard').mockResolvedValue({
-      positions: [
-        { id: 'p1', symbol: 'BTC/USDT', exchange_id: 'binance', side: 'long', contracts: 1.0, entry_price: 60000, mark_price: 61200, unrealized_pnl: 1200 }
-      ],
-      degraded: null,
-      risk: { open_positions_count: 1 }
-    });
+    //
+    // Task 16.1: the same read serves tier 1, so the body carries `overview` and answers PER
+    // ENVIRONMENT -- which is exactly what this invariant is about. `get_portfolio_overview`
+    // branches on `environment` server-side, so a PAPER switch cannot be served the live
+    // account's figures unless this page asks for the wrong one. `/api/portfolio/summary` is no
+    // longer read by the page at all (design.md §7.6: it carries no `available_balance`).
+    const overviewFor = (environment) => (environment === 'paper'
+      ? { total_value: 100000, available_balance: 100000, used_balance: 0, unrealized_pnl: 0, today_realized_pnl: 0, realized_pnl: 0, total_exposure: 0, currency: 'USD' }
+      : { total_value: 50000, available_balance: 30000, used_balance: 20000, unrealized_pnl: 1200, today_realized_pnl: 400, realized_pnl: 900, total_exposure: 61200, currency: 'USDT' });
+    vi.spyOn(dashboardModule.dashboardApi, 'getDashboard')
+      .mockImplementation(({ environment } = {}) => Promise.resolve({
+        positions: environment === 'paper' ? [] : [
+          { id: 'p1', symbol: 'BTC/USDT', exchange_id: 'binance', side: 'long', contracts: 1.0, entry_price: 60000, mark_price: 61200, unrealized_pnl: 1200 }
+        ],
+        degraded: null,
+        overview: overviewFor(environment),
+        risk: {
+          open_positions_count: environment === 'paper' ? 0 : 1,
+          current_drawdown_pct_v2: 1.1
+        }
+      }));
     vi.spyOn(paperModule.paperApi, 'getSummary').mockResolvedValue({
       total_equity: 100000, unrealized_pnl: 0, realized_pnl: 0, available_balance: 100000
     });
@@ -108,7 +122,9 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
 
     render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
-    expect(await screen.findByText('$50,000.00')).toBeDefined();
+    // No `$` prefix on a tier-1 figure any more: `ds/Metric` groups the digits and the
+    // denomination comes from the server's own `overview.currency`.
+    expect(await screen.findByText('50,000.00')).toBeDefined();
     expect(screen.getByText('BTC/USDT')).toBeDefined();
 
     // Switch to Paper
@@ -116,16 +132,18 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
     fireEvent.click(paperBtn);
 
     await waitFor(() => {
-      expect(screen.getAllByText('$100,000.00').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('100,000.00').length).toBeGreaterThan(0);
       expect(screen.queryByText('BTC/USDT')).toBeNull();
     });
+    // No bleed the other way either: the live equity is gone from the screen entirely.
+    expect(screen.queryByText('50,000.00')).toBeNull();
 
     // Switch back to Live
     const liveBtn = screen.getByRole('button', { name: /LIVE/i });
     fireEvent.click(liveBtn);
 
     await waitFor(() => {
-      expect(screen.getByText('$50,000.00')).toBeDefined();
+      expect(screen.getByText('50,000.00')).toBeDefined();
       expect(screen.getByText('BTC/USDT')).toBeDefined();
     });
   });
@@ -141,23 +159,25 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
   //
   // Invariant 4 - no fallback to the paper reads - is asserted exactly as before.
   it('3 & 4: Live API failure states the failure instead of a figure and never falls back to paper', async () => {
-    vi.spyOn(portfolioModule.portfolioApi, 'getSummary').mockRejectedValue(new Error('Network error 500'));
     // Task 13.1: one positions read, not a two-step fallback chain. The chain this used to stage
     // -- `getOpenPositions().catch(() => getPositions())` -- addressed two routes that do not
     // exist, so both legs 404d and both methods have since been deleted. The read is now
-    // `GET /api/dashboard`. Its rejection message is deliberately NOT "Network error 500": the
-    // assertion below is a `getByText`, which throws on more than one match, and the summary and
-    // positions regions each render their own failure sentence.
+    // `GET /api/dashboard`, and after task 16.1 it is also the read behind tier 1, so its
+    // rejection is the one failure this page has to state.
     vi.spyOn(dashboardModule.dashboardApi, 'getDashboard').mockRejectedValue(new Error('Positions read did not complete'));
     const paperSpy = vi.spyOn(paperModule.paperApi, 'getSummary');
 
     render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
+    // Requirement 14.4 / 28.5: the failure is stated in translated copy, and NO figure of any
+    // kind is shown for it -- not a zero, and not a row of markers.
     await waitFor(() => {
-      expect(screen.getAllByText('Unavailable — read failed').length).toBeGreaterThan(0);
+      expect(screen.getByText('Could not load your portfolio')).toBeDefined();
     });
-    expect(screen.getByText(/Network error 500/)).toBeDefined();
-    expect(screen.queryByText('$0.00')).toBeNull();
+    expect(screen.getByText(/Open positions could not be read/)).toBeDefined();
+    expect(screen.queryByText('0.00')).toBeNull();
+    expect(document.querySelectorAll('[data-metric-tier]')).toHaveLength(0);
+    // Invariant 4, unchanged: a failed LIVE read never reaches for the paper account.
     expect(paperSpy).not.toHaveBeenCalled();
   });
 

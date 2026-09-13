@@ -52,35 +52,58 @@ describe('Phase 3 — Trading Platform Operational Completion Tests', () => {
 
   describe('3.1 Portfolio Page Environment Isolation & Open Positions', () => {
     it('renders Live portfolio by default and switches to Paper with positions ledger', async () => {
-      vi.spyOn(portfolioModule.portfolioApi, 'getSummary').mockResolvedValue({
-        account: {
-          total_equity: 65000,
-          unrealized_pnl: 1500,
-          realized_pnl: 800,
-          available_balance: 40000,
-          pnl_pct: 3.5
-        }
-      });
       // Task 13.1: the LIVE positions read is `GET /api/dashboard`, not the two
       // `/api/portfolio/positions*` methods that 404d and have since been deleted. `degraded:
       // null` and a counted `risk.open_positions_count` are the healthy readings of BC-2's two
       // discriminators and are spelled out rather than omitted.
-      vi.spyOn(dashboardModule.dashboardApi, 'getDashboard').mockResolvedValue({
-        positions: [
-          {
-            id: 'pos_1',
-            symbol: 'BTC/USDT',
-            exchange_id: 'binance',
-            side: 'long',
-            contracts: 0.5,
-            entry_price: 60000,
-            mark_price: 63000,
-            unrealized_pnl: 1500
+      //
+      // Task 16.1: the same read now also serves tier 1, so the body carries `overview` and
+      // `risk.current_drawdown_pct_v2`, and the stub answers PER ENVIRONMENT — which is what
+      // `get_portfolio_overview` does. `GET /api/portfolio/summary` is no longer read by this
+      // page at all: it carries neither `available_balance` nor a drawdown, so tier 1 cannot be
+      // assembled from it (design.md §7.6).
+      const overviewFor = (environment) => (environment === 'paper'
+        ? {
+          total_value: 100000,
+          available_balance: 100000,
+          used_balance: 0,
+          unrealized_pnl: 0,
+          today_realized_pnl: 0,
+          realized_pnl: 0,
+          total_exposure: 0,
+          currency: 'USD'
+        }
+        : {
+          total_value: 65000,
+          available_balance: 40000,
+          used_balance: 25000,
+          unrealized_pnl: 1500,
+          today_realized_pnl: 800,
+          realized_pnl: 4200,
+          total_exposure: 30000,
+          currency: 'USDT'
+        });
+      vi.spyOn(dashboardModule.dashboardApi, 'getDashboard')
+        .mockImplementation(({ environment } = {}) => Promise.resolve({
+          positions: environment === 'paper' ? [] : [
+            {
+              id: 'pos_1',
+              symbol: 'BTC/USDT',
+              exchange_id: 'binance',
+              side: 'long',
+              contracts: 0.5,
+              entry_price: 60000,
+              mark_price: 63000,
+              unrealized_pnl: 1500
+            }
+          ],
+          degraded: null,
+          overview: overviewFor(environment),
+          risk: {
+            open_positions_count: environment === 'paper' ? 0 : 1,
+            current_drawdown_pct_v2: 2.4
           }
-        ],
-        degraded: null,
-        risk: { open_positions_count: 1 }
-      });
+        }));
       vi.spyOn(portfolioModule.portfolioApi, 'getEquityCurve').mockResolvedValue([]);
       vi.spyOn(portfolioModule.portfolioApi, 'getAllocation').mockResolvedValue([]);
       vi.spyOn(portfolioModule.portfolioApi, 'getHeatmap').mockResolvedValue([]);
@@ -100,9 +123,11 @@ describe('Phase 3 — Trading Platform Operational Completion Tests', () => {
         </MemoryRouter>
       );
 
-      // Verify Live header and position row
+      // Verify Live header and position row. The tier-1 figure has no currency prefix any
+      // more: `ds/Metric` groups the digits and renders the server's own `overview.currency`
+      // beside them, in place of the hardcoded `$` the old cards carried on a USDT account.
       expect(await screen.findByText('Portfolio Analytics')).toBeDefined();
-      expect(screen.getByText('$65,000.00')).toBeDefined();
+      expect(screen.getByText('65,000.00')).toBeDefined();
       expect(screen.getByText('BTC/USDT')).toBeDefined();
       expect(screen.getByText('binance')).toBeDefined();
 
@@ -111,7 +136,7 @@ describe('Phase 3 — Trading Platform Operational Completion Tests', () => {
       fireEvent.click(paperBtn);
 
       await waitFor(() => {
-        const matchingValues = screen.getAllByText('$100,000.00');
+        const matchingValues = screen.getAllByText('100,000.00');
         expect(matchingValues.length).toBeGreaterThan(0);
         expect(screen.getByText('No open positions currently held in PAPER mode.')).toBeDefined();
       });

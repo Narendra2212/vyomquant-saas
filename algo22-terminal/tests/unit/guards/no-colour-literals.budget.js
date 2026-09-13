@@ -68,7 +68,13 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // Includes the single `border-[#ef4444]` arbitrary-value utility task 1.4
   // recorded, plus 24 further #10b981/#ef4444 occurrences in inline styles.
   'pages/Strategies.jsx': 144,
-  'pages/Portfolio.jsx': 112,
+  // 112 -> 86 at task 16.1, which rebuilt tier 1 only. The 26 were the four summary cards'
+  // slate/cyan/white chrome, `signTone`'s three hues, `SignIcon`'s three, and `CardFigure`'s
+  // amber failure and muted absence states — every one of them replaced by `ds/Metric` and
+  // `ds/Panel`, which take their colour from `design/semantic.js`. The remaining 86 are the
+  // positions ledger, the three charts and the LIVE/PAPER toggle, which task 16.2 takes to zero
+  // along with this page's five `C.` references.
+  'pages/Portfolio.jsx': 86,
   'pages/SignalTrace.jsx': 20,
   'pages/Backtester.jsx': 4,
   'pages/StrategyBuilder.jsx': 3,
