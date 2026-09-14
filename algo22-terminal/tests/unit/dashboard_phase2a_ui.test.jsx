@@ -296,10 +296,26 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
     // Verify the blocked state is reported. `TRIGGERED (BLOCKED)` was the Risk & Safety
     // Matrix's kill-switch row, which task 19.1b removed: it was a second copy of a state
     // the control itself reports, beside two limits the server never sent. The halt is
-    // reported by the Requirement 3.3 strip and by the diagnostics pill — both task 19.2's
-    // and both untouched — so those are what this asserts.
+    // reported by the Requirement 3.3 strip and by the control, both task 19.2's, so those
+    // are what this asserts.
     expect(screen.getByText(/EMERGENCY KILL SWITCH ACTIVE/i)).toBeDefined();
-    expect(screen.getByText('Trading Blocked')).toBeDefined();
+
+    /*
+     * `Trading Blocked` WAS THE DIAGNOSTICS PILL, WHICH 19.2b DELETED.
+     *
+     * It was the first arm of the pill's `isKillSwitchActive ? "Trading Blocked" : wsStatus
+     * === "connected" ? "Engine Operational" : "Stream Connecting"` label, i.e. a second
+     * rendering of `risk.kill_switch_active` sitting beside the control that acts on it.
+     *
+     * The control is where the halt is reported now, and it reports it by CHANGING: with the
+     * switch active the trigger offers the recovery and not the halt, which is a stronger
+     * claim than the pill's — a page that read the flag but left `EMERGENCY HALT` on screen
+     * would have offered to halt an already-halted account, and the pill could not have
+     * caught that. The kill-switch logic behind both arms is Requirement 19.1's and untouched.
+     */
+    expect(screen.getByText('RESUME TRADING')).toBeDefined();
+    expect(screen.queryByText('EMERGENCY HALT')).toBeNull();
+
     expect(screen.getByText(/RISK CIRCUIT BREAKER TRIGGERED/i)).toBeDefined();
   });
 

@@ -248,6 +248,26 @@ describe('Phase 2C — Dashboard Safety & Real-time Unit Tests', () => {
 
       fireEvent.click(screen.getByText('EMERGENCY HALT'));
 
+      /*
+       * THE ACKNOWLEDGEMENT IS TICKED FIRST, BECAUSE IT IS THE FEATURE.
+       *
+       * Task 19.2b routed the switch through `ds/ConfirmDialog intent="destructive"` with
+       * §8.4's acknowledgement, so `riskApi.killSwitch` is unreachable until the box is
+       * ticked — the confirm action is `disabled` AND its handler refuses, which is what
+       * makes the tick a precondition rather than a hint. This test used to click confirm
+       * straight away and pass, because the old hand-rolled modal had no gate.
+       *
+       * Reaching the write path without the tick is not something to restore: a test that
+       * did would be asserting the gate away, and it would keep passing if the gate were
+       * deleted. So the tick is a step here, and whether the gate HOLDS — the disabled
+       * attribute, a raw bubbling click that ignores it, and the box not remembering a
+       * previous session's tick — is `dashboard-kill-switch.test.jsx`'s subject. What this
+       * test still owns is the end of the path: confirming does call the risk API.
+       */
+      fireEvent.click(screen.getByRole('checkbox', {
+        name: 'I understand this halts all trading on this account',
+      }));
+
       const confirmBtn = screen.getByText('Yes, HALT TRADING IMMEDIATELY');
       fireEvent.click(confirmBtn);
 

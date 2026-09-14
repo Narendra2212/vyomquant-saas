@@ -264,11 +264,32 @@ describe('Phase 2D — Trading Cockpit Polish & WebSocket Invariants', () => {
       // Matrix's row, which task 19.1b removed as a second copy of a state the control
       // itself reports. The control is task 19.2's and untouched, so standby is asserted
       // where it is now reported: the trigger still offers the halt rather than the resume,
-      // no halted banner is on screen, and the diagnostics pill reads operational.
+      // and no halted banner is on screen.
       expect(screen.getByText('EMERGENCY HALT')).toBeDefined();
       expect(screen.queryByText('RESUME TRADING')).toBeNull();
       expect(screen.queryByText(/EMERGENCY KILL SWITCH ACTIVE/i)).toBeNull();
-      expect(screen.getByText('Engine Operational')).toBeDefined();
+
+      /*
+       * `Engine Operational` WAS THE DIAGNOSTICS PILL, WHICH 19.2b DELETED.
+       *
+       * The pill's label was one three-way ternary —
+       * `isKillSwitchActive ? "Trading Blocked" : wsStatus === "connected" ? "Engine
+       * Operational" : "Stream Connecting"` — so a single string carried two independent
+       * readings and neither of them was named. Its two halves are now reported separately
+       * and by whoever owns them: the halt by the control and the strip, asserted above, and
+       * the socket by the "Real-time stream" `ds/StatusBadge` that moved into the System &
+       * exchange health panel, which renders `wsClient`'s own state word.
+       *
+       * So the claim is unchanged and is now made against the reading rather than against a
+       * conjunction: this client's stream is connected, and the paper-environment frame did
+       * not disturb it. Awaited, because the reading is inside the health panel's children
+       * and those arrive with the projection, not with the header.
+       */
+      await waitFor(() => {
+        const stream = document.querySelector('[data-health-reading="realtimeStream"]');
+        expect(stream, 'the health panel reported no real-time stream state').not.toBeNull();
+        expect(stream.textContent).toContain('Connected');
+      });
     });
   });
 

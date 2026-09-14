@@ -484,10 +484,28 @@ describe('Dashboard tier 2 — exchange health (Requirements 3.2, 14.5)', () => 
       expect(row.getAttribute('data-connection-state')).toBe('unreported');
       expect(row.getAttribute('data-latency-reported')).toBe('false');
       expect(row.textContent).toContain('Connection not reported');
+      /*
+       * SCOPED TO THE ROW, WHICH IS WHAT THIS ALWAYS MEANT.
+       *
+       * The claim is about `exchange.exchanges[].status` — a per-venue CONSTANT, hardcoded
+       * `"connected"` in `get_exchange_health` — not being dressed up as a reading. A venue
+       * row is where that constant would appear, and this is the element that would carry it.
+       *
+       * It was asserted on the whole panel until task 19.2b, when the diagnostics popover was
+       * folded in and the WebSocket stream reading moved here as the "Real-time stream"
+       * `ds/StatusBadge`. That badge renders "Connected" from `wsClient`'s own state word, and
+       * it is a genuine measurement of a genuinely different thing: the browser's live socket,
+       * observed by the client that holds it, which changes when the connection does. Read at
+       * panel scope the assertion caught it too, which would have made "no fabricated venue
+       * status" and "no honest stream status" the same rule.
+       */
+      expect(row.textContent).not.toContain('Connected');
     }
 
+    // Still panel-wide: `35` is the aggregation service's fixed latency and NOTHING on this
+    // panel may present it, the page-level `ds/Metric` included — it reads
+    // `health.exchange_api_latency_ms`, which is measured, and 35 is not that figure.
     expect(health.textContent).not.toContain('35 ms');
-    expect(health.textContent).not.toContain('Connected');
     // The reason the two are blank is a fact about the aggregation service, which a trader
     // reading an empty connection chip has no other way to learn (Requirement 19.3).
     expect(health.textContent).toContain('not measured');

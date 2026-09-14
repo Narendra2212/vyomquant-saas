@@ -133,17 +133,60 @@
  * `absence: UNMEASURABLE` reason said out loud. Neither is an all-clear. The long form is at
  * THE REQUIREMENT 3.3 ALERT STRIP below, beside the strip's own constants.
  *
- * THE KILL SWITCH IS STILL TASK 19.2 PART B's
- * -------------------------------------------
- * The halt/resume trigger, its confirmation modal, `handleConfirmKillSwitchAction`, its two
- * `riskApi` calls, the `killSwitchAction` state machine, the diagnostics popover and the two
- * `risk.kill_switch_*` subscriptions are exactly as part A left them — Requirement 19.1
- * forbids changing a risk control's logic, and part B owns routing the switch through
- * `ds/ConfirmDialog` with an acknowledgement and folding the popover into the System &
- * exchange health panel. Part A reads `risk.kill_switch_active` and
- * `risk.circuit_breaker_armed` for the two risk bands in the strip region and changes how
- * neither is derived. The popover therefore still reports latency and order-state sync from
- * `health`, which tier 2 now also reports from the declaration.
+ * THE KILL SWITCH — PRESENTATION ONLY (task 19.2 part B, §8.4, Requirement 19.1)
+ * -----------------------------------------------------------------------------
+ * Requirement 19.1 forbids changing a risk control's logic, so part B changed the surface
+ * and nothing behind it. Unchanged, byte for byte: the two `riskApi` calls and their
+ * arguments, `handleConfirmKillSwitchAction`'s activate/recover branch with its
+ * `res && res.kill_switch_active` / `res && !res.kill_switch_active` checks, its
+ * `setRiskState` patches, its `setShowKillSwitchModal(false)` on success, its `catch` and its
+ * `finally`; the `killSwitchAction` `"activate"｜"recover"` machine and which trigger sets
+ * which; both `risk.kill_switch_*` subscriptions; and how `isKillSwitchActive` and
+ * `isCircuitBreakerArmed` are read off `riskState`.
+ *
+ * What changed is the three surfaces those things drove:
+ *
+ *   * **The trigger** is a `ds/CommandButton intent="destructive"`, so the halt takes its
+ *     hue from the intent rather than from a hand-written `rgba(239,68,68,0.15)` / `#ef4444`
+ *     pair, and it gets the focus ring, the keyboard activation and the accessible name that
+ *     primitive already owns.
+ *   * **The confirmation** is `ds/ConfirmDialog intent="destructive"` — a focus trap, Escape,
+ *     `role="dialog"`, initial focus on CANCEL, the single-overlay registry claim and the
+ *     viewport clamp, none of which the hand-rolled `position: fixed` div had. The environment
+ *     is the dialog's `environment` prop, which renders `ds/TradingEnvironmentBadge
+ *     variant="strip"` in the header: the LIVE/PAPER distinction the old modal drew with a
+ *     `#10b981`/`#818cf8` ternary on the words `LIVE TRADING (REAL CAPITAL)` and
+ *     `PAPER SIMULATION` now differs on all four of §8.2's axes, and the review grid states
+ *     `design/semantic.js`'s `ENVIRONMENT[…].long` beside it so the distinction is in prose
+ *     too and not only in a hue.
+ *   * **The diagnostics popover is gone.** Three of its five rows were tier-2 fields the
+ *     System & exchange health panel already reports from the declaration —
+ *     `health.exchange_api_latency_ms`, `health.order_state_sync_status` and the venue count —
+ *     and reporting them twice is how two readings of one field end up disagreeing. The two
+ *     that were only there, the WebSocket stream state and the circuit-breaker reading, moved
+ *     into that panel. Two substituted readings went with the popover rather than moving:
+ *     `exchange_api_latency_status || "optimal"` and `order_state_sync_status ||
+ *     "Synchronized"` each stated a grade the server never sent (Requirement 14.5), and
+ *     "Armed / 0 Breaches" reported a breach count no field carries.
+ *
+ * THE ACKNOWLEDGEMENT IS ON THE HALT AND NOT ON THE RECOVERY
+ * ---------------------------------------------------------
+ * §8.4's inventory gives "Activate kill switch" an acknowledgement — "**Yes** — halts all
+ * trading" — and its preamble spends one on exactly two kinds of action: irreversible ones
+ * ("Cancel all orders … it is bulk and irreversible") and real-funds ones (Requirement 8.2's
+ * deploy). Recovery is neither. It places no order, moves no funds, and is reversible by the
+ * halt itself, which is one control away — the same reversibility test §8.4 uses to refuse an
+ * acknowledgement to "Delete / archive strategy" ("No — reversible via archive"). So the
+ * gate is asymmetric on purpose: `acknowledgement` is constructed on the `"activate"` arm
+ * only, and off it there is no object to hide. Gating the recovery would also put a checkbox
+ * between a trader and the restoration of trading, which trains the box to be ticked without
+ * being read — the failure mode Requirement 8.2's gate exists to avoid.
+ *
+ * It IS constructed on both ledgers, and the statement differs between them. §8.4's kill
+ * switch row is not tagged Requirement 8.2, so this is not the real-funds acknowledgement
+ * that §8.4 makes Live-only: it is the halts-all-trading one, and halting a paper ledger
+ * halts all trading in that ledger. The paper statement therefore claims nothing about real
+ * funds or connected venues.
  *
  * Two of the four figures are read exactly as the server states them, and the reason is in
  * `pageFields`' notes rather than here: `overview.today_pnl` is `today_realized_pnl +
@@ -179,6 +222,7 @@ import { riskApi } from "../api/modules/risk";
 import wsClient from "../websocketClient";
 import { Alert } from "../components/ds/Alert";
 import { CommandButton } from "../components/ds/CommandButton";
+import { ConfirmDialog } from "../components/ds/ConfirmDialog";
 import { DataTable } from "../components/ds/DataTable";
 import { EmptyState } from "../components/ds/EmptyState";
 import { ErrorState } from "../components/ds/ErrorState";
@@ -198,6 +242,7 @@ import {
   TIER_PAGE_ATTRIBUTE,
 } from "../design/pageHierarchy";
 import { fromNullable } from "../design/reported";
+import { ENVIRONMENT } from "../design/semantic";
 import { PANEL_STATES, usePanelState } from "../hooks/usePanelState";
 
 /**
@@ -411,6 +456,26 @@ function PanelLink({ to, children }) {
       {children}
       <ArrowRight size={12} aria-hidden="true" />
     </Link>
+  );
+}
+
+/**
+ * One labelled account-wide state in the System & exchange health panel.
+ *
+ * Three of them: the account's trade permission, the WebSocket stream and the risk circuit
+ * breaker. The last two are what task 19.2b folded out of the diagnostics popover.
+ *
+ * `data-health-reading` and not `data-region`: `data-region` is spelled as a `pageFields` key
+ * everywhere else on this page, and these three are states rather than declared §7.1 fields.
+ * Reusing it here would make "the declared element rendered" undecidable from the DOM, which
+ * is the whole reason that attribute exists (Property 4, task 19.5).
+ */
+function HealthReading({ label, reading, children }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2" data-health-reading={reading}>
+      <span className="text-micro uppercase tracking-wide text-content-secondary">{label}</span>
+      {children}
+    </div>
   );
 }
 
@@ -966,6 +1031,74 @@ const CONDITION_SEVERITY = "warning";
  */
 const UNEVALUABLE_SEVERITY = "info";
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * THE KILL SWITCH's CONFIRMATION (task 19.2 part B) — §8.4, Requirements 7.6, 19.1
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * Copy only. Nothing in this block reads `riskState`, calls `riskApi` or knows what the
+ * `killSwitchAction` machine does — it is the words `ds/ConfirmDialog` renders, keyed by the
+ * machine's own two arm names so a new arm cannot silently inherit another arm's sentence.
+ * The two arms are spelled `"activate"` and `"recover"` because those are the values the
+ * frozen state machine sets; this file does not rename them.
+ */
+
+/** The dialog's title and confirm label, per arm. Both are the old modal's, verbatim. */
+const KILL_SWITCH_TITLE = Object.freeze({
+  activate: "Activate Emergency Kill Switch",
+  recover: "Deactivate Emergency Kill Switch",
+});
+
+const KILL_SWITCH_CONFIRM_LABEL = Object.freeze({
+  activate: "Yes, HALT TRADING IMMEDIATELY",
+  recover: "Resume Operations",
+});
+
+/**
+ * What confirming does, per arm and — on the halt — per ledger.
+ *
+ * The halt's two sentences are the modal's own, minus its `⚠️` glyph: `intent="destructive"`
+ * carries the alarm through the dialog's accent and its acknowledgement wash, so the copy no
+ * longer has to draw one. The recovery has ONE sentence for both ledgers, as the modal did —
+ * the ledger is stated by the header badge and by the review grid, and writing a second
+ * recovery sentence per ledger would be copy no previous surface carried.
+ */
+const HALT_DESCRIPTION = Object.freeze({
+  LIVE: "WARNING: Activating the Emergency Kill Switch will IMMEDIATELY halt all live "
+    + "strategy execution loops and block all new order submissions on connected live "
+    + "exchanges.",
+  PAPER: "Activating the Emergency Kill Switch will freeze all paper simulation bots and "
+    + "prevent new simulated trades.",
+});
+
+const RECOVER_DESCRIPTION =
+  "Deactivating the Emergency Kill Switch will resume normal algorithmic execution and "
+  + "order submissions.";
+
+/**
+ * §8.4's acknowledgement, in the shape `ds/ConfirmDialog`'s `acknowledgement` prop takes.
+ *
+ * Constructed for the HALT only — see the module docblock for why the recovery does not earn
+ * one — and per ledger, so the paper statement claims nothing about real funds or connected
+ * venues. The label is the same sentence on both, because it states what §8.4 spends the
+ * acknowledgement on: the switch halts all trading on this account.
+ */
+const HALT_ACKNOWLEDGEMENT_LABEL = "I understand this halts all trading on this account";
+
+const HALT_ACKNOWLEDGEMENT = Object.freeze({
+  LIVE: Object.freeze({
+    statement: "Confirming halts every live strategy execution loop on this account and "
+      + "blocks all new order submissions on connected live exchanges.",
+    label: HALT_ACKNOWLEDGEMENT_LABEL,
+    control: "checkbox",
+  }),
+  PAPER: Object.freeze({
+    statement: "Confirming freezes every paper simulation bot on this account and blocks all "
+      + "new simulated order submissions.",
+    label: HALT_ACKNOWLEDGEMENT_LABEL,
+    control: "checkbox",
+  }),
+});
+
 /** A list off the body, projected row by row, or the one shared empty list. */
 const readList = (raw, project) => {
   if (!Array.isArray(raw) || raw.length === 0) return NO_ROWS;
@@ -978,13 +1111,29 @@ export default function Dashboard() {
   const [timeframe, setTimeframe] = useState(DEFAULT_PERIOD);
   const equityDays = periodOf(timeframe).days;
 
-  const [showStatusModal, setShowStatusModal] = useState(false);
+  /*
+   * The WebSocket connection state, as `wsClient` reports it.
+   *
+   * `showStatusModal` stood beside this and drove the diagnostics popover, which task 19.2b
+   * deleted. This state survives because it is one of the two readings that popover was the
+   * only home for; it now renders in the System & exchange health panel, through
+   * `ds/StatusBadge`, as the word the client itself used. The popover's two-way
+   * `"Live Connected" : "Reconnecting..."` ternary is not carried across: `wsClient` reports
+   * five states (`connecting disconnected connected error failed`), and collapsing four of
+   * them onto "Reconnecting..." told a trader a retry was in progress when the client had
+   * given up.
+   */
   const [wsStatus, setWsStatus] = useState("connected");
 
   // Authoritative sync timestamp to prevent stale WebSocket overwrites (2D.4)
   const lastSyncTimestampRef = useRef(Date.now());
 
-  // Emergency Halt Modal State (P0.1 / 2D.5) — task 19.2's, untouched here
+  /*
+   * Emergency Halt state (P0.1 / 2D.5). Task 19.2b changed the surface these four drive and
+   * none of the four: `showKillSwitchModal` is now `ds/ConfirmDialog`'s `open`,
+   * `isKillSwitchProcessing` its `busy`, `killSwitchError` a `ds/Alert` inside it, and
+   * `killSwitchAction` still the `"activate"｜"recover"` machine both triggers set.
+   */
   const [showKillSwitchModal, setShowKillSwitchModal] = useState(false);
   const [killSwitchAction, setKillSwitchAction] = useState("activate"); // "activate" or "recover"
   const [isKillSwitchProcessing, setIsKillSwitchProcessing] = useState(false);
@@ -1027,6 +1176,25 @@ export default function Dashboard() {
   const [systemHealth, setSystemHealth] = useState(null);
   const [equityCurve, setEquityCurve] = useState(NO_ROWS);
 
+  /*
+   * WHICH PAYLOAD THE MODELS ABOVE WERE PROJECTED FROM.
+   *
+   * The models are written in an EFFECT, so there is a commit in between where `payload` is
+   * in hand and they still hold the previous read's contents — for a first read, nothing.
+   * Without this, `zoneState` reads that commit as "the read succeeded and this zone has no
+   * rows" and every tier-2 panel renders its `ds/EmptyState`: on a body with two positions,
+   * "No open positions" is painted once, before the table replaces it. That is a claim about
+   * the account made from a payload that had not been read yet, which is the same fabrication
+   * Requirement 14.5 forbids in its cached-as-live direction, one commit earlier.
+   *
+   * It is STATE and not a ref because it has to be able to force the commit that clears it:
+   * a ref written in the effect would leave a payload whose projection happens to set every
+   * model to the value it already held with no re-render at all, and the zones would stay in
+   * the state this flag selects for good. `payload` is the identity compared, not a copy of
+   * its contents — the question is which object was projected, not what was in it.
+   */
+  const [projectedFrom, setProjectedFrom] = useState(null);
+
   // The risk block, for the kill switch and the circuit breaker — task 19.2's two readings.
   const [riskState, setRiskState] = useState(null);
 
@@ -1061,6 +1229,10 @@ export default function Dashboard() {
    * those subscriptions down into the leaves that render the value.
    */
   useEffect(() => {
+    // First, and in both arms: the models below are about to describe THIS payload, and the
+    // render that follows is the first one allowed to present them as its zones' contents.
+    setProjectedFrom(payload ?? null);
+
     if (payload === null || payload === undefined) {
       setPositions(NO_ROWS);
       setPositionsDegraded(null);
@@ -1354,6 +1526,17 @@ export default function Dashboard() {
   }, []);
 
   /*
+   * The confirmation's `onCancel`, which is the one write the old modal's Cancel button made.
+   *
+   * `killSwitchError` is deliberately NOT cleared here: the two triggers clear it when they
+   * open the dialog, which is where the frozen machine clears it, and clearing it on the way
+   * out as well would be a second place that decides when a failure stops being shown.
+   * `ds/ConfirmDialog` refuses cancel while `busy`, which is what the old button's
+   * `disabled={isKillSwitchProcessing}` did.
+   */
+  const closeKillSwitchConfirmation = useCallback(() => setShowKillSwitchModal(false), []);
+
+  /*
    * THE PAGE'S THREE RENDERINGS, from the one read's state.
    *
    * `error` and `unauthorised` are the failure: one read failed, so the page has one failure
@@ -1386,6 +1569,16 @@ export default function Dashboard() {
    * the page says nothing rather than saying everything is fine.
    */
   const readAnswered = payload !== null && payload !== undefined;
+
+  /**
+   * True on the commit where `payload` has arrived and the projection effect has not run yet.
+   *
+   * The tier-1 figures are derived during render straight off `payload`, so they are correct
+   * on that commit; every tier-2 zone reads a projected model and is one commit behind. This
+   * is the gap, named once, so `zoneState` and `positionsState` below can both refuse to
+   * describe a zone from models that do not belong to the payload on screen.
+   */
+  const projectionPending = readAnswered && projectedFrom !== payload;
   const conditionFiring = readAnswered && alertCondition.firing;
   const conditionUnevaluable = readAnswered && !alertCondition.evaluated;
 
@@ -1406,6 +1599,13 @@ export default function Dashboard() {
     if (readState === PANEL_STATES.IDLE || readState === PANEL_STATES.LOADING) {
       return PANEL_STATES.LOADING;
     }
+    // The body is in hand and the projection effect has not run for it yet, so this zone's
+    // rows are the PREVIOUS read's — or, on a first read, none. `loading` is the honest name
+    // for that commit: from the zone's side nothing has arrived, and `empty` here would state
+    // that the account holds nothing on the strength of a payload nobody has read. Not
+    // `refreshing` either, which §11.1 defines as content on screen with a read behind it,
+    // and the content on screen is not this payload's.
+    if (projectionPending) return PANEL_STATES.LOADING;
     if (readState === PANEL_STATES.REFRESHING) {
       return hasContent ? PANEL_STATES.REFRESHING : PANEL_STATES.LOADING;
     }
@@ -1419,8 +1619,12 @@ export default function Dashboard() {
    * must NOT read as an account holding nothing, so the panel goes to `error` — `ds/Panel`
    * renders no children there, so no table exists in the DOM — and the server's own reason
    * is rendered above it. The healthy arm is the ordinary empty/ready pair.
+   *
+   * `projectionPending` gates the degraded arm for the same reason `zoneState` reads it: on
+   * that commit `positionsDegraded` is the PREVIOUS payload's, so a read that recovered would
+   * spend a commit reporting the failure it just cleared.
    */
-  const positionsState = positionsDegraded !== null
+  const positionsState = (positionsDegraded !== null && !projectionPending)
     ? PANEL_STATES.ERROR
     : zoneState(positions.length > 0);
 
@@ -1466,6 +1670,27 @@ export default function Dashboard() {
   /** The ledger's `ds/Panel` / `ds/TradingEnvironmentBadge` environment (§8.2). */
   const panelEnvironment = (LEDGERS.find((entry) => entry.value === environment) ?? LEDGERS[0])
     .environment;
+
+  /*
+   * §8.4's review grid for the kill-switch confirmation: three readings, no prose.
+   *
+   * The ledger's own long form from `design/semantic.js` — the text axis of the distinction
+   * the header badge draws in hue, icon and border style — then the two figures that say how
+   * much the switch is about to act on. Both are read from the SAME state the panels below
+   * render, not recomputed: `strategies.active` and BC-2's `risk.open_positions_count`, each
+   * `null` when the server did not report it, which `ConfirmDialog` renders as its
+   * not-available marker rather than as a fabricated `0` (its safety decision 3).
+   *
+   * The `reason` string `riskApi.killSwitch` sends is deliberately NOT a row here. It is
+   * built inside `handleConfirmKillSwitchAction`, which is frozen byte for byte, and a second
+   * copy of that template in this grid would be free to drift from the sentence actually
+   * written to the audit trail.
+   */
+  const killSwitchReview = useMemo(() => [
+    { label: "Execution environment", value: ENVIRONMENT[panelEnvironment]?.long ?? null },
+    { label: labelOf("activeStrategyCount"), value: strategyCounts?.active ?? null },
+    { label: labelOf("openPositionsCount"), value: openPositionsCount },
+  ], [panelEnvironment, strategyCounts, openPositionsCount]);
 
   return (
     // The page shell, on tokens: `bg-surface-canvas` and `text-content-primary` replace the
@@ -1518,292 +1743,116 @@ export default function Dashboard() {
           </CommandButton>
         )}
       />
-      {/* ═══ OPERATIONAL CONTROLS ══════════════════════════════════════════════════
-          The kill switch and the diagnostics popover, unchanged. The kill switch is a risk
-          control: task 19.2 routes it through `ds/ConfirmDialog` and Requirement 19.1
-          forbids touching its logic, so it keeps its trigger, its confirmation and its two
-          `riskApi` calls exactly as they are and only its container moved. The diagnostics
-          popover reports three tier-2 fields — `health.exchange_api_latency_ms`,
-          `health.order_state_sync_status` and the connected-venue count — which part B
-          folds into §7.1's System & exchange health panel. It sits outside `PageHeader`
-          because that primitive clips overflow to hold the fixed 64px route header
-          (Requirement 2.2), and an absolutely positioned popover inside it would be cut off. */}
-      <div className="relative flex flex-wrap items-center justify-end gap-2">
+      {/* ═══ THE KILL SWITCH's TRIGGER (task 19.2b, §8.4, Requirement 19.1) ════════
+          ONE control in one of two states, and now the only thing on this row: the
+          diagnostics popover that stood beside it is deleted, and the two readings it was
+          the only home for are in the System & exchange health panel below (see the module
+          docblock for the other three, which that panel already reported).
 
-          {/* P0.1 EMERGENCY HALT / RESUME BUTTON */}
-          {!isKillSwitchActive ? (
-            <button
-              onClick={() => {
-                setKillSwitchAction("activate");
-                setKillSwitchError(null);
-                setShowKillSwitchModal(true);
-              }}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.375rem",
-                padding: "0.375rem 0.875rem",
-                background: "rgba(239, 68, 68, 0.15)",
-                border: "1px solid #ef4444",
-                borderRadius: 8,
-                color: "#ef4444",
-                fontSize: "0.75rem",
-                fontWeight: 700,
-                cursor: "pointer",
-                transition: "all 0.15s ease"
-              }}
-            >
-              <ShieldAlert size={14} />
-              EMERGENCY HALT
-            </button>
-          ) : (
-            <button
-              onClick={() => {
-                setKillSwitchAction("recover");
-                setKillSwitchError(null);
-                setShowKillSwitchModal(true);
-              }}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.375rem",
-                padding: "0.375rem 0.875rem",
-                background: "rgba(234, 179, 8, 0.2)",
-                border: "1px solid #eab308",
-                borderRadius: 8,
-                color: "#eab308",
-                fontSize: "0.75rem",
-                fontWeight: 700,
-                cursor: "pointer"
-              }}
-            >
-              <AlertOctagon size={14} />
-              RESUME TRADING
-            </button>
-          )}
+          Both arms are `ds/CommandButton intent="destructive"`, so the hue, the focus ring,
+          the Enter/Space activation and the accessible name come from the primitive instead
+          of from an inline `rgba(239,68,68,0.15)` / `#ef4444` pair on a bare `<button>`. The
+          intent is `destructive` on both arms because this is one risk control with one
+          confirmation surface, and §8.4 puts the kill switch in the destructive inventory;
+          `neutral` would paint resuming automated order submission as a routine action.
 
-          {/* Diagnostics Popover Trigger */}
-          <div style={{ position: "relative" }}>
-            <button
-              onClick={() => setShowStatusModal(!showStatusModal)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-                padding: "0.375rem 0.875rem",
-                background: isKillSwitchActive ? "rgba(239,68,68,0.15)" : "#0f141c",
-                border: `1px solid ${isKillSwitchActive ? "#ef4444" : "#1e293b"}`,
-                borderRadius: 8,
-                color: isKillSwitchActive ? "#ef4444" : "#94a3b8",
-                fontSize: "0.75rem",
-                fontWeight: 600,
-                cursor: "pointer"
-              }}
-            >
-              <span style={{
-                width: 7,
-                height: 7,
-                borderRadius: "50%",
-                background: isKillSwitchActive ? "#ef4444" : wsStatus === "connected" ? "#10b981" : "#eab308",
-                boxShadow: isKillSwitchActive ? "0 0 6px #ef4444" : wsStatus === "connected" ? "0 0 6px #10b981" : "0 0 6px #eab308"
-              }} />
-              <span>{isKillSwitchActive ? "Trading Blocked" : wsStatus === "connected" ? "Engine Operational" : "Stream Connecting"}</span>
-            </button>
-
-            {/* Diagnostics Popover Modal */}
-            {showStatusModal && (
-              <div style={{
-                position: "absolute",
-                top: 38,
-                right: 0,
-                width: 300,
-                background: "#0b0f17",
-                border: "1px solid #1e293b",
-                borderRadius: 10,
-                padding: "1rem",
-                boxShadow: "0 20px 25px -5px rgba(0,0,0,0.7)",
-                zIndex: 100
-              }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
-                  <span style={{ fontSize: "0.6875rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>
-                    Diagnostics ({environment.toUpperCase()})
-                  </span>
-                  <button
-                    onClick={() => setShowStatusModal(false)}
-                    style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: "0.875rem" }}
-                  >
-                    ✕
-                  </button>
-                </div>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.625rem", fontSize: "0.75rem" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "#94a3b8" }}>Exchange API Latency</span>
-                    <span style={{
-                      color: systemHealth?.exchange_api_latency_ms != null ? "#10b981" : "#94a3b8",
-                      fontWeight: 600
-                    }}>
-                      {systemHealth?.exchange_api_latency_ms != null
-                        ? `${systemHealth.exchange_api_latency_ms} ms (${systemHealth.exchange_api_latency_status || "optimal"})`
-                        : "Latency unavailable"}
-                    </span>
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "#94a3b8" }}>Real-time Stream</span>
-                    <span style={{ color: wsStatus === "connected" ? "#10b981" : "#eab308", fontWeight: 600, textTransform: "capitalize" }}>
-                      {wsStatus === "connected" ? "Live Connected" : "Reconnecting..."}
-                    </span>
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "#94a3b8" }}>Circuit Breaker</span>
-                    <span style={{ color: isCircuitBreakerArmed ? "#10b981" : "#ef4444", fontWeight: 600 }}>
-                      {isCircuitBreakerArmed ? "Armed / 0 Breaches" : "Triggered"}
-                    </span>
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "#94a3b8" }}>Order State Sync</span>
-                    <span style={{ color: "#10b981", fontWeight: 600 }}>
-                      {systemHealth?.order_state_sync_status || "Synchronized"}
-                    </span>
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "#94a3b8" }}>Connected Venues</span>
-                    {/* `venues` is the same `exchange.exchanges[]` list the popover read as
-                        `exchangeConnections` before part B renamed it; the count is the
-                        same count. Task 19.2 folds this row into the health panel. */}
-                    <span style={{ color: "#f8fafc", fontWeight: 600 }}>
-                      {venues.length} Active
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          The three writes each arm makes are the frozen ones, copied across unchanged: the
+          arm's own `killSwitchAction`, `killSwitchError` cleared so a previous failure is not
+          shown against a new attempt, and the confirmation opened. Which trigger sets which
+          is exactly as it was. */}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {!isKillSwitchActive ? (
+          <CommandButton
+            intent="destructive"
+            icon={ShieldAlert}
+            onClick={() => {
+              setKillSwitchAction("activate");
+              setKillSwitchError(null);
+              setShowKillSwitchModal(true);
+            }}
+          >
+            EMERGENCY HALT
+          </CommandButton>
+        ) : (
+          <CommandButton
+            intent="destructive"
+            icon={AlertOctagon}
+            onClick={() => {
+              setKillSwitchAction("recover");
+              setKillSwitchError(null);
+              setShowKillSwitchModal(true);
+            }}
+          >
+            RESUME TRADING
+          </CommandButton>
+        )}
       </div>
 
-      {/* ── P0.1 / 2D.5 EMERGENCY KILL SWITCH CONFIRMATION MODAL ───────────────── */}
-      {showKillSwitchModal && (
-        <div style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: "rgba(0, 0, 0, 0.75)",
-          backdropFilter: "blur(4px)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 1000,
-          padding: "1rem"
-        }}>
-          <div style={{
-            background: "#0c1017",
-            border: `1px solid ${killSwitchAction === "activate" ? "#ef4444" : "#eab308"}`,
-            borderRadius: 14,
-            padding: "1.5rem",
-            maxWidth: 480,
-            width: "100%",
-            boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.8)"
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1rem" }}>
-              <div style={{
-                padding: "0.5rem",
-                borderRadius: "50%",
-                background: killSwitchAction === "activate" ? "rgba(239, 68, 68, 0.2)" : "rgba(234, 179, 8, 0.2)"
-              }}>
-                <ShieldAlert size={24} color={killSwitchAction === "activate" ? "#ef4444" : "#eab308"} />
-              </div>
-              <div>
-                <h3 style={{ fontSize: "1rem", fontWeight: 800, color: "#f8fafc", margin: 0 }}>
-                  {killSwitchAction === "activate" ? "Activate Emergency Kill Switch" : "Deactivate Emergency Kill Switch"}
-                </h3>
-                <span style={{ fontSize: "0.6875rem", color: "#94a3b8" }}>
-                  Environment Context: <strong style={{ color: environment === "live" ? "#10b981" : "#818cf8" }}>
-                    {environment === "live" ? "LIVE TRADING (REAL CAPITAL)" : "PAPER SIMULATION"}
-                  </strong>
-                </span>
-              </div>
-            </div>
+      {/* ═══ THE KILL SWITCH's CONFIRMATION — `ds/ConfirmDialog` (§8.4) ════════════
+          The hand-rolled `position: fixed` div this replaces had no focus trap, no Escape,
+          no `role="dialog"`, no `aria-modal`, no registry claim, a `z-index: 1000` outside
+          the token scale, and initial focus wherever the browser put it — which on this
+          surface means a trader who opened the halt and hit Enter out of habit could reach
+          `Yes, HALT TRADING IMMEDIATELY`. `ConfirmDialog` puts initial focus on CANCEL and
+          gates confirm in two independent places (its `disabled` attribute AND a guard
+          inside its handler), which is what makes the acknowledgement a precondition rather
+          than a rendering. It held 23 of this page's 24 remaining colour literals.
 
-            <p style={{ fontSize: "0.8125rem", color: "#cbd5e1", lineHeight: 1.5, marginBottom: "1.25rem" }}>
-              {killSwitchAction === "activate" ? (
-                environment === "live" ? (
-                  "⚠️ WARNING: Activating the Emergency Kill Switch will IMMEDIATELY halt all live strategy execution loops and block all new order submissions on connected live exchanges."
-                ) : (
-                  "Activating the Emergency Kill Switch will freeze all paper simulation bots and prevent new simulated trades."
-                )
-              ) : (
-                "Deactivating the Emergency Kill Switch will resume normal algorithmic execution and order submissions."
-              )}
-            </p>
+          `onConfirm` is `handleConfirmKillSwitchAction`, unchanged and still the only caller
+          of either `riskApi` method. This component issues no request and knows nothing about
+          the switch (Requirement 19.1).
 
-            {killSwitchError && (
-              <div style={{
-                padding: "0.625rem",
-                background: "rgba(239, 68, 68, 0.15)",
-                border: "1px solid #ef4444",
-                borderRadius: 6,
-                fontSize: "0.75rem",
-                color: "#f8fafc",
-                marginBottom: "1rem"
-              }}>
-                {killSwitchError}
-              </div>
-            )}
+          THE LEDGER, ON FOUR AXES INSTEAD OF ONE HUE. `environment` makes the dialog render
+          `ds/TradingEnvironmentBadge variant="strip"` in its header, so live and paper differ
+          in hue, label, icon AND border style (§8.2, Requirement 8.5). The modal drew that
+          distinction with one `#10b981` / `#818cf8` ternary on the words
+          `LIVE TRADING (REAL CAPITAL)` and `PAPER SIMULATION`; the review grid below states
+          `design/semantic.js`'s own long form for the resolved ledger, so the distinction
+          survives in prose for a trader who cannot tell the two hues apart.
 
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem" }}>
-              <button
-                onClick={() => setShowKillSwitchModal(false)}
-                disabled={isKillSwitchProcessing}
-                style={{
-                  padding: "0.5rem 1rem",
-                  background: "#1e293b",
-                  border: "none",
-                  borderRadius: 8,
-                  color: "#94a3b8",
-                  fontSize: "0.75rem",
-                  fontWeight: 600,
-                  cursor: "pointer"
-                }}
-              >
-                Cancel
-              </button>
-
-              <button
-                onClick={handleConfirmKillSwitchAction}
-                disabled={isKillSwitchProcessing}
-                style={{
-                  padding: "0.5rem 1.25rem",
-                  background: killSwitchAction === "activate" ? "#ef4444" : "#eab308",
-                  border: "none",
-                  borderRadius: 8,
-                  color: killSwitchAction === "activate" ? "#fff" : "#000",
-                  fontSize: "0.75rem",
-                  fontWeight: 700,
-                  cursor: isKillSwitchProcessing ? "not-allowed" : "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.375rem"
-                }}
-              >
-                {isKillSwitchProcessing ? (
-                  <>
-                    <RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} />
-                    Processing...
-                  </>
-                ) : (
-                  killSwitchAction === "activate" ? "Yes, HALT TRADING IMMEDIATELY" : "Resume Operations"
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          THE ACKNOWLEDGEMENT IS ON THE HALT ONLY. §8.4 gives one to "Activate kill switch"
+          and to nothing that is reversible; recovery is reversible by the halt itself. Off
+          the halt arm there is no acknowledgement object at all — it is not constructed and
+          hidden, it does not exist (§8.4's own reading of "SHALL NOT display"). */}
+      <ConfirmDialog
+        open={showKillSwitchModal}
+        onCancel={closeKillSwitchConfirmation}
+        onConfirm={handleConfirmKillSwitchAction}
+        intent="destructive"
+        title={KILL_SWITCH_TITLE[killSwitchAction]}
+        environment={panelEnvironment}
+        description={killSwitchAction === "activate"
+          ? HALT_DESCRIPTION[panelEnvironment]
+          : RECOVER_DESCRIPTION}
+        review={killSwitchReview}
+        acknowledgement={killSwitchAction === "activate"
+          ? HALT_ACKNOWLEDGEMENT[panelEnvironment]
+          : undefined}
+        confirmLabel={KILL_SWITCH_CONFIRM_LABEL[killSwitchAction]}
+        cancelLabel="Cancel"
+        /* `isKillSwitchProcessing`, unchanged, expressed as the dialog's in-flight state:
+           both actions disable and Escape goes inert, because cancelling cannot un-send a
+           POST already on the wire and closing the dialog would hide its outcome. */
+        busy={isKillSwitchProcessing}
+        busyLabel="Processing…"
+      >
+        {/* `killSwitchError` is already the message the server sent — the frozen `catch`
+            reads `err?.response?.data?.message` before `err?.message` — so it goes through
+            `ds/Alert` rather than through the dialog's `error` prop. That prop renders
+            `translateError`, which by design never reads `error.message` (Requirement 14.4),
+            and handing it a string would replace the server's own account of why the switch
+            did not move with generic copy. This is `pages/Strategies.jsx`'s treatment of
+            `deployError`, for the same reason. */}
+        {killSwitchError === null || killSwitchError === undefined ? null : (
+          <Alert
+            severity="error"
+            title="The kill switch did not move"
+            data-testid="kill-switch-error"
+          >
+            {killSwitchError}
+          </Alert>
+        )}
+      </ConfirmDialog>
 
       {/* ═══ THE ONE FAILURE STATE (§7.1, Requirements 3.6, 14.5) ══════════════════
           One read means one failure, so the whole body is replaced by ONE `ds/ErrorState`
@@ -2153,20 +2202,48 @@ export default function Dashboard() {
               />
             </div>
 
-            {/* `exchange.can_trade` is ONE flag for the account, not one per venue, so it is
-                reported once here rather than as a chip on every row — which would read as
-                a per-venue permission the response does not carry. */}
-            <div className="mb-3 flex min-w-0 items-center gap-2">
-              <span className="text-micro uppercase tracking-wide text-content-secondary">
-                Trade permission
-              </span>
-              <StatusBadge
-                state={canTrade === true ? "ok" : (canTrade === false ? "blocked" : "unknown")}
-                label={canTrade === true
-                  ? "Can trade"
-                  : (canTrade === false ? "Cannot trade" : "Not reported")}
-                size="sm"
-              />
+            {/* ── THE THREE ACCOUNT-WIDE STATES ─────────────────────────────────────
+                `exchange.can_trade` is ONE flag for the account, not one per venue, so it
+                is reported once here rather than as a chip on every row — which would read
+                as a per-venue permission the response does not carry.
+
+                The stream and the breaker are what task 19.2b folded out of the diagnostics
+                popover. They are here because this panel is where §7.1 puts account-wide
+                health, and they are the only two of that popover's five rows that were not
+                already reported from the declaration: latency and order-state sync are the
+                two `ds/Metric`s above, and the venue count is the list below. Both of the
+                readings that moved are `ds/StatusBadge`, so the hue comes from
+                `design/semantic.js` through the state word rather than from a ternary
+                picking a hex. */}
+            <div className="mb-3 flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2">
+              <HealthReading label="Trade permission" reading="canTrade">
+                <StatusBadge
+                  state={canTrade === true ? "ok" : (canTrade === false ? "blocked" : "unknown")}
+                  label={canTrade === true
+                    ? "Can trade"
+                    : (canTrade === false ? "Cannot trade" : "Not reported")}
+                  size="sm"
+                />
+              </HealthReading>
+
+              {/* The client's own state word, verbatim and humanised by `ds/StatusBadge`.
+                  The popover printed `"Live Connected" : "Reconnecting..."`, which claimed a
+                  retry was under way for `error` and for `failed` — the two states where the
+                  client has stopped trying. */}
+              <HealthReading label="Real-time stream" reading="realtimeStream">
+                <StatusBadge state={wsStatus} size="sm" />
+              </HealthReading>
+
+              {/* `Armed / 0 Breaches` was the popover's label for the armed case. The breach
+                  count is dropped, not carried: no field in the response reports one, so the
+                  `0` was a figure the server never sent (Requirement 14.5). */}
+              <HealthReading label="Risk circuit breaker" reading="circuitBreaker">
+                <StatusBadge
+                  state={isCircuitBreakerArmed ? "ok" : "error"}
+                  label={isCircuitBreakerArmed ? "Armed" : "Triggered"}
+                  size="sm"
+                />
+              </HealthReading>
             </div>
 
             {venues.length === 0 ? (

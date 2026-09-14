@@ -165,7 +165,41 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // So this entry does NOT reach 0 here, and 59 is not a resting place either: the 59 are the
   // kill switch's alone, and part B takes them to 0 when it routes the switch through
   // `ds/ConfirmDialog` and folds the popover into the health panel.
-  'pages/Dashboard.jsx': 59,
+  //
+  // 59 -> 0 at task 19.2 PART B, which did exactly that. The 59 were the kill switch's three
+  // surfaces, and the split is the one recorded above:
+  //
+  //   * the trigger — 6. The halt arm's `rgba(239,68,68,0.15)` fill, `#ef4444` border and
+  //     `#ef4444` label, and the resume arm's `rgba(234,179,8,0.2)` / `#eab308` / `#eab308`
+  //     set. Both arms are now one `ds/CommandButton intent="destructive"`, which takes its
+  //     hue from the intent and accepts no colour prop.
+  //   * the diagnostics popover — 30, removed rather than migrated. Three of its five rows
+  //     were declared tier-2 fields the System & exchange health panel already reports —
+  //     `health.exchange_api_latency_ms`, `health.order_state_sync_status` and the venue
+  //     count — and the two that were only there, the WebSocket stream state and the
+  //     circuit-breaker reading, moved into that panel as `ds/StatusBadge`es. Three
+  //     substituted readings went with it and were NOT carried across: `|| "optimal"` and
+  //     `|| "Synchronized"` each stated a grade the server never sent, and
+  //     `"Armed / 0 Breaches"` reported a breach count no field carries (Requirement 14.5).
+  //     The pill that opened it went too — its dot was colour-only state, and its
+  //     `"Live Connected" : "Reconnecting..."` ternary claimed a retry was under way for the
+  //     `error` and `failed` states where the client has stopped trying.
+  //   * the `window`-level confirmation modal — 23. Its `rgba(0,0,0,0.75)` scrim and
+  //     `rgba(0,0,0,0.8)` shadow, its `#0c1017` shell with the `#ef4444`/`#eab308` border
+  //     ternary, the icon disc's `rgba(239,68,68,0.2)`/`rgba(234,179,8,0.2)` pair and the
+  //     `ShieldAlert`'s own `color=` ternary, the `#f8fafc` title, the `#94a3b8` eyebrow with
+  //     its `#10b981`/`#818cf8` LIVE-versus-PAPER ternary, the `#cbd5e1` body, the error
+  //     box's `rgba(239,68,68,0.15)`/`#ef4444`/`#f8fafc` triple, and the two footer buttons'
+  //     `#1e293b`/`#94a3b8` and `#ef4444`/`#eab308`/`#fff`/`#000` sets. All of it is now
+  //     `ds/ConfirmDialog`'s: the scrim, the shadow and the chrome are the dialog's own, the
+  //     accent comes from `design/semantic.js` through `intent="destructive"`, the
+  //     live-versus-paper distinction comes from `ds/TradingEnvironmentBadge` and
+  //     `ENVIRONMENT` through the `environment` prop, and the error box is `ds/Alert`.
+  //
+  // The `0` entry stays, for the reason `pages/Portfolio.jsx: 0` and `pages/TradeHistory.jsx:
+  // 0` do: it records that the page is clean and holds it there. An entry is deleted only
+  // when the file is.
+  'pages/Dashboard.jsx': 0,
   // Material Design palette (#2196F3 #00BCD4 #FFAB00 #9C27B0 #FF5722 #00C853
   // #607D8B) plus GitHub greys. Rewritten by task 20.x.
   'components/SignalTraceVisualization.jsx': 138,
