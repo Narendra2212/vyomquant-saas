@@ -83,7 +83,26 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // was scoped to leave that section's markup, its `ACTION_CATALOG` and its `data-action`
   // attributes byte-for-byte alone, and lowering this to 0 is exactly what that scope
   // forbids.
-  'pages/Strategies.jsx': 81,
+  //
+  // 81 -> 37 at task 17.2, which moved the marketplace OWNERSHIP SECTION onto tokens: the
+  // section shell and each entry's card are `ds/Panel`, the failed / unauthorised reads and
+  // the non-entitling and unread-paper-session notices are `ds/Alert`, the in-flight state is
+  // `ds/LoadingState`, the completed-and-empty read is `ds/EmptyState`, and the two `Tag2`
+  // chips are `ds/StatusBadge`. The 44 that went were the section's own panel background and
+  // border, its heading and caption greys, the error box's `rgba(239,68,68,0.12)` wash with
+  // its border, heading and body reds, the entry cards' `#080a0e`/`#1e293b` shells and names,
+  // the two `<dl>` grids' label/value greys, the non-entitling box's
+  // `rgba(251,191,36,0.12)`/`#fbbf24`/`#fde68a` triple, the two disclosure panels' rules, and
+  // the action-result line's `#fca5a5`/`#94a3b8` pair. Every hue that is left in the section
+  // comes from `design/semantic.js` inside a primitive.
+  //
+  // The remaining 37 are the DEPLOY MODAL's alone — its `rgba(1,6,8,0.85)` scrim and
+  // `rgba(0,0,0,0.6)` shadow, its `#0c1017`/`#1e293b` dialog chrome, the `#00d4ff` eyebrow
+  // and `#f8fafc` title, and the mode/capital/account controls' own palette. Task 17.2's
+  // remaining part owns them, together with this page's `a11y-ratchet` waiver — the three
+  // `label-has-associated-control` findings are on those same three controls — so they land
+  // in one change rather than being split across a guard and a lint rule.
+  'pages/Strategies.jsx': 37,
   // 112 -> 86 at task 16.1, which rebuilt tier 1 only; 86 -> 0 at task 16.2, which rebuilt
   // tiers 2 and 3. The 86 were the positions ledger's own palette (the two side chips, the
   // signed P&L cell, the row rules and the venue chip), the equity curve's `#10B981` stroke

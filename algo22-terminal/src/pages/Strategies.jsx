@@ -3,18 +3,17 @@ import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import {
   Plus, Layers, TrendingUp, Edit2,
   BarChart2, Pause, Play, Trash2, Copy, Settings,
-  Activity, Zap, Globe, Shield, RefreshCw, AlertTriangle
+  Activity, Zap, Globe, Shield, RefreshCw
 } from "lucide-react";
 import { endpoints, api } from "../api";
 import { CONFIG } from "../config";
 import { Tag2 } from "../components/ui-legacy/primitives";
 import { Button } from "../components/ui/Button";
-import { Card } from "../components/ui/Card";
 // Task 10.3: the two confirmation surfaces. Task 17.1: the table, the filter row and the
-// four states. Task 17.2: the row's overflow menu. Imported from the modules directly
-// rather than through `components/ds/index.js` — this page charts nothing, and the barrel
-// is what would otherwise put `ds/Chart`'s recharts dependency in its import graph (see
-// ds/index.js).
+// four states. Task 17.2: the row's overflow menu, and the ownership section's shell,
+// states and chips. Imported from the modules directly rather than through
+// `components/ds/index.js` — this page charts nothing, and the barrel is what would
+// otherwise put `ds/Chart`'s recharts dependency in its import graph (see ds/index.js).
 import { Alert } from "../components/ds/Alert";
 import { CommandButton } from "../components/ds/CommandButton";
 import { ConfirmDialog } from "../components/ds/ConfirmDialog";
@@ -22,6 +21,7 @@ import { DataTable } from "../components/ds/DataTable";
 import { EmptyState } from "../components/ds/EmptyState";
 import { Field } from "../components/ds/Field";
 import { FilterBar } from "../components/ds/FilterBar";
+import { LoadingState } from "../components/ds/LoadingState";
 import { NotAvailableMarker } from "../components/ds/Metric";
 import { OverflowMenu } from "../components/ds/OverflowMenu";
 import { PageHeader } from "../components/ds/PageHeader";
@@ -526,6 +526,68 @@ const formatInstant = (value) => {
  *  owned one. Rendered as a React text child, never as HTML. */
 const entryName = (entry) => entry?.listing?.name ?? entry?.name ?? null;
 
+/**
+ * Requirement 12.8's completed-and-empty state for the ownership section (task 17.2).
+ *
+ * Reached ONLY when the read finished and returned an `items` array of length zero, which is
+ * why the body can state what the emptiness means. A failed read is the error state below and
+ * an unread one renders nothing at all, so neither can arrive here and be read as "you own
+ * nothing".
+ */
+const NO_OWNERSHIP_STATE = Object.freeze({
+  icon: Layers,
+  headline: "Nothing owned, nothing subscribed",
+  body:
+    "You own no active strategies and hold no marketplace subscriptions. A marketplace "
+    + "strategy cannot be backtested, paper-traded or deployed until a subscription entitles "
+    + "you to it.",
+  action: { label: "Browse the marketplace", to: "/app/marketplace" },
+});
+
+/**
+ * A value as text for a chip, or `null` when there is nothing to render.
+ *
+ * Deliberately NOT `_text`: that normaliser trims, and this section renders the server's
+ * spelling verbatim. All this decides is whether there IS visible text — `String` so that a
+ * numeric status still satisfies `ds/StatusBadge`'s "a badge always renders text" contract
+ * rather than tripping it, which is the one way the old `<Tag2>{value}</Tag2>` was more
+ * forgiving than a primitive with a contract.
+ */
+const chipText = (value) => {
+  if (value === null || value === undefined || value === false) return null;
+  const text = String(value);
+  return text.trim() === "" ? null : text;
+};
+
+/**
+ * The metadata chip — a symbol, a timeframe, nothing that is a state.
+ *
+ * Deliberately NOT `ds/StatusBadge`: a badge takes its hue from `statusToken(state)`, and a
+ * trading pair is a fact rather than a state, so putting one through the status vocabulary
+ * would spend a status colour on something that has no status (Requirement 1.5). These were
+ * `Tag2 c="cyan"` / `c="gold"`, i.e. a hue chosen at the call site, which is what Requirement
+ * 1.4 removes. Neutral surface, neutral line, neutral text — the chip carries its meaning in
+ * its text, which is exactly what the server returned.
+ */
+const META_CHIP_CLASS =
+  "inline-flex shrink-0 items-center rounded-sm border border-line-default bg-surface-raised "
+  + "px-1.5 py-0.5 font-mono text-micro text-content-secondary";
+
+/** The `<dl>` metadata grid: label column sized to its content, value column taking the rest. */
+const OWNERSHIP_DL_CLASS = "m-0 grid gap-1 font-mono text-micro";
+
+/** `auto 1fr`. `tokens.css` has no grid-template token, and Tailwind has no utility for it. */
+const OWNERSHIP_DL_COLUMNS = Object.freeze({ gridTemplateColumns: "auto 1fr" });
+
+/**
+ * The entry grid. `repeat(auto-fit, minmax(300px, 1fr))` has no Tailwind utility and no token
+ * — it is a content dimension, the same class of value as `ds/LoadingState`'s
+ * `SKELETON_GEOMETRY` — so it stays an inline style. It carries no colour.
+ */
+const OWNERSHIP_GRID_COLUMNS = Object.freeze({
+  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Rename validation (task 10.3) — Requirements 15.1, 15.2, 18.3
 //
@@ -945,6 +1007,33 @@ export default function Strategies() {
       : totalCount === 0
         ? PANEL_STATES.EMPTY
         : PANEL_STATES.READY;
+
+  /**
+   * §11.1's states for the ownership section (task 17.2), from the same vocabulary.
+   *
+   * This replaces the four re-derived boolean conjunctions the section used to carry
+   * (`!ownershipLoading && !ownershipError && ownershipEntries && ownershipEntries.length > 0`
+   * and its three siblings) with one value, so the two regions on this page cannot disagree
+   * about what a state is. The order of the arms is the order of the facts: in flight beats a
+   * previous failure, a failure beats a list, and a list that was never read is `idle` — which
+   * renders nothing, because "nothing has been asked for" and "you own nothing" are different
+   * claims and only the second one is an empty state (Requirement 12.8).
+   *
+   * `unauthorised` is separated from `error` here rather than at the render, because the two
+   * are different states in §11.1 and the section has different copy for each: a 401/403 is
+   * not a failed read, it is a read that requires a session.
+   */
+  const ownershipState = ownershipLoading
+    ? PANEL_STATES.LOADING
+    : ownershipError !== null
+      ? (ownershipError.kind === "unauthorised"
+        ? PANEL_STATES.UNAUTHORISED
+        : PANEL_STATES.ERROR)
+      : !Array.isArray(ownershipEntries)
+        ? PANEL_STATES.IDLE
+        : ownershipEntries.length === 0
+          ? PANEL_STATES.EMPTY
+          : PANEL_STATES.READY;
 
   const API_BASE = CONFIG.apiBaseUrl;
 
@@ -1635,132 +1724,184 @@ export default function Strategies() {
               Requirements 12.2, 12.3, 12.4, 12.5, 12.6, 12.8. Every label, every
               subscription field and every button below comes from
               `api.library.myStrategies()`; the section infers no ownership, no entitlement
-              and no affordance of its own. */}
-          <section
-            aria-label="Owned and subscribed strategies"
-            data-testid="ownership-section"
-            style={{ background: "#0c1017", border: "1px solid #1e293b", borderRadius: 12, padding: 14, marginBottom: 16 }}
+              and no affordance of its own.
+
+              TASK 17.2 MOVED THE CHROME ONTO TOKENS AND PRIMITIVES, AND NOTHING ELSE
+              ---------------------------------------------------------------------
+              `ds/Panel` is the section shell and each entry's card; `ds/LoadingState` the
+              in-flight state; `ds/Alert` the failed read, the unauthorised read, the
+              non-entitling notice and the unread paper-session count; `ds/EmptyState` the
+              completed-and-empty read; `ds/StatusBadge` the two chips that were
+              `Tag2 c="purple"` / `c="cyan"`. Forty-four hex and `rgba()` literals went with
+              them, and every hue that is left comes from `design/semantic.js` inside a
+              primitive — there is no `c=` and no colour prop anywhere below.
+
+              `entry.allowed_actions` × `ACTION_CATALOG` is untouched: same map, same
+              catalogue, same `available` / `to` gates, same order, no fallback arm. The
+              offer is still structurally incapable of widening past what the server
+              returned. Every `data-testid`, every `data-action`, both `role`s,
+              `aria-disabled`, `aria-describedby` and the absence of a click handler on the
+              disabled execution controls are byte-for-byte what task 32.9's suite asserts.
+
+              WHY THE STATES ARE DISPATCHED HERE RATHER THAN THROUGH `Panel`'s `state`
+              ---------------------------------------------------------------------
+              `ds/Panel`'s `error` arm renders `ds/ErrorState`, and `ErrorState` has no prop
+              that can carry a message and never reads `error.message` — that is the
+              structural half of Requirement 14.4. This section's two failure states are the
+              opposite contract: Requirement 12.8 asks for the SERVER's own sentence when a
+              read fails, and page-authored copy naming the session when it is a 401/403.
+              `Panel` likewise builds its own loading and empty bodies, so it has nowhere to
+              put `ownership-loading`, `ownership-error`, `ownership-unauthorised`,
+              `ownership-retry` or `ownership-empty`, each of which task 32.9 names.
+
+              So the shell is `Panel`'s and the dispatch below is the page's — but it
+              switches on `ownershipState`, one `PANEL_STATES` value derived above, so this
+              region and the table region share a single state vocabulary rather than
+              carrying four re-derived boolean conjunctions each. */}
+      <Panel
+        title="Owned and subscribed"
+        data-testid="ownership-section"
+        actions={ownershipMeta && ownershipError === null ? (
+          <div
+            data-testid="ownership-counts"
+            className="text-right font-mono text-micro text-content-secondary"
           >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-              <div>
-                <div style={{ color: "#f8fafc", fontSize: 12, fontWeight: 900, letterSpacing: 1, textTransform: "uppercase" }}>
-                  Owned &amp; subscribed
-                </div>
-                <div style={{ color: "#64748b", fontSize: 9, fontFamily: "monospace", marginTop: 3 }}>
-                  Ownership, subscription state and available actions as returned by the server
-                </div>
-              </div>
-              {ownershipMeta && !ownershipError && (
-                <div data-testid="ownership-counts" style={{ color: "#64748b", fontSize: 9, fontFamily: "monospace", textAlign: "right" }}>
-                  {ownershipMeta.owned_total !== undefined && <div>Owned: {ownershipMeta.owned_total}</div>}
-                  {ownershipMeta.subscribed_total !== undefined && <div>Subscribed: {ownershipMeta.subscribed_total}</div>}
-                  {ownershipMeta.as_of && <div>As of {formatInstant(ownershipMeta.as_of)}</div>}
-                </div>
-              )}
-            </div>
+            {ownershipMeta.owned_total !== undefined && <div>Owned: {ownershipMeta.owned_total}</div>}
+            {ownershipMeta.subscribed_total !== undefined && <div>Subscribed: {ownershipMeta.subscribed_total}</div>}
+            {ownershipMeta.as_of && <div>As of {formatInstant(ownershipMeta.as_of)}</div>}
+          </div>
+        ) : null}
+      >
+        <div className="flex min-w-0 flex-col gap-3">
+          <p className="font-mono text-micro text-content-secondary">
+            Ownership, subscription state and available actions as returned by the server
+          </p>
 
-            {/* Loading (Requirement 12.8) */}
-            {ownershipLoading && (
-              <div role="status" data-testid="ownership-loading" style={{ color: "#64748b", fontSize: 11, fontFamily: "monospace", padding: "8px 2px" }}>
-                Loading your owned and subscribed strategies...
-              </div>
-            )}
+          {/* Loading (Requirement 12.8). `ds/LoadingState` owns §11.1's single
+              `role="status"` region and its `aria-busy`; `kind="inline"` is the one shape
+              that claims no dimensions, so the entries arriving shifts nothing. */}
+          {ownershipState === PANEL_STATES.LOADING && (
+            <LoadingState
+              kind="inline"
+              label="Loading your owned and subscribed strategies"
+              data-testid="ownership-loading"
+            />
+          )}
 
-            {/* Unauthorised, and error-with-retry (Requirement 12.8). Nothing of the previous
-                list survives an error: `ownershipEntries` was cleared, so there is no stale
-                list and no zero standing in for a figure that was not read. */}
-            {!ownershipLoading && ownershipError && (
-              <div
-                role="alert"
-                data-testid={ownershipError.kind === "unauthorised" ? "ownership-unauthorised" : "ownership-error"}
-                style={{ background: "rgba(239,68,68,0.12)", border: "1px solid #ef4444", borderRadius: 8, padding: "10px 12px", display: "flex", gap: 8, alignItems: "flex-start" }}
-              >
-                <AlertTriangle size={14} style={{ color: "#ef4444", flexShrink: 0, marginTop: 2 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ color: "#ef4444", fontSize: 10, fontFamily: "monospace", letterSpacing: 1.5, fontWeight: 900, textTransform: "uppercase", marginBottom: 4 }}>
-                    {ownershipError.kind === "unauthorised" ? "Not authorised" : "Ownership list unavailable"}
-                  </div>
-                  <div style={{ color: "#fca5a5", fontSize: 11, lineHeight: 1.5 }}>
-                    {ownershipError.kind === "unauthorised"
-                      ? "This list is only readable while you are signed in. Sign in again to see your owned and subscribed strategies."
-                      : ownershipError.message}
-                  </div>
-                </div>
-                <Button variant="outline" size="xs" icon={RefreshCw} onClick={reloadOwnership} data-testid="ownership-retry">
+          {/* Unauthorised, and error-with-retry (Requirement 12.8). Nothing of the previous
+              list survives an error: `ownershipEntries` was cleared, so there is no stale
+              list and no zero standing in for a figure that was not read. The assertive
+              live region is `severity`'s doing, not the call site's — `ds/Alert` writes
+              `role` after its prop spread precisely so a page cannot choose it. */}
+          {(ownershipState === PANEL_STATES.ERROR
+            || ownershipState === PANEL_STATES.UNAUTHORISED) && (
+            <Alert
+              severity="error"
+              data-testid={ownershipState === PANEL_STATES.UNAUTHORISED
+                ? "ownership-unauthorised"
+                : "ownership-error"}
+              title={ownershipState === PANEL_STATES.UNAUTHORISED
+                ? "Not authorised"
+                : "Ownership list unavailable"}
+              action={(
+                <CommandButton
+                  intent="secondary"
+                  icon={RefreshCw}
+                  onClick={reloadOwnership}
+                  data-testid="ownership-retry"
+                >
                   Retry
-                </Button>
-              </div>
-            )}
+                </CommandButton>
+              )}
+            >
+              {ownershipState === PANEL_STATES.UNAUTHORISED
+                ? "This list is only readable while you are signed in. Sign in again to see your owned and subscribed strategies."
+                : ownershipError.message}
+            </Alert>
+          )}
 
-            {/* Empty (Requirement 12.8) — reached only when the read completed */}
-            {!ownershipLoading && !ownershipError && ownershipEntries && ownershipEntries.length === 0 && (
-              <div data-testid="ownership-empty" style={{ color: "#64748b", fontSize: 11, fontFamily: "monospace", padding: "8px 2px" }}>
-                You own no active strategies and hold no marketplace subscriptions.
-              </div>
-            )}
+          {/* Empty (Requirement 12.8) — reached only when the read completed and returned
+              an `items` array of length zero. Requirement 14.1's three fields are in
+              `NO_OWNERSHIP_STATE`: what is missing, what it means, and where a subscription
+              comes from. */}
+          {ownershipState === PANEL_STATES.EMPTY && (
+            <EmptyState {...NO_OWNERSHIP_STATE} data-testid="ownership-empty" />
+          )}
 
-            {!ownershipLoading && !ownershipError && ownershipEntries && ownershipEntries.length > 0 && (
-              <>
-                {ownershipMeta?.running_paper_sessions_available === false && (
-                  <div data-testid="ownership-sessions-unavailable" style={{ color: "#fbbf24", fontSize: 10, fontFamily: "monospace", marginBottom: 10 }}>
-                    The running paper-session count could not be read, so it is not shown. It is
-                    unavailable, not zero.
-                  </div>
-                )}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 10 }}>
-                  {ownershipEntries.map((entry) => {
-                    // Every one of these is read, not derived.
-                    const actions = Array.isArray(entry.allowed_actions) ? entry.allowed_actions : [];
-                    const nonEntitling = entry.entitling === false;
-                    const reason = reasonText(entry.unavailable_reason);
-                    const reasonId = `ownership-reason-${entry.entry_id}`;
-                    const panels = disclosed[entry.entry_id] || {};
-                    const actionState = subscriptionAction[entry.entry_id] || {};
-                    const listing = entry.listing || null;
-                    const performance = listing?.performance_summary || {};
-                    const risk = listing?.risk_metrics || {};
-                    const figures = [
-                      ["Total return %", performance.total_return_pct],
-                      ["Win rate %", performance.win_rate_pct],
-                      ["Profit factor", performance.profit_factor],
-                      ["Trades", performance.total_trades],
-                      ["Sharpe", risk.sharpe_ratio],
-                      ["Max drawdown %", risk.max_drawdown_pct],
-                    ].filter(([, value]) => value !== null && value !== undefined);
-                    // The three execution actions the server did NOT return for this entry.
-                    // They are rendered as programmatically disabled controls with a text
-                    // reason — never as clickable buttons — which is how Requirement 12.5's
-                    // "every execution action disabled" is visible without the page offering
-                    // anything `allowed_actions` withheld: these carry no click handler.
-                    const disabledExecution = nonEntitling
-                      ? EXECUTION_ACTIONS.filter((action) => !actions.includes(action))
-                      : [];
+          {ownershipState === PANEL_STATES.READY && (
+            <>
+              {ownershipMeta?.running_paper_sessions_available === false && (
+                <Alert
+                  severity="warning"
+                  data-testid="ownership-sessions-unavailable"
+                  title="Running paper-session count not read"
+                >
+                  The running paper-session count could not be read, so it is not shown. It is
+                  unavailable, not zero.
+                </Alert>
+              )}
+              <div className="grid gap-3" style={OWNERSHIP_GRID_COLUMNS}>
+                {ownershipEntries.map((entry) => {
+                  // Every one of these is read, not derived.
+                  const actions = Array.isArray(entry.allowed_actions) ? entry.allowed_actions : [];
+                  const nonEntitling = entry.entitling === false;
+                  const reason = reasonText(entry.unavailable_reason);
+                  const reasonId = `ownership-reason-${entry.entry_id}`;
+                  const panels = disclosed[entry.entry_id] || {};
+                  const actionState = subscriptionAction[entry.entry_id] || {};
+                  const listing = entry.listing || null;
+                  const performance = listing?.performance_summary || {};
+                  const risk = listing?.risk_metrics || {};
+                  // The server's own spelling for the two chips, verbatim and untrimmed.
+                  // `chipText` only establishes that there IS text to render — nothing is
+                  // mapped, normalised or defaulted, and `ds/StatusBadge`'s `label` is what
+                  // overrides its humanising so `SUBSCRIBED` stays `SUBSCRIBED` and a label
+                  // this build has never seen stays whatever the server called it.
+                  const ownershipLabel = chipText(entry.ownership) ?? "Ownership not reported";
+                  const statusLabel = chipText(entry.status);
+                  const symbolLabel = chipText(listing?.symbol ?? entry.symbol);
+                  const timeframeLabel = chipText(entry.timeframe);
+                  const figures = [
+                    ["Total return %", performance.total_return_pct],
+                    ["Win rate %", performance.win_rate_pct],
+                    ["Profit factor", performance.profit_factor],
+                    ["Trades", performance.total_trades],
+                    ["Sharpe", risk.sharpe_ratio],
+                    ["Max drawdown %", risk.max_drawdown_pct],
+                  ].filter(([, value]) => value !== null && value !== undefined);
+                  // The three execution actions the server did NOT return for this entry.
+                  // They are rendered as programmatically disabled controls with a text
+                  // reason — never as clickable buttons — which is how Requirement 12.5's
+                  // "every execution action disabled" is visible without the page offering
+                  // anything `allowed_actions` withheld: these carry no click handler.
+                  const disabledExecution = nonEntitling
+                    ? EXECUTION_ACTIONS.filter((action) => !actions.includes(action))
+                    : [];
 
-                    return (
-                      <Card
-                        key={entry.entry_id}
-                        className="p-4 bg-[#080a0e] border-[#1e293b]"
-                        data-testid={`ownership-entry-${entry.entry_id}`}
-                      >
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 8 }}>
-                          <span style={{ color: "#f8fafc", fontWeight: 900, fontSize: 12, minWidth: 0, overflowWrap: "anywhere" }}>
-                            {entryName(entry) ?? "Name not reported"}
-                          </span>
-                          {/* The label itself, exactly as the server returned it. */}
-                          <Tag2 c={entry.ownership === "SUBSCRIBED" ? "purple" : "cyan"}>
-                            <span data-testid={`ownership-label-${entry.entry_id}`}>{entry.ownership}</span>
-                          </Tag2>
-                        </div>
-
+                  return (
+                    <Panel
+                      key={entry.entry_id}
+                      level={3}
+                      title={entryName(entry) ?? "Name not reported"}
+                      data-testid={`ownership-entry-${entry.entry_id}`}
+                      actions={(
+                        <StatusBadge
+                          state={ownershipLabel}
+                          label={ownershipLabel}
+                          data-testid={`ownership-label-${entry.entry_id}`}
+                        />
+                      )}
+                    >
+                      <div className="flex min-w-0 flex-col gap-2">
                         {/* Descriptive metadata, rendered as text children only. */}
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-                          {(listing?.symbol ?? entry.symbol) && <Tag2 c="cyan">{listing?.symbol ?? entry.symbol}</Tag2>}
-                          {entry.timeframe && <Tag2 c="gold">{entry.timeframe}</Tag2>}
+                        <div className="flex flex-wrap gap-1">
+                          {symbolLabel && <span className={META_CHIP_CLASS}>{symbolLabel}</span>}
+                          {timeframeLabel && <span className={META_CHIP_CLASS}>{timeframeLabel}</span>}
                           {Array.isArray(listing?.supported_timeframes) &&
                             listing.supported_timeframes.map((tf) => (
-                              <Tag2 key={`tf-${entry.entry_id}-${tf}`} c="gold">{tf}</Tag2>
+                              <span key={`tf-${entry.entry_id}-${tf}`} className={META_CHIP_CLASS}>{tf}</span>
                             ))}
-                          {entry.status && <Tag2 c="gray">{entry.status}</Tag2>}
+                          {statusLabel && <StatusBadge state={statusLabel} label={statusLabel} />}
                         </div>
 
                         {/* The Subscription_State, the period expiry and the renewal state
@@ -1769,49 +1910,53 @@ export default function Strategies() {
                         {entry.subscription && (
                           <dl
                             data-testid={`ownership-subscription-${entry.entry_id}`}
-                            style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 8px", margin: "0 0 8px", fontSize: 10, fontFamily: "monospace" }}
+                            className={OWNERSHIP_DL_CLASS}
+                            style={OWNERSHIP_DL_COLUMNS}
                           >
-                            <dt style={{ color: "#64748b" }}>Subscription</dt>
-                            <dd style={{ color: "#e2e8f0", margin: 0 }}>{entry.subscription.state ?? "not reported"}</dd>
-                            <dt style={{ color: "#64748b" }}>Expires</dt>
-                            <dd style={{ color: "#e2e8f0", margin: 0 }}>
+                            <dt className="text-content-secondary">Subscription</dt>
+                            <dd className="m-0 text-content-primary">{entry.subscription.state ?? "not reported"}</dd>
+                            <dt className="text-content-secondary">Expires</dt>
+                            <dd className="m-0 text-content-primary">
                               {formatInstant(entry.subscription.period_expiry) ?? "not reported"}
                             </dd>
-                            <dt style={{ color: "#64748b" }}>Renewal</dt>
-                            <dd style={{ color: "#e2e8f0", margin: 0 }}>{entry.subscription.renewal_state ?? "not reported"}</dd>
+                            <dt className="text-content-secondary">Renewal</dt>
+                            <dd className="m-0 text-content-primary">{entry.subscription.renewal_state ?? "not reported"}</dd>
                           </dl>
                         )}
 
                         {Object.prototype.hasOwnProperty.call(entry, "running_paper_sessions") && (
-                          <div style={{ color: "#64748b", fontSize: 10, fontFamily: "monospace", marginBottom: 8 }}>
+                          <div className="font-mono text-micro text-content-secondary">
                             Running paper sessions: {entry.running_paper_sessions}
                           </div>
                         )}
 
                         {/* The explicit expired / unavailable-strategy state (Requirements
                             12.5, 12.8). Which of the two it is comes from the server's own
-                            `unavailable_reason` code. */}
+                            `unavailable_reason` code, and `severity="warning"` is what gives
+                            this block the polite live region it had as a hand-rolled
+                            `role="status"` div. */}
                         {nonEntitling && (
-                          <div
-                            role="status"
+                          <Alert
+                            severity="warning"
                             data-testid={
                               entry.unavailable_reason === "MARKETPLACE_STRATEGY_UNAVAILABLE"
                                 ? `ownership-unavailable-strategy-${entry.entry_id}`
                                 : `ownership-expired-${entry.entry_id}`
                             }
-                            style={{ background: "rgba(251,191,36,0.12)", border: "1px solid #fbbf24", borderRadius: 6, padding: "6px 8px", marginBottom: 8 }}
+                            title={entry.unavailable_reason === "MARKETPLACE_STRATEGY_UNAVAILABLE"
+                              ? "Strategy unavailable"
+                              : "Subscription does not entitle"}
                           >
-                            <div style={{ color: "#fbbf24", fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 3 }}>
-                              {entry.unavailable_reason === "MARKETPLACE_STRATEGY_UNAVAILABLE"
-                                ? "Strategy unavailable"
-                                : "Subscription does not entitle"}
-                            </div>
-                            <div id={reasonId} style={{ color: "#fde68a", fontSize: 10, lineHeight: 1.5 }}>
+                            {/* The id the disabled execution controls point at with
+                                `aria-describedby`. It has to be on the element that holds
+                                the sentence, not on the banner, so the reason is what gets
+                                announced rather than the whole block. */}
+                            <span id={reasonId}>
                               {reason ?? "The server reported this entry as non-entitling."}{" "}
                               Every execution action is disabled until it entitles again; renewal
                               is offered below.
-                            </div>
-                          </div>
+                            </span>
+                          </Alert>
                         )}
 
                         {/* The affordances. One button per member of `allowed_actions` the page
@@ -1819,7 +1964,7 @@ export default function Strategies() {
                             it, so an action the server withheld is never constructed. */}
                         <div
                           data-testid={`ownership-actions-${entry.entry_id}`}
-                          style={{ display: "flex", gap: 4, flexWrap: "wrap" }}
+                          className="flex flex-wrap gap-1"
                         >
                           {actions.map((action) => {
                             const descriptor = ACTION_CATALOG[action];
@@ -1864,17 +2009,20 @@ export default function Strategies() {
                         {/* `view_performance` — figures already in this response, never
                             recomputed and never zero-filled. */}
                         {panels.performance && (
-                          <div data-testid={`ownership-performance-${entry.entry_id}`} style={{ marginTop: 8, borderTop: "1px solid #1e293b", paddingTop: 8 }}>
+                          <div
+                            data-testid={`ownership-performance-${entry.entry_id}`}
+                            className="border-t border-line-default pt-2"
+                          >
                             {figures.length === 0 ? (
-                              <div style={{ color: "#64748b", fontSize: 10, fontFamily: "monospace" }}>
+                              <div className="font-mono text-micro text-content-secondary">
                                 This response carries no performance figures for this listing.
                               </div>
                             ) : (
-                              <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 8px", margin: 0, fontSize: 10, fontFamily: "monospace" }}>
+                              <dl className={OWNERSHIP_DL_CLASS} style={OWNERSHIP_DL_COLUMNS}>
                                 {figures.map(([label, value]) => (
                                   <React.Fragment key={`${entry.entry_id}-fig-${label}`}>
-                                    <dt style={{ color: "#64748b" }}>{label}</dt>
-                                    <dd style={{ color: "#e2e8f0", margin: 0 }}>{String(value)}</dd>
+                                    <dt className="text-content-secondary">{label}</dt>
+                                    <dd className="m-0 text-content-primary">{String(value)}</dd>
                                   </React.Fragment>
                                 ))}
                               </dl>
@@ -1886,26 +2034,29 @@ export default function Strategies() {
                             exactly as returned (`price_display` when the server rendered one,
                             otherwise the integer minor units and their currency). */}
                         {panels.subscription && entry.subscription && (
-                          <div data-testid={`ownership-subscription-panel-${entry.entry_id}`} style={{ marginTop: 8, borderTop: "1px solid #1e293b", paddingTop: 8 }}>
-                            <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 8px", margin: 0, fontSize: 10, fontFamily: "monospace" }}>
-                              <dt style={{ color: "#64748b" }}>State</dt>
-                              <dd style={{ color: "#e2e8f0", margin: 0 }}>{entry.subscription.state ?? "not reported"}</dd>
-                              <dt style={{ color: "#64748b" }}>Period expiry</dt>
-                              <dd style={{ color: "#e2e8f0", margin: 0 }}>{formatInstant(entry.subscription.period_expiry) ?? "not reported"}</dd>
-                              <dt style={{ color: "#64748b" }}>Renewal</dt>
-                              <dd style={{ color: "#e2e8f0", margin: 0 }}>{entry.subscription.renewal_state ?? "not reported"}</dd>
+                          <div
+                            data-testid={`ownership-subscription-panel-${entry.entry_id}`}
+                            className="border-t border-line-default pt-2"
+                          >
+                            <dl className={OWNERSHIP_DL_CLASS} style={OWNERSHIP_DL_COLUMNS}>
+                              <dt className="text-content-secondary">State</dt>
+                              <dd className="m-0 text-content-primary">{entry.subscription.state ?? "not reported"}</dd>
+                              <dt className="text-content-secondary">Period expiry</dt>
+                              <dd className="m-0 text-content-primary">{formatInstant(entry.subscription.period_expiry) ?? "not reported"}</dd>
+                              <dt className="text-content-secondary">Renewal</dt>
+                              <dd className="m-0 text-content-primary">{entry.subscription.renewal_state ?? "not reported"}</dd>
                               {listing?.price_display !== undefined && (
                                 <>
-                                  <dt style={{ color: "#64748b" }}>Price</dt>
-                                  <dd style={{ color: "#e2e8f0", margin: 0 }}>
+                                  <dt className="text-content-secondary">Price</dt>
+                                  <dd className="m-0 text-content-primary">
                                     {listing.price_display} {listing.currency ?? ""}
                                   </dd>
                                 </>
                               )}
                               {listing?.price_display === undefined && listing?.price_minor !== undefined && listing?.price_minor !== null && (
                                 <>
-                                  <dt style={{ color: "#64748b" }}>Price</dt>
-                                  <dd style={{ color: "#e2e8f0", margin: 0 }}>
+                                  <dt className="text-content-secondary">Price</dt>
+                                  <dd className="m-0 text-content-primary">
                                     {listing.price_minor} {listing.currency ?? ""} minor units
                                   </dd>
                                 </>
@@ -1914,22 +2065,31 @@ export default function Strategies() {
                           </div>
                         )}
 
+                        {/* The outcome of one subscription call. Left as a text region rather
+                            than a `ds/Alert`: `Alert` requires a title, and the only honest
+                            title here would be copy this page invented to sit above the
+                            server's own sentence. The live-region role still follows the
+                            severity — assertive for a refusal, polite for a report. */}
                         {(actionState.message || actionState.error) && (
                           <div
                             role={actionState.error ? "alert" : "status"}
                             data-testid={`ownership-action-result-${entry.entry_id}`}
-                            style={{ marginTop: 8, fontSize: 10, fontFamily: "monospace", color: actionState.error ? "#fca5a5" : "#94a3b8", lineHeight: 1.5 }}
+                            className={`font-mono text-micro leading-relaxed ${
+                              actionState.error ? "text-status-error" : "text-content-secondary"
+                            }`}
                           >
                             {actionState.error || actionState.message}
                           </div>
                         )}
-                      </Card>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </section>
+                      </div>
+                    </Panel>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      </Panel>
 
       {/* ══════════════════════════════════════════════════════════════════════════════
           §7.2's table (task 17.1). Requirements 4.1, 4.4, 4.5, 11.2, 11.4, 11.5, 14.5.
