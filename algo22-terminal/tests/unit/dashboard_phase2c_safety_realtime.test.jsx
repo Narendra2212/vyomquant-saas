@@ -258,16 +258,34 @@ describe('Phase 2C — Dashboard Safety & Real-time Unit Tests', () => {
   });
 
   describe('P0.2: Critical Operational Alert Banner', () => {
-    it('displays operational insights from recent activity', async () => {
+    /*
+     * This asserted the opposite until task 19.2a: that `recent_activity.insights` reached
+     * the banner. It no longer does, and the inversion is the point of the change rather
+     * than a regression. `insights` has no `pageFields` entry, is not one of the three
+     * declared inputs of the Requirement 3.3 condition, and two of the three items
+     * `dashboard_aggregation_service` publishes are prose it hardcodes. A hardcoded sentence
+     * rendered in a live region states a finding nothing measured (Requirement 14.5).
+     *
+     * The condition itself is `design/alertCondition.js`'s and is asserted in
+     * `dashboard-alert-strip.test.jsx`; what is pinned here is that this field is not an
+     * input to it.
+     */
+    it('does not render `recent_activity.insights` — it is not one of the declared inputs', async () => {
       render(
         <MemoryRouter>
           <Dashboard />
         </MemoryRouter>
       );
 
+      // Wait for the ONE read to answer, then assert the absence — an assertion made before
+      // the payload arrives would pass on an empty page.
       await waitFor(() => {
-        expect(screen.getAllByText(/Bybit API rate limit usage reached 78% of capacity/i).length).toBeGreaterThan(0);
+        expect(screen.getByText('Command Center')).toBeDefined();
+        expect(document.querySelector('[data-page-tier="1"]')).not.toBeNull();
       });
+
+      expect(screen.queryByText(/Bybit API rate limit usage reached 78% of capacity/i)).toBeNull();
+      expect(screen.queryByText(/Check Rate Limits/i)).toBeNull();
     });
 
     it('renders kill switch alert when kill switch is active', async () => {

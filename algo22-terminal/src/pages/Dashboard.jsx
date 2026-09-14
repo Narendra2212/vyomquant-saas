@@ -114,21 +114,36 @@
  *   * The Operational Insights list. `recent_activity.insights` has no `pageFields` entry
  *     and no §7.1 row; the two of its three items that the service hardcodes ("Risk Circuit
  *     Breakers active", "n active strategy execution bot(s) running") are prose, not
- *     readings. Its warning-and-worse subset still feeds the Requirement 3.3 alert strip,
- *     which is task 19.2's, and is unchanged.
+ *     readings. Part A left its warning-and-worse subset feeding the alert banner; task
+ *     19.2a took that away too, because the field is not one of the strip's three declared
+ *     inputs — see THE REQUIREMENT 3.3 ALERT STRIP below.
  *   * The per-strategy Pause / Run button. It called no API: it rewrote local state, so the
  *     row said "paused" while the worker kept trading (Requirement 19.4's dead control, and
  *     the most dangerous kind). Deployment control belongs to `/app/strategies`, which the
  *     panel links to.
  *
- * THE KILL SWITCH AND THE ALERT STRIP ARE TASK 19.2's
- * ---------------------------------------------------
- * The halt/resume control, its confirmation, its two `riskApi` calls, the diagnostics
- * popover beside it and the Requirement 3.3 alert strip are exactly as part A left them.
- * Requirement 19.1 forbids changing a risk control's logic, and 19.2 owns routing the
- * switch through `ds/ConfirmDialog` and the strip through `ds/Alert`. The popover therefore
- * still reports latency and order-state sync from `health`, which tier 2 now also reports
- * from the declaration; 19.2 folds the popover into that panel.
+ * THE REQUIREMENT 3.3 ALERT STRIP — DERIVED, ABOVE TIER 1 (task 19.2 part A)
+ * -------------------------------------------------------------------------
+ * `design/alertCondition.js` computes the condition from the three field sets `pageFields`
+ * declares — `exchange.exchanges[].status`, `strategies.items[].status`,
+ * `executions[].status` — and this page renders the result through `ds/Alert`, above tier 1
+ * and outside both tier containers. Its three outcomes each have exactly one rendering, and
+ * the third of them is the reason the module returns a record rather than a boolean: states
+ * read with none firing is silence, while NOTHING readable at all is the declared
+ * `absence: UNMEASURABLE` reason said out loud. Neither is an all-clear. The long form is at
+ * THE REQUIREMENT 3.3 ALERT STRIP below, beside the strip's own constants.
+ *
+ * THE KILL SWITCH IS STILL TASK 19.2 PART B's
+ * -------------------------------------------
+ * The halt/resume trigger, its confirmation modal, `handleConfirmKillSwitchAction`, its two
+ * `riskApi` calls, the `killSwitchAction` state machine, the diagnostics popover and the two
+ * `risk.kill_switch_*` subscriptions are exactly as part A left them — Requirement 19.1
+ * forbids changing a risk control's logic, and part B owns routing the switch through
+ * `ds/ConfirmDialog` with an acknowledgement and folding the popover into the System &
+ * exchange health panel. Part A reads `risk.kill_switch_active` and
+ * `risk.circuit_breaker_armed` for the two risk bands in the strip region and changes how
+ * neither is derived. The popover therefore still reports latency and order-state sync from
+ * `health`, which tier 2 now also reports from the declaration.
  *
  * Two of the four figures are read exactly as the server states them, and the reason is in
  * `pageFields`' notes rather than here: `overview.today_pnl` is `today_realized_pnl +
@@ -153,9 +168,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import {
-  Activity, AlertTriangle, ArrowRight, BarChart2,
+  Activity, ArrowRight, BarChart2,
   Layers, RefreshCw, Server, Wallet,
   ShieldAlert, AlertOctagon
 } from "lucide-react";
@@ -175,6 +190,7 @@ import { Panel } from "../components/ds/Panel";
 import { PnLDisplay } from "../components/ds/PnLDisplay";
 import { StatusBadge } from "../components/ds/StatusBadge";
 import { StrategyStatus } from "../components/ds/StrategyStatus";
+import { armDetail, deriveAlertCondition } from "../design/alertCondition";
 import { PAGES, PAGE_FIELDS_BY_PAGE } from "../design/pageFields";
 import {
   PAGE_HIERARCHY_BY_PAGE,
@@ -873,23 +889,82 @@ const EQUITY_EMPTY = Object.freeze({
 });
 
 /* ══════════════════════════════════════════════════════════════════════════
- * THE ALERT STRIP's INPUT — task 19.2's, unchanged
- * ══════════════════════════════════════════════════════════════════════════ */
+ * THE REQUIREMENT 3.3 ALERT STRIP (task 19.2 part A)
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * `design/alertCondition.js` computes the condition and this page renders it. The split is
+ * the one every derivation on this page uses: the module is pure, total and testable apart
+ * from React, and the call site chooses nothing about the data — it chooses a CONSTANT
+ * severity and hands `ds/Alert` the sentences the derivation composed.
+ *
+ * THREE OUTCOMES, THREE RENDERINGS
+ * --------------------------------
+ *   * `{evaluated: true,  firing: true }` — the summary is the `ds/Alert` title and each
+ *     fired arm is named beneath it with the subjects and the server's own status
+ *     spellings, through `armDetail`.
+ *   * `{evaluated: true,  firing: false}` — NOTHING renders. States were read and none of
+ *     them fired, and silence is the only honest rendering of that: an all-clear band would
+ *     be a positive assertion the derivation did not make (see the exchange arm below).
+ *   * `{evaluated: false, firing: false}` — `pageFields`' `absence: UNMEASURABLE` case. The
+ *     declared `reason` is rendered verbatim as the title, because "no state was reported"
+ *     is a reading a trader has to see and is emphatically not an all-clear. Gated on the
+ *     read having answered, so a page still waiting on `GET /api/dashboard` says nothing
+ *     rather than announcing that nothing was reported.
+ *
+ * WHY THE SEVERITIES ARE CONSTANTS
+ * --------------------------------
+ * `ds/Alert` takes the hue, the icon, the border style and the live-region role from
+ * `severity`, and this page passes a literal for each case. The derivation deliberately
+ * does not rank its three arms against each other, so there is no reading here that could
+ * choose between `warning` and `critical` — and a severity computed from data is exactly
+ * the client-invented severity `pageFields`' `alertCondition` entry rules out.
+ *
+ * THE DERIVED STRIP CARRIES NO ACTION, AND §7.1's MOCK DRAWS ONE
+ * -------------------------------------------------------------
+ * A deliberate departure. The disjunction has up to three subjects living on three different
+ * pages, so a single `[Review]` would have to guess which one the trader meant. Giving each
+ * fired arm its own link instead puts a second, identically-named link to `/app/exchange`,
+ * `/app/strategies` and `/app/trades` on a page whose tier-2 panels already link to all
+ * three — two links with one accessible name pointing at one place, above and below the same
+ * fold. So the strip does what Requirement 3.3 actually asks: it SUMMARISES the condition,
+ * naming the arm, the subjects and the states, and the navigation stays where it already is,
+ * on the panel that reports the subject. The two risk bands DO carry actions, because their
+ * conditions have exactly one subject each and one of them is the page's only route to
+ * `/app/risk`.
+ *
+ * `recent_activity.insights` IS GONE FROM THIS SURFACE
+ * ---------------------------------------------------
+ * `readInsights` / `readCriticalAlerts` stood here and fed the banner's third row from
+ * `recent_activity.insights`. That field has no `pageFields` entry, is not one of the three
+ * declared inputs, and two of its three items are prose `dashboard_aggregation_service`
+ * hardcodes ("Risk Circuit Breakers active", "n active strategy execution bot(s) running").
+ * Rendering hardcoded prose in a live region states a finding nothing measured, so it is
+ * removed rather than migrated — the declaration's "No fourth input" is the whole point of
+ * deriving the condition instead of collecting banners.
+ */
 
-const readInsights = (body) => body?.recent_activity?.insights || NO_ROWS;
+/** The `pageFields` key the strip renders under, so its placement is decidable in the DOM. */
+const ALERT_CONDITION_REGION = "alertCondition";
 
-/** The warning-and-worse subset of the insights, as the banner's rows. */
-const readCriticalAlerts = (insights) => insights
-  .filter((ins) => ins.type === "warning" || ins.type === "error" || ins.type === "critical")
-  .map((ins, index) => ({
-    id: ins.id || `ins_${index}`,
-    severity: ins.type === "error" ? "critical" : "warning",
-    title: ins.type === "error" ? "Execution Alert" : "Risk Notice",
-    message: ins.text,
-    actionPath: ins.actionPath,
-    actionText: ins.actionText,
-    timestamp: "Active",
-  }));
+/**
+ * The severity a FIRED condition renders at. A constant — see the docblock above.
+ *
+ * `warning` and not `critical`: the derivation does not rank a disconnected venue against a
+ * rejected order, so nothing here knows how bad the condition is. `ds/Alert`'s own doctrine
+ * for that case is this exact value — visible, polite, and carrying the icon that says
+ * "look at this" without interrupting a trader mid-sentence (Requirement 16.2).
+ */
+const CONDITION_SEVERITY = "warning";
+
+/**
+ * The severity the UNEVALUABLE case renders at.
+ *
+ * `info` resolves through `design/semantic.js`'s neutral entry, so the band carries no hue
+ * at all. Requirement 1.5 spends colour on current state, risk or required action, and "no
+ * state was reported" is none of the three — it is an absence of information, which is how
+ * every other absence on this page is treated.
+ */
+const UNEVALUABLE_SEVERITY = "info";
 
 /** A list off the body, projected row by row, or the one shared empty list. */
 const readList = (raw, project) => {
@@ -898,8 +973,6 @@ const readList = (raw, project) => {
 };
 
 export default function Dashboard() {
-  const navigate = useNavigate();
-
   // The two page controls, and the only two things that select what the one read asks for.
   const [environment, setEnvironment] = useState("live");
   const [timeframe, setTimeframe] = useState(DEFAULT_PERIOD);
@@ -917,8 +990,22 @@ export default function Dashboard() {
   const [isKillSwitchProcessing, setIsKillSwitchProcessing] = useState(false);
   const [killSwitchError, setKillSwitchError] = useState(null);
 
-  // Operational Critical Alerts State (P0.2 / 2D.2) — task 19.2's alert strip
-  const [criticalAlerts, setCriticalAlerts] = useState(NO_ROWS);
+  /*
+   * Operational Critical Alerts State (P0.2 / 2D.2) — WRITTEN, AND DELIBERATELY UNREAD.
+   *
+   * Three subscriptions below write this list: the two `risk.kill_switch_*` handlers, which
+   * Requirement 19.1 forbids this task from touching, and the `notification` handler beside
+   * them. Nothing renders it any more, because the Requirement 3.3 strip is derived from the
+   * three declared field sets and a pushed frame is not one of them.
+   *
+   * The kill-switch condition those two handlers announce is still on screen: they also set
+   * `riskState.kill_switch_active`, which is what `isKillSwitchActive` reads and what the
+   * strip below renders. So the halt reaches the trader from the state reading rather than
+   * from the frame's prose, and no condition is lost by nobody reading this array. The
+   * binding is a hole rather than a name so the unused reader is not merely unused but
+   * absent — the setter is what the frozen handlers need.
+   */
+  const [, setCriticalAlerts] = useState(NO_ROWS);
 
   /*
    * TIER 2's view models. One per §7.1 region, written in exactly one place — the
@@ -1026,13 +1113,37 @@ export default function Dashboard() {
     setVenues(readList(payload.exchange?.exchanges, toVenueRow));
     setEquityCurve(readEquitySeries(payload));
 
-    setCriticalAlerts(readCriticalAlerts(readInsights(payload)));
     setRiskState(risk);
     setSystemHealth(payload.health ?? null);
   }, [payload]);
 
   /** Tier 1's four figures, as `Reported<T>`s. A `null` payload is four markers, not zeros. */
   const tierOne = useMemo(() => buildTierOne(payload), [payload]);
+
+  /*
+   * REQUIREMENT 3.3's CONDITION — the three declared field sets, read off the ONE payload.
+   *
+   * Straight from `payload` and not from the projected view models above, for the reason
+   * `pageFields`' `alertCondition` entry gives: the declared inputs are
+   * `exchange.exchanges[].status`, `strategies.items[].status` and `executions[].status`, and
+   * a projection that dropped or renamed a status would quietly change what the disjunction
+   * is over. `deriveAlertCondition` is total, so a `null` payload and a body of the wrong
+   * shape both answer "nothing was readable" rather than throwing.
+   */
+  const alertCondition = useMemo(
+    () => deriveAlertCondition({
+      exchanges: payload?.exchange?.exchanges,
+      strategies: payload?.strategies?.items,
+      executions: payload?.executions,
+    }),
+    [payload],
+  );
+
+  /** The arms that fired, in declaration order — exchange · strategy · execution. */
+  const firedArms = useMemo(
+    () => alertCondition.arms.filter((arm) => arm.fired),
+    [alertCondition],
+  );
 
   /** The denomination the server reported, or `null`. Never a guessed one. */
   const currency = useMemo(() => readCurrency(payload), [payload]);
@@ -1228,6 +1339,21 @@ export default function Dashboard() {
   const isKillSwitchActive = riskState?.kill_switch_active ?? false;
 
   /*
+   * The strip's `Resume Trading` affordance.
+   *
+   * The same three writes the `RESUME TRADING` trigger makes, so the strip and the trigger
+   * open ONE confirmation and there is one place the recovery is authorised. It changes no
+   * risk-control logic: `killSwitchAction`, `handleConfirmKillSwitchAction` and
+   * `riskApi.recoverKillSwitch()` are untouched, and this only asks the existing state
+   * machine for the state it already has.
+   */
+  const openResumeTradingConfirmation = useCallback(() => {
+    setKillSwitchAction("recover");
+    setKillSwitchError(null);
+    setShowKillSwitchModal(true);
+  }, []);
+
+  /*
    * THE PAGE'S THREE RENDERINGS, from the one read's state.
    *
    * `error` and `unauthorised` are the failure: one read failed, so the page has one failure
@@ -1245,6 +1371,23 @@ export default function Dashboard() {
   const tierOneState = readState === PANEL_STATES.IDLE || readState === PANEL_STATES.LOADING
     ? PANEL_STATES.LOADING
     : (readState === PANEL_STATES.REFRESHING ? PANEL_STATES.REFRESHING : PANEL_STATES.READY);
+
+  /*
+   * THE STRIP's TWO RENDERABLE OUTCOMES (Requirement 3.3).
+   *
+   * `readAnswered` is what separates "nothing was reported" from "nothing has been read
+   * yet". `usePanelState` holds `data` at `null` in every state except `ready` and
+   * `refreshing`, so a body in hand IS the read having answered — and without this gate the
+   * UNMEASURABLE strip would announce that no state was reported while the request was still
+   * in flight, which is a claim about the account made before the account was read.
+   *
+   * The third outcome — states read, none fired — is neither of these two and renders
+   * nothing. It is the only outcome that may be silent, and it is still not an all-clear:
+   * the page says nothing rather than saying everything is fine.
+   */
+  const readAnswered = payload !== null && payload !== undefined;
+  const conditionFiring = readAnswered && alertCondition.firing;
+  const conditionUnevaluable = readAnswered && !alertCondition.evaluated;
 
   /**
    * One tier-2 zone's §11.1 state, from the ONE read's state and whether the zone has rows.
@@ -1680,135 +1823,92 @@ export default function Dashboard() {
       ) : (
         <>
 
-      {/* ── P0.2 / 2D.2 HIGH-VISIBILITY CRITICAL OPERATIONAL ALERT BANNER ──────── */}
-      {(isKillSwitchActive || !isCircuitBreakerArmed || criticalAlerts.length > 0) && (
-        <div style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: "0.5rem",
-          marginBottom: "1.25rem"
-        }}>
-          {/* Active Kill Switch Alert */}
-          {isKillSwitchActive && (
-            <div style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "0.75rem 1.25rem",
-              background: "rgba(239, 68, 68, 0.15)",
-              border: "1px solid #ef4444",
-              borderRadius: 10
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <ShieldAlert size={20} color="#ef4444" />
-                <div>
-                  <div style={{ fontSize: "0.8125rem", fontWeight: 800, color: "#f8fafc" }}>
-                    EMERGENCY KILL SWITCH ACTIVE — ALL EXECUTIONS HALTED
-                  </div>
-                  <div style={{ fontSize: "0.6875rem", color: "#94a3b8", marginTop: 2 }}>
-                    All algorithmic order placements are blocked by institutional safety guard.
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  setKillSwitchAction("recover");
-                  setKillSwitchError(null);
-                  setShowKillSwitchModal(true);
-                }}
-                style={{
-                  padding: "4px 12px",
-                  background: "#eab308",
-                  border: "none",
-                  borderRadius: 6,
-                  color: "#000",
-                  fontSize: "0.6875rem",
-                  fontWeight: 700,
-                  cursor: "pointer"
-                }}
-              >
-                Resume Trading
-              </button>
-            </div>
-          )}
+      {/* ═══ THE REQUIREMENT 3.3 ALERT STRIP (task 19.2 part A) ════════════════════
+          ABOVE tier 1 and OUTSIDE both tier containers. `design/pageHierarchy.js` registers
+          `alertCondition` as UNTIERED for that reason: Requirement 3.3 puts the strip above
+          the primary figures, so any tier number would make Property 4 false — tier 2
+          precedes tier 1 in document order, and tier 1 would put a conditional full-width
+          band inside the single four-figure container Requirement 3.4 is about. The
+          `data-region` makes the placement decidable from the DOM rather than from this JSX.
 
-          {/* Circuit Breaker Breach Alert */}
-          {!isCircuitBreakerArmed && (
-            <div style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "0.75rem 1.25rem",
-              background: "rgba(234, 179, 8, 0.15)",
-              border: "1px solid #eab308",
-              borderRadius: 10
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <AlertTriangle size={20} color="#eab308" />
-                <div>
-                  <div style={{ fontSize: "0.8125rem", fontWeight: 800, color: "#f8fafc" }}>
-                    RISK CIRCUIT BREAKER TRIGGERED
-                  </div>
-                  <div style={{ fontSize: "0.6875rem", color: "#94a3b8", marginTop: 2 }}>
-                    Daily loss threshold or max drawdown reached. Review open risk parameters.
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => navigate("/app/risk")}
-                style={{
-                  padding: "4px 12px",
-                  background: "#1e293b",
-                  border: "1px solid #334155",
-                  borderRadius: 6,
-                  color: "#f8fafc",
-                  fontSize: "0.6875rem",
-                  fontWeight: 600,
-                  cursor: "pointer"
-                }}
-              >
-                Review Risk Settings
-              </button>
-            </div>
-          )}
+          The three bands this replaces were hand-painted: a `rgba(239,68,68,0.15)` /
+          `#ef4444` kill-switch strip, a `rgba(234,179,8,0.15)` / `#eab308` circuit-breaker
+          strip, and one `alert.severity === "critical" ? … : …` ternary per insight row.
+          `ds/Alert` takes the hue, the icon, the border style and — the part that matters —
+          the live-region role from `severity`, so the assertive/polite choice is no longer
+          made by whichever branch of a ternary drew the border (Requirement 16.2).
 
-          {/* Dynamic Execution / Order Failure Alerts */}
-          {criticalAlerts.map(alert => (
-            <div
-              key={alert.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "0.625rem 1.25rem",
-                background: alert.severity === "critical" ? "rgba(239, 68, 68, 0.12)" : "rgba(234, 179, 8, 0.12)",
-                border: `1px solid ${alert.severity === "critical" ? "#ef4444" : "#eab308"}`,
-                borderRadius: 8
-              }}
+          THE FIRST TWO BANDS ARE `riskState` READINGS, NOT THE DERIVED CONDITION. They are
+          NOT folded into `deriveAlertCondition`: `risk.kill_switch_active` and
+          `risk.circuit_breaker_armed` are not among the three declared inputs, and adding
+          them would be the fourth arm `pageFields`' `alertCondition` entry rules out and
+          would make `summary` state something the derivation never computed. They stay here,
+          each as its own alert, because they are the two conditions carrying this page's only
+          live risk affordances — the `Resume Trading` path into the existing confirmation, and
+          the page's only link to `/app/risk`, which task 19.1b's removal of the Risk & Safety
+          Matrix promised would still exist. Neither reading's derivation is touched. */}
+      {(isKillSwitchActive || !isCircuitBreakerArmed || conditionFiring || conditionUnevaluable) && (
+        <div className="flex min-w-0 flex-col gap-2">
+
+          {isKillSwitchActive ? (
+            <Alert
+              severity="critical"
+              title="Emergency kill switch active — all executions halted"
+              action={{ label: "Resume Trading", onClick: openResumeTradingConfirmation }}
+              data-region="kill-switch-active"
             >
-              <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
-                <AlertTriangle size={16} color={alert.severity === "critical" ? "#ef4444" : "#eab308"} />
-                <span style={{ fontSize: "0.75rem", color: "#f8fafc", fontWeight: 600 }}>
-                  {alert.message}
-                </span>
-              </div>
-              {alert.actionPath && (
-                <button
-                  onClick={() => navigate(alert.actionPath)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "#38bdf8",
-                    fontSize: "0.6875rem",
-                    fontWeight: 700,
-                    cursor: "pointer"
-                  }}
-                >
-                  {alert.actionText || "View Details"} →
-                </button>
-              )}
-            </div>
-          ))}
+              Every algorithmic order placement is blocked until the switch is released.
+            </Alert>
+          ) : null}
+
+          {isCircuitBreakerArmed ? null : (
+            <Alert
+              severity="warning"
+              title="Risk circuit breaker triggered"
+              action={{ label: "Review Risk Settings", to: "/app/risk" }}
+              data-region="circuit-breaker"
+            >
+              {/* The old copy read "Daily loss threshold or max drawdown reached", which
+                  named a cause the response does not carry: `circuit_breaker_armed` is one
+                  boolean and says nothing about which limit moved. */}
+              The engine reports the breaker is no longer armed. It did not report which limit
+              was reached, so the account&apos;s risk settings are where to look.
+            </Alert>
+          )}
+
+          {conditionFiring ? (
+            <Alert
+              severity={CONDITION_SEVERITY}
+              title={alertCondition.summary}
+              data-region={ALERT_CONDITION_REGION}
+              data-alert-condition="firing"
+            >
+              <ul className="flex min-w-0 flex-col gap-1">
+                {firedArms.map((arm) => {
+                  const detail = armDetail(arm);
+                  return (
+                    /* The subjects, then the server's OWN status spellings — a trader reads
+                       the word the subsystem used, not one this client chose. */
+                    <li key={arm.arm} data-alert-arm={arm.arm} className="min-w-0">
+                      {detail === null ? arm.summary : `${arm.summary}: ${detail}`}
+                    </li>
+                  );
+                })}
+              </ul>
+            </Alert>
+          ) : null}
+
+          {conditionUnevaluable ? (
+            <Alert
+              severity={UNEVALUABLE_SEVERITY}
+              title={reasonOf(ALERT_CONDITION_REGION)}
+              data-region={ALERT_CONDITION_REGION}
+              data-alert-condition="unevaluable"
+            >
+              Nothing was checked, so nothing is known. This is not a report that the venues,
+              the strategies and the order submissions are all healthy.
+            </Alert>
+          ) : null}
         </div>
       )}
 

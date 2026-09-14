@@ -140,8 +140,32 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   //     circuit-breaker strip, 8 in the dynamic execution alerts. 19.2 renders the condition
   //     through `ds/Alert`, derived from the disjunction Task 13.3 declares.
   //
-  // So this entry does NOT reach 0 here, and 82 is not a resting place: 19.2 takes it to 0.
-  'pages/Dashboard.jsx': 82,
+  // 82 -> 59 at task 19.2 PART A, which replaced all three bands of that banner with
+  // `ds/Alert`, driven by `design/alertCondition.js`. The 23 that went are the banner's
+  // entire palette, and the count is exactly the split above because part A's scope was the
+  // banner and nothing else:
+  //
+  //   * the kill-switch strip's `rgba(239,68,68,0.15)` wash, `#ef4444` border, `#ef4444`
+  //     icon, `#f8fafc` headline and `#94a3b8` body, plus its Resume Trading button's
+  //     `#eab308` fill and `#000` label — 7;
+  //   * the circuit-breaker strip's matching `rgba(234,179,8,0.15)` / `#eab308` / `#eab308` /
+  //     `#f8fafc` / `#94a3b8` set and its Review Risk Settings button's `#1e293b` fill,
+  //     `#334155` border and `#f8fafc` label — 8;
+  //   * the dynamic execution rows' two `alert.severity === "critical" ? … : …` ternaries for
+  //     the wash and the border (4 literals across the two), the icon's third ternary (2),
+  //     the `#f8fafc` message and the `#38bdf8` action link — 8.
+  //
+  // The hue, the icon, the border style AND the live-region role now come from `ds/Alert`'s
+  // `severity`, which is the part worth recording here: those ternaries were choosing
+  // `role="alert"` versus `role="status"` by drawing a border colour, so a routine message
+  // could interrupt a screen reader mid-sentence (Requirement 16.2). The third band went
+  // rather than migrating — it read `recent_activity.insights`, which has no `pageFields`
+  // entry and is not one of the condition's three declared inputs.
+  //
+  // So this entry does NOT reach 0 here, and 59 is not a resting place either: the 59 are the
+  // kill switch's alone, and part B takes them to 0 when it routes the switch through
+  // `ds/ConfirmDialog` and folds the popover into the health panel.
+  'pages/Dashboard.jsx': 59,
   // Material Design palette (#2196F3 #00BCD4 #FFAB00 #9C27B0 #FF5722 #00C853
   // #607D8B) plus GitHub greys. Rewritten by task 20.x.
   'components/SignalTraceVisualization.jsx': 138,
