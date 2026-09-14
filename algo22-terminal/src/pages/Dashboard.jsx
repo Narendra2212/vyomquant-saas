@@ -90,6 +90,44 @@
  * with `health.exchange_api_latency_status` reading `"unavailable"` beside it — and it
  * renders as one `ds/Metric` that shows the marker, never `0 ms`.
  *
+ * TICK ISOLATION — SUBSCRIBE LOW, NOT HIGH (task 19.3, §13.1, §13.2b, Requirements 2.6, 7.5)
+ * ------------------------------------------------------------------------------------------
+ * Until this task the page held SEVEN `wsClient` subscriptions in one page-root effect, each
+ * writing page-level state, so one frame on any of them re-rendered the whole tree — four
+ * tier-1 `ds/Metric`s, three `ds/DataTable`s and a recharts surface — to move one text node.
+ * §13.2's fix is not a store. It is that the subscription belongs to the leaf that renders
+ * the value, and the page root keeps only the STRUCTURAL data: which positions, strategies
+ * and venues exist, which is a REST read's answer and not a tick's.
+ *
+ * The three leaves are declared together above the tier-2 projections, under TICK ISOLATION,
+ * with the reasoning for each: `LivePositionPnl` on `pnl` filtered to its row's symbol,
+ * `LiveStrategyState` on `STRATEGY_STATUS` filtered to its strategy id, `LiveVenueHealth` on
+ * `exchange_health` filtered to its `exchange_id`. All three are `memo` with primitive props
+ * only, and all three subscribe through `useLiveChannel`, which holds one
+ * `wsClient.subscribe` per channel and compares the selected slice with `Object.is` before
+ * enqueuing anything — so a frame for one symbol does not schedule a render for another.
+ *
+ * FOUR THINGS STAY AT THE PAGE ROOT, AND NONE OF THEM IS A TICK
+ * ------------------------------------------------------------
+ *   * `wsClient.onOpen` → `refetch`. Re-issuing the ONE read is the page's own business, and
+ *     `usePanelState`'s `refetch` identity survives every payload, so this establishes the
+ *     effect once (§1.12).
+ *   * `wsClient.onStatusChange` → `wsStatus`. Not a channel and not per-row: it is one fact
+ *     about THIS browser's socket, reported once in the health panel. It also cannot become
+ *     `useConnectionStatus()` here without changing what the panel reports before the first
+ *     transition, which is not this task's to change.
+ *   * The two `risk.kill_switch_*` handlers. They write `riskState`, which the alert strip,
+ *     the halt/resume trigger and the confirmation's review grid all read, so it is
+ *     page-level by construction — and Requirement 19.1 freezes both handlers where they
+ *     are. They fire on a risk transition, not on a price.
+ *
+ * A `notification` handler stood beside them and was DELETED rather than moved: its only
+ * effect was `criticalAlerts`, which nothing has read since task 19.2a derived the strip
+ * from `alertCondition`. See `setCriticalAlerts`'s declaration for the long form, including
+ * why nothing reaches the trader less for it.
+ *
+ * `usePolling` is not on this page and has not been since task 19.1a — see ONE READ above.
+ *
  * THE EQUITY CURVE IS THE ONE LAZY IMPORT, AND IT DOES NOT TICK
  * -----------------------------------------------------------
  * `ds/Chart` is imported with `lazy(() => import(...))` rather than by path, for the reason
@@ -243,6 +281,7 @@ import {
 } from "../design/pageHierarchy";
 import { fromNullable } from "../design/reported";
 import { ENVIRONMENT } from "../design/semantic";
+import { useLiveChannel } from "../hooks/useLiveChannel";
 import { PANEL_STATES, usePanelState } from "../hooks/usePanelState";
 
 /**
@@ -521,6 +560,302 @@ const labelOf = (field) => fieldEntry(field)?.label ?? field;
 const reasonOf = (field) => fieldEntry(field)?.reason ?? undefined;
 
 /* ══════════════════════════════════════════════════════════════════════════
+ * TICK ISOLATION — the three leaves that subscribe (task 19.3, §13.2b)
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * §13.1's defect, on this page: seven `wsClient.subscribe` handlers in ONE page-root
+ * effect, each writing page-level state, so a single frame on any of them re-rendered
+ * 2187 lines of JSX — the four tier-1 `ds/Metric`s, three `ds/DataTable`s and a recharts
+ * surface — to move one text node. §13.2b's fix is not a store: it is that the
+ * subscription lives in the leaf that renders the value, and the page root keeps only the
+ * STRUCTURAL data (which positions exist, which strategies exist, which venues are
+ * connected), which changes on a REST read and never on a tick.
+ *
+ * The three leaves below are that, one per channel §7.1 has a tier-2 field for:
+ *
+ *   | leaf                | channel            | filtered to        | renders             |
+ *   | ------------------- | ------------------ | ------------------ | ------------------- |
+ *   | `LivePositionPnl`   | `pnl`              | its row's symbol   | `ds/PnLDisplay`     |
+ *   | `LiveStrategyState` | `STRATEGY_STATUS`  | its strategy id    | `ds/StrategyStatus` |
+ *   | `LiveVenueHealth`   | `exchange_health`  | its `exchange_id`  | `ds/ExchangeStatus` |
+ *
+ * EVERY ONE OF THEM IS `memo` WITH PRIMITIVE PROPS ONLY (§13.2c)
+ * -------------------------------------------------------------
+ * A leaf whose props are strings and numbers has a `memo` that actually holds: the page
+ * re-rendering for an unrelated reason re-renders none of them, and a frame re-renders
+ * exactly the one whose selector answered. Passing a row object instead would defeat both
+ * — the projection rebuilds every row object on every read, so identity moves when no
+ * value did. That is the same reason `ds/DataTable` excludes `row` from its own row memo,
+ * and the reason `observe` exists to carry the rest of what a cell reads.
+ *
+ * `useLiveChannel` IS WHAT MAKES SUBSCRIBING PER LEAF AFFORDABLE
+ * -------------------------------------------------------------
+ * Its module registry holds ONE `wsClient.subscribe` per channel and fans each frame out
+ * to the listeners, so five position rows watching `pnl` produce one handler on the client
+ * rather than five. And it compares the selected slice with `Object.is` BEFORE enqueuing a
+ * state update, so a `pnl` frame for BTC/USDT does not even schedule a render for the row
+ * watching ETH/USDT. Both properties are the hook's; nothing here re-implements them.
+ *
+ * A SELECTOR DECLINES A FRAME BY RETURNING `undefined`
+ * ---------------------------------------------------
+ * The hook reads `undefined` as "nothing for me in this frame" and leaves the previous
+ * value standing — see its docblock. Every selector below therefore returns `undefined`
+ * for a frame that is not this leaf's, AND for a frame that is this leaf's but carries no
+ * such field: a `pnl` frame naming this row's symbol and no `unrealized_pnl` must not blank
+ * a figure the read reported (Requirement 14.5). Nothing below can return `null`, so no
+ * leaf can be talked into rendering the not-available marker by a push.
+ *
+ * WHAT SEEDS A LEAF, AND WHAT SUPERSEDES IT
+ * ----------------------------------------
+ * The ONE read seeds every leaf through its ordinary props; a frame that passes the
+ * freshness test supersedes that seed for as long as the leaf is mounted. That ordering is
+ * the point of pushing the figure at all — a mark is a more recent observation of the same
+ * quantity than the read that preceded it — and `isFreshFrame` is what stops it from being
+ * the wrong way round.
+ */
+
+/**
+ * How far behind the last read a frame's own timestamp may be and still be read.
+ *
+ * The page root's `isEventFresh` uses this same one-second slack, and for the same reason:
+ * the frame's clock is the server's and the read's is this browser's, so a frame published
+ * a moment before the read completed must not be discarded for being a moment behind it.
+ */
+const FRAME_CLOCK_SLACK_MS = 1000;
+
+/**
+ * Whether one pushed frame may be read by a leaf on this ledger, seeded by this read.
+ *
+ * The module-scope, prop-driven form of the page root's `isEventFresh` (2D.4), which is a
+ * closure over `environment` and a ref and therefore cannot be handed to a leaf. Both tests
+ * are the same two:
+ *
+ *   * **The ledger.** A frame that names an environment other than the one on screen is not
+ *     about the row it appears to be about. A paper fill may not move a live figure.
+ *   * **The clock.** A frame older than the read that seeded this leaf is a replay, and
+ *     rendering it would put a superseded figure back on screen (Requirement 14.5).
+ *
+ * A frame that names no environment and carries no timestamp passes, exactly as it does at
+ * the page root: the server has told us nothing that would rule it out.
+ *
+ * @param {unknown} frame
+ * @param {string|undefined} environment The ledger on screen — `"live"` or `"paper"`.
+ * @param {number|undefined} syncedAt When the read that seeded this leaf was projected.
+ * @returns {boolean}
+ */
+const isFreshFrame = (frame, environment, syncedAt) => {
+  if (!frame || typeof frame !== "object") return false;
+  if (frame.environment && frame.environment !== environment) return false;
+  if (frame.timestamp && Number.isFinite(syncedAt)) {
+    const publishedAt = new Date(frame.timestamp).getTime();
+    if (Number.isFinite(publishedAt) && publishedAt < syncedAt - FRAME_CLOCK_SLACK_MS) {
+      return false;
+    }
+  }
+  return true;
+};
+
+/**
+ * `pnl` — the per-symbol P&L stream (`wsClient.subscribePnL`'s channel, §7.1).
+ *
+ * `STRATEGY_STATUS` is spelled as `wsClient.subscribeStrategyStatus` spells it, which is
+ * upper case. The page root subscribed to a lower-case `strategy_status` until this task;
+ * nothing publishes that name, so the handler could not fire — moving the subscription into
+ * the leaf is also what fixes which channel it is on.
+ */
+const PNL_CHANNEL = "pnl";
+const STRATEGY_STATUS_CHANNEL = "STRATEGY_STATUS";
+const EXCHANGE_HEALTH_CHANNEL = "exchange_health";
+
+/**
+ * One numeric field off a frame for this leaf's subject, or `undefined` to decline it.
+ *
+ * @param {unknown} frame
+ * @param {{environment: string|undefined, syncedAt: number|undefined,
+ *   idField: string, id: string|null, valueField: string}} contract
+ * @returns {number|undefined}
+ */
+const selectFrameNumber = (frame, { environment, syncedAt, idField, id, valueField }) => {
+  if (id === null || id === undefined) return undefined;
+  if (!isFreshFrame(frame, environment, syncedAt)) return undefined;
+  if (firstText(frame[idField]) !== id) return undefined;
+  // `firstNumber` answers `null` for an absent field, and `null` is how the hook is told a
+  // figure is GONE. Declining is the right reading of a frame that simply did not carry it.
+  return firstNumber(frame[valueField]) ?? undefined;
+};
+
+/** The same, for a text field. Never `null`, for the reason above. */
+const selectFrameText = (frame, { environment, syncedAt, idField, id, valueField }) => {
+  if (id === null || id === undefined) return undefined;
+  if (!isFreshFrame(frame, environment, syncedAt)) return undefined;
+  if (firstText(frame[idField]) !== id) return undefined;
+  return firstText(frame[valueField]) ?? undefined;
+};
+
+/**
+ * ONE position row's unrealised P&L, live off `pnl` and filtered to that row's symbol.
+ *
+ * §13.2b's worked example, in the cell that renders the figure. Two selectors on one
+ * channel rather than one selector returning a pair: the hook gates on `Object.is`, so an
+ * object would fail the comparison on every frame and re-render the cell for every symbol
+ * on the socket — which is the defect this leaf exists to remove. Two selected primitives
+ * are two independent gates, and `useLiveChannel`'s registry still holds ONE
+ * `wsClient.subscribe` for the channel however many of either there are.
+ *
+ * The amount and the percentage are the two figures `ds/PnLDisplay` renders together, and
+ * each falls back to the read's own projection until a frame supersedes it. `pnl` and
+ * `pnlPct` are the seeds; they are named for what they are rather than `value`, because
+ * `value` in this file means "what the cell was handed" and the cell now decides.
+ */
+const LivePositionPnl = memo(function LivePositionPnl({
+  symbol,
+  environment,
+  syncedAt,
+  currency,
+  pnl,
+  pnlPct,
+}) {
+  const pickPnl = useCallback(
+    (frame) => selectFrameNumber(frame, {
+      environment, syncedAt, idField: "symbol", id: symbol, valueField: "unrealized_pnl",
+    }),
+    [environment, syncedAt, symbol],
+  );
+
+  const pickPnlPct = useCallback(
+    (frame) => selectFrameNumber(frame, {
+      environment, syncedAt, idField: "symbol", id: symbol, valueField: "unrealized_pnl_pct",
+    }),
+    [environment, syncedAt, symbol],
+  );
+
+  // A row that reported no market has nothing to filter on, so it subscribes to nothing:
+  // `useLiveChannel` treats a falsy channel as no subscription and returns `initial`.
+  const channel = symbol === null || symbol === undefined ? null : PNL_CHANNEL;
+  const livePnl = useLiveChannel(channel, pickPnl, undefined);
+  const livePnlPct = useLiveChannel(channel, pickPnlPct, undefined);
+
+  return (
+    <PnLDisplay
+      value={livePnl === undefined ? pnl : livePnl}
+      percentValue={livePnlPct === undefined ? pnlPct : livePnlPct}
+      showPercent
+      currency={currency ?? undefined}
+      precision={2}
+      label="Unrealised P&L"
+    />
+  );
+});
+
+/**
+ * ONE strategy's status, live off `STRATEGY_STATUS` and filtered to its id.
+ *
+ * The status, the health and the server's account of a failure are the three fields the
+ * page-root handler used to patch into `strategies`, and they are the three this leaf
+ * renders — so the fleet list's `<li>` is no longer rebuilt to change a badge. `ds/Panel`'s
+ * §11.1 state is not one of them: whether a strategy EXISTS is structural, and a push that
+ * could add or remove a row would be a REST read's answer, not this leaf's.
+ *
+ * `ds/StrategyStatus` is already `memo`, and takes each field verbatim: it says "Status not
+ * reported" for an absent one rather than substituting a default, which is why an
+ * unreported field can travel all the way to it.
+ */
+const LiveStrategyState = memo(function LiveStrategyState({
+  strategyId,
+  environment,
+  syncedAt,
+  status,
+  health,
+  errorMessage,
+}) {
+  const pickStatus = useCallback(
+    (frame) => selectFrameText(frame, {
+      environment, syncedAt, idField: "strategy_id", id: strategyId, valueField: "status",
+    }),
+    [environment, syncedAt, strategyId],
+  );
+
+  const pickHealth = useCallback(
+    (frame) => selectFrameText(frame, {
+      environment, syncedAt, idField: "strategy_id", id: strategyId, valueField: "health",
+    }),
+    [environment, syncedAt, strategyId],
+  );
+
+  const pickError = useCallback(
+    (frame) => selectFrameText(frame, {
+      environment, syncedAt, idField: "strategy_id", id: strategyId, valueField: "error",
+    }),
+    [environment, syncedAt, strategyId],
+  );
+
+  const channel = strategyId === null || strategyId === undefined
+    ? null
+    : STRATEGY_STATUS_CHANNEL;
+  const liveStatus = useLiveChannel(channel, pickStatus, undefined);
+  const liveHealth = useLiveChannel(channel, pickHealth, undefined);
+  const liveError = useLiveChannel(channel, pickError, undefined);
+
+  const reportedError = liveError === undefined ? errorMessage : liveError;
+
+  return (
+    <>
+      <StrategyStatus
+        status={liveStatus === undefined ? status : liveStatus}
+        health={liveHealth === undefined ? health : liveHealth}
+        compact
+      />
+      {/* The server's own account of the failure, verbatim — it is the only thing on
+          screen that says WHY a strategy stopped. */}
+      {reportedError === null || reportedError === undefined ? null : (
+        <p className="text-micro text-content-secondary">{reportedError}</p>
+      )}
+    </>
+  );
+});
+
+/**
+ * ONE venue's health, live off `exchange_health` and filtered to its `exchange_id`.
+ *
+ * `last_sync` is the only field taken from the frame, and that is a decision rather than an
+ * omission: the channel's payload is undeclared, so its `status` and `latency_ms` could no
+ * more be presented as measurements than the REST constants they would replace
+ * (`get_exchange_health` publishes a fixed `"connected"` and a fixed `35`). The page-root
+ * handler this replaces had already been narrowed to that one field by task 19.1b; what
+ * moves here is where it is read, not what.
+ *
+ * So `ds/ExchangeStatus` is passed neither `connectionState` nor `latencyMs` and reports
+ * both as not reported — see the module docblock and `VENUE_CONSTANT_NOTE`.
+ */
+const LiveVenueHealth = memo(function LiveVenueHealth({
+  exchangeId,
+  exchange,
+  environment,
+  syncedAt,
+  lastSync,
+}) {
+  const pickLastSync = useCallback(
+    (frame) => selectFrameText(frame, {
+      environment, syncedAt, idField: "exchange_id", id: exchangeId, valueField: "last_sync",
+    }),
+    [environment, syncedAt, exchangeId],
+  );
+
+  const liveLastSync = useLiveChannel(
+    exchangeId === null || exchangeId === undefined ? null : EXCHANGE_HEALTH_CHANNEL,
+    pickLastSync,
+    undefined,
+  );
+
+  return (
+    <>
+      <ExchangeStatus exchange={exchange} />
+      <VenueLastSync lastSync={liveLastSync === undefined ? lastSync : liveLastSync} />
+    </>
+  );
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
  * TIER 2 — OPEN POSITIONS (`positions`, `degraded`, `risk.open_positions_count`)
  * ══════════════════════════════════════════════════════════════════════════ */
 
@@ -647,20 +982,27 @@ const positionColumns = (currency) => Object.freeze([
     format: "currency",
     priority: 1,
     /*
+     * THE CELL IS A SEAM, NOT A RENDERER (task 19.3).
+     *
+     * It reads the three things the live leaf needs and hands them over as primitives:
+     * the row's symbol — a PROJECTED column, so the row memo already compares it — and the
+     * two page-level values it cannot get from `row`, which come through `observe`.
+     * `LivePositionPnl` is what subscribes and what re-renders; this function does neither.
+     *
      * The percentage comes from `observed`, not from `row`. `ds/DataTable`'s row memo
      * compares the PROJECTED cell values, so a `render` that reads an unprojected field off
-     * `row` can hold a stale figure when a tick rebuilds the array — and `observe` is the
+     * `row` can hold a stale figure when a read rebuilds the array — and `observe` is the
      * declared way for a cell to name the rest of what it reads. See the table below.
      */
-    render: function UnrealisedPnlCell({ value, observed }) {
+    render: function UnrealisedPnlCell({ value, row, observed }) {
       return (
-        <PnLDisplay
-          value={value}
-          percentValue={observed?.unrealisedPnlPct}
-          showPercent
+        <LivePositionPnl
+          symbol={row?.market ?? null}
+          environment={observed?.environment}
+          syncedAt={observed?.syncedAt}
           currency={currency ?? undefined}
-          precision={2}
-          label="Unrealised P&L"
+          pnl={value}
+          pnlPct={observed?.unrealisedPnlPct}
         />
       );
     },
@@ -1129,6 +1471,23 @@ export default function Dashboard() {
   const lastSyncTimestampRef = useRef(Date.now());
 
   /*
+   * THE SAME FLOOR, AS A VALUE A LEAF CAN BE HANDED (task 19.3).
+   *
+   * `lastSyncTimestampRef` is read by the two frozen `risk.kill_switch_*` handlers through
+   * `isEventFresh`, and it has to stay a ref for them: their effect is established ONCE and
+   * must not be torn down and rebuilt every time a read completes (Requirement 19.1 freezes
+   * those two subscriptions, and re-subscribing them per read would change when they are
+   * live). A leaf needs the opposite — a prop, so that a new read re-renders it and its
+   * selectors close over the new floor.
+   *
+   * So it is one clock reading with two carriers and ONE writer: the projection effect
+   * assigns both from the same `Date.now()`. Deriving one from the other is not possible in
+   * either direction — a ref cannot cause a render, and state cannot be read by an effect
+   * that does not depend on it.
+   */
+  const [syncedAt, setSyncedAt] = useState(() => Date.now());
+
+  /*
    * Emergency Halt state (P0.1 / 2D.5). Task 19.2b changed the surface these four drive and
    * none of the four: `showKillSwitchModal` is now `ds/ConfirmDialog`'s `open`,
    * `isKillSwitchProcessing` its `busy`, `killSwitchError` a `ds/Alert` inside it, and
@@ -1142,10 +1501,10 @@ export default function Dashboard() {
   /*
    * Operational Critical Alerts State (P0.2 / 2D.2) — WRITTEN, AND DELIBERATELY UNREAD.
    *
-   * Three subscriptions below write this list: the two `risk.kill_switch_*` handlers, which
-   * Requirement 19.1 forbids this task from touching, and the `notification` handler beside
-   * them. Nothing renders it any more, because the Requirement 3.3 strip is derived from the
-   * three declared field sets and a pushed frame is not one of them.
+   * TWO subscriptions write this list, and they are the two `risk.kill_switch_*` handlers
+   * Requirement 19.1 forbids this task from touching. Nothing renders it, because the
+   * Requirement 3.3 strip is derived from the three declared field sets and a pushed frame is
+   * not one of them.
    *
    * The kill-switch condition those two handlers announce is still on screen: they also set
    * `riskState.kill_switch_active`, which is what `isKillSwitchActive` reads and what the
@@ -1153,16 +1512,37 @@ export default function Dashboard() {
    * from the frame's prose, and no condition is lost by nobody reading this array. The
    * binding is a hole rather than a name so the unused reader is not merely unused but
    * absent — the setter is what the frozen handlers need.
+   *
+   * THE THIRD WRITER IS GONE (task 19.3). A `notification` handler stood beside them and
+   * pushed `severity: "critical"｜"warning"` frames onto this same unread list. Its only
+   * effect was a state nobody reads, which makes it a dead subscription — and a dead
+   * subscription still costs a page-root re-render on every frame, which is exactly what
+   * this task is removing. It is deleted rather than relocated because there is no leaf to
+   * relocate it to: no element on this page renders a pushed notification.
+   *
+   * Nothing reaches the trader less for it. `hooks/useNotificationStream` is the ONE toast
+   * transport for backend events (task 10.1, §11.5) and is mounted once in the shell, so
+   * every `notification` frame is already classified by `design/notificationPolicy`'s
+   * default-closed allowlist and raised there. This handler was a second, unfiltered
+   * consumer of that same channel whose output went nowhere — the arrangement Requirement
+   * 16.2 exists to prevent, minus even the toast.
    */
   const [, setCriticalAlerts] = useState(NO_ROWS);
 
   /*
-   * TIER 2's view models. One per §7.1 region, written in exactly one place — the
-   * projection effect below — and cleared together when the read has no payload.
+   * TIER 2's view models — STRUCTURAL, and written in exactly ONE place (task 19.3).
    *
-   * They are state rather than memos because task 19.3 moves the WebSocket subscriptions
-   * into the leaves that render the value and patches these same models on the way; two of
-   * the handlers already do (`strategy_status`, `exchange_health`).
+   * Which positions exist, which strategies exist, which venues are connected, what the
+   * server counted: every one of these changes on a REST read and none of them on a tick.
+   * The projection effect below is now their only writer — no WebSocket handler patches any
+   * of them any more — which is what makes "a tick re-renders one text node" true of this
+   * page rather than aspirational. The three channels that used to write here are in
+   * `LivePositionPnl`, `LiveStrategyState` and `LiveVenueHealth` (§13.2b).
+   *
+   * They stay `useState` rather than becoming `useMemo` because the projection is an effect:
+   * `projectedFrom` below is the flag that makes the one-commit gap between a payload
+   * arriving and these models describing it decidable, and a memo would not need it because
+   * a memo would not have it.
    */
   const [positions, setPositions] = useState(NO_ROWS);
   // BC-2's two channels, kept apart from the list they qualify.
@@ -1249,8 +1629,12 @@ export default function Dashboard() {
       return;
     }
 
-    // The freshness floor every WebSocket frame is measured against (2D.4).
-    lastSyncTimestampRef.current = Date.now();
+    // The freshness floor every WebSocket frame is measured against (2D.4). One clock
+    // reading, written to both carriers — the ref the frozen root handlers read through
+    // `isEventFresh`, and the state the leaves receive as a prop (see its declaration).
+    const readAt = Date.now();
+    lastSyncTimestampRef.current = readAt;
+    setSyncedAt(readAt);
 
     const risk = payload.risk ?? null;
 
@@ -1388,64 +1772,32 @@ export default function Dashboard() {
       setCriticalAlerts(prev => prev.filter(a => !a.title.includes("Kill Switch")));
     });
 
-    // 5. Strategy Status Changes
-    const unsubStrategy = wsClient.subscribe("strategy_status", (data) => {
-      if (!isEventFresh(data)) return;
-      if (data?.strategy_id) {
-        setStrategies(prev => prev.map(s => s.id === data.strategy_id ? {
-          ...s,
-          status: data.status || s.status,
-          health: data.health || s.health,
-          errorMessage: data.error || s.errorMessage
-        } : s));
-      }
-    });
-
     /*
-     * 6. Exchange Health Changes.
+     * THE THREE TICK CHANNELS THAT USED TO BE HERE ARE IN THE LEAVES NOW (task 19.3).
      *
-     * The frame is merged into the venue row it names, and only into the field this panel
-     * reads: `last_sync`. It used to be spread wholesale (`{...ex, ...data}`), which put the
-     * frame's `status` and `latency_ms` on the row — and nothing declares that channel's
-     * payload, so neither could be presented as a measurement any more than the REST
-     * constants they replaced could. Task 19.3 moves this subscription into
-     * `ds/ExchangeStatus` itself, which is where a per-venue reading belongs.
+     *   * `strategy_status` patched `strategies` — now `LiveStrategyState`, on
+     *     `STRATEGY_STATUS`, the channel `wsClient.subscribeStrategyStatus` actually names.
+     *   * `exchange_health` patched `venues[].lastSync` — now `LiveVenueHealth`, filtered to
+     *     its own `exchange_id`.
+     *   * `notification` pushed onto `criticalAlerts`, which nothing reads — DELETED rather
+     *     than moved. See `setCriticalAlerts`'s declaration above.
+     *
+     * There was never a `pnl` handler at this root: the per-position figure was whatever the
+     * last read said, refreshed only by another read. `LivePositionPnl` is the channel's
+     * first consumer on this page, and it is one text node wide.
+     *
+     * What stays is what is not a tick. `onOpen` re-issues the ONE read, which is the page
+     * root's own business; `onStatusChange` is a fact about this browser's socket, reported
+     * once for the account rather than per row; and the two `risk.kill_switch_*` handlers
+     * write `riskState`, which is page-level because the strip, the trigger and the
+     * confirmation's review grid all read it — and Requirement 19.1 freezes them where they
+     * are. None of the four writes a per-row figure, so none of them fires on a tick.
      */
-    const unsubExchange = wsClient.subscribe("exchange_health", (data) => {
-      if (!isEventFresh(data)) return;
-      if (data?.exchange_id) {
-        setVenues(prev => prev.map(venue => (venue.id === data.exchange_id ? {
-          ...venue,
-          lastSync: firstText(data.last_sync) ?? venue.lastSync,
-        } : venue)));
-      }
-    });
-
-    // 7. Critical Notifications Broadcast
-    const unsubNotif = wsClient.subscribe("notification", (notif) => {
-      if (!isEventFresh(notif)) return;
-      if (notif?.severity === "critical" || notif?.severity === "warning") {
-        setCriticalAlerts(prev => [
-          {
-            id: notif.id || `notif_${Date.now()}`,
-            severity: notif.severity,
-            title: notif.title || "Trading Alert",
-            message: notif.message,
-            timestamp: "Just now"
-          },
-          ...prev.slice(0, 4)
-        ]);
-      }
-    });
-
     return () => {
       if (unsubOpen) unsubOpen();
       if (unsubStatus) unsubStatus();
       if (unsubRiskActivated) unsubRiskActivated();
       if (unsubRiskRecovered) unsubRiskRecovered();
-      if (unsubStrategy) unsubStrategy();
-      if (unsubExchange) unsubExchange();
-      if (unsubNotif) unsubNotif();
     };
   }, [environment, refetch]);
 
@@ -2091,12 +2443,19 @@ export default function Dashboard() {
                       </span>
                     )}
                   </div>
-                  <StrategyStatus status={strategy.status} health={strategy.health} compact />
-                  {/* The server's own account of the failure, verbatim — it is the only
-                      thing on screen that says WHY a strategy stopped. */}
-                  {strategy.errorMessage === null ? null : (
-                    <p className="text-micro text-content-secondary">{strategy.errorMessage}</p>
-                  )}
+                  {/* The badge and the failure sentence are the live pair, so they are ONE
+                      memoised leaf subscribing to `STRATEGY_STATUS` for this deployment
+                      (task 19.3). The `<li>` around it holds the structural half — that
+                      this strategy exists, and what it is called — which only a read
+                      changes. */}
+                  <LiveStrategyState
+                    strategyId={strategy.id}
+                    environment={environment}
+                    syncedAt={syncedAt}
+                    status={strategy.status}
+                    health={strategy.health}
+                    errorMessage={strategy.errorMessage}
+                  />
                 </li>
               ))}
             </ul>
@@ -2159,10 +2518,21 @@ export default function Dashboard() {
                 columns={positionCols}
                 rows={positionRows}
                 getRowId={(row) => row.id}
-                // The percentage is not a projected column, so the cell that shows it beside
-                // the P&L declares it here: `observe`'s RESULT is what the row memo compares,
-                // so a tick cannot leave a stale percentage in a cell (§13.2c).
-                observe={(row) => ({ unrealisedPnlPct: row.unrealisedPnlPct })}
+                /* WHAT THE P&L CELL READS THAT THE PROJECTION DOES NOT CARRY (§13.2c).
+                   `observe`'s RESULT is what the row memo compares — the closure's identity
+                   is not — so this may be rebuilt every render and still re-renders a `<tr>`
+                   only when one of the named values actually moved. All three change on a
+                   REST read and none of them on a tick, which is the point: the tick is
+                   `LivePositionPnl`'s to receive, one text node below this row. */
+                observe={(row) => ({
+                  // Not a projected column, so the cell that shows it beside the P&L has to
+                  // name it or risk holding a figure nothing observed changing.
+                  unrealisedPnlPct: row.unrealisedPnlPct,
+                  // Page state, not row state: the ledger a frame must name to be read, and
+                  // the read floor a frame must not predate.
+                  environment,
+                  syncedAt,
+                })}
                 caption={currency
                   ? `Open positions, ${panelEnvironment} account, in ${currency}`
                   : `Open positions, ${panelEnvironment} account`}
@@ -2256,12 +2626,20 @@ export default function Dashboard() {
                       key={venue.id}
                       className="flex min-w-0 flex-col gap-1 rounded-sm border border-line-subtle bg-surface-canvas px-3 py-2"
                     >
-                      {/* Neither `connectionState` nor `latencyMs` is passed: both are
-                          constants in the aggregation service (`"connected"` and `35`), so
-                          `ds/ExchangeStatus` reports each as not reported rather than as a
-                          measurement. See the module docblock. */}
-                      <ExchangeStatus exchange={venue.exchange ?? venue.id} />
-                      <VenueLastSync lastSync={venue.lastSync} />
+                      {/* The venue's own leaf, subscribing to `exchange_health` filtered to
+                          this `exchange_id` (task 19.3). Neither `connectionState` nor
+                          `latencyMs` is passed on: both are constants in the aggregation
+                          service (`"connected"` and `35`), so `ds/ExchangeStatus` reports
+                          each as not reported rather than as a measurement, and the pushed
+                          frame's copies of them are undeclared and no better. See the
+                          module docblock. */}
+                      <LiveVenueHealth
+                        exchangeId={venue.id}
+                        exchange={venue.exchange ?? venue.id}
+                        environment={environment}
+                        syncedAt={syncedAt}
+                        lastSync={venue.lastSync}
+                      />
                     </li>
                   ))}
                 </ul>
