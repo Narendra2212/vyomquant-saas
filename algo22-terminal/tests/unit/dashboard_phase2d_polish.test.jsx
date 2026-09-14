@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Dashboard from '../../src/pages/Dashboard';
 import * as dashboardModule from '../../src/api/modules/dashboard';
@@ -173,27 +173,12 @@ describe('Phase 2D — Trading Cockpit Polish & WebSocket Invariants', () => {
     vi.spyOn(dashboardModule.dashboardApi, 'getDashboard').mockResolvedValue(mockLivePayload);
   });
 
-  describe('2D.1: Standard / Dense Layout Toggle', () => {
-    it('defaults to Standard layout and toggles to Dense on click', async () => {
-      render(
-        <MemoryRouter>
-          <Dashboard />
-        </MemoryRouter>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText('Standard')).toBeDefined();
-        expect(screen.getByText('Dense')).toBeDefined();
-      });
-
-      // Click Dense toggle
-      const denseBtn = screen.getByText('Dense');
-      fireEvent.click(denseBtn);
-
-      // Verify localStorage was updated
-      expect(localStorage.getItem('vyomquant_dashboard_density')).toBe('dense');
-    });
-  });
+  // The `2D.1: Standard / Dense Layout Toggle` block stood here. Its one test asserted the
+  // toggle rendered `Standard`/`Dense` and wrote `vyomquant_dashboard_density` to
+  // localStorage. vyomquant-ui-redesign task 19.4 deleted the toggle and the key: the
+  // density preference has no requirement behind it and cost a second layout to maintain
+  // (design.md §7.1). The test is deleted with the behaviour it covered rather than relaxed
+  // into an assertion that would pass on any page — there is nothing left to assert.
 
   describe('2D.3: Spot Liquidation Safety Invariants', () => {
     it('renders dash for spot liquidation price and distance without fabrication', async () => {

@@ -50,11 +50,20 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // -- §1.1 G5, the four hotspots task 1.10 names explicitly ----------------
   // 240 inline styles, zero `C.` references, Tailwind-default #ef4444/#64748b
   // with no token source at all. Task 19.1 takes this to 0 — that is the M8 rebuild
-  // of the page onto the tier hierarchy, and it is the only task that touches this
-  // file's markup. (This line read "task 3.5" until the M7 checkpoint; M2 stops at
-  // 3.4, so the largest entry in either budget was pointed at a task that does not
-  // exist and was therefore unowned.)
-  'pages/Dashboard.jsx': 315,
+  // of the page onto the tier hierarchy. (This line read "task 3.5" until the M7
+  // checkpoint; M2 stops at 3.4, so the largest entry in either budget was pointed at a
+  // task that does not exist and was therefore unowned.)
+  //
+  // 315 -> 307 at task 19.4, which deleted the layout-density toggle — a Standard/Dense
+  // preference persisted to `localStorage vyomquant_dashboard_density` with no requirement
+  // behind it, and a second set of spacing values to keep correct on every panel, table and
+  // figure the page draws (design.md §7.1). The 8 were that control's alone: the segmented
+  // container's `#0f141c` and `#1e293b`, and each of the two buttons' selected-state
+  // `#1e293b` / `#f8fafc` / `#64748b` triple. This entry is not 19.1's rebuild starting
+  // early — the 76 `isDense ? … : …` ternaries the toggle fed collapsed to their standard
+  // branch, which is the spacing the page renders with today, so no committed geometry
+  // moved. The other 307 are 19.1's.
+  'pages/Dashboard.jsx': 307,
   // Material Design palette (#2196F3 #00BCD4 #FFAB00 #9C27B0 #FF5722 #00C853
   // #607D8B) plus GitHub greys. Rewritten by task 20.x.
   'components/SignalTraceVisualization.jsx': 138,
@@ -152,7 +161,10 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
 
   // -- Shell and cross-cutting components -----------------------------------
   'components/DeployPreflightPanel.jsx': 30,
-  'components/DashboardUpgrades.jsx': 6,
+  // `components/DashboardUpgrades.jsx: 6` stood here until task 19.4 deleted the file.
+  // Removed rather than lowered to `0`, per this header: a `0` records that a live file is
+  // clean and holds it there, but a deleted file has no source to measure and
+  // `names only files that still exist` fails on an entry pointing at nothing.
   // Cleared by task 8.6, which rebuilt it against `shell/navigation.js`. The five were
   // the brand tile's `linear-gradient(135deg,#00d4ff,#0055ff)` and its `#000` glyph, the
   // notification badge's `#000`, and the active row's `rgba(0,212,255,0.07)`. The

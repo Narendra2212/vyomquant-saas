@@ -46,18 +46,24 @@
  * not resize when the chunk lands (Requirement 14.2).
  *
  * This file is meant to become the ONLY module in `src/` that imports recharts, and
- * it is not that yet. Six others still do it statically today — `pages/Dashboard`,
- * `pages/Portfolio`, `pages/Backtester`, `pages/PaperTrading`,
- * `components/ResearchConsole` and `components/DashboardUpgrades` — and every one of
- * them defeats the split on its own, because a static import anywhere in the entry
- * graph hoists `vendor-recharts` into it regardless of what this file does.
+ * it is not that yet. Four others still do it statically today — `pages/Dashboard`,
+ * `pages/Backtester`, `pages/PaperTrading` and `components/ResearchConsole` — and
+ * every one of them defeats the split on its own, because a static import anywhere in
+ * the entry graph hoists `vendor-recharts` into it regardless of what this file does.
  * `vite.config.js` already routes recharts to its own chunk; that only pays off once
- * the last static importer is gone. Those six call sites belong to the page tasks
- * (14.x, 16.x, 19.x) and are out of scope here, so `Chart.test.jsx` pins the current
- * set instead: it fails the moment a SEVENTH importer appears, and it fails again
+ * the last static importer is gone. Those four call sites belong to the page tasks
+ * (14.x, 19.x, 23.x, 25.x) and are out of scope here, so `Chart.test.jsx` pins the
+ * current set instead: it fails the moment a SIXTH importer appears, and it fails again
  * when one is removed without the list coming down with it. Same ratchet as
  * `no-colour-literals`, for the same reason — progress that is not recorded does not
  * hold.
+ *
+ * The list was six when task 6.18 wrote this. `pages/Portfolio` left it at task 16.2,
+ * which moved its three charts onto a `lazy(() => import(...))` of this file, and
+ * `components/DashboardUpgrades` left it at task 19.4, which deleted that file
+ * outright — 786 lines of gamified upgrade prompts with no importer (design.md §7.1,
+ * Requirement 1.5). That second one is a real gain for the split rather than a
+ * migration: a whole module dropped out of the entry graph.
  *
  * ┌───────────────────────────────────────────────────────────────────────┐
  * │ WHAT IS STRUCTURAL HERE                                               │

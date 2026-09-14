@@ -110,7 +110,14 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // any of them still reads from it.
   'components/SupportCenter.jsx': 160,
   'pages/Profile.jsx': 160,
-  'components/DashboardUpgrades.jsx': 135,
+  // `components/DashboardUpgrades.jsx: 135` stood here until task 19.4 deleted the file.
+  // It is removed rather than lowered to `0`, per this header's rule: an entry reaching
+  // zero records that a file is clean and must stay clean, but a deleted file has no
+  // source to measure, and `names only files that still exist` fails on an entry that
+  // points at nothing. The 135 references left with the 786 lines that held them —
+  // gamified upgrade prompts no module imported (design.md §7.1, Requirement 1.5) — so
+  // this is 135 fewer call sites standing between here and task 27.2's deletion of the
+  // shim, taken without migrating anything.
   'pages/Landing.jsx': 122,
   // 122 -> 121 at task 10.4. The one reference was `AuditTab`'s
   // `style={{ textAlign: "center", color: C.t3 }}` — the whole component was a single

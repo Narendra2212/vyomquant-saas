@@ -480,7 +480,7 @@ describe('Chart: the lazy-loading contract (design.md §13.3)', () => {
     expect(typeof module.default).toBe('function');
   });
 
-  it('pins the set of modules that import recharts, so a seventh cannot appear', async () => {
+  it('pins the set of modules that import recharts, so a sixth cannot appear', async () => {
     const { readFileSync } = await import('node:fs');
     const path = await import('node:path');
     const { SRC, collect, stripComments } = await import('../guards/source-scan.js');
@@ -492,25 +492,34 @@ describe('Chart: the lazy-loading contract (design.md §13.3)', () => {
 
     /*
      * A static import anywhere in the entry graph hoists `vendor-recharts` into it,
-     * so the §13.3 split only pays off once this list is one entry long. These six
-     * call sites belong to the page tasks (14.x, 16.x, 19.x) and are out of scope
+     * so the §13.3 split only pays off once this list is one entry long. The remaining
+     * call sites belong to the page tasks (14.x, 19.x, 23.x, 25.x) and are out of scope
      * for 6.18, so the list is pinned by value rather than asserted down to one:
      * it fails if a NEW importer appears, and it fails again when a page migrates
      * and the list is not lowered with it.
      */
     /*
+     * Six when 6.18 pinned it, now four.
+     *
      * `pages/Portfolio.jsx` left this list at task 16.2: its three charts now go through
      * `ds/Chart`, imported with `lazy(() => import(...))` rather than statically, so
-     * recharts is no longer in that route's static graph. Five remain, all owned by the
-     * page tasks (14.x, 19.x, 23.x, 25.x).
+     * recharts is no longer in that route's static graph.
+     *
+     * `components/DashboardUpgrades.jsx` left it at task 19.4, which deleted the file —
+     * 786 lines of gamified upgrade prompts that no module imported, so its
+     * `AreaChart`/`ReferenceLine` import was holding `vendor-recharts` in the entry
+     * graph for markup that never rendered (design.md §7.1, Requirement 1.5). That is
+     * the first entry to leave by deletion rather than by migrating to `ds/Chart`.
      */
     expect(importers).toEqual([
-      'components/DashboardUpgrades.jsx',
       'components/ResearchConsole.jsx',
       'components/ds/Chart.jsx',
       'pages/Backtester.jsx',
       'pages/Dashboard.jsx',
       'pages/PaperTrading.jsx',
     ]);
+    // The count is pinned separately so that a list edited to the wrong length fails
+    // on the number as well as on the members.
+    expect(importers).toHaveLength(5);
   });
 });

@@ -4,7 +4,7 @@ import {
   ShieldCheck, AlertTriangle, ArrowRight,
   RefreshCw, BarChart2, Server,
   Play, Pause, ShieldAlert, AlertOctagon, CheckCircle2,
-  Sliders, Maximize2, Minimize2, Wifi, WifiOff
+  Sliders, Wifi, WifiOff
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip
@@ -38,13 +38,6 @@ export default function Dashboard() {
   // Environment state (default: 'live' with toggle to 'paper')
   const [environment, setEnvironment] = useState("live");
   const [timeframe, setTimeframe] = useState("1M");
-  const [layoutDensity, setLayoutDensity] = useState(() => {
-    try {
-      return localStorage.getItem("vyomquant_dashboard_density") || "standard";
-    } catch {
-      return "standard";
-    }
-  });
 
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -100,16 +93,6 @@ export default function Dashboard() {
   // Equity Curve State (Zone 8)
   const [equityCurve, setEquityCurve] = useState([]);
   const [equityLoading, setEquityLoading] = useState(false);
-
-  // Toggle density preference handler (2D.1)
-  const handleDensityToggle = (density) => {
-    setLayoutDensity(density);
-    try {
-      localStorage.setItem("vyomquant_dashboard_density", density);
-    } catch {
-      // Ignore local storage error in private mode
-    }
-  };
 
   // Core Authoritative Data Fetcher (2D.4)
   const loadDashboardData = useCallback(async (targetEnv = environment, targetTf = timeframe) => {
@@ -461,7 +444,6 @@ export default function Dashboard() {
   const riskScore = riskState?.risk_score != null ? riskState.risk_score : 25;
   const isCircuitBreakerArmed = riskState?.circuit_breaker_armed ?? true;
   const isKillSwitchActive = riskState?.kill_switch_active ?? false;
-  const isDense = layoutDensity === "dense";
 
   return (
     // TEMPORARY page-level mono (task 3.3). The shell no longer sets a font family, so
@@ -480,10 +462,9 @@ export default function Dashboard() {
     <div className="font-mono" style={{
       flex: 1,
       overflowY: "auto",
-      padding: isDense ? "0.875rem 1.25rem" : "1.25rem 1.75rem",
+      padding: "1.25rem 1.75rem",
       background: "#080a0e",
-      color: "#e2e8f0",
-      transition: "padding 0.15s ease"
+      color: "#e2e8f0"
     }}>
 
       {/* ── ZONE 1: TOP HEADER & GLOBAL TRADING STATUS ─────────────────────────── */}
@@ -491,8 +472,8 @@ export default function Dashboard() {
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        marginBottom: isDense ? "0.875rem" : "1.25rem",
-        paddingBottom: isDense ? "0.75rem" : "1rem",
+        marginBottom: "1.25rem",
+        paddingBottom: "1rem",
         borderBottom: "1px solid rgba(255,255,255,0.06)",
         flexWrap: "wrap",
         gap: "0.875rem"
@@ -501,7 +482,7 @@ export default function Dashboard() {
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
             <h1 style={{
-              fontSize: isDense ? "1.125rem" : "1.25rem",
+              fontSize: "1.25rem",
               fontWeight: 800,
               letterSpacing: "-0.02em",
               color: "#f8fafc",
@@ -610,57 +591,8 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Global Operational Controls & Density Selector */}
+        {/* Global Operational Controls */}
         <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", flexWrap: "wrap" }}>
-          
-          {/* 2D.1 STANDARD / DENSE VIEW TOGGLE */}
-          <div style={{
-            display: "inline-flex",
-            alignItems: "center",
-            background: "#0f141c",
-            padding: "2px",
-            borderRadius: "8px",
-            border: "1px solid #1e293b"
-          }}>
-            <button
-              onClick={() => handleDensityToggle("standard")}
-              title="Standard Spacing Layout"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 4,
-                padding: "3px 8px",
-                borderRadius: 6,
-                fontSize: "0.6875rem",
-                fontWeight: 600,
-                border: "none",
-                cursor: "pointer",
-                background: layoutDensity === "standard" ? "#1e293b" : "transparent",
-                color: layoutDensity === "standard" ? "#f8fafc" : "#64748b"
-              }}
-            >
-              <Maximize2 size={11} /> Standard
-            </button>
-            <button
-              onClick={() => handleDensityToggle("dense")}
-              title="Compact Density Layout (Optimized for Multi-Position Screens)"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 4,
-                padding: "3px 8px",
-                borderRadius: 6,
-                fontSize: "0.6875rem",
-                fontWeight: 600,
-                border: "none",
-                cursor: "pointer",
-                background: layoutDensity === "dense" ? "#1e293b" : "transparent",
-                color: layoutDensity === "dense" ? "#f8fafc" : "#64748b"
-              }}
-            >
-              <Minimize2 size={11} /> Dense
-            </button>
-          </div>
 
           {/* P0.1 EMERGENCY HALT / RESUME BUTTON */}
           {!isKillSwitchActive ? (
@@ -674,7 +606,7 @@ export default function Dashboard() {
                 display: "flex",
                 alignItems: "center",
                 gap: "0.375rem",
-                padding: isDense ? "0.3125rem 0.75rem" : "0.375rem 0.875rem",
+                padding: "0.375rem 0.875rem",
                 background: "rgba(239, 68, 68, 0.15)",
                 border: "1px solid #ef4444",
                 borderRadius: 8,
@@ -699,7 +631,7 @@ export default function Dashboard() {
                 display: "flex",
                 alignItems: "center",
                 gap: "0.375rem",
-                padding: isDense ? "0.3125rem 0.75rem" : "0.375rem 0.875rem",
+                padding: "0.375rem 0.875rem",
                 background: "rgba(234, 179, 8, 0.2)",
                 border: "1px solid #eab308",
                 borderRadius: 8,
@@ -722,7 +654,7 @@ export default function Dashboard() {
               display: "flex",
               alignItems: "center",
               gap: "0.375rem",
-              padding: isDense ? "0.3125rem 0.625rem" : "0.375rem 0.75rem",
+              padding: "0.375rem 0.75rem",
               background: "#0f141c",
               border: "1px solid #1e293b",
               borderRadius: 8,
@@ -744,7 +676,7 @@ export default function Dashboard() {
                 display: "flex",
                 alignItems: "center",
                 gap: "0.5rem",
-                padding: isDense ? "0.3125rem 0.75rem" : "0.375rem 0.875rem",
+                padding: "0.375rem 0.875rem",
                 background: isKillSwitchActive ? "rgba(239,68,68,0.15)" : "#0f141c",
                 border: `1px solid ${isKillSwitchActive ? "#ef4444" : "#1e293b"}`,
                 borderRadius: 8,
@@ -963,7 +895,7 @@ export default function Dashboard() {
           display: "flex",
           flexDirection: "column",
           gap: "0.5rem",
-          marginBottom: isDense ? "0.875rem" : "1.25rem"
+          marginBottom: "1.25rem"
         }}>
           {/* Active Kill Switch Alert */}
           {isKillSwitchActive && (
@@ -971,7 +903,7 @@ export default function Dashboard() {
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              padding: isDense ? "0.625rem 1rem" : "0.75rem 1.25rem",
+              padding: "0.75rem 1.25rem",
               background: "rgba(239, 68, 68, 0.15)",
               border: "1px solid #ef4444",
               borderRadius: 10
@@ -1015,7 +947,7 @@ export default function Dashboard() {
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              padding: isDense ? "0.625rem 1rem" : "0.75rem 1.25rem",
+              padding: "0.75rem 1.25rem",
               background: "rgba(234, 179, 8, 0.15)",
               border: "1px solid #eab308",
               borderRadius: 10
@@ -1057,7 +989,7 @@ export default function Dashboard() {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                padding: isDense ? "0.5rem 1rem" : "0.625rem 1.25rem",
+                padding: "0.625rem 1.25rem",
                 background: alert.severity === "critical" ? "rgba(239, 68, 68, 0.12)" : "rgba(234, 179, 8, 0.12)",
                 border: `1px solid ${alert.severity === "critical" ? "#ef4444" : "#eab308"}`,
                 borderRadius: 8
@@ -1093,20 +1025,20 @@ export default function Dashboard() {
       <div style={{
         display: "grid",
         gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-        gap: isDense ? "0.75rem" : "1rem",
-        marginBottom: isDense ? "0.875rem" : "1.25rem"
+        gap: "1rem",
+        marginBottom: "1.25rem"
       }}>
         {/* Total Equity */}
         <div style={{
           background: "#0c1017",
           border: "1px solid #1e293b",
           borderRadius: 12,
-          padding: isDense ? "0.75rem 1rem" : "1rem 1.25rem"
+          padding: "1rem 1.25rem"
         }}>
           <div style={{ fontSize: "0.6875rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             Total Equity ({portfolioData.currency})
           </div>
-          <div style={{ fontSize: isDense ? "1.25rem" : "1.5rem", fontWeight: 800, color: "#f8fafc", marginTop: "0.25rem", letterSpacing: "-0.03em" }}>
+          <div style={{ fontSize: "1.5rem", fontWeight: 800, color: "#f8fafc", marginTop: "0.25rem", letterSpacing: "-0.03em" }}>
             ${(portfolioData?.totalEquity ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
           </div>
           <div style={{ fontSize: "0.6875rem", color: (portfolioData?.cumulativePnl ?? 0) >= 0 ? "#10b981" : "#ef4444", marginTop: "0.25rem" }}>
@@ -1119,12 +1051,12 @@ export default function Dashboard() {
           background: "#0c1017",
           border: "1px solid #1e293b",
           borderRadius: 12,
-          padding: isDense ? "0.75rem 1rem" : "1rem 1.25rem"
+          padding: "1rem 1.25rem"
         }}>
           <div style={{ fontSize: "0.6875rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             Available Liquidity
           </div>
-          <div style={{ fontSize: isDense ? "1.25rem" : "1.5rem", fontWeight: 800, color: "#f8fafc", marginTop: "0.25rem", letterSpacing: "-0.03em" }}>
+          <div style={{ fontSize: "1.5rem", fontWeight: 800, color: "#f8fafc", marginTop: "0.25rem", letterSpacing: "-0.03em" }}>
             ${(portfolioData?.availableBalance ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
           </div>
           <div style={{ fontSize: "0.6875rem", color: "#64748b", marginTop: "0.25rem" }}>
@@ -1137,13 +1069,13 @@ export default function Dashboard() {
           background: "#0c1017",
           border: "1px solid #1e293b",
           borderRadius: 12,
-          padding: isDense ? "0.75rem 1rem" : "1rem 1.25rem"
+          padding: "1rem 1.25rem"
         }}>
           <div style={{ fontSize: "0.6875rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             Today's Total P&L
           </div>
           <div style={{
-            fontSize: isDense ? "1.25rem" : "1.5rem",
+            fontSize: "1.5rem",
             fontWeight: 800,
             color: (portfolioData?.todayPnl ?? 0) >= 0 ? "#10b981" : "#ef4444",
             marginTop: "0.25rem",
@@ -1168,12 +1100,12 @@ export default function Dashboard() {
           background: "#0c1017",
           border: "1px solid #1e293b",
           borderRadius: 12,
-          padding: isDense ? "0.75rem 1rem" : "1rem 1.25rem"
+          padding: "1rem 1.25rem"
         }}>
           <div style={{ fontSize: "0.6875rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             Market Exposure
           </div>
-          <div style={{ fontSize: isDense ? "1.25rem" : "1.5rem", fontWeight: 800, color: "#f8fafc", marginTop: "0.25rem", letterSpacing: "-0.03em" }}>
+          <div style={{ fontSize: "1.5rem", fontWeight: 800, color: "#f8fafc", marginTop: "0.25rem", letterSpacing: "-0.03em" }}>
             ${(portfolioData?.totalExposure ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
           </div>
           <div style={{ fontSize: "0.6875rem", color: "#64748b", marginTop: "0.25rem" }}>
@@ -1186,7 +1118,7 @@ export default function Dashboard() {
           background: "#0c1017",
           border: "1px solid #1e293b",
           borderRadius: 12,
-          padding: isDense ? "0.75rem 1rem" : "1rem 1.25rem"
+          padding: "1rem 1.25rem"
         }}>
           <div style={{ fontSize: "0.6875rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             Risk Guard State
@@ -1218,19 +1150,19 @@ export default function Dashboard() {
       <div style={{
         display: "grid",
         gridTemplateColumns: "minmax(0, 1.8fr) minmax(0, 1.2fr)",
-        gap: isDense ? "0.875rem" : "1.25rem",
-        marginBottom: isDense ? "1rem" : "1.5rem"
+        gap: "1.25rem",
+        marginBottom: "1.5rem"
       }}>
 
         {/* ── LEFT COLUMN: POSITIONS, PERFORMANCE & EXECUTIONS ───────────────── */}
-        <div style={{ display: "flex", flexDirection: "column", gap: isDense ? "0.875rem" : "1.25rem", minWidth: 0 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem", minWidth: 0 }}>
 
           {/* ── ZONE 3 / P0.3 / 2D.3: OPEN POSITIONS LIVE TABLE ────────────── */}
           <div style={{
             background: "#0c1017",
             border: "1px solid #1e293b",
             borderRadius: 12,
-            padding: isDense ? "0.875rem 1rem" : "1.25rem"
+            padding: "1.25rem"
           }}>
             <div style={{
               display: "flex",
@@ -1296,19 +1228,19 @@ export default function Dashboard() {
               </div>
             ) : (
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", minWidth: 780, borderCollapse: "collapse", fontSize: isDense ? "0.6875rem" : "0.75rem" }}>
+                <table style={{ width: "100%", minWidth: 780, borderCollapse: "collapse", fontSize: "0.75rem" }}>
                   <thead>
                     <tr style={{ borderBottom: "1px solid #1e293b", color: "#64748b", textAlign: "left" }}>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600 }}>Symbol / Market</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600 }}>Venue</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600 }}>Mode</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600 }}>Side</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Contracts</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Entry</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Mark</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>uPnL</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Liq. Price</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Liq. Dist</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600 }}>Symbol / Market</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600 }}>Venue</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600 }}>Mode</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600 }}>Side</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Contracts</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Entry</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Mark</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>uPnL</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Liq. Price</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Liq. Dist</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1318,13 +1250,13 @@ export default function Dashboard() {
 
                       return (
                         <tr key={pos.id} style={{ borderBottom: "1px solid rgba(30,41,59,0.5)" }}>
-                          <td style={{ padding: isDense ? "0.4375rem 0.5rem" : "0.625rem 0.75rem", color: "#f8fafc", fontWeight: 700 }}>
+                          <td style={{ padding: "0.625rem 0.75rem", color: "#f8fafc", fontWeight: 700 }}>
                             {pos.symbol}
                             <span style={{ fontSize: "0.625rem", color: "#64748b", marginLeft: "0.375rem", textTransform: "uppercase" }}>
                               {pos.marketType}
                             </span>
                           </td>
-                          <td style={{ padding: isDense ? "0.4375rem 0.5rem" : "0.625rem 0.75rem" }}>
+                          <td style={{ padding: "0.625rem 0.75rem" }}>
                             <span style={{
                               fontSize: "0.625rem",
                               padding: "2px 6px",
@@ -1338,7 +1270,7 @@ export default function Dashboard() {
                               {pos.exchangeId}
                             </span>
                           </td>
-                          <td style={{ padding: isDense ? "0.4375rem 0.5rem" : "0.625rem 0.75rem" }}>
+                          <td style={{ padding: "0.625rem 0.75rem" }}>
                             <span style={{
                               fontSize: "0.625rem",
                               color: "#94a3b8",
@@ -1348,7 +1280,7 @@ export default function Dashboard() {
                               {isDeriv ? pos.marginType : "SPOT"}
                             </span>
                           </td>
-                          <td style={{ padding: isDense ? "0.4375rem 0.5rem" : "0.625rem 0.75rem" }}>
+                          <td style={{ padding: "0.625rem 0.75rem" }}>
                             <span style={{
                               fontSize: "0.625rem",
                               padding: "2px 6px",
@@ -1361,17 +1293,17 @@ export default function Dashboard() {
                               {pos.side} {pos.leverage > 1 ? `${pos.leverage}x` : ""}
                             </span>
                           </td>
-                          <td style={{ padding: isDense ? "0.4375rem 0.5rem" : "0.625rem 0.75rem", textAlign: "right", color: "#f8fafc", fontWeight: 600 }}>
+                          <td style={{ padding: "0.625rem 0.75rem", textAlign: "right", color: "#f8fafc", fontWeight: 600 }}>
                             {pos.contracts}
                           </td>
-                          <td style={{ padding: isDense ? "0.4375rem 0.5rem" : "0.625rem 0.75rem", textAlign: "right", color: "#94a3b8" }}>
+                          <td style={{ padding: "0.625rem 0.75rem", textAlign: "right", color: "#94a3b8" }}>
                             ${Number(pos?.entryPrice ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
                           </td>
-                          <td style={{ padding: isDense ? "0.4375rem 0.5rem" : "0.625rem 0.75rem", textAlign: "right", color: "#f8fafc", fontWeight: 600 }}>
+                          <td style={{ padding: "0.625rem 0.75rem", textAlign: "right", color: "#f8fafc", fontWeight: 600 }}>
                             ${Number(pos?.markPrice ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
                           </td>
                           <td style={{
-                            padding: isDense ? "0.4375rem 0.5rem" : "0.625rem 0.75rem",
+                            padding: "0.625rem 0.75rem",
                             textAlign: "right",
                             fontWeight: 700,
                             color: pos.unrealizedPnl >= 0 ? "#10b981" : "#ef4444"
@@ -1381,10 +1313,10 @@ export default function Dashboard() {
                               ({pos.unrealizedPnlPct >= 0 ? "+" : ""}{pos.unrealizedPnlPct}%)
                             </span>
                           </td>
-                          <td style={{ padding: isDense ? "0.4375rem 0.5rem" : "0.625rem 0.75rem", textAlign: "right", color: "#64748b" }}>
+                          <td style={{ padding: "0.625rem 0.75rem", textAlign: "right", color: "#64748b" }}>
                             {pos.liquidationPrice != null ? `$${pos.liquidationPrice.toFixed(2)}` : "—"}
                           </td>
-                          <td style={{ padding: isDense ? "0.4375rem 0.5rem" : "0.625rem 0.75rem", textAlign: "right", fontWeight: 700 }}>
+                          <td style={{ padding: "0.625rem 0.75rem", textAlign: "right", fontWeight: 700 }}>
                             {dist != null ? (
                               <span style={{
                                 color: dist < 10 ? "#ef4444" : dist < 20 ? "#eab308" : "#10b981"
@@ -1409,7 +1341,7 @@ export default function Dashboard() {
             background: "#0c1017",
             border: "1px solid #1e293b",
             borderRadius: 12,
-            padding: isDense ? "0.875rem 1rem" : "1.25rem"
+            padding: "1.25rem"
           }}>
             <div style={{
               display: "flex",
@@ -1448,7 +1380,7 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div style={{ height: isDense ? 150 : 180, position: "relative" }}>
+            <div style={{ height: 180, position: "relative" }}>
               {equityLoading ? (
                 <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#475569", fontSize: "0.75rem" }}>
                   Loading trajectory...
@@ -1485,7 +1417,7 @@ export default function Dashboard() {
             background: "#0c1017",
             border: "1px solid #1e293b",
             borderRadius: 12,
-            padding: isDense ? "0.875rem 1rem" : "1.25rem"
+            padding: "1.25rem"
           }}>
             <div style={{
               display: "flex",
@@ -1524,28 +1456,28 @@ export default function Dashboard() {
               </div>
             ) : (
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse", fontSize: isDense ? "0.6875rem" : "0.75rem" }}>
+                <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse", fontSize: "0.75rem" }}>
                   <thead>
                     <tr style={{ borderBottom: "1px solid #1e293b", color: "#64748b", textAlign: "left" }}>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600 }}>Time</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600 }}>Symbol</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600 }}>Venue</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600 }}>Side</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Price</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Amount</th>
-                      <th style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Realized P&L</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600 }}>Time</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600 }}>Symbol</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600 }}>Venue</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600 }}>Side</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Price</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Amount</th>
+                      <th style={{ padding: "0.5rem 0.75rem", fontWeight: 600, textAlign: "right" }}>Realized P&L</th>
                     </tr>
                   </thead>
                   <tbody>
                     {executions.map(exec => (
                       <tr key={exec.id} style={{ borderBottom: "1px solid rgba(30,41,59,0.5)" }}>
-                        <td style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", color: "#64748b" }}>
+                        <td style={{ padding: "0.5rem 0.75rem", color: "#64748b" }}>
                           {exec.timestamp}
                         </td>
-                        <td style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", color: "#f8fafc", fontWeight: 700 }}>
+                        <td style={{ padding: "0.5rem 0.75rem", color: "#f8fafc", fontWeight: 700 }}>
                           {exec.symbol}
                         </td>
-                        <td style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem" }}>
+                        <td style={{ padding: "0.5rem 0.75rem" }}>
                           <span style={{
                             fontSize: "0.625rem",
                             padding: "2px 5px",
@@ -1559,7 +1491,7 @@ export default function Dashboard() {
                             {exec.exchangeId}
                           </span>
                         </td>
-                        <td style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem" }}>
+                        <td style={{ padding: "0.5rem 0.75rem" }}>
                           <span style={{
                             fontSize: "0.625rem",
                             padding: "2px 6px",
@@ -1572,14 +1504,14 @@ export default function Dashboard() {
                             {exec.side}
                           </span>
                         </td>
-                        <td style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", textAlign: "right", color: "#f8fafc", fontWeight: 600 }}>
+                        <td style={{ padding: "0.5rem 0.75rem", textAlign: "right", color: "#f8fafc", fontWeight: 600 }}>
                           ${Number(exec?.price ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
                         </td>
-                        <td style={{ padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem", textAlign: "right", color: "#94a3b8" }}>
+                        <td style={{ padding: "0.5rem 0.75rem", textAlign: "right", color: "#94a3b8" }}>
                           {exec.amount}
                         </td>
                         <td style={{
-                          padding: isDense ? "0.375rem 0.5rem" : "0.5rem 0.75rem",
+                          padding: "0.5rem 0.75rem",
                           textAlign: "right",
                           fontWeight: 700,
                           color: exec.realizedPnl > 0 ? "#10b981" : exec.realizedPnl < 0 ? "#ef4444" : "#64748b"
@@ -1597,14 +1529,14 @@ export default function Dashboard() {
         </div>
 
         {/* ── RIGHT COLUMN: STRATEGIES, RISK, HEALTH & ACTIONS ───────────────── */}
-        <div style={{ display: "flex", flexDirection: "column", gap: isDense ? "0.875rem" : "1.25rem", minWidth: 0 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem", minWidth: 0 }}>
 
           {/* ── ZONE 4 / P1.3: ACTIVE STRATEGIES / BOTS ─────────────────────── */}
           <div style={{
             background: "#0c1017",
             border: "1px solid #1e293b",
             borderRadius: 12,
-            padding: isDense ? "0.875rem 1rem" : "1.25rem"
+            padding: "1.25rem"
           }}>
             <div style={{
               display: "flex",
@@ -1659,7 +1591,7 @@ export default function Dashboard() {
                 </button>
               </div>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: isDense ? "0.375rem" : "0.5rem" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                 {strategies.map(strat => {
                   const isRunning = strat.status === "active" || strat.status === "running";
                   const isError = strat.status === "error" || strat.status === "failed" || strat.health === "error";
@@ -1671,7 +1603,7 @@ export default function Dashboard() {
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "space-between",
-                        padding: isDense ? "0.5rem 0.75rem" : "0.625rem 0.875rem",
+                        padding: "0.625rem 0.875rem",
                         background: "#080a0e",
                         border: `1px solid ${isError ? "#ef4444" : "#1e293b"}`,
                         borderRadius: 8
@@ -1769,7 +1701,7 @@ export default function Dashboard() {
             background: "#0c1017",
             border: "1px solid #1e293b",
             borderRadius: 12,
-            padding: isDense ? "0.875rem 1rem" : "1.25rem"
+            padding: "1.25rem"
           }}>
             <div style={{
               display: "flex",
@@ -1802,7 +1734,7 @@ export default function Dashboard() {
               </button>
             </div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: isDense ? "0.5rem" : "0.75rem", fontSize: "0.75rem" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", fontSize: "0.75rem" }}>
               {/* Daily Loss Utilization Bar */}
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.25rem" }}>
@@ -1858,7 +1790,7 @@ export default function Dashboard() {
             background: "#0c1017",
             border: "1px solid #1e293b",
             borderRadius: 12,
-            padding: isDense ? "0.875rem 1rem" : "1.25rem"
+            padding: "1.25rem"
           }}>
             <div style={{
               display: "flex",
@@ -1914,7 +1846,7 @@ export default function Dashboard() {
                 </button>
               </div>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: isDense ? "0.375rem" : "0.5rem" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                 {exchangeConnections.map(ex => (
                   <div
                     key={ex.exchange_id || ex.id}
@@ -1922,7 +1854,7 @@ export default function Dashboard() {
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "space-between",
-                      padding: isDense ? "0.375rem 0.625rem" : "0.5rem 0.75rem",
+                      padding: "0.5rem 0.75rem",
                       background: "#080a0e",
                       borderRadius: 6,
                       border: "1px solid #1e293b"
@@ -1972,7 +1904,7 @@ export default function Dashboard() {
               background: "#0c1017",
               border: "1px solid #1e293b",
               borderRadius: 12,
-              padding: isDense ? "0.875rem 1rem" : "1.25rem"
+              padding: "1.25rem"
             }}>
               <h2 style={{ fontSize: "0.875rem", fontWeight: 800, color: "#f8fafc", margin: 0, marginBottom: "0.75rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
                 Operational Insights
