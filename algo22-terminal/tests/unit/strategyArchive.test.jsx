@@ -24,7 +24,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { readFileSync } from 'node:fs';
@@ -279,9 +279,49 @@ const renderPage = async () => {
   return view;
 };
 
-/** Open the archive confirmation. Task 10.3: this issues nothing on its own. */
+/**
+ * Open the archive confirmation. Task 10.3: this issues nothing on its own.
+ *
+ * ⚠️ TWO CLICKS, BECAUSE THE CONTROL IS NOT FLAT ANY MORE ⚠️
+ *
+ * This was one `getByRole('button', { name: /archive momentum v2/i })` — the card grid's
+ * `aria-label`, on a flat inline button. vyomquant-ui-redesign task 17.2 moved it: design.md
+ * §7.2 puts a row's destructive and live-transition actions inside the row's trailing
+ * `ds/OverflowMenu`, below a `role="separator"` and inside a `role="group"` named
+ * "Destructive and live-trading actions", and the entry's label is the page action
+ * catalogue's `[ROW_ACTION.ARCHIVE]` — "Archive strategy". So the old query found nothing:
+ * the control exists, but only once the menu is open, and under a different name.
+ *
+ * Re-adding a flat button to satisfy this helper was the other way to make it green and the
+ * wrong one — the partition is §7.2's requirement and `lib/rowActions.js`'s Property 7
+ * asserts on it. What changed here is only HOW the control is reached.
+ *
+ * ═══ WHY THE ENTRY IS REACHED THROUGH THE GROUP ═══
+ *
+ * `within(group)` rather than `within(menu)`, so this helper cannot keep passing if the
+ * archive entry ever escapes the separated group back into the menu's ordinary run: the
+ * separation is the thing Requirement 4.3 asks for, and a locator indifferent to it would
+ * stop noticing the regression it is standing on. Every hop is a role plus an accessible
+ * name rather than a `data-ds` selector, because each name is the contract — `OverflowMenu`'s
+ * `label` prop names the ROW (Requirement 18.4, which is why forty rows do not share one
+ * "More actions"), the group's name is `SEPARATED_GROUP_LABEL`, and the entry's is the
+ * catalogue's own label.
+ *
+ * ═══ WHY NOTHING WAITS FOR THE MENU TO CLOSE ═══
+ *
+ * `OverflowMenu.activate` closes the menu and returns focus to the trigger BEFORE it runs
+ * the handler, precisely so the dialog claims focus from the trigger and hands it back there
+ * on cancel. By the time `onSelect` has run there is no menu left to disambiguate against.
+ */
 const openArchiveDialog = async (user) => {
-  await user.click(screen.getByRole('button', { name: /archive momentum v2/i }));
+  await user.click(screen.getByRole('button', { name: 'More actions for Momentum v2' }));
+
+  const menu = await screen.findByRole('menu', { name: 'More actions for Momentum v2' });
+  const separated = within(menu).getByRole('group', {
+    name: /destructive and live-trading actions/i,
+  });
+  await user.click(within(separated).getByRole('menuitem', { name: 'Archive strategy' }));
+
   return screen.findByRole('dialog');
 };
 
