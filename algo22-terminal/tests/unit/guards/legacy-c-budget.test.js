@@ -298,13 +298,13 @@ describe('legacy-c-budget: the spot check', () => {
     // Hand-verified against the file, so the counting method is pinned to
     // reality and not only to synthetic fixtures. `App.jsx` is a good choice:
     // small enough to enumerate, and it exercises both the template-literal form
-    // (217, 222) and the comment exclusion — `AdminGuard`'s two notes about the real
-    // mono stack sit between counted references, at 304–307 and 317–318.
+    // (218, 223) and the comment exclusion — `AdminGuard`'s two notes about the real
+    // mono stack sit between counted references, at 305–308 and 318–319.
     //
-    // UpdatePasswordPage:  216 C.bg0 · 217 C.bg2, ${C.border} · 218 C.t1
-    // (/reset-password)    222 C.green, ${C.green} · 240 C.red              = 7
-    // AdminGuard:          303 C.bg0 · 308 C.t3 · 314 C.bg0 · 315 C.red
-    //                      316 C.t1 · 319 C.t3                             = 6
+    // UpdatePasswordPage:  217 C.bg0 · 218 C.bg2, ${C.border} · 219 C.t1
+    // (/reset-password)    223 C.green, ${C.green} · 241 C.red              = 7
+    // AdminGuard:          304 C.bg0 · 309 C.t3 · 315 C.bg0 · 316 C.red
+    //                      317 C.t1 · 320 C.t3                             = 6
     //
     // The `AppShell: 297 C.bg0` entry this list used to carry is retired. Task 8.5
     // rewrote `AppShell` into a CSS grid whose wrapper takes `bg-surface-canvas` as
@@ -340,10 +340,17 @@ describe('legacy-c-budget: the spot check', () => {
     // five reads the shim, and the 13 lines 10.1 added lower down (the
     // `useNotificationStream()` call and its comment, inside `ShellGrid`) are below the
     // last counted reference, so they move nothing. The budget stays at 13.
+    //
+    // Task 20.1 then added ONE line above the first surviving group — the `LiveTrading`
+    // lazy import, which gives `/app/live-trading` its own page instead of a second
+    // `<Dashboard />` — so every number below is 1 higher again (216→217 … 319→320). The
+    // line does not read the shim, and 20.1's other edit (the route element on what is now
+    // line 615) is below the last counted reference, so the COUNT did not move:
+    // `LEGACY_C_BUDGET['App.jsx']` stays at 13.
     const source = readFileSync(path.join(SRC, 'App.jsx'), 'utf8');
     const lines = findLegacyC(source).map((r) => r.line);
 
-    expect(lines).toEqual([216, 217, 217, 218, 222, 222, 240, 303, 308, 314, 315, 316, 319]);
+    expect(lines).toEqual([217, 218, 218, 219, 223, 223, 241, 304, 309, 315, 316, 317, 320]);
     expect(lines).toHaveLength(13);
     expect(LEGACY_C_BUDGET['App.jsx']).toBe(13);
   });

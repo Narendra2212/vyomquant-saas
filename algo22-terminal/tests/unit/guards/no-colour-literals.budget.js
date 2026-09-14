@@ -200,6 +200,13 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // 0` do: it records that the page is clean and holds it there. An entry is deleted only
   // when the file is.
   'pages/Dashboard.jsx': 0,
+  // New at task 20.1, which gave `/app/live-trading` its own page instead of a second
+  // `<Dashboard />`, and entered the tree clean: every colour on it comes from a `ds/`
+  // primitive or a token utility class. Seeded at `0` for the reason `pages/Dashboard.jsx: 0`
+  // and `pages/Portfolio.jsx: 0` stay there — an in-scope page with no entry is a page whose
+  // cleanliness nothing is holding, and this is the page where a hand-painted green
+  // CONNECTED chip would be most expensive. Tiers 2 and 3 land on the same primitives.
+  'pages/LiveTrading.jsx': 0,
   // Material Design palette (#2196F3 #00BCD4 #FFAB00 #9C27B0 #FF5722 #00C853
   // #607D8B) plus GitHub greys. Rewritten by task 20.x.
   'components/SignalTraceVisualization.jsx': 138,

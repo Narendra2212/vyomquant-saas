@@ -51,6 +51,7 @@ const LegalPage = lazy(() => import('./pages/LegalPage'));
 
 // Authenticated app pages (lazy - one chunk per route)
 const Dashboard           = lazy(() => import('./pages/Dashboard'));
+const LiveTrading         = lazy(() => import('./pages/LiveTrading'));
 const Strategies          = lazy(() => import('./pages/Strategies'));
 const StrategyDetail      = lazy(() => import('./pages/StrategyDetail'));
 const SignalTrace         = lazy(() => import('./pages/SignalTrace'));
@@ -611,7 +612,7 @@ export default function AppWrapper() {
                   reserved 64px `PageHeader` carrying this route's own title. */}
               <Route path="/app" element={<Navigate to="/app/dashboard" replace />} />
               <Route path="/app/dashboard" element={<Suspense fallback={SHELL_FALLBACK}><Dashboard /></Suspense>} />
-              <Route path="/app/live-trading" element={<Suspense fallback={SHELL_FALLBACK}><Dashboard /></Suspense>} />
+              <Route path="/app/live-trading" element={<Suspense fallback={SHELL_FALLBACK}><LiveTrading /></Suspense>} />
               <Route path="/app/strategies" element={<Suspense fallback={SHELL_FALLBACK}><Strategies /></Suspense>} />
               <Route path="/app/strategies/:strategyId" element={<Suspense fallback={SHELL_FALLBACK}><StrategyDetail /></Suspense>} />
               <Route path="/app/signal-trace" element={<Suspense fallback={SHELL_FALLBACK}><SignalTrace /></Suspense>} />
