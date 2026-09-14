@@ -189,13 +189,16 @@ export const A11Y_PAGE_WAIVERS = Object.freeze({
   // all. The entry is REMOVED rather than lowered to 0, because a `0` entry is what this
   // guard forbids — a cleared page belongs at `error` with every other page nobody has
   // waived, which is what deleting the line does.
-  // M7. 5 -> 3 at task 17.1, which replaced the card grid with `ds/DataTable`: the two that
-  // went were `click-events-have-key-events` and `no-static-element-interactions` on the
-  // dashed "Create New Strategy" card — a `div onClick` that is now the `EmptyState`'s own
-  // action and the header's `New strategy` command. The remaining 3 are the
-  // `label-has-associated-control` cluster on the deploy modal's account, mode and capital
-  // labels, which is task 17.2's `ds/Field` work.
-  'src/pages/Strategies.jsx': Object.freeze({ count: 3, task: '17.2' }),
+  // `src/pages/Strategies.jsx` was here: 5 findings, lowered to 3 by task 17.1 (which
+  // replaced the card grid with `ds/DataTable` and with it the dashed "Create New Strategy"
+  // tile's `div onClick`), then removed entirely by task 17.2's last part. The last 3 were
+  // the `label-has-associated-control` cluster on the deploy modal's Execution Mode, Capital
+  // and Trade Size labels — bare `<label>` elements with no `htmlFor` and no wrapped control
+  // — and that modal is now a `ds/ConfirmDialog` whose every control is a `ds/Field`, which
+  // renders a visible `<label htmlFor>` and offers no way not to. The entry is REMOVED rather
+  // than lowered to 0, because a `0` entry is what this guard forbids: a cleared page belongs
+  // at `error` with every other page nobody has waived, which is what deleting the line does.
+  // The page lints at `error` from here.
   // M8. Task 21.4 rebuilds the page on collapsed independent rows. The largest entry,
   // and the one whose 10 findings are the `label-has-associated-control` cluster around
   // the strategy/environment selects that 21.4 replaces with `ds/Field`.

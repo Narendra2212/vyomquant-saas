@@ -278,15 +278,23 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
     // 23 -> 21 at task 17.1, which rebuilt `src/pages/Strategies.jsx`'s owner card grid: the
     // two that went were `click-events-have-key-events` and `no-static-element-interactions`
     // on the dashed "Create New Strategy" tile, a `div onClick` that the `ds/EmptyState`'s
-    // own action and the header's `New strategy` command replace. Its entry is LOWERED rather
-    // than deleted — the remaining 3 are the deploy modal's `label-has-associated-control`
-    // cluster, which task 17.2 owns.
+    // own action and the header's `New strategy` command replace. Its entry was LOWERED rather
+    // than deleted then — the remaining 3 were the deploy modal's
+    // `label-has-associated-control` cluster, which task 17.2 owned.
+    //
+    // 21 -> 18 at task 17.2's last part, which DELETED that entry rather than lowering it. The
+    // three were on the deploy modal's Execution Mode, Capital and Trade Size labels; the
+    // modal is now a `ds/ConfirmDialog` whose four controls are all `ds/Field`, and `ds/Field`
+    // renders a visible `<label htmlFor>` with no hidden-label option. The page lints at
+    // `error` from here, which is what removing the line does.
     const waived = Object.values(A11Y_PAGE_WAIVERS).reduce((sum, e) => sum + e.count, 0);
     const measured = Object.keys(A11Y_PAGE_WAIVERS).reduce((sum, f) => sum + PAGES[f].count, 0);
     expect(measured).toBe(waived);
-    expect(waived).toBe(21);
-    // And the cleared page is really clean, at `error`, with no line left behind.
-    expect(A11Y_PAGE_WAIVERS['src/pages/Portfolio.jsx']).toBeUndefined();
-    expect(PAGES['src/pages/Portfolio.jsx'].count).toBe(0);
+    expect(waived).toBe(18);
+    // And the cleared pages are really clean, at `error`, with no line left behind.
+    for (const page of ['src/pages/Portfolio.jsx', 'src/pages/Strategies.jsx']) {
+      expect(A11Y_PAGE_WAIVERS[page]).toBeUndefined();
+      expect(PAGES[page].count).toBe(0);
+    }
   });
 });

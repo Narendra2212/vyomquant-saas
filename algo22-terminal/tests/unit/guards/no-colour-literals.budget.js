@@ -96,13 +96,23 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // the action-result line's `#fca5a5`/`#94a3b8` pair. Every hue that is left in the section
   // comes from `design/semantic.js` inside a primitive.
   //
-  // The remaining 37 are the DEPLOY MODAL's alone — its `rgba(1,6,8,0.85)` scrim and
-  // `rgba(0,0,0,0.6)` shadow, its `#0c1017`/`#1e293b` dialog chrome, the `#00d4ff` eyebrow
-  // and `#f8fafc` title, and the mode/capital/account controls' own palette. Task 17.2's
-  // remaining part owns them, together with this page's `a11y-ratchet` waiver — the three
-  // `label-has-associated-control` findings are on those same three controls — so they land
-  // in one change rather than being split across a guard and a lint rule.
-  'pages/Strategies.jsx': 37,
+  // 37 -> 0 at task 17.2's last part, which rebuilt the DEPLOY MODAL on `ds/ConfirmDialog`.
+  // Those 37 were that modal's alone: the `rgba(1,6,8,0.85)` scrim and `rgba(0,0,0,0.6)`
+  // shadow, the `#0c1017`/`#1e293b` dialog chrome, the `#00d4ff` eyebrow and `#f8fafc` title,
+  // the deploy-error box's `rgba(255,46,84,0.1)`/`#ef4444`, the account picker's palette, and
+  // the account / Execution Mode / Capital / Trade Size controls' `#94a3b8`/`#080a0e`/
+  // `#1e293b`/`#f8fafc`/`#10b981`. Every one is now a token: the scrim, the shadow and the
+  // dialog chrome are `ds/ConfirmDialog`'s, the live-versus-paper hue comes from
+  // `design/semantic.js`'s `ENVIRONMENT` through the dialog's `intent` and
+  // `ds/TradingEnvironmentBadge`, the error box is `ds/Alert`, and the four controls are
+  // `ds/Field`. Cleared with this page's three `a11y-ratchet` findings in the same change —
+  // all three were `label-has-associated-control` on those same controls — so the waiver line
+  // in `eslint-rules/a11y-ratchet.js` is deleted rather than lowered.
+  //
+  // The `0` entry stays, for the reason `pages/Portfolio.jsx: 0` and `pages/TradeHistory.jsx:
+  // 0` do: it records that the page is clean and holds it there. An entry is deleted only
+  // when the file is.
+  'pages/Strategies.jsx': 0,
   // 112 -> 86 at task 16.1, which rebuilt tier 1 only; 86 -> 0 at task 16.2, which rebuilt
   // tiers 2 and 3. The 86 were the positions ledger's own palette (the two side chips, the
   // signed P&L cell, the row rules and the venue chip), the equity curve's `#10B981` stroke

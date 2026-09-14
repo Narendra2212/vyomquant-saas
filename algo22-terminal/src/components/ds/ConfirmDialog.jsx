@@ -294,6 +294,19 @@ function DialogError({ error, errorContext }) {
  *   fire until it is satisfied. Omit entirely for Paper and Backtest, so that the real-funds
  *   statement is not merely hidden but never constructed (Requirement 8.4).
  * @param {string} [props.confirmLabel] Default `'Confirm'`.
+ * @param {boolean} [props.confirmDisabled] The action is not permitted *yet* — a gate the
+ *   caller owns has not opened. Disables the confirm action and refuses it in the handler,
+ *   the same two places the acknowledgement is enforced in, and for the same reason (safety
+ *   decision 2). Cancel and Escape stay live, which is why this is not `busy`: nothing is in
+ *   flight, so the trader must still be able to leave.
+ *
+ *   Added for `pages/Strategies.jsx`'s deploy modal, whose confirm control is gated on the
+ *   Deployment_Gate preflight poll (Requirements 13.4, 13.6): a condition that passed a
+ *   moment ago and has since turned red must disable the control again while the dialog
+ *   stays open. This component does not evaluate the gate and holds no opinion about it —
+ *   it renders the caller's verdict. The caller is expected to state the reason in the body
+ *   (that page renders `DeployPreflightPanel`, one row per condition), because a disabled
+ *   control is not focusable and can carry no description of its own.
  * @param {string} [props.cancelLabel] Default `'Cancel'`.
  * @param {boolean} [props.busy] A request is in flight. Both actions are disabled and
  *   Escape is inert — see the note on {@link ConfirmDialog} `busy` below.
@@ -315,6 +328,7 @@ export function ConfirmDialog({
   review,
   acknowledgement,
   confirmLabel = 'Confirm',
+  confirmDisabled = false,
   cancelLabel = 'Cancel',
   busy = false,
   busyLabel = 'Working…',
@@ -444,7 +458,10 @@ export function ConfirmDialog({
   }, [active, violationKey]);
 
   // ── Confirm is gated in two places. See safety decision 2. ──────────────
-  const canConfirm = busy !== true && (ack === null || acknowledged === true);
+  // `confirmDisabled` is the caller's own gate and is ANDed in, never substituted for the
+  // acknowledgement: a live deployment whose preflight has gone green still needs the box.
+  const canConfirm =
+    busy !== true && confirmDisabled !== true && (ack === null || acknowledged === true);
 
   const handleCancel = useCallback(() => {
     // `busy` means a request is already in flight. Cancelling cannot un-send it, and closing
@@ -463,9 +480,11 @@ export function ConfirmDialog({
      * be able to reach `onConfirm` before the acknowledgement.
      */
     if (busy === true) return;
+    // The caller's gate, refused here as well as rendered as `disabled` — same argument.
+    if (confirmDisabled === true) return;
     if (ack !== null && acknowledged !== true) return;
     if (typeof onConfirm === 'function') onConfirm();
-  }, [busy, ack, acknowledged, onConfirm]);
+  }, [busy, confirmDisabled, ack, acknowledged, onConfirm]);
 
   useFocusTrap({
     active,

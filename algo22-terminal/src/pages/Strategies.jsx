@@ -7,11 +7,12 @@ import {
 } from "lucide-react";
 import { endpoints, api } from "../api";
 import { CONFIG } from "../config";
-import { Tag2 } from "../components/ui-legacy/primitives";
 import { Button } from "../components/ui/Button";
-// Task 10.3: the two confirmation surfaces. Task 17.1: the table, the filter row and the
-// four states. Task 17.2: the row's overflow menu, and the ownership section's shell,
-// states and chips. Imported from the modules directly rather than through
+// Task 10.3: two of the three confirmation surfaces (archive and rename); task 17.2's last
+// part made the deploy modal the third, so `ConfirmDialog` is now this page's only overlay
+// and `ui-legacy/primitives` is no longer imported at all. Task 17.1: the table, the filter
+// row and the four states. Task 17.2: the row's overflow menu, and the ownership section's
+// shell, states and chips. Imported from the modules directly rather than through
 // `components/ds/index.js` — this page charts nothing, and the barrel is what would
 // otherwise put `ds/Chart`'s recharts dependency in its import graph (see ds/index.js).
 import { Alert } from "../components/ds/Alert";
@@ -41,7 +42,7 @@ import {
   describeBlockingDeployment,
 } from "../lib/strategyArchive";
 import { deploymentRequest } from "../lib/deployPreflight";
-import { deployPresentation } from "../lib/deployFlow";
+import { beginDeployFlow, deployPresentation } from "../lib/deployFlow";
 import {
   ROW_ACTION,
   ownerRowActions,
@@ -264,6 +265,31 @@ const NO_STRATEGIES_STATE = Object.freeze({
  */
 const ROW_DEPLOY_ENVIRONMENT = "live";
 const ROW_DEPLOY_PRESENTATION = deployPresentation(ROW_DEPLOY_ENVIRONMENT);
+
+/* ── The deploy modal's own form vocabulary (task 17.2c) ─────────────────────────────────
+ *
+ * The two `value`s are the strings `deployConfig.environment` has always held and the
+ * strings `deployPreflight.deploymentModeOf` reads as the binding's `mode`, so the control
+ * is byte-for-byte the one the request is built from. Only the labels are presentation.
+ * `resolveDeployEnvironment` maps both onto `design/semantic.js`'s `ENVIRONMENT` for the
+ * dialog's treatment, and anything outside this pair resolves to no environment at all —
+ * see the note on `deployFlowState` below.
+ */
+const EXECUTION_MODE_OPTIONS = Object.freeze([
+  Object.freeze({ value: "paper", label: "Paper Simulation (Virtual Execution)" }),
+  Object.freeze({ value: "live", label: "Live Execution (Master Executor)" }),
+]);
+
+/**
+ * Requirement 15.2's message for the capital field, and the whole of its validity rule.
+ *
+ * The form's own check, not a duplicate of a server condition: the gate decides whether the
+ * deployment is permitted, and this decides whether the trader has finished stating it.
+ */
+const CAPITAL_REFUSAL =
+  "Capital must be a positive number. It is the allocation this deployment sizes its "
+  + "orders from, so a blank, a zero or a value that is not a number leaves the per-order "
+  + "notional undefined.";
 
 /** `undetermined` has no entry: it is an absence, not a verdict. Mirrors `ds/StrategyStatus`. */
 const HEALTH_BADGE_STATE = Object.freeze({
@@ -1075,6 +1101,103 @@ export default function Strategies() {
     query: deployRequest.query,
     enabled: Boolean(deployModalStrategy),
   });
+
+  /* ── Task 17.2c: the modal's presentation, read from `lib/deployFlow.js` ────────────────
+   *
+   * Requirements 4.3, 8.2, 8.4, 8.5. `deployFlow.js` already decided every one of these and
+   * this page reads them rather than re-deciding them:
+   *
+   *   * `presentation` — the title, the confirm label and the confirm intent, keyed on the
+   *     RESOLVED environment. So `live` gets §8.3's "Deploy to live trading" and
+   *     `intent="live"` (`ds/ConfirmDialog` paints that from `ENVIRONMENT.LIVE`, and the
+   *     `environment` prop adds `ds/TradingEnvironmentBadge`'s strip), `paper` gets "Start
+   *     paper session" and the calm `neutral` treatment, and nothing here writes
+   *     `environment === "live" ? … : …` — which is what stops an unrecognised target from
+   *     silently resolving to either one. An unresolved target gets
+   *     `UNCONFIRMED_PRESENTATION`: no badge, no live hue, and `blockers` non-empty, so the
+   *     confirm control is shut in both directions rather than defaulted to the dangerous
+   *     one (`deployFlow.js`'s own "fails closed, both ways").
+   *   * `acknowledgement` — §8.4's real-funds statement, CONSTRUCTED ONLY on the Live path.
+   *     Off it there is no object to hide (Property 14), which is why this reads the flow's
+   *     own field instead of building a checkbox behind an `if`. It gates the confirm
+   *     control's enabled state ON TOP of `preflight.deployable`, never instead of it.
+   *   * `blockers` — the three structural facts that mean the request has no address:
+   *     an unresolved target, no strategy, no version. Not gate conditions (Requirement
+   *     19.1); `preflight` remains the only judge of whether a deployment is permitted, and
+   *     the no-version refusal `handleConfirmDeploy` already raises is the same sentence.
+   *
+   * Nothing is submitted from the flow: `beginDeployFlow` is pure, holds no HTTP client and
+   * cannot place an order. `handleConfirmDeploy` is still the only caller of
+   * `endpoints.strategies.deployVersion`.
+   */
+  const deployFlowState = useMemo(
+    () =>
+      beginDeployFlow({
+        strategyId: deployModalStrategy?.id ? String(deployModalStrategy.id) : null,
+        version: deployVersionLabel,
+        environment: deployConfig.environment,
+        // The account is what makes the real-funds sentence name a venue and an account
+        // instead of claiming one: `liveAcknowledgement` omits each clause it cannot read,
+        // and `deployConfig.exchange` is deliberately not passed — it defaults to a venue
+        // nobody selected.
+        account: selectedAccount,
+        capital: deployConfig.capital,
+        tradeSizePct: deployConfig.tradeSizePct,
+      }),
+    [
+      deployModalStrategy,
+      deployVersionLabel,
+      deployConfig.environment,
+      deployConfig.capital,
+      deployConfig.tradeSizePct,
+      selectedAccount,
+    ],
+  );
+
+  /**
+   * The form's own validity for the capital field.
+   *
+   * The check the old footer wrote as `Number(deployConfig.capital) <= 0`, negated. The
+   * predicate is the same one for every value that control could previously produce — a
+   * native `type="number"` input hands back `""` for anything unparseable, and
+   * `Number("") <= 0` is true — and `ds/Field` renders numerics as
+   * `<input type="text" inputMode="decimal">` on purpose (see its header: a wheel over a
+   * focused number input changes a trader's capital), which makes `"abc"` reachable for the
+   * first time. `Number("abc") <= 0` is FALSE, so the original spelling would have opened a
+   * hole the old DOM type kept shut. Written as "not positive" instead, so the one value
+   * that changed answer is the one that fails closed.
+   */
+  const capitalRefused = !(Number(deployConfig.capital) > 0);
+
+  /**
+   * Requirements 13.4/13.5: the confirm control's enabled state.
+   *
+   * `preflight.deployable` is the gate — the same poll `DeployPreflightPanel` renders row by
+   * row, so the control and the panel cannot disagree. `handleConfirmDeploy` refuses on it a
+   * second time, independently, and `ds/ConfirmDialog` refuses on this prop a second time
+   * too: a click that raced a condition turning red reaches neither the dialog's `onConfirm`
+   * nor the write path.
+   */
+  const deployRefused =
+    deployFlowState.blockers.length > 0 || capitalRefused || !preflight.deployable;
+
+  /**
+   * The one sentence the dialog states about *which* deployment this is.
+   *
+   * The presentation's title says what will happen; this says what to. The strategy is named
+   * because the modal's header always named it, and the version because the deploy is
+   * addressed to `/versions/{version}/deploy` — naming a different one would describe a
+   * binding that is not the one about to be made. A row the list projection gave no name to
+   * reads "this strategy" rather than a fabricated label, and a missing version is stated by
+   * the blocker instead of being written in here as "unknown".
+   */
+  const deployDescription =
+    deployVersionLabel === null
+      ? "A deployment binds one immutable version. Every check below is the server's own "
+        + "verdict, re-read while this dialog stays open."
+      : `Deploying ${deployModalStrategy?.name ?? "this strategy"} binds version `
+        + `${deployVersionLabel}, immutably. Every check below is the server's own verdict, `
+        + "re-read while this dialog stays open.";
 
   const handleOpenDeployModal = async (s) => {
     setDeployModalStrategy(s);
@@ -2166,104 +2289,171 @@ export default function Strategies() {
         </div>
       </Panel>
 
-      {/* Deployment Modal */}
-      {deployModalStrategy && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(1,6,8,0.85)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
-          <div style={{ background: "#0c1017", border: `1px solid #1e293b`, borderRadius: 14, width: "100%", maxWidth: 520, padding: 24, boxShadow: "0 20px 50px rgba(0,0,0,0.6)" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, borderBottom: `1px solid #1e293b`, paddingBottom: 12 }}>
-              <div>
-                <div style={{ color: "#00d4ff", fontSize: 10, fontFamily: "monospace", letterSpacing: 2, fontWeight: 900, textTransform: "uppercase" }}>DEPLOYMENT ORCHESTRATION</div>
-                <div style={{ color: "#f8fafc", fontSize: 16, fontWeight: 900 }}>{deployModalStrategy.name}</div>
-              </div>
-              {/* The version this modal would deploy, not a hardcoded label: the deploy is
-                  addressed to `/versions/{version}/deploy`, so naming a different one here
-                  would describe a deployment that is not the one about to be bound. It was
-                  `text={`v${strategy.version || "2.0"}`}`, which rendered nothing at all —
-                  `Tag2` takes its label as children, not as a `text` prop — and would have
-                  read "v2.0" for every strategy if it had. */}
-              <Tag2 c="cyan">v{deployVersionLabel || "unknown"}</Tag2>
-            </div>
+      {/* ══════════════════════════════════════════════════════════════════════════════════
+          Task 17.2c — the deployment confirmation, rebuilt on `ds/ConfirmDialog`
+          (design.md §8.3, §8.4; Requirements 4.3, 8.5, 13.3, 13.4, 13.5, 13.6, 14.4, 15.1,
+          15.2, 17.3, 18.1, 18.3, 18.4).
 
+          ⚠️ THE REQUEST PATH IS UNTOUCHED. ⚠️ Everything below is presentation. The endpoint
+          is still `endpoints.strategies.deployVersion(id, deployVersionLabel,
+          deployRequest.body, { environment: deployRequest.environment })`; the body is still
+          `lib/deployPreflight.deploymentRequest`'s, whose server model declares
+          `extra="forbid"`, so a field added here would be a 422 and not a setting; and
+          `handleConfirmDeploy` is still its only caller. Nothing here derives a verdict —
+          `preflight` is the gate and `DeployPreflightPanel` renders its rows one by one.
+
+          WHY `ConfirmDialog` AND NOT `Drawer`
+          -----------------------------------
+          Both go through `ds/overlayRegistry` and both carry the focus trap, `Escape`,
+          `role="dialog"` / `aria-modal` / `aria-labelledby` and the viewport clamp, so the
+          choice is about what this surface IS. A `Drawer` is a navigational side panel —
+          §6.4's account menu, §11.6's Builder inspector — and it dismisses on an outside
+          click, which is the wrong behaviour for the last screen before a real order.
+          `ConfirmDialog` is a decision point: no scrim dismissal, initial focus on CANCEL
+          rather than confirm, and it already takes `children`, `error`, `busy`, `intent` and
+          `confirmLabel` and already owns §8.4's acknowledgement gate. The page mounts two of
+          them for archive and rename, so this is a third instance of one pattern rather than
+          a second overlay mechanism.
+
+          The hand-rolled `position: fixed` div this replaces had none of that — no trap, no
+          `Escape`, no `role`, no registry claim, and a `z-index: 1000` outside the token
+          scale — and it held every one of this page's last 37 colour literals. They are all
+          tokens now: the scrim and the shadow are the dialog's, the live/paper hue comes from
+          `design/semantic.js`'s `ENVIRONMENT` through `intent` and
+          `ds/TradingEnvironmentBadge`, the error box is `ds/Alert`, and the four controls are
+          `ds/Field` — which is also what clears the three `label-has-associated-control`
+          findings, since its label is visible, bound by `htmlFor`, and has no hidden-label
+          escape hatch. */}
+      <ConfirmDialog
+        open={deployModalStrategy !== null}
+        onCancel={() => setDeployModalStrategy(null)}
+        onConfirm={handleConfirmDeploy}
+        /* Requirements 4.3 / 8.5: the title, the confirm label, the confirm intent and the
+           header environment badge are one keyed lookup on the RESOLVED target, so a live
+           confirmation cannot be painted as a paper one or the other way round, and an
+           unresolved target is painted as neither. */
+        title={deployFlowState.presentation.title}
+        intent={deployFlowState.presentation.confirmIntent}
+        environment={deployFlowState.presentation.environment ?? undefined}
+        description={deployDescription}
+        acknowledgement={deployFlowState.acknowledgement ?? undefined}
+        confirmLabel={deployFlowState.presentation.confirmLabel}
+        cancelLabel="Cancel"
+        confirmDisabled={deployRefused}
+        /* `isProcessing[id]`, unchanged, expressed as the dialog's in-flight state: both
+           actions disable and `Escape` goes inert, because cancelling cannot un-send a POST
+           already on the wire and closing the dialog would hide its outcome. */
+        busy={deployModalStrategy !== null && !!isProcessing[deployModalStrategy.id]}
+        busyLabel="Deploying…"
+      >
+        {deployModalStrategy === null ? null : (
+          <div className="flex min-w-0 flex-col gap-4">
+            {/* The structural refusals, in `deployFlow.js`'s own words: an unresolved target,
+                no strategy, no version. They are why the confirm control is shut, said out
+                loud rather than left for the trader to infer from a greyed button — and the
+                no-version sentence is the one `handleConfirmDeploy` refuses with, read from
+                the same table, so the two cannot describe one refusal differently. */}
+            {deployFlowState.blockers.length > 0 ? (
+              <Alert
+                severity="error"
+                title="This deployment has no address yet"
+                data-testid="deploy-blocked"
+              >
+                <ul className="flex flex-col gap-1">
+                  {deployFlowState.blockers.map((blocker) => (
+                    <li key={blocker.code}>{blocker.message}</li>
+                  ))}
+                </ul>
+              </Alert>
+            ) : null}
+
+            {/* Requirement 14.4: the message the server sent, never a status code and never
+                a stack. The `data-testid` is unchanged — it is what the deploy tests read. */}
             {(deployError || preflight.error) && (
-              <div data-testid="deploy-error" style={{ background: "rgba(255,46,84,0.1)", border: `1px solid #ef4444`, borderRadius: 8, padding: "8px 12px", color: "#ef4444", fontSize: 11, fontFamily: "monospace", marginBottom: 16 }}>
-                Deployment Error: {deployError || preflight.error?.message}
-              </div>
+              <Alert severity="error" title="Deployment error" data-testid="deploy-error">
+                {deployError || preflight.error?.message}
+              </Alert>
             )}
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-              <div>
-                <label style={{ color: "#94a3b8", fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 1, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
-                  {deployConfig.environment === "paper" ? "Paper Trading Account" : "Connected Exchange Account"}
-                </label>
-                {deployConfig.environment === "paper" ? (
-                  <div style={{ background: "#080a0e", border: `1px solid rgba(0,212,255,0.4)`, borderRadius: 8, padding: "8px 10px", fontSize: 11, fontFamily: "monospace", color: "#00d4ff" }}>
-                    ★ VyomQuant Virtual Paper Account [$100,000]
-                  </div>
-                ) : exchangesLoading ? (
-                  <div style={{ color: "#64748b", fontSize: 10, fontFamily: "monospace", padding: "8px 10px" }}>Loading accounts...</div>
-                ) : connectedExchanges.length === 0 ? (
-                  <div style={{ color: "#ef4444", fontSize: 10, fontFamily: "monospace", padding: "8px 10px", background: `rgba(239,68,68,0.12)`, borderRadius: 8, border: `1px solid rgba(239,68,68,0.3)` }}>
-                    No exchange accounts connected.{" "}
-                    <button onClick={() => { setDeployModalStrategy(null); navigate('/app/exchange'); }} style={{ color: "#00d4ff", background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'monospace', fontSize: 10 }}>Add one →</button>
-                  </div>
-                ) : (
-                  <select
-                    value={selectedAccount?.id || ""}
-                    onChange={(e) => {
-                      const acct = connectedExchanges.find(a => a.id === e.target.value);
-                      setSelectedAccount(acct || null);
-                      if (acct) setDeployConfig(prev => ({ ...prev, exchange: acct.exchange_id }));
-                    }}
-                    style={{ width: "100%", background: "#080a0e", border: `1px solid ${selectedAccount ? "#10b981" : "#1e293b"}`, borderRadius: 8, padding: "8px 10px", fontSize: 11, fontFamily: "monospace", color: "#f8fafc", outline: "none" }}
-                  >
-                    <option value="">-- Select Account --</option>
-                    {connectedExchanges.map(acct => (
-                      <option key={acct.id} value={acct.id}>
-                        {acct.exchange_id?.toUpperCase()} — {acct.name || acct.masked_key || acct.id.slice(0, 8)} [{acct.status}]
-                      </option>
-                    ))}
-                  </select>
-                )}
-                {deployConfig.environment !== "paper" && selectedAccount && (
-                  <div style={{ marginTop: 4, fontSize: 9, fontFamily: "monospace", color: selectedAccount.status === 'connected' || selectedAccount.status === 'active' ? "#10b981" : "#ef4444" }}>
-                    Status: {selectedAccount.status} · Health: {selectedAccount.health || 'unknown'}
-                  </div>
-                )}
-              </div>
+            <div className="grid grid-cols-2 gap-3">
+              {/* The mode leads, because the account control depends on it: a paper binding
+                  sends no `exchange_account_id` at all — `assert_account_required_for_live`
+                  requires one only for live — so for paper there is no account to choose and
+                  no control for one. The `summary` below states which account it uses. */}
+              <Field
+                id="deploy-execution-mode"
+                label="Execution mode"
+                options={EXECUTION_MODE_OPTIONS}
+                value={deployConfig.environment}
+                onChange={(e) => setDeployConfig(prev => ({ ...prev, environment: e.target.value }))}
+              />
 
-              <div>
-                <label style={{ color: "#94a3b8", fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 1, textTransform: "uppercase", display: "block", marginBottom: 6 }}>Execution Mode</label>
-                <select
-                  value={deployConfig.environment}
-                  onChange={(e) => setDeployConfig(prev => ({ ...prev, environment: e.target.value }))}
-                  style={{ width: "100%", background: "#080a0e", border: `1px solid #1e293b`, borderRadius: 8, padding: "8px 10px", fontSize: 11, fontFamily: "monospace", color: "#f8fafc", outline: "none" }}
+              {deployConfig.environment === "paper" ? null : exchangesLoading ? (
+                <p role="status" className="m-0 self-center font-mono text-micro text-content-secondary">
+                  Reading your connected exchange accounts…
+                </p>
+              ) : connectedExchanges.length === 0 ? (
+                <Alert
+                  severity="error"
+                  title="No exchange accounts connected"
+                  className="col-span-2"
+                  data-testid="deploy-no-accounts"
+                  action={{
+                    label: "Add an exchange account",
+                    onClick: () => { setDeployModalStrategy(null); navigate('/app/exchange'); },
+                  }}
                 >
-                  <option value="paper">Paper Simulation (Virtual Execution)</option>
-                  <option value="live">Live Execution (Master Executor)</option>
-                </select>
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-              <div>
-                <label style={{ color: "#94a3b8", fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 1, textTransform: "uppercase", display: "block", marginBottom: 6 }}>Capital ($)</label>
-                <input
-                  type="number"
-                  value={deployConfig.capital}
-                  onChange={(e) => setDeployConfig(prev => ({ ...prev, capital: e.target.value }))}
-                  style={{ width: "100%", background: "#080a0e", border: `1px solid #1e293b`, borderRadius: 8, padding: "8px 10px", fontSize: 11, fontFamily: "monospace", color: "#f8fafc", outline: "none" }}
+                  A live deployment binds one connected exchange account, and this session
+                  has none.
+                </Alert>
+              ) : (
+                <Field
+                  id="deploy-exchange-account"
+                  label="Connected exchange account"
+                  placeholder="Select an account"
+                  options={connectedExchanges.map((acct) => ({
+                    value: acct.id,
+                    label: `${acct.exchange_id?.toUpperCase() || "exchange"} — ${acct.name || acct.masked_key || acct.id.slice(0, 8)} [${acct.status}]`,
+                  }))}
+                  value={selectedAccount?.id || ""}
+                  /* The `<select>`'s own handler, unchanged: the account row is held whole
+                     because `deploymentRequest` sends its `id`, and `deployConfig.exchange`
+                     follows it so the two cannot name different venues. */
+                  onChange={(e) => {
+                    const acct = connectedExchanges.find(a => a.id === e.target.value);
+                    setSelectedAccount(acct || null);
+                    if (acct) setDeployConfig(prev => ({ ...prev, exchange: acct.exchange_id }));
+                  }}
+                  /* The account's reported condition, in the server's own spelling — stated,
+                     and deliberately neither coloured nor gated on. The accounts endpoint
+                     spells this string several ways, and the gate is the preflight's
+                     `exchange_account` condition rather than this page's reading of it. */
+                  hint={
+                    selectedAccount
+                      ? `Status: ${selectedAccount.status} · Health: ${selectedAccount.health || "not reported"}`
+                      : undefined
+                  }
                 />
-              </div>
+              )}
 
-              <div>
-                <label style={{ color: "#94a3b8", fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 1, textTransform: "uppercase", display: "block", marginBottom: 6 }}>Trade Size %</label>
-                <input
-                  type="number"
-                  value={deployConfig.tradeSizePct}
-                  onChange={(e) => setDeployConfig(prev => ({ ...prev, tradeSizePct: e.target.value }))}
-                  style={{ width: "100%", background: "#080a0e", border: `1px solid #1e293b`, borderRadius: 8, padding: "8px 10px", fontSize: 11, fontFamily: "monospace", color: "#f8fafc", outline: "none" }}
-                />
-              </div>
+              <Field
+                id="deploy-capital"
+                label="Capital ($)"
+                type="number"
+                value={deployConfig.capital}
+                onChange={(e) => setDeployConfig(prev => ({ ...prev, capital: e.target.value }))}
+                invalid={capitalRefused}
+                error={CAPITAL_REFUSAL}
+              />
+
+              <Field
+                id="deploy-trade-size"
+                label="Trade size %"
+                type="number"
+                value={deployConfig.tradeSizePct}
+                onChange={(e) => setDeployConfig(prev => ({ ...prev, tradeSizePct: e.target.value }))}
+                hint="Capital × this percentage is the largest notional one order may carry."
+              />
             </div>
 
             {/* Task 18.1 — the pre-deployment summary (Requirements 13.3, 13.4, 13.5, 13.6).
@@ -2304,34 +2494,9 @@ export default function Strategies() {
                 ],
               ]}
             />
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <Button variant="ghost" size="sm" onClick={() => setDeployModalStrategy(null)}>Cancel</Button>
-              {/* Requirements 13.4/13.5: disabled while any mandatory validation has not
-                  passed, enabled automatically as soon as they all have — both decided by
-                  the preflight poll, which is the same gate the deploy itself runs. The
-                  local account-status and capital checks this replaced were a second,
-                  divergent gate: they read a status string the accounts endpoint spells
-                  differently, and they could not see a balance, a permission or a market
-                  the server refuses on. `Number(capital) > 0` is retained because it is the
-                  form's own validity, not a duplicate of a server condition. */}
-              <Button
-                variant="success"
-                size="sm"
-                icon={Play}
-                onClick={handleConfirmDeploy}
-                disabled={
-                  !!isProcessing[deployModalStrategy.id] ||
-                  Number(deployConfig.capital) <= 0 ||
-                  !preflight.deployable
-                }
-              >
-                {isProcessing[deployModalStrategy.id] ? "Deploying..." : "Confirm & Deploy"}
-              </Button>
-            </div>
           </div>
-        </div>
-      )}
+        )}
+      </ConfirmDialog>
 
       {/* ══════════════════════════════════════════════════════════════════════════════════
           Task 10.3 — the two confirmations that replaced `window.confirm` and
@@ -2342,6 +2507,9 @@ export default function Strategies() {
           and the single-overlay claim (Requirement 18.3, 17.3) that neither native dialog
           could be given. Only one of the two can be open: each button clears nothing and
           sets its own state, and the two states are only ever set from separate handlers.
+          Task 17.2c made the deploy modal above a third instance of the same argument —
+          `deployModalStrategy` is likewise set from one handler and by nothing else, so the
+          registry's one-overlay rule (Requirement 17.3) is never actually contested.
           ══════════════════════════════════════════════════════════════════════════════════ */}
 
       {/* ── Archive. `intent="destructive"`, and NO acknowledgement checkbox ──────────────
