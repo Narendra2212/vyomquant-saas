@@ -1,10 +1,77 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * pages/Dashboard — the command center (`/app/dashboard`)
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * vyomquant-ui-redesign task 19.1, **part A**: the single read, the one failure state and
+ * tier 1. design.md §7.1, §11.1. Requirements 3.1, 3.4, 3.5, 3.6, 14.5.
+ *
+ * Part B rebuilds tier 2 — active strategies, open positions, exchange health, recent
+ * signals and orders, the equity curve — onto `ds/Panel`, `ds/DataTable` and a lazy
+ * `ds/Chart`. Until it lands, every zone below tier 1 keeps the markup it has and reads it
+ * off the one read this part introduces, so the page is never half-built between the two
+ * commits. The zones are marked `PART B` where they stand.
+ *
+ * ONE READ, ONE FAILURE STATE
+ * ---------------------------
+ * `GET /api/dashboard` is a single aggregated read that 503s as a whole, so there is one
+ * failure and the page renders ONE page-level `ds/ErrorState` with retry (§7.1,
+ * Requirement 3.6). Per-panel error states would imply independent reads that do not
+ * exist, and a per-panel fallback to a cached value is the previously-cached-as-live
+ * rendering Requirement 14.5 forbids. Three things make that structural rather than
+ * remembered:
+ *
+ *   1. `usePanelState` drops `data` on failure — see its docblock's three inversions of
+ *      `usePolling`, which keeps the last payload and merely sets `error`. That is also
+ *      why this page does not use `usePolling`: it lists `data` in its `fetch` dependency
+ *      array, so its interval is torn down and re-created on every tick (§1.12).
+ *   2. The projection effect below clears every derived view model when `data` is `null`,
+ *      so no zone holds a value from a read that has since failed.
+ *   3. The failure branch renders the error state INSTEAD of the body, so no zone, table
+ *      or figure exists in the DOM at all while the read is broken.
+ *
+ * The period control belongs to the read, not to the chart. It sits in `PageHeader` beside
+ * the environment switch because `equity_days` is a parameter of the one read: the
+ * in-panel timeframe selector this replaces issued a SECOND `getDashboard` call and wrote
+ * the equity series from it, which is two reads and two failure surfaces for one figure.
+ *
+ * TIER 1 — ONE CONTAINER, FOUR FIGURES
+ * ------------------------------------
+ * `design/pageHierarchy.js` declares which figure belongs to which tier and
+ * `design/pageFields.js` declares where each one's value comes from and what a trader
+ * reads when there is none. Neither is restated here: the row is rendered by walking the
+ * declared tier-1 list, so a fifth figure cannot appear without being declared, and
+ * `Metric tier={1}` appears nowhere else on the page. That is how Requirement 3.4 — one
+ * row of equally-weighted figures, not two — is satisfied structurally (§7.1). The
+ * container carries `data-page` + `data-page-tier` so the claim is decidable from the
+ * rendered DOM (Property 4, task 19.5).
+ *
+ * §7.1 has no tier 3, and one is not invented here to fill the shape.
+ *
+ * Two of the four figures are read exactly as the server states them, and the reason is in
+ * `pageFields`' notes rather than here: `overview.today_pnl` is `today_realized_pnl +
+ * unrealized_pnl` computed server-side and is NOT recomputed from the two parts, and
+ * `overview.cumulative_pnl` includes mark-to-market on open positions and is therefore not
+ * labelled a realised figure. `risk.current_drawdown_pct_v2` is BC-1's field: `null` —
+ * never `0.0` — when the equity series is absent, one point long or has no positive peak,
+ * and `null` renders the not-available marker with the declared reason. Its deprecated
+ * neighbour `risk.current_drawdown_pct` publishes today's return and is read by nothing.
+ *
+ * THE KILL SWITCH IS UNTOUCHED
+ * ----------------------------
+ * Task 19.2 owns it, and Requirement 19.1 forbids changing a risk control's logic. Its
+ * trigger, its confirmation and `riskApi.killSwitch()` / `recoverKillSwitch()` are exactly
+ * as they were; only the container they sit in moved.
+ *
+ * @module pages/Dashboard
+ */
+
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ShieldCheck, AlertTriangle, ArrowRight,
   RefreshCw, BarChart2, Server,
-  Play, Pause, ShieldAlert, AlertOctagon, CheckCircle2,
-  Sliders, Wifi, WifiOff
+  Play, Pause, ShieldAlert, AlertOctagon
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip
@@ -12,6 +79,19 @@ import {
 import { dashboardApi } from "../api/modules/dashboard";
 import { riskApi } from "../api/modules/risk";
 import wsClient from "../websocketClient";
+import { CommandButton } from "../components/ds/CommandButton";
+import { ErrorState } from "../components/ds/ErrorState";
+import { Metric } from "../components/ds/Metric";
+import { PageHeader } from "../components/ds/PageHeader";
+import { Panel } from "../components/ds/Panel";
+import { PAGES, PAGE_FIELDS_BY_PAGE } from "../design/pageFields";
+import {
+  PAGE_HIERARCHY_BY_PAGE,
+  TIER_ATTRIBUTE,
+  TIER_PAGE_ATTRIBUTE,
+} from "../design/pageHierarchy";
+import { fromNullable } from "../design/reported";
+import { PANEL_STATES, usePanelState } from "../hooks/usePanelState";
 
 // Safe float conversion helper
 export function floatVal(v) {
@@ -32,218 +112,370 @@ export function computeLiquidationDistance(markPrice, liqPrice, side, marketType
   }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * THE DECLARATION — read, never restated
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+const DASHBOARD_FIELDS = PAGE_FIELDS_BY_PAGE[PAGES.DASHBOARD] ?? [];
+
+/** §7.1's tiers. There are two of them; the layout has no tier 3 and none is invented. */
+const TIERS = PAGE_HIERARCHY_BY_PAGE[PAGES.DASHBOARD]?.tiers ?? [];
+
+/** §7.1's tier 1, in declaration order: portfolio value, today's P&L, total P&L, drawdown. */
+const TIER_ONE = TIERS.filter((entry) => entry.tier === 1);
+
+/** One field's declaration. */
+const fieldEntry = (field) => DASHBOARD_FIELDS.find((entry) => entry.field === field) ?? null;
+
+/**
+ * How each tier-1 figure is formatted. The ONLY per-field thing this page decides.
+ *
+ * Not in `pageFields.js` because a format is a rendering choice and that module holds none.
+ * `precision: 2` on the three money figures is a balance; the drawdown is already in percent
+ * units on the wire and `ds/Metric` does not multiply by 100 — a 3.2% drawdown rendered as
+ * 320% would be read as a wiped-out account.
+ */
+const TIER_ONE_FORMAT = Object.freeze({
+  portfolioValue: Object.freeze({ format: "currency", precision: 2 }),
+  todayPnl: Object.freeze({ format: "currency", precision: 2 }),
+  totalPnl: Object.freeze({ format: "currency", precision: 2 }),
+  currentDrawdown: Object.freeze({ format: "percent", precision: 2 }),
+});
+
+/** A dotted path off a response body, or `undefined`. Every tier-1 path is a scalar. */
+const readPath = (body, dottedPath) =>
+  dottedPath.split(".").reduce(
+    (node, key) => (node && typeof node === "object" ? node[key] : undefined),
+    body,
+  );
+
+/**
+ * `GET /api/dashboard` → the tier-1 view model: one `Reported<T>` per declared field.
+ *
+ * Nothing here defaults and nothing substitutes. A field the response did not carry becomes
+ * the unavailable arm with the entry's own reason, which `ds/Metric` renders as the marker
+ * plus that sentence — never as `0` (Requirements 14.5, 19.3). `floatVal` is deliberately
+ * NOT used: it answers `0.00` for an absent field, which is the fabricated zero this whole
+ * declaration exists to keep off the page.
+ *
+ * @param {unknown} body A resolved `GET /api/dashboard` body, or `null`.
+ * @returns {Object<string, {available: boolean}>}
+ */
+const buildTierOne = (body) => {
+  const model = {};
+  for (const { key } of TIER_ONE) {
+    const entry = fieldEntry(key);
+    model[key] = fromNullable(readPath(body, entry.path), entry.reason ?? undefined);
+  }
+  return model;
+};
+
+/**
+ * `overview.currency`, or `null`.
+ *
+ * The denomination of the money figures in the same `overview` block, rendered beside them
+ * as `ds/Metric`'s `unit`. It replaces the `ov.currency || (env === "paper" ? "USD" :
+ * "USDT")` fallback, which stated a denomination the response did not report. `ds/Metric`
+ * renders a unit only beside a real figure, so an absent currency costs nothing.
+ */
+const readCurrency = (body) => {
+  const value = readPath(body, "overview.currency");
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+};
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * PAGE CHROME — the two controls that select what the one read asks for
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** The two ledgers, and the `ds/Panel` environment each one declares. */
+const LEDGERS = Object.freeze([
+  Object.freeze({ value: "live", label: "Live", environment: "LIVE" }),
+  Object.freeze({ value: "paper", label: "Paper", environment: "PAPER" }),
+]);
+
+/**
+ * The equity window, which is a parameter of the ONE read (`equity_days`).
+ *
+ * The same five options the in-panel selector offered, with the same day counts, so no
+ * period a trader had disappears — only the second request behind it.
+ */
+const PERIODS = Object.freeze([
+  Object.freeze({ value: "1D", label: "1D", days: 1 }),
+  Object.freeze({ value: "1W", label: "1W", days: 7 }),
+  Object.freeze({ value: "1M", label: "1M", days: 30 }),
+  Object.freeze({ value: "3M", label: "3M", days: 90 }),
+  Object.freeze({ value: "ALL", label: "ALL", days: 365 }),
+]);
+
+const DEFAULT_PERIOD = "1M";
+
+const periodOf = (value) => PERIODS.find((entry) => entry.value === value) ?? PERIODS[2];
+
+/**
+ * The one empty list, shared.
+ *
+ * Every zone's state starts here rather than at a fresh `[]`, so "no read has answered" has
+ * a stable identity and a re-render does not change the input of every derived value.
+ */
+const NO_ROWS = Object.freeze([]);
+
+const CHIP_CLASSES =
+  "inline-flex cursor-pointer items-center rounded-sm border border-line-default px-2 py-0.5 "
+  + "text-micro font-mono font-bold uppercase tracking-wide text-content-secondary "
+  + "transition-colors hover:border-line-strong hover:text-content-primary "
+  + "peer-checked:border-brand peer-checked:bg-brand-wash peer-checked:text-brand "
+  // The radio is `sr-only`, so the focus ring is drawn on the chip the trader can see.
+  + "peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 "
+  + "peer-focus-visible:outline-brand";
+
+/**
+ * A labelled radio group rendered as chips.
+ *
+ * `Portfolio.jsx`'s control for the same job, in the same markup: a `<fieldset>` with a
+ * `<legend>` and one `<input type="radio">` per option, which gets arrow-key movement,
+ * single selection, one tab stop and a real label association from the browser. It replaces
+ * this page's two hand-styled LIVE/PAPER `<button>`s, where the selected one was a control
+ * that did nothing when pressed (Requirement 19.4), and the five timeframe buttons that were
+ * the same shape. A shared `ds/` primitive is the right eventual home for it; §5's primitive
+ * list does not have one yet, and adding one is not part of this task.
+ */
+function ChipRadioGroup({ legend, options, value, onChange, name }) {
+  const groupId = useId();
+
+  return (
+    <fieldset className="flex min-w-0 flex-col gap-1 border-0 p-0">
+      <legend className="p-0 text-micro font-medium uppercase tracking-wider text-content-secondary">
+        {legend}
+      </legend>
+      <div className="flex items-center gap-1">
+        {options.map((option) => {
+          const optionId = `${groupId}-${option.value}`;
+          return (
+            <div key={option.value} className="relative">
+              <input
+                type="radio"
+                id={optionId}
+                name={`${groupId}-${name}`}
+                value={option.value}
+                checked={value === option.value}
+                onChange={() => onChange(option.value)}
+                className="peer sr-only"
+              />
+              <label htmlFor={optionId} className={CHIP_CLASSES}>
+                {option.label}
+              </label>
+            </div>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * THE TIER-2 PROJECTIONS — PART B's zones, off part A's one read
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * Lifted out of the old `loadDashboardData` unchanged, expression for expression, so that
+ * the effect that runs them is small enough to read and so the zones they feed render
+ * exactly what they rendered before. Their `?? 0` defaults and their substituted venue
+ * names are part B's to remove — `pageFields`' `openPositions` and `recentOrders` entries
+ * already say what each field really is.
+ */
+
+const readPositions = (body, environment) => {
+  const raw = Array.isArray(body?.positions) ? body.positions : NO_ROWS;
+  return raw.map((pos) => {
+    const mType = pos.market_type || "spot";
+    const side = (pos.side || "long").toLowerCase();
+    const entryP = floatVal(pos.entry_price || 0);
+    const markP = floatVal(pos.mark_price || entryP);
+    const liqP = pos.liquidation_price != null ? floatVal(pos.liquidation_price) : null;
+
+    return {
+      id: pos.id || `${pos.exchange_id}_${pos.symbol}`,
+      symbol: pos.symbol || "UNKNOWN",
+      exchangeId: pos.exchange_id || (environment === "paper" ? "paper" : "binance"),
+      side,
+      marketType: mType,
+      marginType: (pos.margin_type || "cross").toLowerCase(),
+      contracts: floatVal(pos.contracts || pos.quantity || 0),
+      entryPrice: entryP,
+      markPrice: markP,
+      unrealizedPnl: floatVal(pos.unrealized_pnl || pos.unrealized_pnl_usd || 0),
+      unrealizedPnlPct: floatVal(pos.unrealized_pnl_pct || 0),
+      leverage: pos.leverage ? parseInt(pos.leverage, 10) : 1,
+      liquidationPrice: liqP,
+      liquidationDistancePct: computeLiquidationDistance(markP, liqP, side, mType),
+    };
+  });
+};
+
+const readStrategies = (body) => (body?.strategies?.items || NO_ROWS).map((s) => ({
+  id: s.id,
+  name: s.name || "Automated Strategy",
+  pair: s.pair || s.symbol || "BTC/USDT",
+  status: s.status || "paused",
+  health: s.health || "idle",
+  errorMessage: s.error_message || s.error || s.reason || null,
+  todayPnl: floatVal(s.today_pnl || 0.00),
+  todayReturnPct: floatVal(s.today_return_pct || 0.00),
+  lastSignalTime: s.last_signal_time
+    ? new Date(s.last_signal_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "No signals",
+}));
+
+const readExecutions = (body, environment) => {
+  const raw = Array.isArray(body?.executions) ? body.executions : NO_ROWS;
+  return raw.slice(0, 5).map((e) => ({
+    id: e.id,
+    symbol: e.symbol || "BTC/USDT",
+    exchangeId: e.exchange_id || (environment === "paper" ? "paper" : "binance"),
+    side: (e.side || "buy").toLowerCase(),
+    price: floatVal(e.price || 0),
+    amount: floatVal(e.amount || 0),
+    cost: floatVal(e.cost || (e.amount * e.price) || 0),
+    fee: floatVal(e.fee || 0),
+    realizedPnl: floatVal(e.realized_pnl || 0),
+    timestamp: e.timestamp
+      ? new Date(e.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      : "Just now",
+  }));
+};
+
+const readInsights = (body) => body?.recent_activity?.insights || NO_ROWS;
+
+/** The warning-and-worse subset of the insights, as the banner's rows. */
+const readCriticalAlerts = (insights) => insights
+  .filter((ins) => ins.type === "warning" || ins.type === "error" || ins.type === "critical")
+  .map((ins, index) => ({
+    id: ins.id || `ins_${index}`,
+    severity: ins.type === "error" ? "critical" : "warning",
+    title: ins.type === "error" ? "Execution Alert" : "Risk Notice",
+    message: ins.text,
+    actionPath: ins.actionPath,
+    actionText: ins.actionText,
+    timestamp: "Active",
+  }));
+
+const readEquityCurve = (body) => (Array.isArray(body?.equity_curve) ? body.equity_curve : NO_ROWS)
+  .map((row) => ({
+    d: row.timestamp
+      ? new Date(row.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+      : "",
+    v: parseFloat(row.equity ?? row.value ?? 0),
+  }));
+
+const readExchanges = (body) =>
+  (Array.isArray(body?.exchange?.exchanges) ? body.exchange.exchanges : NO_ROWS);
+
 export default function Dashboard() {
   const navigate = useNavigate();
-  
-  // Environment state (default: 'live' with toggle to 'paper')
+
+  // The two page controls, and the only two things that select what the one read asks for.
   const [environment, setEnvironment] = useState("live");
-  const [timeframe, setTimeframe] = useState("1M");
+  const [timeframe, setTimeframe] = useState(DEFAULT_PERIOD);
+  const equityDays = periodOf(timeframe).days;
 
   const [showStatusModal, setShowStatusModal] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [loadError, setLoadError] = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
   const [wsStatus, setWsStatus] = useState("connected");
 
   // Authoritative sync timestamp to prevent stale WebSocket overwrites (2D.4)
   const lastSyncTimestampRef = useRef(Date.now());
 
-  // Emergency Halt Modal State (P0.1 / 2D.5)
+  // Emergency Halt Modal State (P0.1 / 2D.5) — task 19.2's, untouched here
   const [showKillSwitchModal, setShowKillSwitchModal] = useState(false);
   const [killSwitchAction, setKillSwitchAction] = useState("activate"); // "activate" or "recover"
   const [isKillSwitchProcessing, setIsKillSwitchProcessing] = useState(false);
   const [killSwitchError, setKillSwitchError] = useState(null);
 
   // Operational Critical Alerts State (P0.2 / 2D.2)
-  const [criticalAlerts, setCriticalAlerts] = useState([]);
-
-  // Capital & Performance State (Zone 2)
-  const [portfolioData, setPortfolioData] = useState({
-    totalValue: 0.00,
-    totalEquity: 0.00,
-    availableBalance: 0.00,
-    freeBalance: 0.00,
-    usedBalance: 0.00,
-    todayPnl: 0.00,
-    todayRealizedPnl: 0.00,
-    todayReturnPct: 0.00,
-    unrealizedPnl: 0.00,
-    cumulativePnl: 0.00,
-    totalExposure: 0.00,
-    currency: "USDT"
-  });
+  const [criticalAlerts, setCriticalAlerts] = useState(NO_ROWS);
 
   // Open Positions State (Zone 3 / P0.3 / 2D.3)
-  const [positions, setPositions] = useState([]);
+  const [positions, setPositions] = useState(NO_ROWS);
 
   // Active Strategies State (Zone 4 / P1.3)
-  const [strategies, setStrategies] = useState([]);
+  const [strategies, setStrategies] = useState(NO_ROWS);
 
   // Risk & Safety State (Zone 5)
   const [riskState, setRiskState] = useState(null);
 
   // Exchange Health State (Zone 6)
-  const [exchangeConnections, setExchangeConnections] = useState([]);
+  const [exchangeConnections, setExchangeConnections] = useState(NO_ROWS);
   const [systemHealth, setSystemHealth] = useState(null);
 
   // Recent Executions State (Zone 7)
-  const [executions, setExecutions] = useState([]);
-  const [tradingInsights, setTradingInsights] = useState([]);
+  const [executions, setExecutions] = useState(NO_ROWS);
+  const [tradingInsights, setTradingInsights] = useState(NO_ROWS);
 
   // Equity Curve State (Zone 8)
-  const [equityCurve, setEquityCurve] = useState([]);
-  const [equityLoading, setEquityLoading] = useState(false);
+  const [equityCurve, setEquityCurve] = useState(NO_ROWS);
 
-  // Core Authoritative Data Fetcher (2D.4)
-  const loadDashboardData = useCallback(async (targetEnv = environment, targetTf = timeframe) => {
-    setIsLoading(true);
-    setLoadError(null);
-    try {
-      const dayMap = { "1D": 1, "1W": 7, "1M": 30, "3M": 90, "ALL": 365 };
-      const days = dayMap[targetTf] || 30;
+  /*
+   * THE ONE READ (§7.1).
+   *
+   * `usePanelState` rather than `usePolling`: the hook drops `data` on failure, so no zone
+   * can render a value from a read that has since broken (Requirement 14.5), and its
+   * `refetch` identity survives every payload, so nothing this page does re-creates a timer
+   * (§1.12). `deps` is the question being asked — a different environment or a different
+   * equity window is a NEW question, and the previous answer is discarded rather than shown
+   * under the new controls.
+   */
+  const readDashboard = useCallback(
+    () => dashboardApi.getDashboard({ environment, equity_days: equityDays }),
+    [environment, equityDays],
+  );
+  const dashboard = usePanelState(readDashboard, { deps: [environment, equityDays] });
+  // `payload`, not `data`: the WebSocket handlers below already name their frame `data`, and
+  // one identifier meaning "the REST body" in one scope and "this tick" in another is how a
+  // tick ends up written where a read belongs.
+  const { data: payload, error: readError, refetch, state: readState } = dashboard;
 
-      const dashboardRes = await dashboardApi.getDashboard({
-        environment: targetEnv,
-        equity_days: days
-      });
-
-      if (dashboardRes) {
-        lastSyncTimestampRef.current = Date.now();
-
-        // 1. Primary Capital & Performance Overview
-        const ov = dashboardRes.overview || {};
-        setPortfolioData({
-          totalValue: floatVal(ov.total_value || ov.total_equity || 0.00),
-          totalEquity: floatVal(ov.total_equity || ov.total_value || 0.00),
-          availableBalance: floatVal(ov.available_balance || 0.00),
-          freeBalance: floatVal(ov.free_balance || ov.available_balance || 0.00),
-          usedBalance: floatVal(ov.used_balance || 0.00),
-          todayPnl: floatVal(ov.today_pnl || 0.00),
-          todayRealizedPnl: floatVal(ov.today_realized_pnl || 0.00),
-          todayReturnPct: floatVal(ov.today_return_pct || 0.00),
-          unrealizedPnl: floatVal(ov.unrealized_pnl || 0.00),
-          cumulativePnl: floatVal(ov.cumulative_pnl || 0.00),
-          totalExposure: floatVal(ov.total_exposure || ov.used_balance || 0.00),
-          currency: ov.currency || (targetEnv === "paper" ? "USD" : "USDT")
-        });
-
-        // 2. Open Positions (Zone 3 / P0.3 / 2D.3)
-        const rawPositions = Array.isArray(dashboardRes.positions) ? dashboardRes.positions : [];
-        setPositions(rawPositions.map(pos => {
-          const mType = pos.market_type || "spot";
-          const side = (pos.side || "long").toLowerCase();
-          const entryP = floatVal(pos.entry_price || 0);
-          const markP = floatVal(pos.mark_price || entryP);
-          const liqP = pos.liquidation_price != null ? floatVal(pos.liquidation_price) : null;
-          const liqDist = computeLiquidationDistance(markP, liqP, side, mType);
-
-          return {
-            id: pos.id || `${pos.exchange_id}_${pos.symbol}`,
-            symbol: pos.symbol || "UNKNOWN",
-            exchangeId: pos.exchange_id || (targetEnv === "paper" ? "paper" : "binance"),
-            side,
-            marketType: mType,
-            marginType: (pos.margin_type || "cross").toLowerCase(),
-            contracts: floatVal(pos.contracts || pos.quantity || 0),
-            entryPrice: entryP,
-            markPrice: markP,
-            unrealizedPnl: floatVal(pos.unrealized_pnl || pos.unrealized_pnl_usd || 0),
-            unrealizedPnlPct: floatVal(pos.unrealized_pnl_pct || 0),
-            leverage: pos.leverage ? parseInt(pos.leverage, 10) : 1,
-            liquidationPrice: liqP,
-            liquidationDistancePct: liqDist
-          };
-        }));
-
-        // 3. Active Strategies / Bots (Zone 4 / P1.3)
-        const rawStrategies = dashboardRes.strategies?.items || [];
-        setStrategies(rawStrategies.map(s => ({
-          id: s.id,
-          name: s.name || "Automated Strategy",
-          pair: s.pair || s.symbol || "BTC/USDT",
-          status: s.status || "paused",
-          health: s.health || "idle",
-          errorMessage: s.error_message || s.error || s.reason || null,
-          todayPnl: floatVal(s.today_pnl || 0.00),
-          todayReturnPct: floatVal(s.today_return_pct || 0.00),
-          lastSignalTime: s.last_signal_time ? new Date(s.last_signal_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "No signals"
-        })));
-
-        // 4. Risk & Safety Guard (Zone 5)
-        if (dashboardRes.risk) {
-          setRiskState(dashboardRes.risk);
-        }
-
-        // 5. Exchange Health & Latency (Zone 6)
-        if (dashboardRes.exchange) {
-          setExchangeConnections(Array.isArray(dashboardRes.exchange.exchanges) ? dashboardRes.exchange.exchanges : []);
-        }
-        if (dashboardRes.health) {
-          setSystemHealth(dashboardRes.health);
-        }
-
-        // 6. Recent Executions (Zone 7)
-        const rawExecs = Array.isArray(dashboardRes.executions) ? dashboardRes.executions : [];
-        setExecutions(rawExecs.slice(0, 5).map(e => ({
-          id: e.id,
-          symbol: e.symbol || "BTC/USDT",
-          exchangeId: e.exchange_id || (targetEnv === "paper" ? "paper" : "binance"),
-          side: (e.side || "buy").toLowerCase(),
-          price: floatVal(e.price || 0),
-          amount: floatVal(e.amount || 0),
-          cost: floatVal(e.cost || (e.amount * e.price) || 0),
-          fee: floatVal(e.fee || 0),
-          realizedPnl: floatVal(e.realized_pnl || 0),
-          timestamp: e.timestamp ? new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : "Just now"
-        })));
-
-        // Critical alerts extraction (P0.2)
-        const alerts = [];
-        const rawInsights = dashboardRes.recent_activity?.insights || [];
-        rawInsights.forEach(ins => {
-          if (ins.type === "warning" || ins.type === "error" || ins.type === "critical") {
-            alerts.push({
-              id: ins.id || `ins_${Math.random()}`,
-              severity: ins.type === "error" ? "critical" : "warning",
-              title: ins.type === "error" ? "Execution Alert" : "Risk Notice",
-              message: ins.text,
-              actionPath: ins.actionPath,
-              actionText: ins.actionText,
-              timestamp: "Active"
-            });
-          }
-        });
-        setTradingInsights(rawInsights.slice(0, 3));
-        setCriticalAlerts(alerts);
-
-        // 7. Equity Curve (Zone 8)
-        if (dashboardRes.equity_curve && Array.isArray(dashboardRes.equity_curve)) {
-          setEquityCurve(
-            dashboardRes.equity_curve.map(row => ({
-              d: row.timestamp
-                ? new Date(row.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-                : "",
-              v: parseFloat(row.equity ?? row.value ?? 0)
-            }))
-          );
-        } else {
-          setEquityCurve([]);
-        }
-
-        setLastUpdated(new Date().toLocaleTimeString());
-      }
-    } catch (err) {
-      console.error("Error loading dashboard data:", err);
-      setLoadError("Failed to synchronize trading cockpit data");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [environment, timeframe]);
-
-  // Initial load
+  /*
+   * THE PROJECTION — one payload, one place it is read (Requirement 14.5).
+   *
+   * `data` is `null` in every state except `ready` and `refreshing`, and the null arm clears
+   * every zone rather than leaving the previous read's rows behind: a figure from a read that
+   * has since failed is exactly the cached-as-live rendering Requirement 14.5 forbids, and
+   * `usePanelState` has already dropped the payload at the hook. The WebSocket handlers below
+   * patch these same view models, which is why they are state and not memos — task 19.3 moves
+   * those subscriptions down into the leaves that render the value.
+   */
   useEffect(() => {
-    loadDashboardData(environment, timeframe);
-  }, [environment, loadDashboardData]);
+    if (payload === null || payload === undefined) {
+      setPositions(NO_ROWS);
+      setStrategies(NO_ROWS);
+      setExecutions(NO_ROWS);
+      setTradingInsights(NO_ROWS);
+      setCriticalAlerts(NO_ROWS);
+      setEquityCurve(NO_ROWS);
+      setExchangeConnections(NO_ROWS);
+      setRiskState(null);
+      setSystemHealth(null);
+      return;
+    }
+
+    // The freshness floor every WebSocket frame is measured against (2D.4).
+    lastSyncTimestampRef.current = Date.now();
+
+    const insights = readInsights(payload);
+    setPositions(readPositions(payload, environment));
+    setStrategies(readStrategies(payload));
+    setExecutions(readExecutions(payload, environment));
+    setTradingInsights(insights.slice(0, 3));
+    setCriticalAlerts(readCriticalAlerts(insights));
+    setEquityCurve(readEquityCurve(payload));
+    setExchangeConnections(readExchanges(payload));
+    setRiskState(payload.risk ?? null);
+    setSystemHealth(payload.health ?? null);
+  }, [payload, environment]);
+
+  /** Tier 1's four figures, as `Reported<T>`s. A `null` payload is four markers, not zeros. */
+  const tierOne = useMemo(() => buildTierOne(payload), [payload]);
+
+  /** The denomination the server reported, or `null`. Never a guessed one. */
+  const currency = useMemo(() => readCurrency(payload), [payload]);
 
   // Real-time WebSocket Subscriptions & Reconnect Reconciliation (2D.4)
   useEffect(() => {
@@ -262,10 +494,12 @@ export default function Dashboard() {
     };
 
     // 1. Reconnect & Open Reconciliation Handler (2D.4)
+    // `refetch` re-issues the ONE read. Its identity survives every payload, so this effect
+    // is not re-run by a read completing and the subscriptions are established once.
     const unsubOpen = typeof wsClient.onOpen === "function"
       ? wsClient.onOpen(() => {
           console.log("[WS/Dashboard] Connection re-established. Reconciling with authoritative server state...");
-          loadDashboardData(environment, timeframe);
+          refetch();
         })
       : null;
 
@@ -361,32 +595,18 @@ export default function Dashboard() {
       if (unsubExchange) unsubExchange();
       if (unsubNotif) unsubNotif();
     };
-  }, [environment, timeframe, loadDashboardData]);
+  }, [environment, refetch]);
 
-  // Timeframe change handler
-  const handleTimeframeChange = async (newTf) => {
-    setTimeframe(newTf);
-    setEquityLoading(true);
-    const dayMap = { "1D": 1, "1W": 7, "1M": 30, "3M": 90, "ALL": 365 };
-    const days = dayMap[newTf] || 30;
-    try {
-      const data = await dashboardApi.getDashboard({ environment, equity_days: days });
-      if (data?.equity_curve && Array.isArray(data.equity_curve)) {
-        setEquityCurve(
-          data.equity_curve.map(row => ({
-            d: row.timestamp
-              ? new Date(row.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-              : "",
-            v: parseFloat(row.equity ?? row.value ?? 0)
-          }))
-        );
-      }
-    } catch (err) {
-      console.error("Failed to load equity curve timeframe:", err);
-    } finally {
-      setEquityLoading(false);
-    }
-  };
+  /*
+   * The two page controls.
+   *
+   * `handleTimeframeChange` used to be an async second read: it called `getDashboard` again
+   * with a different `equity_days` and wrote `equityCurve` from the result, swallowing its
+   * own failure into a `console.error`. The period is now a dependency of the one read, so
+   * changing it re-asks the whole question and its failure is the page's one failure state.
+   */
+  const handleEnvironmentChange = useCallback((next) => setEnvironment(next), []);
+  const handlePeriodChange = useCallback((next) => setTimeframe(next), []);
 
   // Strategy pause/resume handler
   const handleToggleStrategy = (id) => {
@@ -439,160 +659,97 @@ export default function Dashboard() {
     }
   };
 
-  // Compute operational risk level badge
-  const riskLevel = riskState?.risk_level || "low";
-  const riskScore = riskState?.risk_score != null ? riskState.risk_score : 25;
+  // The two risk readings the panels below still report. `risk_level` and `risk_score` left
+  // with the Risk Guard hero card: both were rendered with a substituted default — `"low"`
+  // and `25` for an account nothing had been read for — and neither is a §7.1 field.
   const isCircuitBreakerArmed = riskState?.circuit_breaker_armed ?? true;
   const isKillSwitchActive = riskState?.kill_switch_active ?? false;
 
+  /*
+   * THE PAGE'S THREE RENDERINGS, from the one read's state.
+   *
+   * `error` and `unauthorised` are the failure: one read failed, so the page has one failure
+   * state (§7.1). `empty` is NOT among them — a 2xx that carried no account state is a
+   * successful read of nothing, and it renders the four tier-1 markers with their declared
+   * reasons rather than a failure the server did not report. `refreshing` keeps the previous
+   * figures on screen with `ds/Panel`'s inline affordance, and §11.1 makes it reachable only
+   * from `ready`, so it can never be a stale render over a failure.
+   */
+  const isReading = readState === PANEL_STATES.LOADING
+    || readState === PANEL_STATES.IDLE
+    || readState === PANEL_STATES.REFRESHING;
+  const pageFailed = readState === PANEL_STATES.ERROR
+    || readState === PANEL_STATES.UNAUTHORISED;
+  const tierOneState = readState === PANEL_STATES.IDLE || readState === PANEL_STATES.LOADING
+    ? PANEL_STATES.LOADING
+    : (readState === PANEL_STATES.REFRESHING ? PANEL_STATES.REFRESHING : PANEL_STATES.READY);
+
+  /** The ledger's `ds/Panel` / `ds/TradingEnvironmentBadge` environment (§8.2). */
+  const panelEnvironment = (LEDGERS.find((entry) => entry.value === environment) ?? LEDGERS[0])
+    .environment;
+
   return (
-    // TEMPORARY page-level mono (task 3.3). The shell no longer sets a font family, so
-    // this page would otherwise render in Inter — and it has essentially no mono of its
-    // own: its two tables (the positions ledger and the signal log) and its whole
-    // figure grid inherited mono from the shell wrapper. `font-mono` here holds the
-    // page as it looks today rather than shipping it half-migrated.
+    // The page shell, on tokens: `bg-surface-canvas` and `text-content-primary` replace the
+    // `#080a0e` / `#e2e8f0` pair this page set by hand, and the `1.25rem 1.75rem` padding
+    // becomes `p-5` so the spacing comes from the scale rather than from a literal.
     //
-    // REMOVE in task 19.1, which rebuilds this page on the tier hierarchy and puts mono
-    // on the numeric cells that should carry it. This component also serves
-    // /app/live-trading, so task 20.1 must clear it too if 20.1 lands first.
-    //
-    // Replaces a hardcoded `'IBM Plex Mono', 'Fira Code', monospace` that no longer
-    // matched anything loaded: task 3.2 swapped the web fonts to Inter + JetBrains Mono,
-    // so that stack was falling through to the browser's default mono.
-    <div className="font-mono" style={{
-      flex: 1,
-      overflowY: "auto",
-      padding: "1.25rem 1.75rem",
-      background: "#080a0e",
-      color: "#e2e8f0"
-    }}>
+    // Task 3.3's TEMPORARY page-level `font-mono` moved down to the tier-2 grid, which is
+    // the part of the page that inherited mono from the old shell wrapper. This component
+    // also serves /app/live-trading until task 20.1 gives that route its own page.
+    <div className="flex min-w-0 flex-col gap-4 overflow-y-auto bg-surface-canvas p-5 text-content-primary">
 
-      {/* ── ZONE 1: TOP HEADER & GLOBAL TRADING STATUS ─────────────────────────── */}
-      <div style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        marginBottom: "1.25rem",
-        paddingBottom: "1rem",
-        borderBottom: "1px solid rgba(255,255,255,0.06)",
-        flexWrap: "wrap",
-        gap: "0.875rem"
-      }}>
-        {/* Title and Freshness */}
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-            <h1 style={{
-              fontSize: "1.25rem",
-              fontWeight: 800,
-              letterSpacing: "-0.02em",
-              color: "#f8fafc",
-              margin: 0
-            }}>
-              Trading Cockpit
-            </h1>
-
-            {/* LIVE / PAPER Environment Toggle */}
-            <div style={{
-              display: "inline-flex",
-              alignItems: "center",
-              background: "#0f141c",
-              padding: "2px",
-              borderRadius: "8px",
-              border: "1px solid #1e293b"
-            }}>
-              <button
-                onClick={() => setEnvironment("live")}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.375rem",
-                  padding: "4px 10px",
-                  borderRadius: "6px",
-                  fontSize: "0.6875rem",
-                  fontWeight: 700,
-                  border: "none",
-                  cursor: "pointer",
-                  transition: "all 0.15s ease",
-                  background: environment === "live" ? "rgba(16, 185, 129, 0.2)" : "transparent",
-                  color: environment === "live" ? "#10b981" : "#64748b",
-                  boxShadow: environment === "live" ? "inset 0 0 0 1px #10b981" : "none"
-                }}
-              >
-                <span style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: "50%",
-                  background: environment === "live" ? "#10b981" : "#475569",
-                  boxShadow: environment === "live" ? "0 0 6px #10b981" : "none"
-                }} />
-                LIVE
-              </button>
-
-              <button
-                onClick={() => setEnvironment("paper")}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.375rem",
-                  padding: "4px 10px",
-                  borderRadius: "6px",
-                  fontSize: "0.6875rem",
-                  fontWeight: 700,
-                  border: "none",
-                  cursor: "pointer",
-                  transition: "all 0.15s ease",
-                  background: environment === "paper" ? "rgba(99, 102, 241, 0.2)" : "transparent",
-                  color: environment === "paper" ? "#818cf8" : "#64748b",
-                  boxShadow: environment === "paper" ? "inset 0 0 0 1px #6366f1" : "none"
-                }}
-              >
-                <span style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: "50%",
-                  background: environment === "paper" ? "#818cf8" : "#475569",
-                  boxShadow: environment === "paper" ? "0 0 6px #818cf8" : "none"
-                }} />
-                PAPER
-              </button>
-            </div>
-
-            {/* Real Money Warning Badge in Live Mode */}
-            {environment === "live" ? (
-              <span style={{
-                fontSize: "0.6875rem",
-                padding: "2px 8px",
-                borderRadius: 4,
-                background: "rgba(16, 185, 129, 0.12)",
-                color: "#10b981",
-                border: "1px solid rgba(16, 185, 129, 0.3)",
-                fontWeight: 600
-              }}>
-                REAL CAPITAL ACTIVE
-              </span>
-            ) : (
-              <span style={{
-                fontSize: "0.6875rem",
-                padding: "2px 8px",
-                borderRadius: 4,
-                background: "rgba(99, 102, 241, 0.12)",
-                color: "#818cf8",
-                border: "1px solid rgba(99, 102, 241, 0.3)",
-                fontWeight: 600
-              }}>
-                SIMULATED EXECUTION
-              </span>
-            )}
+      {/* ═══ PAGE CHROME — the title, the environment switch, the period, the refresh ═══
+          §7.1's header row. The environment switch and the period are the two inputs of
+          the ONE read, which is why both live here rather than beside the figures they
+          change: `equity_days` is a parameter of `GET /api/dashboard`, not a chart
+          setting. `PageHeader` renders the page's only `<h1>` and, from `environment`,
+          the `TradingEnvironmentBadge` that replaces the two hand-styled
+          REAL CAPITAL ACTIVE / SIMULATED EXECUTION spans (§8.2). */}
+      <PageHeader
+        title="Command Center"
+        subtitle="Capital, exposure and execution across this account"
+        environment={panelEnvironment}
+        meta={(
+          <div className="flex items-center gap-3">
+            <ChipRadioGroup
+              legend="Environment"
+              name="environment"
+              options={LEDGERS}
+              value={environment}
+              onChange={handleEnvironmentChange}
+            />
+            <ChipRadioGroup
+              legend="Equity period"
+              name="period"
+              options={PERIODS}
+              value={timeframe}
+              onChange={handlePeriodChange}
+            />
           </div>
-
-          <div style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "0.25rem" }}>
-            Real-time capital deployment, position risk, and algorithmic execution engine.
-            {lastUpdated && <span style={{ marginLeft: "0.5rem" }}>• Updated {lastUpdated}</span>}
-          </div>
-        </div>
-
-        {/* Global Operational Controls */}
-        <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", flexWrap: "wrap" }}>
+        )}
+        actions={(
+          <CommandButton
+            intent="secondary"
+            icon={RefreshCw}
+            loading={isReading}
+            loadingLabel="Refreshing"
+            onClick={refetch}
+          >
+            Refresh
+          </CommandButton>
+        )}
+      />
+      {/* ═══ OPERATIONAL CONTROLS ══════════════════════════════════════════════════
+          The kill switch and the diagnostics popover, unchanged. The kill switch is a risk
+          control: task 19.2 routes it through `ds/ConfirmDialog` and Requirement 19.1
+          forbids touching its logic, so it keeps its trigger, its confirmation and its two
+          `riskApi` calls exactly as they are and only its container moved. The diagnostics
+          popover reports three tier-2 fields — `health.exchange_api_latency_ms`,
+          `health.order_state_sync_status` and the connected-venue count — which part B
+          folds into §7.1's System & exchange health panel. It sits outside `PageHeader`
+          because that primitive clips overflow to hold the fixed 64px route header
+          (Requirement 2.2), and an absolutely positioned popover inside it would be cut off. */}
+      <div className="relative flex flex-wrap items-center justify-end gap-2">
 
           {/* P0.1 EMERGENCY HALT / RESUME BUTTON */}
           {!isKillSwitchActive ? (
@@ -645,28 +802,6 @@ export default function Dashboard() {
               RESUME TRADING
             </button>
           )}
-
-          {/* Refresh Sync Button */}
-          <button
-            onClick={() => loadDashboardData(environment, timeframe)}
-            disabled={isLoading}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.375rem",
-              padding: "0.375rem 0.75rem",
-              background: "#0f141c",
-              border: "1px solid #1e293b",
-              borderRadius: 8,
-              color: "#94a3b8",
-              fontSize: "0.75rem",
-              fontWeight: 600,
-              cursor: "pointer"
-            }}
-          >
-            <RefreshCw size={13} style={{ animation: isLoading ? "spin 1s linear infinite" : "none" }} />
-            Sync
-          </button>
 
           {/* Diagnostics Popover Trigger */}
           <div style={{ position: "relative" }}>
@@ -766,7 +901,6 @@ export default function Dashboard() {
               </div>
             )}
           </div>
-        </div>
       </div>
 
       {/* ── P0.1 / 2D.5 EMERGENCY KILL SWITCH CONFIRMATION MODAL ───────────────── */}
@@ -888,6 +1022,24 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* ═══ THE ONE FAILURE STATE (§7.1, Requirements 3.6, 14.5) ══════════════════
+          One read means one failure, so the whole body is replaced by ONE `ds/ErrorState`
+          with retry rather than by a per-panel error in each zone: per-panel errors would
+          imply independent reads that do not exist. Because this is a branch and not a
+          banner, no zone, table or figure exists in the DOM at all while the read is
+          broken — there is no markup that could render the previous payload under an error
+          indicator. `ds/ErrorState` reads only `translateError` output, and offers the
+          retry only when the failure is retryable (a 503 is; an expired session is not). */}
+      {pageFailed ? (
+        <ErrorState
+          error={readError}
+          context="dashboard"
+          onRetry={refetch}
+          data-region="page-error"
+        />
+      ) : (
+        <>
 
       {/* ── P0.2 / 2D.2 HIGH-VISIBILITY CRITICAL OPERATIONAL ALERT BANNER ──────── */}
       {(isKillSwitchActive || !isCircuitBreakerArmed || criticalAlerts.length > 0) && (
@@ -1021,133 +1173,63 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── ZONE 2: PRIMARY CAPITAL & PERFORMANCE HERO CARDS ───────────────────── */}
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-        gap: "1rem",
-        marginBottom: "1.25rem"
-      }}>
-        {/* Total Equity */}
-        <div style={{
-          background: "#0c1017",
-          border: "1px solid #1e293b",
-          borderRadius: 12,
-          padding: "1rem 1.25rem"
-        }}>
-          <div style={{ fontSize: "0.6875rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Total Equity ({portfolioData.currency})
-          </div>
-          <div style={{ fontSize: "1.5rem", fontWeight: 800, color: "#f8fafc", marginTop: "0.25rem", letterSpacing: "-0.03em" }}>
-            ${(portfolioData?.totalEquity ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
-          </div>
-          <div style={{ fontSize: "0.6875rem", color: (portfolioData?.cumulativePnl ?? 0) >= 0 ? "#10b981" : "#ef4444", marginTop: "0.25rem" }}>
-            Lifetime P&L: {(portfolioData?.cumulativePnl ?? 0) >= 0 ? "+" : ""}${(portfolioData?.cumulativePnl ?? 0).toFixed(2)}
-          </div>
-        </div>
+      {/* ═══ TIER 1 — Requirements 3.1 and 3.4 (task 19.1) ═════════════════════════
+          ONE container, four figures, and no second row of equally-weighted cards.
 
-        {/* Available Cash / Liquidity */}
-        <div style={{
-          background: "#0c1017",
-          border: "1px solid #1e293b",
-          borderRadius: 12,
-          padding: "1rem 1.25rem"
-        }}>
-          <div style={{ fontSize: "0.6875rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Available Liquidity
-          </div>
-          <div style={{ fontSize: "1.5rem", fontWeight: 800, color: "#f8fafc", marginTop: "0.25rem", letterSpacing: "-0.03em" }}>
-            ${(portfolioData?.availableBalance ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
-          </div>
-          <div style={{ fontSize: "0.6875rem", color: "#64748b", marginTop: "0.25rem" }}>
-            Free: ${(portfolioData?.freeBalance ?? 0).toFixed(0)} • Used: ${(portfolioData?.usedBalance ?? 0).toFixed(0)}
-          </div>
-        </div>
+          Requirement 3.4 is satisfied STRUCTURALLY, not by review: the row is rendered by
+          walking `design/pageHierarchy.js`'s tier-1 list, so a figure cannot appear here
+          without being declared and cannot be declared twice; `Metric tier={1}` appears
+          nowhere else on this page; and `data-page-tier="1"` marks the single container
+          Property 4 (task 19.5) asserts every tier-1 figure is inside.
 
-        {/* Today's Total P&L */}
-        <div style={{
-          background: "#0c1017",
-          border: "1px solid #1e293b",
-          borderRadius: 12,
-          padding: "1rem 1.25rem"
-        }}>
-          <div style={{ fontSize: "0.6875rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Today's Total P&L
-          </div>
-          <div style={{
-            fontSize: "1.5rem",
-            fontWeight: 800,
-            color: (portfolioData?.todayPnl ?? 0) >= 0 ? "#10b981" : "#ef4444",
-            marginTop: "0.25rem",
-            letterSpacing: "-0.03em"
-          }}>
-            {(portfolioData?.todayPnl ?? 0) >= 0 ? "+" : ""}${(portfolioData?.todayPnl ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
-            <span style={{ fontSize: "0.8125rem", fontWeight: 600, marginLeft: "0.375rem" }}>
-              ({(portfolioData?.todayReturnPct ?? 0) >= 0 ? "+" : ""}{portfolioData?.todayReturnPct ?? 0}%)
-            </span>
-          </div>
-          <div style={{ fontSize: "0.6875rem", color: "#94a3b8", marginTop: "0.25rem" }}>
-            Realized: <span style={{ color: (portfolioData?.todayRealizedPnl ?? 0) >= 0 ? "#10b981" : "#ef4444" }}>
-              {(portfolioData?.todayRealizedPnl ?? 0) >= 0 ? "+" : ""}${(portfolioData?.todayRealizedPnl ?? 0).toFixed(2)}
-            </span> • uPnL: <span style={{ color: (portfolioData?.unrealizedPnl ?? 0) >= 0 ? "#10b981" : "#ef4444" }}>
-              {(portfolioData?.unrealizedPnl ?? 0) >= 0 ? "+" : ""}${(portfolioData?.unrealizedPnl ?? 0).toFixed(2)}
-            </span>
-          </div>
+          The five hero cards this replaces were Total Equity, Available Liquidity, Today's
+          Total P&L, Market Exposure and Risk Guard State — five equally weighted cards in a
+          `repeat(auto-fit, minmax(200px, 1fr))` grid that wrapped to a second row below
+          about 1100px, which is the two-rows-of-tier-1 arrangement Requirement 3.4 rules
+          out. Liquidity and exposure are §7.6's figures and are on Portfolio; the risk guard
+          state stays on this page in the Risk & Safety panel below, where it was already
+          reported. Every figure that was `?? 0` is now a declared `Reported<T>`: absent
+          renders the marker with the field's own reason, never a zero (Requirement 14.5). */}
+      <Panel
+        title="Account summary"
+        money
+        environment={panelEnvironment}
+        state={tierOneState}
+        loading={{ kind: "skeleton-metric", rows: 1, columns: 4 }}
+        data-region="tier-1"
+      >
+        <div
+          {...{ [TIER_PAGE_ATTRIBUTE]: PAGES.DASHBOARD, [TIER_ATTRIBUTE]: 1 }}
+          className="grid grid-cols-4 gap-4"
+        >
+          {TIER_ONE.map(({ key, label }) => {
+            const { format, precision } = TIER_ONE_FORMAT[key];
+            return (
+              <Metric
+                key={key}
+                tier={1}
+                label={label}
+                value={tierOne[key]}
+                format={format}
+                precision={precision}
+                // The denomination as the server reported it, and only beside a real figure.
+                unit={format === "currency" ? currency ?? undefined : undefined}
+                hint={fieldEntry(key)?.tooltip ?? undefined}
+              />
+            );
+          })}
         </div>
+      </Panel>
 
-        {/* Capital Exposure */}
-        <div style={{
-          background: "#0c1017",
-          border: "1px solid #1e293b",
-          borderRadius: 12,
-          padding: "1rem 1.25rem"
-        }}>
-          <div style={{ fontSize: "0.6875rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Market Exposure
-          </div>
-          <div style={{ fontSize: "1.5rem", fontWeight: 800, color: "#f8fafc", marginTop: "0.25rem", letterSpacing: "-0.03em" }}>
-            ${(portfolioData?.totalExposure ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
-          </div>
-          <div style={{ fontSize: "0.6875rem", color: "#64748b", marginTop: "0.25rem" }}>
-            {positions.length} Open Positions Active
-          </div>
-        </div>
-
-        {/* Risk & Safety Level */}
-        <div style={{
-          background: "#0c1017",
-          border: "1px solid #1e293b",
-          borderRadius: 12,
-          padding: "1rem 1.25rem"
-        }}>
-          <div style={{ fontSize: "0.6875rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Risk Guard State
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.375rem" }}>
-            <span style={{
-              fontSize: "0.8125rem",
-              fontWeight: 800,
-              padding: "2px 8px",
-              borderRadius: 4,
-              textTransform: "uppercase",
-              background: isKillSwitchActive || riskLevel === "blocked" ? "rgba(239,68,68,0.2)" : riskLevel === "low" ? "rgba(16,185,129,0.15)" : "rgba(234,179,8,0.15)",
-              color: isKillSwitchActive || riskLevel === "blocked" ? "#ef4444" : riskLevel === "low" ? "#10b981" : "#eab308",
-              border: `1px solid ${isKillSwitchActive || riskLevel === "blocked" ? "#ef4444" : riskLevel === "low" ? "#10b981" : "#eab308"}`
-            }}>
-              {isKillSwitchActive ? "BLOCKED" : riskLevel}
-            </span>
-            <span style={{ fontSize: "0.75rem", color: "#94a3b8", fontWeight: 600 }}>
-              Score: {riskScore}/100
-            </span>
-          </div>
-          <div style={{ fontSize: "0.6875rem", color: "#64748b", marginTop: "0.25rem" }}>
-            Circuit Breaker: {isCircuitBreakerArmed ? "ARMED" : "TRIGGERED"}
-          </div>
-        </div>
-      </div>
-
-      {/* ── COCKPIT MAIN LAYOUT GRID (LEFT 65% / RIGHT 35%) ───────────────────── */}
-      <div style={{
+      {/* ── COCKPIT MAIN LAYOUT GRID (LEFT 65% / RIGHT 35%) — PART B's tier 2 ──────
+          `font-mono` moved here from the page root (task 3.3's temporary page-level mono).
+          It is the zones below that inherited mono from the old shell wrapper — the two
+          tables and their figure rows — and holding it on this container keeps them looking
+          as they do today while the header and tier 1 render in the shell's Inter, which is
+          what `ds/PageHeader` and `ds/Metric` are built for. Part B removes it entirely when
+          these tables become `ds/DataTable`, which puts mono on the numeric cells that
+          should carry it. */}
+      <div className="font-mono" style={{
         display: "grid",
         gridTemplateColumns: "minmax(0, 1.8fr) minmax(0, 1.2fr)",
         gap: "1.25rem",
@@ -1351,41 +1433,22 @@ export default function Dashboard() {
             }}>
               <div>
                 <h2 style={{ fontSize: "0.875rem", fontWeight: 800, color: "#f8fafc", margin: 0, textTransform: "uppercase", letterSpacing: "0.03em" }}>
-                  Equity Trajectory ({portfolioData.currency})
+                  {/* The denomination only when the server reported one: the previous title
+                      printed `USDT` for live and `USD` for paper whether or not `overview`
+                      carried a currency. */}
+                  Equity Trajectory{currency === null ? "" : ` (${currency})`}
                 </h2>
                 <span style={{ fontSize: "0.6875rem", color: "#64748b" }}>Historical NAV progression</span>
               </div>
 
-              {/* Timeframe Selector */}
-              <div style={{ display: "flex", gap: 3, background: "#080a0e", padding: 2, borderRadius: 6, border: "1px solid #1e293b" }}>
-                {["1D", "1W", "1M", "3M", "ALL"].map(tf => (
-                  <button
-                    key={tf}
-                    onClick={() => handleTimeframeChange(tf)}
-                    style={{
-                      padding: "3px 8px",
-                      borderRadius: 4,
-                      fontSize: "0.6875rem",
-                      fontWeight: 700,
-                      border: "none",
-                      background: timeframe === tf ? "#0284c7" : "transparent",
-                      color: timeframe === tf ? "#ffffff" : "#64748b",
-                      cursor: "pointer",
-                      transition: "all 0.15s ease"
-                    }}
-                  >
-                    {tf}
-                  </button>
-                ))}
-              </div>
+              {/* The period selector stood here. It is in `PageHeader` now, because
+                  `equity_days` is a parameter of the page's one read: this control issued a
+                  SECOND `getDashboard` call for the same account and wrote the series from
+                  it, which is two reads and two failure surfaces for one figure (§7.1). */}
             </div>
 
             <div style={{ height: 180, position: "relative" }}>
-              {equityLoading ? (
-                <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#475569", fontSize: "0.75rem" }}>
-                  Loading trajectory...
-                </div>
-              ) : equityCurve.length === 0 ? (
+              {equityCurve.length === 0 ? (
                 <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "0.375rem", color: "#475569" }}>
                   <BarChart2 size={24} style={{ opacity: 0.4 }} />
                   <span style={{ fontSize: "0.75rem" }}>No historical curve points yet.</span>
@@ -1760,13 +1823,13 @@ export default function Dashboard() {
                 </span>
               </div>
 
-              {/* Drawdown */}
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "0.3125rem 0", borderBottom: "1px solid rgba(30,41,59,0.5)" }}>
-                <span style={{ color: "#94a3b8" }}>Current Drawdown</span>
-                <span style={{ color: "#f8fafc", fontWeight: 600 }}>
-                  {riskState?.current_drawdown_pct != null ? `${floatVal(riskState.current_drawdown_pct).toFixed(2)}%` : "0.00%"}
-                </span>
-              </div>
+              {/* A second "Current Drawdown" row stood here, reading
+                  `risk.current_drawdown_pct` and falling back to `"0.00%"`. Both halves of
+                  that are now wrong on the same page: the field is BC-1's deprecated
+                  neighbour, which publishes `today_return_pct` — so a profitable day
+                  rendered as a positive drawdown — and `"0.00%"` claimed an account at its
+                  peak whenever nothing had been read. Drawdown is a tier-1 figure and is
+                  reported once, from `risk.current_drawdown_pct_v2`, above. */}
 
               {/* Emergency Kill Switch */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: "0.25rem" }}>
@@ -1950,6 +2013,9 @@ export default function Dashboard() {
 
         </div>
       </div>
+
+        </>
+      )}
 
     </div>
   );

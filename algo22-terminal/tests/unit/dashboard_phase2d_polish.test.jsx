@@ -250,8 +250,10 @@ describe('Phase 2D — Trading Cockpit Polish & WebSocket Invariants', () => {
         </MemoryRouter>
       );
 
+      // Task 19.1 replaced the hand-styled `REAL CAPITAL ACTIVE` span with
+      // `ds/TradingEnvironmentBadge`, whose LIVE label is "LIVE" (design.md §8.2).
       await waitFor(() => {
-        expect(screen.getByText('REAL CAPITAL ACTIVE')).toBeDefined();
+        expect(screen.getAllByText('LIVE').length).toBeGreaterThan(0);
       });
 
       // Event from paper environment should not alter live state

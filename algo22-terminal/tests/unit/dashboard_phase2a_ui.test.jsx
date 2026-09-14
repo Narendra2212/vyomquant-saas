@@ -190,18 +190,38 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
       </MemoryRouter>
     );
 
-    // Verify Title & Live Environment Indicator
-    expect(await screen.findByText('Trading Cockpit')).toBeDefined();
-    expect(screen.getByText('REAL CAPITAL ACTIVE')).toBeDefined();
+    // Verify Title & Live Environment Indicator.
+    //
+    // vyomquant-ui-redesign task 19.1: the title is `ds/PageHeader`'s `<h1>` and the
+    // environment is `ds/TradingEnvironmentBadge`, whose LIVE label is "LIVE". The
+    // hand-styled `REAL CAPITAL ACTIVE` span it replaces is gone, and the badge appears
+    // more than once on the page — the tier-1 panel declares `money` and so carries one too.
+    expect(await screen.findByText('Command Center')).toBeDefined();
+    expect(screen.getAllByText('LIVE').length).toBeGreaterThan(0);
 
-    // Verify Primary Capital Hero Cards
-    expect(screen.getByText('$45,250.00')).toBeDefined();
-    expect(screen.getByText('+$550.00')).toBeDefined();
-    expect(screen.getByText('(+1.22%)')).toBeDefined();
-    expect(screen.getByText('Lifetime P&L: +$5250.00')).toBeDefined();
+    // Verify tier 1 — the four §7.1 figures, in one container.
+    //
+    // `ds/Metric`'s `currency` format renders the grouped digits and puts the denomination
+    // in its own span, so the figure text carries no `$`. The five hero cards these replace
+    // rendered `$45,250.00`, `+$550.00 (+1.22%)` and `Lifetime P&L: +$5250.00`; today's
+    // return percentage and the realised/unrealised split are not §7.1 tier-1 fields and
+    // are not rendered here.
+    expect(screen.getByText('45,250.00')).toBeDefined();   // overview.total_value
+    expect(screen.getByText('550.00')).toBeDefined();      // overview.today_pnl, as ONE field
+    expect(screen.getByText('5,250.00')).toBeDefined();    // overview.cumulative_pnl
+    // BC-1's `risk.current_drawdown_pct_v2` is absent from this payload, so the figure is
+    // the marker and its reason — never `0.00%`, and never the deprecated
+    // `current_drawdown_pct: 1.22` sitting beside it, which is today's return.
+    expect(screen.getByLabelText('Current drawdown: not available')).toBeDefined();
+    expect(screen.queryByText('0.00%')).toBeNull();
+    expect(screen.queryByText('1.22%')).toBeNull();
 
-    // Verify Open Positions rendered with authoritative exchange_id
-    expect(screen.getByText('Open Positions (2)')).toBeDefined();
+    // Verify Open Positions rendered with authoritative exchange_id.
+    //
+    // Awaited rather than read synchronously: tier 1 is derived during the render that
+    // receives the payload, while the tier-2 zones are projected out of it in an effect, so
+    // the positions table arrives one commit after the figures do.
+    expect(await screen.findByText('Open Positions (2)')).toBeDefined();
     expect(screen.getByText('BTC/USDT')).toBeDefined();
     expect(screen.getAllByText(/binance/i).length).toBeGreaterThan(0);
     expect(screen.getByText('ETH/USDT')).toBeDefined();
@@ -227,21 +247,24 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
     );
 
     // Initial Live mode
-    expect(await screen.findByText('REAL CAPITAL ACTIVE')).toBeDefined();
+    expect(await screen.findAllByText('LIVE')).toBeDefined();
 
-    // Click PAPER button
-    const paperButton = screen.getByRole('button', { name: /PAPER/i });
-    fireEvent.click(paperButton);
+    // Select the PAPER ledger. Task 19.1 replaced the two hand-styled toggle buttons with
+    // `ChipRadioGroup`'s radios — the selected one is no longer a `<button>` that does
+    // nothing when pressed (Requirement 19.4).
+    fireEvent.click(screen.getByRole('radio', { name: 'Paper' }));
 
     // Verify Paper environment request called
     await waitFor(() => {
       expect(getDashboardSpy).toHaveBeenCalledWith(expect.objectContaining({ environment: 'paper' }));
     });
 
-    // Verify Paper indicators
-    expect(await screen.findByText('SIMULATED EXECUTION')).toBeDefined();
-    expect(screen.getByText('Total Equity (USD)')).toBeDefined();
-    expect(screen.getAllByText('$100,000.00').length).toBeGreaterThan(0);
+    // Verify Paper indicators. `ds/TradingEnvironmentBadge` labels the paper ledger
+    // "PAPER TRADING"; the figure and its denomination are the tier-1 metric's two spans.
+    expect((await screen.findAllByText('PAPER TRADING')).length).toBeGreaterThan(0);
+    expect(screen.getByText('Portfolio value')).toBeDefined();
+    expect(screen.getAllByText('100,000.00').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('USD').length).toBeGreaterThan(0);
 
     // Verify Empty Positions state
     expect(screen.getByText('No open positions currently held')).toBeDefined();

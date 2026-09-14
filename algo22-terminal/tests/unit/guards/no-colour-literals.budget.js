@@ -63,7 +63,35 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // early — the 76 `isDense ? … : …` ternaries the toggle fed collapsed to their standard
   // branch, which is the spacing the page renders with today, so no committed geometry
   // moved. The other 307 are 19.1's.
-  'pages/Dashboard.jsx': 307,
+  //
+  // 307 -> 228 at task 19.1 PART A, which rebuilt the page chrome and tier 1. The 79 that
+  // went are those two regions' entire palette:
+  //
+  //   * the page shell's `#080a0e` / `#e2e8f0` pair, now `bg-surface-canvas` and
+  //     `text-content-primary`;
+  //   * the whole of the old Zone 1 header — its `rgba(255,255,255,0.06)` rule and `#f8fafc`
+  //     `<h1>`, the hand-built LIVE/PAPER toggle (the segmented container, each button's
+  //     selected/unselected fill, text, inset ring and glowing status dot) and the
+  //     REAL CAPITAL ACTIVE / SIMULATED EXECUTION badges' six — replaced by `ds/PageHeader`,
+  //     `ds/TradingEnvironmentBadge` and Portfolio's `ChipRadioGroup`;
+  //   * the `Sync` button's `#0f141c` / `#1e293b` / `#94a3b8`, now a `ds/CommandButton`;
+  //   * the five capital hero cards — each one's `#0c1017` shell and `#1e293b` border, its
+  //     `#64748b` label, its `#f8fafc` figure and its `#10b981`/`#ef4444` sign ternaries,
+  //     plus the risk card's three-way `rgba` wash/text/border triple — replaced by ONE
+  //     `ds/Panel` holding four `ds/Metric`s, which take their hue from `design/semantic.js`
+  //     and accept no colour prop;
+  //   * the equity panel's five-button timeframe selector (`#080a0e`, `#1e293b`, `#0284c7`,
+  //     `#ffffff`, `#64748b`), which is now the `PageHeader` period control because
+  //     `equity_days` is a parameter of the page's one read, and the `#475569` of the
+  //     second-read spinner it fed;
+  //   * the duplicate "Current Drawdown" row in the risk panel, which read BC-1's deprecated
+  //     `current_drawdown_pct` and defaulted to `"0.00%"`.
+  //
+  // The remaining 228 are PART B's: tier 2 — the positions and executions tables, the
+  // strategy list, the risk and exchange panels, the operational insights, the equity
+  // `AreaChart` — plus the Requirement 3.3 alert banner and the kill-switch modal, which are
+  // tasks 19.2's. Part B takes this entry to 0.
+  'pages/Dashboard.jsx': 228,
   // Material Design palette (#2196F3 #00BCD4 #FFAB00 #9C27B0 #FF5722 #00C853
   // #607D8B) plus GitHub greys. Rewritten by task 20.x.
   'components/SignalTraceVisualization.jsx': 138,
