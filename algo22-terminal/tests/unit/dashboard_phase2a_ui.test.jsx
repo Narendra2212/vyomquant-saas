@@ -1,19 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Dashboard, { floatVal } from '../../src/pages/Dashboard';
 import * as dashboardModule from '../../src/api/modules/dashboard';
 
-// Mock Recharts responsive container & area chart to avoid DOM measurement issues in JSDOM
-vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div data-testid="responsive-container">{children}</div>,
-  AreaChart: ({ children }) => <div data-testid="area-chart">{children}</div>,
-  Area: () => <div data-testid="area" />,
-  XAxis: () => <div data-testid="x-axis" />,
-  YAxis: () => <div data-testid="y-axis" />,
-  Tooltip: () => <div data-testid="tooltip" />,
-}));
+// The equity curve is a lazily-imported `ds/Chart` since vyomquant-ui-redesign task 19.1b,
+// so the page imports recharts nowhere and the `vi.mock('recharts', ...)` that stood here
+// could no longer satisfy the lazy chunk (it resolves `ds/Chart`, which imports more of
+// recharts than this mock declared, and the rejected import took the whole page down).
+// Stubbing the module the page imports is `portfolio-rendering.test.jsx`'s approach since
+// task 16.2, and nothing in this file asserts anything about the chart.
+vi.mock('../../src/components/ds/Chart', () => {
+  const Stub = (props) => <figure data-testid="chart" data-chart-kind={props.kind} />;
+  return { __esModule: true, Chart: Stub, default: Stub };
+});
 
 const mockLiveResponse = {
   environment: "live",
@@ -221,17 +222,38 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
     // Awaited rather than read synchronously: tier 1 is derived during the render that
     // receives the payload, while the tier-2 zones are projected out of it in an effect, so
     // the positions table arrives one commit after the figures do.
-    expect(await screen.findByText('Open Positions (2)')).toBeDefined();
-    expect(screen.getByText('BTC/USDT')).toBeDefined();
-    expect(screen.getAllByText(/binance/i).length).toBeGreaterThan(0);
-    expect(screen.getByText('ETH/USDT')).toBeDefined();
-    expect(screen.getAllByText(/bybit/i).length).toBeGreaterThan(0);
+    //
+    // Task 19.1b re-points the two panel titles: the count is no longer interpolated into
+    // the heading (`Open Positions (2)`), because `positions.length` and the server's
+    // `risk.open_positions_count` are different quantities and only the second one can
+    // report that it is unknown (BC-2). The heading is now the declared `pageFields` label
+    // and the count is a `ds/Metric` beside the table, which is the field that renders the
+    // marker when the read failed.
+    expect(await screen.findByText('Open positions')).toBeDefined();
+    expect(
+      document.querySelector('[data-region="openPositionsCount"]').textContent,
+    ).toContain('2');
+
+    /*
+     * Scoped to the positions region rather than to the document. `BTC/USDT` is now on the
+     * page twice — once as the position's market and once as the deployment's, because the
+     * fleet panel renders `strategies.items[].pair` beside each strategy — so an unscoped
+     * `getByText` matches two elements and cannot say which surface it found. `within` is
+     * the honest form of the same claim: the POSITIONS table names the market and the venue.
+     */
+    const positions = within(document.querySelector('[data-region="openPositions"]'));
+    expect(positions.getByText('BTC/USDT')).toBeDefined();
+    expect(positions.getAllByText(/binance/i).length).toBeGreaterThan(0);
+    expect(positions.getByText('ETH/USDT')).toBeDefined();
+    expect(positions.getAllByText(/bybit/i).length).toBeGreaterThan(0);
 
     // Spot liquidation price must show dash ('—') and not '$0.00'
-    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    expect(positions.getAllByText('—').length).toBeGreaterThan(0);
 
-    // Verify Recent Execution rendered
-    expect(screen.getByText('Recent Order Executions (1)')).toBeDefined();
+    // Verify Recent Execution rendered. `Recent Order Executions (1)` was the same
+    // count-in-the-heading pattern; the heading is the declared label and the row count is
+    // the table's.
+    expect(screen.getByText('Recent orders')).toBeDefined();
     expect(screen.getByText('SOL/USDT')).toBeDefined();
   });
 
@@ -266,11 +288,19 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
     expect(screen.getAllByText('100,000.00').length).toBeGreaterThan(0);
     expect(screen.getAllByText('USD').length).toBeGreaterThan(0);
 
-    // Verify Empty Positions state
-    expect(screen.getByText('No open positions currently held')).toBeDefined();
+    // Verify Empty Positions state. Task 19.1b renders it through `ds/EmptyState`, which
+    // Requirement 14.1 makes say what is missing, why it matters and what to do — the
+    // headline is the first of those three.
+    expect(screen.getByText('No open positions')).toBeDefined();
 
-    // Verify Blocked Kill Switch badge
-    expect(screen.getByText('TRIGGERED (BLOCKED)')).toBeDefined();
+    // Verify the blocked state is reported. `TRIGGERED (BLOCKED)` was the Risk & Safety
+    // Matrix's kill-switch row, which task 19.1b removed: it was a second copy of a state
+    // the control itself reports, beside two limits the server never sent. The halt is
+    // reported by the Requirement 3.3 strip and by the diagnostics pill — both task 19.2's
+    // and both untouched — so those are what this asserts.
+    expect(screen.getByText(/EMERGENCY KILL SWITCH ACTIVE/i)).toBeDefined();
+    expect(screen.getByText('Trading Blocked')).toBeDefined();
+    expect(screen.getByText(/RISK CIRCUIT BREAKER TRIGGERED/i)).toBeDefined();
   });
 
   it('correctly handles unmeasured latency with neutral fallback', async () => {
@@ -282,9 +312,41 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
         </MemoryRouter>
     );
 
-    // Bybit venue has latency null -> should display 'Latency unavailable' (never 38ms or 0ms)
-    expect(await screen.findByText('Latency unavailable')).toBeDefined();
+    /*
+     * The claim is unchanged — an unmeasured latency is never a number — but task 19.1b
+     * moved where it is decided, and made it stronger. The old row rendered
+     * `ex.latency_ms != null ? '${ex.latency_ms} ms' : 'Latency unavailable'` per venue, so
+     * bybit's `null` read as unavailable and binance's `42` read as a measurement. Neither
+     * per-venue field is a measurement: `pageFields`' `exchangeHealth` note records that
+     * `status` and `latency_ms` are constants in the aggregation service. So NO venue row
+     * reports latency now — `ds/ExchangeStatus` marks each one `data-latency-reported=false`
+     * with its own reason — and the measured figure is `health.exchange_api_latency_ms`,
+     * page-level and nullable, rendered as one `ds/Metric`.
+     */
+    // Waited on the venue ROWS, not on the panel: `data-region` is on the `ds/Panel`
+    // section, which is in the DOM in its loading state too, so querying on the region
+    // alone would read the skeleton.
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-exchange]').length).toBe(2);
+    });
+
+    const health = document.querySelector('[data-region="exchangeHealth"]');
+    const venues = health.querySelectorAll('[data-exchange]');
+    expect(venues.length).toBe(2);
+    for (const venue of venues) {
+      expect(venue.getAttribute('data-latency-reported')).toBe('false');
+      expect(venue.getAttribute('data-connection-state')).toBe('unreported');
+    }
+    // Neither the venue that reported 42 nor the constant 35 is presented as a reading.
+    expect(health.textContent).not.toContain('42 ms');
+    expect(health.textContent).not.toContain('35 ms');
     expect(screen.queryByText('38 ms')).toBeNull();
     expect(screen.queryByText('38ms')).toBeNull();
+
+    // The measured figure, which this payload does report, with its unit beside it.
+    const latency = document.querySelector('[data-region="exchangeApiLatencyMs"]');
+    expect(latency.getAttribute('data-metric-available')).toBe('true');
+    expect(latency.textContent).toContain('42');
+    expect(latency.textContent).toContain('ms');
   });
 });

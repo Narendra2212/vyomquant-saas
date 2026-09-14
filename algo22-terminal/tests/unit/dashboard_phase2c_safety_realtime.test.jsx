@@ -6,15 +6,13 @@ import Dashboard, { floatVal, computeLiquidationDistance } from '../../src/pages
 import * as dashboardModule from '../../src/api/modules/dashboard';
 import * as riskModule from '../../src/api/modules/risk';
 
-// Mock Recharts responsive container & area chart to avoid DOM measurement issues in JSDOM
-vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div data-testid="responsive-container">{children}</div>,
-  AreaChart: ({ children }) => <div data-testid="area-chart">{children}</div>,
-  Area: () => <div data-testid="area" />,
-  XAxis: () => <div data-testid="x-axis" />,
-  YAxis: () => <div data-testid="y-axis" />,
-  Tooltip: () => <div data-testid="tooltip" />,
-}));
+// `ds/Chart`, lazily imported since task 19.1b, is stubbed rather than recharts mocked —
+// see `dashboard_phase2a_ui.test.jsx` for why the recharts mock that stood here stopped
+// working. Nothing in this file asserts anything about the chart.
+vi.mock('../../src/components/ds/Chart', () => {
+  const Stub = (props) => <figure data-testid="chart" data-chart-kind={props.kind} />;
+  return { __esModule: true, Chart: Stub, default: Stub };
+});
 
 // Mock WebSocket client
 vi.mock('../../src/websocketClient', () => ({
@@ -326,10 +324,22 @@ describe('Phase 2C — Dashboard Safety & Real-time Unit Tests', () => {
 
       await waitFor(() => {
         expect(screen.getByText('ETH Arbitrage Delta')).toBeDefined();
-        expect(screen.getByText('FAILED')).toBeDefined();
+        // The status is `ds/StrategyStatus`'s since task 19.1b. It normalises the server's
+        // `error` to `failed` and humanises it, so the badge reads "Failed" rather than the
+        // old inline `FAILED` span — and, unlike that span, an ABSENT status renders
+        // "Status not reported" instead of defaulting to paused.
+        expect(screen.getByText('Failed')).toBeDefined();
+        expect(document.querySelector('[data-strategy-status="failed"]')).not.toBeNull();
+        // The server's own account of the failure, still verbatim and still beside the row.
         expect(screen.getByText(/Rate limit exceeded on Bybit WebSocket/i)).toBeDefined();
-        expect(screen.getByText('Inspect')).toBeDefined();
       });
+
+      // `Inspect` was a per-row `<button onClick={navigate('/app/strategies')}>` — a
+      // navigation wearing a button, which announces as the wrong thing and cannot be
+      // opened in a new tab. It is one real `<a>` at panel level now, naming its
+      // destination because `anchor-ambiguous-text` rejects a link whose text names none.
+      const manage = screen.getByRole('link', { name: /manage strategies/i });
+      expect(manage.getAttribute('href')).toBe('/app/strategies');
     });
   });
 });

@@ -25,9 +25,13 @@
  *      per-panel error, no panel at all, and nothing left on screen from the read that
  *      worked (Requirement 14.5).
  *
- * Part B rebuilds tier 2 onto `ds/Panel` and `ds/DataTable`; the tier-2 zones are covered by
- * `dashboard_phase2a_ui`, `dashboard_phase2c_safety_realtime` and `dashboard_phase2d_polish`
- * and are deliberately not re-asserted here.
+ * Part B rebuilt tier 2 onto `ds/Panel`, `ds/DataTable`, `ds/ExchangeStatus` and a lazy
+ * `ds/Chart`. Those regions are `dashboard-tier2.test.jsx`'s — the declared tier-2 elements
+ * and their document order, BC-2's two arms, the figures that must never read `0`, and the
+ * two constant per-venue fields — with `dashboard_phase2a_ui`,
+ * `dashboard_phase2c_safety_realtime` and `dashboard_phase2d_polish` still holding the
+ * phase-2 behaviour. None of it is re-asserted here: this file's fixtures carry an empty
+ * account precisely so that tier 1 is the only thing on screen.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -41,18 +45,19 @@ import { PAGES, PAGE_FIELD_BY_KEY, pageFieldKey } from '../../src/design/pageFie
 import { PAGE_HIERARCHY_BY_PAGE, tierSelector } from '../../src/design/pageHierarchy';
 
 /*
- * recharts is stubbed for the same reason `dashboard_phase2a_ui` stubs it: the equity curve
- * is still the pre-part-B `AreaChart` and recharts needs layout APIs jsdom does not
- * implement. Nothing below asserts anything about the chart.
+ * `ds/Chart` is stubbed, not recharts.
+ *
+ * Part B put the equity curve behind `lazy(() => import('../components/ds/Chart'))`, so the
+ * page imports recharts nowhere and a `recharts` mock would have to enumerate every export
+ * `ds/Chart` uses for the lazy chunk to resolve at all. Stubbing the module the page imports
+ * is `portfolio-rendering.test.jsx`'s approach since task 16.2. Nothing below asserts
+ * anything about the chart; this file's fixtures carry no equity series, so it does not
+ * mount — the stub is here so that a fixture which does cannot fail for the chart's reasons.
  */
-vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div data-testid="responsive-container">{children}</div>,
-  AreaChart: ({ children }) => <div data-testid="area-chart">{children}</div>,
-  Area: () => <div data-testid="area" />,
-  XAxis: () => <div data-testid="x-axis" />,
-  YAxis: () => <div data-testid="y-axis" />,
-  Tooltip: () => <div data-testid="tooltip" />,
-}));
+vi.mock('../../src/components/ds/Chart', () => {
+  const Stub = (props) => <figure data-testid="chart" data-chart-kind={props.kind} />;
+  return { __esModule: true, Chart: Stub, default: Stub };
+});
 
 /* ══════════════════════════════════════════════════════════════════════════════════════
  * THE DECLARATION, AND THE FIXTURE

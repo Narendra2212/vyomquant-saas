@@ -480,7 +480,7 @@ describe('Chart: the lazy-loading contract (design.md §13.3)', () => {
     expect(typeof module.default).toBe('function');
   });
 
-  it('pins the set of modules that import recharts, so a sixth cannot appear', async () => {
+  it('pins the set of modules that import recharts, so a fifth cannot appear', async () => {
     const { readFileSync } = await import('node:fs');
     const path = await import('node:path');
     const { SRC, collect, stripComments } = await import('../guards/source-scan.js');
@@ -493,13 +493,19 @@ describe('Chart: the lazy-loading contract (design.md §13.3)', () => {
     /*
      * A static import anywhere in the entry graph hoists `vendor-recharts` into it,
      * so the §13.3 split only pays off once this list is one entry long. The remaining
-     * call sites belong to the page tasks (14.x, 19.x, 23.x, 25.x) and are out of scope
-     * for 6.18, so the list is pinned by value rather than asserted down to one:
+     * call sites belong to the page tasks (23.1 for `Backtester`, 25.1 for
+     * `PaperTrading`; `ResearchConsole` is named by no task in `tasks.md`) and were out
+     * of scope for 6.18, so the list is pinned by value rather than asserted down to one:
      * it fails if a NEW importer appears, and it fails again when a page migrates
      * and the list is not lowered with it.
      */
     /*
-     * Six when 6.18 pinned it, now four.
+     * Seven when 6.18 pinned it, now four. Every count in this block — and the "a fifth
+     * cannot appear" in the title — is a count of ENTRIES, `ds/Chart` itself included,
+     * so the number here and the number in `toHaveLength` below are the same number.
+     * The earlier revisions of this comment alternated between entries and "importers
+     * other than `ds/Chart`", which is how the title kept saying "sixth" against a
+     * five-entry list.
      *
      * `pages/Portfolio.jsx` left this list at task 16.2: its three charts now go through
      * `ds/Chart`, imported with `lazy(() => import(...))` rather than statically, so
@@ -510,16 +516,27 @@ describe('Chart: the lazy-loading contract (design.md §13.3)', () => {
      * `AreaChart`/`ReferenceLine` import was holding `vendor-recharts` in the entry
      * graph for markup that never rendered (design.md §7.1, Requirement 1.5). That is
      * the first entry to leave by deletion rather than by migrating to `ds/Chart`.
+     *
+     * `pages/Dashboard.jsx` left it at task 19.1b, which rebuilt tier 2 and moved the
+     * equity curve onto `const Chart = lazy(() => import('../components/ds/Chart'))`
+     * behind its own `Suspense` boundary — the same migration Portfolio made, on the
+     * page §13.3 names first. What it buys is the whole point of the split: recharts is
+     * ~350KB before gzip, `vite.config.js` already routes it to `vendor-recharts`, and a
+     * static import ANYWHERE in the entry graph hoists that chunk into it however the
+     * chunk config reads. Dashboard is `/app/dashboard` and — until task 20.1 gives that
+     * route its own page — `/app/live-trading` too, so its static import was the one
+     * charging every non-charting route (Strategies, Trade History, Signal Trace) for a
+     * chart it never draws, which is exactly the cost §13.3 says they must not pay.
+     * The three that remain are the three still to migrate.
      */
     expect(importers).toEqual([
       'components/ResearchConsole.jsx',
       'components/ds/Chart.jsx',
       'pages/Backtester.jsx',
-      'pages/Dashboard.jsx',
       'pages/PaperTrading.jsx',
     ]);
     // The count is pinned separately so that a list edited to the wrong length fails
     // on the number as well as on the members.
-    expect(importers).toHaveLength(5);
+    expect(importers).toHaveLength(4);
   });
 });

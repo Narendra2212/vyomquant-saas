@@ -29,7 +29,7 @@
  * adding an entry, means a new literal entered the tree; that reverses §14.4
  * and needs a reason in the PR description.
  *
- * An entry reaching `0` is expected and stays (task 19.1 lowers Dashboard.jsx to
+ * An entry reaching `0` is expected and stays (task 19.2 takes Dashboard.jsx to
  * zero, for instance). Delete an entry only when the file itself is deleted —
  * `components/ui-legacy/primitives.jsx` goes at task 27.2 with the shim.
  *
@@ -49,8 +49,9 @@
 export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // -- §1.1 G5, the four hotspots task 1.10 names explicitly ----------------
   // 240 inline styles, zero `C.` references, Tailwind-default #ef4444/#64748b
-  // with no token source at all. Task 19.1 takes this to 0 — that is the M8 rebuild
-  // of the page onto the tier hierarchy. (This line read "task 3.5" until the M7
+  // with no token source at all. Tasks 19.1 and 19.2 take this to 0 between them — that is
+  // the M8 rebuild of the page onto the tier hierarchy, and 19.2 owns the two risk-control
+  // regions 19.1 is forbidden to touch. (This line read "task 3.5" until the M7
   // checkpoint; M2 stops at 3.4, so the largest entry in either budget was pointed at a
   // task that does not exist and was therefore unowned.)
   //
@@ -87,11 +88,60 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   //   * the duplicate "Current Drawdown" row in the risk panel, which read BC-1's deprecated
   //     `current_drawdown_pct` and defaulted to `"0.00%"`.
   //
-  // The remaining 228 are PART B's: tier 2 — the positions and executions tables, the
-  // strategy list, the risk and exchange panels, the operational insights, the equity
-  // `AreaChart` — plus the Requirement 3.3 alert banner and the kill-switch modal, which are
-  // tasks 19.2's. Part B takes this entry to 0.
-  'pages/Dashboard.jsx': 228,
+  // 228 -> 82 at task 19.1 PART B, which rebuilt tier 2 on the `ds/` primitives. The 146
+  // that went are the seven old zones' entire palettes, measured per zone against the
+  // pre-rebuild file rather than apportioned by hand:
+  //
+  //   * Zone 3, the open-positions table — 35. Its `#0c1017` shell and `#1e293b` border are
+  //     `ds/Panel`; the header, row and cell colours are `ds/DataTable`; the `#10b981` /
+  //     `#ef4444` P&L sign ternaries are `ds/PnLDisplay`; the hand-painted long/short pill
+  //     is `ds/StatusBadge`; the liquidation-distance threshold hues (red under 10%, amber
+  //     under 20%) are gone entirely with Requirement 1.5's calm default — the figure is the
+  //     reading. The count above the table is a `ds/Metric`, the no-rows case is
+  //     `ds/EmptyState`, and BC-2's degraded arm is `ds/Alert`.
+  //   * Zone 7, the recent-executions table — 23. The same `ds/Panel` + `ds/DataTable` +
+  //     `ds/PnLDisplay` + `ds/StatusBadge` set, because it was the same table written twice.
+  //   * Zone 4, active strategies — 29. Shell to `ds/Panel`, the two counts to `ds/Metric`,
+  //     every status and health hue to `ds/StrategyStatus`, the empty case to
+  //     `ds/EmptyState`. The per-row Pause / Run button's four literals went with the
+  //     control: it called no API, so the row read "paused" while the worker kept trading
+  //     (Requirement 19.4's dead control). Deployment control is `/app/strategies`'.
+  //   * Zone 6, exchange health — 21. The per-venue connection dot and latency text are
+  //     `ds/ExchangeStatus`, which is also why neither is presented as a measurement any
+  //     more: both fields are constants in the aggregation service. The account-wide
+  //     `can_trade` chip is `ds/StatusBadge` and the two `health` figures are `ds/Metric`.
+  //   * Zone 8, the equity curve — 11. The `AreaChart`'s inline stroke/fill/grid/axis
+  //     colours are `ds/Chart`'s `series[].token`, resolved through `design/semantic.js`,
+  //     and the panel is `ds/Panel` with a `ds/LoadingState kind="skeleton-chart"` under the
+  //     `Suspense` boundary the lazy import needs. This is also the change that takes
+  //     `pages/Dashboard.jsx` off `Chart.test.jsx`'s recharts importer list.
+  //   * Zone 5, the Risk & Safety Matrix — 18, removed rather than migrated. Its three rows
+  //     were a daily-loss bar defaulting to `$0.00 / $500.00` for an account nothing had
+  //     been read for, an "Open Position Capacity" reading `positions.length /
+  //     (max_positions || 10)`, and a second copy of the kill-switch state. None is a §7.1
+  //     field, the first two stated limits the server never reported, and `/app/risk` owns
+  //     those figures — the page links to it. No risk-control LOGIC is touched.
+  //   * Zone 7b, the Operational Insights list — 9, also removed. `recent_activity.insights`
+  //     has no `pageFields` entry and no §7.1 row, and two of its three items are prose the
+  //     service hardcodes. Its warning-and-worse subset still feeds the alert strip below.
+  //
+  // Plus, across all seven: the eight zone shells' repeated `#0c1017` / `#1e293b` /
+  // `#080a0e` chrome, now one `ds/Panel` each, and the four hand-built "view all" buttons,
+  // now `<Link>`s on token utilities.
+  //
+  // The remaining 82 are TASK 19.2's, and are the two regions Requirement 19.1 forbids this
+  // task from touching:
+  //
+  //   * 59 in the kill switch — 6 in the EMERGENCY HALT / RESUME TRADING trigger, 30 in the
+  //     diagnostics popover beside it, 23 in the `window`-level confirmation modal. 19.2
+  //     routes the switch through `ds/ConfirmDialog` with an acknowledgement and folds the
+  //     popover into the System & exchange health panel.
+  //   * 23 in the Requirement 3.3 alert banner — 7 in the kill-switch-active strip, 8 in the
+  //     circuit-breaker strip, 8 in the dynamic execution alerts. 19.2 renders the condition
+  //     through `ds/Alert`, derived from the disjunction Task 13.3 declares.
+  //
+  // So this entry does NOT reach 0 here, and 82 is not a resting place: 19.2 takes it to 0.
+  'pages/Dashboard.jsx': 82,
   // Material Design palette (#2196F3 #00BCD4 #FFAB00 #9C27B0 #FF5722 #00C853
   // #607D8B) plus GitHub greys. Rewritten by task 20.x.
   'components/SignalTraceVisualization.jsx': 138,

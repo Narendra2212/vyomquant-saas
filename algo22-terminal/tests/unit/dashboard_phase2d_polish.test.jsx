@@ -7,15 +7,13 @@ import * as dashboardModule from '../../src/api/modules/dashboard';
 import * as riskModule from '../../src/api/modules/risk';
 import wsClient from '../../src/websocketClient';
 
-// Mock Recharts responsive container & area chart to avoid DOM measurement issues in JSDOM
-vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div data-testid="responsive-container">{children}</div>,
-  AreaChart: ({ children }) => <div data-testid="area-chart">{children}</div>,
-  Area: () => <div data-testid="area" />,
-  XAxis: () => <div data-testid="x-axis" />,
-  YAxis: () => <div data-testid="y-axis" />,
-  Tooltip: () => <div data-testid="tooltip" />,
-}));
+// `ds/Chart`, lazily imported since task 19.1b, is stubbed rather than recharts mocked —
+// see `dashboard_phase2a_ui.test.jsx` for why the recharts mock that stood here stopped
+// working. Nothing in this file asserts anything about the chart.
+vi.mock('../../src/components/ds/Chart', () => {
+  const Stub = (props) => <figure data-testid="chart" data-chart-kind={props.kind} />;
+  return { __esModule: true, Chart: Stub, default: Stub };
+});
 
 // Mock WebSocket client with event triggering capability
 vi.mock('../../src/websocketClient', () => {
@@ -262,22 +260,53 @@ describe('Phase 2D — Trading Cockpit Polish & WebSocket Invariants', () => {
         message: 'Simulated kill switch'
       });
 
-      // Live kill switch should remain standby
-      expect(screen.getByText('STANDBY (READY)')).toBeDefined();
+      // The live kill switch must remain standby. `STANDBY (READY)` was the Risk & Safety
+      // Matrix's row, which task 19.1b removed as a second copy of a state the control
+      // itself reports. The control is task 19.2's and untouched, so standby is asserted
+      // where it is now reported: the trigger still offers the halt rather than the resume,
+      // no halted banner is on screen, and the diagnostics pill reads operational.
+      expect(screen.getByText('EMERGENCY HALT')).toBeDefined();
+      expect(screen.queryByText('RESUME TRADING')).toBeNull();
+      expect(screen.queryByText(/EMERGENCY KILL SWITCH ACTIVE/i)).toBeNull();
+      expect(screen.getByText('Engine Operational')).toBeDefined();
     });
   });
 
   describe('2D.6: Unmeasured Latency Neutral Fallback', () => {
-    it('displays Latency unavailable when venue latency is null', async () => {
+    it('reports no per-venue latency, because neither venue field is measured', async () => {
       render(
         <MemoryRouter>
           <Dashboard />
         </MemoryRouter>
       );
 
+      /*
+       * The old per-venue row read `latency_ms` and printed "Latency unavailable" only for
+       * the `null` one, which presented binance's 28 as a measurement. `pageFields`'
+       * `exchangeHealth` note records that `status` and `latency_ms` are both constants in
+       * the aggregation service, so task 19.1b stopped passing either to
+       * `ds/ExchangeStatus`: every row reports its latency as not measured, with that
+       * component's own reason, and the measured figure is the page-level
+       * `health.exchange_api_latency_ms`.
+       */
+      // Waited on the venue ROWS, not on the panel: `data-region` is on the `ds/Panel`
+      // section, which is in the DOM in its loading state too, so querying on the region
+      // alone would read the skeleton.
       await waitFor(() => {
-        expect(screen.getByText('Latency unavailable')).toBeDefined();
+        expect(document.querySelectorAll('[data-exchange]').length).toBe(2);
       });
+
+      const health = document.querySelector('[data-region="exchangeHealth"]');
+      const venues = health.querySelectorAll('[data-exchange]');
+      expect(venues.length).toBe(2);
+      for (const venue of venues) {
+        expect(venue.getAttribute('data-latency-reported')).toBe('false');
+      }
+      expect(health.textContent).not.toContain('28 ms');
+      // The one measured latency on the page, from `health`, with its unit.
+      const latency = document.querySelector('[data-region="exchangeApiLatencyMs"]');
+      expect(latency.getAttribute('data-metric-available')).toBe('true');
+      expect(latency.textContent).toContain('28');
     });
   });
 });

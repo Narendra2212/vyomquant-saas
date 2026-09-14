@@ -46,24 +46,31 @@
  * not resize when the chunk lands (Requirement 14.2).
  *
  * This file is meant to become the ONLY module in `src/` that imports recharts, and
- * it is not that yet. Four others still do it statically today — `pages/Dashboard`,
- * `pages/Backtester`, `pages/PaperTrading` and `components/ResearchConsole` — and
- * every one of them defeats the split on its own, because a static import anywhere in
- * the entry graph hoists `vendor-recharts` into it regardless of what this file does.
- * `vite.config.js` already routes recharts to its own chunk; that only pays off once
- * the last static importer is gone. Those four call sites belong to the page tasks
- * (14.x, 19.x, 23.x, 25.x) and are out of scope here, so `Chart.test.jsx` pins the
- * current set instead: it fails the moment a SIXTH importer appears, and it fails again
+ * it is not that yet. Three others still do it statically today — `pages/Backtester`,
+ * `pages/PaperTrading` and `components/ResearchConsole` — and every one of them defeats
+ * the split on its own, because a static import anywhere in the entry graph hoists
+ * `vendor-recharts` into it regardless of what this file does. `vite.config.js` already
+ * routes recharts to its own chunk; that only pays off once the last static importer is
+ * gone. Those three call sites belong to tasks 23.1 and 25.1, and to no task at all in
+ * the case of `ResearchConsole`, so `Chart.test.jsx` pins the current set instead: FOUR
+ * entries, this file included. It fails the moment a FIFTH appears, and it fails again
  * when one is removed without the list coming down with it. Same ratchet as
  * `no-colour-literals`, for the same reason — progress that is not recorded does not
  * hold.
  *
- * The list was six when task 6.18 wrote this. `pages/Portfolio` left it at task 16.2,
- * which moved its three charts onto a `lazy(() => import(...))` of this file, and
- * `components/DashboardUpgrades` left it at task 19.4, which deleted that file
- * outright — 786 lines of gamified upgrade prompts with no importer (design.md §7.1,
- * Requirement 1.5). That second one is a real gain for the split rather than a
- * migration: a whole module dropped out of the entry graph.
+ * The list was seven when task 6.18 wrote this, and three have left it since.
+ * `pages/Portfolio` went at task 16.2, which moved its three charts onto a
+ * `lazy(() => import(...))` of this file. `components/DashboardUpgrades` went at task
+ * 19.4, which deleted that file outright — 786 lines of gamified upgrade prompts with no
+ * importer (design.md §7.1, Requirement 1.5); that one is a real gain for the split
+ * rather than a migration, because a whole module dropped out of the entry graph.
+ * `pages/Dashboard` went at task 19.1b, which rebuilt tier 2 and put the equity curve
+ * behind `lazy(() => import('../components/ds/Chart'))` and a `skeleton-chart` fallback,
+ * exactly as the example above shows. That is the departure §13.3 cared about most:
+ * Dashboard is `/app/dashboard`, and until task 20.1 gives it its own page,
+ * `/app/live-trading` as well, so its static import was what put ~350KB of charting into
+ * the graph of the three routes that draw no chart at all (Strategies, Trade History,
+ * Signal Trace).
  *
  * ┌───────────────────────────────────────────────────────────────────────┐
  * │ WHAT IS STRUCTURAL HERE                                               │
