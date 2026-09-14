@@ -17,7 +17,13 @@
  *     directions, and toggling direction twice returns the identical order.
  *   * **The pagination partition.** Clamping an out-of-range page is the tempting
  *     behaviour and it silently duplicates rows. Walking every page and counting ids
- *     is the only way that shows up.
+ *     is the only way that shows up. Section 8 adds the other half of the same
+ *     question: `pageSlice` staying empty out of range is right, and the *component*
+ *     resolving one clamped page number for both the `<tbody>` and the live region is
+ *     also right. Only a rendered assertion can catch the two disagreeing.
+ *   * **What the row memo does and does not observe.** Section 14 covers `observe` in
+ *     both directions, because a mechanism that makes a declared value re-render its
+ *     row is worthless if it re-renders the other forty-nine as well.
  *
  * The rendering assertions read `data-align`, `data-column-key`, `data-row-id` and
  * `data-priority` rather than computed styles, because jsdom applies no Tailwind CSS:
@@ -371,6 +377,12 @@ describe('DataTable pagination rendering', () => {
     strategy: 's',
   }));
 
+  /** The live region's promise, read back out as `[first, last, total]`. */
+  const announcedRange = () => {
+    const match = /Showing (\d+)–(\d+) of (\d+)/.exec(screen.getByRole('status').textContent);
+    return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+  };
+
   it('renders one page at a time and walks the whole set without repeating a row', () => {
     const seen = [];
     for (let page = 1; page <= 3; page += 1) {
@@ -412,6 +424,50 @@ describe('DataTable pagination rendering', () => {
     renderTable();
     expect(screen.queryByRole('navigation')).toBeNull();
     expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('shows the last real page for a stale `page`, instead of announcing rows it never rendered', () => {
+    // The case a filter creates: the set narrows to 7 rows while the page state still
+    // says 9. The footer has always clamped, so it announced "Showing 7–7 of 7"; the
+    // body sliced with the raw prop, so `pageSlice` correctly returned nothing and the
+    // `<tbody>` was absent altogether. A live region describing rows that are not on
+    // screen is worse than either behaviour on its own.
+    render(
+      <DataTable caption="Paged" columns={COLUMNS} rows={many} page={9} pageSize={3} onPageChange={() => {}} />,
+    );
+
+    expect(rowIds()).toEqual(['r6']);
+    expect(announcedRange()).toEqual([7, 7, 7]);
+    expect(screen.getByText('Page 3 of 3')).toBeTruthy();
+  });
+
+  it('shows the first page for a `page` below the range', () => {
+    render(
+      <DataTable caption="Paged" columns={COLUMNS} rows={many} page={0} pageSize={3} onPageChange={() => {}} />,
+    );
+
+    expect(rowIds()).toEqual(['r0', 'r1', 'r2']);
+    expect(announcedRange()).toEqual([1, 3, 7]);
+  });
+
+  it('renders exactly the rows the live region says it is showing, at every page number', () => {
+    // Walked past both ends, because in range the body and the footer agree either
+    // way — the disagreement only exists where `pageSlice` is deliberately empty
+    // (Property 20). So this is a statement about the *component* resolving one page
+    // number for both halves, not about that function, which is unchanged.
+    const pages = pageCount(many.length, 3);
+
+    for (let page = -1; page <= pages + 3; page += 1) {
+      const view = render(
+        <DataTable caption="Paged" columns={COLUMNS} rows={many} page={page} pageSize={3} onPageChange={() => {}} />,
+      );
+
+      const [first, last, total] = announcedRange();
+      expect(total).toBe(many.length);
+      expect(rowIds()).toEqual(many.slice(first - 1, last).map((row) => row.id));
+
+      view.unmount();
+    }
   });
 
   it('leaves rows alone when totalCount says the server already sliced them', () => {
@@ -652,5 +708,127 @@ describe('DataTable row memoisation', () => {
     // was mounted with.
     expect(onRowClick.mock.calls[0][0]).toBe(second[0]);
     expect(onRowClick.mock.calls[0][0]).not.toBe(first[0]);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+// 14. A cell declaring what it reads beyond the projection (design.md §13.2c)
+// ══════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * The two directions `observe` has to hold in, and why both are needed.
+ *
+ * An action cell's visible state — disabled while its request is in flight — is page
+ * state, not a row field, so no projected value moves when it changes. The memo above
+ * therefore skips the row and the button stays enabled: correct by its own contract and
+ * wrong on screen. `observe` closes that, and the interesting risk is that it closes it
+ * by re-rendering everything. So the second test is the one that protects §13.2c's "one
+ * tick re-renders one `<tr>`": a rebuilt `observe` closure and fifty new row objects
+ * must still re-render nothing when no value moved.
+ */
+describe('DataTable observed dependencies', () => {
+  const rendered = [];
+
+  /**
+   * An action cell reading page state through `observed` rather than a closure.
+   *
+   * Declared here, at module scope for the table, precisely because it must not be the
+   * thing that changes: a cell that closed over `closingId` would have to be rebuilt
+   * with `columns`, and `columns` identity is in the memo compare.
+   */
+  function ActionCell({ row, observed }) {
+    rendered.push(row.id);
+    return (
+      <button type="button" disabled={observed.closing === true}>
+        {observed.closing === true ? `Closing ${row.id}` : `Close ${row.id}`}
+      </button>
+    );
+  }
+
+  const columns = [
+    { key: 'market', header: 'Market', align: 'text' },
+    { key: 'pnl', header: 'P&L', align: 'numeric' },
+    { key: 'action', header: 'Action', align: 'text', render: ActionCell },
+  ];
+
+  const build = (pnls) => pnls.map((pnl, index) => ({ id: `r${index}`, market: `M${index}`, pnl }));
+
+  /** `observe` is inline on purpose: a new closure every render is the normal case. */
+  const table = (closingId, pnls) => (
+    <DataTable
+      caption="Live"
+      columns={columns}
+      rows={build(pnls)}
+      getRowId={(row) => row.id}
+      observe={(row) => ({ closing: closingId === row.id })}
+    />
+  );
+
+  beforeEach(() => {
+    rendered.length = 0;
+  });
+
+  it('re-renders the one row whose declared value moved, and repaints its cell', () => {
+    const { rerender } = render(table(null, [1, 2, 3]));
+    expect(rendered).toEqual(['r0', 'r1', 'r2']);
+    rendered.length = 0;
+
+    // No cell value changes. Only page state does — the thing the projection cannot see.
+    rerender(table('r1', [1, 2, 3]));
+
+    expect(rendered).toEqual(['r1']);
+    expect(screen.getByRole('button', { name: 'Closing r1' }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Close r0' }).disabled).toBe(false);
+  });
+
+  it('re-renders nothing on a tick that moves neither a cell value nor a declared one', () => {
+    // This is the §13.2c guarantee. Every row object is new and the `observe` closure is
+    // new, so a compare that looked at either identity would re-render all three.
+    const { rerender } = render(table('r1', [1, 2, 3]));
+    rendered.length = 0;
+
+    rerender(table('r1', [1, 2, 3]));
+
+    expect(rendered).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Closing r1' }).disabled).toBe(true);
+  });
+
+  it('leaves the rows whose declared values held still out of an unrelated tick', () => {
+    const { rerender } = render(table('r1', [1, 2, 3]));
+    rendered.length = 0;
+
+    // A `pnl` tick on r2 while the action state stays put.
+    rerender(table('r1', [1, 2, 99]));
+
+    expect(rendered).toEqual(['r2']);
+  });
+
+  it('hands a cell an empty record when the table declares no observe', () => {
+    // Backwards compatibility is the requirement, so `observed.closing` has to read as
+    // `undefined` rather than throw on every table written before this existed.
+    render(
+      <DataTable caption="Live" columns={columns} rows={build([1, 2])} getRowId={(row) => row.id} />,
+    );
+
+    expect(rendered).toEqual(['r0', 'r1']);
+    expect(screen.getByRole('button', { name: 'Close r0' }).disabled).toBe(false);
+  });
+
+  it('refuses a declaration the memo cannot compare by name', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    // An array or a scalar would leave the memo observing nothing while the call site
+    // still looked correct — the failure `observe` exists to remove.
+    expect(() =>
+      render(
+        <DataTable
+          caption="Live"
+          columns={columns}
+          rows={build([1])}
+          getRowId={(row) => row.id}
+          observe={(row) => [row.id]}
+        />,
+      ),
+    ).toThrow(/observe/i);
+    vi.restoreAllMocks();
   });
 });

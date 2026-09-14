@@ -29,7 +29,7 @@
  * adding an entry, means a new literal entered the tree; that reverses §14.4
  * and needs a reason in the PR description.
  *
- * An entry reaching `0` is expected and stays (task 3.5 lowers Dashboard.jsx to
+ * An entry reaching `0` is expected and stays (task 19.1 lowers Dashboard.jsx to
  * zero, for instance). Delete an entry only when the file itself is deleted —
  * `components/ui-legacy/primitives.jsx` goes at task 27.2 with the shim.
  *
@@ -49,7 +49,11 @@
 export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // -- §1.1 G5, the four hotspots task 1.10 names explicitly ----------------
   // 240 inline styles, zero `C.` references, Tailwind-default #ef4444/#64748b
-  // with no token source at all. Task 3.5 takes this to 0.
+  // with no token source at all. Task 19.1 takes this to 0 — that is the M8 rebuild
+  // of the page onto the tier hierarchy, and it is the only task that touches this
+  // file's markup. (This line read "task 3.5" until the M7 checkpoint; M2 stops at
+  // 3.4, so the largest entry in either budget was pointed at a task that does not
+  // exist and was therefore unowned.)
   'pages/Dashboard.jsx': 315,
   // Material Design palette (#2196F3 #00BCD4 #FFAB00 #9C27B0 #FF5722 #00C853
   // #607D8B) plus GitHub greys. Rewritten by task 20.x.

@@ -96,10 +96,53 @@
  * compare: a WebSocket tick that rebuilds the page's row array hands every row a
  * new object identity while changing the values of one, and comparing identities
  * would re-render all fifty. The consequence to know about is the other side of
- * the same coin — a `render` component that reads a field of `row` which no column
- * projects can hold a stale value, because nothing observed it changing. Declare
- * the field as a column (it may be a `priority: 3` one) rather than reaching past
- * the projection.
+ * the same coin — a `render` component that reads anything the projection does not
+ * carry can hold a stale value, because nothing observed it changing. That is
+ * either a field of `row` no column projects, or a value that is not on `row` at
+ * all: the page state an action cell reads to know it is mid-flight.
+ *
+ * `observe` IS HOW A CELL DECLARES THE REST OF WHAT IT READS
+ * --------------------------------------------------------
+ * A table-level `observe(row)` returns a record of named values, evaluated once per
+ * visible row per render, appended to the memo compare and handed to every `render`
+ * as `observed`:
+ *
+ * ```jsx
+ * <DataTable
+ *   columns={columns}                                  // memoised, closes over nothing volatile
+ *   observe={(row) => ({ closing: closingId === row.id, reason: row.error_message })}
+ *   …
+ * />
+ * // and in the cell, which is declared at module scope:
+ * const CloseCell = ({ row, observed }) => (
+ *   <CommandButton disabled={observed.closing} disabledReason={…} onClick={…}>Close</CommandButton>
+ * );
+ * ```
+ *
+ * The record is compared **by value**; the `observe` function's identity is not
+ * compared at all. That asymmetry is the whole mechanism. A page may rebuild the
+ * closure on every render — it has to, to close over fresh page state — and no row
+ * re-renders unless the values it named actually moved. So `closingId` changing from
+ * `null` to `'s-7'` re-renders exactly one `<tr>`, and a `pnl` tick on an unrelated
+ * row re-renders neither.
+ *
+ * Why table-level and not `observe: []` per column: the memo is on the `<tr>`, so the
+ * dependency set is a row's, and per-column lists would be merged into one row-level
+ * set anyway. More decisively, a per-column declaration would have to live on the
+ * column object — and `columns` identity **is** in the compare, so a column list
+ * rebuilt to capture new page state re-renders every row. That is the trap
+ * `pages/Strategies.jsx` documents at its `rowActionCatalog` and opted out of the
+ * memo over. Keeping the volatile closure off `columns` is what makes the memo
+ * survivable for a page that has both row actions and ticks.
+ *
+ * Why not a table-level `rowVersion` scalar: one number for the whole table re-renders
+ * all fifty rows when one row's action state changes, which is the opposite of the
+ * guarantee. A per-row `rowVersion(row)` is this mechanism with the values hashed into
+ * one opaque number — lossy, since a collision silently freezes a cell, and it gives
+ * the cell nothing to read.
+ *
+ * A table that declares no `observe` is unchanged in every respect: every row shares
+ * one frozen empty record, and the compare settles on identity.
  *
  * Row activation handlers are created once and look the current row up through a
  * ref, so they stay referentially stable across ticks. A `() => onRowClick(row)`
@@ -202,6 +245,15 @@ const STICKY_MAX_HEIGHT = '70dvh';
 const EMPTY_ROWS = Object.freeze([]);
 const EMPTY_SET = Object.freeze(new Set());
 
+/**
+ * What a row observes when the table declares no `observe`.
+ *
+ * One frozen instance shared by every row of every table, so the memo compare's
+ * `left === right` fast path settles it and a table that declares nothing pays
+ * nothing — which is what makes `observe` additive rather than a behaviour change.
+ */
+const EMPTY_OBSERVED = Object.freeze({});
+
 /* ══════════════════════════════════════════════════════════════════════════
  * VALUE READING — total, and never inherited
  * ══════════════════════════════════════════════════════════════════════════ */
@@ -223,6 +275,38 @@ export function readCell(row, key) {
 /** The cell values a row contributes, in column order. The memo compare's subject. */
 export function projectRow(row, columns) {
   return columns.map((column) => readCell(row, column.key));
+}
+
+/**
+ * What `observe(row)` said this row depends on, beyond its projected cell values.
+ *
+ * `undefined` and `null` mean "nothing live for this row", which a page needs when
+ * only some rows carry an in-flight action. Anything else must be a record, because
+ * the values are compared by name: an array or a scalar would make the memo stop
+ * observing while every call site still looked correct, which is the exact failure
+ * mode `observe` exists to remove. So it is asserted rather than coerced.
+ *
+ * Not exported, and not in the `ds/` barrel: unlike {@link projectRow}, which is the
+ * projection contract a property test can state on its own, this only validates what a
+ * caller's function returned. Its behaviour is observable through the component.
+ *
+ * @param {Function|undefined} observe
+ * @param {Object} row
+ * @returns {Object} A record of named values, or {@link EMPTY_OBSERVED}.
+ */
+function readObserved(observe, row) {
+  if (typeof observe !== 'function') return EMPTY_OBSERVED;
+  const declared = observe(row);
+  if (declared === undefined || declared === null) return EMPTY_OBSERVED;
+  const isRecord = typeof declared === 'object' && !Array.isArray(declared);
+  assertContract(
+    isRecord,
+    'DataTable: `observe` must return a record of named values, or nothing — e.g. '
+      + '`observe={(row) => ({ closing: closingId === row.id })}`. Received '
+      + `${Array.isArray(declared) ? 'an array' : JSON.stringify(typeof declared)}, whose `
+      + 'values the row memo cannot compare by name.',
+  );
+  return isRecord ? declared : EMPTY_OBSERVED;
 }
 
 /**
@@ -389,6 +473,11 @@ export function pageCount(total, pageSize) {
  *
  * A non-positive or non-finite `pageSize` means "do not paginate" and returns every
  * row, which is how a small embedded table (Dashboard's five positions) opts out.
+ *
+ * {@link DataTable} clamps `page` into `1…pageCount` **before** calling this, so a
+ * stale prop shows the nearest real page rather than nothing. The two are not in
+ * tension: the clamp is a decision about what to render for an out-of-range request,
+ * and this function is the partition that decision indexes into.
  */
 export function pageSlice(rows, page, pageSize) {
   const list = Array.isArray(rows) ? rows : [];
@@ -566,14 +655,18 @@ function NotAvailable() {
  *
  * design.md §11.3 writes `render: PnLDisplay`, `render: StatusBadge`,
  * `render: SideBadge` — component references. So it is rendered as
- * `<Render value={…} row={…} column={…} />`, which makes `render: PnLDisplay` work
- * verbatim and makes an inline adapter read the same way:
+ * `<Render value={…} row={…} column={…} observed={…} />`, which makes
+ * `render: PnLDisplay` work verbatim and makes an inline adapter read the same way:
  * `render: ({ value }) => <StatusBadge state={value} />`.
+ *
+ * `observed` is the table's `observe(row)` record, so a cell that needs page state
+ * reads it from a prop the memo compares instead of from a closure the memo cannot
+ * see. See the module docblock.
  */
-function renderCellContent(column, value, row) {
+function renderCellContent(column, value, row, observed) {
   if (column.render) {
     const Render = column.render;
-    return <Render value={value} row={row} column={column} />;
+    return <Render value={value} row={row} column={column} observed={observed} />;
   }
   // A row that already carries an element for this column renders it as given.
   if (React.isValidElement(value)) return value;
@@ -588,8 +681,8 @@ function renderCellContent(column, value, row) {
  * the first cell's content in a real link is what puts the row in the tab order
  * (Requirement 18.1) without making a `<tr>` pretend to be a control.
  */
-function DataCell({ column, value, row, wrapper: Wrapper, wrapperProps }) {
-  const content = renderCellContent(column, value, row);
+function DataCell({ column, value, row, observed, wrapper: Wrapper, wrapperProps }) {
+  const content = renderCellContent(column, value, row, observed);
 
   return (
     <td
@@ -614,11 +707,34 @@ function sameValues(left, right) {
 }
 
 /**
+ * Shallow and by name, over `observe(row)`'s record.
+ *
+ * By name rather than by position so a call site reads `observed.closing` instead of
+ * `observed[1]`, and so adding a second observed value cannot silently shift the
+ * first. The identity fast path is what an `observe`-less table takes: every row
+ * shares `EMPTY_OBSERVED`.
+ */
+function sameObserved(left, right) {
+  if (left === right) return true;
+  const keys = Object.keys(left);
+  if (keys.length !== Object.keys(right).length) return false;
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (!Object.prototype.hasOwnProperty.call(right, key)) return false;
+    if (!Object.is(left[key], right[key])) return false;
+  }
+  return true;
+}
+
+/**
  * The memo compare. `row` is absent from it on purpose — see the module docblock.
  *
- * Everything else here is either a primitive or an identity the parent holds stable
+ * Everything else here is either a primitive, an identity the parent holds stable
  * across renders (`columns` and `droppedColumns` come from a `useMemo`; `onActivate`
- * and `onToggleExpand` from a `useCallback` with no dependencies).
+ * and `onToggleExpand` from a `useCallback` with no dependencies), or a set of values
+ * compared by value: the projected cells and the `observed` record. Note which side
+ * of that line `observed` is on — the *record* is compared, never the `observe`
+ * function that produced it, so a page may rebuild that closure every render.
  */
 function rowPropsEqual(previous, next) {
   return (
@@ -636,6 +752,7 @@ function rowPropsEqual(previous, next) {
     && previous.onToggleExpand === next.onToggleExpand
     && previous.linkable === next.linkable
     && sameValues(previous.values, next.values)
+    && sameObserved(previous.observed, next.observed)
   );
 }
 
@@ -643,6 +760,7 @@ const DataTableRow = memo(function DataTableRow({
   rowId,
   row,
   values,
+  observed,
   columns,
   droppedColumns,
   href,
@@ -742,6 +860,7 @@ const DataTableRow = memo(function DataTableRow({
             column={column}
             value={values[column.index]}
             row={row}
+            observed={observed}
             wrapper={column.index === 0 ? linkWrapper : null}
             wrapperProps={linkProps}
           />
@@ -762,7 +881,7 @@ const DataTableRow = memo(function DataTableRow({
                     data-align={column.align}
                     className={`${alignmentClasses(column.align)} text-content-primary`}
                   >
-                    {renderCellContent(column, values[column.index], row)}
+                    {renderCellContent(column, values[column.index], row, observed)}
                   </dd>
                 </React.Fragment>
               ))}
@@ -829,10 +948,18 @@ function SortGlyph({ direction }) {
  *   whole (filtered) set otherwise.
  * @param {(row: Object, index: number) => string|number} [props.getRowId] Defaults to
  *   `row.id`, then the index. It is the memo key, so a row that changes id is a new row.
+ * @param {(row: Object) => Object} [props.observe] What a row's cells read beyond the
+ *   projected cell values — unprojected `row` fields, or page state such as which row
+ *   has an action in flight. Returns a record of named values (or nothing); the record
+ *   joins the row memo's compare and reaches every `render` as `observed`. Need not be
+ *   referentially stable: its *result* is compared, never the function. See the module
+ *   docblock.
  * @param {{key: string, direction: 'asc'|'desc'}} [props.sort] Controlled. Single column.
  * @param {(sort: {key: string, direction: 'asc'|'desc'}) => void} [props.onSortChange]
  *   Absent means the headers are text, not dead buttons (Requirement 19.4).
- * @param {number} [props.page] **1-based.**
+ * @param {number} [props.page] **1-based.** Clamped into `1…pageCount` once, for the
+ *   body and the footer together, so a stale page number cannot announce a range the
+ *   `<tbody>` does not hold.
  * @param {number} [props.pageSize] `<= 0` disables pagination.
  * @param {(page: number) => void} [props.onPageChange] Receives the new 1-based page.
  * @param {number} [props.totalCount] The size of the set being paged over, after
@@ -849,6 +976,7 @@ export function DataTable({
   columns,
   rows,
   getRowId,
+  observe,
   sort,
   onSortChange,
   page = 1,
@@ -927,9 +1055,27 @@ export function DataTable({
     [safeRows, normalizedColumns, sort],
   );
 
+  /*
+   * ONE PAGE NUMBER, READ BY BOTH THE BODY AND THE FOOTER
+   * ----------------------------------------------------
+   * Resolved here, above the slice, and not a second time below the table. `page` is
+   * a prop, so it can arrive outside `1…pages` — a filter that narrows the set while
+   * the page state still says 3 is the ordinary way that happens — and the body and
+   * the footer disagreeing about which page that is means the live region announces
+   * "Showing 51–60 of 60" over an empty `<tbody>`. Clamping is the right resolution
+   * for a stale number: the trader asked for a page that no longer exists and the
+   * nearest real page is what they meant.
+   *
+   * The clamp lives HERE rather than in {@link pageSlice}, which still returns nothing
+   * for an out-of-range page. That function is Property 20's subject and clamping
+   * inside it would make walking `1…pageCount` yield the last page's ids twice.
+   */
+  const pages = pageCount(total, pageSize);
+  const currentPage = Math.min(Math.max(Number.isFinite(page) ? Math.trunc(page) : 1, 1), pages);
+
   const visibleRows = useMemo(
-    () => (preSliced ? sortedRows : pageSlice(sortedRows, page, pageSize)),
-    [preSliced, sortedRows, page, pageSize],
+    () => (preSliced ? sortedRows : pageSlice(sortedRows, currentPage, pageSize)),
+    [preSliced, sortedRows, currentPage, pageSize],
   );
 
   const resolveRowId = useMemo(
@@ -939,14 +1085,29 @@ export function DataTable({
     [getRowId],
   );
 
+  assertContract(
+    observe === undefined || typeof observe === 'function',
+    'DataTable: `observe` must be a function of one row — '
+      + '`observe={(row) => ({ closing: closingId === row.id })}`. It is called once per '
+      + 'visible row per render, and its record is what the row memo compares.',
+  );
+
+  /*
+   * `observe` is in the dependency list on purpose, so a closure rebuilt every render
+   * recomputes this map every render. That is one `observe(row)` call and one small
+   * record per visible row — at most `pageSize` of them — and it is what buys the row
+   * memo the ability to compare values instead of a closure identity. The expensive
+   * thing is re-rendering a `<tr>`, not re-reading what it depends on.
+   */
   const entries = useMemo(
     () => visibleRows.map((row, index) => ({
       id: resolveRowId(row, index),
       row,
       values: projectRow(row, normalizedColumns),
+      observed: readObserved(observe, row),
       href: typeof rowHref === 'function' ? rowHref(row) : undefined,
     })),
-    [visibleRows, normalizedColumns, resolveRowId, rowHref],
+    [visibleRows, normalizedColumns, resolveRowId, rowHref, observe],
   );
 
   /*
@@ -989,8 +1150,6 @@ export function DataTable({
   const inRouter = useInRouterContext();
   const rowsAreLinks = typeof rowHref === 'function';
 
-  const pages = pageCount(total, pageSize);
-  const currentPage = Math.min(Math.max(Number.isFinite(page) ? Math.trunc(page) : 1, 1), pages);
   const paginated = pages > 1;
   warnContract(
     !paginated || typeof onPageChange === 'function',
@@ -1094,6 +1253,7 @@ export function DataTable({
                   rowId={entry.id}
                   row={entry.row}
                   values={entry.values}
+                  observed={entry.observed}
                   columns={normalizedColumns}
                   droppedColumns={droppedColumns}
                   href={entry.href}
