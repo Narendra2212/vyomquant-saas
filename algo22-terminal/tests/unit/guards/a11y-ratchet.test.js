@@ -287,12 +287,24 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
     // modal is now a `ds/ConfirmDialog` whose four controls are all `ds/Field`, and `ds/Field`
     // renders a visible `<label htmlFor>` with no hidden-label option. The page lints at
     // `error` from here, which is what removing the line does.
+    //
+    // 18 -> 8 at task 21.4a, which DELETED `src/pages/SignalTrace.jsx`'s entry — the largest
+    // one — rather than lowering it. Eight of its ten were the `label-has-associated-control`
+    // cluster on the filter grid's bare `<label>` elements, three of which labelled their
+    // input by `placeholder` alone; the filters are `ds/FilterBar` now, so every control is a
+    // `ds/Field` with a visible `<label htmlFor>`. The other two were
+    // `click-events-have-key-events` and `no-static-element-interactions` on the signal row's
+    // `div onClick`, and the rows are `ds/DataTable`'s. The page lints at `error` from here.
     const waived = Object.values(A11Y_PAGE_WAIVERS).reduce((sum, e) => sum + e.count, 0);
     const measured = Object.keys(A11Y_PAGE_WAIVERS).reduce((sum, f) => sum + PAGES[f].count, 0);
     expect(measured).toBe(waived);
-    expect(waived).toBe(18);
+    expect(waived).toBe(8);
     // And the cleared pages are really clean, at `error`, with no line left behind.
-    for (const page of ['src/pages/Portfolio.jsx', 'src/pages/Strategies.jsx']) {
+    for (const page of [
+      'src/pages/Portfolio.jsx',
+      'src/pages/Strategies.jsx',
+      'src/pages/SignalTrace.jsx',
+    ]) {
       expect(A11Y_PAGE_WAIVERS[page]).toBeUndefined();
       expect(PAGES[page].count).toBe(0);
     }
