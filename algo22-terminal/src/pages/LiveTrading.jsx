@@ -5,8 +5,18 @@
  *
  * vyomquant-ui-redesign task 20.1: part A the page shell, the route and tier 1; part B the
  * tier-2 money row; part C the tier-3 activity row; part D the deployment selector above
- * tier 1. design.md §7.5, §8.1, §8.2, §11.1.
- * Requirements 1.3, 7.1, 7.2, 7.3, 7.4, 12.2, 14.1, 14.4, 14.5, 19.3, 19.4.
+ * tier 1. Task 20.3 adds the three destructive controls — stop the selected deployment,
+ * cancel the named open order, cancel every open order at the venue — each behind a
+ * `ds/ConfirmDialog`, with the acknowledgement on the bulk one ONLY. design.md §7.5, §8.1,
+ * §8.2, §8.3, §8.4, §11.1.
+ * Requirements 1.3, 7.1, 7.2, 7.3, 7.4, 7.6, 8.1, 8.3, 8.5, 12.2, 14.1, 14.4, 14.5, 19.1,
+ * 19.3, 19.4.
+ *
+ * The page was READ-ONLY through 20.1 and is no longer. Everything about the three writes —
+ * why the acknowledgement is asymmetric, why Property 13 is structural rather than a property
+ * of a `confirm()` return value, which two client paths were wrong and how each route was
+ * verified, and which control is withheld when its endpoint cannot be addressed — is in the
+ * "THREE DESTRUCTIVE ACTIONS" section below, next to the code it governs.
  *
  * Until this task `/app/live-trading` rendered `pages/Dashboard`, so the route existed and
  * answered a different question — the account's capital — than the one Requirement 7.1
@@ -120,9 +130,14 @@
  * `ordersApi.getOpenOrders(symbol)` sent only `symbol`, so the call answered 422 for every
  * caller. `api/modules/orders.js` now takes the venue as a second optional parameter and sends
  * it; `symbol` stays first, so nothing that called it positionally changed meaning. That is
- * the whole change: one missing query parameter on a READ. No order-execution path is touched
- * by this page or by that module edit — this page never calls `createOrder`, `cancelOrder` or
- * `updateOrder`, and `POST`/`DELETE` on that module are untouched.
+ * the whole change on the read: one missing query parameter.
+ *
+ * Task 20.3 then found the same class of defect on the two CANCEL methods and corrected them
+ * the same way — path, method and required parameters, nothing about what the endpoints do.
+ * This page calls `cancelOrder` and `cancelAllOrders` from task 20.3 onwards, and it still
+ * never calls `createOrder` or `updateOrder`: `POST /api/orders/execute` stays behind its
+ * algo-only guard and this page adds no manual-order affordance of any kind (Requirement
+ * 19.1). See the "THREE DESTRUCTIVE ACTIONS" section.
  *
  * FOUR THINGS THE DECLARATION RECORDS, AND THEY ARE THE POINT OF THE PAGE
  * ----------------------------------------------------------------------
@@ -201,6 +216,9 @@ import { ordersApi } from "../api/modules/orders";
 import { strategiesApi } from "../api/modules/strategies";
 import { Alert } from "../components/ds/Alert";
 import { CommandButton } from "../components/ds/CommandButton";
+// The ONE confirmation surface (§5.1, §8.3). Task 20.3's three controls all go through it, and
+// its own confirm handler is the only caller of the three mutations — see that section.
+import { ConfirmDialog } from "../components/ds/ConfirmDialog";
 import { DataTable } from "../components/ds/DataTable";
 import { EmptyState } from "../components/ds/EmptyState";
 import { ErrorState } from "../components/ds/ErrorState";
@@ -1001,6 +1019,20 @@ const latestOrderRow = (rows) => {
   return newest;
 };
 
+/**
+ * The venue's open-orders response → its object rows, or `[]`.
+ *
+ * The response root IS the ccxt array, so there is no envelope to unwrap. Extracted from
+ * {@link latestOrderReport} in task 20.3 because the cancel control reads the SAME rows: two
+ * copies of this filter would be two chances for the order a trader is shown and the order a
+ * cancel addresses to be different rows.
+ *
+ * @param {unknown} payload
+ * @returns {Object[]}
+ */
+const openOrderRows = (payload) =>
+  (Array.isArray(payload) ? payload.filter((row) => row && typeof row === "object") : []);
+
 /** The parts of one order row that make up the reading, in the order they are read. */
 const ORDER_PARTS = Object.freeze(["side", "amount", "symbol"]);
 
@@ -1035,9 +1067,7 @@ const latestOrderReport = ({ venue, failed, payload }) => {
   if (venue === null) return unavailable(ORDERS_ABSENCE.noVenue);
   if (failed) return unavailable(reasonOf(ORDERS_FIELD));
 
-  const rows = Array.isArray(payload)
-    ? payload.filter((row) => row && typeof row === "object")
-    : [];
+  const rows = openOrderRows(payload);
   if (rows.length === 0) return unavailable(ORDERS_ABSENCE.none);
 
   const newest = latestOrderRow(rows);
@@ -1177,6 +1207,9 @@ const DEPLOYMENT_ID_KEY = DEPLOYMENT_COLUMNS[0].key;
 
 /** The environment column's key. */
 const DEPLOYMENT_ENVIRONMENT_KEY = "environment";
+
+/** The status column's key, which task 20.3's stop confirmation states before it acts. */
+const DEPLOYMENT_STATUS_KEY = "status";
 
 /**
  * THE INCOMPLETENESS, IN WORDS A TRADER CAN ACT ON.
@@ -1462,6 +1495,211 @@ function EnvironmentSlot({ label, environment, className = "" }) {
     </div>
   );
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * THE THREE DESTRUCTIVE ACTIONS (task 20.3) — Requirements 7.6, 8.1, 8.3, 19.1, 19.4
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * Until this task the page was READ-ONLY. It now carries three controls and NOTHING ELSE:
+ * stop the selected deployment, cancel the one open order tier 3 names, cancel every open
+ * order at the venue. Each one is a `ds/ConfirmDialog` over an endpoint that already exists.
+ *
+ * THERE IS NO MANUAL-ORDER AFFORDANCE HERE, AND THAT IS A REQUIREMENT
+ * ------------------------------------------------------------------
+ * `POST /api/orders/execute` answers every caller with `MANUAL_EXECUTION_BLOCKED` and its
+ * aliases — `/create`, `/stop-loss`, `/take-profit` — do the same (Requirement 19.1). So this
+ * task adds no place-order control, no amend control and no modify-position control: the
+ * three below either STOP something or REMOVE a resting order. `ordersApi.createOrder` and
+ * `ordersApi.updateOrder` are not imported by this page and are not called from it.
+ *
+ * THE ACKNOWLEDGEMENT IS ON ONE OF THE THREE, AND THE ASYMMETRY IS THE POINT
+ * -------------------------------------------------------------------------
+ * §8.4's inventory spends an acknowledgement on two kinds of action — the irreversible ones
+ * ("Cancel all orders … it is bulk and irreversible") and the real-funds ones (Requirement
+ * 8.2's deploy to live) — and refuses one to everything reversible or risk-reducing:
+ *
+ *   * **Stop deployment — NO acknowledgement.** Stopping is risk-REDUCING. It stops new
+ *     orders being generated and it is reversible one control away, on the same list, by
+ *     deploying again. `pages/Dashboard.jsx` makes exactly this argument in reverse for its
+ *     kill switch: the halt earns the checkbox, the RECOVERY does not, because "gating the
+ *     recovery would put a checkbox between a trader and the restoration of trading".
+ *   * **Cancel live order — NO acknowledgement.** One resting order, named in the review grid
+ *     by side, size, market and id. It is the smallest reversible-by-re-placing action on the
+ *     page, and `pages/Strategies.jsx`'s archive dialog is the same verdict for the same
+ *     reason: the checkbox is "reserved for the irreversible and the live-funds cases".
+ *   * **Cancel all orders — YES, required.** Bulk, every market at the venue, and nothing on
+ *     this page or on the server re-places what it removes.
+ *
+ * Making the three symmetric is the failure mode, not the safe default. A trader who ticks a
+ * box to stop a bot learns to tick boxes without reading them, and that habit is spent on the
+ * one action here that actually needs the pause — which is what makes the gate worthless
+ * exactly where §8.4 put it.
+ *
+ * The LIVE badge is on all three, and it is a different axis. `environment="LIVE"` states
+ * which LEDGER is being acted on (Requirement 8.5), and every action on this route acts on
+ * the live one (Requirement 1.3). The acknowledgement states the RISK CLASS of the action.
+ * Only the second is asymmetric, and conflating them would either drop a badge from a
+ * real-money confirmation or put a checkbox on all three.
+ *
+ * PROPERTY 13 IS STRUCTURAL HERE, NOT A PROPERTY OF A RETURN VALUE
+ * ---------------------------------------------------------------
+ * Each action is split in two, copying `pages/Strategies.jsx`'s
+ * `requestArchiveStrategy`/`handleConfirmArchive` shape and its reasoning: the `request…`
+ * half is the WHOLE of what the button does — it sets one state object and issues nothing —
+ * and the `handleConfirm…` half is the dialog's own confirm action and the only place the
+ * mutation is called from. Under a `window.confirm` the button and the request were one
+ * statement, so "no request before the confirmation" was a property of what `confirm()`
+ * returned. It is now a property of this file's structure: there is no code path from a
+ * button to `stopDeployment`, `cancelOrder` or `cancelAllOrders`, which is what Property 13
+ * can check. `ds/ConfirmDialog` then enforces the acknowledgement in two independent places
+ * of its own — the `disabled` attribute AND a guard inside its confirm handler — so a stray
+ * `.click()` cannot reach the cancel-all mutation before the box is ticked.
+ *
+ * EVERY PATH WAS CHECKED AGAINST ITS ROUTER, AND TWO OF THEM WERE WRONG
+ * --------------------------------------------------------------------
+ * This codebase has shipped client paths that resolve to nothing four times over — three
+ * recorded in `api/modules/strategies.js`, one in the open-orders read this page fixed in
+ * task 20.1c. Both cancel methods were the fifth and sixth: `DELETE /api/orders/{id}` and
+ * `DELETE /api/orders?{options}`, against a router that declares no `DELETE` at all and
+ * spells the two cancels `POST /cancel/{order_id}` and `POST /cancel-all`, each with a
+ * REQUIRED `exchange_id` query parameter and a body. `api/modules/orders.js` now sends what
+ * the routes declare — a corrected address for the same two actions, with the server's own
+ * freeze check, execution guard, cancel lock and idempotency untouched.
+ *
+ *   | control            | route (verified)                            | required           |
+ *   |--------------------|---------------------------------------------|--------------------|
+ *   | Stop deployment    | `POST /api/deployments/{id}/stop`           | path id; body opt. |
+ *   | Cancel live order  | `POST /api/orders/cancel/{order_id}`        | `?exchange_id`,    |
+ *   |                    |                                             | `{order_id,symbol}`|
+ *   | Cancel all orders  | `POST /api/orders/cancel-all`               | `?exchange_id`     |
+ *
+ * A CONTROL WHOSE ENDPOINT CANNOT BE ADDRESSED IS NOT RENDERED
+ * -----------------------------------------------------------
+ * Every required parameter above is a rendering condition, because a button that 422s or
+ * 404s on a live account is worse than an absent one:
+ *
+ *   * **Stop** needs a deployment id in the path, so it renders only for a selected row that
+ *     REPORTS one. {@link deploymentRow} synthesises `union_row_key` for a row that reported
+ *     no id — that key is this page's, not the server's, and posting it would address nothing.
+ *   * **Cancel live order** needs the id, the symbol and the venue. It renders only when the
+ *     open-orders read answered, named exactly one newest order (tier 3's own reading) and
+ *     that order reports both an id and a symbol.
+ *   * **Cancel all** needs the venue, which is tier 1's `exchange` reading. No single venue
+ *     reported means no request was ever issued for the orders read either, and the control
+ *     is absent rather than guessing an `exchange_id`.
+ *
+ * Cancel-all is deliberately NOT gated on the open-orders read having found something. The
+ * read is one venue's snapshot and it can fail in place — that is this page's whole doctrine
+ * for it — and a bulk risk-reducing control that disappears when a venue read breaks is a
+ * control that is missing exactly when a trader reaches for it. What the read knows is stated
+ * in the dialog's review grid instead, including "could not be read" when it failed.
+ *
+ * A FAILED MUTATION RENDERS THROUGH THE DIALOG, AND THE DIALOG STAYS OPEN
+ * ----------------------------------------------------------------------
+ * `ConfirmDialog`'s `error` prop, which renders `translateError`'s output and nothing else —
+ * never `err.message`, never a status code, never a stack (Requirement 14.4). The dialog is
+ * NOT closed on failure: §8.3's `Failed` state returns to Review, where the confirm button is
+ * the retry, and the review grid a trader was reading is still the description of what did
+ * not happen. Nothing here hand-rolls an error box.
+ */
+
+/** The reason recorded against a stop issued from this page. `stopDeployment` preserves it. */
+const STOP_REASON = "Stopped by the trader from the Live Trading page.";
+
+/**
+ * A `Reported<>` → a `ConfirmDialog` review value.
+ *
+ * An unavailable reading becomes `null`, which the dialog renders as its not-available marker
+ * with the row's label beside it. That is the point of routing through here rather than
+ * reading `.value`: a review grid must never state a figure this page could not read, and it
+ * must never drop the row either (§8.3's safety decision 3).
+ *
+ * @param {{available: boolean}|undefined} report
+ * @returns {string|null}
+ */
+const reviewValue = (report) => (report?.available === true ? report.value : null);
+
+/**
+ * The newest open order as something a cancel can ADDRESS, or `null`.
+ *
+ * The same row tier 3's `latestOrder` names — {@link latestOrderRow} over
+ * {@link openOrderRows}, one definition each — so the order described on the page and the
+ * order a cancel is issued against cannot be different orders.
+ *
+ * `null` on every arm where the route could not be satisfied: no venue (no request was
+ * issued), a failed read (`usePanelState` has dropped the payload, so there is no row), no
+ * newest row (several orders and none reports a time — {@link latestOrderRow} refuses to
+ * pick), or a row missing the id or the symbol `cancel_order` requires. Each of those is a
+ * control that is not rendered rather than a request that cannot succeed.
+ *
+ * @param {Object} orders
+ * @param {string|null} orders.venue
+ * @param {boolean} orders.failed
+ * @param {unknown} orders.payload
+ * @returns {{orderId: string, symbol: string, reading: string|null}|null}
+ */
+const cancellableOrder = ({ venue, failed, payload }) => {
+  if (venue === null || failed) return null;
+
+  const newest = latestOrderRow(openOrderRows(payload));
+  if (newest === null) return null;
+
+  const orderId = scalarText(newest.id);
+  const symbol = scalarText(newest.symbol);
+  if (orderId === null || symbol === null) return null;
+
+  return { orderId, symbol, reading: orderText(newest) };
+};
+
+/**
+ * What confirming a STOP does, in the words the server's own path supports and no further.
+ *
+ * `strategy_service.transition_deployment` gates the transition, asks the in-process runtime
+ * best effort, writes `status` and `stopped_at` with the reason on the row, moves the version
+ * and audits it. It does not close a position and it does not cancel a resting order, and the
+ * response says nothing about either — so this copy says nothing about either happening, and
+ * says instead that it does not know. The alternative, "your position will be closed", is the
+ * one sentence here that could cost a trader real money on a claim nothing reports.
+ */
+const STOP_DESCRIPTION =
+  "Stopping moves this deployment to stopped, records the reason on it and stops the version "
+  + "it is running, so it generates no further signals or orders. That is all the server "
+  + "reports doing. It does NOT report closing your open position and it does NOT report "
+  + "cancelling orders already resting at the exchange — nothing on this page confirms either, "
+  + "so treat the position and the open orders as still there and deal with them yourself. "
+  + "Stopping a deployment that is already stopped changes nothing.";
+
+/** What confirming ONE cancel does. The refusal sentence is why a dialog can show an error. */
+const CANCEL_ORDER_DESCRIPTION =
+  "Cancelling removes this one resting order from the exchange. It does not close an open "
+  + "position, it does not affect any other order, and a quantity this order has already "
+  + "filled is not undone by cancelling it. The server runs its own safety checks on a cancel "
+  + "and can refuse one; a refusal is reported here rather than silently.";
+
+/** What confirming a cancel-ALL does, including the two things a trader under-reads. */
+const CANCEL_ALL_DESCRIPTION =
+  "Cancelling removes EVERY order this account currently has resting at this venue, in every "
+  + "market — not only the one shown above. Open orders are held per venue and carry no "
+  + "strategy, so this includes orders your running deployments placed, and a deployment that "
+  + "is still running may place new ones immediately afterwards. Nothing here re-places a "
+  + "cancelled order, and cancelling does not close any open position.";
+
+/**
+ * §8.4's acknowledgement, for the ONE action on this page that earns one.
+ *
+ * Constructed for cancel-all and for nothing else — off that action there is no object to
+ * pass, so the gate is not hidden, it does not exist (§8.4's reading of "SHALL NOT display").
+ * The statement names the scope and the irreversibility, because those are the two things the
+ * label alone cannot carry.
+ */
+const CANCEL_ALL_ACKNOWLEDGEMENT = Object.freeze({
+  statement:
+    "Confirming cancels every order resting at this venue for this account, across every "
+    + "market and every deployment. Cancelled orders are not restored and nothing here "
+    + "re-places them.",
+  label: "I understand every open order at this venue will be cancelled",
+  control: "checkbox",
+});
 
 /* ══════════════════════════════════════════════════════════════════════════
  * THE PAGE
@@ -1775,6 +2013,155 @@ export default function LiveTrading() {
     refetchDeployments();
   }, [refetchExchange, refetchStrategies, refetchOrders, refetchDeployments]);
 
+  /* ══════════════════════════════════════════════════════════════════════
+   * THE THREE ACTIONS (task 20.3)
+   * ══════════════════════════════════════════════════════════════════════
+   *
+   * One state object per action, `null` when its dialog is closed. Each is set by exactly
+   * ONE `request…` handler and read by exactly one `handleConfirm…`, which is the whole of
+   * Property 13's structural argument: a button sets state, and the mutation is reachable
+   * only from the dialog's confirm action (see the section docblock above).
+   *
+   * The object also carries that request's own `busy` and `error`, rather than three more
+   * pieces of page state. Both belong to one attempt on one target, and holding them apart
+   * from it is how a refusal of a cancel ends up rendered over a stop.
+   *
+   * The review fields are read off the page's own readings HERE, at click time, so the
+   * dialog keeps describing what the trader clicked even if a read answers underneath it —
+   * `pages/Strategies.jsx`'s archive dialog does the same, for the same reason.
+   */
+  const [stopRequest, setStopRequest] = useState(null);
+  const [cancelOrderRequest, setCancelOrderRequest] = useState(null);
+  const [cancelAllRequest, setCancelAllRequest] = useState(null);
+
+  /** The selected row's own reported deployment id, or `null` — the stop's path parameter. */
+  const selectedDeploymentId = selectedRow === null
+    ? null
+    : scalarText(selectedRow[DEPLOYMENT_ID_KEY]);
+
+  /** The newest open order as something `cancel_order` can address, or `null`. */
+  const cancelTarget = useMemo(
+    () => cancellableOrder({
+      venue: ordersVenue,
+      failed: isFailure(ordersState),
+      payload: ordersPayload,
+    }),
+    [ordersVenue, ordersState, ordersPayload],
+  );
+
+  /**
+   * How many open orders the venue reported, or `null` when that read did not answer.
+   *
+   * A review-grid figure only: `null` renders `ConfirmDialog`'s not-available marker, which is
+   * the honest reading for a failed or unissued read. It gates nothing — see the section
+   * docblock on why cancel-all does not depend on this read.
+   */
+  const openOrderCount = ordersVenue === null || isFailure(ordersState) || isReading(ordersState)
+    ? null
+    : String(openOrderRows(ordersPayload).length);
+
+  /** The button's WHOLE job: open the dialog. It issues nothing. */
+  const requestStopDeployment = useCallback(() => {
+    if (selectedDeploymentId === null) return;
+    setStopRequest({
+      deploymentId: selectedDeploymentId,
+      // The tier figures' own readings, so the dialog cannot describe a different strategy,
+      // market or position from the one on the page. An unavailable reading travels as `null`
+      // and renders the dialog's marker (Requirement 14.5), never a fabricated field.
+      strategy: reviewValue(tierOne.strategy),
+      market: reviewValue(tierOne.market),
+      position: reviewValue(tierTwo.position),
+      status: scalarText(selectedRow?.[DEPLOYMENT_STATUS_KEY]),
+      environment: scalarText(selectedRow?.[DEPLOYMENT_ENVIRONMENT_KEY]),
+      busy: false,
+      error: null,
+    });
+  }, [selectedDeploymentId, selectedRow, tierOne, tierTwo]);
+
+  /** The button's WHOLE job: open the dialog. It issues nothing. */
+  const requestCancelOrder = useCallback(() => {
+    if (cancelTarget === null) return;
+    setCancelOrderRequest({ ...cancelTarget, venue: ordersVenue, busy: false, error: null });
+  }, [cancelTarget, ordersVenue]);
+
+  /** The button's WHOLE job: open the dialog. It issues nothing. */
+  const requestCancelAll = useCallback(() => {
+    if (ordersVenue === null) return;
+    setCancelAllRequest({
+      venue: ordersVenue,
+      openCount: openOrderCount,
+      busy: false,
+      error: null,
+    });
+  }, [ordersVenue, openOrderCount]);
+
+  /**
+   * The ONLY caller of `strategiesApi.stopDeployment`.
+   *
+   * On success the dialog closes and every read is re-issued: the row's `status`, the position
+   * and the risk state are the page's answer to "did that work?", and leaving the old reading
+   * on screen would be this page's own failure mode. On failure the dialog STAYS OPEN carrying
+   * the error, where §8.3 puts the retry.
+   */
+  const handleConfirmStop = useCallback(async () => {
+    if (stopRequest === null || stopRequest.busy === true) return;
+    const { deploymentId } = stopRequest;
+    setStopRequest((current) => (current === null
+      ? null
+      : { ...current, busy: true, error: null }));
+    try {
+      await strategiesApi.stopDeployment(deploymentId, STOP_REASON);
+      setStopRequest(null);
+      retry();
+    } catch (error) {
+      setStopRequest((current) => (current === null
+        ? null
+        : { ...current, busy: false, error }));
+    }
+  }, [stopRequest, retry]);
+
+  /** The ONLY caller of `ordersApi.cancelOrder`. Three arguments, all three route-required. */
+  const handleConfirmCancelOrder = useCallback(async () => {
+    if (cancelOrderRequest === null || cancelOrderRequest.busy === true) return;
+    const { orderId, symbol, venue } = cancelOrderRequest;
+    setCancelOrderRequest((current) => (current === null
+      ? null
+      : { ...current, busy: true, error: null }));
+    try {
+      await ordersApi.cancelOrder(orderId, symbol, venue);
+      setCancelOrderRequest(null);
+      retry();
+    } catch (error) {
+      setCancelOrderRequest((current) => (current === null
+        ? null
+        : { ...current, busy: false, error }));
+    }
+  }, [cancelOrderRequest, retry]);
+
+  /**
+   * The ONLY caller of `ordersApi.cancelAllOrders`, and it is reachable only through
+   * `ConfirmDialog`'s acknowledgement gate.
+   *
+   * No `symbol`: this control is the every-market one, and the route reads an absent `symbol`
+   * as exactly that. Narrowing it here would make the button do less than the dialog says.
+   */
+  const handleConfirmCancelAll = useCallback(async () => {
+    if (cancelAllRequest === null || cancelAllRequest.busy === true) return;
+    const { venue } = cancelAllRequest;
+    setCancelAllRequest((current) => (current === null
+      ? null
+      : { ...current, busy: true, error: null }));
+    try {
+      await ordersApi.cancelAllOrders(venue);
+      setCancelAllRequest(null);
+      retry();
+    } catch (error) {
+      setCancelAllRequest((current) => (current === null
+        ? null
+        : { ...current, busy: false, error }));
+    }
+  }, [cancelAllRequest, retry]);
+
   /**
    * BOTH panels' state, because both tiers are projections of the same two reads.
    *
@@ -1925,6 +2312,23 @@ export default function LiveTrading() {
               <CommandButton intent="secondary" onClick={clearDeployment}>
                 Show all deployments
               </CommandButton>
+              {/* ── STOP, on the SELECTED row (task 20.3) ────────────────────────────
+                  Rendered only for a row that REPORTS a deployment id: the path parameter
+                  `POST /api/deployments/{id}/stop` needs is the server's id, and a row that
+                  reported none carries only this page's synthetic union key, which addresses
+                  nothing. An absent control beats one that 404s on a live account.
+
+                  `onClick` opens the dialog and does nothing else — the request lives in
+                  `handleConfirmStop`, which the dialog alone calls (Property 13). */}
+              {selectedDeploymentId === null ? null : (
+                <CommandButton
+                  intent="destructive"
+                  onClick={requestStopDeployment}
+                  data-live-action="stop-deployment"
+                >
+                  Stop deployment
+                </CommandButton>
+              )}
             </div>
           )}
           data-region={DEPLOYMENT_FIELD}
@@ -2146,6 +2550,36 @@ export default function LiveTrading() {
           title="What happened last"
           state={tierThreeState}
           loading={{ kind: "skeleton-metric", rows: 1, columns: 3 }}
+          /* ── THE TWO ORDER CONTROLS (task 20.3) ────────────────────────────────────
+             Here rather than anywhere else because this is the panel that NAMES the order:
+             `latestOrder` is the reading `cancelTarget` addresses, and a cancel control
+             separated from the thing it cancels is how the wrong order gets cancelled.
+
+             Each is rendered only where its route can be satisfied — the target for one, the
+             venue for all — and neither is rendered at all when there is nothing addressable,
+             so the header carries no empty control group. Both buttons only open a dialog. */
+          actions={cancelTarget === null && ordersVenue === null ? null : (
+            <div className="flex min-w-0 items-center gap-2" data-live-actions="orders">
+              {cancelTarget === null ? null : (
+                <CommandButton
+                  intent="destructive"
+                  onClick={requestCancelOrder}
+                  data-live-action="cancel-order"
+                >
+                  Cancel live order
+                </CommandButton>
+              )}
+              {ordersVenue === null ? null : (
+                <CommandButton
+                  intent="destructive"
+                  onClick={requestCancelAll}
+                  data-live-action="cancel-all-orders"
+                >
+                  Cancel all orders
+                </CommandButton>
+              )}
+            </div>
+          )}
           data-region="tier-3"
         >
           {/* Three equal-weight slots in ONE row, walked from `pageHierarchy`'s tier-3 list,
@@ -2173,6 +2607,105 @@ export default function LiveTrading() {
             ))}
           </div>
         </Panel>
+
+        {/* ═══ THE THREE CONFIRMATIONS (task 20.3) ═════════════════════════════════
+            Requirements 7.6, 8.1, 8.3, 8.5. All three go through `ds/ConfirmDialog`, so all
+            three get the focus trap, Escape, initial focus on CANCEL, the single-overlay
+            claim and an error rendering that cannot leak `err.message`.
+
+            Only one can be open: each `open` reads its own state object, and each object is
+            set by exactly one `request…` handler and by nothing else — so the overlay
+            registry's one-overlay rule is never actually contested, which is the argument
+            `pages/Strategies.jsx` makes about its own pair.
+
+            THE ACKNOWLEDGEMENT IS ON CANCEL-ALL AND ON NOTHING ELSE. §8.4 spends one on the
+            bulk irreversible action and refuses one to everything risk-reducing; off that
+            action there is no `acknowledgement` object at all — it is not constructed and
+            hidden, it does not exist. The `environment="LIVE"` badge IS on all three,
+            because every action on this route acts on the live ledger (Requirement 8.5) and
+            that is a different claim from the risk class. See the section docblock. */}
+
+        {/* ── Stop the selected deployment. NO acknowledgement: stopping reduces risk. ── */}
+        <ConfirmDialog
+          open={stopRequest !== null}
+          onCancel={() => setStopRequest(null)}
+          onConfirm={handleConfirmStop}
+          title="Stop this deployment"
+          intent="destructive"
+          environment="LIVE"
+          description={STOP_DESCRIPTION}
+          /* The labels are authored and the VALUES are the page's own readings, so the
+             dialog cannot describe a different strategy, market or position from the one
+             above it. "Strategy" rather than the declared "Strategy (version)": in a stop
+             review that label reads as the version the worker is bound to, and nothing on
+             this page reports that. An unreadable field is the marker, never invented. */
+          review={[
+            { label: "Deployment", value: stopRequest?.deploymentId ?? null },
+            { label: "Strategy", value: stopRequest?.strategy ?? null },
+            { label: "Market", value: stopRequest?.market ?? null },
+            { label: "Current position", value: stopRequest?.position ?? null },
+            { label: "Reported status", value: stopRequest?.status ?? null },
+            { label: "Deployment's own environment", value: stopRequest?.environment ?? null },
+            { label: "Open position", value: "Not closed by this action" },
+            { label: "Resting orders", value: "Not cancelled by this action" },
+          ]}
+          confirmLabel="Stop deployment"
+          cancelLabel="Leave it running"
+          busy={stopRequest?.busy === true}
+          busyLabel="Stopping…"
+          error={stopRequest?.error ?? undefined}
+          errorContext="live-trading"
+        />
+
+        {/* ── Cancel ONE resting order. NO acknowledgement: one named, re-placeable order. ── */}
+        <ConfirmDialog
+          open={cancelOrderRequest !== null}
+          onCancel={() => setCancelOrderRequest(null)}
+          onConfirm={handleConfirmCancelOrder}
+          title="Cancel this order"
+          intent="destructive"
+          environment="LIVE"
+          description={CANCEL_ORDER_DESCRIPTION}
+          review={[
+            { label: "Order", value: cancelOrderRequest?.reading ?? null },
+            { label: "Order id", value: cancelOrderRequest?.orderId ?? null },
+            { label: "Market", value: cancelOrderRequest?.symbol ?? null },
+            { label: "Venue", value: cancelOrderRequest?.venue ?? null },
+          ]}
+          confirmLabel="Cancel this order"
+          cancelLabel="Leave it resting"
+          busy={cancelOrderRequest?.busy === true}
+          busyLabel="Cancelling…"
+          error={cancelOrderRequest?.error ?? undefined}
+          errorContext="live-trading"
+        />
+
+        {/* ── Cancel EVERY resting order at the venue. THE acknowledgement (§8.4). ──────
+            Bulk, every market, and nothing re-places what it removes. The count is what the
+            open-orders read knows; a read that failed or was never issued renders the
+            dialog's marker there rather than a `0` that would read as "nothing to cancel". */}
+        <ConfirmDialog
+          open={cancelAllRequest !== null}
+          onCancel={() => setCancelAllRequest(null)}
+          onConfirm={handleConfirmCancelAll}
+          title="Cancel all open orders"
+          intent="destructive"
+          environment="LIVE"
+          description={CANCEL_ALL_DESCRIPTION}
+          review={[
+            { label: "Venue", value: cancelAllRequest?.venue ?? null },
+            { label: "Scope", value: "Every open order at this venue, in every market" },
+            { label: "Open orders reported", value: cancelAllRequest?.openCount ?? null },
+            { label: "Open position", value: "Not closed by this action" },
+          ]}
+          acknowledgement={CANCEL_ALL_ACKNOWLEDGEMENT}
+          confirmLabel="Cancel all orders"
+          cancelLabel="Leave them resting"
+          busy={cancelAllRequest?.busy === true}
+          busyLabel="Cancelling…"
+          error={cancelAllRequest?.error ?? undefined}
+          errorContext="live-trading"
+        />
         </>
       )}
     </div>

@@ -412,6 +412,49 @@ export const strategiesApi = {
   stop: (id) => post(`/api/strategies/${id}/stop`),
 
   /**
+   * Stop ONE deployment — the row {@link strategiesApi.listDeployments} lists (task 20.3).
+   *
+   * `POST /api/deployments/{deployment_id}/stop` (`stop_deployment`, 100/minute). The router is
+   * mounted at `prefix="/api"` and declares the route as `/deployments/{deployment_id}/stop`,
+   * so this is the whole address — `components/DeploymentConsole.jsx` already calls exactly
+   * this path, and the PATH NOTE on {@link strategiesApi.listDeployments} is why it is spelled
+   * without a `strategy-operations` segment.
+   *
+   * NOT `strategiesApi.stop`. That one is `POST /api/strategies/{id}/stop`, which is the
+   * STRATEGY-level legacy surface: it stops the fleet bot for the strategy's symbol and flips
+   * the `strategies` row. This one moves a single deployment's binding, which is what a row in
+   * the deployment list is.
+   *
+   * WHAT THE SERVER REPORTS DOING, AND WHAT IT DOES NOT MENTION
+   * ----------------------------------------------------------
+   * `strategy_service.transition_deployment` is explicit about its five steps: read the row
+   * scoped to the caller, gate the transition, ask the in-process runtime **best effort** (a
+   * runtime that never heard of this deployment is a warning and never blocks a stop), write
+   * `status` plus `stopped_at` with the reason preserved, then move the version and audit it.
+   *
+   * Nothing in that path closes an open position and nothing in it cancels an order already
+   * resting at a venue, and the response reports neither. Callers must not tell a trader that
+   * either happened — see `pages/LiveTrading.jsx`'s stop confirmation, which states only what
+   * this endpoint says and points at the separate cancel controls for the rest.
+   *
+   * Stopping an already-stopped deployment is idempotent: a 200 carrying `idempotent: true`
+   * and a message naming the current state, not a failure.
+   *
+   * @param {string} deploymentId
+   * @param {string} [reason] Why the stop was requested. `DeploymentTransitionRequest` is
+   *   `extra="forbid"` and carries this ONE field, capped at 500 characters; it is preserved on
+   *   the row's `error_message` and in the audit record, so "why is this stopped?" has an
+   *   answer. Omitted, the server records its own `"stop requested by …"` sentence.
+   * @returns {Promise<{status: string, deployment_id: string, binding_state: string,
+   *   action: string, previous_state: string, idempotent: boolean, audit_id: (string|null)}>}
+   */
+  stopDeployment: (deploymentId, reason) =>
+    post(
+      `/api/deployments/${encodeURIComponent(deploymentId)}/stop`,
+      reason ? { reason } : {},
+    ),
+
+  /**
    * Pause a strategy
    * @param {string} id
    * @returns {Promise<{status: string}>}

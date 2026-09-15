@@ -3,7 +3,7 @@
  * 
  * Endpoints: /api/orders/*
  */
-import { get, post, put, del } from '../../apiClient';
+import { get, post, put } from '../../apiClient';
 
 /**
  * @typedef {Object} OrderRequest
@@ -64,23 +64,77 @@ export const ordersApi = {
   },
 
   /**
-   * Cancel an order
-   * @param {string} orderId - Order ID
-   * @returns {Promise<{success: boolean, message: string}>}
+   * Cancel ONE resting order at a venue.
+   *
+   * ⚠️ PATH, METHOD AND PARAMETER CORRECTION (task 20.3) ⚠️
+   * ------------------------------------------------------
+   * This function used to be `DELETE /api/orders/{orderId}`. `routers/orders.py` declares no
+   * `DELETE` at all and no `/{order_id}` write route — the cancel is
+   * `@router.post("/cancel/{order_id}")` — so the old spelling resolved to nothing on every
+   * call. That is the same class of defect `api/modules/strategies.js` records three times
+   * over, and the fourth was `GET /api/orders/open`'s missing `exchange_id` (task 20.1c).
+   *
+   * `cancel_order` needs THREE things and refuses without any one of them:
+   *
+   *   * `order_id` in the **path**.
+   *   * `exchange_id` as a **required query parameter** — `Query(...)` with no default. The
+   *     handler loads that venue's decrypted keys and builds the execution engine against it
+   *     before it asks the venue for anything, so an omitted venue is a 422 and not a default.
+   *   * a `CancelOrderRequest` **body** carrying `{order_id, symbol}`. Both fields are
+   *     non-optional on the model, and the handler reads `body.symbol` twice — once for the
+   *     `ExecutionGuard` signal and once for the engine call — so a cancel cannot be issued
+   *     without naming the market the order rests in. The id is therefore sent in both the
+   *     path and the body, which is what the route asks for.
+   *
+   * This is a corrected address for the SAME action. Nothing about what the endpoint does is
+   * changed here: its `SafetyMonitor` freeze check, its `ExecutionGuard` validation, its Redis
+   * cancel lock and its idempotency key are the server's and are untouched.
+   *
+   * @param {string} orderId - The venue's order id, as `getOpenOrders` reported it.
+   * @param {string} symbol - The market the order rests in, e.g. `BTC/USDT`. Required.
+   * @param {string} exchangeId - The venue, e.g. `binance`. Required by the route.
+   * @returns {Promise<Object>} The execution engine's own cancel result.
    */
-  cancelOrder: async (orderId) => {
-    return del(`/api/orders/${orderId}`);
+  cancelOrder: async (orderId, symbol, exchangeId) => {
+    const params = new URLSearchParams();
+    if (exchangeId) params.set('exchange_id', exchangeId);
+    return post(`/api/orders/cancel/${encodeURIComponent(orderId)}?${params}`, {
+      order_id: orderId,
+      symbol,
+    });
   },
 
   /**
-   * Cancel all orders
-   * @param {Object} [options] - Optional parameters
-   * @param {string} [options.symbol] - Cancel orders for specific symbol only
-   * @returns {Promise<{success: boolean, cancelled: number}>}
+   * Cancel EVERY order this account has resting at one venue, optionally in one market.
+   *
+   * ⚠️ PATH, METHOD AND PARAMETER CORRECTION (task 20.3) ⚠️
+   * ------------------------------------------------------
+   * This function used to be `DELETE /api/orders?{options}`. The route is
+   * `@router.post("/cancel-all")`, so the old spelling resolved to nothing — and the options
+   * it serialised into the query string were never the parameters the route reads.
+   *
+   * What it actually declares:
+   *
+   *   * `exchange_id` as a **required query parameter**, for the same reason as
+   *     {@link ordersApi.cancelOrder}: the venue is what the engine is built against.
+   *   * a `CancelAllRequest` **body** whose one field, `symbol`, is genuinely OPTIONAL. The
+   *     handler reads `body.symbol` and passes `None` when it is absent, which is the
+   *     every-market case. So an omitted market is omitted from the body rather than sent
+   *     blank — `{"symbol": ""}` would be a filter on the empty symbol, not the absence of
+   *     one, exactly as `?symbol=` was on the open-orders read.
+   *
+   * Scope, because it is easy to under-read: with no `symbol` this cancels the account's open
+   * orders at that venue across every market. Open orders are held per venue and carry no
+   * strategy, so this is not scoped to one strategy or one deployment and cannot be.
+   *
+   * @param {string} exchangeId - The venue, e.g. `binance`. Required by the route.
+   * @param {string} [symbol] - Restrict to one market. Omitted means every market at the venue.
+   * @returns {Promise<{status: string, cancelled: Object}>}
    */
-  cancelAllOrders: async (options = {}) => {
-    const params = new URLSearchParams(options);
-    return del(`/api/orders?${params}`);
+  cancelAllOrders: async (exchangeId, symbol) => {
+    const params = new URLSearchParams();
+    if (exchangeId) params.set('exchange_id', exchangeId);
+    return post(`/api/orders/cancel-all?${params}`, symbol ? { symbol } : {});
   },
 
   /**

@@ -74,6 +74,9 @@ import * as dashboardModule from '../../src/api/modules/dashboard';
 import { ordersApi } from '../../src/api/modules/orders';
 import { strategiesApi } from '../../src/api/modules/strategies';
 import { ApiError } from '../../src/apiClient';
+// Task 20.3: the authored copy a failed mutation must render INSTEAD of `err.message`, taken
+// from the module that owns it rather than retyped here (Requirement 14.4).
+import { CATEGORY_COPY } from '../../src/design/errorCopy';
 import { PAGES, PAGE_FIELD_BY_KEY, pageFieldKey } from '../../src/design/pageFields';
 import {
   PAGE_HIERARCHY_BY_PAGE,
@@ -1072,5 +1075,309 @@ describe('LiveTrading deployment selector (task 20.1d)', () => {
     // The strip is unaffected: it states what the ROUTE is, and that claim is still true.
     expect(document.querySelector('[data-environment-variant="strip"]').getAttribute('data-environment'))
       .toBe('LIVE');
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+ * THE THREE DESTRUCTIVE ACTIONS (task 20.3)
+ * ══════════════════════════════════════════════════════════════════════════════════════
+ *
+ * design.md §8.3, §8.4. Requirements 7.6, 8.1, 8.3, 8.5, 14.4, 19.1, 19.4. Property 13.
+ *
+ * WHAT IS PINNED HERE, AND WHY EACH ONE IS WORTH A TEST
+ * ====================================================
+ *  23. **No request is issued before the confirmation, for all three actions.** This is
+ *      Property 13, and it is asserted as a property of the page's STRUCTURE: the control is
+ *      clicked, the dialog is on screen, and the mutation spy has not been called. Under a
+ *      `window.confirm` this could only ever have been a property of what `confirm()`
+ *      returned.
+ *  24. **Cancel-all is unreachable until the acknowledgement is ticked**, and reachable
+ *      immediately afterwards. The confirm control is `disabled` AND activating it issues
+ *      nothing — `ds/ConfirmDialog` enforces the gate in both places, and a test that only
+ *      read the attribute would pass against a styled-but-live button.
+ *  25. **Stop and cancel-one carry NO acknowledgement.** The asymmetry is the safety
+ *      property, not an omission: spending a checkbox on a risk-REDUCING action is how a
+ *      trader learns to tick one without reading it, which is what makes it worthless on the
+ *      bulk irreversible one. Asserted as the absence of the acknowledgement region, so a
+ *      later "consistency" edit that adds one fails here.
+ *  26. **Each mutation is called with what its ROUTER requires.** `POST /api/orders/cancel/
+ *      {order_id}` needs the id, the market and the venue; `POST /api/orders/cancel-all`
+ *      needs the venue; `POST /api/deployments/{id}/stop` needs the deployment id. Two of
+ *      those client methods were addressing routes that do not exist before this task.
+ *  27. **A failed mutation renders authored copy and never `err.message`** (Requirement
+ *      14.4), inside the dialog, which stays open over the review a trader was reading.
+ *  28. **A control whose endpoint cannot be addressed is not rendered at all.** A row that
+ *      reports no deployment id, and an account with no single venue, are both cases where a
+ *      button would 404 or 422 against a live account.
+ *  29. **No manual-order affordance exists** (Requirement 19.1): nothing on the page places,
+ *      amends or modifies anything.
+ */
+
+describe('LiveTrading destructive actions (task 20.3)', () => {
+  beforeEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  /** One deployment record with a server-reported id — the stop's path parameter. */
+  const deployment = (overrides = {}) => ({
+    deployment_id: 'dep-1',
+    status: 'running',
+    environment: 'live',
+    worker: 'worker-a',
+    started_at: '2026-06-01T08:00:00.000Z',
+    health: 'healthy',
+    ...overrides,
+  });
+
+  /** One ccxt open order, as the venue reports it: an id and a symbol, which cancel needs. */
+  const openOrder = (overrides = {}) => ({
+    id: 'ord-1',
+    symbol: 'BTC/USDT',
+    side: 'buy',
+    amount: 0.1,
+    price: 60000,
+    timestamp: 1780000000000,
+    ...overrides,
+  });
+
+  /** The page with one deployment and one open order — every control addressable. */
+  const readyWithControls = (overrides = {}) => bothRead({
+    orders: [openOrder()],
+    deployments: (id) => Promise.resolve(deploymentsBody(id, [deployment()])),
+    ...overrides,
+  });
+
+  const dialog = () => document.querySelector('[data-ds="confirm-dialog"]');
+  const confirmButton = () => document.querySelector('[data-ds="confirm-dialog-confirm"]');
+  const acknowledgement = () =>
+    document.querySelector('[data-ds="confirm-dialog-acknowledgement"]');
+  const reviewText = () =>
+    document.querySelector('[data-ds="confirm-dialog-review"]').textContent;
+
+  const control = (action) => document.querySelector(`[data-live-action="${action}"]`);
+  const selectorRow = () =>
+    document.querySelector('[data-region="deployment"] tbody tr[data-row-id]');
+
+  /** Mount, wait for all four reads, and select the one deployment row. */
+  const mountAndSelect = async () => {
+    mount();
+    await waitFor(() => expect(selectorRow()).not.toBeNull());
+    fireEvent.click(selectorRow());
+    await waitFor(() => expect(control('stop-deployment')).not.toBeNull());
+  };
+
+  it('opens a dialog and issues NOTHING when Stop deployment is clicked, then stops on confirm', async () => {
+    readyWithControls();
+    const stop = vi.spyOn(strategiesApi, 'stopDeployment').mockResolvedValue({
+      status: 'stopped', deployment_id: 'dep-1', idempotent: false,
+    });
+
+    await mountAndSelect();
+
+    fireEvent.click(control('stop-deployment'));
+
+    // ── Property 13 ──────────────────────────────────────────────────────────────────
+    // The dialog is up and the mutation has NOT been called. The button's whole job is to
+    // set dialog state; there is no code path from it to the request.
+    await waitFor(() => expect(dialog()).not.toBeNull());
+    expect(stop).not.toHaveBeenCalled();
+
+    // The review grid names the three things §7.5 makes this page about, read off the page's
+    // own tier figures rather than from a second source.
+    expect(reviewText()).toContain('dep-1');
+    expect(reviewText()).toContain('Momentum Breakout');
+    expect(reviewText()).toContain('BTC/USDT');
+    expect(reviewText()).toContain('long 0.25');
+
+    // And the copy states what the endpoint does NOT do. `transition_deployment` moves the
+    // binding, writes the reason and moves the version; it neither closes a position nor
+    // cancels a resting order, and the response reports neither — so the dialog says so
+    // instead of claiming an outcome nothing reports.
+    const body = document.querySelector('[data-ds="confirm-dialog-body"]').textContent;
+    expect(body).toContain('does NOT report closing your open position');
+    expect(body).toContain('Not closed by this action');
+
+    // The confirm action is the ONLY caller, and it sends the path id plus the reason the
+    // router preserves on the row and in the audit trail.
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+    expect(stop).toHaveBeenCalledWith('dep-1', expect.stringContaining('Live Trading'));
+  });
+
+  it('opens a dialog and issues NOTHING when Cancel live order is clicked, then cancels with the id, market and venue', async () => {
+    readyWithControls();
+    const cancel = vi.spyOn(ordersApi, 'cancelOrder').mockResolvedValue({ status: 'canceled' });
+
+    mount();
+    await waitFor(() => expect(control('cancel-order')).not.toBeNull());
+
+    fireEvent.click(control('cancel-order'));
+
+    await waitFor(() => expect(dialog()).not.toBeNull());
+    expect(cancel).not.toHaveBeenCalled();
+
+    // The order named is the one tier 3 reports — same row, one definition of "newest".
+    expect(reviewText()).toContain('ord-1');
+    expect(reviewText()).toContain('BTC/USDT');
+    expect(reviewText()).toContain('binance');
+
+    fireEvent.click(confirmButton());
+
+    // `POST /api/orders/cancel/{order_id}` declares `exchange_id` as a required query
+    // parameter and a body of `{order_id, symbol}`. All three travel, in that order.
+    await waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+    expect(cancel).toHaveBeenCalledWith('ord-1', 'BTC/USDT', 'binance');
+  });
+
+  it('gates Cancel all orders behind the acknowledgement, and issues nothing until it is ticked', async () => {
+    readyWithControls();
+    const cancelAll = vi.spyOn(ordersApi, 'cancelAllOrders')
+      .mockResolvedValue({ status: 'ok', cancelled: {} });
+
+    mount();
+    await waitFor(() => expect(control('cancel-all-orders')).not.toBeNull());
+
+    fireEvent.click(control('cancel-all-orders'));
+
+    await waitFor(() => expect(dialog()).not.toBeNull());
+    expect(cancelAll).not.toHaveBeenCalled();
+
+    // §8.4's acknowledgement, on the ONE action here that earns one: bulk, every market, and
+    // nothing re-places what it removes.
+    expect(acknowledgement()).not.toBeNull();
+    expect(acknowledgement().textContent).toContain('every order resting at this venue');
+
+    // Unreachable: the control is disabled AND activating it issues nothing. Reading only the
+    // attribute would pass against a button that was styled instead of gated.
+    expect(confirmButton().disabled).toBe(true);
+    fireEvent.click(confirmButton());
+    confirmButton().click();
+    expect(cancelAll).not.toHaveBeenCalled();
+
+    // Ticked, and only now.
+    fireEvent.click(acknowledgement().querySelector('input[type="checkbox"]'));
+    expect(confirmButton().disabled).toBe(false);
+
+    fireEvent.click(confirmButton());
+
+    // The venue, and NO symbol: an absent `symbol` is how `cancel_all` is told "every
+    // market", which is what this control says it does.
+    await waitFor(() => expect(cancelAll).toHaveBeenCalledTimes(1));
+    expect(cancelAll).toHaveBeenCalledWith('binance');
+  });
+
+  it('gives stop and cancel-one NO acknowledgement, and puts the LIVE badge on all three', async () => {
+    readyWithControls();
+    vi.spyOn(strategiesApi, 'stopDeployment').mockResolvedValue({ status: 'stopped' });
+
+    await mountAndSelect();
+
+    // Stop: risk-REDUCING and reversible by deploying again, so no gate. The environment
+    // badge IS there — it states which LEDGER is being acted on, which is a different claim
+    // from the risk class of the action (Requirement 8.5).
+    fireEvent.click(control('stop-deployment'));
+    await waitFor(() => expect(dialog()).not.toBeNull());
+    expect(acknowledgement()).toBeNull();
+    expect(confirmButton().disabled).toBe(false);
+    expect(dialog().querySelector('[data-ds="environment-strip"]').getAttribute('data-environment'))
+      .toBe('LIVE');
+    fireEvent.click(document.querySelector('[data-ds="confirm-dialog-cancel"]'));
+    await waitFor(() => expect(dialog()).toBeNull());
+
+    // Cancel one: a single named order, re-placeable by the strategy that placed it.
+    fireEvent.click(control('cancel-order'));
+    await waitFor(() => expect(dialog()).not.toBeNull());
+    expect(acknowledgement()).toBeNull();
+    expect(confirmButton().disabled).toBe(false);
+    expect(dialog().querySelector('[data-ds="environment-strip"]').getAttribute('data-environment'))
+      .toBe('LIVE');
+    fireEvent.click(document.querySelector('[data-ds="confirm-dialog-cancel"]'));
+    await waitFor(() => expect(dialog()).toBeNull());
+
+    // Cancel all: the one that has it.
+    fireEvent.click(control('cancel-all-orders'));
+    await waitFor(() => expect(dialog()).not.toBeNull());
+    expect(acknowledgement()).not.toBeNull();
+    expect(dialog().querySelector('[data-ds="environment-strip"]').getAttribute('data-environment'))
+      .toBe('LIVE');
+  });
+
+  it('renders authored copy — never `err.message` — when a mutation fails, and keeps the dialog open', async () => {
+    readyWithControls();
+    // A refusal carrying everything Requirement 14.4 forbids on a screen: a status code, an
+    // error class name and a stack frame.
+    vi.spyOn(strategiesApi, 'stopDeployment').mockRejectedValue(
+      new ApiError('DEPLOYMENT_STOP_FAILED at Object.stop (/app/routers/x.py:12:3)', {
+        status: 503,
+      }),
+    );
+
+    await mountAndSelect();
+
+    fireEvent.click(control('stop-deployment'));
+    await waitFor(() => expect(dialog()).not.toBeNull());
+    fireEvent.click(confirmButton());
+
+    const failure = await waitFor(() => {
+      const node = document.querySelector('[data-ds="dialog-error"]');
+      expect(node).not.toBeNull();
+      return node;
+    });
+
+    // `translateError`'s output and nothing else.
+    expect(failure.textContent).toContain(CATEGORY_COPY.SERVER_ERROR.headline);
+    expect(failure.textContent).not.toContain('DEPLOYMENT_STOP_FAILED');
+    expect(failure.textContent).not.toContain('routers/x.py');
+    expect(document.body.textContent).not.toContain('503');
+
+    // The dialog stays open over the review the trader was reading: §8.3's failed state
+    // returns to Review, where the confirm control is the retry. And it is a `ds/` rendering,
+    // not a hand-rolled box on the page.
+    expect(dialog()).not.toBeNull();
+    expect(reviewText()).toContain('dep-1');
+    expect(confirmButton()).not.toBeNull();
+  });
+
+  it('renders no control whose endpoint cannot be addressed, and no manual-order affordance', async () => {
+    // A deployment row that reports NO id — `deploymentRow` gives it this page's synthetic
+    // union key, which addresses nothing — and a venue that reports two exchanges, so tier 1
+    // names no single one and the open-orders read was never issued.
+    bothRead({
+      dashboard: dashboardBody({
+        exchanges: [
+          { exchange_id: 'binance', status: 'connected' },
+          { exchange_id: 'kraken', status: 'connected' },
+        ],
+      }),
+      deployments: (id) => Promise.resolve(deploymentsBody(id, [
+        { status: 'running', environment: 'live', worker: 'worker-a', health: 'healthy' },
+      ])),
+    });
+
+    mount();
+    await waitFor(() => expect(selectorRow()).not.toBeNull());
+    fireEvent.click(selectorRow());
+
+    // Selected — the page re-scoped — and still no Stop: there is no id to put in the path.
+    await waitFor(() =>
+      expect(document.querySelector('[data-selected-deployment]')).not.toBeNull());
+    expect(control('stop-deployment')).toBeNull();
+
+    // No venue, so no `exchange_id`: neither order control is rendered, and the group they
+    // would have sat in is absent too.
+    expect(control('cancel-order')).toBeNull();
+    expect(control('cancel-all-orders')).toBeNull();
+    expect(document.querySelector('[data-live-actions="orders"]')).toBeNull();
+
+    // Requirement 19.1: this task added stop and cancel only. Nothing here places, amends or
+    // modifies an order or a position.
+    const controls = [...document.querySelectorAll('button, a')]
+      .map((node) => (node.textContent ?? '').toLowerCase());
+    for (const forbidden of ['place order', 'new order', 'amend', 'modify position', 'close position']) {
+      expect(controls.some((label) => label.includes(forbidden)), `${forbidden} is rendered`)
+        .toBe(false);
+    }
   });
 });
