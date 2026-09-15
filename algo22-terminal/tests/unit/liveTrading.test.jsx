@@ -42,7 +42,27 @@
  *      has to say which absence this is.
  *  11. **The tier-2 panel carries an environment chip** (Requirements 7.4, 12.2).
  *
- * Tier 3 and the deployment selector are the next part of task 20.1 and are asserted nowhere.
+ * AND WHAT PART D ADDS (task 20.1d — the deployment selector, Requirements 14.1, 19.4)
+ * =====================================================================================
+ *  17. **The selector renders ABOVE tier 1 and carries NO tier.** `pageHierarchy` registers
+ *      `deployment` as untiered precisely because it is a control that chooses what the tiers
+ *      describe, so a tier attribute anywhere inside it would put a control into Property 4's
+ *      ordering of figures.
+ *  18. **Two strategies' deployments appear as ONE union, at one call per strategy.** The read
+ *      is per strategy — "there is no single read that returns every deployment a trader
+ *      has" — and an absent field on a record is the marker, never `0` and never the cheerful
+ *      `"healthy"` default this codebase has already been caught inventing for that field.
+ *  19. **A selection re-scopes `strategy`, `market` and `latestSignal` and NOTHING else.** The
+ *      account-wide slots keep their figures, their labels and their hints word for word,
+ *      because `overview.today_realized_pnl` and `risk.risk_level` are account-wide sums and
+ *      `positions[]` carries no deployment key. Inventing an attribution there is the
+ *      fabrication this page is built around.
+ *  20. **One strategy's failed read keeps the others' rows, and is disclosed.** Erasing every
+ *      deployment because one strategy's read failed is part C's erasure one level down.
+ *  21. **Zero deployments renders `ds/EmptyState`, not an empty table**, quoting the declared
+ *      reason as what the server actually answered (Requirement 14.1).
+ *  22. **The in-process-registry incompleteness is on the surface, once**, and says what to do
+ *      about it rather than only admitting it.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -55,7 +75,11 @@ import { ordersApi } from '../../src/api/modules/orders';
 import { strategiesApi } from '../../src/api/modules/strategies';
 import { ApiError } from '../../src/apiClient';
 import { PAGES, PAGE_FIELD_BY_KEY, pageFieldKey } from '../../src/design/pageFields';
-import { PAGE_HIERARCHY_BY_PAGE, tierSelector } from '../../src/design/pageHierarchy';
+import {
+  PAGE_HIERARCHY_BY_PAGE,
+  UNTIERED_FIELDS_BY_PAGE,
+  tierSelector,
+} from '../../src/design/pageHierarchy';
 
 /* ══════════════════════════════════════════════════════════════════════════════════════
  * THE DECLARATION, AND THE TWO FIXTURES
@@ -127,19 +151,36 @@ const readDashboard = () => vi.spyOn(dashboardModule.dashboardApi, 'getDashboard
 const readStrategies = () => vi.spyOn(strategiesApi, 'list');
 /** The third read (task 20.1c). The response root IS the ccxt order array — no envelope. */
 const readOrders = () => vi.spyOn(ordersApi, 'getOpenOrders');
+/** The fourth read (task 20.1d), and it is PER STRATEGY: one call per strategy id. */
+const readDeployments = () => vi.spyOn(strategiesApi, 'listDeployments');
+
+/** `{strategy_id, deployments, total}` — the shape `list_deployments` answers. */
+const deploymentsBody = (strategyId, deployments = []) => ({
+  strategy_id: strategyId,
+  deployments,
+  total: deployments.length,
+});
+
+/** The default fan-out answer: this strategy holds none. */
+const noDeployments = (strategyId) => Promise.resolve(deploymentsBody(strategyId, []));
 
 const mount = () => render(<MemoryRouter><LiveTrading /></MemoryRouter>);
 
 /**
- * All three reads resolving, which is the state most of the tests below start from.
+ * All four reads resolving, which is the state most of the tests below start from.
  *
- * The orders read defaults to `[]` — a venue holding no open order — so no test that is not
- * about tier 3 has an order in its DOM, and none of them reaches the network.
+ * The orders read defaults to `[]` — a venue holding no open order — and the deployment
+ * fan-out to no deployment per strategy, so no test that is not about tier 3 has an order in
+ * its DOM, no test that is not about the selector has a deployment row in its DOM, and none of
+ * them reaches the network. `overrides.deployments` is a function of the strategy id, because
+ * the read is per strategy and the union's whole subject is what the several answers together
+ * do (and do not) contain.
  */
 const bothRead = (overrides = {}) => {
   readDashboard().mockResolvedValue(overrides.dashboard ?? dashboardBody());
   readStrategies().mockResolvedValue(overrides.strategies ?? strategiesBody());
   readOrders().mockResolvedValue(overrides.orders ?? []);
+  readDeployments().mockImplementation(overrides.deployments ?? noDeployments);
 };
 
 /* ══════════════════════════════════════════════════════════════════════════════════════
@@ -319,8 +360,11 @@ describe('LiveTrading — one failure state for two reads (task 20.1)', () => {
       .mockResolvedValue(dashboardBody());
     const strategies = readStrategies().mockResolvedValue(strategiesBody());
     // Mocked because the retry below recovers tier 1, which reports a venue, which issues the
-    // third read (task 20.1c). Unmocked it would reach the network from jsdom.
+    // third read (task 20.1c). Unmocked it would reach the network from jsdom. The deployment
+    // fan-out (task 20.1d) is mocked for the same reason: the recovered strategies read gives
+    // it a strategy id to ask about.
     readOrders().mockResolvedValue([]);
+    readDeployments().mockImplementation(noDeployments);
 
     mount();
 
@@ -753,5 +797,280 @@ describe('LiveTrading tier 3 (task 20.1c)', () => {
     expect(figureOf(declared('exposure').label)).toContain('15,500.00');
     expect(figureOf(declared('riskState').label)).toContain('elevated');
     expect(figureOf(declared('exchange').label)).toContain('binance');
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+ * THE DEPLOYMENT SELECTOR — untiered, above tier 1 (task 20.1d)
+ * ══════════════════════════════════════════════════════════════════════════════════════
+ *
+ * Items 17-22 of the file docblock. The two facts every test here turns on:
+ *
+ *   * `strategiesApi.listDeployments` is PER STRATEGY, so the selector is the union over the
+ *     strategies the page already lists — N calls, and a partial answer is a real outcome.
+ *   * The union's rows can re-scope only what a strategy id can re-scope. The account-wide
+ *     figures stay account-wide, and the tests assert their LABELS as well as their values,
+ *     because relabelling one of them is how a per-deployment claim would appear.
+ */
+
+describe('LiveTrading deployment selector (task 20.1d)', () => {
+  beforeEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  /** One deployment record, as `list_deployments` publishes them. */
+  const deployment = (overrides = {}) => ({
+    deployment_id: 'dep-1',
+    status: 'running',
+    environment: 'live',
+    worker: 'worker-a',
+    started_at: '2026-06-01T08:00:00.000Z',
+    health: 'healthy',
+    ...overrides,
+  });
+
+  /** Two strategies, so the union is a union rather than one call's answer. */
+  const twoStrategies = () => strategiesBody({
+    strategies: [
+      { id: 's1', name: 'Momentum Breakout', version: 4, symbol: 'BTC/USDT' },
+      { id: 's2', name: 'Mean Reversion', version: 2, symbol: 'ETH/USDT' },
+    ],
+  });
+
+  /** Two signals on the ACCOUNT, one per strategy, newest first. */
+  const twoSignals = () => ({
+    ...dashboardBody(),
+    recent_activity: {
+      signals: [
+        { id: 'sig-2', strategy_id: 's2', time: '2026-06-01T12:00:00Z', text: 'Signal SELL: ETH/USDT on BINANCE' },
+        { id: 'sig-1', strategy_id: 's1', time: '2026-06-01T09:00:00Z', text: 'Signal BUY: BTC/USDT on BINANCE' },
+      ],
+      insights: [],
+      executions: [],
+    },
+  });
+
+  const selectorPanel = () => document.querySelector('[data-region="deployment"]');
+  const selectorRows = () =>
+    [...document.querySelectorAll('[data-region="deployment"] tbody tr[data-row-id]')];
+  const rowFor = (text) => selectorRows().find((row) => row.textContent.includes(text));
+
+  it('renders the selector ABOVE tier 1, carrying the untiered `deployment` marker and no tier', async () => {
+    bothRead({ deployments: (id) => Promise.resolve(deploymentsBody(id, [deployment()])) });
+
+    mount();
+
+    await waitFor(() => expect(selectorRows()).toHaveLength(1));
+
+    // The declaration's own verdict: `deployment` is registered UNTIERED, and the reason it
+    // gives is that the selector sits above tier 1.
+    expect(UNTIERED_FIELDS_BY_PAGE[PAGES.LIVE_TRADING].map((entry) => entry.field))
+      .toContain('deployment');
+
+    const panel = selectorPanel();
+    expect(panel).not.toBeNull();
+    // NO tier, anywhere inside it — not on the region and not on a figure.
+    expect(panel.getAttribute('data-page-tier')).toBeNull();
+    expect(panel.querySelector('[data-page-tier]')).toBeNull();
+    expect(panel.querySelector('[data-metric-tier]')).toBeNull();
+
+    // ABOVE tier 1, asserted from the rendered DOM rather than from the JSX: every element of
+    // the selector precedes the tier-1 container.
+    const documentOrder = [...document.querySelectorAll('*')];
+    const tierOneAt = documentOrder.indexOf(tierOneContainer());
+    expect(documentOrder.indexOf(panel)).toBeLessThan(tierOneAt);
+    for (const element of panel.querySelectorAll('*')) {
+      expect(documentOrder.indexOf(element)).toBeLessThan(tierOneAt);
+    }
+  });
+
+  it('lists two strategies\' deployments as ONE union, one call per strategy, absent fields as the marker', async () => {
+    bothRead({
+      strategies: twoStrategies(),
+      deployments: (id) => Promise.resolve(deploymentsBody(id, [
+        // s2's record reports no `health` and no `worker`, which is the case that must render
+        // the marker rather than `0` or a cheerful default.
+        id === 's2'
+          ? { deployment_id: 'dep-s2', status: 'running', environment: 'live', started_at: null }
+          : deployment({ deployment_id: 'dep-s1' }),
+      ])),
+    });
+
+    mount();
+
+    await waitFor(() => expect(selectorRows()).toHaveLength(2));
+
+    // PER STRATEGY: one call each, issued once — not once per render.
+    expect(strategiesApi.listDeployments).toHaveBeenCalledTimes(2);
+    expect(strategiesApi.listDeployments.mock.calls.map((call) => call[0]).sort())
+      .toEqual(['s1', 's2']);
+
+    // One table holding both strategies' rows.
+    expect(selectorPanel().querySelectorAll('table')).toHaveLength(1);
+    expect(rowFor('dep-s1')).not.toBeUndefined();
+    expect(rowFor('dep-s2')).not.toBeUndefined();
+
+    // The six columns are the read's own keys, in the order the record carries them.
+    const headers = [...selectorPanel().querySelectorAll('thead th[data-column-key]')];
+    expect(headers.map((node) => node.getAttribute('data-column-key')))
+      .toEqual(['deployment_id', 'status', 'environment', 'worker', 'started_at', 'health']);
+
+    // Absent → the marker. Never `0`, never `"healthy"` assumed.
+    for (const key of ['worker', 'started_at', 'health']) {
+      const cell = rowFor('dep-s2').querySelector(`[data-column-key="${key}"]`);
+      expect(cell.textContent, `${key} did not render the marker`).toContain('—');
+      expect(cell.textContent).not.toContain('0');
+      expect(cell.textContent.toLowerCase()).not.toContain('healthy');
+    }
+  });
+
+  it('re-scopes strategy, market and the latest signal on selection, and leaves the account-wide figures alone', async () => {
+    bothRead({
+      dashboard: twoSignals(),
+      strategies: twoStrategies(),
+      deployments: (id) => Promise.resolve(
+        deploymentsBody(id, id === 's2' ? [deployment({ deployment_id: 'dep-s2' })] : []),
+      ),
+    });
+
+    mount();
+
+    await waitFor(() => expect(selectorRows()).toHaveLength(1));
+
+    // BEFORE the selection: two strategies are reported, so there is no single one to name and
+    // no strategy id to match a signal against. Markers, not an arbitrary pick.
+    expect(figureOf(declared('strategy').label)).toBeNull();
+    expect(figureOf(declared('market').label)).toBeNull();
+    expect(figureOf(declared('latestSignal').label)).toBeNull();
+
+    // The account-wide readings, recorded before the click so the labels and hints can be
+    // compared afterwards rather than described twice.
+    const riskLabel = declared('riskState').label;
+    const riskHint = metricFor(riskLabel).querySelector('[title]').getAttribute('title');
+
+    fireEvent.click(selectorRows()[0]);
+
+    // AFTER: the row names `s2`, so the strategy, its market and the signal filter are that
+    // strategy's — and the other strategy's signal is not on the page.
+    await waitFor(() => expect(figureOf(declared('strategy').label)).toContain('Mean Reversion'));
+    expect(figureOf(declared('strategy').label)).not.toContain('Momentum');
+    expect(figureOf(declared('market').label)).toContain('ETH/USDT');
+    expect(figureOf(declared('latestSignal').label)).toContain('Signal SELL: ETH/USDT');
+    expect(document.body.textContent).not.toContain('Signal BUY: BTC/USDT');
+    expect(document.querySelector('[data-selected-deployment]').getAttribute('data-selected-deployment'))
+      .toBe('dep-s2');
+
+    // NOT re-scoped, and the labels prove it: both are account-wide, and `positions[]` carries
+    // no deployment key at all. Same figures, same labels, same hint as before the click.
+    expect(declared('realisedPnlAccount').label).toBe('Realised P&L (account, today)');
+    expect(figureOf(declared('realisedPnlAccount').label)).toContain('412.75');
+    expect(figureOf(riskLabel)).toContain('elevated');
+    expect(metricFor(riskLabel).querySelector('[title]').getAttribute('title')).toBe(riskHint);
+    expect(riskHint).toContain('WHOLE ACCOUNT');
+    expect(figureOf(declared('position').label)).toContain('long 0.25');
+    // And realised P&L per deployment is STILL the marker: a selection does not make an
+    // account-wide sum attributable to one deployment.
+    expect(metricFor(declared('realisedPnlPerDeployment').label).dataset.metricAvailable)
+      .toBe('false');
+
+    // A selection is not a new question for the fan-out, so it re-issues nothing.
+    expect(strategiesApi.listDeployments).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the strategies that answered when one strategy\'s deployment read fails', async () => {
+    bothRead({
+      strategies: twoStrategies(),
+      deployments: (id) => (id === 's1'
+        ? Promise.reject(new ApiError('The deployment read failed.', { status: 503 }))
+        : Promise.resolve(deploymentsBody(id, [deployment({ deployment_id: 'dep-s2' })]))),
+    });
+
+    mount();
+
+    await waitFor(() => expect(selectorRows()).toHaveLength(1));
+
+    // s2's row survives s1's failure. Rejecting the whole union on the first failure would
+    // hide every deployment a trader has because one strategy's read timed out.
+    expect(rowFor('dep-s2')).not.toBeUndefined();
+
+    // And the partial answer is DISCLOSED, naming the strategy, so a short list is never read
+    // as a complete one.
+    const partial = document.querySelector('[data-deployments-read="partial"]');
+    expect(partial).not.toBeNull();
+    expect(partial.textContent).toContain('1 of 2');
+    expect(partial.textContent).toContain('s1');
+
+    // Not the page-level branch: the figures that were read successfully are still on screen.
+    expect(document.querySelector('[data-region="page-error"]')).toBeNull();
+    expect(figureOf(declared('exposure').label)).toContain('15,500.00');
+    expect(figureOf(declared('riskState').label)).toContain('elevated');
+  });
+
+  it('renders an EmptyState rather than an empty table when no deployment is reported', async () => {
+    // The default fan-out: one strategy, asked, answering with no deployment.
+    bothRead();
+
+    mount();
+
+    await waitFor(() => expect(document.querySelector('[data-deployments-empty]')).not.toBeNull());
+
+    // NO table: a header row over nothing cannot say which emptiness this is, and a selector
+    // that selects nothing is the dead control Requirement 19.4 forbids.
+    expect(selectorPanel().querySelector('table')).toBeNull();
+
+    const empty = document.querySelector('[data-deployments-empty]');
+    expect(empty.getAttribute('data-empty-variant')).toBe('no-data');
+    // The DECLARED reason, quoted as what the server actually answered — once per strategy,
+    // because that is how the read is scoped.
+    expect(empty.textContent).toContain(declared('deployment').reason);
+    // Requirement 14.1's third field, which is the one everybody omits.
+    expect(empty.querySelector('a, button')).not.toBeNull();
+  });
+
+  it('states the in-process-registry incompleteness on the surface, once', async () => {
+    bothRead({ deployments: (id) => Promise.resolve(deploymentsBody(id, [deployment()])) });
+
+    mount();
+
+    await waitFor(() => expect(selectorRows()).toHaveLength(1));
+
+    const caveats = document.querySelectorAll('[data-selector-caveat="in-process-registry"]');
+    expect(caveats).toHaveLength(1);
+    // The endpoint lists an in-process worker registry, so it can answer with fewer
+    // deployments than `strategy_deployments` holds — and the sentence says what to DO about
+    // that, which is the half that stops a duplicate live deployment.
+    expect(caveats[0].textContent).toContain('may be incomplete');
+    expect(caveats[0].textContent).toContain('UNKNOWN rather than stopped');
+    // A sentence, not an alert: a permanent property of the read dressed as a warning is the
+    // banner that stops being read.
+    expect(caveats[0].closest('[data-alert-severity]')).toBeNull();
+    // Above the rows it qualifies.
+    const documentOrder = [...document.querySelectorAll('*')];
+    expect(documentOrder.indexOf(caveats[0]))
+      .toBeLessThan(documentOrder.indexOf(selectorRows()[0]));
+  });
+
+  it('surfaces a row whose own environment disagrees with the LIVE route', async () => {
+    bothRead({
+      deployments: (id) => Promise.resolve(deploymentsBody(id, [
+        deployment({ deployment_id: 'dep-paper', environment: 'paper' }),
+      ])),
+    });
+
+    mount();
+
+    await waitFor(() => expect(selectorRows()).toHaveLength(1));
+
+    // The row's `environment` is the deployment record's OWN, and it contradicts this route.
+    // Surfaced, not hidden: a trader about to scope the page by it should read that first.
+    const disagreement = document.querySelector('[data-deployments-environment="disagrees"]');
+    expect(disagreement).not.toBeNull();
+    expect(disagreement.textContent).toContain('dep-paper');
+    expect(disagreement.textContent).toContain('paper');
+
+    // The strip is unaffected: it states what the ROUTE is, and that claim is still true.
+    expect(document.querySelector('[data-environment-variant="strip"]').getAttribute('data-environment'))
+      .toBe('LIVE');
   });
 });

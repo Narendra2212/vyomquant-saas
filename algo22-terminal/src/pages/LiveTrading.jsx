@@ -4,34 +4,54 @@
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * vyomquant-ui-redesign task 20.1: part A the page shell, the route and tier 1; part B the
- * tier-2 money row; part C the tier-3 activity row. design.md §7.5, §8.1, §8.2, §11.1.
- * Requirements 1.3, 7.1, 7.2, 7.3, 7.4, 12.2, 14.4, 14.5, 19.3.
+ * tier-2 money row; part C the tier-3 activity row; part D the deployment selector above
+ * tier 1. design.md §7.5, §8.1, §8.2, §11.1.
+ * Requirements 1.3, 7.1, 7.2, 7.3, 7.4, 12.2, 14.1, 14.4, 14.5, 19.3, 19.4.
  *
  * Until this task `/app/live-trading` rendered `pages/Dashboard`, so the route existed and
  * answered a different question — the account's capital — than the one Requirement 7.1
  * asks: is this thing actually running, and against what?
  *
- * WHAT THIS PAGE IS, AND WHAT IT IS NOT YET
- * -----------------------------------------
- * All three of §7.5's tiers. The deployment selector above tier 1 is declared in
- * `design/pageHierarchy.js` as untiered and is the next part of task 20.1; nothing here stubs
- * it, because a selector that selects nothing is the dead control Requirement 19.4 is about.
+ * WHAT THIS PAGE IS, AND WHAT THE SELECTOR CAN AND CANNOT RE-SCOPE
+ * ---------------------------------------------------------------
+ * All three of §7.5's tiers, plus the untiered deployment selector above them. Part D adds
+ * that selector — `pageHierarchy` registers `deployment` with NO tier precisely because it
+ * sits above tier 1 and chooses what the tiers describe — and it fixes exactly as much of
+ * the attribution gap as the payloads allow. It does not fix all of it, and the split is the
+ * point:
  *
- * Tiers 2 and 3 therefore describe the ACCOUNT rather than a chosen deployment, and every
- * slot that could be misread as narrower than it is says so in its label or its hint:
- * `risk.risk_level` and `overview.today_realized_pnl` are one state and one sum for the whole
- * account, and `executions[]` and the venue's open orders are account-wide lists.
- * `latestSignal` is the one tier-3 field whose declaration demands MORE than a caveat — see
- * below.
+ *   * **RE-SCOPED by a selection.** `strategy` and `market` are `strategies[].name` and
+ *     `strategies[].symbol`, and `latestSignal` filters by `strategies[].id`. A selected
+ *     deployment names the `strategy_id` it was read under, so {@link scopeStrategies}
+ *     narrows the strategies body to that one strategy and the SAME tier-1 and tier-3
+ *     builders then report "this deployment's strategy" instead of "the sole reported
+ *     strategy". Nothing is renamed and no new source appears: the narrowing happens in the
+ *     body, before {@link soleReport} ever sees it, so {@link DISAGREEMENT_REASON} keeps
+ *     meaning what it meant.
+ *   * **NOT re-scoped, and no attribution is invented.** `overview.today_realized_pnl` and
+ *     `risk.risk_level` are account-wide sums and `positions[]` carries no deployment key at
+ *     all, so tier 2 keeps its account-wide labels and hints with a deployment selected —
+ *     word for word, unchanged. `connectionState`, `exchange` and `tradingEnvironment` come
+ *     off the dashboard read per venue key and per position, not per deployment.
+ *     `latestOrder` and `executionStatus` stay the account's at that venue. Attributing any
+ *     of them to the selected row would be the fabrication Requirement 14.5 forbids, and it
+ *     is the whole reason `realisedPnlPerDeployment` is declared UNAVAILABLE rather than
+ *     computed.
  *
- * THREE READS, ONE PAGE-LEVEL FAILURE AND ONE SLOT-LEVEL ONE
+ * So a selection sharpens six words on the page and leaves nine figures exactly as they
+ * were. That is a smaller change than the selector looks like it should make, and saying so
+ * on the surface — in each account-wide slot's own hint — is what stops it from being read
+ * as a per-deployment page.
+ *
+ * FOUR READS, ONE PAGE-LEVEL FAILURE AND TWO SLOT-LEVEL ONES
  * ---------------------------------------------------------
  * `GET /api/dashboard` carries the venue keys, the open positions, the signals and the
  * executions; `GET /api/strategies` carries the strategies, their ids and their symbols;
- * `GET /api/orders/open` carries one venue's open orders. All three go through
- * `usePanelState`, which DROPS its payload on failure — see its docblock's three inversions
- * of `usePolling` — so no figure on this page can be a value from a read that has since
- * broken.
+ * `GET /api/orders/open` carries one venue's open orders; and
+ * `GET /api/strategies/{id}/deployments` carries the selector's rows, once per strategy (see
+ * {@link readDeploymentUnion}). All four go through `usePanelState`, which DROPS its payload
+ * on failure — see its docblock's three inversions of `usePolling` — so no figure on this
+ * page can be a value from a read that has since broken.
  *
  * The first two share ONE page-level `ds/ErrorState`, rendered INSTEAD of the body. That is
  * not a simplification: tier 1's six figures are one statement about one running thing, and
@@ -53,9 +73,45 @@
  * So it fails in place: `latestOrder` renders its declared marker — "Open orders could not be
  * read for this exchange" — and its two neighbours, which come off the dashboard read, keep
  * reporting. There is no second `ds/ErrorState` and no second alert, because one slot's
- * failure already has exactly one rendering, and the header's Refresh re-issues all three
+ * failure already has exactly one rendering, and the header's Refresh re-issues all four
  * reads. Requirement 14.5 is satisfied the same way in both places: the figure is absent and
  * explained, never stale and never zero.
+ *
+ * AND NEITHER IS THE DEPLOYMENT UNION — FOR THE SAME REASON, ONE LEVEL DOWN
+ * -----------------------------------------------------------------------
+ * The union is N requests, one per strategy, and part C's precedent decides both questions it
+ * raises. It is not in the page-level branch: a selector that could not be read must not erase
+ * the position, the exposure and the risk state, which are true statements about real money
+ * from a read that succeeded. And WITHIN the union, one strategy's failure does not erase the
+ * others' rows — {@link readDeploymentUnion} settles every call and keeps what answered, then
+ * says how many did not. The alternative, rejecting the whole union on the first failure,
+ * would hide every deployment a trader has because one strategy's read timed out, which is
+ * the same erasure at a smaller scale.
+ *
+ * That partial failure is DISCLOSED rather than absorbed: a `ds/Alert` above the table names
+ * the strategies whose deployments could not be read, so a short list is never mistaken for a
+ * complete one. Requirement 14.5's shape again — what is missing is missing, and it says why.
+ *
+ * THE SELECTOR'S LIST IS NOT A COMPLETE LIST, AND IT SAYS SO ON THE SURFACE
+ * ------------------------------------------------------------------------
+ * `strategiesApi.listDeployments`' docblock records the limitation in as many words: the
+ * handler lists `deployment_manager`'s IN-PROCESS registry, so a deployment the current
+ * backend process did not start — one from before a restart, or one `deploy_version` created
+ * elsewhere — is not in it, and the endpoint can answer with fewer deployments than the
+ * `strategy_deployments` table holds. Nothing on the client can repair that; the only honest
+ * response is to stop the list from being read as exhaustive.
+ *
+ * So {@link REGISTRY_CAVEAT} is rendered ONCE, above the rows, in every state where there are
+ * rows or an absence to explain, and it is written for a trader rather than for a reader of
+ * this file: a deployment you expect and cannot find here is UNKNOWN, not stopped, so this
+ * screen is not grounds for deploying it again. That last clause is the actionable half — the
+ * cost of misreading an incomplete list on this page is a duplicate live deployment.
+ *
+ * It is a sentence and not a `ds/Alert`, deliberately. It is a permanent property of the read,
+ * true on every load and on every account, and §11.1's alert vocabulary is for conditions.
+ * An always-on warning banner is the one that gets dismissed by habit; the partial-failure
+ * alert above it is a condition, and keeping the two visibly different is what lets the
+ * conditional one still register.
  *
  * ONE DEFECT IN A READ PATH, FIXED HERE BECAUSE THIS TASK ADOPTS THE FIELD
  * -----------------------------------------------------------------------
@@ -130,8 +186,8 @@
  * @module pages/LiveTrading
  */
 
-import { useCallback, useId, useMemo } from "react";
-import { RefreshCw } from "lucide-react";
+import { useCallback, useId, useMemo, useState } from "react";
+import { RefreshCw, Server } from "lucide-react";
 
 import { dashboardApi } from "../api/modules/dashboard";
 // The third read, and the one that goes to a VENUE rather than to our own server. Its
@@ -145,6 +201,8 @@ import { ordersApi } from "../api/modules/orders";
 import { strategiesApi } from "../api/modules/strategies";
 import { Alert } from "../components/ds/Alert";
 import { CommandButton } from "../components/ds/CommandButton";
+import { DataTable } from "../components/ds/DataTable";
+import { EmptyState } from "../components/ds/EmptyState";
 import { ErrorState } from "../components/ds/ErrorState";
 import { Metric } from "../components/ds/Metric";
 import { PageHeader } from "../components/ds/PageHeader";
@@ -1018,6 +1076,313 @@ const buildTierThree = (dashboardBody, strategiesBody, orderReport) => {
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
+ * THE SELECTOR ABOVE TIER 1 — THE PER-STRATEGY UNION (part D)
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * Declared here, after tier 3, because it reuses {@link listRows} and
+ * {@link STRATEGY_ID_PATH} from that section. It RENDERS above tier 1, which is where
+ * `pageHierarchy` puts it and why it carries no tier.
+ *
+ * THE READ IS PER STRATEGY, SO THE SELECTOR IS A UNION AND COSTS N REQUESTS
+ * -----------------------------------------------------------------------
+ * `deployment`'s declaration says it outright: "there is no single read that returns every
+ * deployment a trader has". `GET /api/strategies/{id}/deployments` answers for ONE strategy
+ * id, so the list §7.5 draws is the union over the strategies `GET /api/strategies` already
+ * returned — one call per strategy, issued together. There is no account-wide deployment
+ * endpoint to prefer instead, and there is no cap on the fan-out: a cap would silently drop
+ * a running deployment from a selector whose whole job is to list them, which is a worse
+ * failure than N requests.
+ *
+ * They are issued ONCE per answer, not per render. The reader is `useCallback`'d over a
+ * memoised id array whose identity changes only when the strategies payload does, and
+ * `usePanelState`'s `deps` holds that same array — the hook compares `deps` element-wise and
+ * reads the reader through a ref, so neither a re-render nor a new closure re-issues
+ * anything. A changed id list IS a new question and does re-issue, which is correct: rows
+ * from strategies the account no longer lists must not stay selectable.
+ *
+ * ONE STRATEGY'S FAILURE KEEPS THE OTHERS' ROWS (part C's precedent, one level down)
+ * -------------------------------------------------------------------------------
+ * `Promise.allSettled`, not `Promise.all`. `all` rejects on the first failure, which would
+ * make one strategy's timeout erase every deployment the account has — the same erasure part
+ * C refused when it kept the venue's orders read out of the page-level branch. Here the union
+ * keeps what answered and reports what did not, and {@link REGISTRY_CAVEAT}'s neighbour alert
+ * names the unread strategies so a short list is never read as a complete one.
+ *
+ * WHAT A ROW CARRIES, AND WHAT IT DOES NOT
+ * ---------------------------------------
+ * The six columns are the record's own keys and nothing else — `deployment_id`, `status`,
+ * `environment`, `worker`, `started_at`, `health`. Three of them (`status`, `worker`,
+ * `started_at`) are the declaration's own `inputs`; `environment` is an input of
+ * `tradingEnvironment`; `deployment_id` and `health` are on the response shape
+ * `strategiesApi.listDeployments` documents. An absent one renders `ds/DataTable`'s
+ * not-available marker, which is what that component does for `null`, `undefined` and `""` —
+ * never `0`, never a guessed `"healthy"`, which is the default `pages/Strategies.jsx` was
+ * caught inventing for exactly this field.
+ *
+ * The record names NO strategy, so {@link deploymentRow} attaches the `strategy_id` the read
+ * was made under — the response's own, falling back to the id requested. That is not a join
+ * and not an inference: it is the scope of the request that produced the row, and it is the
+ * only thing that makes a selection able to re-scope anything at all.
+ *
+ * A ROW'S `environment` IS THE RECORD'S OWN, AND A DISAGREEMENT IS SURFACED
+ * -----------------------------------------------------------------------
+ * This route is the live ledger (Requirement 1.3), and a deployment record labelled anything
+ * else is a fact worth knowing rather than a fact worth hiding: it means the row a trader is
+ * about to scope the page by is not running against real money, whatever the strip above
+ * says. {@link nonLiveDeployments} collects them and the surface names them. The strip is
+ * NOT altered by it — the strip states what the route is, and that claim is still true.
+ */
+
+/** The declared field the selector renders. `pageHierarchy` registers it with NO tier. */
+const DEPLOYMENT_FIELD = "deployment";
+
+/** The declared path — the container the response carries the records under. */
+const DEPLOYMENTS_PATH = fieldEntry(DEPLOYMENT_FIELD)?.path ?? "deployments";
+
+/** The response's own scope field, and the key {@link deploymentRow} records it under. */
+const STRATEGY_SCOPE_PATH = "strategy_id";
+
+/** A row's identity in the union: the strategy scope plus the deployment id. */
+const UNION_KEY = "union_row_key";
+
+/** `strategies[].id`'s leaf, so {@link scopeStrategies} matches on the declared key. */
+const STRATEGY_ID_KEY = leafKeyOf(STRATEGY_ID_PATH);
+
+/** The one environment a row may report without contradicting this route. */
+const LIVE_ENVIRONMENT = "live";
+
+/**
+ * The six columns, which are the six keys the read carries.
+ *
+ * `sortable` is on none of them and `onSortChange` is not passed: `ds/DataTable` renders a
+ * sortable header as a button and a non-sortable one as text, so declaring sorting without
+ * wiring it is precisely the dead control Requirement 19.4 forbids. `started_at` is a
+ * `timestamp`, so a value the browser cannot parse as an instant renders the marker rather
+ * than being shown as an unordered string.
+ */
+const DEPLOYMENT_COLUMNS = Object.freeze([
+  Object.freeze({ key: "deployment_id", header: "Deployment", format: "text", priority: 1 }),
+  Object.freeze({ key: "status", header: "Status", format: "text", priority: 1 }),
+  Object.freeze({ key: "environment", header: "Environment", format: "text", priority: 1 }),
+  Object.freeze({ key: "worker", header: "Worker", format: "text", priority: 2 }),
+  Object.freeze({ key: "started_at", header: "Started", format: "timestamp", priority: 2 }),
+  Object.freeze({ key: "health", header: "Health", format: "text", priority: 2 }),
+]);
+
+/** The record keys the columns project, derived so the two lists cannot diverge. */
+const DEPLOYMENT_RECORD_KEYS = Object.freeze(DEPLOYMENT_COLUMNS.map((column) => column.key));
+
+/** The first column's key, which is also a row's own identifier. */
+const DEPLOYMENT_ID_KEY = DEPLOYMENT_COLUMNS[0].key;
+
+/** The environment column's key. */
+const DEPLOYMENT_ENVIRONMENT_KEY = "environment";
+
+/**
+ * THE INCOMPLETENESS, IN WORDS A TRADER CAN ACT ON.
+ *
+ * Not a declared reason — the declaration's `reason` is for an absent record, and this is a
+ * property of a list that DID answer. `strategiesApi.listDeployments`' docblock is what this
+ * sentence carries to the surface: the handler lists an in-process registry, so a deployment
+ * the current backend process did not start is not in it and the answer can be shorter than
+ * the `strategy_deployments` table.
+ *
+ * The last clause is the actionable one. The expensive misreading here is not "this list is
+ * short", it is "this deployment is not running, so I will start it again".
+ */
+const REGISTRY_CAVEAT =
+  "This list may be incomplete. It reports the deployments the backend process currently "
+  + "holds in memory, so one started by an earlier process — before a restart, or on another "
+  + "worker — is not listed here even though it is still recorded and may still be trading. "
+  + "Treat a deployment you cannot find as UNKNOWN rather than stopped, and do not deploy it "
+  + "again on the strength of this list.";
+
+/** What a selection re-scopes, and what it deliberately does not. Rendered beside the table. */
+const SELECTION_CAVEAT =
+  "Selecting a deployment re-scopes the strategy, the market and the latest signal below to "
+  + "that deployment's strategy. It does not re-scope the realised P&L, the risk state or the "
+  + "position: those are reported for the whole account, and no read on this page attributes "
+  + "them to a deployment.";
+
+/**
+ * One record → one row of the union.
+ *
+ * Built key by key rather than spread, so a field the response gains later cannot arrive in
+ * the table without a column being declared for it, and so the two synthetic keys cannot
+ * collide with a record key.
+ *
+ * @param {Object} record One element of `deployments`.
+ * @param {string} strategyId The scope the record was read under.
+ * @param {number} ordinal Its position in the union, for a row with no reported id.
+ * @returns {Object}
+ */
+const deploymentRow = (record, strategyId, ordinal) => {
+  const row = {};
+  for (const key of DEPLOYMENT_RECORD_KEYS) row[key] = record[key];
+
+  const id = scalarText(record[DEPLOYMENT_ID_KEY]);
+  row[STRATEGY_SCOPE_PATH] = strategyId;
+  row[UNION_KEY] = `${strategyId}::${id ?? `row-${ordinal}`}`;
+  return row;
+};
+
+/**
+ * Every strategy's deployments, read together, with the failures counted rather than thrown.
+ *
+ * @param {string[]} strategyIds The ids `GET /api/strategies` reported.
+ * @returns {Promise<{deployments: Object[], unreadStrategies: string[]}>} Never rejects for a
+ *   single strategy's failure; see the section docblock.
+ */
+const readDeploymentUnion = async (strategyIds) => {
+  const settled = await Promise.allSettled(
+    strategyIds.map((strategyId) => strategiesApi.listDeployments(strategyId)),
+  );
+
+  const deployments = [];
+  const unreadStrategies = [];
+
+  settled.forEach((outcome, index) => {
+    const requestedId = strategyIds[index];
+    if (outcome.status !== "fulfilled") {
+      unreadStrategies.push(requestedId);
+      return;
+    }
+    // The response states its own scope; the requested id is the same fact, and is used only
+    // when a server answered without echoing it.
+    const scope = scalarText(readPath(outcome.value, STRATEGY_SCOPE_PATH)) ?? requestedId;
+    for (const record of listRows(outcome.value, DEPLOYMENTS_PATH)) {
+      deployments.push(deploymentRow(record, scope, deployments.length));
+    }
+  });
+
+  return { deployments, unreadStrategies };
+};
+
+/** The union's rows off the read's payload, or `[]` — no read yet, or a failed one. */
+const unionRows = (payload) =>
+  (Array.isArray(payload?.deployments) ? payload.deployments : []);
+
+/** The strategies whose deployments could not be read, or `[]`. */
+const unreadStrategiesOf = (payload) =>
+  (Array.isArray(payload?.unreadStrategies) ? payload.unreadStrategies : []);
+
+/**
+ * The rows whose OWN environment contradicts this route.
+ *
+ * A row reporting no environment is not in the list: an absent label is the marker's job and
+ * is not evidence of a paper deployment (§8.1's rule, one level out).
+ *
+ * @param {Object[]} rows
+ * @returns {Object[]}
+ */
+const nonLiveDeployments = (rows) =>
+  rows.filter((row) => {
+    const environment = scalarText(row[DEPLOYMENT_ENVIRONMENT_KEY]);
+    return environment !== null && environment.toLowerCase() !== LIVE_ENVIRONMENT;
+  });
+
+/** A row's own id as a trader reads it, or its union key when it reported none. */
+const deploymentLabel = (row) =>
+  scalarText(row[DEPLOYMENT_ID_KEY]) ?? String(row[UNION_KEY]);
+
+/** Where a trader goes to deploy one. `App.jsx`'s route, not a guess. */
+const STRATEGIES_ROUTE = "/app/strategies";
+
+/** "The one strategy this page lists was asked …" / "All 4 … were asked …", with the answer. */
+const askedClause = (count, answer) =>
+  (count === 1
+    ? `The one strategy this page lists was asked for its deployments, and answered: "${answer}"`
+    : `All ${count} strategies this page lists were asked for their deployments, and every one `
+      + `answered: "${answer}"`);
+
+/** "The one strategy this page lists did not answer" / "None of the 4 … answered". */
+const unreadClause = (count) =>
+  (count === 1
+    ? "The one strategy this page lists did not answer"
+    : `None of the ${count} strategies this page lists answered`);
+
+/**
+ * An empty union → Requirement 14.1's three fields, and WHICH emptiness this is.
+ *
+ * Three cases, and collapsing them would be the failure `ds/EmptyState` exists to stop. "No
+ * deployment is reported" and "the deployment reads failed" are different facts with different
+ * next actions, and an account with no strategy at all has not been asked anything: reporting
+ * that as "nothing is running" would state the result of a read that was never issued.
+ *
+ * The declared reason is quoted VERBATIM in the third case, because it is the server's answer
+ * to the question that was actually asked — once per strategy.
+ *
+ * @param {{strategyCount: number, unreadCount: number, retry: Function}} input
+ * @returns {{headline: string, body: string, action: Object}}
+ */
+const emptySelectorCopy = ({ strategyCount, unreadCount, retry }) => {
+  if (strategyCount === 0) {
+    return {
+      headline: "There is no strategy to ask about",
+      body:
+        "Deployments are read one strategy at a time, and this account lists no strategy — so "
+        + "no deployment read was issued. This is not a reading of nothing running; it is the "
+        + "absence of anything to ask.",
+      action: { label: "Open Strategies", to: STRATEGIES_ROUTE },
+    };
+  }
+
+  if (unreadCount >= strategyCount) {
+    return {
+      headline: "The deployment list could not be read",
+      body:
+        `${unreadClause(strategyCount)}, so this list is empty because the reads failed — not `
+        + "because nothing is deployed. Nothing below is scoped to a deployment.",
+      action: { label: "Try again", onClick: retry },
+    };
+  }
+
+  return {
+    headline: "No deployment is reported",
+    body: unreadCount === 0
+      ? askedClause(strategyCount, reasonOf(DEPLOYMENT_FIELD))
+      : `The ${strategyCount - unreadCount} strategies that answered each said: `
+        + `"${reasonOf(DEPLOYMENT_FIELD)}" The other ${unreadCount} could not be read, so this `
+        + "is not evidence that nothing is deployed.",
+    action: { label: "Open Strategies", to: STRATEGIES_ROUTE },
+  };
+};
+
+/**
+ * The strategies body, narrowed to the selected deployment's strategy.
+ *
+ * This is the ENTIRE re-scoping mechanism, and it is a narrowing of the payload rather than a
+ * new code path: `buildTierOne` and `buildTierThree` are handed a body with one strategy in
+ * it, so `strategies[].name`, `strategies[].symbol` and `strategies[].id` resolve to that
+ * strategy through the same {@link soleReport} they always used. Nothing downstream knows a
+ * selection happened, which is why a selection cannot introduce a figure that an unselected
+ * page could not produce.
+ *
+ * A selection whose strategy is not in the list narrows to NOTHING rather than falling back
+ * to the whole list: the tiers then render their declared absences, which is the honest answer
+ * to "we cannot describe this deployment's strategy". Falling back would label another
+ * strategy's name as this deployment's.
+ *
+ * @param {{strategies: unknown[]}} strategiesBody
+ * @param {Object|null} selectedRow
+ * @returns {{strategies: unknown[]}}
+ */
+const scopeStrategies = (strategiesBody, selectedRow) => {
+  if (selectedRow === null) return strategiesBody;
+
+  const strategyId = scalarText(selectedRow[STRATEGY_SCOPE_PATH]);
+  if (strategyId === null) return strategiesBody;
+
+  return {
+    strategies: strategiesBody.strategies.filter(
+      (row) => row
+        && typeof row === "object"
+        && scalarText(row[STRATEGY_ID_KEY]) === strategyId,
+    ),
+  };
+};
+
+/* ══════════════════════════════════════════════════════════════════════════
  * THE TWO READINGS THAT ARE NOT DECLARED FIELDS
  * ══════════════════════════════════════════════════════════════════════════ */
 
@@ -1219,9 +1584,84 @@ export default function LiveTrading() {
   /** This browser's socket, which is not a fact about any exchange. */
   const socketStatus = useConnectionStatus();
 
+  /**
+   * The strategies read, normalised ONCE.
+   *
+   * Memoised because three things now read it — the fan-out's id list, tier 1 and tier 3 —
+   * and `asStrategiesBody` returns a fresh object per call: an un-memoised call in the fan-out
+   * reader's dependency list would be a new identity on every render, which is how N parallel
+   * requests turn into N requests per render.
+   */
+  const strategiesBody = useMemo(() => asStrategiesBody(strategiesPayload), [strategiesPayload]);
+
+  /*
+   * THE FOURTH READ (part D): ONE `listDeployments` PER STRATEGY.
+   *
+   * `strategies[].id` — `strategy`'s own declared input, collected distinct — is the fan-out's
+   * subject list and is also `deps`. Its identity changes only when the strategies payload
+   * does, so the N calls are issued once per answer rather than once per render (see the
+   * section docblock), and a changed id list is a new question whose previous answer
+   * `usePanelState` discards. `enabled` false while the list is empty is what makes "no
+   * strategies" cost no requests at all.
+   */
+  const strategyIds = useMemo(
+    () => reportedAcross(strategiesBody, STRATEGY_ID_PATH),
+    [strategiesBody],
+  );
+
+  const readDeployments = useCallback(() => readDeploymentUnion(strategyIds), [strategyIds]);
+  const {
+    data: deploymentsPayload,
+    error: deploymentsError,
+    refetch: refetchDeployments,
+    state: deploymentsState,
+  } = usePanelState(readDeployments, {
+    deps: [strategyIds],
+    enabled: strategyIds.length > 0,
+  });
+
+  const deploymentRows = useMemo(() => unionRows(deploymentsPayload), [deploymentsPayload]);
+  const unreadStrategies = useMemo(
+    () => unreadStrategiesOf(deploymentsPayload),
+    [deploymentsPayload],
+  );
+
+  /*
+   * THE SELECTION, HELD AS A KEY AND RESOLVED BY LOOKUP.
+   *
+   * The key rather than the row, so a re-read cannot leave a row object from a previous answer
+   * scoping the tiers. A key that is no longer in the union resolves to `null` and the page is
+   * account-wide again — which is the honest outcome for a deployment that has stopped being
+   * reported, and it needs no effect to clean up after it.
+   */
+  const [selectedKey, setSelectedKey] = useState(null);
+  const selectedRow = useMemo(
+    () => deploymentRows.find((row) => row[UNION_KEY] === selectedKey) ?? null,
+    [deploymentRows, selectedKey],
+  );
+
+  const selectDeployment = useCallback((row) => {
+    setSelectedKey(row?.[UNION_KEY] ?? null);
+  }, []);
+  const clearDeployment = useCallback(() => setSelectedKey(null), []);
+  const rowIdOf = useCallback((row) => row[UNION_KEY], []);
+
+  /**
+   * The strategies body the tiers are built from — narrowed by the selection, or not.
+   *
+   * This is the whole of the re-scoping. Tier 1's `strategy` and `market` and tier 3's
+   * signal filter read `strategies[]` off this body, so they describe the selected
+   * deployment's strategy without a second code path; every other slot reads the dashboard
+   * body, which no selection touches, and therefore keeps its account-wide label and hint.
+   */
+  const scopedStrategies = useMemo(
+    () => scopeStrategies(strategiesBody, selectedRow),
+    [strategiesBody, selectedRow],
+  );
+
   const tierOne = useMemo(
-    () => buildTierOne(exchangePayload, asStrategiesBody(strategiesPayload)),
-    [exchangePayload, strategiesPayload],
+    () => buildTierOne(exchangePayload, scopedStrategies),
+    [exchangePayload, scopedStrategies],
   );
 
   /*
@@ -1298,18 +1738,23 @@ export default function LiveTrading() {
    * leave the Refresh button spinning on an account with no single reported venue.
    */
   const ordersReading = ordersVenue !== null && isReading(ordersState);
+  /* The same test for the union: no strategies means no requests, not a permanent spinner. */
+  const deploymentsReading = strategyIds.length > 0 && isReading(deploymentsState);
 
   const tierThree = useMemo(
     () => buildTierThree(
       exchangePayload,
-      asStrategiesBody(strategiesPayload),
+      // The SCOPED body, so `latestSignal`'s strategy-id filter is the selected deployment's
+      // strategy rather than the sole reported one. The filter itself is unchanged; what it
+      // filters by is what a selection re-scopes.
+      scopedStrategies,
       latestOrderReport({
         venue: ordersVenue,
         failed: isFailure(ordersState),
         payload: ordersPayload,
       }),
     ),
-    [exchangePayload, strategiesPayload, ordersVenue, ordersState, ordersPayload],
+    [exchangePayload, scopedStrategies, ordersVenue, ordersState, ordersPayload],
   );
 
   /**
@@ -1325,7 +1770,10 @@ export default function LiveTrading() {
     refetchExchange();
     refetchStrategies();
     refetchOrders();
-  }, [refetchExchange, refetchStrategies, refetchOrders]);
+    // The union too: a trader pressing Refresh after a strategy's deployments failed to read
+    // is asking for that list again as much as for the figures.
+    refetchDeployments();
+  }, [refetchExchange, refetchStrategies, refetchOrders, refetchDeployments]);
 
   /**
    * BOTH panels' state, because both tiers are projections of the same two reads.
@@ -1360,6 +1808,40 @@ export default function LiveTrading() {
     ? PANEL_STATES.LOADING
     : (readState === PANEL_STATES.READY && ordersReading ? PANEL_STATES.REFRESHING : readState);
 
+  /**
+   * The selector's OWN panel state, which is the union read's and nothing else.
+   *
+   * Not `readState`: the selector is above tier 1 and projects neither of the two reads that
+   * state shares, so borrowing it would show the selector as loading while the dashboard was
+   * being re-read, and as ready while the union was still outstanding.
+   *
+   * `empty` is deliberately NOT among the outcomes, even though zero deployments is exactly
+   * what `ds/Panel`'s `empty` state is for. Requirement 14.1's three fields are rendered — by
+   * `ds/EmptyState`, as a child — because the empty rendering has to sit BESIDE
+   * {@link REGISTRY_CAVEAT} and beside the partial-failure alert, and `empty` renders no
+   * children at all: the panel would then say "nothing is running" with the sentence
+   * explaining why that may be false suppressed. `error` is reachable only if the fan-out
+   * itself throws rather than one of its calls failing, which {@link readDeploymentUnion}
+   * settles — so it is wired for honesty, not because it is expected.
+   */
+  const selectorState = strategyIds.length === 0
+    ? PANEL_STATES.READY
+    : (isFailure(deploymentsState)
+      ? deploymentsState
+      : (unanswered(deploymentsState)
+        ? PANEL_STATES.LOADING
+        : (deploymentsReading ? PANEL_STATES.REFRESHING : PANEL_STATES.READY)));
+
+  /** The rows whose own environment contradicts the LIVE route, which is worth surfacing. */
+  const misEnvironmented = nonLiveDeployments(deploymentRows);
+
+  /** Which empty case this is, in Requirement 14.1's three fields. */
+  const selectorEmpty = emptySelectorCopy({
+    strategyCount: strategyIds.length,
+    unreadCount: unreadStrategies.length,
+    retry,
+  });
+
   return (
     <div className="flex min-w-0 flex-col gap-4 overflow-y-auto bg-surface-canvas p-5 text-content-primary">
 
@@ -1374,9 +1856,10 @@ export default function LiveTrading() {
           <CommandButton
             intent="secondary"
             icon={RefreshCw}
-            // Every read this page makes, including the venue's order book: the control
-            // re-issues all three, so it reports in-flight for all three.
-            loading={busy || ordersReading}
+            // Every read this page makes, including the venue's order book and the
+            // per-strategy deployment union: the control re-issues all four, so it reports
+            // in-flight for all four.
+            loading={busy || ordersReading || deploymentsReading}
             loadingLabel="Refreshing"
             onClick={retry}
           >
@@ -1406,6 +1889,133 @@ export default function LiveTrading() {
         />
       ) : (
         <>
+        {/* ═══ THE DEPLOYMENT SELECTOR — UNTIERED, ABOVE TIER 1 (part D) ═══════════
+            `data-region="deployment"` is the declared field's own key and there is NO
+            `data-page-tier` anywhere in here: `pageHierarchy` registers `deployment` as
+            untiered precisely because it sits above tier 1 and chooses what the tiers
+            describe, so giving it a tier would put a control into Property 4's ordering of
+            figures.
+
+            NOT a `money` panel. Its columns are ids, states, a worker name and two words
+            about health; `ds/Panel`'s `money` assertion is for balances, P&L and positions,
+            and a second environment badge here would imply these rows are amounts. The
+            per-row `environment` column is the deployment record's OWN label, and where it
+            contradicts this route the alert below says so rather than the badge. */}
+        <Panel
+          title="Deployments"
+          state={selectorState}
+          loading={{ kind: "skeleton-table", rows: 3, columns: DEPLOYMENT_COLUMNS.length }}
+          // Reachable only if the fan-out itself throws — see `selectorState`. It fails HERE
+          // and not page-wide, for part C's reason: a selector that cannot be read must not
+          // erase figures about real money that were read successfully.
+          error={{ error: deploymentsError, context: "live-trading", onRetry: retry }}
+          actions={selectedRow === null ? null : (
+            <div
+              className="flex min-w-0 items-center gap-2"
+              data-selected-deployment={deploymentLabel(selectedRow)}
+            >
+              <span className="text-micro uppercase tracking-wide text-content-secondary">
+                Tiers scoped to
+              </span>
+              <span className="font-mono text-micro font-bold uppercase tracking-wide text-content-primary">
+                {deploymentLabel(selectedRow)}
+              </span>
+              {/* Rendered only while something is selected, so it always has something to
+                  clear (Requirement 19.4). */}
+              <CommandButton intent="secondary" onClick={clearDeployment}>
+                Show all deployments
+              </CommandButton>
+            </div>
+          )}
+          data-region={DEPLOYMENT_FIELD}
+        >
+          <div className="flex min-w-0 flex-col gap-3">
+            {/* ── The incompleteness, ONCE, above the rows it qualifies ─────────────
+                A sentence and not an alert: it is a permanent property of the read rather
+                than a condition, and an always-on warning banner is the one that stops being
+                read. See the module docblock. */}
+            <p
+              className="text-small text-content-secondary"
+              data-selector-caveat="in-process-registry"
+            >
+              {REGISTRY_CAVEAT}
+            </p>
+            {/* What a selection does and does not re-scope, stated where the expectation is
+                formed rather than only in each account-wide slot's hint. */}
+            <p
+              className="text-small text-content-secondary"
+              data-selector-caveat="selection-scope"
+            >
+              {SELECTION_CAVEAT}
+            </p>
+
+            {/* ── Partial fan-out failure, DISCLOSED (part C's precedent) ───────────
+                The strategies that answered keep their rows; the ones that did not are named,
+                so a short list is never read as a complete one. */}
+            {unreadStrategies.length === 0 ? null : (
+              <Alert
+                severity="warning"
+                title="Some strategies' deployments could not be read"
+                action={{ label: "Try again", onClick: retry }}
+                data-deployments-read="partial"
+              >
+                {`${unreadStrategies.length} of ${strategyIds.length} strategies did not answer, `
+                  + "so any deployment they hold is missing from the list below: "
+                  + `${unreadStrategies.join(", ")}. The rest answered and their deployments are `
+                  + "shown."}
+              </Alert>
+            )}
+
+            {/* ── A row's own environment against the LIVE route ───────────────────
+                Surfaced, not hidden, and not suppressed to a selected row: a trader about to
+                scope this page by a row that is not trading real money should read that
+                before clicking it, not after. The strip above is unaffected — it states what
+                the ROUTE is, which is still true. */}
+            {misEnvironmented.length === 0 ? null : (
+              <Alert
+                severity="warning"
+                title="A deployment below is not labelled live"
+                data-deployments-environment="disagrees"
+              >
+                {`This page reads the live ledger, but ${misEnvironmented.length} of the `
+                  + `${deploymentRows.length} deployments listed reports its own environment as `
+                  + `something else: ${misEnvironmented
+                    .map((row) => `${deploymentLabel(row)} (${scalarText(row[DEPLOYMENT_ENVIRONMENT_KEY])})`)
+                    .join(", ")}. The label is the deployment record's, not this route's.`}
+              </Alert>
+            )}
+
+            {/* ── The rows, or Requirement 14.1's three fields ─────────────────────
+                Never an empty table: a header row over nothing says "no deployments" in a
+                form that cannot say which emptiness this is, and a selector that selects
+                nothing is the dead control Requirement 19.4 forbids. */}
+            {deploymentRows.length === 0 ? (
+              <EmptyState
+                icon={Server}
+                headline={selectorEmpty.headline}
+                body={selectorEmpty.body}
+                action={selectorEmpty.action}
+                data-deployments-empty="true"
+              />
+            ) : (
+              <DataTable
+                caption={
+                  "Deployments reported for your strategies. Select one to scope the strategy, "
+                  + "market and latest signal below to it."
+                }
+                columns={DEPLOYMENT_COLUMNS}
+                rows={deploymentRows}
+                getRowId={rowIdOf}
+                onRowClick={selectDeployment}
+                // The union is the whole list and it is short; `0` disables pagination, so no
+                // page control is rendered that has nothing to page (Requirement 19.4).
+                pageSize={0}
+                stickyHeader
+              />
+            )}
+          </div>
+        </Panel>
+
         {/* ═══ TIER 1 — Requirement 7.1 ═══════════════════════════════════════════
             ONE container, six slots, walked from `pageHierarchy`'s tier-1 list — so a
             seventh figure cannot appear here without being declared, the order is the
