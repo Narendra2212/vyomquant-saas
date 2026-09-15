@@ -25,7 +25,24 @@
  *      service and `useConnectionStatus()` is a fact about this browser, so neither is
  *      evidence the exchange is reachable and the page must not merge them.
  *
- * Tiers 2 and 3 are later parts of task 20.1 and are asserted nowhere below.
+ * AND WHAT PART B ADDS (task 20.1b — tier 2, Requirements 7.2, 7.4, 12.2, 14.4)
+ * =============================================================================
+ *   7. **Requirement 7.2's seven figures, in the declared order, inside ONE container that
+ *      follows every tier-1 element.** Same shape as (1), because the tier order IS §7.5's
+ *      answer to "is it running?" then "what is the position doing?".
+ *   8. **`degraded` non-null renders the server's own sentence and NO flat position.**
+ *      `positions: []` is what a failed positions read answers as well as an account holding
+ *      nothing, and BC-2's marker is the only thing that separates them.
+ *   9. **The realised-P&L pair.** The account-wide figure renders under its full declared
+ *      label and the per-deployment field renders its own marker beside it. Both
+ *      `overview.today_realized_pnl` and BC-5's `overview.realized_pnl` are account-wide
+ *      sums, so attributing either to a deployment is the fabrication.
+ *  10. **A spot position's liquidation distance renders the marker with the SPOT reason.** A
+ *      blank cell beside a leveraged position reads as "no liquidation risk", so the reason
+ *      has to say which absence this is.
+ *  11. **The tier-2 panel carries an environment chip** (Requirements 7.4, 12.2).
+ *
+ * Tier 3 and the deployment selector are the next part of task 20.1 and are asserted nowhere.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -43,8 +60,9 @@ import { PAGE_HIERARCHY_BY_PAGE, tierSelector } from '../../src/design/pageHiera
  * THE DECLARATION, AND THE TWO FIXTURES
  * ══════════════════════════════════════════════════════════════════════════════════════ */
 
-/** §7.5's tier 1, read from the declaration rather than retyped. */
+/** §7.5's tiers, read from the declaration rather than retyped. */
 const TIER_ONE = PAGE_HIERARCHY_BY_PAGE[PAGES.LIVE_TRADING].tiers.filter((e) => e.tier === 1);
+const TIER_TWO = PAGE_HIERARCHY_BY_PAGE[PAGES.LIVE_TRADING].tiers.filter((e) => e.tier === 2);
 
 const declared = (field) => PAGE_FIELD_BY_KEY[pageFieldKey({ page: PAGES.LIVE_TRADING, field })];
 
@@ -56,7 +74,7 @@ const declared = (field) => PAGE_FIELD_BY_KEY[pageFieldKey({ page: PAGES.LIVE_TR
  * nothing — it is there because the real payload carries it, and a page reading it instead
  * would pass this file's third test with the wrong field.
  */
-const dashboardBody = ({ exchanges, positions } = {}) => ({
+const dashboardBody = ({ exchanges, positions, overview, risk, degraded } = {}) => ({
   environment: 'live',
   exchange: {
     total_exchanges: 1,
@@ -65,11 +83,34 @@ const dashboardBody = ({ exchanges, positions } = {}) => ({
       { exchange_id: 'binance', status: 'connected', latency_ms: 35, last_sync: null },
     ],
   },
+  /*
+   * ONE open position, with every field tier 2's seven slots declare a path or an input
+   * into. `market_type: 'future'` and a `liquidation_price` are what make the derived
+   * distance computable at all — the spot case is its own test below.
+   *
+   * Long, so the distance is ((62000 - 49600) / 62000) × 100 = 20.0%.
+   */
   positions: positions ?? [
-    { id: 'p1', symbol: 'BTC/USDT', environment: 'live', contracts: 0.25 },
+    {
+      id: 'p1',
+      symbol: 'BTC/USDT',
+      environment: 'live',
+      market_type: 'future',
+      side: 'long',
+      contracts: 0.25,
+      entry_price: 61000,
+      mark_price: 62000,
+      notional: 15500,
+      unrealized_pnl: 250.5,
+      unrealized_pnl_pct: 1.64,
+      liquidation_price: 49600,
+    },
   ],
+  // The two ACCOUNT-WIDE blocks. Neither is per deployment, and tier 2 says so.
+  overview: overview ?? { today_realized_pnl: 412.75, currency: 'USDT' },
+  risk: risk ?? { risk_level: 'elevated' },
   executions: [],
-  degraded: null,
+  degraded: degraded ?? null,
 });
 
 /** `GET /api/strategies` → `{strategies, total, ...}`. One strategy, named and versioned. */
@@ -96,6 +137,7 @@ const bothRead = (overrides = {}) => {
  * ══════════════════════════════════════════════════════════════════════════════════════ */
 
 const tierOneContainer = () => document.querySelector(tierSelector(PAGES.LIVE_TRADING, 1));
+const tierTwoContainer = () => document.querySelector(tierSelector(PAGES.LIVE_TRADING, 2));
 
 /** The `ds/Metric` root for a label. Exactly one, or the assertion says how many there were. */
 const metricFor = (label) => {
@@ -291,5 +333,203 @@ describe('LiveTrading — one failure state for two reads (task 20.1)', () => {
     expect(dashboard).toHaveBeenCalledTimes(2);
     expect(strategies).toHaveBeenCalledTimes(2);
     expect(document.querySelectorAll('[role="alert"]')).toHaveLength(0);
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+ * TIER 2 — Requirement 7.2, and the realised-P&L distinction Requirement 14.5 turns on
+ * ══════════════════════════════════════════════════════════════════════════════════════ */
+
+describe('LiveTrading tier 2 (task 20.1b)', () => {
+  beforeEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('renders the seven declared fields in order, in ONE container, after every tier-1 element', async () => {
+    bothRead();
+
+    mount();
+
+    await waitFor(() => expect(tierTwoContainer()).not.toBeNull());
+
+    // ONE container, so a second row of tier-2 money figures cannot appear beside it.
+    expect(document.querySelectorAll(tierSelector(PAGES.LIVE_TRADING, 2))).toHaveLength(1);
+    expect(TIER_TWO).toHaveLength(7);
+
+    // Document order over the seven declared slots, each `data-region` spelled as its
+    // `pageFields` key — including `realisedPnlPerDeployment`, whose marker keeps its
+    // declared place in the row (Requirement 19.3's state is a rendered element).
+    const slots = [...tierTwoContainer().querySelectorAll('[data-region]')];
+    expect(slots.map((node) => node.getAttribute('data-region')))
+      .toEqual(TIER_TWO.map((entry) => entry.key));
+
+    // Tier 2 FOLLOWS tier 1: the tier order is the requirement, so it is asserted from the
+    // rendered DOM and not from the JSX. Every tier-1 element precedes this container.
+    const documentOrder = [...document.querySelectorAll('*')];
+    const tierTwoAt = documentOrder.indexOf(tierTwoContainer());
+    expect(documentOrder.indexOf(tierOneContainer())).toBeLessThan(tierTwoAt);
+    for (const element of tierOneContainer().querySelectorAll('*')) {
+      expect(documentOrder.indexOf(element)).toBeLessThan(tierTwoAt);
+    }
+
+    // And nothing outside this container claims tier 2.
+    const figures = document.querySelectorAll('[data-metric-tier="2"]');
+    expect(figures.length).toBe(7);
+    for (const figure of figures) {
+      expect(tierTwoContainer().contains(figure), 'a tier-2 figure rendered outside the container')
+        .toBe(true);
+    }
+  });
+
+  it('reads every tier-2 figure from its declared path, and derives the liquidation distance', async () => {
+    bothRead();
+
+    mount();
+
+    await waitFor(() => expect(tierTwoContainer()).not.toBeNull());
+
+    // `positions[].contracts` with `positions[].side` — the pair, never a size carrying a
+    // side borrowed from another position.
+    expect(figureOf(declared('position').label)).toContain('long 0.25');
+    // `positions[].unrealized_pnl`, `positions[].notional`, `risk.risk_level`.
+    expect(figureOf(declared('unrealisedPnl').label)).toContain('250.50');
+    expect(figureOf(declared('exposure').label)).toContain('15,500.00');
+    expect(figureOf(declared('riskState').label)).toContain('elevated');
+    // DERIVED from `mark_price` and `liquidation_price`: ((62000 − 49600) / 62000) × 100.
+    expect(figureOf(declared('liquidationDistance').label)).toContain('20.0%');
+    // No zero anywhere: every slot is either one of these readings or a marker.
+    expect(document.querySelectorAll('[data-page-tier="2"] [data-metric-available="true"]'))
+      .toHaveLength(6);
+  });
+
+  it('renders the account-wide realised P&L under its full label, and the per-deployment field as a marker', async () => {
+    bothRead();
+
+    mount();
+
+    await waitFor(() => expect(tierTwoContainer()).not.toBeNull());
+
+    // The account figure IS shown — and the label is part of the declaration, because the
+    // same number under a bare "Realised P&L" beside a deployment reads as that
+    // deployment's.
+    const accountLabel = declared('realisedPnlAccount').label;
+    expect(accountLabel).toBe('Realised P&L (account, today)');
+    expect(figureOf(accountLabel)).toContain('412.75');
+
+    // The per-deployment field is permanently unavailable and renders ITS OWN reason. It is
+    // not the account figure repeated, and it is not blank.
+    const perDeploymentLabel = declared('realisedPnlPerDeployment').label;
+    const perDeployment = metricFor(perDeploymentLabel);
+    expect(perDeployment.dataset.metricAvailable).toBe('false');
+    expect(figureOf(perDeploymentLabel)).toBeNull();
+    expect(markerIn(perDeploymentLabel).getAttribute('title'))
+      .toBe(declared('realisedPnlPerDeployment').reason);
+    expect(markerIn(perDeploymentLabel).getAttribute('title'))
+      .toContain('not per deployment');
+
+    // Both keep their declared places, in declared order, in the same row.
+    const regions = [...tierTwoContainer().querySelectorAll('[data-region]')]
+      .map((node) => node.getAttribute('data-region'));
+    expect(regions.indexOf('realisedPnlAccount')).toBeLessThan(
+      regions.indexOf('realisedPnlPerDeployment'),
+    );
+  });
+
+  it('renders the server\'s own reason and NO flat position when `degraded` is set', async () => {
+    // BC-2: a 200 whose positions read failed. `positions: []` here is NOT an account
+    // holding nothing, and the marker is the only thing that says so.
+    const serverReason = 'Binance rejected the positions read for the live account: invalid API key.';
+    bothRead({
+      dashboard: dashboardBody({
+        positions: [],
+        degraded: { positions: 'unreadable', environment: 'live', reason: serverReason },
+      }),
+    });
+
+    mount();
+
+    await waitFor(() => expect(tierTwoContainer()).not.toBeNull());
+
+    // The server's account of the failure, verbatim: `translateError` carries no free-form
+    // message by design, and the server knows which environment failed (Requirement 14.4).
+    const degraded = document.querySelector('[data-positions-read="degraded"]');
+    expect(degraded).not.toBeNull();
+    expect(degraded.textContent).toContain(serverReason);
+
+    // No flat position: the position slot is the marker, carrying that same sentence — not
+    // a size, not a side, and not a zero.
+    const positionLabel = declared('position').label;
+    expect(metricFor(positionLabel).dataset.metricAvailable).toBe('false');
+    expect(figureOf(positionLabel)).toBeNull();
+    expect(markerIn(positionLabel).getAttribute('title')).toBe(serverReason);
+    expect(tierTwoContainer().textContent).not.toContain('0.25');
+    // The same gate covers the other two figures off those rows, for the same reason.
+    expect(markerIn(declared('unrealisedPnl').label).getAttribute('title')).toBe(serverReason);
+    expect(markerIn(declared('exposure').label).getAttribute('title')).toBe(serverReason);
+
+    // The account-wide figures are NOT gated on the positions marker: they do not come off
+    // that list, and suppressing them would report a failure the server did not report.
+    expect(figureOf(declared('realisedPnlAccount').label)).toContain('412.75');
+    expect(figureOf(declared('riskState').label)).toContain('elevated');
+  });
+
+  it('renders the spot reason on the liquidation distance, not a blank cell', async () => {
+    // `liquidation_price` is `null` for every spot position. That is a permanent absence,
+    // not a failed read, and the reason has to say WHICH absence it is.
+    bothRead({
+      dashboard: dashboardBody({
+        positions: [{
+          id: 'p1',
+          symbol: 'BTC/USDT',
+          environment: 'live',
+          market_type: 'spot',
+          side: 'long',
+          contracts: 1.5,
+          mark_price: 62000,
+          notional: 93000,
+          unrealized_pnl: 120,
+          liquidation_price: null,
+        }],
+      }),
+    });
+
+    mount();
+
+    await waitFor(() => expect(tierTwoContainer()).not.toBeNull());
+
+    const label = declared('liquidationDistance').label;
+    expect(metricFor(label).dataset.metricAvailable).toBe('false');
+    expect(figureOf(label)).toBeNull();
+    // The declared sentence, which is the spot one — and it names spot, so a trader cannot
+    // read the marker as "this leveraged position has no liquidation risk".
+    expect(markerIn(label).getAttribute('title')).toBe(declared('liquidationDistance').reason);
+    expect(markerIn(label).getAttribute('title')).toContain('spot');
+
+    // The rest of the row still reads: a spot position has a size, a P&L and an exposure.
+    expect(figureOf(declared('position').label)).toContain('long 1.5');
+    expect(figureOf(declared('exposure').label)).toContain('93,000.00');
+  });
+
+  it('carries an environment chip on the tier-2 money panel (Requirements 7.4, 12.2)', async () => {
+    bothRead();
+
+    mount();
+
+    await waitFor(() => expect(tierTwoContainer()).not.toBeNull());
+
+    const panel = document.querySelector('[data-region="tier-2"]');
+    expect(panel).not.toBeNull();
+    // `money` declared, so `ds/Panel` would have thrown in development had the environment
+    // been omitted rather than decided.
+    expect(panel.getAttribute('data-panel-money')).toBe('true');
+    expect(panel.contains(tierTwoContainer())).toBe(true);
+
+    // §8.2's own badge, from the environment the SERVER labelled the positions with.
+    const chip = panel.querySelector('[data-environment-variant="chip"]');
+    expect(chip).not.toBeNull();
+    expect(chip.getAttribute('data-environment')).toBe('LIVE');
+    // The page's announcing instance is the strip, so this one does not announce again.
+    expect(chip.getAttribute('role')).toBeNull();
   });
 });

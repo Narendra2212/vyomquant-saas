@@ -1021,6 +1021,10 @@ const positionColumns = (currency) => Object.freeze([
 /**
  * BC-2's `degraded` marker off a `GET /api/dashboard` body → the server's reason, or `null`.
  *
+ * Exported for `pages/LiveTrading.jsx` (task 20.1b), which gates its tier-2 position figure
+ * on this same marker: `positions: []` means "flat" there for exactly the reason it does
+ * here, and two readings of `degraded` would be two chances to get that distinction wrong.
+ *
  * `null` means every read behind the response succeeded, which is a HEALTHY reading and not
  * an absent value: it renders no marker anywhere. Anything else is
  * `{positions: "unreadable", environment, reason}`, and the reason is rendered verbatim
@@ -1030,7 +1034,7 @@ const positionColumns = (currency) => Object.freeze([
  * @param {unknown} body
  * @returns {string|null}
  */
-const readPositionsDegradation = (body) => {
+export const readPositionsDegradation = (body) => {
   const degraded = body && typeof body === "object" ? body.degraded : null;
   if (!degraded || typeof degraded !== "object") return null;
   if (degraded.positions !== "unreadable") return null;
