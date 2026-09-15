@@ -199,10 +199,15 @@ export const A11Y_PAGE_WAIVERS = Object.freeze({
   // than lowered to 0, because a `0` entry is what this guard forbids: a cleared page belongs
   // at `error` with every other page nobody has waived, which is what deleting the line does.
   // The page lints at `error` from here.
-  // M8. Task 21.4 rebuilds the page on collapsed independent rows. The largest entry,
-  // and the one whose 10 findings are the `label-has-associated-control` cluster around
-  // the strategy/environment selects that 21.4 replaces with `ds/Field`.
-  'src/pages/SignalTrace.jsx': Object.freeze({ count: 10, task: '21.4' }),
+  // `src/pages/SignalTrace.jsx` was here: 10 findings, cleared by task 21.4a. Eight were
+  // the `label-has-associated-control` cluster on the filter grid's bare `<label>`s, and
+  // the page's filters are now `ds/FilterBar` — every control a `ds/Field`, which renders a
+  // visible `<label htmlFor>` and offers no way not to. The other two were the signal row's
+  // `div onClick` (`click-events-have-key-events` plus `no-static-element-interactions`);
+  // the rows are `ds/DataTable`'s now, and its row activation is keyboard-operable. The
+  // entry is REMOVED rather than lowered to 0, because a `0` entry is what this guard
+  // forbids: a cleared page belongs at `error` with every other page nobody has waived,
+  // which is what deleting the line does. The page lints at `error` from here.
   // M9. Task 23.1 rebuilds the configuration flow as four `ds/Panel`s. 4 rather than 3
   // because raising `control-has-associated-label` off the preset's `0` found one more
   // here — the only page finding this task's added rules contributed.

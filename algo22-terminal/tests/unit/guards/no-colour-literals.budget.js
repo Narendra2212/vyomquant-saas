@@ -279,7 +279,15 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // or `ds/Chart`'s series palette. Cleared with this page's five `C.` references in the same
   // change, as §14.4 requires of a page task.
   'pages/Portfolio.jsx': 0,
-  'pages/SignalTrace.jsx': 20,
+  // 20 -> 0 at task 21.4a, which rebuilt the page on `ds/PageHeader`, `ds/FilterBar`,
+  // `ds/DataTable`, `ds/Panel`, `ds/Alert`, `ds/StatusBadge` and `ds/Metric`'s
+  // not-available marker. The 20 were the connection indicator's four presentations
+  // (a hue, a border wash and a background per state, six literals) plus the refusal
+  // banner's border/background/text, the new-signal strip's wash, and the row cells'
+  // hardcoded cyan/green/red. Every hue now comes from `statusToken`, including the
+  // four connection states — they name `connected`, `reconnecting`, `disconnected`
+  // and the null-neutral arm, so the page holds no palette of its own.
+  'pages/SignalTrace.jsx': 0,
   'pages/Backtester.jsx': 4,
   'pages/StrategyBuilder.jsx': 3,
   'pages/PaperTrading.jsx': 1,

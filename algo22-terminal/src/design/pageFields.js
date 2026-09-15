@@ -1539,7 +1539,92 @@ const TRADE_HISTORY_FIELDS = [
 const TRACE_READ = 'get(`/api/signal-trace/signals/${signalId}`)';
 const TRACE_ENDPOINT = 'GET /api/signal-trace/signals/{signalId}';
 
+/*
+ * The LIST read, which is a different response from the detail read above and is the one
+ * §10.3's five-column table is built from. Declared separately for the reason `path` exists
+ * at all: a column reading `signals[].symbol` is reading the list envelope, not the detail
+ * body, and one `read` covering both would make every path below ambiguous.
+ *
+ * `signal_service.Signal.to_public_dict()` is the row shape. Two things about it that a
+ * column would otherwise get wrong:
+ *
+ *   * There is NO strategy NAME anywhere on this response — only `strategy_id` and
+ *     `strategy_version`. §10.3 draws a "Strategy" column; the honest rendering is the id.
+ *   * `order_lifecycle_state` is the canonical column and `status` is the long-standing
+ *     `public.signals.status` vocabulary the list has always carried. The Outcome column
+ *     renders `status`, because that is the field the row reports its own outcome in;
+ *     `order_lifecycle_state` is named as an input rather than rendered beside it, because
+ *     two spellings of one fact in one cell reads as two facts.
+ */
+const LIST_READ = 'get(`/api/signal-trace/signals?${query}`)';
+const LIST_ENDPOINT = 'GET /api/signal-trace/signals';
+
 const SIGNAL_TRACE_FIELDS = [
+  entry({
+    page: PAGES.SIGNAL_TRACE,
+    field: 'listTime',
+    label: 'Time',
+    requirement: '9.3',
+    read: LIST_READ,
+    endpoint: LIST_ENDPOINT,
+    path: 'signals[].generated_at',
+    absence: ABSENCE.UNMEASURABLE,
+    reason: 'This signal reports no generation time.',
+    note: 'The list is sorted by this column descending, server-side, and the endpoint takes '
+      + 'no sort parameter — so the table offers no sort headers. A client-side sort would '
+      + 'reorder one page of a server-ordered set, which reads as a reordering of the whole.',
+  }),
+  entry({
+    page: PAGES.SIGNAL_TRACE,
+    field: 'listStrategy',
+    label: 'Strategy',
+    requirement: '9.3',
+    read: LIST_READ,
+    endpoint: LIST_ENDPOINT,
+    path: 'signals[].strategy_id',
+    inputs: ['signals[].strategy_version'],
+    absence: ABSENCE.UNMEASURABLE,
+    reason: 'This signal reports no strategy.',
+    note: 'The id, not a name: `to_public_dict` carries no strategy name and this page issues '
+      + 'no second read to resolve one. The version is rendered beside it where reported.',
+  }),
+  entry({
+    page: PAGES.SIGNAL_TRACE,
+    field: 'listMarket',
+    label: 'Market',
+    requirement: '9.3',
+    read: LIST_READ,
+    endpoint: LIST_ENDPOINT,
+    path: 'signals[].symbol',
+    absence: ABSENCE.UNMEASURABLE,
+    reason: 'This signal reports no market symbol.',
+  }),
+  entry({
+    page: PAGES.SIGNAL_TRACE,
+    field: 'listDecision',
+    label: 'Decision',
+    requirement: '9.3',
+    read: LIST_READ,
+    endpoint: LIST_ENDPOINT,
+    path: 'signals[].decision',
+    inputs: ['signals[].side'],
+    absence: ABSENCE.UNMEASURABLE,
+    reason: 'This signal reports no decision.',
+  }),
+  entry({
+    page: PAGES.SIGNAL_TRACE,
+    field: 'listOutcome',
+    label: 'Outcome',
+    requirement: '9.3',
+    read: LIST_READ,
+    endpoint: LIST_ENDPOINT,
+    path: 'signals[].status',
+    inputs: ['signals[].order_lifecycle_state'],
+    absence: ABSENCE.UNMEASURABLE,
+    reason: 'This signal reports no outcome.',
+    note: 'The legacy `signals.status` vocabulary, rendered verbatim through `statusToken` so '
+      + 'a value the frontend has never seen renders calmly rather than as a guess.',
+  }),
   entry({
     page: PAGES.SIGNAL_TRACE,
     field: 'stage1MarketData',

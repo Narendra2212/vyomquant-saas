@@ -76,8 +76,13 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // M9 — the two largest and most behaviourally sensitive files, migrated last.
   'pages/PaperTrading.jsx': 191,
   'pages/StrategyBuilder.jsx': 148,
-  // M8
-  'pages/SignalTrace.jsx': 92,
+  // M8. 92 -> 0 at task 21.4a. The 92 were the shim's text, surface and border values
+  // spread across the filter grid's eight inline-styled inputs, the eleven-column row
+  // template, the two detail cards and the timeline's rail — all of which the rebuild
+  // replaced with `ds/*` primitives and token utility classes. The page imports nothing
+  // from `components/ui-legacy/primitives` any more, so there is no shim reference left
+  // to reintroduce by copying a neighbouring line.
+  'pages/SignalTrace.jsx': 0,
   'pages/Backtester.jsx': 66,
   // M7. 5 -> 0 at task 16.2. The 5 were one line: `const COLORS = [C.orange,
   // C.purple, C.cyan, C.gold, C.t3]` — five entries rendering four colours, since
