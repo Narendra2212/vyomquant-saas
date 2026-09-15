@@ -1,493 +1,375 @@
 /**
- * `api-paths` — the `/api/strategy-operations/…` guard.
+ * `api-paths` — every client API path, against every router.
  *
  * ===========================================================================
  * WHY THIS EXISTS
  * ===========================================================================
- * The same bug has now been found three times, in three unrelated features:
+ * The same bug has now been found **six** times, in six unrelated features, one
+ * at a time, each by accident when a page happened to adopt the field:
  *
- *  1. `strategiesApi.listBacktests` (and the raw `fetch` it replaced) read
- *     `/api/strategy-operations/backtests`. The router declares `/backtests`.
- *     It 404'd on every load; the handler only checked `res.ok`, so "Saved
- *     Backtest History" was silently, permanently empty.
+ *  1. `strategiesApi.listBacktests` read `/api/strategy-operations/backtests`. The
+ *     router declares `/backtests`. It 404'd on every load; the handler only
+ *     checked `res.ok`, so "Saved Backtest History" was silently, permanently
+ *     empty.
  *  2. `strategiesApi.deployVersion` posted to
  *     `/api/strategy-operations/strategies/{id}/versions/{version}/deploy`.
- *     `deploy_version` declares only `/strategies/{id}/versions/{version}/deploy`.
- *     Worse than symmetric: the *preflight* GET beside it registers **both**
- *     spellings, so the gate passed, the Deploy button enabled, and only the
- *     POST 404'd.
+ *     `deploy_version` declares only the unprefixed spelling. Worse than
+ *     symmetric: the *preflight* GET beside it registers **both**, so the gate
+ *     passed, the Deploy button enabled, and only the POST 404'd.
  *  3. `strategiesApi.listDeployments` read
- *     `/api/strategy-operations/strategies/{id}/deployments`. `list_deployments`
- *     declares only `/strategies/{id}/deployments`, so the Signal_Trace page had
- *     no deployment ids to compose `signal.{deployment_id}` subscriptions from —
- *     while `components/DeploymentConsole.jsx` read the unprefixed spelling
- *     directly and worked. Two callers, one endpoint, two addresses.
+ *     `/api/strategy-operations/strategies/{id}/deployments`, which is not
+ *     declared, while `components/DeploymentConsole.jsx` read the unprefixed
+ *     spelling and worked. Two callers, one endpoint, two addresses.
+ *  4. `ordersApi.getOpenOrders` read `GET /api/orders/open` with no
+ *     `exchange_id`. That parameter is `Query(...)` with no default, so every
+ *     call was a 422 — a correct path that cannot succeed.
+ *  5. `ordersApi.cancelOrder` sent `DELETE /api/orders/{orderId}`.
+ *     `routers/orders.py` declares no `DELETE` **at all**; the cancel is
+ *     `POST /cancel/{order_id}`.
+ *  6. `ordersApi.cancelAllOrders` sent `DELETE /api/orders?{options}`. The route
+ *     is `POST /cancel-all`, and the options it serialised were never the
+ *     parameters the route reads.
  *
- * One shape, three times: `strategy_operations.router` is mounted at
- * `prefix="/api"` (`backend_app/main.py`), and a *minority* of its routes also
- * declare a `strategy-operations` alias (`_PREFLIGHT_PATHS`, `execute_backtest`'s
- * two decorators, the whole `/registry/*` family). So the prefixed spelling is
- * right for some paths and a 404 for the rest, which is exactly the condition
- * under which eyeballing does not work. This guard asks the routers instead.
+ * The previous version of this guard covered 1-3 and would have caught none of
+ * 4-6: it compared one prefix, `/api/strategy-operations/…`, and it compared
+ * paths only. Its own docblock named the two things missing — the full mount table
+ * and FastAPI path parameters — and a third it did not: nothing compared the query
+ * string against the parameters the route refuses to run without.
  *
  * ===========================================================================
- * SCOPE — stated honestly, because it is narrow on purpose
+ * WHAT IT CHECKS NOW
  * ===========================================================================
- * **Covered.** Every `/api/strategy-operations/…` path that appears in *code*
- * (not prose) under `src/api/modules/**` and `src/lib/**`, checked against the
- * route paths the `.py` files under `backend_app/routers/` actually declare, at
- * the mount prefix `backend_app/main.py` actually mounts them under.
+ * Two checks, over every `/api/…` path the browser bundle constructs:
  *
- * **Not covered, deliberately.** Every path in every module against every
- * router. That is a much larger job: it needs the full mount table, FastAPI path
- * parameters modelled per route (`{strategy_id}` vs `{id}` vs a literal
- * segment), and a decision about paths built at runtime from values this file
- * cannot see. It would also be a guard that fails for reasons unrelated to the
- * bug it is here to prevent. The `strategy-operations` prefix is where all three
- * instances were, and it is the only prefix in this codebase that is
- * *sometimes* aliased, so it is the one worth pinning.
+ *  * **Path and method.** Each path must be declared by some router, at the mount
+ *    prefix `backend_app/main.py` actually mounts that router under, and the verb
+ *    the client issues must be one of the verbs declared for it. Path parameters
+ *    are normalised to `{}` on both sides, so a declared
+ *    `/strategies/{strategy_id}/deployments` matches a client
+ *    `/api/strategies/${id}/deployments`; parameter *names* need not agree, only
+ *    positions.
+ *  * **Required query parameters.** For each matched route, every `Query(...)`
+ *    parameter the handler declares with no default must be visible at the call
+ *    site — as a literal `name=` pair, as a key of the axios `params` object, or
+ *    as a `params.set('name', …)` in the function that builds the request. This is
+ *    defects 4-6's class, and it is invisible to a path-only check: the path is
+ *    right and the call still cannot succeed.
+ *
+ * The mount table is read, not assumed. There is no single prefix: `/api/auth`,
+ * `/api/exchanges`, `/api/orders`, bare `/api` (four routers share it, which is
+ * what made defects 1-3 possible), `/api/v1/copilot`, `/api/internal/persistence`,
+ * `/health`, plus `routers/dag_tasks.py`, which carries `/api/dag/tasks` on the
+ * `APIRouter(...)` constructor and is mounted with no prefix at all. Routers whose
+ * module lives outside `backend_app/routers/` are followed through their
+ * `import … as …` aliases, and `main.py`'s own `@app.get(...)` routes are included
+ * — `/api/stats` is one of them, and `api/modules/user.js` calls it.
+ *
+ * ===========================================================================
+ * SCOPE — stated plainly
+ * ===========================================================================
+ * **Covered.** Every non-test `.js`/`.jsx`/`.ts`/`.tsx` file under `src/api/**`,
+ * `src/lib/**`, `src/pages/**`, `src/components/**`, `src/contexts/**`,
+ * `src/hooks/**`, `src/design/**`, `src/shell/**` and `src/utils/**`.
+ *
+ * The brief asked for `src/api/**` at minimum and asked for a decision on
+ * `src/pages/**` and `src/lib/**`. The decision is to widen to all of them, and to
+ * `src/components/**` as well, because that is where the raw `fetch` calls are and
+ * the raw `fetch` calls are the ones no module contract covers:
+ * `pages/Backtester.jsx`'s `fetch(`${API_BASE}/api/strategy-operations/backtests/validate-data`)`
+ * (the case the old docblock named, and a defect), `pages/Strategies.jsx`'s clone
+ * POST, `pages/StrategyDetail.jsx`'s strategy, performance and risk-metric reads,
+ * `pages/SignalTrace.jsx`'s CSV export, and `components/DeploymentConsole.jsx`'s six
+ * deployment calls — which is the *other* caller in defect 3. Leaving those out
+ * would have left half of that defect uncovered by the guard written because of it.
+ *
+ * `src/api/typed-client.ts` is covered too, and it is worth saying why given how
+ * much of the findings list is its: nothing imports it. It is a complete second
+ * client, written against an older route table, and pinning its defects here is
+ * the argument for deleting it — see the notes in `api-paths.budget.js`.
  *
  * **Not covered: comments.** A path in a docblock cannot 404. Prose is stripped
- * (`source-scan.stripComments`), which is the same doctrine every other guard
- * here follows: documenting a construct is not using it. Several docblocks in
- * `src/lib/` do still name the prefixed spelling of paths that are unprefixed on
- * the wire — worth a pass, but a documentation defect, not a shipping one.
+ * (`source-scan.stripComments`), which is the doctrine every guard here follows:
+ * documenting a construct is not using it. Several docblocks do still name dead
+ * spellings; that is a documentation defect, not a shipping one.
  *
- * **Not covered: `src/pages/**` and `src/components/**`.** Out of this change's
- * scope. `pages/Backtester.jsx` holds a raw
- * `fetch('/api/strategy-operations/backtests/validate-data')` that this guard
- * would have an opinion about; extending the two globs below is all it takes
- * once someone owns fixing what that surfaces.
+ * **Not covered: required parameters that are not `Query(...)`.** A bare annotated
+ * parameter with no default is also required by FastAPI, but telling
+ * `symbol: str` (a query parameter) apart from `body: CancelOrderRequest` (a JSON
+ * body), `request: Request` and `user: dict = Depends(...)` needs type resolution a
+ * text scan does not have. `Query(...)` is unambiguous, is the form this codebase
+ * uses for every required query parameter it has, and is the form all of defects
+ * 4-6 turned on. Request bodies are not compared at all.
+ *
+ * **Deliberately strict: a literal client segment does not match a declared path
+ * parameter.** FastAPI would route `POST /api/strategies/stop` into
+ * `POST /strategies/{strategy_id}` if such a route existed, so this guard is
+ * stricter than the server. That is the useful direction: excusing a literal
+ * because *some* parameterised route could swallow it would excuse
+ * `GET /api/orders/closed` on the grounds that `/{order_id}` might exist. It costs
+ * nothing today — the one literal-in-a-parameter-position finding,
+ * `marketApi.haltStrategies`, has no `POST /{strategy_id}` to fall into either and
+ * is dead under any reading.
+ *
+ * **Not covered: whether a route works.** This is an address check. A path that
+ * resolves can still 500.
  *
  * ===========================================================================
  * FAIL LOUDLY, NEVER SKIP
  * ===========================================================================
- * Frontend paths are template literals, so a complete literal path is not always
- * recoverable: `${encodeURIComponent(strategyId)}` is a value this file cannot
- * know. Interpolations are normalised to a `{}` placeholder and matched on the
- * static segments, which is enough — the three bugs were all in static segments.
+ * A guard that quietly passes on what it cannot parse is the guard that let six of
+ * these through. So `api-surface.js` reports rather than drops:
  *
- * What this file must never do is *skip* a path it cannot parse. A guard that
- * silently ignores its own blind spots is the green-looking non-run
- * `source-scan.js` warns about in its header. So:
+ *  * a recognised transport call whose URL mentions `/api` but does not reduce to
+ *    a path is a **named failure** (`reports every call it cannot resolve`);
+ *  * every `/api` occurrence in executable code must sit inside a string or
+ *    template literal the scanner collected, so a path hidden in a construct it
+ *    does not understand fails (`accounts for every /api occurrence in code`);
+ *  * a route decorator whose path argument cannot be reduced to a literal fails,
+ *    because a hole in the reference set reads as a client defect;
+ *  * the counts of routes read, calls checked and literals checked are asserted
+ *    against floors, so the guard cannot quietly start checking nothing.
  *
- *  * `${IDENT}` is resolved against path constants declared anywhere in the
- *    scanned tree (`REGISTRY_BASE_PATH` → `REGISTRY_BLOCKS_PATH`), recursively;
- *  * a literal that still cannot be reduced to a path is a **named failure**
- *    (`reports every path it cannot resolve`), not an omission;
- *  * every occurrence of the marker in code must be accounted for by a collected
- *    literal (`accounts for every marker occurrence in code`), so a path hidden
- *    in a construct the extractor does not understand fails rather than vanishes;
- *  * the number of paths checked is asserted against a floor, so the guard
- *    cannot quietly start checking zero and passing.
+ * Where the router genuinely declares two spellings — `_PREFLIGHT_PATHS`'s pair
+ * and `execute_backtest`'s two decorators — both are in the table and both pass. A
+ * stack of decorators on one handler shares that handler's query parameters.
+ *
+ * ===========================================================================
+ * THE FINDINGS ARE PINNED, NOT FIXED
+ * ===========================================================================
+ * This commit changes no client method and no router. The defects it found are
+ * recorded in `api-paths.budget.js` as an exact set: a **new** defect fails CI, and
+ * a **fixed** defect fails CI too until its line is deleted, which is the same
+ * ratchet shape `no-colour-literals.budget.js` and `legacy-c.budget.js` use and the
+ * same reason — a `<=` assertion lets the next contributor put back what this one
+ * removed.
  */
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { collect, isTestFile, list, stripComments, TERMINAL_ROOT, toPosix } from './source-scan.js';
-import { REPO_ROOT } from '../../../src/api/modules/__tests__/apiSourceContract.js';
+import {
+  CALLS_CHECKED_AT_LEAST,
+  KNOWN_API_DEFECTS,
+  LITERALS_CHECKED_AT_LEAST,
+  ROUTES_READ_AT_LEAST,
+} from './api-paths.budget.js';
+import { clientPaths, declaredRoutes } from './api-surface.js';
+import { list } from './source-scan.js';
 
-/** `<repo>/algo22-terminal`, from `source-scan`; `REPO_ROOT` is its parent. */
-const TERMINAL = TERMINAL_ROOT;
+const backend = declaredRoutes();
+const client = clientPaths();
 
-/** The frontend trees this guard reads. Both hold transport code. */
-const SCANNED_DIRS = [
-  path.join(TERMINAL, 'src', 'api', 'modules'),
-  path.join(TERMINAL, 'src', 'lib'),
-];
-
-const ROUTERS_DIR = path.join(REPO_ROOT, 'backend_app', 'routers');
-const MAIN_PY = path.join(REPO_ROOT, 'backend_app', 'main.py');
-
-/** The prefix under audit. */
-const MARKER = '/api/strategy-operations';
-
-/**
- * The floor on how many paths must be checked.
- *
- * Eight today: seven complete routes — `registry/blocks`, `registry/timeframes`,
- * `assets`, `strategies/{}/data-quality`,
- * `strategies/{}/versions/{}/deploy/preflight`, `strategies/{}/backtests/execute`,
- * `strategies/{}/nodes/{}/preview` — plus `registryClient.REGISTRY_BASE_PATH`, the
- * one base-path constant.
- *
- * A floor rather than an equality: adding a legitimately-aliased path should not
- * fail CI, but *losing* the ones we know about should. The point of the number is
- * that this guard cannot quietly start checking zero and reporting green, which is
- * how a guard becomes decoration.
- */
-const PATHS_CHECKED_AT_LEAST = 8;
-
-/* ── Frontend: extracting paths from JavaScript ─────────────────────────────── */
-
-/**
- * Every complete same-position string or template literal, in source order.
- *
- * Backticks are included — unlike `source-scan.maskStrings`, which excludes them
- * on purpose because it is masking *out* code. Here the template literal **is**
- * the thing being read.
- */
-const LITERAL = /`(?:[^`\\]|\\.)*`|'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"/g;
-
-/** `const NAME =` / `export const NAME =` immediately before a literal. */
-const CONST_BEFORE = /(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*$/;
-
-/**
- * Literal bodies, with `+`-joined runs folded into one value.
- *
- * Needed because the paths in this codebase are written across two lines:
- *
- *     `/api/strategy-operations/strategies/${encodeURIComponent(id)}` +
- *       `/versions/${encodeURIComponent(version)}/deploy/preflight`
- *
- * Reading those as two separate literals would see two fragments, neither of
- * which is a route — the exact "cannot resolve" state this guard must not enter
- * quietly.
- *
- * @param {string} code Comment-stripped source.
- * @returns {Array<{body: string, line: number, constName: string|null}>}
- */
-function foldedLiterals(code) {
-  const spans = [...code.matchAll(LITERAL)].map((m) => ({
-    body: m[0].slice(1, -1),
-    start: m.index,
-    end: m.index + m[0].length,
-  }));
-
-  const out = [];
-  for (let i = 0; i < spans.length; i += 1) {
-    let { body, end } = spans[i];
-    const { start } = spans[i];
-
-    while (i + 1 < spans.length && /^\s*\+\s*$/.test(code.slice(end, spans[i + 1].start))) {
-      i += 1;
-      body += spans[i].body;
-      end = spans[i].end;
-    }
-
-    const before = CONST_BEFORE.exec(code.slice(Math.max(0, start - 120), start));
-    out.push({
-      body,
-      line: code.slice(0, start).split('\n').length,
-      constName: before ? before[1] : null,
-    });
-  }
-  return out;
+/** Declared path → the set of verbs declared for it. */
+const methodsByPath = new Map();
+/** `VERB path` → the route, for its query parameters. */
+const routeByKey = new Map();
+for (const route of backend.routes) {
+  if (!methodsByPath.has(route.full)) methodsByPath.set(route.full, new Set());
+  methodsByPath.get(route.full).add(route.method);
+  const key = `${route.method} ${route.full}`;
+  if (!routeByKey.has(key)) routeByKey.set(key, route);
 }
 
-/** Every `${…}` whose body holds no brace — i.e. one this file can reason about. */
-const INTERPOLATION = /\$\{([^{}]*)\}/g;
+/** The file part of a `file:line` location, so a finding id survives a line moving. */
+const fileOf = (where) => where.slice(0, where.lastIndexOf(':'));
 
 /**
- * Substitute `${IDENT}` for the value of a known path constant, recursively.
+ * A base-path constant rather than an address.
  *
- * `REGISTRY_BLOCKS_PATH = `${REGISTRY_BASE_PATH}/blocks`` is the case that makes
- * this necessary: without it the marker lives in one constant and the routes
- * built from it are invisible.
+ * `registryClient.REGISTRY_BASE_PATH = '/api/strategy-operations/registry'` is the
+ * one today. It addresses nothing on its own and the routes built from it are
+ * checked in full, so failing it would be wrong.
  *
- * @param {string} body
- * @param {Map<string, string>} constants
- * @returns {string}
+ * **Segment-prefix-ness alone is not the test, and the negative control below is
+ * why.** `/api/strategy-operations/strategies/{}/versions/{}/deploy` — defect 2,
+ * the deploy POST that 404'd — is a perfectly good segment-prefix of the declared
+ * preflight alias `…/deploy/preflight`. An escape hatch keyed on prefix-ness would
+ * have excused the exact bug this guard exists to catch. So the requirement is
+ * *demonstrated use as a building block*: the literal must be a binding, and some
+ * other literal must interpolate that binding and land on a declared route.
+ *
+ * @param {{bindingName: string|null, path: string}} literal
+ * @param {Array<{raw: string, path: string}>} all
  */
-function substitute(body, constants) {
-  let value = body;
-  for (let depth = 0; depth < 8; depth += 1) {
-    const next = value.replace(INTERPOLATION, (whole, inner) => {
-      const name = inner.trim();
-      return constants.has(name) ? constants.get(name) : whole;
-    });
-    if (next === value) return value;
-    value = next;
-  }
-  return value;
-}
-
-/** `${…}` → `{}`, so a path is compared on its static segments. */
-const normaliseFrontend = (value) => value.replace(INTERPOLATION, '{}');
-
-/** A value that is a path this guard can compare. */
-const RESOLVED_PATH = /^\/api\/[A-Za-z0-9\-_.{}/]*$/;
-
-/* ── Backend: extracting declared routes from FastAPI ───────────────────────── */
-
-/** `@router.get("…")` / `@router.post(NAME[0])`, anchored to line start. */
-const DECORATOR = /^[ \t]*@router\.(get|post|put|patch|delete)\(\s*([^)\n]*?)\s*(?:,|\))/gm;
-
-/** `NAME = ( "…", "…" )` / `NAME = [ "…" ]` — a module-level tuple of paths. */
-const PATH_TUPLE = /^([A-Za-z_][\w]*)\s*=\s*[([]([\s\S]*?)[)\]]/gm;
-
-/** A Python string literal. */
-const PY_STRING = /"([^"\n]*)"|'([^'\n]*)'/g;
-
-/** `{param}` → `{}`, matching `normaliseFrontend`. */
-const normaliseBackend = (value) => value.replace(/\{[^{}]*\}/g, '{}');
-
-/**
- * `module` → mount prefix, from `app.include_router(module.router, prefix="…")`.
- *
- * Same derivation `tests/unit/deployPreflight.test.jsx` uses for the deploy path,
- * generalised over every router. Entries mounted by bare name (`ws_router`,
- * `execution_router`) are absent by design: a router whose mount cannot be read
- * is reported rather than assumed, below.
- *
- * @returns {Map<string, string>}
- */
-function mountPrefixes() {
-  const source = readFileSync(MAIN_PY, 'utf8');
-  const mounts = new Map();
-  for (const m of source.matchAll(
-    /include_router\(\s*([A-Za-z_][\w]*)\.router\s*,\s*prefix=["']([^"']+)["']/g,
-  )) {
-    mounts.set(m[1], m[2]);
-  }
-  return mounts;
-}
-
-/**
- * Every route the routers declare, as `{full, module, declared}`, plus the
- * decorator arguments that could not be resolved to a literal path.
- *
- * @returns {{routes: Array<{full: string, module: string, declared: string}>,
- *   unresolvedDecorators: string[]}}
- */
-function declaredRoutes() {
-  const mounts = mountPrefixes();
-  const routes = [];
-  const unresolvedDecorators = [];
-
-  for (const file of collect(ROUTERS_DIR, ['.py'])) {
-    const module = path.basename(file, '.py');
-    const source = readFileSync(file, 'utf8');
-
-    // Module-level tuples of paths, for `@router.get(_PREFLIGHT_PATHS[0])`.
-    const tuples = new Map();
-    for (const m of source.matchAll(PATH_TUPLE)) {
-      const items = [...m[2].matchAll(PY_STRING)].map((s) => s[1] ?? s[2]);
-      if (items.length) tuples.set(m[1], items);
-    }
-
-    for (const m of source.matchAll(DECORATOR)) {
-      const arg = m[2];
-      let declared = null;
-
-      // `[^"']*`, not `+`: `@router.get("")` is the mount root (`GET /api/exchanges`),
-      // a real declaration and not an unresolved argument.
-      const literal = /^["']([^"']*)["']$/.exec(arg);
-      const indexed = /^([A-Za-z_][\w]*)\[(\d+)\]$/.exec(arg);
-      if (literal) declared = literal[1];
-      else if (indexed && tuples.has(indexed[1])) declared = tuples.get(indexed[1])[Number(indexed[2])];
-
-      if (declared == null) {
-        unresolvedDecorators.push(`${module}.py: @router.${m[1]}(${arg})`);
-        continue;
-      }
-
-      const prefix = mounts.get(module);
-      if (prefix === undefined) {
-        // Only a problem if it could be one of the paths under audit.
-        if (declared.includes('strategy-operations')) {
-          unresolvedDecorators.push(
-            `${module}.py declares ${declared} but main.py does not mount ${module}.router`,
-          );
-        }
-        continue;
-      }
-
-      routes.push({ full: normaliseBackend(prefix + declared), module, declared });
-    }
-  }
-
-  return { routes, unresolvedDecorators };
-}
-
-/* ── The scan ───────────────────────────────────────────────────────────────── */
-
-/**
- * Every marker-bearing path in the scanned frontend tree, resolved.
- *
- * @returns {{checked: Array<Object>, prefixes: Array<Object>, unresolved: Array<Object>,
- *   unaccounted: string[]}}
- */
-function frontendPaths() {
-  const files = SCANNED_DIRS.flatMap((dir) => collect(dir, ['.js', '.jsx'])).filter(
-    (file) => !isTestFile(toPosix(path.relative(TERMINAL, file))),
+export const isBasePathFragment = (literal, all) =>
+  literal.bindingName !== null &&
+  [...methodsByPath.keys()].some((full) => full.startsWith(`${literal.path}/`)) &&
+  all.some(
+    (other) =>
+      other !== literal &&
+      other.raw.includes(`\${${literal.bindingName}}`) &&
+      methodsByPath.has(other.path),
   );
 
-  // Pass 1: every path constant in the tree, so cross-file `${IDENT}` resolves.
-  const constants = new Map();
-  const parsed = files.map((file) => {
-    const code = stripComments(readFileSync(file, 'utf8'));
-    const literals = foldedLiterals(code);
-    for (const literal of literals) {
-      if (literal.constName && !literal.constName.startsWith('_')) {
-        constants.set(literal.constName, literal.body);
+/**
+ * Every defect, as `id → detail`.
+ *
+ * Four kinds, and the split is deliberate so that one defect produces one entry:
+ *
+ *  * `wrong-path` — no router declares this path under any verb. Raised from the
+ *    literal scan, which sees paths that are not call arguments too
+ *    (`lib/deployFlow.js` states a route as data).
+ *  * `wrong-method` — the path is declared, but not for the verb the client
+ *    issues. Defect 5's class.
+ *  * `missing-query` — the route matched and a required `Query(...)` parameter is
+ *    nowhere at the call site. Defects 4 and 6's class.
+ *  * `opaque-query` — same, except the query string is a caller-supplied bag
+ *    (`new URLSearchParams(filters)`) so the parameter *might* arrive. Recorded
+ *    separately because it is a weaker claim, not because it is acceptable.
+ *
+ * Ids carry the file but not the line, so moving code does not churn the list. Two
+ * occurrences of one defect in one file therefore share an entry; that is stated
+ * rather than hidden, and the ratchet still holds for distinct defects.
+ */
+function collectFindings() {
+  const found = new Map();
+  const add = (id, detail) => {
+    if (!found.has(id)) found.set(id, detail);
+  };
+
+  for (const literal of client.literals) {
+    if (methodsByPath.has(literal.path)) continue;
+    if (isBasePathFragment(literal, client.literals)) continue;
+    const trimmed = literal.path.replace(/\/$/, '');
+    const detail = methodsByPath.has(trimmed)
+      ? `trailing slash; ${trimmed} is declared`
+      : 'no router declares this path under any verb';
+    add(`wrong-path|${fileOf(literal.where)}|${literal.path}`, `${literal.where} — ${detail}`);
+  }
+
+  for (const call of client.calls) {
+    for (const target of call.paths) {
+      const methods = methodsByPath.get(target);
+      // The path itself is reported by the literal scan above; reporting it here
+      // as well would give one defect two entries.
+      if (!methods) continue;
+
+      if (!methods.has(call.method)) {
+        add(
+          `wrong-method|${fileOf(call.where)}|${call.method} ${target}`,
+          `${call.where} — router declares ${[...methods].sort().join(', ')} for ${target}`,
+        );
+        continue;
       }
-    }
-    return { file, code, literals };
-  });
 
-  // Pass 2: resolve, then keep the ones that address the prefix under audit.
-  const found = [];
-  const unaccounted = [];
-  for (const { file, code, literals } of parsed) {
-    const relative = toPosix(path.relative(TERMINAL, file));
-    let markersInLiterals = 0;
+      const route = routeByKey.get(`${call.method} ${target}`);
+      const missing = route.requiredQuery.filter((name) => !call.queryNames.includes(name));
+      if (missing.length === 0) continue;
 
-    for (const literal of literals) {
-      const resolved = substitute(literal.body, constants);
-      if (!resolved.includes(MARKER)) continue;
-      markersInLiterals += literal.body.split(MARKER).length - 1;
-      found.push({
-        where: `${relative}:${literal.line}`,
-        raw: literal.body,
-        constName: literal.constName,
-        value: normaliseFrontend(resolved),
-      });
-    }
-
-    // Every marker in code must have come out of a literal we collected. If one
-    // did not, the extractor met a construct it does not understand and this
-    // says so instead of passing.
-    const markersInCode = code.split(MARKER).length - 1;
-    if (markersInCode !== markersInLiterals) {
-      unaccounted.push(
-        `${relative}: ${markersInCode} occurrence(s) of ${MARKER} in code, ` +
-          `${markersInLiterals} recovered from string/template literals`,
+      const kind = call.queryOpaque ? 'opaque-query' : 'missing-query';
+      add(
+        `${kind}|${fileOf(call.where)}|${call.method} ${target}`,
+        `${call.where} — ${route.module}::${route.handler} requires ` +
+          `${missing.map((n) => `${n}=`).join(', ')}`,
       );
     }
   }
 
-  const unresolved = found.filter((p) => !RESOLVED_PATH.test(p.value));
-  return {
-    checked: found.filter((p) => RESOLVED_PATH.test(p.value)),
-    unresolved,
-    unaccounted,
-  };
+  return found;
 }
 
-/* ── The assertions ─────────────────────────────────────────────────────────── */
-
-const backend = declaredRoutes();
-const frontend = frontendPaths();
-const declaredFull = new Set(backend.routes.map((r) => r.full));
-
-/**
- * Merely a segment-prefix of some declared route. Necessary for a base path, and
- * nowhere near sufficient — see `isFragmentOfDeclared`.
- */
-const isPrefixOfDeclared = (value) =>
-  [...declaredFull].some((full) => full.startsWith(`${value}/`));
-
-/**
- * A path fragment rather than an address: a constant that other literals build
- * declared routes out of.
- *
- * `registryClient.REGISTRY_BASE_PATH = '/api/strategy-operations/registry'` is the
- * only one today. It addresses nothing on its own, and the two paths built from it
- * are checked in full, so failing it would be wrong.
- *
- * **Prefix-ness alone is not the test, and the negative control below is why.**
- * `/api/strategy-operations/strategies/{}/versions/{}/deploy` — bug #2, the deploy
- * POST that 404'd — is a perfectly good segment-prefix of the declared preflight
- * alias `…/deploy/preflight`. An escape hatch keyed on prefix-ness would have
- * excused the exact bug this guard exists to catch. So the requirement is
- * *demonstrated use as a building block*: the literal must be a `const`, and some
- * other collected literal must interpolate that constant and resolve to a route
- * the backend actually declares.
- *
- * Residual hole, stated rather than hidden: a constant that is both interpolated
- * into a declared route *and* used directly as an address would be excused. No
- * such constant exists here, and one would be odd on its own terms.
- *
- * @param {{constName: string|null, value: string}} found
- * @param {Array<{raw: string, value: string}>} all Every collected literal.
- */
-const isFragmentOfDeclared = (found, all) =>
-  found.constName !== null &&
-  isPrefixOfDeclared(found.value) &&
-  all.some(
-    (other) =>
-      other !== found &&
-      other.raw.includes(`\${${found.constName}}`) &&
-      declaredFull.has(other.value),
-  );
+const findings = collectFindings();
 
 /** `source-scan.list` — indent report rows under the failure message. */
 const report = list;
 
-describe('api-paths guard: /api/strategy-operations paths resolve to declared routes', () => {
-  it('reads both trees and the routers', () => {
-    expect(backend.routes.length, 'no routes read from backend_app/routers').toBeGreaterThan(0);
+describe('api-paths guard: every client API path resolves to a declared route', () => {
+  it('reads the routers and the client', () => {
     expect(
-      [...declaredFull].filter((f) => f.includes('strategy-operations')).length,
-      'no strategy-operations alias found in the routers — the extractor is broken, ' +
-        'since at least the registry family and the preflight declare one',
+      backend.routes.length,
+      'no routes read from the mounted routers — the extractor is broken',
+    ).toBeGreaterThanOrEqual(ROUTES_READ_AT_LEAST);
+    expect(
+      client.filesRead,
+      'no client files read — the scanned globs are wrong',
+    ).toBeGreaterThan(50);
+    expect(
+      [...methodsByPath.keys()].filter((p) => p.includes('strategy-operations')).length,
+      'no strategy-operations alias found — at least the registry family and the ' +
+        'preflight declare one, so the extractor is broken',
+    ).toBeGreaterThan(0);
+    expect(
+      [...methodsByPath.keys()].filter((p) => p.startsWith('/api/dag/tasks/')).length,
+      'no /api/dag/tasks route found — that prefix lives on the APIRouter(...) ' +
+        'constructor, not on the mount, so the mount table is only half read',
     ).toBeGreaterThan(0);
   });
 
-  it('resolves every decorator it finds in the routers', () => {
+  it('resolves every mount and every route decorator', () => {
     expect(
       backend.unresolvedDecorators,
-      'a route decorator could not be reduced to a path, so the reference set may be ' +
-        `incomplete:\n${report(backend.unresolvedDecorators)}`,
+      'a mount or a route decorator could not be reduced to a path, so the reference ' +
+        `set may be incomplete and a client path may be blamed for it:\n${report(
+          backend.unresolvedDecorators,
+        )}`,
     ).toEqual([]);
   });
 
-  it('accounts for every marker occurrence in code', () => {
+  it('accounts for every /api occurrence in code', () => {
     expect(
-      frontend.unaccounted,
-      'a path was found in code that no collected literal explains — the extractor ' +
-        `cannot see it, and skipping it silently is not an option:\n${report(frontend.unaccounted)}`,
+      client.unaccounted,
+      'a path was found in code that no collected literal explains — the scanner ' +
+        `cannot see it, and skipping it silently is not an option:\n${report(
+          client.unaccounted,
+        )}`,
     ).toEqual([]);
   });
 
-  it('reports every path it cannot resolve', () => {
-    const rows = frontend.unresolved.map((p) => `${p.where}: ${p.value}`);
+  it('reports every call it cannot resolve', () => {
     expect(
-      rows,
-      `unresolvable path(s). Normalise the interpolation or hoist the path into a ` +
-        `constant this guard can read; do not delete the case:\n${report(rows)}`,
+      client.unresolvable,
+      'transport call(s) whose URL could not be reduced to a path. Hoist the path into ' +
+        `a binding this guard can read; do not delete the case:\n${report(
+          client.unresolvable,
+        )}`,
     ).toEqual([]);
   });
 
-  it('checks at least the paths we know about', () => {
+  it('checks at least the calls and paths we know about', () => {
     expect(
-      frontend.checked.length,
-      `only ${frontend.checked.length} path(s) checked, expected at least ` +
-        `${PATHS_CHECKED_AT_LEAST}. A guard that checks nothing passes for free — if a ` +
-        `path was legitimately removed, lower the floor deliberately.`,
-    ).toBeGreaterThanOrEqual(PATHS_CHECKED_AT_LEAST);
+      client.calls.length,
+      `only ${client.calls.length} call site(s) checked, expected at least ` +
+        `${CALLS_CHECKED_AT_LEAST}. A guard that checks nothing passes for free.`,
+    ).toBeGreaterThanOrEqual(CALLS_CHECKED_AT_LEAST);
+    expect(
+      client.literals.length,
+      `only ${client.literals.length} path literal(s) checked, expected at least ` +
+        `${LITERALS_CHECKED_AT_LEAST}.`,
+    ).toBeGreaterThanOrEqual(LITERALS_CHECKED_AT_LEAST);
   });
 
-  it('finds each one declared with the strategy-operations alias', () => {
-    const failures = [];
-
-    for (const found of frontend.checked) {
-      if (declaredFull.has(found.value)) continue;
-      if (isFragmentOfDeclared(found, frontend.checked)) continue;
-
-      const unprefixed = found.value.replace(`${MARKER}/`, '/api/');
-      const because = declaredFull.has(unprefixed)
-        ? `the router declares ${unprefixed} and no alias — use that`
-        : 'no route with either spelling was found';
-      failures.push(`${found.where}\n      requests ${found.value}\n      ${because}`);
-    }
+  it('finds no defect that is not already recorded', () => {
+    const unrecorded = [...findings.entries()]
+      .filter(([id]) => !(id in KNOWN_API_DEFECTS))
+      .map(([id, detail]) => `${id}\n      ${detail}`)
+      .sort();
 
     expect(
-      failures,
-      'path(s) the backend does not declare with the strategy-operations alias. This is ' +
-        'the fourth instance of a bug found three times; the router is mounted at /api and ' +
-        `only some of its routes carry the alias:\n${report(failures)}`,
+      unrecorded,
+      'client path(s) the routers do not serve as written. Either fix the call or, if ' +
+        'the fix belongs to another task, record it in api-paths.budget.js with a ' +
+        `reason:\n${report(unrecorded)}`,
+    ).toEqual([]);
+  });
+
+  it('records no defect that no longer exists', () => {
+    const stale = Object.keys(KNOWN_API_DEFECTS)
+      .filter((id) => !findings.has(id))
+      .sort();
+
+    expect(
+      stale,
+      'api-paths.budget.js records defect(s) this scan no longer finds. If they were ' +
+        'fixed, delete the entries in the same commit — a list that outlives its ' +
+        `defects stops meaning anything:\n${report(stale)}`,
     ).toEqual([]);
   });
 
   /**
-   * The negative control. Without this, "everything passes" could equally mean
-   * "the comparison never says no". These are the three paths that shipped
-   * broken, each with the spelling that actually resolves.
+   * The negative control. Without this, "everything passes" could equally mean "the
+   * comparison never says no". These are the six spellings that shipped broken, each
+   * with the thing the router actually declares.
    */
-  it('rejects the three spellings this guard exists because of', () => {
+  it('rejects the six spellings this guard exists because of', () => {
+    // 1-3: the prefixed spellings, and the unprefixed ones that resolve.
     const historical = [
       ['/api/strategy-operations/backtests', '/api/backtests'],
       [
@@ -496,42 +378,63 @@ describe('api-paths guard: /api/strategy-operations paths resolve to declared ro
       ],
       ['/api/strategy-operations/strategies/{}/deployments', '/api/strategies/{}/deployments'],
     ];
-
     for (const [prefixed, declared] of historical) {
-      expect(declaredFull.has(prefixed), `${prefixed} must not be a declared route`).toBe(false);
-      expect(declaredFull.has(declared), `${declared} must be a declared route`).toBe(true);
-
-      // Not excused as a path fragment either — under any constant name, and with
-      // every literal in the tree available to build from.
+      expect(methodsByPath.has(prefixed), `${prefixed} must not be a declared route`).toBe(false);
+      expect(methodsByPath.has(declared), `${declared} must be a declared route`).toBe(true);
       expect(
-        isFragmentOfDeclared({ constName: 'ANY_NAME', value: prefixed }, frontend.checked),
+        isBasePathFragment({ bindingName: 'ANY_NAME', path: prefixed }, client.literals),
         `${prefixed} must not be excused as a base path`,
       ).toBe(false);
     }
 
-    // The trap that shaped `isFragmentOfDeclared`, asserted so it cannot be forgotten:
-    // bug #2's dead path IS a segment-prefix of the declared `…/deploy/preflight` alias.
-    // A prefix-only escape hatch would have passed it. This one does not.
+    // The trap that shaped `isBasePathFragment`: defect 2's dead path IS a segment
+    // prefix of the declared `…/deploy/preflight` alias, so a prefix-only escape
+    // hatch would have passed it.
     expect(
-      isPrefixOfDeclared('/api/strategy-operations/strategies/{}/versions/{}/deploy'),
+      [...methodsByPath.keys()].some((full) =>
+        full.startsWith('/api/strategy-operations/strategies/{}/versions/{}/deploy/'),
+      ),
+      'the preflight alias must still be declared, or the trap above is not being sprung',
     ).toBe(true);
 
-    // And none of the three is still in the tree.
-    const offenders = frontend.checked
-      .filter((p) => historical.some(([prefixed]) => p.value === prefixed))
-      .map((p) => `${p.where}: ${p.value}`);
+    // 4: the path is right and the call cannot succeed without the parameter.
+    const openOrders = routeByKey.get('GET /api/orders/open');
+    expect(openOrders, 'GET /api/orders/open must be declared').toBeTruthy();
+    expect(openOrders.requiredQuery, 'exchange_id must be read as required').toEqual([
+      'exchange_id',
+    ]);
+
+    // 5 and 6: no DELETE on the orders router at all, and the two POSTs that replaced
+    // the spellings that shipped.
+    expect(methodsByPath.get('/api/orders/{}')?.has('DELETE') ?? false).toBe(false);
+    expect(methodsByPath.get('/api/orders')?.has('DELETE') ?? false).toBe(false);
+    expect(methodsByPath.get('/api/orders/cancel/{}')?.has('POST') ?? false).toBe(true);
+    expect(methodsByPath.get('/api/orders/cancel-all')?.has('POST') ?? false).toBe(true);
+
+    // And the three corrected call sites are not in the tree under the old spellings.
+    const offenders = client.literals
+      .filter((literal) => historical.some(([prefixed]) => literal.path === prefixed))
+      .map((literal) => `${literal.where}: ${literal.path}`);
     expect(offenders).toEqual([]);
   });
 
   it('permits a base-path constant only where routes are demonstrably built from it', () => {
-    const bases = frontend.checked.filter(
-      (p) => !declaredFull.has(p.value) && isFragmentOfDeclared(p, frontend.checked),
+    const bases = client.literals.filter(
+      (literal) =>
+        !methodsByPath.has(literal.path) && isBasePathFragment(literal, client.literals),
     );
-    // Not an emptiness assertion: `registryClient.REGISTRY_BASE_PATH` is one, and it is
-    // fine. What is asserted is that it is the only kind excused — a named constant that
-    // other literals interpolate into routes the backend declares.
-    expect(bases.map((p) => `${p.constName} → ${p.value}`)).toEqual([
+    // Not an emptiness assertion: there are two and both are fine. What is asserted is
+    // that this is the only kind excused — a named binding that other literals
+    // interpolate into routes the backend declares — and that the list of them is
+    // short enough to read.
+    //
+    // `apiBaseUrl` is `CopilotContext`'s prop default, and it is the reason
+    // `api-surface.js` accepts a destructuring default as a binding: `/api/v1/copilot`
+    // is the mount prefix, it addresses nothing on its own, and the four `fetch` calls
+    // built from it are checked in full — two of which are in the findings list.
+    expect([...new Set(bases.map((b) => `${b.bindingName} → ${b.path}`))].sort()).toEqual([
       'REGISTRY_BASE_PATH → /api/strategy-operations/registry',
+      'apiBaseUrl → /api/v1/copilot',
     ]);
   });
 });

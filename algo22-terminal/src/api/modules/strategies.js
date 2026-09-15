@@ -383,9 +383,12 @@ export const strategiesApi = {
    * `components/DeploymentConsole.jsx` already read the unprefixed spelling directly, so
    * the two callers of the same endpoint disagreed about its address.
    *
-   * `tests/unit/guards/api-paths.test.js` now checks every `/api/strategy-operations/…`
-   * path in `src/api/modules/**` and `src/lib/**` against the routers' own declarations,
-   * so a fourth instance fails CI rather than shipping.
+   * `tests/unit/guards/api-paths.test.js` now checks **every** `/api/…` path the client
+   * constructs — not just this prefix — against the routes the routers declare at the
+   * mount prefixes `backend_app/main.py` gives them, and checks each call's query string
+   * against the route's required `Query(...)` parameters as well. So a fourth instance of
+   * this trap, and of the missing-parameter variant beside it, fails CI rather than
+   * shipping.
    *
    * @param {string} strategyId
    * @returns {Promise<{strategy_id: string, deployments: Array<Object>, total: number}>}
