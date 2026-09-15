@@ -4,8 +4,8 @@
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * vyomquant-ui-redesign task 20.1: part A the page shell, the route and tier 1; part B the
- * tier-2 money row. design.md §7.5, §8.1, §8.2, §11.1.
- * Requirements 1.3, 7.1, 7.2, 7.4, 12.2, 14.4, 14.5, 19.3.
+ * tier-2 money row; part C the tier-3 activity row. design.md §7.5, §8.1, §8.2, §11.1.
+ * Requirements 1.3, 7.1, 7.2, 7.3, 7.4, 12.2, 14.4, 14.5, 19.3.
  *
  * Until this task `/app/live-trading` rendered `pages/Dashboard`, so the route existed and
  * answered a different question — the account's capital — than the one Requirement 7.1
@@ -13,30 +13,60 @@
  *
  * WHAT THIS PAGE IS, AND WHAT IT IS NOT YET
  * -----------------------------------------
- * Tiers 1 and 2. §7.5's tier 3 (the latest signal, the latest order, the execution status)
- * and the deployment selector above tier 1 are declared in `design/pageHierarchy.js` and are
- * the next part of task 20.1; nothing here stubs them, because a stub of a money figure is
- * the fabrication Requirement 14.5 is about, and a selector that selects nothing is the dead
- * control Requirement 19.4 is about.
+ * All three of §7.5's tiers. The deployment selector above tier 1 is declared in
+ * `design/pageHierarchy.js` as untiered and is the next part of task 20.1; nothing here stubs
+ * it, because a selector that selects nothing is the dead control Requirement 19.4 is about.
  *
- * Tier 2 therefore describes the ACCOUNT's one open position rather than a chosen
- * deployment's, and every one of its slots says so in its label or its hint. The two
- * account-wide fields are the ones that would mislead if they did not: `risk.risk_level` and
- * `overview.today_realized_pnl` are one state and one sum for the whole account.
+ * Tiers 2 and 3 therefore describe the ACCOUNT rather than a chosen deployment, and every
+ * slot that could be misread as narrower than it is says so in its label or its hint:
+ * `risk.risk_level` and `overview.today_realized_pnl` are one state and one sum for the whole
+ * account, and `executions[]` and the venue's open orders are account-wide lists.
+ * `latestSignal` is the one tier-3 field whose declaration demands MORE than a caveat — see
+ * below.
  *
- * TWO READS, ONE FAILURE STATE
- * ----------------------------
- * `GET /api/dashboard` carries the venue keys and the open positions; `GET /api/strategies`
- * carries the strategies and their symbols. Both go through `usePanelState`, which DROPS its
- * payload on failure — see its docblock's three inversions of `usePolling` — so no figure on
- * this page can be a value from a read that has since broken.
+ * THREE READS, ONE PAGE-LEVEL FAILURE AND ONE SLOT-LEVEL ONE
+ * ---------------------------------------------------------
+ * `GET /api/dashboard` carries the venue keys, the open positions, the signals and the
+ * executions; `GET /api/strategies` carries the strategies, their ids and their symbols;
+ * `GET /api/orders/open` carries one venue's open orders. All three go through
+ * `usePanelState`, which DROPS its payload on failure — see its docblock's three inversions
+ * of `usePolling` — so no figure on this page can be a value from a read that has since
+ * broken.
  *
- * Two reads and ONE page-level `ds/ErrorState`, rendered INSTEAD of the body. That is not a
- * simplification: tier 1's six figures are one statement about one running thing, and half a
- * statement about a real-money deployment is worse than none. Because the failure is a
+ * The first two share ONE page-level `ds/ErrorState`, rendered INSTEAD of the body. That is
+ * not a simplification: tier 1's six figures are one statement about one running thing, and
+ * half a statement about a real-money deployment is worse than none. Because the failure is a
  * branch and not a banner, no figure, marker or table exists in the DOM at all while either
  * read is broken (Requirement 14.5) — there is no markup left that could hold the other
- * read's payload under an error indicator. The retry re-issues both.
+ * read's payload under an error indicator.
+ *
+ * THE OPEN-ORDERS READ IS DELIBERATELY NOT IN THAT BRANCH, AND THIS IS THE DIFFERENCE
+ * ----------------------------------------------------------------------------------
+ * It feeds exactly ONE slot, `latestOrder`, and it is a request to a VENUE. The other two are
+ * requests to our own server for the state of the running thing. So the reasoning that puts
+ * them in one branch does not extend to it: if it did, a venue that 500s on
+ * `fetch_open_orders` would erase the position, the unrealised P&L, the exposure and the risk
+ * state — figures that were read successfully, about real money, seconds ago. Withholding a
+ * true statement about an open position because a different endpoint failed is worse than the
+ * page-level branch it would be imitating.
+ *
+ * So it fails in place: `latestOrder` renders its declared marker — "Open orders could not be
+ * read for this exchange" — and its two neighbours, which come off the dashboard read, keep
+ * reporting. There is no second `ds/ErrorState` and no second alert, because one slot's
+ * failure already has exactly one rendering, and the header's Refresh re-issues all three
+ * reads. Requirement 14.5 is satisfied the same way in both places: the figure is absent and
+ * explained, never stale and never zero.
+ *
+ * ONE DEFECT IN A READ PATH, FIXED HERE BECAUSE THIS TASK ADOPTS THE FIELD
+ * -----------------------------------------------------------------------
+ * `latestOrder`'s declaration recorded that `GET /api/orders/open` requires an `exchange_id`
+ * QUERY PARAMETER — `routers/orders.py` declares it `Query(...)` with no default — while
+ * `ordersApi.getOpenOrders(symbol)` sent only `symbol`, so the call answered 422 for every
+ * caller. `api/modules/orders.js` now takes the venue as a second optional parameter and sends
+ * it; `symbol` stays first, so nothing that called it positionally changed meaning. That is
+ * the whole change: one missing query parameter on a READ. No order-execution path is touched
+ * by this page or by that module edit — this page never calls `createOrder`, `cancelOrder` or
+ * `updateOrder`, and `POST`/`DELETE` on that module are untouched.
  *
  * FOUR THINGS THE DECLARATION RECORDS, AND THEY ARE THE POINT OF THE PAGE
  * ----------------------------------------------------------------------
@@ -104,6 +134,10 @@ import { useCallback, useId, useMemo } from "react";
 import { RefreshCw } from "lucide-react";
 
 import { dashboardApi } from "../api/modules/dashboard";
+// The third read, and the one that goes to a VENUE rather than to our own server. Its
+// `getOpenOrders` gained the `exchange_id` the route requires as part of this task — see the
+// module docblock's note on the defect `pageFields` recorded against this field.
+import { ordersApi } from "../api/modules/orders";
 // `endpoints.strategies.list` reached by module path rather than through the `endpoints`
 // alias: `api/index.js` marks that alias deprecated and re-exports this exact object as
 // `api.strategies`, so this is the same function with one fewer module graph pulled into
@@ -143,7 +177,7 @@ import { computeLiquidationDistance, readPositionsDegradation } from "./Dashboar
 
 const LIVE_TRADING_FIELDS = PAGE_FIELDS_BY_PAGE[PAGES.LIVE_TRADING] ?? [];
 
-/** §7.5's tiers. This part renders the first of them and declares nothing about the others. */
+/** §7.5's three tiers. The untiered deployment selector is declared there and rendered nowhere. */
 const TIERS = PAGE_HIERARCHY_BY_PAGE[PAGES.LIVE_TRADING]?.tiers ?? [];
 
 /**
@@ -687,6 +721,303 @@ const buildTierTwo = (dashboardBody, degradedReason) => {
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
+ * TIER 3 — WHAT HAPPENED LAST (Requirement 7.3)
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * Three declared slots: the latest signal, the latest order, the execution status. Two of
+ * them come off the dashboard read this page already makes; the third is the only read on
+ * this page that goes to a venue.
+ *
+ * THE SIGNAL IS THE ONE FIELD WHERE READING THE DECLARED PATH WOULD BE THE BUG
+ * ---------------------------------------------------------------------------
+ * `recent_activity.signals[0]` is the newest signal ON THE ACCOUNT, and this page's entire
+ * subject is attribution — which strategy, which venue, which deployment. Rendering that row
+ * under the label "Latest signal" beside one strategy's name states that the strategy
+ * produced it, which is a claim the payload does not support and which no marker can be
+ * retracted from once a trader has acted on it. The declaration says so in as many words:
+ * filter by strategy id first, and render the marker rather than the account's newest signal
+ * when the filter is empty. {@link latestSignalReport} does exactly that, and the strategy id
+ * it filters by is `strategies[].id` — one of `strategy`'s own declared inputs, and the same
+ * strategy tier 1 names — taken only when the read reports exactly one of them.
+ *
+ * IN PRACTICE THAT FILTER IS EMPTY TODAY, AND THAT IS THE HONEST OUTCOME
+ * --------------------------------------------------------------------
+ * `dashboard_aggregation_service.get_recent_signals` selects
+ * `id, generated_at, decision, symbol, exchange_id, risk_passed` and publishes
+ * `{id, time, text, type}`. There is no strategy id on the row and none in the select, so no
+ * published signal is attributable to a strategy at all, and {@link SIGNAL_ABSENCE}'s
+ * `unattributed` sentence is what a trader sees. That is the field working: the marker names
+ * a real gap in the payload, where the alternative is a sentence about someone else's
+ * strategy rendered as this one's. The strategy-id filter is still written and still runs,
+ * because it is the check that must not be skipped the moment the service publishes the
+ * column, and because it is the only thing that distinguishes "no signal is attributable"
+ * from "this strategy has no signal".
+ *
+ * THE ORDER IS ONE VENUE'S, AND THE VENUE HAS TO BE PASSED
+ * -------------------------------------------------------
+ * `GET /api/orders/open` requires `exchange_id`; the venue comes from tier 1's `exchange`
+ * reading, which is `exchange.exchanges[].exchange_id` collapsed by {@link soleReport}. If no
+ * single venue is reported there is nothing to query, so NO REQUEST IS ISSUED — `usePanelState`
+ * is left disabled — and the slot renders {@link ORDERS_ABSENCE}`.noVenue`. Guessing
+ * `"binance"` is what the old surfaces did, and it would query the wrong venue's keys.
+ *
+ * "Latest" is a claim about time, so it is read from a reported time: ccxt's `timestamp`, or
+ * its `datetime` parsed. A single open order is unambiguous whatever it reports, but several
+ * orders with no reported time have no newest one, and the marker says that rather than
+ * letting the array's arrival order decide.
+ *
+ * THE EXECUTION STATUS IS ACCOUNT-WIDE AND SAYS SO
+ * -----------------------------------------------
+ * `executions[].status` is the whole account's, exactly like `risk.risk_level` in tier 2, and
+ * it goes through {@link soleReport} for tier 1's reason: one slot holds one reading, an empty
+ * list is the declared absence, and several distinct statuses is a disagreement rather than a
+ * row picked out of a list.
+ */
+
+/** §7.5's tier 3, in declaration order. */
+const TIER_THREE = TIERS.filter((entry) => entry.tier === 3);
+
+/** The tier-1 field whose reading is the venue the open-orders read is issued against. */
+const VENUE_FIELD = "exchange";
+
+/** The three tier-3 fields, named once each. */
+const SIGNAL_FIELD = "latestSignal";
+const ORDERS_FIELD = "latestOrder";
+
+/** `strategies[].id`, which is one of `strategy`'s declared inputs. */
+const STRATEGY_ID_PATH = inputPath("strategy", ".id") ?? "strategies[].id";
+
+/**
+ * The keys a signal row would carry a strategy id under.
+ *
+ * Two spellings and no third: the service publishes neither today, and a wider net — matching
+ * anything containing "strategy" — would eventually match a NAME and compare it against an id,
+ * which fails open. Both of these are ids or nothing.
+ */
+const SIGNAL_STRATEGY_KEYS = Object.freeze(["strategy_id", "strategyId"]);
+
+/** The composed sentence `get_recent_signals` publishes per row. */
+const SIGNAL_TEXT_KEY = "text";
+
+/**
+ * WHY a signal could not be attributed to this strategy — and it matters which.
+ *
+ * The declaration carries one reason for this field, and it is the one for an account with no
+ * signals at all ("No signal has been recorded for this account yet"). These four are the
+ * other outcomes, and none of them may collapse into that sentence: an account with five
+ * signals none of which is attributable has recorded signals, and saying otherwise would
+ * report an empty table where the truth is an unattributable one.
+ */
+const SIGNAL_ABSENCE = Object.freeze({
+  unknownStrategy:
+    "This read reported no single strategy, so there is no strategy id to match a signal "
+    + "against. The account's newest signal is not shown, because nothing says it is this "
+    + "strategy's.",
+  unattributed:
+    "Signals have been recorded on this account, but none of them reports the strategy that "
+    + "produced it, so none can be attributed to this strategy. The account's newest signal "
+    + "is not shown as this strategy's.",
+  otherStrategy:
+    "Signals have been recorded on this account, and every one of them belongs to another "
+    + "strategy. This strategy has produced none.",
+  undescribed:
+    "This strategy's newest signal carries no description, so there is nothing to show for "
+    + "it. The signal itself was recorded.",
+});
+
+/**
+ * WHY there is no latest order.
+ *
+ * The declared reason covers exactly one of these — the read that failed — and it is used for
+ * that arm verbatim. The other three are successes, or non-attempts, and reporting them as
+ * "could not be read" would blame a venue that answered.
+ */
+const ORDERS_ABSENCE = Object.freeze({
+  noVenue:
+    "No single exchange is reported for this account, so there is no venue whose open orders "
+    + "could be requested. Open orders are held per venue and this read takes one.",
+  none:
+    "This venue reports no open order for this account, so there is no latest order to show. "
+    + "This is a complete read: the open-orders read did not fail.",
+  undated:
+    "The venue reported several open orders and none of them carries a time, so which is the "
+    + "latest is unknown. The first one in the list is not evidence of the newest.",
+  undescribed:
+    "The venue's newest open order reports no side, size or market, so there is nothing to "
+    + "show for it. The order itself is open.",
+});
+
+/** The one strategy id the strategies read reports, or `null` when it is not exactly one. */
+const soleStrategyId = (strategiesBody) => {
+  const ids = reportedAcross(strategiesBody, STRATEGY_ID_PATH);
+  return ids.length === 1 ? ids[0] : null;
+};
+
+/** The strategy id a signal row attributes itself to, or `null` when it attributes itself to none. */
+const signalStrategyId = (row) => {
+  for (const key of SIGNAL_STRATEGY_KEYS) {
+    const value = scalarText(row[key]);
+    if (value !== null) return value;
+  }
+  return null;
+};
+
+/** The rows of a declared list off a body, objects only, in the order the server sent them. */
+const listRows = (body, dottedPath) => {
+  const list = readPath(body, dottedPath);
+  return Array.isArray(list) ? list.filter((row) => row && typeof row === "object") : [];
+};
+
+/**
+ * The latest signal THIS STRATEGY produced, or the marker saying which absence this is.
+ *
+ * Five arms, and the order is the point:
+ *
+ *   1. no signals on the account — the DECLARED reason, the only arm it describes.
+ *   2. no single strategy id from the strategies read — nothing to filter by.
+ *   3. signals exist and none reports a strategy — the payload's own gap (see the section
+ *      docblock: this is today's outcome for every account).
+ *   4. signals exist, all attributed elsewhere — this strategy has produced none.
+ *   5. the newest of this strategy's, which is the first matching row because the service
+ *      orders by `generated_at` descending.
+ *
+ * Arms 2, 3 and 4 are the ones that would otherwise render the account's newest signal.
+ *
+ * @param {unknown} dashboardBody
+ * @param {string|null} strategyId The one strategy id reported, or `null`.
+ * @returns {{available: boolean}}
+ */
+const latestSignalReport = (dashboardBody, strategyId) => {
+  const entry = fieldEntry(SIGNAL_FIELD);
+  const rows = listRows(dashboardBody, entry.path);
+  if (rows.length === 0) return unavailable(entry.reason);
+  if (strategyId === null) return unavailable(SIGNAL_ABSENCE.unknownStrategy);
+
+  const attributed = rows.filter((row) => signalStrategyId(row) !== null);
+  if (attributed.length === 0) return unavailable(SIGNAL_ABSENCE.unattributed);
+
+  const mine = attributed.filter((row) => signalStrategyId(row) === strategyId);
+  if (mine.length === 0) return unavailable(SIGNAL_ABSENCE.otherStrategy);
+
+  return fromNullable(scalarText(mine[0][SIGNAL_TEXT_KEY]), SIGNAL_ABSENCE.undescribed);
+};
+
+/**
+ * One ccxt order row → the millisecond time it reports, or `null`.
+ *
+ * `timestamp` is ccxt's own millisecond integer and `datetime` is the same instant as an ISO
+ * string; the second is read only when the first is absent, so two encodings of one fact
+ * cannot disagree here. Neither is defaulted to "now", which would make every undated order
+ * the newest.
+ */
+const orderTime = (row) => {
+  const millis = numberOf(row.timestamp);
+  if (millis !== null) return millis;
+
+  const iso = scalarText(row.datetime);
+  if (iso === null) return null;
+  const parsed = Date.parse(iso);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+/**
+ * The newest order among the venue's open ones, or `null` when there is no basis to pick one.
+ *
+ * A single order is the latest by being the only one, whatever it reports about time. With
+ * several, only a reported time decides — the array's own order is the venue's, and ccxt makes
+ * no promise about it.
+ */
+const latestOrderRow = (rows) => {
+  if (rows.length === 1) return rows[0];
+
+  let newest = null;
+  let newestAt = null;
+  for (const row of rows) {
+    const at = orderTime(row);
+    if (at === null) continue;
+    if (newestAt === null || at > newestAt) {
+      newest = row;
+      newestAt = at;
+    }
+  }
+  return newest;
+};
+
+/** The parts of one order row that make up the reading, in the order they are read. */
+const ORDER_PARTS = Object.freeze(["side", "amount", "symbol"]);
+
+/**
+ * One order row → `"buy 0.25 BTC/USDT"`, or `null` when it reports none of the three.
+ *
+ * All three come off the SAME row, so nothing here is a pair assembled across rows — the
+ * failure `readPositionPair` and `readStrategyPair` are shaped to avoid. A row reporting two
+ * of the three renders those two: a partial reading of one order is still a true one.
+ */
+const orderText = (row) => {
+  const parts = [];
+  for (const key of ORDER_PARTS) {
+    const part = scalarText(row[key]);
+    if (part !== null) parts.push(part);
+  }
+  return parts.length === 0 ? null : parts.join(" ");
+};
+
+/**
+ * The open-orders read → the `latestOrder` slot. Four arms, and only one of them is the
+ * declared reason.
+ *
+ * @param {Object} orders
+ * @param {string|null} orders.venue The one venue reported, or `null` — no request was issued.
+ * @param {boolean} orders.failed Whether the read failed. `usePanelState` has already dropped
+ *   its payload, so this is the only thing that tells a failure from a venue holding nothing.
+ * @param {unknown} orders.payload The response root, which IS the order array.
+ * @returns {{available: boolean}}
+ */
+const latestOrderReport = ({ venue, failed, payload }) => {
+  if (venue === null) return unavailable(ORDERS_ABSENCE.noVenue);
+  if (failed) return unavailable(reasonOf(ORDERS_FIELD));
+
+  const rows = Array.isArray(payload)
+    ? payload.filter((row) => row && typeof row === "object")
+    : [];
+  if (rows.length === 0) return unavailable(ORDERS_ABSENCE.none);
+
+  const newest = latestOrderRow(rows);
+  if (newest === null) return unavailable(ORDERS_ABSENCE.undated);
+
+  return fromNullable(orderText(newest), ORDERS_ABSENCE.undescribed);
+};
+
+/**
+ * The three payloads → tier 3's three `Reported<>`s, keyed by declared field.
+ *
+ * The signal and the order each have their own function above, for the reasons those
+ * functions carry. `executionStatus` is the plain case: a declared path into a list, through
+ * {@link soleReport}, so an empty `executions` is the declared absence and several distinct
+ * statuses is a disagreement rather than a pick.
+ *
+ * @param {unknown} dashboardBody
+ * @param {unknown} strategiesBody
+ * @param {{available: boolean}} orderReport {@link latestOrderReport}'s answer.
+ * @returns {Object<string, {available: boolean}>}
+ */
+const buildTierThree = (dashboardBody, strategiesBody, orderReport) => {
+  const model = {};
+  for (const { key } of TIER_THREE) {
+    if (key === ORDERS_FIELD) {
+      model[key] = orderReport;
+      continue;
+    }
+    if (key === SIGNAL_FIELD) {
+      model[key] = latestSignalReport(dashboardBody, soleStrategyId(strategiesBody));
+      continue;
+    }
+    model[key] = soleReport(reportedAcross(dashboardBody, fieldEntry(key).path), key);
+  }
+  return model;
+};
+
+/* ══════════════════════════════════════════════════════════════════════════
  * THE TWO READINGS THAT ARE NOT DECLARED FIELDS
  * ══════════════════════════════════════════════════════════════════════════ */
 
@@ -818,6 +1149,32 @@ const TIER_TWO_HINT = Object.freeze({
     + "every open position — not for one deployment.",
 });
 
+/**
+ * Tier 3's three hints. None of the three fields declares a `tooltip`, and all three are
+ * places where the label is narrower than the reading behind it:
+ *
+ *   * `latestSignal` is the one field on the page that is FILTERED rather than caveated, so
+ *     its hint says what the filter is and that an unmatched account signal is not shown in
+ *     its place. That is the difference between this slot and a wrong attribution.
+ *   * `latestOrder` is everything the VENUE holds open for the account — `fetch_open_orders`
+ *     takes no strategy — so the hint says whose orders they are and which venue was asked.
+ *   * `executionStatus` is account-wide, exactly as `riskState` is, and gets the same
+ *     treatment for the same reason.
+ */
+const TIER_THREE_HINT = Object.freeze({
+  latestSignal:
+    "The newest signal recorded against THIS STRATEGY's id. Signals are recorded per account, "
+    + "so one that reports a different strategy — or no strategy at all — is not shown here: "
+    + "the account's newest signal is not evidence this strategy produced it.",
+  latestOrder:
+    "The newest order the exchange reports as still open for this account at the venue shown "
+    + "in Exchange above. Open orders are held per venue and are not recorded against a "
+    + "strategy, so this is the account's order at that venue, not this deployment's.",
+  executionStatus:
+    "The status the server reports for recorded executions on the WHOLE ACCOUNT — not for one "
+    + "deployment. Several different statuses show no single reading rather than one of them.",
+});
+
 export default function LiveTrading() {
   /*
    * THE TWO READS (§7.5).
@@ -884,6 +1241,32 @@ export default function LiveTrading() {
     [exchangePayload, positionsDegraded],
   );
 
+  /*
+   * THE THIRD READ (Requirement 7.3), AND THE VENUE IT NEEDS.
+   *
+   * `ordersVenue` is tier 1's own `exchange` reading and not a second collapse of the same
+   * list: the figure a trader sees under "Exchange" is the venue this read is issued against,
+   * so the two cannot disagree. `null` — nothing reported, or several venues reported — means
+   * there is no venue to query, and `enabled: false` is how that becomes NO REQUEST rather
+   * than a request with a guessed `exchange_id` (`usePanelState` leaves it `idle`).
+   *
+   * `deps: [ordersVenue]` because a different venue is a different question: the previous
+   * venue's orders must not stay on screen labelled as this one's, and the hook discards them.
+   * `symbol` is left unsent — `fetch_open_orders` filters by market, not by strategy, and this
+   * page has no basis to narrow one venue's open orders to one market.
+   */
+  const ordersVenue = tierOne[VENUE_FIELD]?.available ? tierOne[VENUE_FIELD].value : null;
+
+  const readOrders = useCallback(
+    () => ordersApi.getOpenOrders(undefined, ordersVenue),
+    [ordersVenue],
+  );
+  const {
+    data: ordersPayload,
+    refetch: refetchOrders,
+    state: ordersState,
+  } = usePanelState(readOrders, { deps: [ordersVenue], enabled: ordersVenue !== null });
+
   /**
    * The environment the SERVER labelled the records with, or `null`.
    *
@@ -909,12 +1292,40 @@ export default function LiveTrading() {
   const readError = isFailure(exchangeState) ? exchangeError : strategiesError;
 
   const busy = isReading(exchangeState) || isReading(strategiesState);
+  /*
+   * The orders read is only in flight when it was issued at all. Without the venue test
+   * `isReading` would report the disabled `idle` state as in-flight for ever, which would
+   * leave the Refresh button spinning on an account with no single reported venue.
+   */
+  const ordersReading = ordersVenue !== null && isReading(ordersState);
 
-  /** Re-issue both reads. One statement, so a retry that fixed half of it would not help. */
+  const tierThree = useMemo(
+    () => buildTierThree(
+      exchangePayload,
+      asStrategiesBody(strategiesPayload),
+      latestOrderReport({
+        venue: ordersVenue,
+        failed: isFailure(ordersState),
+        payload: ordersPayload,
+      }),
+    ),
+    [exchangePayload, strategiesPayload, ordersVenue, ordersState, ordersPayload],
+  );
+
+  /**
+   * Re-issue every read.
+   *
+   * Tiers 1 and 2 are one statement, so a retry that fixed half of it would not help; the
+   * orders read is a separate failure surface but shares this one control, because a trader
+   * pressing Refresh is asking for the page and not for one slot. `refetchOrders` is a no-op
+   * while that read is disabled — `usePanelState` issues nothing from `idle` — so the button
+   * is not a dead control on an account with no single venue: the other two reads still go.
+   */
   const retry = useCallback(() => {
     refetchExchange();
     refetchStrategies();
-  }, [refetchExchange, refetchStrategies]);
+    refetchOrders();
+  }, [refetchExchange, refetchStrategies, refetchOrders]);
 
   /**
    * BOTH panels' state, because both tiers are projections of the same two reads.
@@ -931,6 +1342,24 @@ export default function LiveTrading() {
     ? PANEL_STATES.LOADING
     : (busy ? PANEL_STATES.REFRESHING : PANEL_STATES.READY);
 
+  /**
+   * Tier 3's panel state, which is the two reads' PLUS the orders read's.
+   *
+   * It is separate from `readState` because tiers 1 and 2 do not project the orders read, and
+   * showing them as `refreshing` while a venue is being asked about its order book would claim
+   * their own reads were in flight. The `loading` arm is what keeps
+   * {@link ORDERS_ABSENCE}`.none` — "this venue reports no open order" — out of the DOM while
+   * the request that would contradict it is still outstanding: §11.1 renders no children in
+   * `loading`, so there is no window in which the marker states a completed read.
+   *
+   * A disabled orders read is ANSWERED for this purpose. There is nothing outstanding, the
+   * slot's marker is final, and treating `idle` as loading would leave the tier as a skeleton
+   * for ever on an account with no single reported venue.
+   */
+  const tierThreeState = ordersVenue !== null && unanswered(ordersState)
+    ? PANEL_STATES.LOADING
+    : (readState === PANEL_STATES.READY && ordersReading ? PANEL_STATES.REFRESHING : readState);
+
   return (
     <div className="flex min-w-0 flex-col gap-4 overflow-y-auto bg-surface-canvas p-5 text-content-primary">
 
@@ -945,7 +1374,9 @@ export default function LiveTrading() {
           <CommandButton
             intent="secondary"
             icon={RefreshCw}
-            loading={busy}
+            // Every read this page makes, including the venue's order book: the control
+            // re-issues all three, so it reports in-flight for all three.
+            loading={busy || ordersReading}
             loadingLabel="Refreshing"
             onClick={retry}
           >
@@ -1084,6 +1515,52 @@ export default function LiveTrading() {
                 />
               ))}
             </div>
+          </div>
+        </Panel>
+
+        {/* ═══ TIER 3 — Requirement 7.3 ═══════════════════════════════════════════
+            "What happened last?", and the tier where the page's subject — attribution —
+            is enforced rather than caveated: `latestSignal` is FILTERED by strategy id and
+            renders the marker rather than the account's newest signal when nothing matches.
+
+            NOT a `money` panel. Its three readings are a sentence, an open order and a
+            status word; `money` is `ds/Panel`'s assertion for a surface showing balances,
+            P&L or positions, and declaring it here would put a second environment badge on
+            the page for figures that are not amounts. Tier 2 is where the money is, and it
+            carries the badge Requirements 7.4 and 12.2 ask for.
+
+            The orders read's failure does NOT come out here as a panel error: it belongs to
+            one slot, and a panel-level error would suppress the two neighbours that read
+            successfully off the dashboard. See the module docblock. */}
+        <Panel
+          title="What happened last"
+          state={tierThreeState}
+          loading={{ kind: "skeleton-metric", rows: 1, columns: 3 }}
+          data-region="tier-3"
+        >
+          {/* Three equal-weight slots in ONE row, walked from `pageHierarchy`'s tier-3 list,
+              each carrying `data-region` spelled as its `pageFields` key. `flex-1` from a
+              zero basis, as tiers 1 and 2 do: a bare `grid-cols-*` above 4 is not a utility
+              this build emits, so it would compile to nothing (design.md §1.2). */}
+          <div
+            {...{ [TIER_PAGE_ATTRIBUTE]: PAGES.LIVE_TRADING, [TIER_ATTRIBUTE]: 3 }}
+            className="flex min-w-0 items-start gap-4"
+          >
+            {TIER_THREE.map(({ key, label }) => (
+              <Metric
+                key={key}
+                tier={3}
+                label={label}
+                value={tierThree[key]}
+                // `raw` for all three: a signal sentence, a side-size-market reading and a
+                // status word. None is a quantity, and a numeric format would group and
+                // round the size out of the middle of the order reading.
+                format="raw"
+                hint={TIER_THREE_HINT[key] ?? fieldEntry(key)?.tooltip ?? undefined}
+                className="flex-1"
+                data-region={key}
+              />
+            ))}
           </div>
         </Panel>
         </>

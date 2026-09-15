@@ -51,6 +51,7 @@ import { MemoryRouter } from 'react-router-dom';
 
 import LiveTrading from '../../src/pages/LiveTrading';
 import * as dashboardModule from '../../src/api/modules/dashboard';
+import { ordersApi } from '../../src/api/modules/orders';
 import { strategiesApi } from '../../src/api/modules/strategies';
 import { ApiError } from '../../src/apiClient';
 import { PAGES, PAGE_FIELD_BY_KEY, pageFieldKey } from '../../src/design/pageFields';
@@ -63,6 +64,7 @@ import { PAGE_HIERARCHY_BY_PAGE, tierSelector } from '../../src/design/pageHiera
 /** §7.5's tiers, read from the declaration rather than retyped. */
 const TIER_ONE = PAGE_HIERARCHY_BY_PAGE[PAGES.LIVE_TRADING].tiers.filter((e) => e.tier === 1);
 const TIER_TWO = PAGE_HIERARCHY_BY_PAGE[PAGES.LIVE_TRADING].tiers.filter((e) => e.tier === 2);
+const TIER_THREE = PAGE_HIERARCHY_BY_PAGE[PAGES.LIVE_TRADING].tiers.filter((e) => e.tier === 3);
 
 const declared = (field) => PAGE_FIELD_BY_KEY[pageFieldKey({ page: PAGES.LIVE_TRADING, field })];
 
@@ -123,13 +125,21 @@ const strategiesBody = ({ strategies } = {}) => ({
 
 const readDashboard = () => vi.spyOn(dashboardModule.dashboardApi, 'getDashboard');
 const readStrategies = () => vi.spyOn(strategiesApi, 'list');
+/** The third read (task 20.1c). The response root IS the ccxt order array — no envelope. */
+const readOrders = () => vi.spyOn(ordersApi, 'getOpenOrders');
 
 const mount = () => render(<MemoryRouter><LiveTrading /></MemoryRouter>);
 
-/** Both reads resolving, which is the state five of the six tests below start from. */
+/**
+ * All three reads resolving, which is the state most of the tests below start from.
+ *
+ * The orders read defaults to `[]` — a venue holding no open order — so no test that is not
+ * about tier 3 has an order in its DOM, and none of them reaches the network.
+ */
 const bothRead = (overrides = {}) => {
   readDashboard().mockResolvedValue(overrides.dashboard ?? dashboardBody());
   readStrategies().mockResolvedValue(overrides.strategies ?? strategiesBody());
+  readOrders().mockResolvedValue(overrides.orders ?? []);
 };
 
 /* ══════════════════════════════════════════════════════════════════════════════════════
@@ -138,6 +148,7 @@ const bothRead = (overrides = {}) => {
 
 const tierOneContainer = () => document.querySelector(tierSelector(PAGES.LIVE_TRADING, 1));
 const tierTwoContainer = () => document.querySelector(tierSelector(PAGES.LIVE_TRADING, 2));
+const tierThreeContainer = () => document.querySelector(tierSelector(PAGES.LIVE_TRADING, 3));
 
 /** The `ds/Metric` root for a label. Exactly one, or the assertion says how many there were. */
 const metricFor = (label) => {
@@ -307,6 +318,9 @@ describe('LiveTrading — one failure state for two reads (task 20.1)', () => {
       .mockRejectedValueOnce(new ApiError('The dashboard read failed.', { status: 503 }))
       .mockResolvedValue(dashboardBody());
     const strategies = readStrategies().mockResolvedValue(strategiesBody());
+    // Mocked because the retry below recovers tier 1, which reports a venue, which issues the
+    // third read (task 20.1c). Unmocked it would reach the network from jsdom.
+    readOrders().mockResolvedValue([]);
 
     mount();
 
@@ -531,5 +545,213 @@ describe('LiveTrading tier 2 (task 20.1b)', () => {
     expect(chip.getAttribute('data-environment')).toBe('LIVE');
     // The page's announcing instance is the strip, so this one does not announce again.
     expect(chip.getAttribute('role')).toBeNull();
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+ * TIER 3 — Requirement 7.3, and the two things it must not do
+ * ══════════════════════════════════════════════════════════════════════════════════════
+ *
+ * 12. **Requirement 7.3's three figures, in the declared order, inside ONE container that
+ *     follows every tier-2 element.** Same shape as (1) and (7): the tier order IS §7.5's
+ *     sequence of questions, and the third of them is "what happened last?".
+ * 13. **A signal belonging to another strategy renders the MARKER, not the signal.**
+ *     `recent_activity.signals` is account-wide and its declaration says to filter by
+ *     strategy id first. Rendering the account's newest signal under "Latest signal" beside
+ *     one strategy's name would state that this strategy produced it — the attribution error
+ *     this page exists to avoid.
+ * 14. **The open-orders read is issued WITH the venue.** `GET /api/orders/open` declares
+ *     `exchange_id` as a required query parameter, so the call as `ordersApi` used to write
+ *     it answered 422 for everyone. The venue is tier 1's own `exchange` reading.
+ * 15. **No single reported venue means NO REQUEST and a marker.** There is no venue whose
+ *     order book could be asked, and `"binance"` assumed here would query another account's
+ *     keys.
+ * 16. **A failed orders read fails IN PLACE.** It feeds one slot, so it takes one slot's
+ *     marker with it — the position, the P&L and the risk state were read successfully and
+ *     stay on screen. That is the one difference between this read and the two that share the
+ *     page-level error state.
+ */
+
+describe('LiveTrading tier 3 (task 20.1c)', () => {
+  beforeEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  /** One ccxt open order, as `DataEngine.fetch_open_orders` returns them — a bare array. */
+  const openOrder = (overrides = {}) => ({
+    id: 'o1',
+    symbol: 'BTC/USDT',
+    side: 'buy',
+    type: 'limit',
+    amount: 0.1,
+    price: 60000,
+    status: 'open',
+    timestamp: 1780000000000,
+    datetime: '2026-06-01T10:00:00.000Z',
+    ...overrides,
+  });
+
+  it('renders the three declared fields in order, in ONE container, after every tier-2 element', async () => {
+    bothRead({ orders: [openOrder()] });
+
+    mount();
+
+    await waitFor(() => expect(tierThreeContainer()).not.toBeNull());
+
+    // ONE container, so a second activity row cannot appear beside it.
+    expect(document.querySelectorAll(tierSelector(PAGES.LIVE_TRADING, 3))).toHaveLength(1);
+    expect(TIER_THREE).toHaveLength(3);
+
+    // Document order over the three declared slots, each `data-region` spelled as its
+    // `pageFields` key.
+    const slots = [...tierThreeContainer().querySelectorAll('[data-region]')];
+    expect(slots.map((node) => node.getAttribute('data-region')))
+      .toEqual(TIER_THREE.map((entry) => entry.key));
+
+    // Tier 3 FOLLOWS tier 2, asserted from the rendered DOM rather than from the JSX.
+    const documentOrder = [...document.querySelectorAll('*')];
+    const tierThreeAt = documentOrder.indexOf(tierThreeContainer());
+    expect(documentOrder.indexOf(tierTwoContainer())).toBeLessThan(tierThreeAt);
+    for (const element of tierTwoContainer().querySelectorAll('*')) {
+      expect(documentOrder.indexOf(element)).toBeLessThan(tierThreeAt);
+    }
+
+    // And nothing outside this container claims tier 3.
+    const figures = document.querySelectorAll('[data-metric-tier="3"]');
+    expect(figures.length).toBe(3);
+    for (const figure of figures) {
+      expect(tierThreeContainer().contains(figure), 'a tier-3 figure rendered outside the container')
+        .toBe(true);
+    }
+  });
+
+  it('renders the marker for a signal that belongs to another strategy, never the account\'s newest', async () => {
+    // Two signals on the ACCOUNT, newest first, exactly as `get_recent_signals` orders them.
+    // The newest belongs to another strategy; the older one is this strategy's.
+    const dashboard = dashboardBody();
+    bothRead({
+      dashboard: {
+        ...dashboard,
+        recent_activity: {
+          signals: [
+            { id: 'sig-2', strategy_id: 'other', time: '2026-06-01T12:00:00Z', text: 'Signal SELL: ETH/USDT on BINANCE (Risk: APPROVED)' },
+            { id: 'sig-1', strategy_id: 's1', time: '2026-06-01T09:00:00Z', text: 'Signal BUY: BTC/USDT on BINANCE (Risk: APPROVED)' },
+          ],
+          insights: [],
+          executions: [],
+        },
+      },
+    });
+
+    mount();
+
+    await waitFor(() => expect(tierThreeContainer()).not.toBeNull());
+
+    // `strategies[].id` is `s1`, so the newest of THIS strategy's signals is the older row.
+    // The account's newest — the other strategy's — appears nowhere on the page.
+    const label = declared('latestSignal').label;
+    expect(figureOf(label)).toContain('Signal BUY: BTC/USDT');
+    expect(document.body.textContent).not.toContain('Signal SELL: ETH/USDT');
+
+    // And with the account's signals all attributed elsewhere, the slot is the marker
+    // rather than the newest of them.
+    cleanup();
+    vi.restoreAllMocks();
+    bothRead({
+      dashboard: {
+        ...dashboard,
+        recent_activity: {
+          signals: [
+            { id: 'sig-2', strategy_id: 'other', time: '2026-06-01T12:00:00Z', text: 'Signal SELL: ETH/USDT on BINANCE (Risk: APPROVED)' },
+          ],
+          insights: [],
+          executions: [],
+        },
+      },
+    });
+
+    mount();
+
+    await waitFor(() => expect(tierThreeContainer()).not.toBeNull());
+
+    expect(metricFor(label).dataset.metricAvailable).toBe('false');
+    expect(figureOf(label)).toBeNull();
+    expect(document.body.textContent).not.toContain('Signal SELL: ETH/USDT');
+    // The reason says signals exist and belong to another strategy — not that the account
+    // has none, which is what the declared reason would have claimed.
+    expect(markerIn(label).getAttribute('title')).toContain('another');
+    expect(markerIn(label).getAttribute('title')).not.toBe(declared('latestSignal').reason);
+  });
+
+  it('issues the open-orders read WITH the venue tier 1 reports, and reads the bare array', async () => {
+    bothRead({ orders: [openOrder({ id: 'o-old', timestamp: 1770000000000, side: 'sell', amount: 2 }), openOrder()] });
+
+    mount();
+
+    await waitFor(() => expect(tierThreeContainer()).not.toBeNull());
+
+    // THE FIX: `exchange_id` is a required query parameter on `GET /api/orders/open`, and the
+    // venue is `exchange.exchanges[].exchange_id` — the same reading tier 1 shows.
+    const orders = ordersApi.getOpenOrders;
+    expect(orders).toHaveBeenCalled();
+    for (const call of orders.mock.calls) {
+      expect(call[1]).toBe('binance');
+    }
+
+    // The response ROOT is the order array, and "latest" is decided by the reported time:
+    // the newer `timestamp` wins over the array's own order.
+    expect(figureOf(declared('latestOrder').label)).toContain('buy 0.1 BTC/USDT');
+    expect(figureOf(declared('latestOrder').label)).not.toContain('sell');
+  });
+
+  it('issues NO open-orders request and renders the marker when no single venue is reported', async () => {
+    // Two configured venues: `soleReport` shows no single one, so there is no venue whose
+    // order book could be asked. Assuming the first would query the wrong keys.
+    bothRead({
+      dashboard: dashboardBody({
+        exchanges: [
+          { exchange_id: 'binance', status: 'connected', latency_ms: 35, last_sync: null },
+          { exchange_id: 'kraken', status: 'connected', latency_ms: 41, last_sync: null },
+        ],
+      }),
+    });
+
+    mount();
+
+    await waitFor(() => expect(tierThreeContainer()).not.toBeNull());
+
+    expect(ordersApi.getOpenOrders).not.toHaveBeenCalled();
+
+    const label = declared('latestOrder').label;
+    expect(metricFor(label).dataset.metricAvailable).toBe('false');
+    expect(figureOf(label)).toBeNull();
+    // The reason is the non-attempt, not the declared "could not be read": no venue answered
+    // badly, because none was asked.
+    expect(markerIn(label).getAttribute('title')).toContain('no venue');
+    expect(markerIn(label).getAttribute('title')).not.toBe(declared('latestOrder').reason);
+  });
+
+  it('fails the orders read IN PLACE, leaving tier 1 and tier 2 reporting', async () => {
+    bothRead();
+    readOrders().mockRejectedValue(new ApiError('The venue rejected the read.', { status: 503 }));
+
+    mount();
+
+    await waitFor(() => expect(tierThreeContainer()).not.toBeNull());
+
+    // One slot's marker, carrying the DECLARED reason — this is the arm it describes.
+    const label = declared('latestOrder').label;
+    expect(metricFor(label).dataset.metricAvailable).toBe('false');
+    expect(markerIn(label).getAttribute('title')).toBe(declared('latestOrder').reason);
+
+    // NOT the page-level error state: no second `ds/ErrorState`, and the figures that were
+    // read successfully are still on screen. Suppressing a real position because a venue's
+    // order book failed would withhold a true statement about real money.
+    expect(document.querySelector('[data-region="page-error"]')).toBeNull();
+    expect(figureOf(declared('position').label)).toContain('long 0.25');
+    expect(figureOf(declared('exposure').label)).toContain('15,500.00');
+    expect(figureOf(declared('riskState').label)).toContain('elevated');
+    expect(figureOf(declared('exchange').label)).toContain('binance');
   });
 });

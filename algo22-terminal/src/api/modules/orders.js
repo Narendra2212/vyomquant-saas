@@ -103,12 +103,26 @@ export const ordersApi = {
   },
 
   /**
-   * Get open orders
+   * Get open orders. A READ: nothing here places, amends or cancels an order.
+   *
+   * `GET /api/orders/open` declares `exchange_id` as `Query(...)` with NO default — the route
+   * loads that venue's decrypted keys before it asks the venue for anything — so the call
+   * answers 422 without one. This function sent only `symbol`, which is why
+   * `design/pageFields.js`'s `latestOrder` entry records the endpoint as unreachable as
+   * written; the venue is now a parameter it can send.
+   *
+   * `symbol` stays FIRST and stays optional, so every existing positional call keeps its
+   * meaning, and an omitted parameter is omitted from the query string rather than sent
+   * blank: `?symbol=` is a filter on the empty symbol, not the absence of a filter.
+   *
    * @param {string} [symbol] - Filter by symbol
-   * @returns {Promise<OrderResponse[]>}
+   * @param {string} [exchangeId] - Venue to query, e.g. `binance`. Required by the route.
+   * @returns {Promise<OrderResponse[]>} The venue's own ccxt order array — no envelope.
    */
-  getOpenOrders: async (symbol) => {
-    const params = symbol ? new URLSearchParams({ symbol }) : '';
+  getOpenOrders: async (symbol, exchangeId) => {
+    const params = new URLSearchParams();
+    if (symbol) params.set('symbol', symbol);
+    if (exchangeId) params.set('exchange_id', exchangeId);
     return get(`/api/orders/open?${params}`);
   },
 
