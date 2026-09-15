@@ -93,6 +93,7 @@ import {
   unlistedSignalIds,
 } from '../lib/signalTraceRealtime';
 import {
+  REASON_TRACE_RETENTION,
   STAGE_BLOCKED,
   STAGE_COMPLETE,
   STAGE_EXECUTION,
@@ -418,6 +419,1028 @@ function StageLatency({ stage }) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+ * THE EXPANDED BODY — THE TECHNICAL DETAIL (task 21.4b, design.md §10.3)
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * WHERE EVERY VALUE BELOW COMES FROM
+ * ---------------------------------
+ * `stage.detail`, and nothing else. `lib/signalTraceStages.js` already hands each stage the
+ * slice of the payload that backs it — `signal.market_info` for stage 1, `{source, nodes,
+ * readings}` for stage 2, the ML `detail` for stage 3, and so on — so no renderer here
+ * reaches back into the raw response. That matters for the same reason the state does: a
+ * body that re-read `payload.trace.dag_nodes` could show nodes for a stage the module had
+ * already called not-available, and the two would disagree on screen.
+ *
+ * WHAT AN ABSENT FIELD RENDERS
+ * ---------------------------
+ * The marker, with a reason naming the response path that is empty. Never a `0`, never a
+ * dash on its own, never a plausible default (Requirements 14.5, 19.3). And where the whole
+ * backing section is absent, the body says THAT — one sentence, the module's own reason —
+ * instead of laying out a grid of markers for fields that were never going to be there.
+ *
+ * WHY THE INNER LABELS ARE THE SERVER'S OWN KEY NAMES
+ * -------------------------------------------------
+ * `design/pageFields.js` declares one entry per STAGE (plus `resultingPosition`, which is a
+ * field in its own right and is read from there). It does not declare the ~70 fields inside
+ * the four trace sections, and it should not: `market_info`, `signal.indicators`, a node's
+ * `reading` and the row-sourced `ml_info` are open records whose keys are strategy-defined,
+ * so any fixed list would silently drop whatever it had not been told about. The named
+ * fields below are the ones the backend's own projections always emit — `_dag_node_entry`,
+ * `_execution_outcome_of`, `_position_updated_event`, `_node_io` and the three engine
+ * dataclasses — and every key beyond them is rendered under "Other reported fields" with
+ * the key the server sent. Nothing the response carries is hidden, and nothing it does not
+ * carry is invented.
+ */
+
+/** A plain record, or `null`. An array is not a record and neither is a string. */
+const plainRecord = (value) =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null;
+
+/** An array, or `[]`. A section the server could not build is not a crash here. */
+const plainArray = (value) => (Array.isArray(value) ? value : []);
+
+/**
+ * Why a field renders the marker: the response does not carry it.
+ *
+ * The path is named rather than described, so the sentence says which field of which
+ * section is empty and a reader can check it against the payload.
+ */
+const absentReason = (path) =>
+  `The response carries no ${path} for this signal. An unreported value and a zero are `
+  + 'different facts, so nothing is stated rather than a default.';
+
+/** A readable scalar as the text to render, or `null` when there is nothing to render. */
+function scalarText(value) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed === '' ? null : trimmed;
+  }
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : null;
+  if (typeof value === 'bigint') return String(value);
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return null;
+}
+
+/**
+ * A record or an array as compact JSON — the server's own structure, unedited.
+ *
+ * The values that reach here are the open ones: a node's evaluated `reading`, a port's
+ * `value`, `market_info.reported`, an ML feature vector. They are already bounded
+ * server-side (`signal_service._jsonable` caps depth, width and string length), so there is
+ * nothing to truncate here, and truncating would be the one edit that turns a real value
+ * into a partial one. An empty record or array reads as "nothing carried" and takes the
+ * marker, because `{}` is not a value a trader can act on.
+ */
+function structuredText(value) {
+  if (Array.isArray(value)) return value.length === 0 ? null : JSON.stringify(value);
+  const record = plainRecord(value);
+  if (record === null) return null;
+  return Object.keys(record).length === 0 ? null : JSON.stringify(record);
+}
+
+/** Any value the response carries → its text, or `null` for "not carried". */
+const detailText = (value) => scalarText(value) ?? structuredText(value);
+
+/** A field's value, or the marker with the reason there is none. */
+function DetailValue({ label, value, reason }) {
+  const shown = detailText(value);
+  if (shown === null) return <NotAvailableMarker label={label} reason={reason} />;
+  return <span className="min-w-0 break-words font-mono text-content-primary">{shown}</span>;
+}
+
+/** One labelled field of a section. */
+function DetailField({ label, value, reason, wide = false }) {
+  return (
+    <div className={`flex min-w-0 flex-col gap-1${wide ? ' col-span-2' : ''}`}>
+      <span className="text-micro uppercase tracking-wide text-content-secondary">{label}</span>
+      <DetailValue label={label} value={value} reason={reason} />
+    </div>
+  );
+}
+
+/**
+ * A whole section the response does not carry, or an empty list inside one.
+ *
+ * The marker AND the sentence, because this is the case where the sentence is the entire
+ * content of the region: a lone dash where a node trace was expected says nothing about why
+ * it is not there.
+ */
+function DetailNote({ label, reason }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="text-micro uppercase tracking-wide text-content-secondary">{label}</span>
+      <span className="flex min-w-0 flex-wrap items-baseline gap-2">
+        <NotAvailableMarker label={label} reason={reason} />
+        <span className="min-w-0 text-content-secondary">{reason}</span>
+      </span>
+    </div>
+  );
+}
+
+/** A titled group inside an expanded body. */
+function DetailSection({ title, children }) {
+  return (
+    <section className="flex min-w-0 flex-col gap-2 border-t border-line-default pt-2">
+      <h4 className="text-micro font-semibold uppercase tracking-wide text-content-secondary">
+        {title}
+      </h4>
+      {children}
+    </section>
+  );
+}
+
+/** Two columns of labelled fields. The one layout every section body uses. */
+function FieldGrid({ children }) {
+  return <div className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-2">{children}</div>;
+}
+
+/**
+ * A declared field list against one record.
+ *
+ * @param {Object} props
+ * @param {ReadonlyArray<{key: string, label: string, wide?: boolean}>} props.fields
+ * @param {unknown} props.record The section, as the projection handed it over.
+ * @param {string} props.path The response path of `record`, for the absence reasons.
+ */
+function DeclaredFields({ fields, record, path }) {
+  const source = plainRecord(record);
+  return (
+    <FieldGrid>
+      {fields.map((field) => (
+        <DetailField
+          key={field.key}
+          label={field.label}
+          value={source?.[field.key]}
+          reason={field.reason ?? absentReason(`${path}.${field.key}`)}
+          wide={field.wide === true}
+        />
+      ))}
+    </FieldGrid>
+  );
+}
+
+/**
+ * Every key of a record that the declared list above did not name.
+ *
+ * This is what keeps the four trace sections honest in the other direction. `market_info`
+ * and `ml_info` are open records, the engine dataclasses gain fields without asking this
+ * page, and a strategy's node closure is keyed by node id — so a body that rendered only
+ * its declared fields would quietly drop real recorded values. Renders nothing at all when
+ * there is nothing left over, rather than an empty heading.
+ */
+function OtherFields({ record, known, path, title = 'Other reported fields' }) {
+  const entries = Object.entries(plainRecord(record) ?? {}).filter(
+    ([key]) => !known.includes(key),
+  );
+  if (entries.length === 0) return null;
+  return (
+    <DetailSection title={title}>
+      <FieldGrid>
+        {entries.map(([key, value]) => (
+          <DetailField
+            key={key}
+            label={key}
+            value={value}
+            reason={absentReason(`${path}.${key}`)}
+          />
+        ))}
+      </FieldGrid>
+    </DetailSection>
+  );
+}
+
+/** The keys of a declared field list, for {@link OtherFields}. */
+const keysOf = (fields) => fields.map((field) => field.key);
+
+/** An open record rendered key by key — a node closure, an indicator reading set. */
+function RecordFields({ record, path, title, emptyReason }) {
+  const entries = Object.entries(plainRecord(record) ?? {});
+  return (
+    <DetailSection title={title}>
+      {entries.length === 0 ? (
+        <DetailNote label={title} reason={emptyReason} />
+      ) : (
+        <FieldGrid>
+          {entries.map(([key, value]) => (
+            <DetailField
+              key={key}
+              label={key}
+              value={value}
+              reason={absentReason(`${path}.${key}`)}
+            />
+          ))}
+        </FieldGrid>
+      )}
+    </DetailSection>
+  );
+}
+
+/* ── The DAG node trace (stages 2 and 4) ───────────────────────────────── */
+
+/**
+ * `_dag_node_entry`'s key set, minus the three the card renders in its own header.
+ *
+ * One key set covers both sources on purpose — the server's own decision: the engine's
+ * record and the row's persisted `node_closure` describe the same node with different
+ * amounts of detail, and the absent half comes back `None`/`[]` rather than as a second
+ * response shape. So a row-sourced node renders markers for the timing and the per-port
+ * I/O, which is exactly what it does not carry, and `source` on the card says why.
+ */
+const NODE_FIELDS = Object.freeze([
+  Object.freeze({ key: 'node_type', label: 'Node type' }),
+  Object.freeze({ key: 'node_label', label: 'Node label' }),
+  Object.freeze({ key: 'status', label: 'Status' }),
+  Object.freeze({ key: 'execution_ms', label: 'Execution ms' }),
+  Object.freeze({ key: 'cache_hit', label: 'Cache hit' }),
+  Object.freeze({ key: 'retry_count', label: 'Retries' }),
+  Object.freeze({ key: 'started_at', label: 'Started at' }),
+  Object.freeze({ key: 'ended_at', label: 'Ended at' }),
+  Object.freeze({ key: 'reading', label: 'Evaluated reading', wide: true }),
+  Object.freeze({ key: 'error', label: 'Error', wide: true }),
+]);
+
+/** The node keys rendered somewhere on the card, so `OtherFields` does not repeat them. */
+const NODE_KNOWN_KEYS = Object.freeze([
+  ...keysOf(NODE_FIELDS),
+  'node_id',
+  'source',
+  'is_source_node',
+  'inputs',
+  'outputs',
+]);
+
+const NODES_PATH = 'trace.dag_nodes.nodes[]';
+
+/**
+ * Why a node carries no per-port I/O. `_dag_nodes_from_row` cannot report any: the
+ * persisted closure holds the evaluated reading per node and nothing about the ports.
+ */
+const REASON_NO_NODE_IO =
+  'This node record reports no ports. Per-port inputs and outputs are recorded by the live '
+  + 'trace engine only, so a node reconstructed from the signal row carries the evaluated '
+  + 'reading instead.';
+
+/** One `_node_io` port: its key, its value, and the two shape facts the server sends. */
+function NodePort({ port, side, index }) {
+  const io = plainRecord(port) ?? {};
+  const name = scalarText(io.key);
+  const label = name ?? `${side} ${index + 1}`;
+  return (
+    <span className="flex min-w-0 flex-wrap items-baseline gap-2 font-mono text-micro">
+      {name === null ? (
+        <NotAvailableMarker label={`${label} name`} reason={absentReason(`${NODES_PATH}.${side}[].key`)} />
+      ) : (
+        <span className="text-content-secondary">{name}</span>
+      )}
+      <span aria-hidden="true" className="text-content-muted">=</span>
+      <DetailValue
+        label={`${label} value`}
+        value={io.value}
+        reason={absentReason(`${NODES_PATH}.${side}[].value`)}
+      />
+      <span aria-hidden="true" className="text-content-muted">·</span>
+      <DetailValue
+        label={`${label} dtype`}
+        value={io.dtype}
+        reason={absentReason(`${NODES_PATH}.${side}[].dtype`)}
+      />
+      <span aria-hidden="true" className="text-content-muted">·</span>
+      <DetailValue
+        label={`${label} shape`}
+        value={io.shape}
+        reason={absentReason(`${NODES_PATH}.${side}[].shape`)}
+      />
+    </span>
+  );
+}
+
+/** One side of a node's I/O. */
+function NodePorts({ ports, side, title }) {
+  const list = plainArray(ports);
+  if (list.length === 0) return <DetailNote label={title} reason={REASON_NO_NODE_IO} />;
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="text-micro uppercase tracking-wide text-content-secondary">{title}</span>
+      {list.map((port, index) => (
+        <NodePort
+          key={`${side}-${scalarText(plainRecord(port)?.key) ?? String(index)}`}
+          port={port}
+          side={side}
+          index={index}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** One node of the DAG trace, with its inputs and outputs. */
+function NodeCard({ node }) {
+  const record = plainRecord(node) ?? {};
+  const nodeId = scalarText(record.node_id);
+  const source = scalarText(record.source);
+  return (
+    <div
+      data-node-id={nodeId ?? undefined}
+      className="flex min-w-0 flex-col gap-2 rounded-sm border border-line-default px-2 py-2"
+    >
+      <div className="flex min-w-0 flex-wrap items-baseline gap-2 text-micro">
+        {nodeId === null ? (
+          <NotAvailableMarker label="Node id" reason={absentReason(`${NODES_PATH}.node_id`)} />
+        ) : (
+          <span className="font-mono font-medium text-content-primary">{nodeId}</span>
+        )}
+        <span className="text-content-secondary">
+          {source === null ? 'source not stated' : `read from ${source}`}
+        </span>
+        {record.is_source_node === true ? (
+          <span className="text-content-secondary">emitting node</span>
+        ) : null}
+      </div>
+
+      <DeclaredFields fields={NODE_FIELDS} record={record} path={NODES_PATH} />
+
+      <NodePorts ports={record.inputs} side="inputs" title="Inputs" />
+      <NodePorts ports={record.outputs} side="outputs" title="Outputs" />
+
+      <OtherFields
+        record={record}
+        known={NODE_KNOWN_KEYS}
+        path={NODES_PATH}
+        title="Other node fields"
+      />
+    </div>
+  );
+}
+
+/** The node trace behind a stage, or the reason there is none to show. */
+function NodeList({ nodes, title, emptyReason }) {
+  const list = plainArray(nodes);
+  return (
+    <DetailSection title={title}>
+      {list.length === 0 ? (
+        <DetailNote label={title} reason={emptyReason} />
+      ) : (
+        <div className="flex min-w-0 flex-col gap-2">
+          {list.map((node, index) => (
+            <NodeCard
+              key={scalarText(plainRecord(node)?.node_id) ?? `node-${index}`}
+              node={node}
+            />
+          ))}
+        </div>
+      )}
+    </DetailSection>
+  );
+}
+
+/** The `source` tag every trace section carries, rendered as its own fact. */
+function TraceSource({ value, path }) {
+  return (
+    <DetailField
+      label="Trace source"
+      value={value}
+      reason={absentReason(path)}
+    />
+  );
+}
+
+/* ── Stage 1: market data ──────────────────────────────────────────────── */
+
+/**
+ * `signal.market_info`'s named keys: `Signal._market_info()`'s attribution set plus the
+ * market facts `_market_facts` reads off the emitting node output. Everything else the
+ * record carries — including `reported`, where the emitter volunteered extra named facts —
+ * comes through `OtherFields`.
+ */
+const MARKET_FIELDS = Object.freeze([
+  Object.freeze({ key: 'symbol', label: 'Symbol' }),
+  Object.freeze({ key: 'timeframe', label: 'Timeframe' }),
+  Object.freeze({ key: 'price', label: 'Decision price' }),
+  Object.freeze({ key: 'bar_time', label: 'Bar time' }),
+  Object.freeze({ key: 'strength', label: 'Strength' }),
+  Object.freeze({ key: 'confidence', label: 'Confidence' }),
+  Object.freeze({ key: 'signal_type', label: 'Signal type' }),
+  Object.freeze({ key: 'side', label: 'Side' }),
+  Object.freeze({ key: 'mode', label: 'Mode' }),
+  Object.freeze({ key: 'source_node_ids', label: 'Source nodes', wide: true }),
+  Object.freeze({ key: 'sizing_intention', label: 'Sizing intention', wide: true }),
+]);
+
+const MARKET_PATH = 'signal.market_info';
+
+function MarketDataBody({ stage }) {
+  return (
+    <>
+      <DeclaredFields fields={MARKET_FIELDS} record={stage.detail} path={MARKET_PATH} />
+      <OtherFields
+        record={stage.detail}
+        known={keysOf(MARKET_FIELDS)}
+        path={MARKET_PATH}
+      />
+    </>
+  );
+}
+
+/* ── Stage 2: indicators ───────────────────────────────────────────────── */
+
+function IndicatorsBody({ stage }) {
+  const detail = plainRecord(stage.detail) ?? {};
+  return (
+    <>
+      <FieldGrid>
+        <TraceSource value={detail.source} path="trace.dag_nodes.source" />
+      </FieldGrid>
+
+      <RecordFields
+        record={detail.readings}
+        path="signal.indicators"
+        title="Indicator readings"
+        emptyReason={reasonFor('stage2Indicators') ?? absentReason('signal.indicators')}
+      />
+
+      <NodeList
+        nodes={detail.nodes}
+        title="Node trace"
+        emptyReason={REASON_TRACE_RETENTION}
+      />
+    </>
+  );
+}
+
+/* ── Stage 3: model ────────────────────────────────────────────────────── */
+
+/**
+ * `MLInferenceTrace`'s fields, which is the engine-sourced shape. A row-sourced section
+ * carries `ml_info` — an open column — so its keys arrive through `OtherFields`.
+ */
+const ML_FIELDS = Object.freeze([
+  Object.freeze({ key: 'model_id', label: 'Model id' }),
+  Object.freeze({ key: 'model_version', label: 'Model version' }),
+  Object.freeze({ key: 'prediction', label: 'Prediction' }),
+  Object.freeze({ key: 'confidence', label: 'Confidence' }),
+  Object.freeze({ key: 'inference_ms', label: 'Inference ms' }),
+  Object.freeze({ key: 'status', label: 'Status' }),
+  Object.freeze({ key: 'probabilities', label: 'Class probabilities', wide: true }),
+  Object.freeze({ key: 'features', label: 'Features', wide: true }),
+  Object.freeze({ key: 'feature_vector', label: 'Feature vector', wide: true }),
+  Object.freeze({ key: 'error_message', label: 'Error', wide: true }),
+]);
+
+const ML_PATH = 'trace.ml_inference.detail';
+
+/**
+ * Stage 3's body.
+ *
+ * The not-applicable arm renders the SECTION rather than a detail grid, because that is what
+ * the projection hands over for it: `{source, applicable: false, detail: null}`. There is no
+ * inference to lay out, and a grid of ten markers would imply the model's record was lost
+ * when the server's statement is that no model was consulted. The state comes from the
+ * module; this only reads which one it decided.
+ */
+function ModelBody({ stage }) {
+  if (stage.state === STAGE_NOT_APPLICABLE) {
+    const section = plainRecord(stage.detail) ?? {};
+    return (
+      <FieldGrid>
+        <TraceSource value={section.source} path="trace.ml_inference.source" />
+        <DetailField
+          label="Applies to this strategy"
+          value={section.applicable}
+          reason={absentReason('trace.ml_inference.applicable')}
+        />
+      </FieldGrid>
+    );
+  }
+
+  return (
+    <>
+      <DeclaredFields fields={ML_FIELDS} record={stage.detail} path={ML_PATH} />
+      <OtherFields record={stage.detail} known={keysOf(ML_FIELDS)} path={ML_PATH} />
+    </>
+  );
+}
+
+/* ── Stage 4: logic ────────────────────────────────────────────────────── */
+
+/**
+ * Why a `complete` stage 4 can still have no node to show: the projection's third branch,
+ * where nodes were retained, none of them is `LOGIC`-category, and the stage stands on
+ * `signal.decision` alone. Retention is demonstrably not the explanation there — nodes
+ * survived — so the retention sentence would be false.
+ */
+const REASON_DECISION_ONLY =
+  'The retained node trace carries no LOGIC-category node for this signal, so there are no '
+  + 'per-node inputs or outputs to show. The decision above is the signal record\u2019s own.';
+
+function LogicBody({ stage }) {
+  const detail = plainRecord(stage.detail) ?? {};
+  return (
+    <>
+      <FieldGrid>
+        <DetailField
+          label={labelFor('listDecision')}
+          value={detail.decision}
+          reason={absentReason('signal.decision')}
+        />
+        <TraceSource value={detail.source} path="trace.dag_nodes.source" />
+      </FieldGrid>
+
+      <NodeList
+        nodes={detail.nodes}
+        title="Logic nodes"
+        emptyReason={REASON_DECISION_ONLY}
+      />
+    </>
+  );
+}
+
+/* ── Stage 5: signal generated ─────────────────────────────────────────── */
+
+/**
+ * `SIGNAL_GENERATED.data` is `{decision, indicators, market_info}` — the same two records
+ * stages 1 and 2 render in full. Stated rather than dumped a second time: two copies of one
+ * record in one timeline read as two records, and a reader comparing them would be looking
+ * for a difference that cannot exist (`signal_event_timeline` reads both off the same row).
+ */
+const REASON_EVENT_REPEATS_SECTIONS =
+  'The SIGNAL_GENERATED payload repeats `signal.indicators` and `signal.market_info`, which '
+  + 'stages 1 and 2 render in full from the same row. It carries nothing else.';
+
+function SignalBody({ stage }) {
+  const detail = plainRecord(stage.detail) ?? {};
+  const event = plainRecord(detail.event);
+  return (
+    <>
+      <FieldGrid>
+        <DetailField
+          label={labelFor('listDecision')}
+          value={detail.decision}
+          reason={absentReason('signal.decision')}
+        />
+        <DetailField
+          label="Generated at"
+          value={event?.timestamp}
+          reason={absentReason('timeline[].event=SIGNAL_GENERATED.timestamp')}
+        />
+      </FieldGrid>
+
+      <DetailSection title="Event payload">
+        {event === null ? (
+          <DetailNote
+            label="SIGNAL_GENERATED"
+            reason={absentReason('timeline[].event=SIGNAL_GENERATED')}
+          />
+        ) : (
+          <p className="min-w-0 text-content-secondary">{REASON_EVENT_REPEATS_SECTIONS}</p>
+        )}
+      </DetailSection>
+    </>
+  );
+}
+
+/* ── Stage 6: order decision (risk validation + order created) ─────────── */
+
+/**
+ * The risk verdict's persisted key set — `signal_from_row`'s `risk` dict, which is the row
+ * source and the one both sources always have. The engine's `RiskValidationTrace` adds the
+ * limit numbers it measured against (`position_limit`, `exposure_pct`, `would_exceed`,
+ * `max_drawdown_limit`, `validation_ms`, `blocked`, `block_reason`), and those arrive
+ * through `OtherFields` — present on an engine-sourced section, absent on a row-sourced one,
+ * with no scaffolding either way.
+ */
+const RISK_FIELDS = Object.freeze([
+  Object.freeze({ key: 'passed', label: 'Risk passed' }),
+  Object.freeze({ key: 'position_size', label: 'Position size' }),
+  Object.freeze({ key: 'capital', label: 'Capital' }),
+  Object.freeze({ key: 'exposure', label: 'Exposure' }),
+  Object.freeze({ key: 'expected_loss', label: 'Expected loss' }),
+  Object.freeze({ key: 'expected_reward', label: 'Expected reward' }),
+  Object.freeze({ key: 'drawdown_check', label: 'Drawdown check' }),
+  Object.freeze({ key: 'evaluated_at', label: 'Evaluated at' }),
+  Object.freeze({ key: 'reason', label: 'Reason', wide: true }),
+]);
+
+const RISK_PATH = 'trace.risk_validation.detail';
+
+/** The risk keys rendered by name or as the check list, so `OtherFields` does not repeat them. */
+const RISK_KNOWN_KEYS = Object.freeze([...keysOf(RISK_FIELDS), 'checks']);
+
+/**
+ * FINDING, and why each check's verdict is a marker.
+ *
+ * §10.3 asks for "each risk check with its verdict". `RiskValidationTrace.checks` is a
+ * `List[str]` — the NAMES of the checks performed — and the verdict fields (`passed`,
+ * `blocked`, `block_reason`) are one verdict over the whole set. So the per-check verdict is
+ * not a field the backend produces. Repeating the overall verdict beside each name would
+ * claim nine results the server never recorded, so each name renders with the marker and
+ * this sentence instead.
+ */
+const REASON_CHECK_VERDICT_UNREPORTED =
+  'The risk section names the checks it performed and reports one verdict over the whole '
+  + 'set, so there is no per-check result recorded. The risk verdict above is that verdict.';
+
+function RiskChecks({ checks }) {
+  const names = plainArray(checks).map(detailText).filter((name) => name !== null);
+  const title = 'Checks performed';
+  return (
+    <DetailSection title={title}>
+      {names.length === 0 ? (
+        <DetailNote label={title} reason={absentReason(`${RISK_PATH}.checks`)} />
+      ) : (
+        <div className="flex min-w-0 flex-col gap-1">
+          {names.map((name) => (
+            <span
+              key={name}
+              className="flex min-w-0 flex-wrap items-baseline gap-2 font-mono text-micro"
+            >
+              <span className="text-content-primary">{name}</span>
+              <span aria-hidden="true" className="text-content-muted">·</span>
+              <NotAvailableMarker
+                label={`${name} verdict`}
+                reason={REASON_CHECK_VERDICT_UNREPORTED}
+              />
+            </span>
+          ))}
+        </div>
+      )}
+    </DetailSection>
+  );
+}
+
+/** `RISK_EVALUATED.data` and `ORDER_CREATED.data`, which are the row's own columns. */
+const RISK_EVENT_FIELDS = Object.freeze([
+  Object.freeze({ key: 'risk_passed', label: 'Risk passed' }),
+  Object.freeze({ key: 'position_size', label: 'Position size' }),
+  Object.freeze({ key: 'risk_reason', label: 'Risk reason', wide: true }),
+]);
+
+const ORDER_EVENT_FIELDS = Object.freeze([
+  Object.freeze({ key: 'order_id', label: 'Order id' }),
+  Object.freeze({ key: 'quantity', label: 'Quantity' }),
+]);
+
+/** One timeline event's `data`, plus the timestamp the event was recorded at. */
+function EventDetail({ event, fields, name, title }) {
+  const record = plainRecord(event);
+  const path = `timeline[].event=${name}`;
+  return (
+    <DetailSection title={title}>
+      {record === null ? (
+        <DetailNote label={name} reason={absentReason(path)} />
+      ) : (
+        <>
+          <FieldGrid>
+            <DetailField
+              label="Recorded at"
+              value={record.timestamp}
+              reason={absentReason(`${path}.timestamp`)}
+            />
+          </FieldGrid>
+          <DeclaredFields fields={fields} record={record.data} path={`${path}.data`} />
+          <OtherFields
+            record={record.data}
+            known={keysOf(fields)}
+            path={`${path}.data`}
+            title={`Other ${name} fields`}
+          />
+        </>
+      )}
+    </DetailSection>
+  );
+}
+
+function OrderDecisionBody({ stage }) {
+  const detail = plainRecord(stage.detail) ?? {};
+  return (
+    <>
+      <FieldGrid>
+        <TraceSource value={detail.source} path="trace.risk_validation.source" />
+      </FieldGrid>
+
+      <DeclaredFields fields={RISK_FIELDS} record={detail.risk} path={RISK_PATH} />
+      <RiskChecks checks={plainRecord(detail.risk)?.checks} />
+      <OtherFields record={detail.risk} known={RISK_KNOWN_KEYS} path={RISK_PATH} />
+
+      <EventDetail
+        event={detail.risk_event}
+        fields={RISK_EVENT_FIELDS}
+        name="RISK_EVALUATED"
+        title="Risk evaluated"
+      />
+      <EventDetail
+        event={detail.order_event}
+        fields={ORDER_EVENT_FIELDS}
+        name="ORDER_CREATED"
+        title="Order created"
+      />
+    </>
+  );
+}
+
+/* ── Stages 7 and 8: submission and execution ──────────────────────────── */
+
+/** `EXCHANGE_RESPONSE.data` — the two columns the row records for the venue's answer. */
+const SUBMISSION_EVENT_FIELDS = Object.freeze([
+  Object.freeze({ key: 'exchange_order_id', label: 'Exchange order id' }),
+  Object.freeze({ key: 'order_status', label: 'Order status' }),
+]);
+
+/**
+ * The submission half of `trace.execution.exchange_response` — the engine's `ExecutionTrace`
+ * as it was at submission. Reported ALONGSIDE the outcome and never merged into it, because
+ * on a signal whose fills arrived late the two legitimately disagree; the labels say which
+ * is which.
+ */
+const EXCHANGE_SUBMISSION_FIELDS = Object.freeze([
+  Object.freeze({ key: 'exchange', label: 'Exchange' }),
+  Object.freeze({ key: 'order_id', label: 'Order id' }),
+  Object.freeze({ key: 'status', label: 'Status' }),
+  Object.freeze({ key: 'order_type', label: 'Order type' }),
+  Object.freeze({ key: 'signal_type', label: 'Side' }),
+  Object.freeze({ key: 'symbol', label: 'Symbol' }),
+  Object.freeze({ key: 'requested_size', label: 'Requested size' }),
+  Object.freeze({ key: 'requested_price', label: 'Requested price' }),
+  Object.freeze({ key: 'submission_time', label: 'Submitted at' }),
+  Object.freeze({ key: 'response_time', label: 'Responded at' }),
+  Object.freeze({ key: 'exchange_latency_ms', label: 'Exchange latency ms' }),
+  Object.freeze({ key: 'error_code', label: 'Error code' }),
+  Object.freeze({ key: 'error_message', label: 'Error', wide: true }),
+]);
+
+/** The fill half of the same record, rendered at stage 8 where the fill belongs. */
+const EXCHANGE_FILL_FIELDS = Object.freeze([
+  Object.freeze({ key: 'filled_size', label: 'Filled size' }),
+  Object.freeze({ key: 'filled_price', label: 'Filled price' }),
+  Object.freeze({ key: 'fill_percent', label: 'Fill percent' }),
+  Object.freeze({ key: 'fees', label: 'Fees' }),
+  Object.freeze({ key: 'slippage', label: 'Slippage' }),
+  Object.freeze({ key: 'total_latency_ms', label: 'Total latency ms' }),
+]);
+
+const EXCHANGE_PATH = 'trace.execution.exchange_response';
+
+/**
+ * Why the engine's submission record can be absent on a signal that was submitted.
+ * `_execution_section` reports `exchange_response: null` when no engine record survives —
+ * the same hour's retention stage 4 depends on — and the row's own timeline event is then
+ * the whole record of what the venue said.
+ */
+const REASON_NO_EXCHANGE_RESPONSE =
+  'No engine-observed exchange response is retained for this signal, so the timeline event '
+  + 'above is the whole record of the venue\u2019s answer. The trace store keeps the engine\u2019s '
+  + 'record for about an hour.';
+
+function SubmissionBody({ stage }) {
+  const detail = plainRecord(stage.detail) ?? {};
+  const exchange = plainRecord(detail.exchange_response);
+  return (
+    <>
+      <EventDetail
+        event={detail.event}
+        fields={SUBMISSION_EVENT_FIELDS}
+        name="EXCHANGE_RESPONSE"
+        title="Exchange response"
+      />
+
+      <DetailSection title="Engine record at submission">
+        {exchange === null ? (
+          <DetailNote label="Exchange response" reason={REASON_NO_EXCHANGE_RESPONSE} />
+        ) : (
+          <DeclaredFields
+            fields={EXCHANGE_SUBMISSION_FIELDS}
+            record={exchange}
+            path={EXCHANGE_PATH}
+          />
+        )}
+      </DetailSection>
+    </>
+  );
+}
+
+/** `_execution_outcome_of`'s key set — the row's own columns, always all present. */
+const OUTCOME_FIELDS = Object.freeze([
+  Object.freeze({ key: 'order_id', label: 'Order id' }),
+  Object.freeze({ key: 'execution_id', label: 'Execution id' }),
+  Object.freeze({ key: 'execution_price', label: 'Execution price' }),
+  Object.freeze({ key: 'filled_quantity', label: 'Filled quantity' }),
+  Object.freeze({ key: 'remaining_quantity', label: 'Remaining quantity' }),
+  Object.freeze({ key: 'fees', label: 'Fees' }),
+  Object.freeze({ key: 'slippage', label: 'Slippage' }),
+  Object.freeze({ key: 'latency_ms', label: 'Latency ms' }),
+  Object.freeze({ key: 'pnl', label: 'P&L' }),
+  Object.freeze({ key: 'realized_pnl', label: 'Realised P&L' }),
+  Object.freeze({ key: 'order_updated_at', label: 'Order updated at' }),
+  Object.freeze({ key: 'executed_at', label: 'Executed at' }),
+  Object.freeze({ key: 'failure_reason', label: 'Failure reason', wide: true }),
+]);
+
+const OUTCOME_PATH = 'trace.execution.outcome';
+
+/** `EXECUTED.data`. */
+const EXECUTED_EVENT_FIELDS = Object.freeze([
+  Object.freeze({ key: 'trade_id', label: 'Trade id' }),
+  Object.freeze({ key: 'pnl', label: 'P&L' }),
+]);
+
+/** Everything either stage renders off the engine record, so neither repeats the other. */
+const EXCHANGE_KNOWN_KEYS = Object.freeze([
+  ...keysOf(EXCHANGE_SUBMISSION_FIELDS),
+  ...keysOf(EXCHANGE_FILL_FIELDS),
+]);
+
+function ExecutionBody({ stage }) {
+  const detail = plainRecord(stage.detail) ?? {};
+  const exchange = plainRecord(detail.exchange_response);
+  return (
+    <>
+      <DetailSection title="Execution outcome">
+        <DeclaredFields fields={OUTCOME_FIELDS} record={detail.outcome} path={OUTCOME_PATH} />
+      </DetailSection>
+
+      <EventDetail
+        event={detail.event}
+        fields={EXECUTED_EVENT_FIELDS}
+        name="EXECUTED"
+        title="Executed"
+      />
+
+      <DetailSection title="Engine fill record">
+        {exchange === null ? (
+          <DetailNote label="Fill detail" reason={REASON_NO_EXCHANGE_RESPONSE} />
+        ) : (
+          <>
+            <DeclaredFields
+              fields={EXCHANGE_FILL_FIELDS}
+              record={exchange}
+              path={EXCHANGE_PATH}
+            />
+            <OtherFields
+              record={exchange}
+              known={EXCHANGE_KNOWN_KEYS}
+              path={EXCHANGE_PATH}
+              title="Other exchange response fields"
+            />
+          </>
+        )}
+      </DetailSection>
+    </>
+  );
+}
+
+/* ── Stage 9: position update (BC-6) ───────────────────────────────────── */
+
+const POSITION_PATH = 'timeline[].event=POSITION_UPDATED.data';
+
+/**
+ * `_position_updated_event`'s `data` keys. The event reports the position CHANGE, which is
+ * why `resulting_position` is in the list and is always `null`: no column in this domain
+ * carries the absolute holding a signal left behind.
+ */
+const POSITION_FIELDS = Object.freeze([
+  Object.freeze({ key: 'symbol', label: 'Symbol' }),
+  Object.freeze({ key: 'direction', label: 'Direction' }),
+  Object.freeze({ key: 'quantity_delta', label: 'Quantity change' }),
+  Object.freeze({ key: 'average_price', label: 'Average price' }),
+  Object.freeze({ key: 'trade_id', label: 'Trade id' }),
+  Object.freeze({ key: 'realized_pnl', label: 'Realised P&L' }),
+]);
+
+/** The keys rendered by name or as the server's own absence list. */
+const POSITION_KNOWN_KEYS = Object.freeze([
+  ...keysOf(POSITION_FIELDS),
+  'resulting_position',
+  'not_available',
+  'not_available_reason',
+]);
+
+/**
+ * Stage 9's body, and the one place the page renders a SERVER-SUPPLIED absence reason.
+ *
+ * `data.not_available` names the transition fields the row did not report, plus
+ * `resulting_position`, and `data.not_available_reason` says why in one sentence
+ * (`signal_service.POSITION_RESULTING_UNREPORTED_REASON`). Both are surfaced VERBATIM: the
+ * list is rendered as the server spelled it, and the sentence is passed to every marker for
+ * a listed field instead of this page's own `absentReason`. `pageFields`' `resultingPosition`
+ * reason is the fallback for a payload that omits the server's, and it says so there — two
+ * independent sentences for one fact is how they drift.
+ */
+function PositionUpdateBody({ stage }) {
+  const data = plainRecord(stage.detail) ?? {};
+  const unavailable = plainArray(data.not_available)
+    .map(scalarText)
+    .filter((field) => field !== null);
+  const serverReason = scalarText(data.not_available_reason);
+  const listed = (key) => (unavailable.includes(key) ? serverReason : null);
+
+  return (
+    <>
+      <FieldGrid>
+        {POSITION_FIELDS.map((field) => (
+          <DetailField
+            key={field.key}
+            label={field.label}
+            value={data[field.key]}
+            reason={listed(field.key) ?? absentReason(`${POSITION_PATH}.${field.key}`)}
+          />
+        ))}
+        <DetailField
+          label={labelFor('resultingPosition')}
+          value={data.resulting_position}
+          reason={
+            listed('resulting_position')
+            ?? serverReason
+            ?? reasonFor('resultingPosition')
+            ?? absentReason(`${POSITION_PATH}.resulting_position`)
+          }
+          wide
+        />
+      </FieldGrid>
+
+      <DetailSection title="Reported as not available by the server">
+        {unavailable.length === 0 ? (
+          <DetailNote
+            label="Not available"
+            reason={absentReason(`${POSITION_PATH}.not_available`)}
+          />
+        ) : (
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="flex min-w-0 flex-wrap gap-2 font-mono text-micro text-content-primary">
+              {unavailable.map((field) => (
+                <span key={field}>{field}</span>
+              ))}
+            </span>
+            {serverReason === null ? (
+              <NotAvailableMarker
+                label="Not available reason"
+                reason={absentReason(`${POSITION_PATH}.not_available_reason`)}
+              />
+            ) : (
+              <span className="min-w-0 text-content-secondary">{serverReason}</span>
+            )}
+          </div>
+        )}
+      </DetailSection>
+
+      <OtherFields record={data} known={POSITION_KNOWN_KEYS} path={POSITION_PATH} />
+    </>
+  );
+}
+
+/* ── The nine bodies, keyed by canonical stage id ──────────────────────── */
+
+/**
+ * Canonical id → the renderer for its expanded region.
+ *
+ * Keyed by id for the same reason `STAGE_FIELD` is: a stage with no body is a missing key
+ * rather than an off-by-one, and the map cannot drift out of step with the projection's
+ * order.
+ */
+const STAGE_BODY = Object.freeze({
+  [STAGE_MARKET_DATA]: MarketDataBody,
+  [STAGE_INDICATORS]: IndicatorsBody,
+  [STAGE_MODEL]: ModelBody,
+  [STAGE_LOGIC]: LogicBody,
+  [STAGE_SIGNAL]: SignalBody,
+  [STAGE_ORDER_DECISION]: OrderDecisionBody,
+  [STAGE_SUBMISSION]: SubmissionBody,
+  [STAGE_EXECUTION]: ExecutionBody,
+  [STAGE_POSITION_UPDATE]: PositionUpdateBody,
+});
+
+/**
+ * The technical detail for one stage, or the one sentence that says why there is none.
+ *
+ * A stage the projection resolved with no backing record has `detail === null` — swept by
+ * retention, not yet reached, refused upstream, or not applicable to the strategy — and the
+ * body then carries the module's own reason and nothing else. It does NOT render the field
+ * grid with every cell marked: scaffolding for a record that does not exist reads as a
+ * record that arrived empty, which is a different fact and a worse one.
+ *
+ * @param {Object} props
+ * @param {Object} props.stage One entry of `buildSignalTraceStages(...).stages`.
+ * @param {string|undefined} props.declaredReason `pageFields`' reason for this stage.
+ */
+function StageDetail({ stage, declaredReason }) {
+  const Body = STAGE_BODY[stage.id] ?? null;
+  const label = `${stage.name} detail`;
+
+  if (Body === null || plainRecord(stage.detail) === null) {
+    return (
+      <DetailNote
+        label={label}
+        reason={stage.reason ?? declaredReason ?? absentReason(`this trace\u2019s ${stage.name}`)}
+      />
+    );
+  }
+
+  return (
+    <div data-stage-detail={stage.id} className="flex min-w-0 flex-col gap-2">
+      <Body stage={stage} />
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
  * ONE STAGE ROW — COLLAPSED, AND INDEPENDENT (Requirement 9.3, §10.3)
  * ══════════════════════════════════════════════════════════════════════════ */
 
@@ -432,11 +1455,14 @@ function StageLatency({ stage }) {
  * rather than conditionally rendered, so `aria-controls` always names an element that
  * exists.
  *
- * PART (a) OF TASK 21.4 STOPS AT THE REGION'S FRAME. The region carries the stage's state,
- * the server's reason and the human summary; the technical detail — raw indicator values,
- * per-node inputs and outputs, ML confidence, each risk check, the exchange fields, the
- * fill, and stage 9's `not_available` list — is part (b). The region is real and correctly
- * wired now, and gains content there rather than being introduced there.
+ * WHAT THE REGION CARRIES (part (b), task 21.4b)
+ * ---------------------------------------------
+ * The stage's state, the server's reason, the human summary, and then the technical detail
+ * §10.3 asks for: `market_info`'s fields, the raw indicator readings and every `dag_nodes`
+ * node with its per-port inputs and outputs, the ML confidence and model id, the LOGIC
+ * nodes and the decision, each named risk check, the exchange response fields, the fill, and
+ * stage 9's position change with the server's `not_available` list and `not_available_reason`
+ * verbatim. All of it off `stage.detail` — see `StageDetail` above.
  *
  * @param {Object} props
  * @param {Object} props.stage One entry of `buildSignalTraceStages(...).stages`.
@@ -546,6 +1572,9 @@ function StageRow({ stage, expanded, onToggle }) {
               <span className="text-content-secondary">{stage.reason ?? declaredReason}</span>
             )}
           </div>
+
+          {/* The technical detail — the whole point of expanding a row. */}
+          <StageDetail stage={stage} declaredReason={declaredReason} />
         </div>
       </div>
     </div>
