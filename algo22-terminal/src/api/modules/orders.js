@@ -3,18 +3,12 @@
  * 
  * Endpoints: /api/orders/*
  */
-import { get, post, put } from '../../apiClient';
+import { get, post } from '../../apiClient';
 
-/**
- * @typedef {Object} OrderRequest
- * @property {string} symbol - Trading symbol (e.g., BTCUSDT)
- * @property {string} side - Order side: 'buy' or 'sell'
- * @property {string} type - Order type: 'market', 'limit', 'stop', 'stop_limit'
- * @property {number} quantity - Order quantity
- * @property {number} [price] - Order price (required for limit orders)
- * @property {number} [stopPrice] - Stop price (required for stop orders)
- * @property {number} [timeInForce] - Time in force: 'GTC', 'IOC', 'FOK'
- * @property {Object} [params] - Additional exchange-specific parameters
+/*
+ * The `OrderRequest` typedef went with `createOrder` below. It described an
+ * order-placement body, and nothing in this module places an order any more — leaving it
+ * would document a request shape no method here can send.
  */
 
 /**
@@ -31,38 +25,34 @@ import { get, post, put } from '../../apiClient';
  * @property {string} timestamp - Order timestamp
  */
 
+/*
+ * ⚠️ SIX DEAD METHODS WERE DELETED FROM THIS MODULE ⚠️
+ * ----------------------------------------------------
+ * `createOrder`, `getOrders`, `getOrder`, `updateOrder`, `getOrderTrades` and
+ * `getClosedOrders` all addressed routes `routers/orders.py` does not declare, so every call
+ * 404'd. None had a caller anywhere in `src/` — checked before deleting, one at a time — so
+ * removing them changes no behaviour. What each was, and why it is gone rather than
+ * repointed:
+ *
+ *   * `createOrder` — `POST /api/orders`. The router declares nothing at its mount root. The
+ *     nearest POSTs are `/execute` and `/create`, and **both answer 403
+ *     MANUAL_EXECUTION_BLOCKED by design**: this backend routes all execution through a
+ *     strategy deployment. So there is no correct address for it and it must not be given
+ *     one. `pages/LiveTrading.jsx`'s docblock already records that it adds no manual-order
+ *     affordance of any kind for this reason.
+ *   * `getOrders` — `GET /api/orders?{filters}`. Same absent root. The supported reads are
+ *     `GET /open` (`getOpenOrders`) and `GET /history` (`getHistory`), both below.
+ *   * `getOrder` (GET) and `updateOrder` (PUT) — `/api/orders/{order_id}`, which the router
+ *     declares under no verb. That absence is what made the old
+ *     `DELETE /api/orders/{orderId}` cancel a 404 too (corrected at task 20.3, below). A
+ *     single order is read out of `/open` or `/history`; amendment is not offered at all.
+ *   * `getOrderTrades` — `GET /api/orders/{order_id}/trades`. Per-order fills are not
+ *     exposed.
+ *   * `getClosedOrders` — `GET /api/orders/closed`. The router declares `/open` and
+ *     `/history` and no `/closed`. **`GET /api/orders/history` is the closed-order read**, so
+ *     if something needs closed orders it already has a correct method: `getHistory`.
+ */
 export const ordersApi = {
-  /**
-   * Create a new order
-   * @param {OrderRequest} orderData - Order details
-   * @returns {Promise<OrderResponse>}
-   */
-  createOrder: async (orderData) => {
-    return post('/api/orders', orderData);
-  },
-
-  /**
-   * Get order by ID
-   * @param {string} orderId - Order ID
-   * @returns {Promise<OrderResponse>}
-   */
-  getOrder: async (orderId) => {
-    return get(`/api/orders/${orderId}`);
-  },
-
-  /**
-   * Get all orders for current user
-   * @param {Object} [filters] - Optional filters
-   * @param {string} [filters.symbol] - Filter by symbol
-   * @param {string} [filters.status] - Filter by status
-   * @param {number} [filters.limit] - Limit results
-   * @returns {Promise<OrderResponse[]>}
-   */
-  getOrders: async (filters = {}) => {
-    const params = new URLSearchParams(filters);
-    return get(`/api/orders?${params}`);
-  },
-
   /**
    * Cancel ONE resting order at a venue.
    *
@@ -180,36 +170,4 @@ export const ordersApi = {
     return get(`/api/orders/open?${params}`);
   },
 
-  /**
-   * Get closed orders
-   * @param {Object} [filters] - Optional filters
-   * @param {string} [filters.symbol] - Filter by symbol
-   * @param {number} [filters.limit] - Limit results
-   * @returns {Promise<OrderResponse[]>}
-   */
-  getClosedOrders: async (filters = {}) => {
-    const params = new URLSearchParams(filters);
-    return get(`/api/orders/closed?${params}`);
-  },
-
-  /**
-   * Get order trades
-   * @param {string} orderId - Order ID
-   * @returns {Promise<Array>}
-   */
-  getOrderTrades: async (orderId) => {
-    return get(`/api/orders/${orderId}/trades`);
-  },
-
-  /**
-   * Update order (if supported by exchange)
-   * @param {string} orderId - Order ID
-   * @param {Object} updates - Order updates
-   * @param {number} [updates.price] - New price
-   * @param {number} [updates.quantity] - New quantity
-   * @returns {Promise<OrderResponse>}
-   */
-  updateOrder: async (orderId, updates) => {
-    return put(`/api/orders/${orderId}`, updates);
-  },
 };

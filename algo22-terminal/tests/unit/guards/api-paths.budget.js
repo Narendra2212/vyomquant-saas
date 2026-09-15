@@ -20,10 +20,46 @@
  * assertion lets one contributor fix twelve of these and leave the list at its old
  * length, so the next contributor can put twelve back without CI noticing.
  *
- * **This commit fixes none of them.** The task that produced this list was scoped
- * to the guard; changing a client method or a router here would mix a detection
- * change with twenty-five behaviour changes in one diff. The list is the
- * deliverable.
+ * The commit that seeded this list fixed none of them, deliberately: the task was
+ * scoped to the guard, and changing a client method there would have mixed a
+ * detection change with twenty-five behaviour changes in one diff.
+ *
+ * ---------------------------------------------------------------------------
+ * 25 SEEDED, 23 CLEARED, 2 LEFT
+ * ---------------------------------------------------------------------------
+ * The follow-up commit cleared the twenty-three whose fix was unambiguous — every
+ * one where the router either declares the right address or declares nothing the
+ * call could have meant:
+ *
+ *   * **Sixteen went with `src/api/typed-client.ts`**, deleted outright. It was a
+ *     complete second API client written against an older route table, exported as
+ *     `api`, and nothing in `src/` imported it (verified across `.js`, `.jsx`, `.ts`
+ *     and `.tsx` — the twenty-two `import { api } from '../api'` sites all resolve
+ *     to `src/api/index.js`, which neither imports nor re-exports it).
+ *     `src/types/api.types.ts` went with it: it was imported by that file and
+ *     nothing else, so it died with its only consumer. Sixteen addresses that would
+ *     have become sixteen shipped defects on one `import` are now zero lines of code.
+ *   * **Four were dead methods with no caller**, deleted rather than repointed
+ *     because no correct address exists for them: `marketApi.haltStrategies` (there
+ *     is no fleet-wide halt endpoint — `POST /api/risk/kill-switch` is the real one),
+ *     `riskApi.getAccountHealth`, and the six `orders.js` methods aimed at the three
+ *     dead order addresses (`/api/orders`, `/api/orders/{}`, `/api/orders/{}/trades`,
+ *     `/api/orders/closed`). `createOrder` in particular must never be repointed:
+ *     `POST /execute` and `POST /create` answer 403 MANUAL_EXECUTION_BLOCKED **by
+ *     design**, because this backend routes all execution through a strategy
+ *     deployment.
+ *   * **Two were live reads at the wrong address**, repointed:
+ *     `riskApi.getMarginHealth` to `GET /api/risk/margin-health` (its caller,
+ *     `pages/RiskSettings.jsx`, renders exactly the body that route returns — the
+ *     read was real and simply was not being reached) and `pages/Backtester.jsx`'s
+ *     raw `fetch` to `POST /api/backtests/validate-data`.
+ *
+ * **The two that remain are not oversights.** Both `CopilotContext.jsx` entries need
+ * a product decision before a fix can be right: `generateDAG` has no endpoint at all,
+ * so whether Copilot DAG generation is meant to exist is the question, not which path
+ * to type; and `loadSession`'s read wants `GET /sessions/{id}/messages`, which returns
+ * messages rather than a session, so repointing it changes what the caller receives.
+ * Guessing either would be a behaviour change disguised as a path fix.
  *
  * ---------------------------------------------------------------------------
  * KEY FORMAT
@@ -46,32 +82,16 @@
  * call sites.
  *
  * ---------------------------------------------------------------------------
- * SEEDED FROM THE TREE ON THE DAY THE GUARD WAS WIDENED
+ * WHAT THE SCAN NOW READS
  * ---------------------------------------------------------------------------
- * 25 keys over 6 files, from 263 transport call sites and 308 path literals checked
+ * 2 keys over 1 file, from 185 transport call sites and 215 path literals checked
  * against the 338 routes `main.py`'s mounts resolve to. Measured, not estimated.
- * Nine keys are in live code, covering twelve call sites — three of those dead
- * addresses are each reached by two client methods. The other sixteen are in
- * `src/api/typed-client.ts`, which nothing imports.
  *
- * ---------------------------------------------------------------------------
- * `src/api/typed-client.ts` — sixteen of these, and the honest recommendation
- * ---------------------------------------------------------------------------
- * That file is a complete second API client, `export`ed as `api`, and **no module
- * in `src/` imports it**. It was written against an older route table and never
- * re-checked: it addresses `/api/auth/signin` and `/api/auth/signup` (the router
- * declares `/login` and `/register`), `/api/auth/refresh` (never existed),
- * `/api/market/candles?symbol=…` in query form (the route takes path parameters),
- * `/api/user/stats` and `/api/user/security-logs` (the real reads are `/api/stats`
- * and `/api/security/logs`), and it still carries defects 4 and 5 — the ones
- * `api/modules/orders.js` was corrected off at task 20.3 — untouched.
- *
- * It is recorded rather than excluded because "nothing imports it *today*" is not a
- * property a guard can rely on: one `import { api } from './typed-client'` turns
- * sixteen recorded defects into sixteen shipped ones. The recommendation is to
- * delete the file, and this list is the argument for it: bringing it up to date
- * means re-checking sixteen addresses against a router table
- * `src/api/modules/**` already tracks correctly.
+ * The seeding day read 263 call sites and 308 literals. The drop is almost entirely
+ * `typed-client.ts`: that one file held 78 of the call sites and 93 of the literals,
+ * which is the scale of the duplicate it was. The rest is the ten deleted methods.
+ * No router changed and no route was lost — 338 is the same number both days, which
+ * is the check that the reduction is on the client side only.
  */
 
 /**
@@ -84,60 +104,6 @@ export const KNOWN_API_DEFECTS = Object.freeze({
   /* ── Dead addresses in LIVE code ─────────────────────────────────────────
    * These are reachable from the running app. Each is a total failure of the
    * feature that calls it, not a degradation. */
-
-  // `marketApi.haltStrategies` — the emergency "halt all strategies" call. It POSTs
-  // `/api/strategies/stop`; `routers/strategies.py` declares `POST /{strategy_id}/stop`
-  // and no `POST /stop`, and there is no `POST /{strategy_id}` for the literal `stop` to
-  // fall into either. There is no fleet-wide halt endpoint at all: the kill switch is
-  // `POST /api/risk/kill-switch`, which `riskApi.killSwitch` already reaches. Worst of the
-  // nine, because it is a safety control that reports success while doing nothing.
-  'wrong-path|src/api/modules/market.js|/api/strategies/stop':
-    'POST; routers/strategies.py declares POST /{strategy_id}/stop only. No fleet-wide ' +
-    'halt route exists — POST /api/risk/kill-switch is the one that stops trading.',
-
-  // Two call sites, one dead address: `ordersApi.createOrder` (POST) and
-  // `ordersApi.getOrders` (GET, with a `?${params}` query). `routers/orders.py` declares
-  // nothing at its mount root. The nearest POSTs are `/execute` and `/create`, and both
-  // answer 403 MANUAL_EXECUTION_BLOCKED by design — this backend routes all execution
-  // through a strategy deployment — so `createOrder` has no correct address to move to.
-  // The open/history/cancel reads are the supported surface.
-  'wrong-path|src/api/modules/orders.js|/api/orders':
-    'createOrder (POST) and getOrders (GET); routers/orders.py declares no route at the ' +
-    'mount root. POST /execute and POST /create both answer 403 by design.',
-
-  // `ordersApi.getOrder` (GET) and `ordersApi.updateOrder` (PUT). `routers/orders.py`
-  // declares no `/{order_id}` route under any verb — the same absence that made defect 5
-  // (`DELETE /api/orders/{orderId}`) a 404. A single order is read out of
-  // `GET /open` or `GET /history`; amendment is not offered at all.
-  'wrong-path|src/api/modules/orders.js|/api/orders/{}':
-    'getOrder (GET) and updateOrder (PUT); routers/orders.py declares no /{order_id} ' +
-    'route under any verb. This is the absence behind defect 5.',
-
-  // `ordersApi.getOrderTrades`. No such route; per-order fills are not exposed.
-  'wrong-path|src/api/modules/orders.js|/api/orders/{}/trades':
-    'getOrderTrades (GET); routers/orders.py declares no per-order trades route.',
-
-  // `ordersApi.getClosedOrders`. `routers/orders.py` declares `/open` and `/history` and
-  // no `/closed`; `GET /history` is the closed-order read.
-  'wrong-path|src/api/modules/orders.js|/api/orders/closed':
-    'getClosedOrders (GET); routers/orders.py declares /open and /history only.',
-
-  // `riskApi.getMarginHealth` AND `riskApi.getAccountHealth` — two methods, one dead
-  // address. `routers/risk.py` declares `GET /margin-health` and `GET /status`; there is
-  // no `/account-health`. So the margin-health read is addressable and is not being
-  // addressed, and the account-health read has no endpoint at all.
-  'wrong-path|src/api/modules/risk.js|/api/risk/account-health':
-    'getMarginHealth and getAccountHealth (GET); routers/risk.py declares ' +
-    'GET /margin-health and GET /status, not /account-health.',
-
-  // `pages/Backtester.jsx`'s raw `fetch`. Defect 1's exact shape, still in the tree:
-  // `strategy_operations.router` is mounted at `/api` and this route carries no
-  // `strategy-operations` alias, so the declared path is `/api/backtests/validate-data`.
-  // The old guard's docblock named this call site and left it out of scope; widening the
-  // globs is what surfaced it.
-  'wrong-path|src/pages/Backtester.jsx|/api/strategy-operations/backtests/validate-data':
-    'POST; strategy_operations.py declares POST /backtests/validate-data at the /api ' +
-    'mount and no strategy-operations alias — i.e. /api/backtests/validate-data.',
 
   // `CopilotContext.generateDAG`. `routers/copilot.py` declares `/chat/stream`,
   // `/sessions`, `/sessions/{id}/messages` and `DELETE /sessions/{id}`. There is no DAG
@@ -153,65 +119,6 @@ export const KNOWN_API_DEFECTS = Object.freeze({
   'wrong-method|src/contexts/CopilotContext.jsx|GET /api/v1/copilot/sessions/{}':
     'loadSession; routers/copilot.py declares DELETE for that path. The read is ' +
     'GET /sessions/{session_id}/messages.',
-
-  /* ── Dead addresses in `src/api/typed-client.ts` ─────────────────────────
-   * Nothing imports this module. See the header for why they are recorded anyway
-   * and why deleting the file is the recommendation. */
-
-  'wrong-path|src/api/typed-client.ts|/api/auth/signin':
-    'auth.signIn (POST); routers/auth.py declares POST /login.',
-  'wrong-path|src/api/typed-client.ts|/api/auth/signup':
-    'auth.signUp (POST); routers/auth.py declares POST /register.',
-  'wrong-path|src/api/typed-client.ts|/api/auth/refresh':
-    'auth.refreshToken (POST); routers/auth.py declares no refresh route — the token is ' +
-    'refreshed by Supabase in apiClient.js, not by this backend.',
-
-  'wrong-path|src/api/typed-client.ts|/api/market/candles':
-    'market.getCandles (GET, ?symbol=&timeframe=&limit=); routers/market.py declares ' +
-    'GET /candles/{symbol}/{timeframe}. Query form, path route.',
-  'wrong-path|src/api/typed-client.ts|/api/market/ticker':
-    'market.getTicker (GET, ?symbol=); routers/market.py declares GET /ticker/{symbol}.',
-  'wrong-path|src/api/typed-client.ts|/api/market/orderbook':
-    'market.getOrderBook (GET, ?symbol=&depth=); routers/market.py declares ' +
-    'GET /orderbook/{symbol}.',
-  'wrong-path|src/api/typed-client.ts|/api/market/funding-rate':
-    'market.getFundingRate (GET, ?symbol=); routers/market.py declares GET /funding/{symbol}.',
-
-  // Defect 5, still live here. `api/modules/orders.js` was corrected at task 20.3; this
-  // copy was not, because nothing calls it and nothing checked it.
-  'wrong-path|src/api/typed-client.ts|/api/orders/{}':
-    'orders.cancel (DELETE); routers/orders.py declares no DELETE at all — the cancel is ' +
-    'POST /cancel/{order_id}. This is defect 5, uncorrected in this module.',
-
-  'wrong-path|src/api/typed-client.ts|/api/portfolio/positions':
-    'portfolio.getPositions (GET); routers/portfolio.py declares no /positions. Positions ' +
-    'arrive in the dashboard aggregation (GET /api/dashboard).',
-  'wrong-path|src/api/typed-client.ts|/api/risk/account-health':
-    'risk.getAccountHealth (GET); routers/risk.py declares GET /margin-health and ' +
-    'GET /status. Same dead address as api/modules/risk.js.',
-  'wrong-path|src/api/typed-client.ts|/api/strategies/{}/start':
-    'strategies.start (POST); routers/strategies.py declares /deploy, /stop, /pause and ' +
-    '/resume, no /start.',
-  'wrong-path|src/api/typed-client.ts|/api/user/stats':
-    'user.getStats (GET); the read is GET /api/stats, declared on main.py itself.',
-  'wrong-path|src/api/typed-client.ts|/api/user/referrals':
-    'user.getReferralStats (GET); the read is GET /api/referral/stats.',
-  'wrong-path|src/api/typed-client.ts|/api/user/security-logs':
-    'user.getSecurityLogs (GET); routers/user.py declares GET /security/logs at the /api ' +
-    'mount — i.e. /api/security/logs.',
-
-  /* ── Missing required query parameters — 422 on every call ───────────────
-   * Defects 4 and 6's class: the address is right and the request is refused
-   * before the handler runs. Both are in `typed-client.ts`; `api/modules/orders.js`
-   * was corrected at tasks 20.1c and 20.3 and passes both checks. */
-
-  'missing-query|src/api/typed-client.ts|GET /api/orders/open':
-    'orders.getOpen sends no query at all; get_open_orders declares ' +
-    'exchange_id: str = Query(...) with no default. This is defect 4, uncorrected here.',
-  'missing-query|src/api/typed-client.ts|POST /api/orders/cancel-all':
-    'orders.cancelAll sends no query and no body; cancel_all declares ' +
-    'exchange_id: str = Query(...) with no default. Defect 6 reached the right path in ' +
-    'this module and still cannot succeed.',
 });
 
 /**
@@ -222,10 +129,23 @@ export const KNOWN_API_DEFECTS = Object.freeze({
  * examines zero paths passes for free, which is how a guard becomes decoration —
  * `source-scan.js`'s header calls that the green-looking non-run.
  *
- * Measured on the seeding day: 338 declared routes, 263 transport call sites, 308
- * path literals. Set about 10% below, so ordinary churn does not touch them and a
+ * Currently measured: 338 declared routes, 185 transport call sites, 215 path
+ * literals. Set about 10% below, so ordinary churn does not touch them and a
  * collapse does.
+ *
+ * THE TWO CLIENT FLOORS WERE LOWERED WHEN `typed-client.ts` WAS DELETED, and that is
+ * the one move a floor like this has to be defended for. They were 235 and 275,
+ * measured against 263 call sites and 308 literals. Deleting a 473-line duplicate
+ * client took 78 call sites and 93 literals out of the tree, so the old floors would
+ * have failed a commit that removed dead code rather than a commit that broke the
+ * scanner — which is the opposite of what they are for.
+ *
+ * What makes it safe to lower them rather than a hole: `ROUTES_READ_AT_LEAST` did
+ * **not** move, and 338 was the reading before and after. A scanner that had actually
+ * broken would have taken the route count down with it. And the reduction was
+ * accounted for file by file, not absorbed as churn: 78 + 93 from one deleted file
+ * plus ten deleted methods explains the whole of it.
  */
 export const ROUTES_READ_AT_LEAST = 300;
-export const CALLS_CHECKED_AT_LEAST = 235;
-export const LITERALS_CHECKED_AT_LEAST = 275;
+export const CALLS_CHECKED_AT_LEAST = 165;
+export const LITERALS_CHECKED_AT_LEAST = 190;

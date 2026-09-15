@@ -263,7 +263,14 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
       const API_BASE = CONFIG.apiBaseUrl;
       const token = sessionStorage.getItem("token");
 
-      const validationRes = await fetch(`${API_BASE}/api/strategy-operations/backtests/validate-data`, {
+      // ⚠️ PATH CORRECTION ⚠️ This read `/api/strategy-operations/backtests/validate-data`,
+      // which no router declares. `strategy_operations.router` is mounted at `/api` in
+      // `main.py` and `validate_historical_data` carries the single decorator
+      // `@router.post("/backtests/validate-data")` with no `strategy-operations` alias, so
+      // the declared address is the one below. The `if (validationRes.ok)` below meant the
+      // 404 was swallowed and every run skipped its data check silently — the same shape as
+      // the `listBacktests` defect the api-paths guard was originally written for.
+      const validationRes = await fetch(`${API_BASE}/api/backtests/validate-data`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
