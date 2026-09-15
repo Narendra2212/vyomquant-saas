@@ -1492,7 +1492,20 @@ Today the connection issue, the validation summary, the deployed-lock notice, th
 
 ### 10.1 The nine stages and what actually backs each one
 
-Requirement 9.1 names nine stages. The backend's `GET /api/signal-trace/signals/{id}` returns `{signal, trace, lifecycle_transitions, timeline, lifecycle_state_source, degraded}`, where `trace` carries four labelled sections (`dag_nodes`, `ml_inference`, `risk_validation`, `execution`) each tagged with its `source` (`signal_trace_engine` or `signals_row`), and `timeline` carries **five** event types: `SIGNAL_GENERATED`, `RISK_EVALUATED`, `ORDER_CREATED`, `EXCHANGE_RESPONSE`, `EXECUTED`.
+Requirement 9.1 names nine stages. The backend's `GET /api/signal-trace/signals/{id}` returns `{signal, trace, lifecycle_transitions, timeline, lifecycle_state_source, degraded}` (`signal_service.py::build_signal_detail`), where `trace` carries four labelled sections (`dag_nodes`, `ml_inference`, `risk_validation`, `execution`) each tagged with the `source` it was read from (`signal_trace_engine` or `signals_row`), and `timeline` carries **six** event types, declared server-side as `signal_service.SIGNAL_TIMELINE_EVENTS`: `SIGNAL_GENERATED`, `RISK_EVALUATED`, `ORDER_CREATED`, `EXCHANGE_RESPONSE`, `EXECUTED`, `POSITION_UPDATED`.
+
+**Corrected after task 21.1**, which verified this section against `backend_app/` while building `lib/signalTraceStages.js`: this paragraph said **five** event types, written before BC-6 landed. Task 12.6 added the sixth. The six names are transcribed from `SIGNAL_TIMELINE_EVENTS` rather than re-derived, because a client-side guess at an event name is the one mistake that never announces itself — it silently produces a stage with no backing.
+
+Each `trace` section is a **wrapper** carrying its `source` alongside the record, not the bare record:
+
+| Section | Shape |
+| --- | --- |
+| `trace.dag_nodes` | `{source, nodes: [...]}` — **`nodes` is the array**; the section itself is not iterable |
+| `trace.ml_inference` | `{source, applicable, detail}` — `detail` is `null` exactly when `applicable` is `false` |
+| `trace.risk_validation` | `{source, detail}` — `detail` carries `passed`, `blocked`, `reason`, `checks` and the sizing numbers |
+| `trace.execution` | `{source, outcome, exchange_response}` — `outcome` is the row's own projection, `exchange_response` is what the engine observed at submission; the server reports them side by side and never merges them, because on a signal whose fills arrived late the two legitimately disagree |
+
+**Corrected after task 21.1:** the mapping below described these four as if they were bare records, so `trace.dag_nodes` read as the node array and `trace.ml_inference` as the inference detail. Both are one level too shallow, and both fail *silently* — an array read of a wrapper object yields nothing on every payload rather than throwing on the first.
 
 `components/SignalTraceVisualization.jsx` currently renders **seven** stages (`MARKET_DATA INDICATORS DAG_NODES ML_INFERENCE RISK_VALIDATION EXECUTION EXCHANGE`) from a `trace.pipeline` array, with a Material-design palette (§1.1 G5).
 
@@ -1501,16 +1514,23 @@ The honest mapping:
 | # | Req 9.1 stage | Backing | Verdict |
 | --- | --- | --- | --- |
 | 1 | Market data input | `signal.market_info` (required field on `SignalCreateRequest`) | ✅ |
-| 2 | Indicator / feature evaluation | `signal.indicators` (required) + `trace.dag_nodes` | ✅ |
-| 3 | Model output | `trace.ml_inference` — carries `applicable: false` (not `null`) when the strategy version has no ML node | ✅ — and the `applicable` flag gives a genuine "not applicable" state distinct from "pending" |
-| 4 | Logic evaluation | **no dedicated record.** Derivable from `trace.dag_nodes` filtered to `LOGIC`-category nodes plus `signal.decision` | ⚠️ derived from real node records. When `dag_nodes` is empty (the trace engine has ~1h retention, so an older signal legitimately has none), the stage renders **not-available with the retention reason**, not pending. |
+| 2 | Indicator / feature evaluation | `signal.indicators` (required) + `trace.dag_nodes.nodes` | ✅ |
+| 3 | Model output | `trace.ml_inference` — the section carries `applicable: false` with `detail: null` (not a missing section) when the strategy version has no ML node | ✅ — and the `applicable` flag gives a genuine "not applicable" state distinct from "pending" |
+| 4 | Logic evaluation | **no dedicated record.** Derived from `trace.dag_nodes.nodes` filtered to `LOGIC`-category nodes (`NodeType.LOGIC` is spelled `"LOGIC"`, `strategy_dag/schema.py`) plus `signal.decision` | ⚠️ derived from real node records, in three branches — see §10.2's routes to `not-available`: a retained `LOGIC` node decides the stage on its own verdict; **no nodes at all** → not-available with the retention reason; **nodes retained but none `LOGIC`-category** → `complete` on `signal.decision` alone where the signal records one, else not-available with a reason naming the absent `LOGIC` node. |
 | 5 | Signal | `timeline` event `SIGNAL_GENERATED` + `signal.decision` | ✅ |
 | 6 | Order decision | `timeline` `RISK_EVALUATED` + `ORDER_CREATED` + `trace.risk_validation` | ✅ |
 | 7 | Submission | `timeline` `EXCHANGE_RESPONSE` | ✅ |
 | 8 | Execution | `timeline` `EXECUTED` + `trace.execution` | ✅ |
-| 9 | **Position update** | **nothing in the signal-trace domain records it.** `PUT /signals/{id}/execution` accepts `trade_id`, `pnl`, `realized_pnl` — a P&L outcome, not a position transition. | **🔶 BC-6** — either record a `POSITION_UPDATED` timeline event or expose the resulting position snapshot on the trace. Until then the stage renders **not-available** with reason *"The engine does not yet record the resulting position change for a signal."* It is **not omitted** (Requirement 9.2 requires all nine to be present) and it is **not** rendered as pending (that would claim it is coming). |
+| 9 | **Position update** | `timeline` `POSITION_UPDATED` (`signal_service.POSITION_UPDATED_EVENT`) and its `data` | ✅ — **BC-6, landed in task 12.6.** A real event-backed stage, resolved by the same rules as every other timeline-backed stage. |
 
-This is the one place where the requirement asks for something the backend does not track at all, and it is registered as BC-6 rather than approximated.
+**Corrected after task 21.1:** row 9 registered stage 9 as **🔶 BC-6** — "nothing in the signal-trace domain records it", rendering `not-available` permanently with the hardcoded reason *"The engine does not yet record the resulting position change for a signal."* That was true when it was written and is no longer. Task 12.6 landed the event, so the stage reads it rather than hardcoding an absence, and §16's BC-6 "until then" column is now historical.
+
+Two things about stage 9 that 21.4 has to honour:
+
+- **It is paired with stage 8, structurally.** `_position_updated_event` is gated on the same `executed_at` column `EXECUTED` is gated on, written by the same statement in the same transaction, so the two events are present or absent *together*. `POSITION_UPDATED` carries `EXECUTED`'s own timestamp and is appended after it under a stable sort, so stage 9 can never sort ahead of stage 8. There is no state in which stage 8 completed and stage 9 is a mystery.
+- **The event reports the position CHANGE only**, and names what it could not report: `data.not_available` lists the transition fields the row did not carry (of `symbol`, `direction`, `quantity_delta`, `average_price`) plus `resulting_position`, which no column in this domain carries at all, and `data.not_available_reason` says why in one sentence. Both are the **server's own text and are surfaced verbatim** — the page does not restate, summarise or substitute a frontend string, and it does not reconstruct an absolute position from a change.
+
+Stage 9 is therefore no longer the one place where the requirement asks for something the backend does not track at all. All nine stages now have a real backing record, and `not-available` is left to mean what §10.2 says it means.
 
 ### 10.2 Stage flow and state model
 
@@ -1527,8 +1547,22 @@ Every stage renders in exactly one of five states, and the state is a **function
 | `complete` | a backing record exists and reports success | `status.live` marker, solid rail, timestamp + latency |
 | `blocked` | a backing record exists and reports rejection (`risk_validation.blocked`, `order_status: REJECTED`) | `status.error` marker, solid rail, the server's reason |
 | `pending` | no backing record, and an **earlier** stage is `complete` while no stage is `blocked` — i.e. genuinely not yet reached (Requirement 9.2) | `status.neutral` outline marker, dashed rail, label *"Not yet reached"* |
-| `not-applicable` | the server said so — `ml_inference.applicable === false` | `content.muted` marker, dotted rail, label *"Not applicable to this strategy"* |
-| `not-available` | the capability or the retained record does not exist (stage 9 always; stage 4 when `dag_nodes` is empty) | `content.muted` marker, dotted rail, the reason in the summary line |
+| `not-applicable` | the server said so — `ml_inference.applicable === false`, and nothing else reaches this state | `content.muted` marker, dotted rail, label *"Not applicable to this strategy"* |
+| `not-available` | the record cannot be read: swept by retention, or belonging to a lifecycle that ended (the three routes below) | `content.muted` marker, dotted rail, the reason in the summary line |
+
+The three routes to `not-available`:
+
+| Route | When | Reason rendered |
+| --- | --- | --- |
+| Swept by retention | stage 4, and `trace.dag_nodes.nodes` is empty | The trace store keeps node-level records for about an hour, so a signal older than that legitimately has none. The window is a literal, not prose: `signal_trace_engine.py:473`, `retention_seconds: float = 3600`, with the sweeper dropping any trace older than that. The record existed and was swept, so it is not available rather than still to come. |
+| No `LOGIC` node | stage 4, nodes **were** retained, none of them is `LOGIC`-category, and `signal.decision` is absent | The retained node trace carries no `LOGIC`-category node and the signal records no decision. Retention is demonstrably not the explanation here — nodes survived — so quoting the retention reason would be false. |
+| Lifecycle ended | every stage **after** a `blocked` stage | The stage that stopped the signal, named rather than described generically: *"The signal was stopped at Order decision, so this stage will never occur. It is not available rather than pending, which would claim it is still coming."* |
+
+**Corrected after task 21.1**, twice. The `not-available` row read "the capability or the retained record does not exist (stage 9 always; stage 4 when `dag_nodes` is empty)". Stage 9 is no longer permanently not-available (§10.1), and stage 4 has the second, distinct route above.
+
+The third route is new, and it closes a hole: the `pending` definition above already forecloses `pending` for a blocked signal — "an **earlier** stage is `complete` while no stage is `blocked`" — but named no state in its place, leaving stages 6–9 of a signal refused at risk validation unspecified. They are `not-available`, with a reason naming the blocking stage. `pending` is a promise about the future, and a signal refused at risk will never be submitted, never fill and never move a position, so `pending` would be a lie the page tells on every blocked signal. `not-applicable` is wrong for the same reason it stays reserved to the server's own statement: nobody said those stages do not apply, and they *would* have applied had the signal passed — "this strategy has no model" and "this order was refused" are different facts about a trace and must not collapse into one marker.
+
+This does not relax Requirement 9.2. The row still renders, still in canonical position, still visually distinct, still not omitted; it carries strictly more than a `pending` row would, because the reason names the stage that ended the lifecycle instead of implying the stage is still coming.
 
 The renderer builds the nine stages from the canonical list first and *then* attaches whatever the payload provides. This inversion — canonical list outward rather than payload inward — is what makes Requirement 9.1's "in order" and 9.2's "rather than omitting it" structural, and it is why an unknown event type in the payload cannot add or remove a row (property P9, §19).
 
@@ -1538,19 +1572,30 @@ The renderer builds the nine stages from the canonical list first and *then* att
 ┌ PageHeader "Signal Trace" ── [strategy ▾] [environment ▾] ── TradingEnvironmentBadge ┐
 ├ FilterBar + signal list (DataTable) — Time · Strategy · Market · Decision · Outcome  │
 ├ Selected signal ────────────────────────────────────────────────────────────────────┤
-│  ● 1 Market data          BTC/USDT 15m · 12:04:00Z            2ms        ⌄          │
+│  ● 1 Market data          BTC/USDT 15m · 12:04:00Z              —        ⌄          │
 │  ● 2 Indicators           RSI 28.4 · EMA50 63,120            11ms        ⌄          │
-│  ○ 3 Model                Not applicable to this strategy               ⌄          │
+│  ○ 3 Model                Not applicable to this strategy       —        ⌄          │
 │  ● 4 Logic                RSI < 30 AND close > EMA → true     1ms        ⌄          │
-│  ● 5 Signal               BUY · strength 0.68                            ⌄          │
-│  ● 6 Order decision       Risk passed · size 0.014 BTC        4ms        ⌄          │
-│  ● 7 Submission           Binance accepted · order …9F2      86ms        ⌄          │
+│  ● 5 Signal               BUY · strength 0.68                   —        ⌄          │
+│  ● 6 Order decision       Risk passed · size 0.014 BTC          —        ⌄          │
+│  ● 7 Submission           Binance accepted · order …9F2         —        ⌄          │
 │  ● 8 Execution            Filled 0.014 @ 63,118 · fee 0.88   12ms        ⌄          │
-│  ◌ 9 Position update      Not recorded by the engine yet                 —          │
+│  ● 9 Position update      BTC/USDT BUY · Δ 0.014                —        ⌄          │
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Every row is collapsed on first render. Each row is an independent `<button aria-expanded>` controlling its own region — expanding one does not collapse or affect another (property P10, §19). The one-line summary carries stage number, stage name, the human summary, and latency; the expanded body carries the technical detail (raw indicator values, `dag_nodes` per-node inputs/outputs, ML confidence and model id, each risk check with its verdict, exchange response fields, fill detail).
+Every row is collapsed on first render. Each row is an independent `<button aria-expanded>` controlling its own region — expanding one does not collapse or affect another (property P10, §19). The one-line summary carries stage number, stage name, the human summary, and latency where a latency exists; the expanded body carries the technical detail (raw indicator values, `dag_nodes.nodes` per-node inputs/outputs, ML confidence and model id, each risk check with its verdict, exchange response fields, fill detail, and for stage 9 the position change with the server's `not_available` list and `not_available_reason` rendered verbatim).
+
+**Corrected after task 21.1:** the mock above carried a latency figure on almost every row, including stages that have no latency field anywhere in the response. Three fields in the whole payload report a duration — `dag_nodes[].execution_ms`, `ml_inference.detail.inference_ms` and `execution.outcome.latency_ms` — so the only stages that can ever show a real figure are:
+
+| Stage | Field |
+| --- | --- |
+| 2 Indicators | `execution_ms` summed over `dag_nodes.nodes` |
+| 3 Model | `ml_inference.detail.inference_ms`, and only on an engine-sourced section — the row's persisted `ml_info` need not carry it |
+| 4 Logic | `execution_ms` summed over the `LOGIC`-category nodes behind the stage |
+| 8 Execution | `execution.outcome.latency_ms` |
+
+Stages 1, 5, 6, 7 and 9 have no duration at all, and render the **not-available marker** in the latency slot rather than a `0ms` that would read as "instant". An unreported duration and a zero duration are different facts (Requirements 14.5, 19.3), and the marker is the same one `Metric` uses everywhere else (§5.1).
 
 `degraded` and `lifecycle_state_source` from the response are surfaced as a `status.warning` note above the timeline when degraded — *"Part of this trace is reconstructed from the signal record because the trace store no longer retains it."* That is a real server signal and hiding it would misrepresent the trace's completeness.
 

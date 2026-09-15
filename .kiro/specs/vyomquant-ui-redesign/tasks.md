@@ -1304,9 +1304,14 @@ the decomposition this plan uses instead:
       timeline
     - Every stage row is collapsed on first render and is an independent `<button aria-expanded>`
       controlling its own region, so expanding one cannot collapse or affect another (`§10.3`)
-    - The one-line summary carries stage number, name, human summary and latency; the expanded body
-      carries the technical detail (raw indicator values, per-node `dag_nodes` inputs/outputs, ML
-      confidence and model id, each risk check with its verdict, exchange response fields, fill detail)
+    - The one-line summary carries stage number, name, human summary and latency **only where the
+      response reports one** — stages 2, 3, 4 and 8; stages 1, 5, 6, 7 and 9 render the
+      not-available marker in the latency slot, never a `0ms` (`§10.3`)
+    - The expanded body carries the technical detail: raw indicator values, per-node
+      `dag_nodes.nodes` inputs/outputs — the section is a `{source, nodes}` wrapper, not the array —
+      ML confidence and model id, each risk check with its verdict, exchange response fields, fill
+      detail, and for stage 9 the position change with the server's `not_available` list and
+      `not_available_reason` surfaced verbatim
     - `EmptyState` headline "No signal traces for this strategy", body explaining traces are produced
       when a deployed strategy evaluates market data, action → deploy or start a paper session
     - Add the page to the Task 8.11 / 8.12 / 10.13 registries
