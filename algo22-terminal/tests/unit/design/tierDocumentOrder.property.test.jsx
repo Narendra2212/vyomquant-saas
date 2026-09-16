@@ -63,12 +63,32 @@
  *    deliberately carries no `Metric tier={1}`; a clause stated over regions reads that line as a
  *    stray tier-1 element outside the tier-1 container and fails a page that is correct.
  * 4. **The vacuous case is real, and is asserted rather than skipped.** `mount` resolves on
- *    "settled" — no `[data-panel-state="loading"]` — and not on "tier 1 appeared, because §7.4
+ *    "settled" — no `[data-panel-state="loading"]` — and not on "tier 1 appeared", because §7.4
  *    and Requirement 6.6 say an unreadable tier-1 row renders NO FIGURES AT ALL. So a generated
  *    payload may legitimately produce a page with no tiers, and on those runs both clauses hold
  *    over an empty node list. Skipping them would let a generator that destroys the page every
  *    time pass in green, so instead each run is counted and the counts are asserted after the
  *    property: at least one non-vacuous render, and every reading kind reached.
+ *
+ * WHAT THE COUNTERS ACTUALLY REPORTED, MEASURED
+ * ---------------------------------------------
+ * Worth writing down, because it is not what decision 4 braces for. Over 100 runs on Portfolio:
+ * 100 non-vacuous, 0 vacuous, 100 with a tier-1 figure, 0 with a PARTIAL tier 1, 8 healthy `{}`
+ * draws, all four reading kinds reached. So this property is asserting over a real DOM on every
+ * single run, which is the strong outcome — but the reason is worth naming: Portfolio's tier-1
+ * row is `ds/Metric` per declared field, and a `Metric` given an unreadable value renders ITSELF
+ * with the not-available marker rather than vanishing. §7.4's "no figures at all" is the state of
+ * the tier-1 PANEL, which `tierOneState` reaches only when the dashboard READ fails — and this
+ * generator corrupts the body's fields, never the read. Two consequences for whoever registers
+ * the next page:
+ *   - the vacuity counters are a live guard, not dead weight: a page whose tier 1 does collapse
+ *     under a corrupt field (Backtester, Requirement 6.6) will move the vacuous count off zero,
+ *     and the `nonVacuousRuns > 0` witness is what stops that page from passing while asserting
+ *     nothing;
+ *   - clause 2's most interesting input — a tier 1 that rendered SOME of its figures, which is
+ *     where a page is most tempted to spill one into a lower tier — is not reachable on Portfolio
+ *     through a payload at all, hence `partialTierOneRuns` being reported rather than asserted on.
+ *     A page that can produce one should say so, and tighten that line to an assertion.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -81,6 +101,7 @@ import {
   TIER_REGISTRY,
   assertTierEntry,
   declaredTiersOf,
+  tierFieldsOf,
 } from './tierRegistry';
 import {
   METRIC_TIER_ATTRIBUTE,
@@ -297,6 +318,17 @@ for (const entry of TIER_REGISTRY) {
   describe(`Property 4: declared tier determines document order on ${entry.page}`, () => {
     const declaredTiers = declaredTiersOf(entry.hierarchy);
 
+    /**
+     * How many figures a FULL tier 1 is on this page, read off the declaration.
+     *
+     * Only tier 1 is one figure per declared field — that is what decision 2 above says is NOT
+     * true of tiers 2 and 3, whose fields are tables, columns and charts. Read from the hierarchy
+     * rather than written as a literal because it is 8 on Portfolio and will not be 8 on
+     * Dashboard, Live Trading or Backtester (tasks 19.5, 20.4, 23.5); a literal here would report
+     * every one of their full tier-1 rows as partial.
+     */
+    const fullTierOne = tierFieldsOf(entry.hierarchy, 1).length;
+
     afterEach(() => {
       // Belt and braces. Each run unmounts itself in a `finally`; this catches a mount that threw
       // before it could return a handle, so run n + 1 never inherits run n's DOM.
@@ -401,7 +433,7 @@ for (const entry of TIER_REGISTRY) {
             if (elements.length === 0) vacuousRuns += 1;
             else nonVacuousRuns += 1;
             if (tierOne.length > 0) tierOneRenderedRuns += 1;
-            if (tierOne.length > 0 && tierOne.length < 8) partialTierOneRuns += 1;
+            if (tierOne.length > 0 && tierOne.length < fullTierOne) partialTierOneRuns += 1;
           } finally {
             if (mounted !== null) mounted.unmount();
             else {
