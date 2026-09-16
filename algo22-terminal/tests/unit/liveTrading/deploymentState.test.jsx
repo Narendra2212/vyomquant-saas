@@ -277,11 +277,11 @@ describe('LiveTrading — STRATEGY_STATUS reaches tier 1 with no clock advanced 
     socket.reset();
   });
 
-  it('subscribes tier 1 to the declared channel, and renders no pushed line before a frame', async () => {
+  it('renders no pushed line before a frame, with the declared channel already held', async () => {
     await mountAndSettle();
 
-    // The subscription is the mechanism Requirement 7.5 rests on, so its absence is a
-    // failure in its own right and not only a symptom of one.
+    // The channel is held before any frame exists, which is what makes the bound a property
+    // of the subscription rather than of when a trader happened to open the page.
     expect(liveChannelSubscriberCount(STRATEGY_STATUS_CHANNEL)).toBeGreaterThan(0);
 
     // Nothing pushed yet renders NO line at all — not a not-available marker. The socket
@@ -382,10 +382,14 @@ describe('LiveTrading — STRATEGY_STATUS reaches tier 1 with no clock advanced 
   it('holds ONE wsClient subscription for the channel however many leaves ask for it', async () => {
     await mountAndSettle();
 
-    // Tier 1's leaf and `components/trading/ExecutionsPanel.jsx`'s two selectors are all on
-    // this channel, and `useLiveChannel`'s registry is what keeps that one handler rather
-    // than three (§13.2a). The double keeps a set, so a broken registry would show here.
+    // FOUR selectors are on this channel on a settled page: tier 1's leaf takes `status` and
+    // `error`, and `components/trading/ExecutionsPanel.jsx`'s leaf takes the same two. The
+    // number is asserted so this case has teeth against EITHER leaf losing its subscription —
+    // a lower bound of one would be satisfied by whichever leaf survived.
+    expect(liveChannelSubscriberCount(STRATEGY_STATUS_CHANNEL)).toBeGreaterThanOrEqual(4);
+
+    // And they share ONE `wsClient.subscribe` (§13.2a). The double keeps a set per event
+    // type, so a registry that subscribed per consumer would show up right here.
     expect(socket.handlers.get(STRATEGY_STATUS_CHANNEL).size).toBe(1);
-    expect(liveChannelSubscriberCount(STRATEGY_STATUS_CHANNEL)).toBeGreaterThan(1);
   });
 });
