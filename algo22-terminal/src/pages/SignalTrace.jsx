@@ -1592,11 +1592,17 @@ function StageRow({ stage, expanded, onToggle }) {
  * Expansion lives in ONE record keyed by stage id. A record rather than an "open row" makes
  * the independence Requirement 9.3 asks for a property of the data structure.
  *
+ * Exported for the same reason `SignalConnectionIndicator` is: Property 17 (task 21.5) is a
+ * statement about THIS component's expansion state machine over long activation sequences,
+ * and reaching it through the whole page would put a list read, a detail read and a
+ * WebSocket between the property and the thing it is about. The page's own use below is
+ * unchanged — this is the same component, called with the same two props.
+ *
  * @param {Object} props
  * @param {ReadonlyArray<Object>} props.stages
  * @param {{message: string, lifecycleStateSource: string|null}|null} props.degraded
  */
-function SignalTimeline({ stages, degraded }) {
+export function SignalTimeline({ stages, degraded }) {
   const [expanded, setExpanded] = useState(() => ({}));
 
   const toggle = useCallback((id) => {
