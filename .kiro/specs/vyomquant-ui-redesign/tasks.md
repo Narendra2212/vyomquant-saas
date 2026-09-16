@@ -1086,7 +1086,7 @@ the decomposition this plan uses instead:
       8.12 / 10.13 registries
     - _Requirements: 10.3, 10.4, 14.5, 15.5_
 
-  - [ ]* 16.3 Write the property test for priority tiers
+  - [x]* 16.3 Write the property test for priority tiers
     - **Property 4: Declared priority tier determines document order**
     - **Validates: Requirements 3.1, 3.2, 3.4, 6.2, 6.3, 7.1, 7.2, 7.3, 10.1, 10.2**
     - Build the test over a registry of `{hierarchy, render adapter}` pairs, seeded with Portfolio;
