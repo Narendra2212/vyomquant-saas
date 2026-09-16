@@ -1267,7 +1267,7 @@ the decomposition this plan uses instead:
 
 - [ ] 21. M8 — Signal Trace (`/app/signal-trace`)
 
-  - [~] 21.1 Create the canonical nine-stage projection in `src/lib/signalTraceStages.js`
+  - [x] 21.1 Create the canonical nine-stage projection in `src/lib/signalTraceStages.js`
     - Build the nine stages from the **canonical list outward** and then attach whatever the payload
       provides — the inversion is what makes Requirement 9.1's "in order" and 9.2's "rather than
       omitting it" structural, and why an unknown event type cannot add or remove a row (`§10.2`)
@@ -1285,20 +1285,20 @@ the decomposition this plan uses instead:
     - _Requirements: 9.1, 9.2, 19.3_
     - _Property: P15, P16_
 
-  - [ ]* 21.2 Write the property test for stage presence and order
+  - [x]* 21.2 Write the property test for stage presence and order
     - **Property 15: The nine trace stages are always all present, in order**
     - **Validates: Requirements 9.1**
     - Generate payloads with no events, reversed and arbitrary orderings, duplicated events, unknown
       event types and absent trace sections; assert the rendered sequence equals the canonical nine
       ids in canonical order, exactly once each; minimum 100 iterations
 
-  - [ ]* 21.3 Write the property test for stage state
+  - [x]* 21.3 Write the property test for stage state
     - **Property 16: A stage's state is a function of its own backing record**
     - **Validates: Requirements 9.2**
     - Assert no stage with a backing record is ever `pending` and no stage without one is ever
       `complete`, and that `not-applicable` occurs exactly when the server said so; 100 iterations
 
-  - [~] 21.4 Rebuild `src/pages/SignalTrace.jsx` with collapsed independent rows
+  - [x] 21.4 Rebuild `src/pages/SignalTrace.jsx` with collapsed independent rows
     - `PageHeader` + strategy/environment selects + `TradingEnvironmentBadge`; `FilterBar` + a signal
       list `DataTable` (Time, Strategy, Market, Decision, Outcome); then the selected signal's
       timeline
@@ -1318,7 +1318,7 @@ the decomposition this plan uses instead:
     - _Requirements: 9.3, 9.4_
     - _Property: P17_
 
-  - [ ]* 21.5 Write the property test for independent expansion
+  - [x]* 21.5 Write the property test for independent expansion
     - **Property 17: Every trace stage starts collapsed and expands independently**
     - **Validates: Requirements 9.3**
     - Assert all nine are collapsed on first render, and for any sequence of expand/collapse

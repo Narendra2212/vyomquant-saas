@@ -207,9 +207,25 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // cleanliness nothing is holding, and this is the page where a hand-painted green
   // CONNECTED chip would be most expensive. Tiers 2 and 3 land on the same primitives.
   'pages/LiveTrading.jsx': 0,
-  // Material Design palette (#2196F3 #00BCD4 #FFAB00 #9C27B0 #FF5722 #00C853
-  // #607D8B) plus GitHub greys. Rewritten by task 20.x.
-  'components/SignalTraceVisualization.jsx': 138,
+  // 138 -> 0 at task 21.6, which was the largest entry in either budget. The 138 were the
+  // Material Design palette (#2196F3 #00BCD4 #FFAB00 #9C27B0 #FF5722 #00C853 #607D8B) and
+  // its GitHub surfaces (#0d1117 #30363d #161b22 #8b949e #c9d1d9), spread over four local
+  // maps — `PIPELINE_STAGES`, `SIGNAL_STATES`, `ERROR_TYPES`, `SIGNAL_TYPES` — plus ~90
+  // inline `style` hues in the renderers. All four maps are gone: state colour comes from
+  // `design/semantic.js`'s `statusToken`, the trace and node chips are `ds/StatusBadge`,
+  // the error block is `ds/Alert` at `error`, every absent value is `ds/Metric`'s
+  // `NotAvailableMarker`, and the surfaces are `bg-surface-*` / `border-line-*` utilities.
+  //
+  // Five of the seven Material hues were DECORATIVE per-stage accents, which is why the
+  // retoken deletes them rather than mapping them: Requirement 1.5 spends colour on state,
+  // and a stage's identity is its number, its name and its icon. The same commit replaced
+  // the file's own seven-entry stage list with the canonical nine imported from
+  // `lib/signalTraceStages.js` (design.md §10.1), so there is one list, not two.
+  //
+  // The twelve hexes still in the file are all inside its header docblock, which records
+  // the retired palette the way this budget file records it. `countColourLiterals` strips
+  // comments first, which is exactly the case that provision exists for.
+  'components/SignalTraceVisualization.jsx': 0,
   // Cleared by task 15.1, which rebuilt the page on `ds/DataTable`, `ds/FilterBar`,
   // `ds/Panel` and `ds/Metric`. The 62 were the LIVE/PAPER toggle's six literals, the
   // five summary-card hues, the four filter-chip states, the twelve cell colours and the
