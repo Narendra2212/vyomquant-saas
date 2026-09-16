@@ -295,15 +295,24 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
     // `ds/Field` with a visible `<label htmlFor>`. The other two were
     // `click-events-have-key-events` and `no-static-element-interactions` on the signal row's
     // `div onClick`, and the rows are `ds/DataTable`'s. The page lints at `error` from here.
+    //
+    // 8 -> 4 at task 23.1, which DELETED `src/pages/Backtester.jsx`'s entry rather than
+    // lowering it. Three of its four were `label-has-associated-control` on the configuration
+    // column's bare `<label>`s, and the fourth was `control-has-associated-label` on the
+    // timeframe `<select>` none of them named — the only finding this ratchet's added rules
+    // contributed on any page. The configuration flow is four `ds/Panel`s of `ds/Field`s now,
+    // and `ds/Field` renders a visible `<label htmlFor>` with no hidden-label option. The page
+    // lints at `error` from here, results region included.
     const waived = Object.values(A11Y_PAGE_WAIVERS).reduce((sum, e) => sum + e.count, 0);
     const measured = Object.keys(A11Y_PAGE_WAIVERS).reduce((sum, f) => sum + PAGES[f].count, 0);
     expect(measured).toBe(waived);
-    expect(waived).toBe(8);
+    expect(waived).toBe(4);
     // And the cleared pages are really clean, at `error`, with no line left behind.
     for (const page of [
       'src/pages/Portfolio.jsx',
       'src/pages/Strategies.jsx',
       'src/pages/SignalTrace.jsx',
+      'src/pages/Backtester.jsx',
     ]) {
       expect(A11Y_PAGE_WAIVERS[page]).toBeUndefined();
       expect(PAGES[page].count).toBe(0);

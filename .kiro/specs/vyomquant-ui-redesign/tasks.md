@@ -1340,7 +1340,7 @@ the decomposition this plan uses instead:
 
 - [ ] 23. M9 — Backtester (`/app/backtest`, `/app/backtester`)
 
-  - [~] 23.1 Rebuild the configuration flow in `src/pages/Backtester.jsx`
+  - [x] 23.1 Rebuild the configuration flow in `src/pages/Backtester.jsx`
     - Four `Panel`s in a single column in the Requirement 6.1 order — strategy (version pinned),
       market & data, period, capital & risk — then the run action (`§7.4`)
     - Reuse the existing `components/builder/AssetSelector.jsx` and `TimeframeSelector.jsx` rather

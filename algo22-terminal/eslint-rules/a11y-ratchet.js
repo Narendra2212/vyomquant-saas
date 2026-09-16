@@ -208,10 +208,20 @@ export const A11Y_PAGE_WAIVERS = Object.freeze({
   // entry is REMOVED rather than lowered to 0, because a `0` entry is what this guard
   // forbids: a cleared page belongs at `error` with every other page nobody has waived,
   // which is what deleting the line does. The page lints at `error` from here.
-  // M9. Task 23.1 rebuilds the configuration flow as four `ds/Panel`s. 4 rather than 3
-  // because raising `control-has-associated-label` off the preset's `0` found one more
-  // here — the only page finding this task's added rules contributed.
-  'src/pages/Backtester.jsx': Object.freeze({ count: 4, task: '23.1' }),
+  // `src/pages/Backtester.jsx` was here: 4 findings, cleared by task 23.1. Three were the
+  // `label-has-associated-control` cluster on the configuration column's bare `<label>`
+  // elements (Select Strategy, Asset Pair, Timeframe, ML Confidence — none with an
+  // `htmlFor` and none wrapping its control), and the fourth was
+  // `control-has-associated-label` on the timeframe `<select>` those labels failed to
+  // name — the one finding this file's added rules contributed anywhere. The
+  // configuration flow is four `ds/Panel`s now: every field is a `ds/Field`, which
+  // renders a visible `<label htmlFor>` and offers no way not to, and the two market
+  // controls are the builder's own `AssetSelector`/`TimeframeSelector` under `<label
+  // htmlFor>` elements of their own. The entry is REMOVED rather than lowered to 0,
+  // because a `0` entry is what this guard forbids: a cleared page belongs at `error`
+  // with every other page nobody has waived, which is what deleting the line does. The
+  // page lints at `error` from here — including the results region task 23.2 rebuilds,
+  // which holds no a11y finding of its own.
   // M9. Task 26.1 rewrites the subscription-state elements — the in-scope part of this
   // page (Requirement 1.3 scopes Marketplace to those elements only).
   'src/pages/StrategyMarketplace.jsx': Object.freeze({ count: 4, task: '26.1' }),

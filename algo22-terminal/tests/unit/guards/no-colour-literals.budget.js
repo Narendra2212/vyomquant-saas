@@ -332,7 +332,12 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // four connection states — they name `connected`, `reconnecting`, `disconnected`
   // and the null-neutral arm, so the page holds no palette of its own.
   'pages/SignalTrace.jsx': 0,
-  'pages/Backtester.jsx': 4,
+  // M9. 4 -> 3 at task 23.1, which rebuilt the configuration flow only. The one that went
+  // was `color: "#000"` on the old run button's cyan fill; the trigger is a
+  // `ds/CommandButton` now and takes no colour. The remaining 3 are all in the RESULTS
+  // region — the running overlay's `rgba(1,6,8,0.5)` scrim and the two tables' shared
+  // `rgba(255,255,255,0.05)` row rule — which task 23.2 rebuilds and takes to 0.
+  'pages/Backtester.jsx': 3,
   'pages/StrategyBuilder.jsx': 3,
   'pages/PaperTrading.jsx': 1,
   // Subscription-state elements only (Requirement 13); the rest of the page is

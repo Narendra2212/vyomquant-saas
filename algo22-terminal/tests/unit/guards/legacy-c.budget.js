@@ -83,7 +83,16 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // from `components/ui-legacy/primitives` any more, so there is no shim reference left
   // to reintroduce by copying a neighbouring line.
   'pages/SignalTrace.jsx': 0,
-  'pages/Backtester.jsx': 66,
+  // M9. 66 -> 42 at task 23.1, which rebuilt the CONFIGURATION flow only. The 24 that went
+  // were the config column's own: the four uppercase `C.t2` micro-labels, the three
+  // inline-styled `<select>`/`<input>` surfaces (`C.bg3` + `C.border` + `C.t1` each), the
+  // run button's `C.cyan` fill, the ML slider's `accentColor`, and the removed
+  // data-validation panel's `${C.red}12` wash with its issue and warning rows. Every
+  // control in that column is a `ds/Field`, a `ds/Panel` or a `ds/CommandButton` now, so
+  // the column holds no shim reference at all. The remaining 42 are entirely inside the
+  // RESULTS region — the eight metric cards, the equity chart's stroke and gradient, and
+  // the two tables' cells — which task 23.2 rebuilds and takes to 0.
+  'pages/Backtester.jsx': 42,
   // M7. 5 -> 0 at task 16.2. The 5 were one line: `const COLORS = [C.orange,
   // C.purple, C.cyan, C.gold, C.t3]` — five entries rendering four colours, since
   // M1 collapsed `C.orange`/`C.gold` onto the one amber and `C.purple` onto
