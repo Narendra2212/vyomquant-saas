@@ -53,7 +53,15 @@
  * ===========================================================================
  * Task 1.10 and §15.1 both scope this guard to `src/pages/**` and
  * `src/components/**`, excluding `styles/tokens.css` and `design/tokens.js`.
- * `src/index.css` is in neither root, and it is deliberately left out:
+ * Task 23.3 added a third root, `src/lib/**`, when it added a pure derivation
+ * module there: those two roots are where colour is *rendered*, not the only
+ * place it can be chosen, and `lib/blockRegistry.js` — 8 `C.` references in the
+ * sibling budget — is the standing proof that a `lib/` module can decide a
+ * palette a component merely spreads. All 20 files under `src/lib/` measure 0 as
+ * that root is added, so the widening moves no committed number; it means the
+ * next `lib/` module that reaches for a hex has to answer for it here.
+ *
+ * `src/index.css` is in none of the three roots, and it is deliberately left out:
  *
  *   1. It is the token layer, not a consumer of it. It is where `tailwindcss`
  *      and `styles/tokens.css` are imported. The two files task 1.10 names as
@@ -115,8 +123,12 @@ import { SRC, collect, isTestFile, list, relToSrc, stripComments } from './sourc
 
 const BUDGET_FILE = 'tests/unit/guards/no-colour-literals.budget.js';
 
-/** Task 1.10 / §15.1: this guard polices page and component code. */
-const SCAN_ROOTS = Object.freeze(['pages', 'components']);
+/**
+ * Task 1.10 / §15.1: this guard polices page and component code. `lib` joined them at
+ * task 23.3 — see the SCOPE section above. Every file under `src/lib/` measures 0, so the
+ * widening is a fence around clean ground rather than a new debt.
+ */
+const SCAN_ROOTS = Object.freeze(['pages', 'components', 'lib']);
 
 const SCANNED_EXTENSIONS = Object.freeze(['.js', '.jsx', '.ts', '.tsx', '.css']);
 
@@ -233,14 +245,24 @@ describe('no-colour-literals: the counting method', () => {
 // ---------------------------------------------------------------------------
 
 describe('no-colour-literals: scope', () => {
-  it('scans src/pages and src/components, and nothing else', () => {
+  it('scans src/pages, src/components and src/lib, and nothing else', () => {
     expect(SCANNED.length).toBeGreaterThan(50);
     for (const { relative } of SCANNED) {
       expect(
         SCAN_ROOTS.some((root) => relative.startsWith(`${root}/`)),
-        `${relative} is outside src/pages and src/components`,
+        `${relative} is outside ${SCAN_ROOTS.map((root) => `src/${root}`).join(', ')}`,
       ).toBe(true);
     }
+  });
+
+  it('reaches src/lib, the root task 23.3 added', () => {
+    // Non-vacuity for the widening: if `collect` did not descend into `src/lib`, the
+    // budget entry below would be a stray and the guard would be silently governing
+    // nothing there. `lib/drawdownSeries.js` is the file the root was added for.
+    const lib = SCANNED.filter((f) => f.relative.startsWith('lib/'));
+
+    expect(lib.length).toBeGreaterThan(1);
+    expect(lib.some((f) => f.relative === 'lib/drawdownSeries.js')).toBe(true);
   });
 
   it('leaves the token layer out, on purpose and on the record', () => {

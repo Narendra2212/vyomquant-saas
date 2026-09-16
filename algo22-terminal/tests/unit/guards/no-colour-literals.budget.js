@@ -43,6 +43,22 @@
  * Scope is `src/pages/**` and `src/components/**`, per task 1.10 and §15.1.
  * `src/index.css`, `src/styles/tokens.css` and `src/design/tokens.js` are the
  * token layer and are not scanned — see the scope note in the test file.
+ *
+ * ---------------------------------------------------------------------------
+ * SCOPE WIDENED TO `src/lib/**` AT TASK 23.3
+ * ---------------------------------------------------------------------------
+ * Task 1.10's two roots are where colour is *rendered*, which is why they were
+ * seeded first. They are not where colour can only ever be. `lib/blockRegistry.js`
+ * carries 8 `C.` references in the other budget precisely because a pure module
+ * decided a palette, and a hue chosen in `lib/` and merely spread by a component
+ * would sit outside this guard's view entirely.
+ *
+ * All 20 files under `src/lib/` measure `0` under `countColourLiterals` as this
+ * root is added, so widening changes no committed number and fails nothing. It
+ * means the next `lib/` module that reaches for a hex has to say so here. The
+ * test's stray-entry failure names this as the deliberate move rather than
+ * dropping the entry, and the entry it was added for — `lib/drawdownSeries.js` —
+ * is at the bottom of the list.
  */
 
 /** Paths are relative to `src/`, forward-slashed, matching the spec's notation. */
@@ -380,6 +396,15 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   'components/landing/ScreenshotsSection.jsx': 3,
   'components/landing/PortfolioAnalytics.jsx': 2,
   'components/landing/ScreenshotComingSoon.jsx': 2,
+
+  // -- src/lib: the pure decision and derivation modules --------------------
+  // New at task 23.3, along with the `lib` scan root that makes the entry real — see the
+  // SCOPE note above. The drawdown curve's derivation from the real equity curve
+  // (design.md §7.4, Requirement 6.3) holds no colour: it answers with numbers and lets
+  // `ds/Chart` decide what they look like. Entered at `0` and held there, for the reason
+  // `components/Sidebar.jsx: 0` keeps its entry — a file with no entry is a file whose
+  // cleanliness nothing is holding.
+  'lib/drawdownSeries.js': 0,
 });
 
 /**

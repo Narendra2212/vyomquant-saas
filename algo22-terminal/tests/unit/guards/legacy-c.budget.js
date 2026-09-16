@@ -168,6 +168,13 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // Not a page: the block-category presentation map. Colours the builder
   // palette, so it clears with the builder work.
   'lib/blockRegistry.js': 8,
+  // New at task 23.3 — the drawdown curve's derivation from the real equity curve
+  // (design.md §7.4, Requirement 6.3). A pure data module: no JSX, no import of the shim,
+  // nothing to render a colour with. Entered at `0` and held there for the reason
+  // `components/Sidebar.jsx: 0` keeps its entry — a file with no entry is a file whose
+  // cleanliness nothing is holding, and `lib/blockRegistry.js` above is the standing proof
+  // that a `lib/` module can end up reaching for the shim.
+  'lib/drawdownSeries.js': 0,
   'pages/UpdatePasswordPage.jsx': 7,
   'pages/RiskSettings.jsx': 6,
   // New at task 20.2 — §7.8 (4)'s three shared trading panels, extracted from

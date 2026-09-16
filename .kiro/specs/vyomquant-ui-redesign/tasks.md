@@ -1361,7 +1361,7 @@ the decomposition this plan uses instead:
     - _Requirements: 6.2, 6.3, 6.4, 6.6, 14.5_
     - _Property: P4_
 
-  - [~] 23.3 Derive the drawdown curve in `src/lib/drawdownSeries.js`
+  - [x] 23.3 Derive the drawdown curve in `src/lib/drawdownSeries.js`
     - The backend does not return a drawdown series; compute running peak minus current per point from
       the real equity curve, in `lib/` with a unit test, so it is a derivation from a real series and
       not a fabricated shape (`§7.4`)
