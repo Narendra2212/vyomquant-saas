@@ -1259,7 +1259,7 @@ the decomposition this plan uses instead:
     - **Validates: Requirements 7.1, 7.2, 7.3**
     - Register the Live Trading hierarchy and render adapter in the Task 16.3 registry
 
-  - [ ]* 20.5 Write the deployment-state push test
+  - [x]* 20.5 Write the deployment-state push test
     - `tests/unit/liveTrading/deploymentState.test.jsx`: with fake timers, assert a `STRATEGY_STATUS`
       stop/error/disconnect message updates the tier-1 connection element without advancing timers
       past 5 seconds, satisfying Requirement 7.5 by construction

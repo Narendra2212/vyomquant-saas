@@ -328,8 +328,15 @@ const LIVE_TRADING_HIERARCHY = Object.freeze({
     ),
     liveTradingUntiered(
       'deploymentStopped',
-      'A `STRATEGY_STATUS` push (Requirement 7.5), not a figure with a place in the layout. '
-        + 'It changes what tier 1 and tier 2 report; it renders no element of its own.',
+      'A `STRATEGY_STATUS` push (Requirement 7.5), and not a figure with a place in the row '
+        + 'Requirement 7.1 orders. Task 20.5 reports it INSIDE the tier-1 `connectionState` '
+        + 'element — the slot it is about — as its own labelled line under its own declared '
+        + 'label, carrying no `Metric tier={1}` and no `data-region` of its own. So tier 1 '
+        + 'still holds exactly six equally-weighted figures and Property 4 counts what it '
+        + 'counted, while the pushed state has somewhere honest to land. It does NOT '
+        + 'supersede the connection figure: a worker\'s run state and a configured exchange '
+        + 'key are different facts (Requirement 14.5), and `pages/LiveTrading.jsx`\'s '
+        + '`LiveConnectionSlot` carries the argument.',
     ),
   ]),
   note: 'Requirement 7.4 is enforced by `ds/Panel`, not by this declaration: a panel '

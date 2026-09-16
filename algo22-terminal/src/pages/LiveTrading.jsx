@@ -202,6 +202,18 @@
  * including why tier 3's two panels still produce exactly one tier container, is in the
  * "THREE PANELS THIS PAGE NO LONGER OWNS" section below.
  *
+ * TIER 1 NOW CARRIES THE ONE SUBSCRIPTION THIS FILE OWNS (task 20.5)
+ * -----------------------------------------------------------------
+ * §7.5's table assigns the `STRATEGY_STATUS` push to the row that answers "is it actually
+ * running?", and until task 20.5 tier 1 had no subscription at all — so a deployment that
+ * stopped, errored or disconnected reached `components/trading/ExecutionsPanel.jsx` and never
+ * reached the figures a trader reads to answer that question. {@link LiveConnectionSlot} is
+ * that leaf: `useLiveChannel` at the element that renders the value, `memo` with primitive
+ * props only, and the frame read through `components/trading/liveFrame.js`'s gate rather than
+ * through a fourth copy of it. The push is reported BESIDE the connection figure and not into
+ * it, because a worker's run state and a configured exchange key are different facts — the
+ * argument, and `pageFields`' own agreement with it, are in that component's docblock.
+ *
  * NO `C.` SHIM, NO COLOUR LITERAL, NO POLLING
  * ------------------------------------------
  * Every colour on this page comes from a `ds/` primitive or a token utility class, so
@@ -213,7 +225,7 @@
  * @module pages/LiveTrading
  */
 
-import { useCallback, useId, useMemo, useState } from "react";
+import { memo, useCallback, useId, useMemo, useState } from "react";
 import { RefreshCw, Server } from "lucide-react";
 
 import { dashboardApi } from "../api/modules/dashboard";
@@ -247,6 +259,17 @@ import { TradingEnvironmentBadge } from "../components/ds/TradingEnvironmentBadg
 import { ExecutionsPanel } from "../components/trading/ExecutionsPanel";
 import { OrdersPanel, orderReadingOf } from "../components/trading/OrdersPanel";
 import { PositionsPanel } from "../components/trading/PositionsPanel";
+/*
+ * The ledger-and-clock gate the three panels' leaves read a frame through, and the ONE
+ * spelling of the channel name. Task 20.5's tier-1 leaf reads a frame under exactly the same
+ * two refusals as they do, so it imports them rather than restating them — see
+ * {@link LiveConnectionSlot}.
+ */
+import {
+  STRATEGY_STATUS_CHANNEL,
+  frameText,
+  isFreshFrame,
+} from "../components/trading/liveFrame";
 import { PAGES, PAGE_FIELDS_BY_PAGE, VERDICT } from "../design/pageFields";
 import {
   PAGE_HIERARCHY_BY_PAGE,
@@ -255,6 +278,7 @@ import {
 } from "../design/pageHierarchy";
 import { available, fromNullable, unavailable } from "../design/reported";
 import { useConnectionStatus } from "../hooks/useConnectionStatus";
+import { useLiveChannel } from "../hooks/useLiveChannel";
 import { PANEL_STATES, usePanelState } from "../hooks/usePanelState";
 /*
  * `pages/Dashboard.jsx`'s two readings of the same payload, imported rather than copied.
@@ -299,6 +323,27 @@ const reasonOf = (field) => fieldEntry(field)?.reason ?? undefined;
  */
 const ENVIRONMENT_FIELD = "tradingEnvironment";
 
+/**
+ * The tier-1 slot Requirement 7.5's push is reported IN, named once.
+ *
+ * `pageHierarchy` puts `connectionState` first in tier 1 and §7.5 calls that row "is it
+ * actually running?", so this is the slot a stopped, errored or disconnected deployment has
+ * to reach. It is the only tier-1 slot that carries a subscription — see
+ * {@link LiveConnectionSlot}.
+ */
+const CONNECTION_FIELD = "connectionState";
+
+/**
+ * The declared `STRATEGY_STATUS` field, which is UNTIERED and reported inside tier 1's
+ * connection slot.
+ *
+ * Untiered in `pageHierarchy` because it takes no place in the six-slot row Requirement 7.1
+ * orders — it is not a seventh figure and it carries no `Metric tier={1}`, so Property 4's
+ * count is unchanged. It is nested in {@link CONNECTION_FIELD}'s element because that is the
+ * figure it is ABOUT: a trader reading "is it running?" reads that slot.
+ */
+const DEPLOYMENT_STATE_FIELD = "deploymentStopped";
+
 /** The strategy's version, which is an `inputs` entry of `strategy` rather than a field. */
 const STRATEGY_VERSION_PATH = "strategies[].version";
 
@@ -318,6 +363,18 @@ const STRATEGY_VERSION_PATH = "strategies[].version";
 const CONNECTION_HINT =
   "The state the server reports for this exchange key. It confirms a key is configured, "
   + "not that the venue answered — no request is made to the exchange to produce it.";
+
+/**
+ * Why the pushed run state sits BESIDE the connection figure instead of replacing it.
+ *
+ * `deploymentStopped`'s declared `note` is written for a reader of the declaration — "the
+ * tier-1 state stays whatever the last REST read reported" is an instruction to this file.
+ * This is the same statement addressed to a trader, and it claims nothing the note does not.
+ */
+const DEPLOYMENT_STATE_HINT =
+  "The run state the strategy's own stream last pushed for this deployment. It is the "
+  + "worker's state, not the exchange connection above it, and it does not change what the "
+  + "exchange key reported.";
 
 /** Why the version beside the name is not the running worker's version. */
 const STRATEGY_HINT =
@@ -1507,6 +1564,166 @@ function ClientSocketReading({ status }) {
 }
 
 /**
+ * The tier-1 connection slot, and the one place on this page a `STRATEGY_STATUS` frame lands.
+ *
+ * Task 20.5. §7.5's table, §13.2(b). Requirements 7.1, 7.5, 14.5.
+ *
+ * REQUIREMENT 7.5 HOLDS BY CONSTRUCTION HERE, NOT BY AN INTERVAL BEING SHORT ENOUGH
+ * --------------------------------------------------------------------------------
+ * "A deployment that stops, errors or disconnects is reflected within five seconds." There is
+ * no timer in this path at all: `useLiveChannel` hands the frame to `setSelected` in the
+ * socket callback, so the bound is whatever the socket's own latency is and there is no
+ * interval to tune against a requirement or to re-tune when the payload grows. Task 20.5's
+ * test asserts exactly that shape — it advances fake timers by nothing and the state is on
+ * screen — because a test that had to advance a clock would be a test of a poll.
+ *
+ * `memo` with primitive props only, which is what makes the subscription affordable at the
+ * leaf: a frame re-renders this slot's text nodes and nothing else on a page holding four
+ * reads, a `ds/DataTable` and three panels. The seeded `Reported<T>` is therefore split into
+ * `seeded` + `reason` — a union object is a new identity on every projection and would defeat
+ * the comparison, which is `components/trading/PositionsPanel.jsx`'s reasoning in the file
+ * that established the shape.
+ *
+ * THE PUSH DOES NOT SUPERSEDE THE CONNECTION FIGURE. IT IS REPORTED BESIDE IT.
+ * ---------------------------------------------------------------------------
+ * The two are different facts and Requirement 14.5 is the rule that keeps them apart:
+ *
+ *   * The FIGURE is `exchange.exchanges[].status`, which the aggregation service returns as a
+ *     constant `"connected"` — so it says an exchange KEY is configured ({@link
+ *     CONNECTION_HINT} says so on the figure itself).
+ *   * The PUSH is `STRATEGY_STATUS.status`, the run state of a worker.
+ *
+ * Writing `stopped` into a slot labelled *Connection* would therefore make a false statement
+ * about the exchange key — the venue's key is exactly as configured as it was a moment ago —
+ * and it would do it in the vocabulary of the wrong subject. `pageFields`' own note for
+ * `deploymentStopped` reaches the same verdict from the other direction: absence of a frame is
+ * not evidence a deployment is healthy, so the tier-1 state stays whatever the last REST read
+ * reported. `components/trading/ExecutionsPanel.jsx` made this call first for a recorded
+ * execution status, and its docblock carries the general form: a fact is rendered as the fact
+ * it is, or not at all.
+ *
+ * So the push gets its own labelled line, under `deploymentStopped`'s own declared label,
+ * inside this slot's element. It is `role="status"` because the whole point is that it appears
+ * with no action from the trader — `pages/SignalTrace.jsx`'s connection reading is the same
+ * verdict for the same reason — and it is not a `ds/Metric` and carries no `data-region`,
+ * because tier 1 is six equally-weighted figures and a seventh would be a different row from
+ * the one Requirement 7.1 declares.
+ *
+ * Until a frame arrives there is no line at all. A "nothing pushed yet" marker would be a
+ * not-available state for a value nobody claimed was available: the socket having said nothing
+ * is not a gap in a read.
+ */
+const LiveConnectionSlot = memo(function LiveConnectionSlot({
+  label,
+  pushLabel,
+  seeded,
+  reason,
+  strategyId,
+  environment,
+  syncedAt,
+  className = "",
+}) {
+  const hintId = useId();
+  const labelId = useId();
+
+  /*
+   * Two selectors on one channel rather than one returning a pair: `useLiveChannel` gates on
+   * `Object.is`, so an object would fail that comparison on every frame and re-render this
+   * leaf for every strategy on the socket. The registry still holds ONE `wsClient.subscribe`
+   * for the channel however many selectors ask for it — and `ExecutionsPanel`'s two selectors
+   * share that same one.
+   *
+   * `isFreshFrame` and `frameText` come from `components/trading/liveFrame.js` rather than
+   * being written again here. That module exists precisely so a PAPER frame cannot move a LIVE
+   * figure and a replayed frame cannot put a superseded one back on screen; a private copy in
+   * this page would be a copy that can disagree with the three panels' copy.
+   *
+   * Both selectors return `undefined` to DECLINE a frame and never `null`. `null` is how
+   * `useLiveChannel` is told a figure is GONE, so a frame naming this strategy and carrying no
+   * `status` must not blank a state a previous frame reported.
+   */
+  const pickStatus = useCallback(
+    (frame) => {
+      if (!isFreshFrame(frame, environment, syncedAt)) return undefined;
+      if (frameText(frame.strategy_id) !== strategyId) return undefined;
+      return frameText(frame.status) ?? undefined;
+    },
+    [environment, syncedAt, strategyId],
+  );
+
+  const pickError = useCallback(
+    (frame) => {
+      if (!isFreshFrame(frame, environment, syncedAt)) return undefined;
+      if (frameText(frame.strategy_id) !== strategyId) return undefined;
+      return frameText(frame.error) ?? undefined;
+    },
+    [environment, syncedAt, strategyId],
+  );
+
+  // No strategy to filter on means no subscription: `useLiveChannel` treats a falsy channel
+  // as no subscription and returns `initial`. A push about another strategy has no business
+  // on a page scoped to this one.
+  const channel = strategyId === null || strategyId === undefined
+    ? null
+    : STRATEGY_STATUS_CHANNEL;
+  const pushedStatus = useLiveChannel(channel, pickStatus, undefined);
+  const pushedError = useLiveChannel(channel, pickError, undefined);
+
+  return (
+    <div
+      className={`flex min-w-0 flex-col gap-2 ${className}`.trim()}
+      data-region={CONNECTION_FIELD}
+    >
+      {/* The READ figure, untouched by any frame. `data-region` is on the wrapper rather than
+          here so tier 1 still carries exactly its six declared regions, in order. */}
+      <Metric
+        tier={1}
+        label={label}
+        value={seeded === null ? unavailable(reason) : available(seeded)}
+        // `raw`: a state word is not a quantity, and a numeric format would group it.
+        format="raw"
+        hint={CONNECTION_HINT}
+      />
+
+      {/* The hint lives OUTSIDE the live region: inside it, every pushed state change would
+          announce the whole explanation again. */}
+      {pushedStatus === undefined ? null : (
+        <>
+          <span id={hintId} className="sr-only">{DEPLOYMENT_STATE_HINT}</span>
+          <div
+            role="status"
+            aria-labelledby={labelId}
+            aria-describedby={hintId}
+            className="flex min-w-0 flex-col gap-1"
+            data-live-channel={STRATEGY_STATUS_CHANNEL}
+            data-live-reading={DEPLOYMENT_STATE_FIELD}
+          >
+            <span
+              id={labelId}
+              className="cursor-help text-micro uppercase tracking-wide text-content-secondary"
+              title={DEPLOYMENT_STATE_HINT}
+            >
+              {pushLabel}
+            </span>
+            <span className="font-mono text-micro font-bold uppercase tracking-wide text-content-primary">
+              {pushedStatus}
+            </span>
+            {/* The worker's own account of the failure, when it sent one. Verbatim: this is
+                the only thing that says WHY a deployment errored, and `translateError` carries
+                no free-form message by design (Requirement 14.4). */}
+            {pushedError === undefined ? null : (
+              <span className="text-micro text-content-secondary" data-live-reading-detail="error">
+                {pushedError}
+              </span>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+});
+
+/**
  * The tier-1 environment slot.
  *
  * `ds/Metric`'s label typography with `ds/TradingEnvironmentBadge` where the figure goes —
@@ -2603,6 +2820,23 @@ export default function LiveTrading() {
                   // `ENVIRONMENT UNCONFIRMED` for `null` and for anything outside §8.2's
                   // three named environments — never a guess (Requirement 7.4).
                   environment={serverEnvironment}
+                />
+              ) : key === CONNECTION_FIELD ? (
+                /* The read figure, plus the ONE subscription on this page's tier 1
+                   (Requirement 7.5). The `Reported<T>` is split into two primitives so the
+                   `memo` holds and a frame re-renders this slot alone — see
+                   {@link LiveConnectionSlot}, which also records why the push is reported
+                   BESIDE this figure rather than into it. */
+                <LiveConnectionSlot
+                  key={key}
+                  label={label}
+                  pushLabel={fieldEntry(DEPLOYMENT_STATE_FIELD)?.label ?? "Deployment state"}
+                  seeded={tierOne[key]?.available ? tierOne[key].value : null}
+                  reason={tierOne[key]?.available ? undefined : tierOne[key]?.reason}
+                  strategyId={liveStrategyId}
+                  environment={serverEnvironment}
+                  syncedAt={exchangeSyncedAt}
+                  className="flex-1"
                 />
               ) : (
                 <Metric

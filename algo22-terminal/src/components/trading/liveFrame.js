@@ -37,6 +37,19 @@
  */
 
 /**
+ * The worker run-state stream, spelled ONCE for every leaf that subscribes to it.
+ *
+ * `wsClient.subscribeStrategyStatus` spells it in upper case and nothing publishes a
+ * lower-case `strategy_status`, so a handler registered on that name can never fire — which
+ * is the defect task 19.3 found at the Dashboard page root. Task 20.5 added a second leaf on
+ * this channel (`pages/LiveTrading.jsx`'s tier-1 connection slot) beside
+ * `./ExecutionsPanel.jsx`'s, and two string literals are two chances to reintroduce that
+ * defect in one of them, so the name lives here with the rest of what a frame-reading leaf
+ * needs.
+ */
+export const STRATEGY_STATUS_CHANNEL = "STRATEGY_STATUS";
+
+/**
  * How far behind the read that seeded a leaf a frame's own clock may be and still be read.
  *
  * `pages/Dashboard.jsx` uses this same one-second slack, and for the same reason: the

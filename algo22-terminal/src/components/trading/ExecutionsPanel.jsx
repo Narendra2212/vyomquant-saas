@@ -44,14 +44,12 @@ import { Panel } from "../ds/Panel";
 import { TradingEnvironmentBadge } from "../ds/TradingEnvironmentBadge";
 import { TIER_ATTRIBUTE, TIER_PAGE_ATTRIBUTE } from "../../design/pageHierarchy";
 import { useLiveChannel } from "../../hooks/useLiveChannel";
-import { frameText, isFreshFrame } from "./liveFrame";
-
-/**
- * `STRATEGY_STATUS` — spelled as `wsClient.subscribeStrategyStatus` spells it, which is upper
- * case. Nothing publishes a lower-case `strategy_status`; a handler registered on that name
- * can never fire, which is the defect task 19.3 found at the Dashboard page root.
+/*
+ * `STRATEGY_STATUS` is spelled in `./liveFrame.js` and imported here rather than declared
+ * locally, because task 20.5 put a second leaf on the same channel in
+ * `pages/LiveTrading.jsx`'s tier-1 connection slot — see that module's docblock.
  */
-const STRATEGY_STATUS_CHANNEL = "STRATEGY_STATUS";
+import { STRATEGY_STATUS_CHANNEL, frameText, isFreshFrame } from "./liveFrame";
 
 /**
  * One deployment's pushed run state, filtered to its strategy id.
