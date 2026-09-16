@@ -170,6 +170,16 @@ export const LEGACY_C_BUDGET = Object.freeze({
   'lib/blockRegistry.js': 8,
   'pages/UpdatePasswordPage.jsx': 7,
   'pages/RiskSettings.jsx': 6,
+  // New at task 20.2 — §7.8 (4)'s three shared trading panels, extracted from
+  // `pages/LiveTrading.jsx` so `pages/PaperTrading.jsx` can render the same components at
+  // task 25.2. None of the four imports the shim: every colour comes from `ds/` primitives
+  // and token utility classes. Entered at `0` and held there, for the reason
+  // `components/Sidebar.jsx: 0` and `components/TopBar.jsx: 0` keep theirs — a file with no
+  // entry is a file whose cleanliness nothing is holding.
+  'components/trading/PositionsPanel.jsx': 0,
+  'components/trading/OrdersPanel.jsx': 0,
+  'components/trading/ExecutionsPanel.jsx': 0,
+  'components/trading/liveFrame.js': 0,
 });
 
 /**

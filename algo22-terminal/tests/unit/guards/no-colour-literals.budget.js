@@ -207,6 +207,18 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // cleanliness nothing is holding, and this is the page where a hand-painted green
   // CONNECTED chip would be most expensive. Tiers 2 and 3 land on the same primitives.
   'pages/LiveTrading.jsx': 0,
+  // New at task 20.2, which moved §7.8 (4)'s three shared surfaces out of
+  // `pages/LiveTrading.jsx` so that `pages/PaperTrading.jsx` can render the SAME components
+  // at task 25.2 (Requirement 12.1). All four entered the tree clean: the panels are
+  // `ds/Panel` + `ds/Metric` + `ds/TradingEnvironmentBadge` and every hue comes from those,
+  // and `liveFrame.js` renders nothing at all. Seeded at `0` for the reason
+  // `pages/LiveTrading.jsx: 0` is — an in-scope file with no entry is a file whose
+  // cleanliness nothing is holding, and a hand-painted LIVE chip on a shared panel would be
+  // wrong on two pages rather than one.
+  'components/trading/PositionsPanel.jsx': 0,
+  'components/trading/OrdersPanel.jsx': 0,
+  'components/trading/ExecutionsPanel.jsx': 0,
+  'components/trading/liveFrame.js': 0,
   // 138 -> 0 at task 21.6, which was the largest entry in either budget. The 138 were the
   // Material Design palette (#2196F3 #00BCD4 #FFAB00 #9C27B0 #FF5722 #00C853 #607D8B) and
   // its GitHub surfaces (#0d1117 #30363d #161b22 #8b949e #c9d1d9), spread over four local

@@ -190,6 +190,18 @@
  * venue, or one strategy, for a page that has no basis to prefer it. Neither arm is ever a
  * zero, an empty string or a guessed default.
  *
+ * TIERS 2 AND 3 ARE NO LONGER THIS FILE'S PANELS (task 20.2)
+ * ---------------------------------------------------------
+ * They are `components/trading/{PositionsPanel,OrdersPanel,ExecutionsPanel}`, parameterised by
+ * environment, and task 25.2 renders the SAME three on Paper Trading — which is §7.8 (4)'s
+ * structural reading of Requirement 12.1's "same visual language". The reads did not move:
+ * all four `usePanelState` calls, every projection and every not-available sentence are still
+ * here, the panels take their figures as props, and no API path changed. What moved with them
+ * is the WebSocket subscription, down to the leaf that renders each value (§13.2(b)), which is
+ * what makes Requirement 7.5's five-second bound hold with no polling. The full account,
+ * including why tier 3's two panels still produce exactly one tier container, is in the
+ * "THREE PANELS THIS PAGE NO LONGER OWNS" section below.
+ *
  * NO `C.` SHIM, NO COLOUR LITERAL, NO POLLING
  * ------------------------------------------
  * Every colour on this page comes from a `ds/` primitive or a token utility class, so
@@ -226,6 +238,15 @@ import { Metric } from "../components/ds/Metric";
 import { PageHeader } from "../components/ds/PageHeader";
 import { Panel } from "../components/ds/Panel";
 import { TradingEnvironmentBadge } from "../components/ds/TradingEnvironmentBadge";
+/*
+ * §7.8 (4)'s three shared surfaces, moved out of this file by task 20.2 and consumed back in
+ * — see the "THREE PANELS THIS PAGE NO LONGER OWNS" section below. `orderReadingOf` comes
+ * from `OrdersPanel` rather than the reverse because the panel's leaf and this page's REST
+ * projection must read an order identically, and one of the two has to own the composition.
+ */
+import { ExecutionsPanel } from "../components/trading/ExecutionsPanel";
+import { OrdersPanel, orderReadingOf } from "../components/trading/OrdersPanel";
+import { PositionsPanel } from "../components/trading/PositionsPanel";
 import { PAGES, PAGE_FIELDS_BY_PAGE, VERDICT } from "../design/pageFields";
 import {
   PAGE_HIERARCHY_BY_PAGE,
@@ -535,6 +556,32 @@ const SIDE_KEY = leafKeyOf(POSITION_SIDE_PATH);
 const MARK_PRICE_KEY = leafKeyOf(inputPath(LIQUIDATION_FIELD, ".mark_price"));
 const LIQUIDATION_PRICE_KEY = leafKeyOf(inputPath(LIQUIDATION_FIELD, ".liquidation_price"));
 const ENVIRONMENT_KEY = leafKeyOf(fieldEntry(ENVIRONMENT_FIELD)?.path);
+
+/**
+ * `positions[].symbol` — the market the open position is in.
+ *
+ * Composed off {@link POSITIONS_PATH} rather than typed, for that constant's own reason. It is
+ * not a rendered field: it is the identity `components/trading/PositionsPanel.jsx`'s leaf
+ * filters the `pnl` stream on, so that a tick for another market cannot move this position's
+ * figure. Tier 1's `market` is `strategies[].symbol` — a different path, a different claim —
+ * and using it here would filter the position's P&L by the strategy's configured market.
+ */
+const POSITION_SYMBOL_PATH = `${POSITIONS_PATH}${LIST_MARKER}.symbol`;
+
+/**
+ * The one market the reported open positions are in, or `null` when it is not exactly one.
+ *
+ * {@link soleReport}'s rule without its copy: several markets means no single symbol to
+ * filter a tick by, and a filter on one of them would supersede a figure that is the sum
+ * across all of them. `null` makes the leaf subscribe to nothing.
+ *
+ * @param {unknown} body
+ * @returns {string|null}
+ */
+const solePositionSymbol = (body) => {
+  const symbols = reportedAcross(body, POSITION_SYMBOL_PATH);
+  return symbols.length === 1 ? symbols[0] : null;
+};
 
 /**
  * `market_type`, which `computeLiquidationDistance` needs and which no field on THIS page
@@ -1033,24 +1080,18 @@ const latestOrderRow = (rows) => {
 const openOrderRows = (payload) =>
   (Array.isArray(payload) ? payload.filter((row) => row && typeof row === "object") : []);
 
-/** The parts of one order row that make up the reading, in the order they are read. */
-const ORDER_PARTS = Object.freeze(["side", "amount", "symbol"]);
-
-/**
- * One order row → `"buy 0.25 BTC/USDT"`, or `null` when it reports none of the three.
+/*
+ * `orderText` — one order row → `"buy 0.25 BTC/USDT"` — stood here until task 20.2 and now
+ * lives in `components/trading/OrdersPanel.jsx` as `orderReadingOf`, imported above.
  *
- * All three come off the SAME row, so nothing here is a pair assembled across rows — the
- * failure `readPositionPair` and `readStrategyPair` are shaped to avoid. A row reporting two
- * of the three renders those two: a partial reading of one order is still a true one.
+ * It moved because TWO things now compose that reading: this page's projection of the venue's
+ * open orders, and the panel's leaf when an `orders` push supersedes it. Two copies would be
+ * two chances for the order a trader is shown and the order a push reports to read
+ * differently, which is the same argument that keeps ONE `openOrderRows` for the row a cancel
+ * addresses. The composition is unchanged: the same three fields off the same one row, in the
+ * same order, joined the same way, with the same coercion — a row reporting two of the three
+ * still renders those two, because a partial reading of one order is still a true one.
  */
-const orderText = (row) => {
-  const parts = [];
-  for (const key of ORDER_PARTS) {
-    const part = scalarText(row[key]);
-    if (part !== null) parts.push(part);
-  }
-  return parts.length === 0 ? null : parts.join(" ");
-};
 
 /**
  * The open-orders read → the `latestOrder` slot. Four arms, and only one of them is the
@@ -1073,7 +1114,7 @@ const latestOrderReport = ({ venue, failed, payload }) => {
   const newest = latestOrderRow(rows);
   if (newest === null) return unavailable(ORDERS_ABSENCE.undated);
 
-  return fromNullable(orderText(newest), ORDERS_ABSENCE.undescribed);
+  return fromNullable(orderReadingOf(newest), ORDERS_ABSENCE.undescribed);
 };
 
 /**
@@ -1648,7 +1689,7 @@ const cancellableOrder = ({ venue, failed, payload }) => {
   const symbol = scalarText(newest.symbol);
   if (orderId === null || symbol === null) return null;
 
-  return { orderId, symbol, reading: orderText(newest) };
+  return { orderId, symbol, reading: orderReadingOf(newest) };
 };
 
 /**
@@ -1778,6 +1819,84 @@ const TIER_THREE_HINT = Object.freeze({
     + "deployment. Several different statuses show no single reading rather than one of them.",
 });
 
+/**
+ * How each tier-3 figure is FORMATTED, which for all three is `raw`.
+ *
+ * A signal sentence, a side-size-market reading and a status word. None is a quantity, and a
+ * numeric format would group and round the size out of the middle of the order reading. Held
+ * as a map for the same reason {@link TIER_TWO_FORMAT} is: {@link slotsFor} reads one shape.
+ */
+const TIER_THREE_FORMAT = Object.freeze({
+  [SIGNAL_FIELD]: Object.freeze({ format: "raw" }),
+  [ORDERS_FIELD]: Object.freeze({ format: "raw" }),
+  executionStatus: Object.freeze({ format: "raw" }),
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * THREE PANELS THIS PAGE NO LONGER OWNS (task 20.2)
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * `components/trading/{PositionsPanel,OrdersPanel,ExecutionsPanel}` render tiers 2 and 3.
+ * Requirement 12.1 asks Paper Trading for "the same visual language" as this page, and
+ * §7.8 (4) reads that structurally: the same COMPONENTS, parameterised by environment, so
+ * task 25.2 points `pages/PaperTrading.jsx` at these three rather than at a second
+ * vocabulary for one thing. `environment` is a prop on all three; nothing in them is
+ * hardcoded `LIVE`.
+ *
+ * WHAT MOVED AND WHAT DID NOT
+ * ---------------------------
+ * The panels own the RENDERING and, per §13.2(b), the leaf subscription — a `pnl` tick
+ * re-renders one figure instead of this file. They own no read: all four `usePanelState`
+ * reads stay here, every figure still arrives as a `Reported<>` this page projected, and no
+ * API path moved or changed. Nothing in `components/trading/` imports an api module, which is
+ * also what keeps Property 13 intact: a destructive control is built here, arrives as
+ * `actions`, and its mutation is still called only by this file's `handleConfirm…`.
+ *
+ * TIER 3 IS TWO PANELS INSIDE ONE TIER CONTAINER, AND THE CONTAINER STAYS HERE
+ * ---------------------------------------------------------------------------
+ * Requirement 7.3's three figures are ONE row in declaration order — that is Property 4's
+ * subject and it is asserted from the rendered DOM — while §7.8's split puts the order slot
+ * and the execution slot in different components. Both hold because the tier-3 container is
+ * rendered by THIS file and the two panels are given `tier` without `page`: a panel that is
+ * not told its page does not declare a tier container, so `data-page-tier="3"` occurs exactly
+ * once however many panels the row is made of, and every figure in it still carries
+ * `data-metric-tier="3"` and its declared `data-region`.
+ *
+ * The signal travels with the order rather than with the execution, and that grouping is the
+ * lifecycle: a signal is the decision, the order is what that decision placed, and both are
+ * things this account ASKED the venue for. The execution status is what the venue did about
+ * it. The cancel controls belong beside the first pair for the reason they were always beside
+ * `latestOrder` — a cancel separated from the thing it cancels is how the wrong order gets
+ * cancelled.
+ */
+
+/** The two tier-3 fields the order panel renders, in declaration order. */
+const ORDER_PANEL_FIELDS = Object.freeze([SIGNAL_FIELD, ORDERS_FIELD]);
+
+/**
+ * Declared tier entries + this page's projection → the `slots` the panels take.
+ *
+ * One shape, built from the DECLARATION rather than from a list typed here: `label` is
+ * `pageHierarchy`'s, `value` is the `Reported<>` this page projected, the format comes from
+ * the tier's own map and the hint from the authored map or the field's declared `tooltip`.
+ * The order is the declaration's, so a panel cannot reorder a tier and a field cannot appear
+ * in one without being declared.
+ *
+ * @param {Array<{key: string, label: string}>} entries The tier's declared entries.
+ * @param {Object<string, {available: boolean}>} model This page's projection, keyed by field.
+ * @param {Object<string, Object>} formats
+ * @param {Object<string, string>} hints
+ * @returns {Array<Object>}
+ */
+const slotsFor = (entries, model, formats, hints) =>
+  entries.map(({ key, label }) => ({
+    key,
+    label,
+    value: model[key],
+    ...(formats[key] ?? {}),
+    hint: hints[key] ?? fieldEntry(key)?.tooltip ?? undefined,
+  }));
+
 export default function LiveTrading() {
   /*
    * THE TWO READS (§7.5).
@@ -1811,6 +1930,10 @@ export default function LiveTrading() {
     error: exchangeError,
     refetch: refetchExchange,
     state: exchangeState,
+    // When this read last answered, which is the CLOCK the panels' leaves gate a frame
+    // against: a frame published before it is a replay, and rendering one would put a
+    // superseded figure back on screen (Requirement 14.5).
+    lastUpdated: exchangeSyncedAt,
   } = usePanelState(readDashboard);
   const {
     data: strategiesPayload,
@@ -1943,7 +2066,34 @@ export default function LiveTrading() {
     data: ordersPayload,
     refetch: refetchOrders,
     state: ordersState,
+    // The order panel's own clock, and not the dashboard read's: the two reads answer at
+    // different times and gating an `orders` frame against the wrong one would discard a
+    // frame that is newer than the read it would supersede.
+    lastUpdated: ordersSyncedAt,
   } = usePanelState(readOrders, { deps: [ordersVenue], enabled: ordersVenue !== null });
+
+  /**
+   * The market the reported open position is in — the `pnl` stream's filter, not a figure.
+   *
+   * Read off the dashboard body rather than from tier 2's projection, because the projection
+   * is a formatted reading and this is an identity. `null` while the positions read reported
+   * no single market, which is also every state in which tier 2 shows the marker instead of a
+   * figure — so the leaf subscribes to nothing exactly when there is nothing to supersede.
+   */
+  const positionSymbol = useMemo(
+    () => solePositionSymbol(exchangePayload),
+    [exchangePayload],
+  );
+
+  /**
+   * The strategy id `STRATEGY_STATUS` is filtered by — the same one tier 3's signal filter
+   * uses, and the same one a selection narrows.
+   *
+   * `soleStrategyId` and not a first row: a push about another strategy must not be reported
+   * on a page scoped to this one, and with several strategies reported there is no single
+   * deployment for a pushed state to be about (`null` subscribes to nothing).
+   */
+  const liveStrategyId = useMemo(() => soleStrategyId(scopedStrategies), [scopedStrategies]);
 
   /**
    * The environment the SERVER labelled the records with, or `null`.
@@ -2473,140 +2623,157 @@ export default function LiveTrading() {
         </Panel>
 
         {/* ═══ TIER 2 — Requirement 7.2, and Requirement 7.4 on the panel ═════════
-            A money panel: `money` with an `environment` is the pair `ds/Panel` asserts on,
-            so this panel cannot ship without an environment decision, and `null` — the
-            server labelled none — is a decision it accepts and renders as
-            `ENVIRONMENT UNCONFIRMED`. The `chip` beside it is §8.2's own badge on a panel
-            showing position and P&L data (Requirement 12.2). */}
-        <Panel
+            `components/trading/PositionsPanel` from task 20.2, which is the SAME component
+            Paper Trading renders at task 25.2 (Requirement 12.1, §7.8 (4)) — so
+            `environment` is passed rather than assumed, and the panel declares `money`
+            itself: `money` with an `environment` is the pair `ds/Panel` asserts on, so this
+            surface cannot ship without an environment decision, and `null` — the server
+            labelled none — is a decision it accepts and renders as
+            `ENVIRONMENT UNCONFIRMED`. The panel's own `chip` is §8.2's badge on a surface
+            showing position and P&L data (Requirement 12.2).
+
+            The seven slots are walked from `pageHierarchy`'s tier-2 list, so the order is the
+            declaration's and an eighth figure cannot appear without being declared. Both
+            realised-P&L slots keep their DECLARED labels, which for that pair is
+            load-bearing: "Realised P&L (account, today)" beside "Realised P&L (this
+            deployment)" — the second of which is permanently the marker — is what stops the
+            account-wide figure being read as a deployment's (Requirement 14.5).
+
+            `symbol` and `syncedAt` are the leaf subscription's two primitives, not figures:
+            the panel supersedes the unrealised P&L from a `pnl` tick for THIS market and
+            gates every frame against the read's own clock (§13.2(b)). */}
+        <PositionsPanel
           title="Position and risk"
-          money
           environment={serverEnvironment}
+          page={PAGES.LIVE_TRADING}
+          tier={2}
+          slots={slotsFor(TIER_TWO, tierTwo, TIER_TWO_FORMAT, TIER_TWO_HINT)}
           state={readState}
           loading={{ kind: "skeleton-metric", rows: 1, columns: 7 }}
-          actions={<TradingEnvironmentBadge variant="chip" environment={serverEnvironment} />}
-          data-region="tier-2"
-        >
-          <div className="flex min-w-0 flex-col gap-4">
-            {/* ── BC-2's degraded arm ───────────────────────────────────────────────
-                The server's own sentence, verbatim and not paraphrased: it knows which
-                environment failed and why, `translateError` carries no free-form message by
-                design (Requirement 14.4), and this is the only place that account reaches
-                the screen. It sits ABOVE the row it explains, and the row's position
-                figure is the marker carrying this same reason — never a flat position. */}
-            {positionsDegraded === null ? null : (
-              <Alert
-                severity="warning"
-                title="The server could not read your open positions"
-                action={{ label: "Try again", onClick: retry }}
-                data-positions-read="degraded"
-              >
-                {positionsDegraded}
-              </Alert>
-            )}
-
-            {/* Seven equal-weight slots in ONE row, walked from `pageHierarchy`'s tier-2
-                list, each carrying `data-region` spelled as its `pageFields` key. `flex-1`
-                from a zero basis, as tier 1 does and for the same reason: `grid-cols-7` is
-                not a utility this build emits, so it would compile to nothing. */}
-            <div
-              {...{ [TIER_PAGE_ATTRIBUTE]: PAGES.LIVE_TRADING, [TIER_ATTRIBUTE]: 2 }}
-              className="flex min-w-0 items-start gap-4"
-            >
-              {TIER_TWO.map(({ key, label }) => (
-                <Metric
-                  key={key}
-                  tier={2}
-                  // The DECLARED label, which for the realised-P&L pair is load-bearing:
-                  // "Realised P&L (account, today)" beside "Realised P&L (this deployment)"
-                  // is what stops the account-wide figure being read as a deployment's.
-                  label={label}
-                  value={tierTwo[key]}
-                  {...TIER_TWO_FORMAT[key]}
-                  hint={TIER_TWO_HINT[key] ?? fieldEntry(key)?.tooltip ?? undefined}
-                  className="flex-1"
-                  data-region={key}
-                />
-              ))}
-            </div>
-          </div>
-        </Panel>
+          /* ── BC-2's degraded arm ─────────────────────────────────────────────────
+             The server's own sentence, verbatim and not paraphrased: it knows which
+             environment failed and why, `translateError` carries no free-form message by
+             design (Requirement 14.4), and this is the only place that account reaches the
+             screen. The panel renders it ABOVE the row it explains, and the row's position
+             figure is the marker carrying this same reason — never a flat position. */
+          notice={positionsDegraded}
+          noticeTitle="The server could not read your open positions"
+          onRetry={retry}
+          symbol={positionSymbol}
+          syncedAt={exchangeSyncedAt}
+          region="tier-2"
+        />
 
         {/* ═══ TIER 3 — Requirement 7.3 ═══════════════════════════════════════════
             "What happened last?", and the tier where the page's subject — attribution —
             is enforced rather than caveated: `latestSignal` is FILTERED by strategy id and
             renders the marker rather than the account's newest signal when nothing matches.
 
-            NOT a `money` panel. Its three readings are a sentence, an open order and a
-            status word; `money` is `ds/Panel`'s assertion for a surface showing balances,
-            P&L or positions, and declaring it here would put a second environment badge on
-            the page for figures that are not amounts. Tier 2 is where the money is, and it
-            carries the badge Requirements 7.4 and 12.2 ask for.
+            BOTH panels here are `money` panels, which is a change of reading and not of
+            content. Until task 20.2 this tier was one panel that declared no `money` on the
+            grounds that a sentence, an open order and a status word are not amounts. An OPEN
+            ORDER is money content in as many words — it is `ds/Panel`'s `MONEY_CONTENT`
+            second entry, beside `position` and `fill` — because it is resting capital at a
+            venue, and §7.8 (4)'s shared panels are badged for exactly that reason: a live
+            order must be unmistakable from a paper one on both pages. So each panel carries
+            its own `chip` (Requirements 7.4, 12.2) and each takes the same `environment`
+            decision tier 2 takes: the server's label, or `null` for a record it did not
+            label — never a default.
 
-            The orders read's failure does NOT come out here as a panel error: it belongs to
-            one slot, and a panel-level error would suppress the two neighbours that read
+            The orders read's failure does NOT come out as a panel error on either: it belongs
+            to one slot, and a panel-level error would suppress the neighbours that read
             successfully off the dashboard. See the module docblock. */}
-        <Panel
-          title="What happened last"
-          state={tierThreeState}
-          loading={{ kind: "skeleton-metric", rows: 1, columns: 3 }}
-          /* ── THE TWO ORDER CONTROLS (task 20.3) ────────────────────────────────────
-             Here rather than anywhere else because this is the panel that NAMES the order:
-             `latestOrder` is the reading `cancelTarget` addresses, and a cancel control
-             separated from the thing it cancels is how the wrong order gets cancelled.
-
-             Each is rendered only where its route can be satisfied — the target for one, the
-             venue for all — and neither is rendered at all when there is nothing addressable,
-             so the header carries no empty control group. Both buttons only open a dialog. */
-          actions={cancelTarget === null && ordersVenue === null ? null : (
-            <div className="flex min-w-0 items-center gap-2" data-live-actions="orders">
-              {cancelTarget === null ? null : (
-                <CommandButton
-                  intent="destructive"
-                  onClick={requestCancelOrder}
-                  data-live-action="cancel-order"
-                >
-                  Cancel live order
-                </CommandButton>
-              )}
-              {ordersVenue === null ? null : (
-                <CommandButton
-                  intent="destructive"
-                  onClick={requestCancelAll}
-                  data-live-action="cancel-all-orders"
-                >
-                  Cancel all orders
-                </CommandButton>
-              )}
-            </div>
-          )}
-          data-region="tier-3"
+        {/* ONE tier-3 container holding the row's TWO panels, walked from `pageHierarchy`'s
+            tier-3 list so the order is the declaration's and each slot carries `data-region`
+            spelled as its `pageFields` key. The container is rendered HERE and neither panel
+            is told its page, so `data-page-tier="3"` occurs exactly once however the row is
+            split — see the "THREE PANELS" section. `flex-1` from a zero basis, as tiers 1 and
+            2 do: a bare `grid-cols-*` above 4 is not a utility this build emits, so it would
+            compile to nothing (design.md §1.2). */}
+        <div
+          {...{ [TIER_PAGE_ATTRIBUTE]: PAGES.LIVE_TRADING, [TIER_ATTRIBUTE]: 3 }}
+          className="flex min-w-0 items-start gap-4"
         >
-          {/* Three equal-weight slots in ONE row, walked from `pageHierarchy`'s tier-3 list,
-              each carrying `data-region` spelled as its `pageFields` key. `flex-1` from a
-              zero basis, as tiers 1 and 2 do: a bare `grid-cols-*` above 4 is not a utility
-              this build emits, so it would compile to nothing (design.md §1.2). */}
-          <div
-            {...{ [TIER_PAGE_ATTRIBUTE]: PAGES.LIVE_TRADING, [TIER_ATTRIBUTE]: 3 }}
-            className="flex min-w-0 items-start gap-4"
-          >
-            {TIER_THREE.map(({ key, label }) => (
-              <Metric
-                key={key}
-                tier={3}
-                label={label}
-                value={tierThree[key]}
-                // `raw` for all three: a signal sentence, a side-size-market reading and a
-                // status word. None is a quantity, and a numeric format would group and
-                // round the size out of the middle of the order reading.
-                format="raw"
-                hint={TIER_THREE_HINT[key] ?? fieldEntry(key)?.tooltip ?? undefined}
-                className="flex-1"
-                data-region={key}
-              />
-            ))}
-          </div>
-        </Panel>
+          <OrdersPanel
+            title="What happened last"
+            environment={serverEnvironment}
+            tier={3}
+            slots={slotsFor(
+              TIER_THREE.filter(({ key }) => ORDER_PANEL_FIELDS.includes(key)),
+              tierThree,
+              TIER_THREE_FORMAT,
+              TIER_THREE_HINT,
+            )}
+            // The slot an `orders` push may supersede, and the venue it is filtered to. The
+            // panel issues no read: this is the same venue tier 1 reports and this page's
+            // third read was issued against, so a pushed order and a read order cannot be
+            // about different exchanges.
+            liveSlot={ORDERS_FIELD}
+            venue={ordersVenue}
+            syncedAt={ordersSyncedAt}
+            state={tierThreeState}
+            loading={{ kind: "skeleton-metric", rows: 1, columns: 2 }}
+            /* ── THE TWO ORDER CONTROLS (task 20.3) ──────────────────────────────────
+               In THIS panel rather than the other one because this is the panel that NAMES
+               the order: `latestOrder` is the reading `cancelTarget` addresses, and a cancel
+               control separated from the thing it cancels is how the wrong order gets
+               cancelled. They are built here and passed down, so the extraction did not move
+               a mutation into a component (Property 13).
+
+               Each is rendered only where its route can be satisfied — the target for one,
+               the venue for all — and neither is rendered at all when there is nothing
+               addressable, so the header carries no empty control group. Both buttons only
+               open a dialog. */
+            actions={cancelTarget === null && ordersVenue === null ? null : (
+              <div className="flex min-w-0 items-center gap-2" data-live-actions="orders">
+                {cancelTarget === null ? null : (
+                  <CommandButton
+                    intent="destructive"
+                    onClick={requestCancelOrder}
+                    data-live-action="cancel-order"
+                  >
+                    Cancel live order
+                  </CommandButton>
+                )}
+                {ordersVenue === null ? null : (
+                  <CommandButton
+                    intent="destructive"
+                    onClick={requestCancelAll}
+                    data-live-action="cancel-all-orders"
+                  >
+                    Cancel all orders
+                  </CommandButton>
+                )}
+              </div>
+            )}
+            className="min-w-0 flex-1"
+            data-region="tier-3"
+          />
+
+          {/* The venue's side of the same row, and the panel Requirement 7.5's five-second
+              bound lives in: it subscribes to `STRATEGY_STATUS` for this strategy at the leaf
+              and reports a pushed stop, error or disconnect as its own labelled fact. It does
+              NOT supersede the execution figure with it — a worker's run state and a recorded
+              execution's status are two different facts, and rendering one as the other would
+              be the fabrication Requirement 14.5 forbids. */}
+          <ExecutionsPanel
+            title="Execution status"
+            environment={serverEnvironment}
+            tier={3}
+            slots={slotsFor(
+              TIER_THREE.filter(({ key }) => !ORDER_PANEL_FIELDS.includes(key)),
+              tierThree,
+              TIER_THREE_FORMAT,
+              TIER_THREE_HINT,
+            )}
+            strategyId={liveStrategyId}
+            syncedAt={exchangeSyncedAt}
+            state={tierThreeState}
+            loading={{ kind: "skeleton-metric", rows: 1, columns: 1 }}
+            className="min-w-0 flex-1"
+            data-region="tier-3-executions"
+          />
+        </div>
 
         {/* ═══ THE THREE CONFIRMATIONS (task 20.3) ═════════════════════════════════
             Requirements 7.6, 8.1, 8.3, 8.5. All three go through `ds/ConfirmDialog`, so all

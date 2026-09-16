@@ -1234,7 +1234,7 @@ the decomposition this plan uses instead:
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 14.5_
     - _Property: P4, P12_
 
-  - [~] 20.2 Extract the shared position, order and execution panels
+  - [x] 20.2 Extract the shared position, order and execution panels
     - Create `src/components/trading/{PositionsPanel,OrdersPanel,ExecutionsPanel}.jsx`, parameterised
       by environment, and consume them from Live Trading. This is the structural reading of
       Requirement 12.1's "same visual language" — Task 25.2 points Paper Trading at the same
