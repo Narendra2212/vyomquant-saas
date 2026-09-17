@@ -569,6 +569,31 @@ export const edgeStrokeFor = (edge, selectedNodeId) => {
 };
 
 /**
+ * The builder shell's three tracks (§9.2): palette, canvas, inspector.
+ *
+ * Spelled once and exported because the numbers are the layout's contract: the two outer
+ * tracks are fixed, the canvas track takes everything else, and a closed outer track
+ * collapses to `0` instead of being pulled out of the grid — that is what lets the canvas
+ * *grow into* the space rather than have a panel laid over it (Requirement 5.3).
+ */
+export const PALETTE_TRACK_PX = 240;
+export const INSPECTOR_TRACK_PX = 320;
+
+/**
+ * The shell's `grid-template-columns`.
+ *
+ * An explicit template rather than a `grid-cols-*` utility: fixed-pixel outer tracks around a
+ * fluid middle are not a shape `grid-cols-*` can express, and this build's Tailwind emits no
+ * bare `grid-cols-5` and up in any case. The middle is `minmax(0, 1fr)` so a wide node row
+ * inside the canvas cannot push the two fixed tracks off the shell.
+ */
+export const shellTemplateColumns = (paletteShown, inspectorShown) => [
+  `${paletteShown ? PALETTE_TRACK_PX : 0}px`,
+  'minmax(0, 1fr)',
+  `${inspectorShown ? INSPECTOR_TRACK_PX : 0}px`,
+].join(' ');
+
+/**
  * A colour for one runtime state (task 8.5).
  *
  * An addition to the reading, never the reading itself: the label word and the bar count are
@@ -1481,8 +1506,18 @@ function StrategyBuilderCanvas({
 
   // The history push stays outside the state updater: an updater may run twice, and a
   // side effect inside one would record the same edit twice.
+  //
+  // `select` changes are dropped rather than applied (§9.2, the structural guarantee behind
+  // P8). React Flow reports a click as a node change, and applying it would write `selected`
+  // into the `nodes` state — the array `toCanonical` serialises and the array the undo stack
+  // holds — so a selection would become an edit and would land a "selected a block" entry in
+  // the undo history. Selection lives in `selectedNodeId`; `renderedNodes` draws it from
+  // there, so nothing is lost by not storing it. A change list that is nothing but selection
+  // returns without a write at all, so no re-render and no history entry follow a click.
   const onNodesChange = useCallback((changes) => {
-    const next = applyNodeChanges(changes, nodes);
+    const edits = changes.filter((change) => change.type !== 'select');
+    if (edits.length === 0) return;
+    const next = applyNodeChanges(edits, nodes);
     setNodes(next);
     pushState({ nodes: next, edges });
   }, [nodes, edges, pushState]);
@@ -1937,6 +1972,15 @@ function StrategyBuilderCanvas({
     [nodes, selectedNodeId],
   );
 
+  /*
+    Requirement 5.3: the inspector track exists for a selected node and for nothing else. With
+    no selection it is `display: none` at width `0`, so the canvas track takes the room back
+    rather than sharing the shell with an empty panel. The toolbar's toggle can still close it
+    over a selection — an author who wants the whole width says so — but it can never open it
+    onto nothing.
+  */
+  const inspectorShown = inspectorOpen && selectedNode !== null;
+
   const selectedDescriptor = useMemo(() => {
     if (!selectedNode) return null;
     return selectedNode.data.descriptor || getDescriptor(selectedNode.data.block_id);
@@ -2333,6 +2377,28 @@ function StrategyBuilderCanvas({
     [edges, selectedNodeId],
   );
 
+  /**
+   * The nodes as drawn (§9.2): the selected one carries React Flow's `selected` flag, which is
+   * what `PremiumNodeWrapper` reads for its ring.
+   *
+   * Derived here for the same reason `renderedEdges` is, and the reason matters more for nodes:
+   * `nodes` is the array `toCanonical` serializes and the array the undo stack holds, so a
+   * `selected` flag written into it would make clicking a block an edit to the strategy. The
+   * flag is presentation, so it lives on the rendered copy only — nothing about a node's id, its
+   * position, its params or its data changes when the selection moves, and React Flow's viewport
+   * is never touched at all.
+   *
+   * An unchanged node is returned by identity, so selecting one block re-renders that block and
+   * the one it was taken from, not the graph.
+   */
+  const renderedNodes = useMemo(
+    () => nodes.map((node) => {
+      const selected = node.id === selectedNodeId;
+      return Boolean(node.selected) === selected ? node : { ...node, selected };
+    }),
+    [nodes, selectedNodeId],
+  );
+
   // An unset required parameter deliberately does **not** disable the button. A disabled
   // control says "no" without saying why; clicking through produces the structured refusal that
   // names the node and the field, which is the whole point of the SB-06 fix.
@@ -2587,11 +2653,44 @@ function StrategyBuilderCanvas({
         </div>
       )}
 
-      {/* Main content */}
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* Palette */}
-        {libraryOpen && (
-          <div style={{ width: 280, background: C.bg2, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column' }} data-testid="palette">
+      {/*
+        The shell (§9.2): three sibling grid tracks — palette 240px, canvas `minmax(0, 1fr)`,
+        inspector 320px. A closed outer track collapses to width `0` and `display: none`, and
+        because the middle track is `1fr` the canvas simply occupies the space; nothing is ever
+        laid over it.
+
+        Sibling rather than overlay is a functional requirement, not a stylistic one. An
+        absolutely positioned inspector would sit inside or on top of the canvas element and
+        would shift the drop coordinates off the canvas's own box — the same failure task 24.1's
+        lane strip avoids by being a sibling above the canvas rather than an overlay on it.
+
+        The three children are always rendered so the tracks and the columns cannot drift apart:
+        with auto-placement, a track that disappeared from the DOM would slide the canvas into
+        the palette's column.
+      */}
+      <div
+        data-testid="builder-shell"
+        style={{
+          flex: 1,
+          display: 'grid',
+          gridTemplateColumns: shellTemplateColumns(libraryOpen, inspectorShown),
+          overflow: 'hidden',
+        }}
+      >
+        {/* Palette track */}
+        <div
+          data-testid="palette"
+          data-open={libraryOpen ? 'true' : 'false'}
+          style={{
+            width: libraryOpen ? '100%' : 0,
+            minWidth: 0,
+            background: token.surface.panel,
+            borderRight: `1px solid ${token.line.default}`,
+            display: libraryOpen ? 'flex' : 'none',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
             <div style={{ padding: '12px', borderBottom: `1px solid ${C.border}` }}>
               <label
                 htmlFor="palette-search"
@@ -2720,15 +2819,17 @@ function StrategyBuilderCanvas({
                 })
               )}
             </div>
-          </div>
-        )}
+        </div>
 
         {/*
-          Canvas column: the persistent stage lane header strip, then the canvas itself. The
+          Canvas track: the persistent stage lane header strip, then the canvas itself. The
           strip is a sibling above the canvas rather than an overlay on it, so it cannot cover
           a node and the drop coordinates stay measured from the canvas's own box.
         */}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <div
+          data-testid="canvas-track"
+          style={{ minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        >
           <StageLaneStrip bands={laneBands} />
 
           <div
@@ -2740,7 +2841,12 @@ function StrategyBuilderCanvas({
           >
             <DragLegalityContext.Provider value={dragLegality}>
               <ReactFlow
-                nodes={nodes}
+                /*
+                  The drawn copies, not the state. `renderedNodes` carries the selection flag
+                  and `renderedEdges` the selection stroke, both derived; the `nodes` and
+                  `edges` arrays behind them are untouched by a click (§9.2, P8).
+                */
+                nodes={renderedNodes}
                 edges={renderedEdges}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
@@ -2750,6 +2856,13 @@ function StrategyBuilderCanvas({
                 isValidConnection={isValidConnection}
                 onNodeClick={onNodeClick}
                 nodeTypes={nodeTypes}
+                /*
+                  `fitView` here is React Flow's *initial* fit and nothing else. Selection never
+                  fits: `handleFitView` is the toolbar button and the only caller of `fitView()`,
+                  and the inspector track appearing resizes the canvas without re-fitting it,
+                  because the initial fit is spent the first time a node is measured. So the
+                  viewport an author panned and zoomed to survives every selection (§9.2, P8).
+                */
                 fitView
                 deleteKeyCode={null}
                 /*
@@ -2777,15 +2890,34 @@ function StrategyBuilderCanvas({
           </div>
         </div>
 
-        {/* Inspector */}
-        {inspectorOpen && (
-          <div style={{ width: 320, background: C.bg2, borderLeft: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ padding: '12px', borderBottom: `1px solid ${C.border}` }}>
-              <PanelTitle title="Inspector" sub={selectedNode ? selectedNode.data.label : 'Select a node'} />
+        {/*
+          Inspector track (Requirement 5.3). The third grid column: 320px with a selected node,
+          width `0` and `display: none` without one. It stays in the DOM as a collapsed track so
+          the grid keeps three columns for three children, and it holds nothing while it is
+          collapsed — a hidden panel has no content to offer.
+        */}
+        <aside
+          data-testid="inspector"
+          data-open={inspectorShown ? 'true' : 'false'}
+          aria-label="Inspector"
+          aria-hidden={inspectorShown ? undefined : 'true'}
+          style={{
+            width: inspectorShown ? '100%' : 0,
+            minWidth: 0,
+            background: token.surface.panel,
+            borderLeft: `1px solid ${token.line.default}`,
+            display: inspectorShown ? 'flex' : 'none',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          {selectedNode && (
+            <>
+            <div style={{ padding: '12px', borderBottom: `1px solid ${token.line.default}` }}>
+              <PanelTitle title="Inspector" sub={selectedNode.data.label} />
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
-              {selectedNode ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   <div>
                     <div className="text-micro" style={{ color: C.t3, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', marginBottom: '8px' }}>
@@ -2868,14 +3000,10 @@ function StrategyBuilderCanvas({
                     Delete Node
                   </Button>
                 </div>
-              ) : (
-                <div className="text-small" style={{ color: C.t3, fontFamily: 'monospace', textAlign: 'center', padding: '20px' }}>
-                  Click a node to inspect
-                </div>
-              )}
             </div>
-          </div>
-        )}
+            </>
+          )}
+        </aside>
       </div>
 
       {/* The report, listed: node issues, connection issues and graph-level issues */}

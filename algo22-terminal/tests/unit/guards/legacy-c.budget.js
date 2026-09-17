@@ -82,7 +82,15 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // creation and on a validation verdict, the React Flow `Background` and `MiniMap`
   // colours, and the empty-canvas hint. The palette, the toolbar, the banner stack and the
   // inspector still hold the rest — tasks 24.2 and 24.4 own those.
-  'pages/StrategyBuilder.jsx': 120,
+  //
+  // 120 -> 114 at task 24.2a, which made the inspector a sibling grid track. The six that
+  // went are the three track wrappers' own surfaces and rules: the palette panel's
+  // background and right rule, the inspector panel's background and left rule, the
+  // inspector header's bottom rule, and the "click a node to inspect" placeholder the
+  // collapsed track no longer has anywhere to render. The palette's block rows, the
+  // toolbar, the banner stack and the inspector's body still hold the remaining 114 —
+  // task 24.4 owns zeroing the page.
+  'pages/StrategyBuilder.jsx': 114,
   // M8. 92 -> 0 at task 21.4a. The 92 were the shim's text, surface and border values
   // spread across the filter grid's eight inline-styled inputs, the eleven-column row
   // template, the two detail cards and the timeline's rail — all of which the rebuild
