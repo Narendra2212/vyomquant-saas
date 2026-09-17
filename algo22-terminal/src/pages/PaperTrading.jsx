@@ -149,6 +149,7 @@ import {
   CheckCircle2,
   Clock,
   DollarSign,
+  FlaskConical,
   Layers,
   Lock,
   Pause,
@@ -173,6 +174,12 @@ import { C, PanelTitle, Spinner } from '../components/ui-legacy/primitives';
 import { errorLine } from '../design/errorLine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+// Task 25.1 / Requirement 12.2. The page-level environment statement is the shared
+// `ds/` badge rather than this page's own span, and `ENVIRONMENT.PAPER` is where the
+// per-figure tag below now takes its hue, wash and border style from — so the indigo
+// treatment lives in `design/semantic.js` and not in two places on this page.
+import { TradingEnvironmentBadge } from '../components/ds/TradingEnvironmentBadge';
+import { ENVIRONMENT } from '../design/semantic';
 import { useAppState } from '../AppState';
 import { api } from '../api';
 import websocketClient from '../websocketClient';
@@ -432,25 +439,49 @@ const stackedValueStyle = {
  *
  * Text, not a colour and not an icon alone, and rendered inside the same region as the figure it
  * qualifies rather than once in a page header a scrolled user cannot see.
+ *
+ * TASK 25.1 — WHY THIS IS NOT `ds/TradingEnvironmentBadge`, AND WHAT DID CHANGE
+ * ----------------------------------------------------------------------------
+ * §7.8 (1) replaces this page's labels with `TradingEnvironmentBadge environment="PAPER"`. The
+ * PAGE-LEVEL label is exactly that now — see the header, where the badge's own `strip` variant
+ * renders `ENVIRONMENT.PAPER.long`, which is character-for-character the copy this page used to
+ * pass in as `children`. The PER-FIGURE label cannot be the badge: the badge's PAPER label is
+ * `PAPER TRADING` (`design/semantic.js`'s `ENVIRONMENT.PAPER.label`, §8.2's declared four-axis
+ * table), and `PaperTrading.test.jsx` asserts the exact string `Simulated` inside each of the
+ * twelve figure regions, the five titled panels and the tables' cards. Rendering the badge in
+ * those seats would change that text, and that suite has to keep passing unchanged. Relabelling
+ * the badge is not the way out either — `ENVIRONMENT.PAPER.label` is read by every other
+ * consumer and asserted by `dashboard_phase2a_ui.test.jsx`.
+ *
+ * So the WORD stays and the TREATMENT moves: the hue, the wash and the border style are
+ * `ENVIRONMENT.PAPER`'s — the `env.paper` token — and the `FlaskConical` glyph that is
+ * `ENVIRONMENT.PAPER.icon` is drawn beside the word, which is the badge's own shape axis. The
+ * result is that this page names no colour of its own, and the page-level badge and the
+ * per-figure tag can no longer drift apart in hue, border style or icon.
  */
-const SimulatedTag = ({ children = 'Simulated' }) => (
+const SimulatedTag = () => (
   <span
+    className="rounded-sm"
     style={{
-      display: 'inline-block',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 3,
       fontSize: 8,
       fontFamily: 'monospace',
       fontWeight: 900,
       letterSpacing: 1.5,
       textTransform: 'uppercase',
-      color: C.purple,
-      border: `1px solid ${C.purple}66`,
-      background: 'rgba(168,85,247,0.10)',
-      borderRadius: C.radius.sm,
+      color: ENVIRONMENT.PAPER.fg,
+      backgroundColor: ENVIRONMENT.PAPER.wash,
+      borderWidth: 1,
+      borderStyle: ENVIRONMENT.PAPER.border,
+      borderColor: ENVIRONMENT.PAPER.fg,
       padding: '1px 5px',
       whiteSpace: 'nowrap',
     }}
   >
-    {children}
+    <FlaskConical size={9} strokeWidth={2.5} aria-hidden="true" />
+    Simulated
   </span>
 );
 
@@ -2212,7 +2243,6 @@ export default function PaperTrading() {
             <h1 style={{ fontSize: '1.25rem', fontWeight: 900, color: C.t1, margin: 0, letterSpacing: '-0.02em' }}>
               Paper Trading
             </h1>
-            <SimulatedTag>Simulated — no live order is ever placed</SimulatedTag>
           </div>
           <p style={{ fontSize: 11, color: C.t3, margin: '4px 0 0' }}>
             Every figure on this page is produced by the paper simulator against validated market
@@ -2272,6 +2302,28 @@ export default function PaperTrading() {
           </Button>
         </div>
       </div>
+
+      {/* ── the page's environment statement ───────────────────────────────
+          Task 25.1 / Requirement 12.2 / §7.8 (1). This replaces the hand-styled span that used to
+          sit beside the `<h1>` reading `Simulated — no live order is ever placed`. That copy is not
+          restated here: it IS `ENVIRONMENT.PAPER.long`, so the badge's `strip` variant — §5.1's
+          full-width-under-the-header placement, and the only variant that shows the long form as
+          text rather than a tooltip — renders the identical sentence, now alongside the `PAPER
+          TRADING` label, the `FlaskConical` glyph, the indigo `env.paper` hue and the dashed border
+          that are §8.2's other three axes.
+
+          `announce` is set here and nowhere else on the page: this is the first and only
+          announcing instance, so a screen reader states the environment once rather than once per
+          figure. `environment="PAPER"` is a constant because it is a statement about the page, not
+          about a record — every figure below comes from the paper simulator by construction. The
+          per-record fields §8.1 talks about are `positions[].environment` and
+          `execution_environment`, and nothing here infers either. */}
+      <TradingEnvironmentBadge
+        environment="PAPER"
+        variant="strip"
+        announce
+        className="mb-4 rounded-sm"
+      />
 
       {/* ── controls ───────────────────────────────────────────────────── */}
       <Card className="mb-4" style={{ background: C.bg2, borderColor: C.border }}>

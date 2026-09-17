@@ -74,7 +74,93 @@ export const LEGACY_C_BUDGET = Object.freeze({
 
   // -- In-scope pages, the six task 1.12 names ------------------------------
   // M9 — the two largest and most behaviourally sensitive files, migrated last.
-  'pages/PaperTrading.jsx': 191,
+  //
+  // 191 -> 188 at task 25.1, PART 1, which took the environment indicator only. The three that
+  // went are all of `SimulatedTag`'s: `color: C.purple`, `` border: `1px solid ${C.purple}66` ``
+  // and `borderRadius: C.radius.sm`. They are replaced by `ENVIRONMENT.PAPER`'s `fg`, `wash` and
+  // `border` read from `design/semantic.js` plus a `rounded-sm` utility class, which also clears
+  // this page's single `no-colour-literals` entry (the hand-mixed `rgba(168,85,247,0.10)` wash).
+  // The page-level label — the one that read `Simulated — no live order is ever placed` beside the
+  // `<h1>` — is `ds/TradingEnvironmentBadge environment="PAPER" variant="strip" announce` now, and
+  // it carried no shim reference of its own, so the swap itself is worth 0 of the 3.
+  //
+  // THE PER-FIGURE LABELS ARE DELIBERATELY *NOT* THE BADGE, and this is a real conflict rather
+  // than an unfinished edit. §7.8 (1) says to replace this page's labels with
+  // `TradingEnvironmentBadge environment="PAPER"`. The badge's PAPER label is `PAPER TRADING`
+  // (`ENVIRONMENT.PAPER.label`, §8.2's declared table, also asserted by
+  // `tests/unit/dashboard_phase2a_ui.test.jsx`), and `src/pages/__tests__/PaperTrading.test.jsx`
+  // asserts the EXACT string `Simulated` inside each of the twelve figure regions, the five
+  // titled panels and the tables' cards — `getAllByText('Simulated')`, which matches an element's
+  // own text nodes and so cannot be satisfied by `PAPER TRADING`. That suite must keep passing
+  // unchanged, so the sixteen per-figure seats keep the word and take the badge's OTHER three
+  // axes instead: the `env.paper` hue, its wash, its dashed border and its `FlaskConical` glyph.
+  // The page-level seat is the one place the two agree on text, because the badge's `strip`
+  // variant renders `ENVIRONMENT.PAPER.long`, which IS that header's copy character for
+  // character. Reconciling the rest needs either a relabelled badge (which rewrites §8.2 for
+  // every other consumer) or an edited test; neither is part 1's to take.
+  //
+  // WHERE THE REMAINING 188 ARE. Measured with this guard's own `findLegacyC`, grouped by region,
+  // line ranges as of this commit. Nothing below is estimated and the parts sum to 188.
+  //
+  //   22  module-level style objects, 318-433 — `TONE_COLOR` 4 (319-322), `PAGE_PADDING` 1 (333),
+  //       `panelStyle` 4 (336-339), `labelStyle` 1 (344), `fieldStyle` 4 (356-362), `thStyle` 1
+  //       (367), `tdStyle` 1 (378), `tableCaptionStyle` 1 (388), `stackedRowStyle` 3 (405-407),
+  //       `stackedLabelStyle` 1 (413), `stackedValueStyle` 1 (423). Eleven frozen `style` objects
+  //       shared by the whole page; the cheapest region to take and the one that unblocks the
+  //       tables and the form at once.
+  //   29  the small presentation components, 434-966 — `StatusPill` 3 (506-508), `StaleNote` 1
+  //       (532), `Figure` 5 (574-619), `PanelNotice` 5 (644-668), `PanelBody` 6 (714-737),
+  //       `DataTable` 3 (883-909), `ChartTooltip` 6 (939-954). `SimulatedTag` (462-493) and
+  //       `TableFrame` (848-877) are now at 0. `PanelBody` is §11.1's eight states and
+  //       `PanelNotice` its notice chrome — both are `ds/Panel`'s job, and neither may lose a
+  //       state in the move.
+  //   11  the five tables' column definitions, 1886-2044 — `positionColumns` 3 (1907-1913),
+  //       `orderColumns` 1 (1938), `tradeColumns` 3 (1964-1972), `signalColumns` 1 (1984),
+  //       `executionColumns` 3 (2010-2038). Per-cell profit/loss tones inside `render`
+  //       functions, so these are `PnLDisplay`'s and `statusToken`'s, not a wrapper's.
+  //    2  the page shell, 2224-2225 — `background: C.bg0`, `color: C.t1` on the root `<div>`.
+  //    7  the header, 2239-2305 — the row's two spacings (2240), the `<h1>` colour (2243), the
+  //       subtitle (2247) and the reconnecting indicator's 3 (2272-2274). The environment
+  //       statement at 2306-2327 is the badge and holds none.
+  //   16  session controls, 2328-2581 — the card 2 (2329), the field grid's spacings 2
+  //       (2345-2346), a help note 1 (2369), the capital field's error border and help text 4
+  //       (2441-2444) and the two operation `borderTop` dividers with a note 7 (2473-2542).
+  //   17  the stop / reset report, 2582-2669 — the stop card 3 (2584, one arm of which is a
+  //       conditional `complete` border), its definition list 1 (2601) and six `C.t1` value
+  //       tones (2605-2628); the reset card 2 (2639), its list 1 (2648) and four more (2652-2664).
+  //   10  the status strip, 2670-2796 — the grid's spacing 2 (2677-2678) and the four cells'
+  //       label and value tones 8 (2698-2773).
+  //   14  the live event stream, 2797-2916 — the card and its refused-channel border 3 (2798), a
+  //       refusal notice chip 3 (2833-2835), the empty note 1 (2860), and the retention footer's
+  //       rule, spacings and three inline counts 7 (2891-2908).
+  //    3  the "not computed" note, 2917-2940 — `${C.warning}55` border, a spacing and the text.
+  //    2  the figures grid, 2941-3062 — the grid's `gap` and `marginBottom` only. The twelve
+  //       `Figure`s inside it hold none of their own; their colour comes from the component
+  //       above, which is why that 5 is worth more than this 2.
+  //   10  the equity curve, 3063-3130 — the card 2 (3064), the fill gradient's two stops 2
+  //       (3080-3081), the grid and two axes 3 (3084-3086), the starting-capital `ReferenceLine`
+  //       and the `Area` stroke 2 (3107, 3111) and the below-chart note 1 (3115).
+  //   19  PnL and drawdown, 3131-3217 — the two-track grid 2 (3135); the PnL card 2 (3140), its
+  //       grid and axes 3 (3150-3152), its three `Line` strokes 3 (3166-3168) and its note 1
+  //       (3171); the drawdown card 2 (3179), its two gradient stops 2 (3191-3192), its grid and
+  //       axes 3 (3195-3197) and its `Area` stroke 1 (3211). The near-duplication is the point:
+  //       one `ds/Chart` call site takes both.
+  //   11  the price series and trade markers, 3218-3269 — the card 2 (3219), the grid and axes 3
+  //       (3233-3235), the close line and two fill markers 3 (3250-3252) and the legend row with
+  //       its two arrows 3 (3255-3260).
+  //    3  open positions, 3270-3296 — the card 2 (3271) and the below-table note 1 (3290).
+  //    3  open orders, 3297-3322 — the card 2 (3298) and the below-table note 1 (3317).
+  //    2  completed trades, 3323-3345 — the card only (3324).
+  //    7  signal stream and execution events, 3346-end — the two-track grid 1 (3350), the two
+  //       cards 4 (3352, 3378), the signal note 1 (3371) and the `role="alert"` error line 1
+  //       (3398).
+  //
+  // The largest single win left is the 22 + 29 above the component body: 51 of the 188 sit in
+  // eleven shared `style` objects and seven shared components, and every card, table and figure
+  // region below reads from them. The eleven `Card` + `PanelTitle` call sites are the next 40-odd
+  // between them, and they are all the same two lines — `background: C.bg2, borderColor: C.border`
+  // — which is one `ds/Panel` swap repeated, not eleven decisions.
+  'pages/PaperTrading.jsx': 188,
   // 148 -> 120 at task 24.1, which applied §9.1's five-stage visual grammar to the canvas.
   // The 28 that went are the canvas's own: `PremiumNodeWrapper`'s body, border, text and
   // two shadow colours, the node's stage strip, block id, marker, runtime and lock tones,

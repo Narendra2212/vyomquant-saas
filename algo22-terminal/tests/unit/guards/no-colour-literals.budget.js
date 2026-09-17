@@ -364,7 +364,19 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // scans `src/pages`, `src/components` and `src/lib`, so an entry under `tests/` would
   // fail both `names only files that still exist` and the stray-entry check.
   'components/builder/validationSurfaces.jsx': 0,
-  'pages/PaperTrading.jsx': 1,
+  // 1 -> 0 at task 25.1, part 1. The single literal was `SimulatedTag`'s
+  // `rgba(168,85,247,0.10)` wash — a 10% tint of the retired `C.purple`, hand-mixed because
+  // the shim had no wash to read. The tag takes `ENVIRONMENT.PAPER.wash` now, and its hue and
+  // border style come from the same `env.paper` treatment, so the per-figure marker and the
+  // page-level `ds/TradingEnvironmentBadge` that replaced this page's own header label are one
+  // decision rather than two.
+  //
+  // NOTE ON THE TASK TEXT: task 25.1 and design.md §7.8 (3) both say "127 inline styles" for
+  // this page. That is the `style={{…}}` count, not the colour-literal count, and this guard
+  // measures the latter — the page only ever carried ONE literal, which is what this entry
+  // said. The 127 `style` attributes are real and are what the retoken half of 25.1 removes;
+  // they are not colour literals and were never in this budget's view.
+  'pages/PaperTrading.jsx': 0,
   // Subscription-state elements only (Requirement 13); the rest of the page is
   // out of scope, which is why the number is this large.
   'pages/StrategyMarketplace.jsx': 188,
