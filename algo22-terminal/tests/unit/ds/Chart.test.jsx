@@ -493,11 +493,11 @@ describe('Chart: the lazy-loading contract (design.md §13.3)', () => {
     /*
      * A static import anywhere in the entry graph hoists `vendor-recharts` into it,
      * so the §13.3 split only pays off once this list is one entry long. The remaining
-     * call sites belong to the page tasks (23.1 for `Backtester`, 25.1 for
-     * `PaperTrading`; `ResearchConsole` is named by no task in `tasks.md`) and were out
-     * of scope for 6.18, so the list is pinned by value rather than asserted down to one:
-     * it fails if a NEW importer appears, and it fails again when a page migrates
-     * and the list is not lowered with it.
+     * call site belongs to a page task (25.1 for `PaperTrading`; `ResearchConsole` is
+     * named by no task in `tasks.md`) and was out of scope for 6.18, so the list is
+     * pinned by value rather than asserted down to one: it fails if a NEW importer
+     * appears, and it fails again when a page migrates and the list is not lowered with
+     * it.
      */
     /*
      * Seven when 6.18 pinned it, now four. Every count in this block — and the "a fifth
@@ -517,6 +517,15 @@ describe('Chart: the lazy-loading contract (design.md §13.3)', () => {
      * graph for markup that never rendered (design.md §7.1, Requirement 1.5). That is
      * the first entry to leave by deletion rather than by migrating to `ds/Chart`.
      *
+     * `pages/Backtester.jsx` left it at task 23.2, which rebuilt the result region on
+     * §7.4's three tiers: both curves are `ds/Chart`s behind
+     * `lazy(() => import('../components/ds/Chart'))` and its own `Suspense` boundary, so
+     * `/app/backtest` and `/app/backtester` no longer pull `vendor-recharts` into the
+     * static graph. That is the third migration of the same shape, and it left the two
+     * Backtester suites' `vi.mock('recharts', …)` unable to satisfy the lazy chunk — the
+     * same consequence task 19.1b recorded for `dashboard_phase2a_ui.test.jsx`, resolved
+     * the same way: stub the module the page imports.
+     *
      * `pages/Dashboard.jsx` left it at task 19.1b, which rebuilt tier 2 and moved the
      * equity curve onto `const Chart = lazy(() => import('../components/ds/Chart'))`
      * behind its own `Suspense` boundary — the same migration Portfolio made, on the
@@ -532,11 +541,10 @@ describe('Chart: the lazy-loading contract (design.md §13.3)', () => {
     expect(importers).toEqual([
       'components/ResearchConsole.jsx',
       'components/ds/Chart.jsx',
-      'pages/Backtester.jsx',
       'pages/PaperTrading.jsx',
     ]);
     // The count is pinned separately so that a list edited to the wrong length fails
     // on the number as well as on the members.
-    expect(importers).toHaveLength(4);
+    expect(importers).toHaveLength(3);
   });
 });

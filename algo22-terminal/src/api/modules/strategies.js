@@ -74,15 +74,42 @@ import { get, post, put, del } from '../../apiClient';
  */
 
 /**
+ * An equity point's value, or `null` when the wire did not carry one.
+ *
+ * **Not `0`.** vyomquant-ui-redesign task 23.2: this read was `Number(value.equity ?? 0)`,
+ * which turned an omitted equity into a genuine-looking zero — a point that reads as the
+ * account crashing to nothing, and one no downstream consumer could tell from a real zero.
+ * It is the shape `lib/drawdownSeries.js` is built to carry: an unreadable point derives
+ * `drawdown: null`, which draws as a GAP in both tier-2 curves instead of a spike to the
+ * full depth of the peak. The coercion that mattered is kept — the wire's numbers may
+ * arrive as decimal strings — and everything that is not a finite number is `null`.
+ *
+ * `0` itself still passes through as `0`: a simulated account that really did reach zero is
+ * a reading, and Requirement 14.5 is about fabricated values, not measured ones.
+ *
+ * @param {unknown} raw
+ * @returns {number|null}
+ */
+const equityPointValue = (raw) => {
+  if (raw === null || raw === undefined || raw === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+};
+
+/**
  * The equity series the UI charts, read off an execute response.
  *
  * `BacktestRuntime` publishes the curve under `results.charts.equity_curve`, whose
  * `values` are either `{timestamp, equity}` records or bare numbers paired positionally
  * with `timestamps`. Both forms are read; neither is invented. An absent curve yields an
- * empty series rather than a fabricated one (Requirement 8.4, 9.4).
+ * empty series rather than a fabricated one (Requirement 8.4, 9.4), and a point whose
+ * equity is absent yields `null` rather than `0` — see {@link equityPointValue}.
+ *
+ * The point is KEPT rather than dropped, so the series stays the same length as the curve
+ * the engine published and the two tier-2 charts stay aligned point for point.
  *
  * @param {Object} [metrics] - The `results` object of a {@link BacktestExecuteResponse}.
- * @returns {Array<{timestamp: (string|number), equity: number}>}
+ * @returns {Array<{timestamp: (string|number), equity: (number|null)}>}
  */
 export const equitySeriesFromBacktestResults = (metrics) => {
   const curve = metrics?.charts?.equity_curve;
@@ -93,10 +120,10 @@ export const equitySeriesFromBacktestResults = (metrics) => {
     if (value !== null && typeof value === 'object') {
       return {
         timestamp: value.timestamp ?? timestamps[index] ?? index,
-        equity: Number(value.equity ?? 0),
+        equity: equityPointValue(value.equity),
       };
     }
-    return { timestamp: timestamps[index] ?? index, equity: Number(value ?? 0) };
+    return { timestamp: timestamps[index] ?? index, equity: equityPointValue(value) };
   });
 };
 

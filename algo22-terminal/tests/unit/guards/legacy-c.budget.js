@@ -88,11 +88,17 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // inline-styled `<select>`/`<input>` surfaces (`C.bg3` + `C.border` + `C.t1` each), the
   // run button's `C.cyan` fill, the ML slider's `accentColor`, and the removed
   // data-validation panel's `${C.red}12` wash with its issue and warning rows. Every
-  // control in that column is a `ds/Field`, a `ds/Panel` or a `ds/CommandButton` now, so
-  // the column holds no shim reference at all. The remaining 42 are entirely inside the
-  // RESULTS region — the eight metric cards, the equity chart's stroke and gradient, and
-  // the two tables' cells — which task 23.2 rebuilds and takes to 0.
-  'pages/Backtester.jsx': 42,
+  // control in that column is a `ds/Field`, a `ds/Panel` or a `ds/CommandButton` now.
+  //
+  // 42 -> 0 at task 23.2, which rebuilt the RESULT region on §7.4's three declared tiers.
+  // The 42 were all of it: the eight inline-styled metric cards, the equity chart's own
+  // `C.green` stroke and two-stop gradient, `C.border` grid and `CustomTooltip`, and the
+  // saved-history and trade tables' per-cell `C.t1`/`C.t2`/`C.t3`/`C.green`/`C.red`
+  // colouring. Tier 1 is six `ds/Metric`s, tier 2 two `ds/Chart`s (which own the series
+  // palette), tier 3 a `ds/Tabs` over a `ds/DataTable`, and the region's states are
+  // `ds/Panel`'s — so the page imports nothing from `components/ui-legacy/primitives` any
+  // more and there is no shim reference left to reintroduce by copying a neighbouring line.
+  'pages/Backtester.jsx': 0,
   // M7. 5 -> 0 at task 16.2. The 5 were one line: `const COLORS = [C.orange,
   // C.purple, C.cyan, C.gold, C.t3]` — five entries rendering four colours, since
   // M1 collapsed `C.orange`/`C.gold` onto the one amber and `C.purple` onto

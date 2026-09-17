@@ -1,15 +1,92 @@
-/**
+﻿/**
  * ═══════════════════════════════════════════════════════════════════════════
- * pages/Backtester — configure one run of one stored version (`/app/backtest`)
+ * pages/Backtester — one run of one stored version, and its result (`/app/backtest`)
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * vyomquant-ui-redesign task 23.1: the CONFIGURATION FLOW and the RUN ACTION. design.md
- * §7.4, §11.1, §11.2. Requirements 6.1, 6.5, 15.1, 15.2, 15.3, 15.6, 19.3.
+ * vyomquant-ui-redesign task 23.1: the CONFIGURATION FLOW and the RUN ACTION.
+ * vyomquant-ui-redesign task 23.2: the RESULT REGION, on §7.4's three declared tiers.
+ * design.md §7.4, §11.1, §11.2, §11.4. Requirements 6.1–6.6, 14.5, 15.1, 15.2, 15.3, 15.6,
+ * 19.3.
  *
- * The results region below the configuration column is task 23.2's and is deliberately
- * untouched here — it still reads `mapBacktestExecutionToUI`'s flat object, still renders the
- * saved-history table, and still carries the legacy `C.` treatment 23.2 clears. What changed
- * is everything above and beside it.
+ * ═══ THE RESULT REGION (task 23.2) — THREE TIERS, AND ONE PREDICATE ═══
+ *
+ *   TIER 1  total return · net P&L · max drawdown · Sharpe · win rate · trades  (Req 6.2)
+ *   TIER 2  equity curve │ drawdown curve                                      (Req 6.3)
+ *   TIER 3  Tabs: Trades │ Monthly returns │ Extended statistics               (Req 6.4)
+ *
+ * Each band is one container carrying `design/pageHierarchy.js`'s declared
+ * `data-page` + `data-page-tier` pair, in that document order, and each figure carries
+ * `data-region` spelled as its `pageFields` key — so "the declared figure rendered, and it
+ * rendered in its band" is decidable from the DOM rather than from a reviewer's memory
+ * (Property 4, task 23.5). Tier 1's six slots are walked from the tier-1 DECLARATION, so a
+ * seventh figure cannot appear there without being declared and the order is not a matter of
+ * where a `<Metric>` was pasted.
+ *
+ * ═══ REQUIREMENT 6.6 IS STRUCTURAL, NOT REMEMBERED ═══
+ *
+ * On a failed run the tier-1 figures are **not rendered at all** — not zeros, and not a
+ * rendered row of em-dashes, which would still assert "this run has results". That is one
+ * conditional over one total predicate:
+ *
+ *   {@link tierOneFigures} answers `null` for anything that is not a result object — which
+ *       is exactly what `mapBacktestExecutionToUI` returns for a response it could not read —
+ *       and a complete `Reported<T>` per declared field otherwise. There is no arm anywhere
+ *       below that reads a metric off `results` directly, so there is no arm that can render
+ *       a figure the mapper did not produce.
+ *   {@link resultRegionState} is `READY` if and only if that answer is not `null`, and the
+ *       three tier containers exist ONLY inside the `READY` arm. Every other state — a run in
+ *       flight, a refused run, a run that answered with nothing, no run yet — renders ONE
+ *       `ds/Panel` over the whole region in that state, which is §7.4's "`Panel
+ *       state="loading"` over the whole result region" and its `ErrorState` on failure.
+ *
+ * The distinction against the not-available marker is deliberate and is the sharp edge of
+ * 6.6: a COMPLETED run that omitted one figure renders the marker for that figure, because
+ * the row is readable and one field is missing. A run that FAILED renders no row.
+ *
+ * ═══ THE DRAWDOWN CURVE IS DERIVED, ONCE, IN `lib/` ═══
+ *
+ * `src/lib/drawdownSeries.js` (task 23.3) is the whole arithmetic: `absoluteDrawdownSeries`
+ * is running peak minus current per point, in the equity curve's own units, and this page
+ * consumes it rather than recomputing a second opinion. Tier 1's max drawdown stays the
+ * engine's own `max_drawdown_pct` — a percentage derived here could contradict it.
+ *
+ * An equity point the wire omitted derives `drawdown: null`, which `ds/Chart` draws as a
+ * GAP (`connectNulls={false}`), and {@link countUnreadableDrawdownPoints} is why the gap is
+ * also stated in words: `REASON_UNREADABLE_EQUITY` renders whenever the count is not zero,
+ * because an incomplete curve drawn as complete is the fabrication Requirement 14.5 forbids.
+ *
+ * `api/modules/strategies.js` was changed for this: it read `Number(value.equity ?? 0)`, so
+ * an omitted equity arrived as a genuine-looking `0` — a crash to zero that OVERSTATES the
+ * drawdown depth — and no downstream branch could tell it from a real zero. It reads `null`
+ * now. See that module's own note; this page and its two suites are its only call sites.
+ *
+ * ═══ WHAT THE ENGINE DOES NOT PRODUCE (Requirement 19.3) ═══
+ *
+ *   * **Net P&L.** `pageFields` declares `results.total_pnl` and §7.4's table marks it ✅,
+ *     but `backtesting_engine.py`'s result dict carries `final_equity` and no `total_pnl` at
+ *     all — it computes `final_equity - initial_equity` for a log line and discards it. So
+ *     tier 1's second slot is the declared not-available marker with the declared reason,
+ *     and nothing here derives a substitute: a figure labelled "Net P&L" that this page
+ *     subtracted for itself is not the engine's answer.
+ *   * **Monthly returns.** `BacktestRuntime` publishes `monthly_returns` as bare numbers
+ *     with no months attached (and resamples them off a positional index rather than the
+ *     curve's own timestamps), so nothing in the payload can be dated to a month. The tab
+ *     states that, and invents no chart.
+ *   * **A dated x axis for the two curves.** `charts.equity_curve.timestamps` is
+ *     `DatetimeIndex.astype('int64')` — nanoseconds — while the same curve's record form
+ *     carries ISO strings, so a date axis would need this page to guess a unit. Both curves
+ *     are plotted against the point's POSITION in the run, and the axis says so. The trade
+ *     table carries the real entry and exit instants.
+ *
+ * ═══ THE SAVED RUNS TABLE ═══
+ *
+ * `strategy_backtests` persists `win_rate`, `max_drawdown` and `equity_curve` from keys the
+ * engine's result dict does not have (`update_backtest_results` reads `win_rate` against an
+ * engine that reports `win_rate_pct`), so those columns are structurally `0`/`[]` for every
+ * row ever written. They are not rendered: a column that can only ever read `0` misinforms.
+ * The columns that remain are the ones the writer fills from keys the engine really sends,
+ * and `Inspect` loads a saved row THROUGH `mapBacktestExecutionToUI` — see
+ * {@link savedRunAsExecution}, which carries the same argument field by field.
  *
  * ═══ REQUIREMENT 6.1 — FOUR PANELS, ONE COLUMN, IN THIS ORDER ═══
  *
@@ -113,12 +190,9 @@
  * — none of which can do anything without a strategy — and the results region stays.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
-import {
-  ResponsiveContainer, AreaChart, Area, CartesianGrid, XAxis, YAxis, Tooltip
-} from "recharts";
 
 import { endpoints } from "../api";
 import { dataQualityApi } from "../api/modules/dataQuality";
@@ -128,16 +202,40 @@ import { TimeframeSelector } from "../components/builder/TimeframeSelector";
 import { Accordion, partitionAdvanced } from "../components/ds/Accordion";
 import { Alert } from "../components/ds/Alert";
 import { CommandButton } from "../components/ds/CommandButton";
+import { DataTable } from "../components/ds/DataTable";
+import { EmptyState } from "../components/ds/EmptyState";
 import { ErrorState } from "../components/ds/ErrorState";
 import { Field } from "../components/ds/Field";
+import { LoadingState } from "../components/ds/LoadingState";
 import { Metric } from "../components/ds/Metric";
 import { PageHeader } from "../components/ds/PageHeader";
 import { Panel } from "../components/ds/Panel";
-import { C, PanelTitle, CustomTooltip } from "../components/ui-legacy/primitives";
-import { Button } from "../components/ui/Button";
-import { Card } from "../components/ui/Card";
+import { Tabs } from "../components/ds/Tabs";
+import { PAGE_FIELDS_BY_PAGE, PAGES } from "../design/pageFields";
+import {
+  PAGE_HIERARCHY_BY_PAGE,
+  TIER_ATTRIBUTE,
+  TIER_PAGE_ATTRIBUTE,
+} from "../design/pageHierarchy";
 import { fromNullable } from "../design/reported";
 import { PANEL_STATES, usePanelState } from "../hooks/usePanelState";
+import {
+  REASON_UNREADABLE_EQUITY,
+  absoluteDrawdownSeries,
+  countUnreadableDrawdownPoints,
+} from "../lib/drawdownSeries";
+
+/**
+ * `ds/Chart`, lazily — the one primitive on this page not imported by path.
+ *
+ * It is the only module in `src/` that may import recharts (~350KB before gzip), it is
+ * deliberately absent from `ds/index.js`, and a static import here would hoist
+ * `vendor-recharts` into this route's chunk graph however `vite.config.js` reads (§13.3).
+ * `lazy()` needs a module whose `default` is the component, which `Chart.jsx` provides for
+ * exactly this call site. Task 23.2 is what took `pages/Backtester.jsx` off the static
+ * recharts importer list `tests/unit/ds/Chart.test.jsx` pins.
+ */
+const Chart = lazy(() => import("../components/ds/Chart"));
 
 /* ══════════════════════════════════════════════════════════════════════════
  * THE RUN LIFECYCLE (Requirement 6.5, Property 11)
@@ -559,6 +657,459 @@ function DataAvailabilityNote({ state, report, error, onRetry, described }) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+ * THE RESULT REGION, AS THE DECLARATION HAS IT (task 23.2, §7.4)
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** Every Backtester field `pageFields` declares. Labels and reasons are READ, never retyped. */
+const BACKTESTER_FIELDS = PAGE_FIELDS_BY_PAGE[PAGES.BACKTESTER] ?? [];
+
+/** §7.4's three bands, as `pageHierarchy` declares them. */
+const RESULT_TIERS = PAGE_HIERARCHY_BY_PAGE[PAGES.BACKTESTER]?.tiers ?? [];
+
+/** Tier 1, in declaration order. The row below is this list and nothing else (Req 6.2). */
+const TIER_ONE = RESULT_TIERS.filter((entry) => entry.tier === 1);
+
+/** One declared field's entry, or `null`. */
+const fieldEntry = (field) => BACKTESTER_FIELDS.find((entry) => entry.field === field) ?? null;
+
+/** One field's declared label. Two spellings of one figure are two figures to a test. */
+const labelOf = (field) => fieldEntry(field)?.label ?? field;
+
+/** One field's declared reason — the sentence rendered INSTEAD of the figure (Req 19.3). */
+const reasonOf = (field) => fieldEntry(field)?.reason ?? undefined;
+
+/**
+ * How each tier-1 slot is read off the mapped result, and how it is formatted.
+ *
+ * `read` is the declared path's last segment, because `mapBacktestExecutionToUI` spreads the
+ * engine's `results` FLAT and renames nothing; the two fallbacks — `max_drawdown` and
+ * `trades_count` — are the `inputs` the same declarations list, not guesses.
+ *
+ * Percentages are NOT scaled: every one of these arrives from the engine already in percent
+ * units (`Total Return [%]`, `Max Drawdown [%]`, `win_rate * 100`), and `ds/Metric` appends
+ * the sign without multiplying. `precision` is presentational and applies only to the
+ * rendering; nothing here rounds a value before it is read.
+ */
+const TIER_ONE_FIGURE = Object.freeze({
+  totalReturn: Object.freeze({
+    format: "percent",
+    precision: 2,
+    read: (results) => results.total_return_pct,
+    hint: "The run's total return over the window, as the engine reported it.",
+  }),
+  netPnl: Object.freeze({
+    format: "currency",
+    precision: 2,
+    read: (results) => results.total_pnl,
+    hint: "The run's net profit and loss. The engine reports a final equity and no net "
+      + "P&L, so this is the not-available marker rather than a figure this page subtracted "
+      + "for itself.",
+  }),
+  maxDrawdown: Object.freeze({
+    format: "percent",
+    precision: 2,
+    read: (results) => results.max_drawdown_pct ?? results.max_drawdown,
+    hint: "The worst decline the run went through — the engine's own figure, not the "
+      + "drawdown curve's.",
+  }),
+  sharpe: Object.freeze({
+    format: "number",
+    precision: 2,
+    read: (results) => results.sharpe_ratio,
+    hint: "Return per unit of volatility, annualised by the engine.",
+  }),
+  winRate: Object.freeze({
+    format: "percent",
+    precision: 2,
+    read: (results) => results.win_rate_pct,
+    hint: "The share of closed trades that ended in profit.",
+  }),
+  tradeCount: Object.freeze({
+    format: "integer",
+    read: (results) => results.total_trades ?? results.trades_count,
+    hint: "How many trades the simulation closed. A reported 0 is a real outcome — a "
+      + "strategy that never triggered.",
+  }),
+});
+
+/**
+ * The six tier-1 figures, or **`null` when there is no result to render at all**.
+ *
+ * This is Requirement 6.6's mechanism. `null` in means `null` out, and so does anything that
+ * is not a result object — which is exactly what `mapBacktestExecutionToUI` answers for a
+ * response it could not read. The caller renders the tier-1 container only for a non-`null`
+ * answer, so a failed run has no row rather than a row of zeros or of em-dashes.
+ *
+ * A non-`null` answer carries one `Reported<T>` per DECLARED field, so a completed run that
+ * omitted one figure renders that one figure's marker with the declared reason and the other
+ * five as read. Total: nothing here throws, whatever it is handed.
+ *
+ * Exported for the property tests (23.4, 23.5) — the predicate they assert has to be the
+ * predicate the page renders from, not a second copy of it.
+ *
+ * @param {unknown} results `mapBacktestExecutionToUI`'s answer, or anything at all.
+ * @returns {Readonly<Object>|null}
+ */
+export function tierOneFigures(results) {
+  if (results === null || typeof results !== "object" || Array.isArray(results)) return null;
+
+  const figures = {};
+  for (const { key } of TIER_ONE) {
+    const read = TIER_ONE_FIGURE[key]?.read;
+    figures[key] = fromNullable(
+      typeof read === "function" ? read(results) : null,
+      reasonOf(key),
+    );
+  }
+  return Object.freeze(figures);
+}
+
+/**
+ * The whole result region's `ds/Panel` state — one function of the run lifecycle and the
+ * result, and the only thing that decides whether the three tiers exist.
+ *
+ * `loading` covers the WHOLE region while a run is in flight (§7.4), `error` is Requirement
+ * 6.6's `ErrorState` in place of the figures, and `empty` covers both "no run yet" and "the
+ * run answered with nothing renderable" — {@link resultEmptyCopy} tells those two apart in
+ * words. `ready` is reachable only when {@link tierOneFigures} answered, which is what makes
+ * "no figures at all on failure" structural.
+ *
+ * @param {unknown} runState A {@link RUN_LIFECYCLE} value, or anything.
+ * @param {unknown} results `mapBacktestExecutionToUI`'s answer, or anything.
+ * @returns {string} A `PANEL_STATES` value.
+ */
+export function resultRegionState(runState, results) {
+  if (isRunInFlight(runState)) return PANEL_STATES.LOADING;
+  if (runState === RUN_LIFECYCLE.FAILED) return PANEL_STATES.ERROR;
+  return tierOneFigures(results) === null ? PANEL_STATES.EMPTY : PANEL_STATES.READY;
+}
+
+/**
+ * What every "there is nothing here" state offers as its next action.
+ *
+ * Deliberately NOT worded as the run trigger. `RunBacktestControl` is the one control
+ * Property 11 (task 23.4) holds the `disabled` ⟺ non-terminal biconditional over, and a
+ * second control reading the same words would invite the reading that this one carries the
+ * same guarantee. It does not need to: every state that renders this action is unreachable
+ * while a run is in flight, because `resultRegionState` answers `loading` for the whole
+ * region then and `ds/Panel` renders no other body in that state.
+ */
+const RETRY_LABEL = "Try the run again";
+
+/**
+ * Requirement 14.1's three fields for the two ways this region can be empty.
+ *
+ * They are different facts and they get different words: a run that COMPLETED and answered
+ * with nothing renderable is a statement about that run, while "nothing has been run" is a
+ * statement about the page. Neither says anything about performance.
+ *
+ * @param {unknown} runState
+ * @param {Function} onRun
+ */
+const resultEmptyCopy = (runState, onRun) => (
+  runState === RUN_LIFECYCLE.COMPLETED
+    ? {
+      headline: "This run reported no result",
+      body: "The endpoint answered without a result body, so there are no figures, no "
+        + "curves and no trades to show. Nothing is substituted for them.",
+      action: { label: RETRY_LABEL, onClick: onRun },
+    }
+    : {
+      headline: "No backtest has been run yet",
+      body: "The six headline figures, the equity and drawdown curves and the trade list "
+        + "all appear here once a run reports. Nothing stands in for them before then.",
+      action: { label: "Start the run", onClick: onRun },
+    }
+);
+
+/* ── TIER 2: the two curves, from one derived series ─────────────────────── */
+
+/**
+ * The rows both tier-2 charts are drawn from, plus the two counts the panels need.
+ *
+ * ONE array for both charts, because it is one derivation: `absoluteDrawdownSeries` emits
+ * exactly one point per equity point — carrying the equity it read, or `null` where it could
+ * not read one — so the two curves cannot end up with different lengths or a different idea
+ * of where the gaps are.
+ *
+ * `point` is the position in the run, 1-based, and it is the x of both charts. See the module
+ * docblock for why not a date: the payload's own timestamps are nanosecond integers in one
+ * shape and ISO strings in another, and an axis this page had to guess the unit of is worse
+ * than an axis that says exactly what it plots.
+ *
+ * @param {unknown} results
+ * @returns {{rows: Array<Object>, readable: number, unreadable: number}}
+ */
+export function resultCurves(results) {
+  const equity = Array.isArray(results?.equity) ? results.equity : [];
+  const derived = absoluteDrawdownSeries(equity);
+
+  return {
+    rows: derived.map((entry, index) => ({
+      point: index + 1,
+      equity: entry.equity,
+      drawdown: entry.drawdown,
+    })),
+    readable: derived.filter((entry) => entry.readable === true).length,
+    unreadable: countUnreadableDrawdownPoints(derived),
+  };
+}
+
+/** Requirement 14.1 for a curve that has no readable point. Never a flat line. */
+const CURVE_EMPTY = Object.freeze({
+  headline: "This run produced no equity series",
+  body: "Both curves are drawn from the equity the engine reported point by point, and this "
+    + "run reported none that could be read. A flat line here would claim the account never "
+    + "moved.",
+});
+
+/* ── TIER 3: the three tabs ──────────────────────────────────────────────── */
+
+/** The tab ids. `trades` is what a new run opens on, which is what "collapsed" means here. */
+const DETAIL_TABS = Object.freeze({
+  TRADES: "trades",
+  MONTHLY: "monthly-returns",
+  EXTENDED: "extended-statistics",
+});
+
+/** §7.7's page size is 50; a trade list read in one tab is comfortable at 20. */
+const TRADES_PER_PAGE = 20;
+
+/**
+ * The trade list's columns (Requirement 6.4's detail, behind the tabs).
+ *
+ * Every key is one `backtesting_engine.py` writes into each `results.trades[]` record.
+ * `durationText` is the one projected field — see {@link tradeDetailRows} for why a reported
+ * `0` is not rendered as a duration.
+ *
+ * `priority: 3` drops a column below `--breakpoint-laptop` (Requirement 17.2), and the three
+ * that carry it are the ones a trader scanning P&L can lose first.
+ */
+const TRADE_COLUMNS = Object.freeze([
+  { key: "trade_id", header: "#", align: "numeric", format: "number", priority: 3 },
+  { key: "entry_time", header: "Entry", format: "timestamp", sortable: true },
+  { key: "entry_price", header: "Entry price", align: "numeric", format: "currency" },
+  { key: "exit_time", header: "Exit", format: "timestamp" },
+  { key: "exit_price", header: "Exit price", align: "numeric", format: "currency" },
+  { key: "side", header: "Side", format: "text" },
+  { key: "quantity", header: "Quantity", align: "numeric", format: "number" },
+  { key: "gross_pnl", header: "Gross P&L", align: "numeric", format: "currency", sortable: true },
+  { key: "fees", header: "Fees", align: "numeric", format: "currency" },
+  { key: "net_pnl", header: "Net P&L", align: "numeric", format: "currency", sortable: true },
+  { key: "return_pct", header: "Return %", align: "numeric", format: "number", priority: 3 },
+  { key: "durationText", header: "Held for", format: "text", priority: 3 },
+]);
+
+/** `123.4` seconds → `2m 03s`. The engine reports the duration in seconds. */
+const secondsHeld = (seconds) => {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return null;
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${String(Math.round(seconds % 60)).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+};
+
+/**
+ * The trade rows, with the one field the table cannot read straight off the record.
+ *
+ * `duration` is initialised to `0` by the engine and overwritten only when both timestamps
+ * parse, so a `0` there is indistinguishable from "not measured" — and "0s" beside a trade
+ * that was held for two days is a fabricated figure. A non-positive duration therefore
+ * projects to `null`, which `ds/DataTable` renders as the not-available marker.
+ *
+ * @param {unknown} trades
+ * @returns {Array<Object>}
+ */
+export function tradeDetailRows(trades) {
+  if (!Array.isArray(trades)) return [];
+  return trades
+    .filter((trade) => trade !== null && typeof trade === "object")
+    .map((trade) => ({ ...trade, durationText: secondsHeld(trade.duration) }));
+}
+
+/**
+ * The extended statistics, which are the engine's OWN remaining metrics.
+ *
+ * `fees` is the one field `pageFields` declares among them (§7.4's table), so its label, its
+ * absence reason and its `data-region` come from the declaration. The other eight are keys
+ * `backtesting_engine.py` and `backtest_runtime.py` really write — nothing here is a
+ * placeholder for a metric that does not exist — and they are declared locally rather than
+ * added to `pageFields` on purpose: `pageHierarchy`'s Backtester hierarchy is frozen and
+ * `pageHierarchy.test.js` asserts that every declared field is tiered or explicitly
+ * untiered, so a new `pageFields` entry would need a tier entry to go with it and that is a
+ * change to what §7.4's bands claim, not a rendering decision.
+ */
+const EXTENDED_STATISTICS = Object.freeze([
+  Object.freeze({
+    key: "total_fees_paid",
+    field: "fees",
+    format: "currency",
+    precision: 2,
+    hint: "Everything the simulator charged across both sides of every fill.",
+  }),
+  Object.freeze({
+    key: "final_equity",
+    label: "Final equity",
+    format: "currency",
+    precision: 2,
+    reason: "This run did not report a final equity.",
+    hint: "The simulated account at the last point of the run.",
+  }),
+  Object.freeze({
+    key: "profit_factor",
+    label: "Profit factor",
+    format: "number",
+    precision: 2,
+    reason: "This run did not report a profit factor.",
+    hint: "Gross profit divided by gross loss. The engine reports 9999 for a run with no "
+      + "losing trade, which is its stand-in for an infinite ratio.",
+  }),
+  Object.freeze({
+    key: "sortino_ratio",
+    label: "Sortino ratio",
+    format: "number",
+    precision: 2,
+    reason: "This run did not report a Sortino ratio.",
+    hint: "Return per unit of DOWNSIDE volatility only.",
+  }),
+  Object.freeze({
+    key: "calmar_ratio",
+    label: "Calmar ratio",
+    format: "number",
+    precision: 2,
+    reason: "This run did not report a Calmar ratio.",
+    hint: "Annualised return over the worst drawdown.",
+  }),
+  Object.freeze({
+    key: "expectancy",
+    label: "Expectancy",
+    format: "currency",
+    precision: 2,
+    reason: "This run did not report an expectancy.",
+    hint: "The average outcome of one trade at this win rate.",
+  }),
+  Object.freeze({
+    key: "recovery_factor",
+    label: "Recovery factor",
+    format: "number",
+    precision: 2,
+    reason: "This run did not report a recovery factor.",
+    hint: "Net profit over the worst drawdown.",
+  }),
+  Object.freeze({
+    key: "kelly",
+    label: "Kelly fraction",
+    format: "number",
+    precision: 3,
+    reason: "This run did not report a Kelly fraction.",
+    hint: "The position fraction the run's own win rate and average outcomes imply.",
+  }),
+  Object.freeze({
+    key: "execution_time_seconds",
+    label: "Simulation time",
+    format: "number",
+    precision: 2,
+    unit: "s",
+    reason: "This run did not report how long the simulation took.",
+    hint: "How long the engine took to run, not anything about the market.",
+  }),
+]);
+
+/**
+ * One saved `strategy_backtests` row → the execute-response shape the mapper reads.
+ *
+ * `Inspect` goes through `mapBacktestExecutionToUI` like a live run does, so the results
+ * region has exactly one input shape and there is no second, hand-assembled object that
+ * could drift from it.
+ *
+ * The row is NOT copied wholesale, and the omissions are the point:
+ *
+ *   * `win_rate` and `max_drawdown` are dropped. `backtest_service.update_backtest_results`
+ *     writes them from `results.get("win_rate", 0)` / `results.get("max_drawdown", 0)`
+ *     against an engine dict that carries `win_rate_pct` and `max_drawdown_pct`, so every
+ *     persisted row holds `0` for both. Carrying them across would render "0%" — "every
+ *     trade lost", "the account never declined" — from a key nobody ever wrote.
+ *   * `equity_curve` is carried only when it is a NON-EMPTY array, for the same reason: the
+ *     same mismatch (`results.get("equity_curve", [])` against a curve the engine publishes
+ *     under `charts.equity_curve`) means the stored column is `[]`, and an empty series
+ *     renders the empty state rather than a flat line.
+ *
+ * @param {unknown} run One row of `GET /api/backtests`.
+ * @returns {Object|null} An execute-response-shaped object, or `null` for an unusable row.
+ */
+export function savedRunAsExecution(run) {
+  if (run === null || typeof run !== "object" || Array.isArray(run)) return null;
+
+  const curve = Array.isArray(run.equity_curve) && run.equity_curve.length > 0
+    ? { equity_curve: { values: run.equity_curve } }
+    : null;
+
+  return {
+    backtest_id: run.id ?? null,
+    status: run.status ?? null,
+    strategy_id: run.strategy_id ?? null,
+    version: run.version ?? null,
+    results: {
+      total_return_pct: run.total_return_pct,
+      sharpe_ratio: run.sharpe_ratio,
+      sortino_ratio: run.sortino_ratio,
+      profit_factor: run.profit_factor,
+      total_trades: run.total_trades,
+      final_equity: run.final_capital,
+      execution_time_seconds: run.execution_time_seconds,
+      trades: Array.isArray(run.trades) ? run.trades : undefined,
+      ...(curve === null ? {} : { charts: curve }),
+    },
+  };
+}
+
+/**
+ * The saved-history table's columns.
+ *
+ * "Win Rate" and "Max DD" are gone rather than restyled — see {@link savedRunAsExecution}:
+ * both columns read a database field written from a key the engine does not send, so both
+ * could only ever be `0`. `Trades` and `Sharpe` take their place because those two ARE
+ * written from keys the engine sends.
+ *
+ * The two text columns are projected rather than formatted by the table, because a column
+ * that renders `12.5` where a trader expects `12.50%` and one that renders an empty cell for
+ * an absent figure are two different mistakes; `null` from the projection reaches
+ * `ds/DataTable`'s own not-available marker.
+ */
+const SAVED_RUN_COLUMNS = Object.freeze([
+  { key: "created_at", header: "Created", format: "timestamp", sortable: true },
+  { key: "strategy", header: "Strategy", format: "text" },
+  { key: "version", header: "Version", format: "text" },
+  { key: "dataset", header: "Pair", format: "symbol" },
+  { key: "status", header: "Status", format: "text" },
+  { key: "returnText", header: "Return %", align: "numeric", format: "text" },
+  { key: "total_trades", header: "Trades", align: "numeric", format: "number" },
+  { key: "sharpeText", header: "Sharpe", align: "numeric", format: "text" },
+]);
+
+/** The one empty list, shared, so a read that answered with nothing keeps its identity. */
+const NO_SAVED_RUNS = Object.freeze([]);
+
+/** `12.5` → `"12.50%"`, and anything unreadable → `null`, never `"0.00%"`. */
+const percentText = (value) => (
+  typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(2)}%` : null
+);
+
+/** `1.2345` → `"1.23"`, and anything unreadable → `null`. */
+const decimalText = (value, digits) => (
+  typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : null
+);
+
+/** The name the saved row itself carries, or the id it was saved under. */
+const savedRunName = (run) => {
+  const name = run?.blueprint?.name;
+  if (typeof name === "string" && name.trim() !== "") return name.trim();
+  const id = run?.strategy_id;
+  return typeof id === "string" && id !== "" ? `Strategy ${id.slice(0, 8)}` : null;
+};
+
+/* ══════════════════════════════════════════════════════════════════════════
  * THE PAGE
  * ══════════════════════════════════════════════════════════════════════════ */
 
@@ -783,12 +1334,21 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
   /* ── The run ────────────────────────────────────────────────────────────── */
   const [runState, setRunState] = useState(RUN_LIFECYCLE.IDLE);
   const [runError, setRunError] = useState(null);
+  /*
+   * The rejection itself, kept alongside its message. The Alert beside the trigger renders
+   * the server's own sentence (see {@link runFailureMessage}); the result region renders
+   * `ds/ErrorState`, which reads the ERROR — never a message string (Requirements 14.3,
+   * 14.4). Two surfaces, two jobs: one says why the run was refused, the other says that
+   * there are consequently no figures (Requirement 6.6).
+   */
+  const [runFailure, setRunFailure] = useState(null);
   const [refusal, setRefusal] = useState(null);
   const [results, setResults] = useState(null);
 
-  /* ── The results region's own reads (task 23.2 owns what they render) ────── */
-  const [tradePage, setTradePage] = useState(0);
-  const tradesPerPage = 20;
+  /* ── The result region's own view state (task 23.2) ──────────────────────── */
+  const [detailTab, setDetailTab] = useState(DETAIL_TABS.TRADES);
+  /** 1-based, as `ds/DataTable` counts pages. */
+  const [tradesPage, setTradesPage] = useState(1);
 
   /**
    * "Saved Backtest History" — the rows the backend holds (task 17.2).
@@ -814,32 +1374,42 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
     error: savedError,
     refetch: refetchSaved,
   } = usePanelState(readSavedRuns);
-  const savedRuns = Array.isArray(savedPayload?.backtests) ? savedPayload.backtests : [];
+  /*
+   * Memoised because the table's rows are derived from it: a fresh `[]` on every render
+   * would change the identity of that derivation every render, and with it every `<tr>`
+   * `ds/DataTable` memoises.
+   */
+  const savedRuns = useMemo(
+    () => (Array.isArray(savedPayload?.backtests) ? savedPayload.backtests : NO_SAVED_RUNS),
+    [savedPayload],
+  );
 
-  const handleLoadSavedRun = (run) => {
+  const handleLoadSavedRun = useCallback((run) => {
     if (!run || typeof run !== "object") return;
     // A saved row is a run that already happened, so nothing about the run lifecycle moves
     // here — but a previous failure's message describes a different run and must go.
     setRunError(null);
+    setRunFailure(null);
     setRefusal(null);
     if (run.strategy_id) setSelectedId(String(run.strategy_id));
     if (typeof run.dataset === "string" && run.dataset.trim() !== "") setMarket(run.dataset.trim());
     if (run.initial_capital !== null && run.initial_capital !== undefined) {
       setCapital((previous) => ({ ...previous, "bt-initial-capital": String(run.initial_capital) }));
     }
-    if (run.status === "completed" && run.equity_curve) {
-      setResults({
-        equity: run.equity_curve,
-        total_return_pct: run.total_return_pct,
-        win_rate_pct: run.win_rate,
-        max_drawdown_pct: run.max_drawdown,
-        sharpe_ratio: run.sharpe_ratio,
-        sortino_ratio: run.sortino_ratio,
-        profit_factor: run.profit_factor,
-        total_trades: run.total_trades,
-      });
+    /*
+     * Through the same mapper a live run goes through, so the result region has one input
+     * shape (task 23.2). Only a COMPLETED row is loaded: a row that failed or is still
+     * running holds no metrics to render, and the table's own `Inspect` control is disabled
+     * for exactly those rows.
+     */
+    if (run.status === "completed") {
+      setResults(mapBacktestExecutionToUI(savedRunAsExecution(run)));
+      // A different run is a different detail: the tabs and the trade page both reset, so
+      // page 3 of the previous run's trades cannot be on screen over this one's.
+      setDetailTab(DETAIL_TABS.TRADES);
+      setTradesPage(1);
     }
-  };
+  }, []);
 
   /**
    * What stops this configuration from being run, in the order a trader should fix them.
@@ -872,6 +1442,11 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
     }
 
     setRunError(null);
+    setRunFailure(null);
+    // A new run is a new detail: the tabs open on Trades and the trade list starts at page 1,
+    // so nothing from the previous run's list can be on screen under this run's heading.
+    setDetailTab(DETAIL_TABS.TRADES);
+    setTradesPage(1);
     setRunState(RUN_LIFECYCLE.RUNNING);
 
     /*
@@ -911,35 +1486,157 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
       // an empty panel.
       console.error("Backtest run failed:", err?.message);
       setRunError(runFailureMessage(err));
+      setRunFailure(err);
+      // Requirement 6.6: the previous run's figures are not this run's, and this run has
+      // none. `null` here is what collapses the whole tier-1 row — see `tierOneFigures`.
       setResults(null);
       setRunState(RUN_LIFECYCLE.FAILED);
     }
   }, [blockers, capital, endDate, refetchSaved, startDate, strategy, versionId]);
 
-  const runInFlight = isRunInFlight(runState);
+  /* ── The result region (task 23.2) ──────────────────────────────────────── */
 
-  /* ── The results region (task 23.2) ─────────────────────────────────────── */
+  /**
+   * One state for the whole region, and the ONE condition the three tiers exist under.
+   * Everything Requirement 6.6 turns on is in `resultRegionState` and `tierOneFigures`.
+   */
+  const resultState = resultRegionState(runState, results);
+  const tierOne = useMemo(() => tierOneFigures(results), [results]);
 
-  // Memoised – prevents recharts reconciliation unless results actually change
-  const equityData = useMemo(
-    () => (results?.equity || []).map((row, i) => ({
-      timestamp: row.timestamp ?? row.time ?? i,
-      equity: Number(row.equity ?? row.value ?? 0),
+  /** Both curves, derived once from the one equity series (task 23.3). */
+  const curves = useMemo(() => resultCurves(results), [results]);
+  const curveState = curves.readable > 0 ? PANEL_STATES.READY : PANEL_STATES.EMPTY;
+
+  /** The trade list, with its one projected column. */
+  const tradeRows = useMemo(() => tradeDetailRows(results?.trades), [results]);
+  const tradesReported = Array.isArray(results?.trades);
+
+  /**
+   * Tier 3's three tabs (Requirement 6.4).
+   *
+   * `ds/Tabs` is controlled from here because a new run resets the disclosure to Trades —
+   * which is the sense in which tier 3 is "collapsed by default": the tab strip is rendered
+   * and ordered, and two of the three panels are closed at rest.
+   */
+  const detailTabs = useMemo(() => [
+    {
+      id: DETAIL_TABS.TRADES,
+      label: labelOf("tradeList"),
+      content: tradesReported && tradeRows.length > 0 ? (
+        <DataTable
+          caption="Simulated trades, in the order the run reported them"
+          columns={TRADE_COLUMNS}
+          rows={tradeRows}
+          getRowId={(row, index) => row?.trade_id ?? index}
+          page={tradesPage}
+          pageSize={TRADES_PER_PAGE}
+          onPageChange={setTradesPage}
+          density="compact"
+          stickyHeader
+        />
+      ) : (
+        <EmptyState
+          headline={tradesReported
+            ? "This run closed no trades"
+            : "This run reported no trade list"}
+          body={tradesReported
+            ? "The strategy never triggered over this window, which is a result rather than "
+              + "a failure. The six figures above describe that run."
+            : `${reasonOf("tradeList")} The engine returns the list with the run, so there is `
+              + "nothing to re-read it from."}
+          action={{ label: RETRY_LABEL, onClick: runBacktest }}
+        />
+      ),
+    },
+    {
+      id: DETAIL_TABS.MONTHLY,
+      label: "Monthly returns",
+      /*
+       * Requirement 19.3, not a placeholder. `BacktestRuntime._calculate_performance_metrics`
+       * publishes `monthly_returns` as a bare list of numbers — no months — and resamples it
+       * off a positional index rather than the equity curve's own timestamps, so the payload
+       * contains nothing that could be dated. A chart with month labels this page invented is
+       * the one thing that must not be here, so the state says so instead.
+       */
+      content: (
+        <Panel
+          state={PANEL_STATES.UNAVAILABLE}
+          unavailable={{
+            reason: "The engine reports no dated monthly returns for a backtest: the figures "
+              + "it publishes carry no months, so there is no honest way to label a month "
+              + "against one. The equity curve above covers the same window point by point.",
+          }}
+          data-region="monthly-returns"
+        />
+      ),
+    },
+    {
+      id: DETAIL_TABS.EXTENDED,
+      label: "Extended statistics",
+      content: (
+        <div className="grid min-w-0 grid-cols-3 gap-4">
+          {EXTENDED_STATISTICS.map((entry) => (
+            <Metric
+              key={entry.key}
+              tier={3}
+              label={entry.field ? labelOf(entry.field) : entry.label}
+              value={fromNullable(
+                results?.[entry.key],
+                entry.field ? reasonOf(entry.field) : entry.reason,
+              )}
+              format={entry.format}
+              precision={entry.precision}
+              unit={entry.unit}
+              hint={entry.hint}
+              data-region={entry.field ?? entry.key}
+            />
+          ))}
+        </div>
+      ),
+    },
+  ], [results, tradeRows, tradesReported, tradesPage, runBacktest]);
+
+  /**
+   * The saved rows, with the two figures projected to the text a trader reads.
+   *
+   * Projected rather than formatted by the table: `12.5` under a "Return %" header is not
+   * what a trader expects to read, and an unreadable figure has to reach `ds/DataTable`'s
+   * not-available marker rather than an empty cell (Requirement 14.5).
+   */
+  const savedRunRows = useMemo(
+    () => savedRuns.map((run) => ({
+      ...run,
+      strategy: savedRunName(run),
+      returnText: percentText(run?.total_return_pct),
+      sharpeText: decimalText(run?.sharpe_ratio, 2),
     })),
-    [results]
+    [savedRuns],
   );
 
-  // Stable reference – statItems never changes between renders
-  const statItems = useMemo(() => [
-    { key: "total_return_pct", label: "Total Return %" },
-    { key: "win_rate_pct", label: "Win Rate %" },
-    { key: "max_drawdown_pct", label: "Max Drawdown %" },
-    { key: "total_trades", label: "Total Trades" },
-    { key: "profit_factor", label: "Profit Factor" },
-    { key: "sharpe_ratio", label: "Sharpe Ratio" },
-    { key: "sortino_ratio", label: "Sortino Ratio" },
-    { key: "calmar_ratio", label: "Calmar Ratio" },
-  ], []);
+  /** The saved table's columns plus its one action, which needs this page's handler. */
+  const savedRunColumns = useMemo(
+    () => [
+      ...SAVED_RUN_COLUMNS,
+      {
+        key: "inspect",
+        header: "Action",
+        align: "numeric",
+        render: ({ row }) => (
+          <CommandButton
+            intent="ghost"
+            disabled={row?.status !== "completed"}
+            disabledReason={row?.status === "completed"
+              ? undefined
+              : "This run did not complete, so it holds no result to inspect."}
+            onClick={() => handleLoadSavedRun(row)}
+          >
+            Inspect
+          </CommandButton>
+        ),
+      },
+    ],
+    [handleLoadSavedRun],
+  );
 
   /*
    * The configuration cannot be assembled at all when the listing failed AND nothing else
@@ -1234,232 +1931,213 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
           </div>
         )}
 
-        {/* ═══ THE RESULTS REGION — task 23.2 rebuilds everything below ═══════════
-            Left as it stands, deliberately: 23.1 is the configuration flow and the run
-            action. It still reads `mapBacktestExecutionToUI`'s flat object and still carries
-            the legacy `C.` treatment and the two `rgba(255,255,255,0.05)` row rules that
-            23.2's budget entries account for. */}
+        {/* ═══ THE RESULT REGION — §7.4's THREE TIERS (task 23.2) ══════════════════
+            One branch, one predicate. The three tier containers exist ONLY in the `ready`
+            arm, and `ready` is reachable only when `tierOneFigures` answered — which is
+            Requirement 6.6 made structural rather than remembered: a failed run renders no
+            tier-1 row at all, not a row of zeros and not a row of em-dashes.
+
+            Every other state is ONE `ds/Panel` over the whole region: `loading` while the
+            run is in flight (§7.4), `ErrorState` on failure, and `EmptyState` both for "no
+            run yet" and for a run that answered with nothing renderable. */}
         <div className="col-span-2 flex min-w-0 flex-col gap-3" data-region="backtest-results">
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
-            {statItems.map((s) => (
-              <Card key={s.key} cls="p-3">
-                <div style={{ color: C.t3, fontSize: 8, fontFamily: "monospace", letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 }}>{s.label}</div>
-                <div style={{ color: C.t1, fontSize: 18, fontWeight: 900, fontFamily: "monospace" }}>
-                  {results?.[s.key] === null || results?.[s.key] === undefined ? "-" : String(results[s.key])}
-                </div>
-              </Card>
-            ))}
-          </div>
-          <Card className="p-4 flex-1 flex flex-col">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <PanelTitle
-                title="Equity Curve"
-                sub={results ? `Simulated performance, ${startDate} to ${endDate}` : "Awaiting backtest execution..."}
-              />
-              {results?.backtest_id && (
-                <span
-                  data-testid="backtester-persisted-run"
-                  style={{ color: C.t3, fontSize: 9, fontFamily: "monospace", letterSpacing: 1 }}
+          {resultState === PANEL_STATES.READY && tierOne !== null ? (
+            <>
+              {/* ── TIER 1 — six figures, one row (Requirement 6.2) ───────────────
+                  Walked from `pageHierarchy`'s tier-1 list, so a seventh figure cannot
+                  appear without being declared and the order is the declaration's.
+                  `Metric tier={1}` exists nowhere else on this page. */}
+              <Panel
+                title="Result"
+                money
+                environment="BACKTEST"
+                actions={results?.backtest_id ? (
+                  <span
+                    data-testid="backtester-persisted-run"
+                    className="font-mono text-micro tracking-wide text-content-secondary"
+                  >
+                    {`SAVED · ${String(results.backtest_id).slice(0, 8)}`}
+                  </span>
+                ) : null}
+                data-region="tier-1"
+              >
+                {/* Six equal-weight slots in ONE row: `flex-1` from a zero basis, not
+                    `grid-cols-6` — the built stylesheet carries bare `grid-cols-1…4` plus
+                    `lg:grid-cols-6`, so a bare `grid-cols-6` compiles to nothing and renders
+                    as though the attribute were absent (`dead-tailwind`, design.md §1.2). */}
+                <div
+                  {...{ [TIER_PAGE_ATTRIBUTE]: PAGES.BACKTESTER, [TIER_ATTRIBUTE]: 1 }}
+                  className="flex min-w-0 items-start gap-4"
                 >
-                  SAVED · {String(results.backtest_id).slice(0, 8)}
-                </span>
-              )}
-            </div>
-            <div style={{ width: "100%", height: 280, minHeight: 280, position: "relative" }}>
-              <ResponsiveContainer width="100%" height={280} minWidth={100} minHeight={280}>
-                <AreaChart data={equityData}>
-                  <defs>
-                    <linearGradient id="btEq" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={C.green} stopOpacity={0.22} />
-                      <stop offset="95%" stopColor={C.green} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-                  <XAxis dataKey="timestamp" hide />
-                  <YAxis domain={["auto", "auto"]} hide />
-                  <Tooltip content={<CustomTooltip prefix="$" />} />
-                  <Area dataKey="equity" stroke={C.green} strokeWidth={2} fill="url(#btEq)" dot={false} />
-                </AreaChart>
-              </ResponsiveContainer>
-              {!results && !runInFlight && (
-                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: C.t3, fontFamily: "monospace", fontSize: 12 }}>
-                  Configure the run and select Run backtest to visualise a result.
+                  {TIER_ONE.map(({ key, label }) => (
+                    <Metric
+                      key={key}
+                      tier={1}
+                      label={label}
+                      value={tierOne[key]}
+                      format={TIER_ONE_FIGURE[key]?.format}
+                      precision={TIER_ONE_FIGURE[key]?.precision}
+                      hint={TIER_ONE_FIGURE[key]?.hint}
+                      className="flex-1"
+                      data-region={key}
+                    />
+                  ))}
                 </div>
-              )}
-              {runInFlight && (
-                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: C.cyan, fontFamily: "monospace", fontSize: 12, background: "rgba(1,6,8,0.5)", backdropFilter: "blur(2px)" }}>
-                  VectorBT Engine is crunching historical data...
-                </div>
-              )}
-            </div>
-          </Card>
+              </Panel>
 
-          {/* Saved Backtests History */}
-          {savedRuns.length > 0 && (
-            <Card className="p-4">
-              <PanelTitle
-                title="Saved Backtest History"
-                sub={savedState === PANEL_STATES.REFRESHING
-                  ? "Refreshing from the database..."
-                  : "Reproducible backtest simulation runs"}
-              />
-              <div style={{ overflowX: "auto", marginTop: 8 }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace" }}>
-                  <thead>
-                    <tr style={{ borderBottom: `1px solid ${C.border}`, color: C.t3, textAlign: "left" }}>
-                      <th style={{ padding: "6px 8px" }}>Created At</th>
-                      <th style={{ padding: "6px 8px" }}>Strategy</th>
-                      <th style={{ padding: "6px 8px" }}>Version</th>
-                      <th style={{ padding: "6px 8px" }}>Pair</th>
-                      <th style={{ padding: "6px 8px" }}>Status</th>
-                      <th style={{ padding: "6px 8px" }}>Return %</th>
-                      <th style={{ padding: "6px 8px" }}>Win Rate</th>
-                      <th style={{ padding: "6px 8px" }}>Max DD</th>
-                      <th style={{ padding: "6px 8px", textAlign: "right" }}>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {savedRuns.map(run => (
-                      <tr key={run.id} style={{ borderBottom: `1px solid rgba(255,255,255,0.05)` }} className="hover:bg-white/[0.02]">
-                        <td style={{ padding: "6px 8px", color: C.t2 }}>{new Date(run.created_at).toLocaleDateString()}</td>
-                        <td style={{ padding: "6px 8px", color: C.t1, fontWeight: 700 }}>
-                          {run.blueprint?.name || `Strategy ${run.strategy_id?.slice(0, 8)}`}
-                        </td>
-                        <td style={{ padding: "6px 8px", color: C.t2 }}>{run.version}</td>
-                        <td style={{ padding: "6px 8px", color: C.cyan }}>{run.dataset}</td>
-                        <td style={{ padding: "6px 8px", color: run.status === "completed" ? C.green : C.t2 }}>
-                          {run.status}
-                        </td>
-                        <td style={{ padding: "6px 8px", color: Number(run.total_return_pct ?? 0) >= 0 ? C.green : C.red }}>
-                          {run.total_return_pct ? `${run.total_return_pct.toFixed(2)}%` : "-"}
-                        </td>
-                        <td style={{ padding: "6px 8px", color: C.t1 }}>{run.win_rate ? `${(run.win_rate * 100).toFixed(1)}%` : "-"}</td>
-                        <td style={{ padding: "6px 8px", color: C.red }}>{run.max_drawdown ? `${(run.max_drawdown * 100).toFixed(2)}%` : "-"}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>
-                          <Button variant="ghost" size="xs" onClick={() => handleLoadSavedRun(run)} disabled={run.status !== "completed"}>
-                            Inspect
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )}
+              {/* ── TIER 2 — the two curves (Requirement 6.3) ─────────────────────
+                  Side by side in one container, below tier 1, both drawn from the ONE
+                  derived series so they cannot disagree about where the gaps are. */}
+              <div
+                {...{ [TIER_PAGE_ATTRIBUTE]: PAGES.BACKTESTER, [TIER_ATTRIBUTE]: 2 }}
+                className="grid min-w-0 grid-cols-2 gap-4"
+              >
+                <Panel
+                  title={labelOf("equityCurve")}
+                  money
+                  environment="BACKTEST"
+                  level={3}
+                  state={curveState}
+                  empty={{ ...CURVE_EMPTY, action: { label: RETRY_LABEL, onClick: runBacktest } }}
+                  data-region="equityCurve"
+                >
+                  <Suspense fallback={<LoadingState kind="skeleton-chart" label="Loading the equity curve" />}>
+                    <Chart
+                      kind="area"
+                      data={curves.rows}
+                      xAxis={{ key: "point", label: "Point in the run", format: "number" }}
+                      yAxis={{ label: "Equity (quote currency)", format: "number" }}
+                      series={[{ key: "equity", name: "Equity", token: "brand" }]}
+                      emptyMessage="This run produced no equity series"
+                    />
+                  </Suspense>
+                </Panel>
 
-          {savedState === PANEL_STATES.ERROR && (
-            <Card className="p-4">
-              <ErrorState error={savedError} context="backtest" onRetry={refetchSaved} compact />
-            </Card>
-          )}
-
-          {/* Trade Table */}
-          {results && results.total_trades > 0 && (
-            <Card className="p-4">
-              <PanelTitle title="Trade History" sub={`${results.total_trades} simulated trades`} />
-              {results.trades && results.trades.length > 0 ? (
-                <>
-                  <div style={{ overflowX: "auto", marginTop: 8 }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace" }}>
-                      <thead>
-                        <tr style={{ borderBottom: `1px solid ${C.border}`, color: C.t3, textAlign: "left" }}>
-                          <th style={{ padding: "6px 8px" }}>Trade #</th>
-                          <th style={{ padding: "6px 8px" }}>Entry Time</th>
-                          <th style={{ padding: "6px 8px" }}>Entry Price</th>
-                          <th style={{ padding: "6px 8px" }}>Exit Time</th>
-                          <th style={{ padding: "6px 8px" }}>Exit Price</th>
-                          <th style={{ padding: "6px 8px" }}>Side</th>
-                          <th style={{ padding: "6px 8px" }}>Quantity</th>
-                          <th style={{ padding: "6px 8px" }}>Gross P&L</th>
-                          <th style={{ padding: "6px 8px" }}>Fees</th>
-                          <th style={{ padding: "6px 8px" }}>Net P&L</th>
-                          <th style={{ padding: "6px 8px" }}>Return %</th>
-                          <th style={{ padding: "6px 8px" }}>Duration</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {results.trades
-                          .slice(tradePage * tradesPerPage, (tradePage + 1) * tradesPerPage)
-                          .map((trade, idx) => (
-                          <tr key={idx} style={{ borderBottom: `1px solid rgba(255,255,255,0.05)` }} className="hover:bg-white/[0.02]">
-                            <td style={{ padding: "6px 8px", color: C.t2 }}>#{trade.trade_id}</td>
-                            <td style={{ padding: "6px 8px", color: C.t2 }}>
-                              {trade.entry_time ? new Date(trade.entry_time).toLocaleString() : "-"}
-                            </td>
-                            <td style={{ padding: "6px 8px", color: C.t1 }}>
-                              ${trade.entry_price?.toFixed(2) || "-"}
-                            </td>
-                            <td style={{ padding: "6px 8px", color: C.t2 }}>
-                              {trade.exit_time ? new Date(trade.exit_time).toLocaleString() : "-"}
-                            </td>
-                            <td style={{ padding: "6px 8px", color: C.t1 }}>
-                              ${trade.exit_price?.toFixed(2) || "-"}
-                            </td>
-                            <td style={{ padding: "6px 8px", color: trade.side === "BUY" ? C.green : C.red }}>
-                              {trade.side || "-"}
-                            </td>
-                            <td style={{ padding: "6px 8px", color: C.t1 }}>
-                              {trade.quantity?.toFixed(4) || "-"}
-                            </td>
-                            <td style={{ padding: "6px 8px", color: trade.gross_pnl >= 0 ? C.green : C.red }}>
-                              ${trade.gross_pnl?.toFixed(2) || "-"}
-                            </td>
-                            <td style={{ padding: "6px 8px", color: C.red }}>
-                              ${trade.fees?.toFixed(2) || "-"}
-                            </td>
-                            <td style={{ padding: "6px 8px", color: trade.net_pnl >= 0 ? C.green : C.red }}>
-                              ${trade.net_pnl?.toFixed(2) || "-"}
-                            </td>
-                            <td style={{ padding: "6px 8px", color: trade.return_pct >= 0 ? C.green : C.red }}>
-                              {trade.return_pct ? `${trade.return_pct.toFixed(2)}%` : "-"}
-                            </td>
-                            <td style={{ padding: "6px 8px", color: C.t2 }}>
-                              {trade.duration ? `${trade.duration}s` : "-"}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                <Panel
+                  title={labelOf("drawdownCurve")}
+                  money
+                  environment="BACKTEST"
+                  level={3}
+                  state={curveState}
+                  empty={{ ...CURVE_EMPTY, action: { label: RETRY_LABEL, onClick: runBacktest } }}
+                  data-region="drawdownCurve"
+                >
+                  <div className="flex min-w-0 flex-col gap-2">
+                    {/* An incomplete curve, labelled incomplete. `lib/drawdownSeries.js`
+                        derives `null` — never `0` — for an equity point that could not be
+                        read, which `ds/Chart` draws as a gap; this is the same fact in
+                        words, because a gap alone does not say the depths after it are
+                        measured from a lower peak. */}
+                    {curves.unreadable === 0 ? null : (
+                      <Alert
+                        severity="warning"
+                        title={`${curves.unreadable} of ${curves.rows.length} equity points could not be read`}
+                        data-testid="backtester-drawdown-incomplete"
+                      >
+                        {REASON_UNREADABLE_EQUITY}
+                      </Alert>
+                    )}
+                    <Suspense fallback={<LoadingState kind="skeleton-chart" label="Loading the drawdown curve" />}>
+                      <Chart
+                        kind="area"
+                        data={curves.rows}
+                        xAxis={{ key: "point", label: "Point in the run", format: "number" }}
+                        // Absolute, in the equity curve's own units — the derivation is
+                        // `peak − current`, not a percentage. Tier 1's max drawdown is the
+                        // engine's `max_drawdown_pct` and stays the only percentage on
+                        // screen, so the two cannot contradict each other.
+                        yAxis={{ label: "Drawdown from peak (quote currency)", format: "number" }}
+                        series={[{ key: "drawdown", name: "Drawdown from peak", token: "loss" }]}
+                        emptyMessage="No drawdown curve can be drawn without an equity series"
+                      />
+                    </Suspense>
                   </div>
+                </Panel>
+              </div>
 
-                  {/* Pagination */}
-                  {results.trades.length > tradesPerPage && (
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
-                      <span style={{ color: C.t3, fontSize: 10, fontFamily: "monospace" }}>
-                        Showing {tradePage * tradesPerPage + 1} to {Math.min((tradePage + 1) * tradesPerPage, results.trades.length)} of {results.trades.length} trades
-                      </span>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => setTradePage(Math.max(0, tradePage - 1))}
-                          disabled={tradePage === 0}
-                        >
-                          Previous
-                        </Button>
-                        <span style={{ color: C.t1, fontSize: 10, fontFamily: "monospace", alignSelf: "center" }}>
-                          Page {tradePage + 1} of {Math.ceil(results.trades.length / tradesPerPage)}
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => setTradePage(Math.min(Math.ceil(results.trades.length / tradesPerPage) - 1, tradePage + 1))}
-                          disabled={tradePage >= Math.ceil(results.trades.length / tradesPerPage) - 1}
-                        >
-                          Next
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div style={{ color: C.t3, fontSize: 10, fontFamily: "monospace", marginTop: 8 }}>
-                  Trade details not available for this backtest (VectorBT trade extraction may require configuration)
-                </div>
-              )}
-            </Card>
+              {/* ── TIER 3 — the detail, behind Tabs (Requirement 6.4) ────────────
+                  Collapsed is a disclosure state, not an absence: the tab strip is rendered
+                  and ordered — which is what Property 4 sees — and two of the three panels
+                  are closed at rest. A new run reopens Trades. */}
+              <div
+                {...{ [TIER_PAGE_ATTRIBUTE]: PAGES.BACKTESTER, [TIER_ATTRIBUTE]: 3 }}
+                className="flex min-w-0 flex-col gap-3"
+              >
+                <Panel
+                  title="Detail"
+                  money
+                  environment="BACKTEST"
+                  level={3}
+                  data-region="tier-3"
+                >
+                  <Tabs
+                    label="Backtest detail"
+                    items={detailTabs}
+                    value={detailTab}
+                    onChange={setDetailTab}
+                    data-testid="backtester-detail-tabs"
+                  />
+                </Panel>
+              </div>
+            </>
+          ) : (
+            <Panel
+              title="Result"
+              money
+              environment="BACKTEST"
+              state={resultState}
+              // §7.4: the loading state covers the WHOLE region, at the shape of the row it
+              // replaces — the six figures — rather than one skeleton per tier.
+              loading={{
+                kind: "skeleton-metric",
+                rows: 2,
+                columns: 3,
+                label: "Running the backtest",
+              }}
+              empty={resultEmptyCopy(runState, runBacktest)}
+              // Requirement 6.6's `ErrorState`, and the ERROR — never the message string,
+              // which `ds/ErrorState` does not accept by design (Requirements 14.3, 14.4).
+              // The server's own sentence is beside the trigger, where the fix is.
+              error={{ error: runFailure, context: "backtest", onRetry: runBacktest }}
+              data-region="result"
+            />
           )}
+
+          {/* ── The saved runs the backend holds (task 17.2, Requirement 10.1) ─────
+              Not one of the three tiers and not a declared field: these are other runs,
+              not this run's result, so they carry no `data-page-tier` and no
+              `Metric tier`. Rendered only when there are rows — an empty history is not a
+              statement worth a heading. */}
+          {savedRunRows.length === 0 ? null : (
+            <Panel
+              title="Saved Backtest History"
+              money
+              environment="BACKTEST"
+              state={savedState === PANEL_STATES.REFRESHING
+                ? PANEL_STATES.REFRESHING
+                : PANEL_STATES.READY}
+              data-region="saved-runs"
+            >
+              <DataTable
+                caption="Backtest runs this account has saved, most recent first"
+                columns={savedRunColumns}
+                rows={savedRunRows}
+                getRowId={(row, index) => row?.id ?? index}
+                pageSize={0}
+                density="compact"
+              />
+            </Panel>
+          )}
+
+          {savedState === PANEL_STATES.ERROR ? (
+            <ErrorState
+              error={savedError}
+              context="backtest"
+              onRetry={refetchSaved}
+              compact
+              data-region="saved-runs-error"
+            />
+          ) : null}
         </div>
       </div>
     </div>

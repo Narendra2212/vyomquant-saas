@@ -24,16 +24,21 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
-// Charts are not the subject, and jsdom gives `ResponsiveContainer` no box to measure.
-vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div data-testid="responsive-container">{children}</div>,
-  AreaChart: ({ children }) => <div data-testid="area-chart">{children}</div>,
-  Area: () => <div data-testid="area" />,
-  CartesianGrid: () => <div data-testid="grid" />,
-  XAxis: () => <div data-testid="x-axis" />,
-  YAxis: () => <div data-testid="y-axis" />,
-  Tooltip: () => <div data-testid="tooltip" />,
-}));
+/*
+ * Charts are not the subject, and recharts needs layout APIs jsdom does not implement.
+ *
+ * The stub is `ds/Chart` and no longer `recharts`, because task 23.2 put both tier-2 curves
+ * behind `lazy(() => import('../components/ds/Chart'))`: the page imports recharts nowhere,
+ * and a `vi.mock('recharts', …)` can no longer satisfy the lazy chunk — it resolves
+ * `ds/Chart`, which imports more of recharts than a hand-written factory declares, and the
+ * rejected import takes the region down. Stubbing the module the page actually asks for is
+ * the boundary that exists; it is what `dashboard_phase2a_ui.test.jsx` did at task 19.1b and
+ * `portfolio-rendering.test.jsx` at 16.2. Nothing asserted below concerns a chart.
+ */
+vi.mock('../../src/components/ds/Chart', () => {
+  const Stub = (props) => <figure data-testid="chart" data-chart-kind={props.kind} />;
+  return { __esModule: true, Chart: Stub, default: Stub };
+});
 
 /*
  * The two market controls the configuration flow reuses from task 23.1 —

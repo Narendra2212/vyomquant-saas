@@ -334,10 +334,15 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   'pages/SignalTrace.jsx': 0,
   // M9. 4 -> 3 at task 23.1, which rebuilt the configuration flow only. The one that went
   // was `color: "#000"` on the old run button's cyan fill; the trigger is a
-  // `ds/CommandButton` now and takes no colour. The remaining 3 are all in the RESULTS
-  // region — the running overlay's `rgba(1,6,8,0.5)` scrim and the two tables' shared
-  // `rgba(255,255,255,0.05)` row rule — which task 23.2 rebuilds and takes to 0.
-  'pages/Backtester.jsx': 3,
+  // `ds/CommandButton` now and takes no colour.
+  //
+  // 3 -> 0 at task 23.2, which rebuilt the RESULT region. The three were the running
+  // overlay's `rgba(1,6,8,0.5)` scrim — gone with the overlay itself, since a run in flight
+  // is now `ds/Panel state="loading"` over the whole region rather than a wash over a chart
+  // drawn from the previous run — and the `rgba(255,255,255,0.05)` row rule the saved-history
+  // and trade tables shared, which is `ds/DataTable`'s own tokened rule now. The page holds
+  // no palette of its own: the two curves take their hue from `ds/Chart`'s series tokens.
+  'pages/Backtester.jsx': 0,
   'pages/StrategyBuilder.jsx': 3,
   'pages/PaperTrading.jsx': 1,
   // Subscription-state elements only (Requirement 13); the rest of the page is
