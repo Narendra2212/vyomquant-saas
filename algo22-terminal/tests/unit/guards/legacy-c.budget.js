@@ -114,10 +114,21 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // survivors in that region were already inside rows the surfaces now own and read
   // `token.content.muted` and `statusToken(...)` directly.
   //
-  // The remaining 79 are the palette panel and its block rows (~30), the inspector body's
-  // field labels, section headers and asset/timeframe rows (~30), the toolbar and canvas
-  // chrome (~7) and the status strip's tone lookups (~12). Task 24.4's follow-up takes the
-  // page to 0; none of the eight bands is in that set any more.
+  // Where the remaining 79 are, counted rather than estimated, so the final retoken can be
+  // scoped from this list instead of re-measuring:
+  //
+  //   18  the palette panel and its block rows, plus the inspector's header and section shells
+  //   16  the status strip — its own surface and rule, and eleven `C.red`/`C.green`/`C.gold`
+  //       tone lookups that each want `statusToken`
+  //   13  the palette's registry-error panel and its retry button
+  //   12  `ValidationIssueRow` and `ValidationIssuePanel`'s four group headings
+  //    6  the page shell and the toolbar's three rules
+  //    6  the inspector body's preview and marker rows
+  //    4  `StatusCell`
+  //    4  `PremiumNodeWrapper`'s remaining border and text tones
+  //
+  // Task 24.4's follow-up takes the page to 0. None of the eight bands is in that set any more,
+  // and neither is anything §9.3 owns.
   'pages/StrategyBuilder.jsx': 79,
   // M8. 92 -> 0 at task 21.4a. The 92 were the shim's text, surface and border values
   // spread across the filter grid's eight inline-styled inputs, the eleven-column row
