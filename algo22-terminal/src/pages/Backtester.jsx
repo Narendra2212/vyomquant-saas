@@ -639,7 +639,7 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
   } = usePanelState(readStrategies);
 
   const strategyRows = useMemo(() => strategyRowsOf(listPayload), [listPayload]);
-  const options = useMemo(
+  const listedOptions = useMemo(
     () => strategyRows
       .map((row) => namedStrategy(row))
       .filter(Boolean)
@@ -676,6 +676,29 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
   );
 
   const strategy = handedOverSelection ?? listedStrategy ?? detailStrategy ?? null;
+
+  /*
+   * The selected strategy is always one of the offered options, even when the listing does not
+   * carry it. A `<select>` whose `value` matches no option renders as though nothing were
+   * chosen, so a deep link to an entitled strategy would show "Choose a strategy…" over a
+   * configuration that is in fact pinned to a version of that strategy. The entry appended
+   * here is a strategy the server named — through the listing, the caller, or the by-id read —
+   * and never an id typed into a URL: `strategy` is `null` until one of the three answers.
+   */
+  const strategyOptions = useMemo(() => {
+    if (strategy === null || listedOptions.some((option) => option.value === strategy.id)) {
+      return listedOptions;
+    }
+    return [
+      { value: strategy.id, label: strategy.name ?? `Strategy ${strategy.id}` },
+      ...listedOptions,
+    ];
+  }, [listedOptions, strategy]);
+
+  /** The list read failed. A known strategy still runs; the trader simply cannot switch. */
+  const listFailed = listState === PANEL_STATES.ERROR
+    || listState === PANEL_STATES.UNAUTHORISED
+    || listState === PANEL_STATES.UNAVAILABLE;
 
   /* ── The version the run executes (Requirements 5.2, 5.7) ────────────────── */
   const readVersions = useCallback(
@@ -923,10 +946,7 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
    * named a strategy. That is the one failure this page renders instead of a region, and it
    * replaces the four panels only — never the results region, whose rows read successfully.
    */
-  const configurationFailed = strategy === null
-    && (listState === PANEL_STATES.ERROR
-      || listState === PANEL_STATES.UNAUTHORISED
-      || listState === PANEL_STATES.UNAVAILABLE);
+  const configurationFailed = strategy === null && listFailed;
 
   const versionLabel = currentVersion === null
     ? null
@@ -963,9 +983,11 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
             {/* ── 1. Strategy ─────────────────────────────────────────────────── */}
             <Panel
               title="Strategy"
-              state={listState === PANEL_STATES.EMPTY && strategy !== null
-                ? PANEL_STATES.READY
-                : listState}
+              // A strategy that is already named is a configurable panel whatever the listing
+              // did: the empty and failed arms describe the SELECTOR's options, and neither is
+              // true of a page that was handed a strategy or deep-linked to one. The listing's
+              // own failure is reported inside, where it is about the thing it is about.
+              state={strategy !== null ? PANEL_STATES.READY : listState}
               loading={{ kind: "skeleton-metric", rows: 1, columns: 2 }}
               empty={{
                 headline: "No strategies to backtest",
@@ -984,7 +1006,7 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                   placeholder="Choose a strategy…"
                   hint="Owned strategies, as the server lists them."
                   value={selectedId}
-                  options={options}
+                  options={strategyOptions}
                   onChange={(event) => {
                     setSelectedId(event.target.value);
                     // A different strategy is a different run: the previous result describes
@@ -1016,6 +1038,22 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                     + "version the server marks current is used."}
                   data-region="pinnedVersion"
                 />
+
+                {/* The listing failed but this strategy is known, so the panel is usable and
+                    the only thing missing is the ability to switch. Said here rather than
+                    swallowed: a one-entry selector with no explanation reads as an account
+                    with one strategy. */}
+                {listFailed ? (
+                  <Alert
+                    severity="warning"
+                    title="The other strategies could not be listed"
+                    action={{ label: "Try again", onClick: refetchList }}
+                    data-testid="backtester-list-error"
+                  >
+                    This selector is showing only the strategy already named on this page. Every
+                    other one is unknown rather than absent.
+                  </Alert>
+                ) : null}
 
                 {/* A deep link to a strategy the listing does not carry is the only path that
                     reads one by id, so this is the only place that failure can appear. */}

@@ -19,7 +19,6 @@
  * re-asserted here.
  */
 
-import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -35,6 +34,41 @@ vi.mock('recharts', () => ({
   YAxis: () => <div data-testid="y-axis" />,
   Tooltip: () => <div data-testid="tooltip" />,
 }));
+
+/*
+ * The two market controls the configuration flow reuses from task 23.1 —
+ * `builder/AssetSelector` and `builder/TimeframeSelector` — read the venue's asset universe
+ * and the pipeline's published timeframe set on mount, both through the shared axios instance
+ * rather than through `src/api`. Unmocked, mounting this page attempts two real requests that
+ * jsdom sends at localhost and reports as unhandled `AggregateError`s.
+ *
+ * They are refused here rather than stubbed with a market list, for the same reason the charts
+ * above are replaced rather than measured: market selection is not this suite's subject, and a
+ * fabricated universe would be a list neither the page nor a trader could have got from the
+ * platform. Both controls answer a refusal with their own error state and a retry, so what
+ * renders during these tests is exactly what a trader sees when those reads fail — and the
+ * save flow, which is the subject, is unaffected either way because the execute endpoint
+ * accepts no market at all (SB-06).
+ */
+vi.mock('../../src/apiClient', () => {
+  const refuse = () => Promise.reject(new Error('this suite makes no network requests'));
+  return {
+    default: { get: refuse, post: refuse, put: refuse, patch: refuse, delete: refuse },
+    get: refuse,
+    post: refuse,
+    put: refuse,
+    del: refuse,
+    patch: refuse,
+    publicGet: refuse,
+    ApiError: Error,
+    clearApiCache: () => {},
+    getMetrics: () => ({}),
+    getToken: () => null,
+    isAuthenticated: () => false,
+    logout: refuse,
+    testConnection: refuse,
+  };
+});
 
 const { mockStrategies, mockExchange } = vi.hoisted(() => ({
   mockStrategies: {
