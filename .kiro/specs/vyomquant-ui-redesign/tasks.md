@@ -1349,7 +1349,7 @@ the decomposition this plan uses instead:
     - `Run backtest` is `disabled` with a `disabledReason` while running (Requirements 6.5, 15.3)
     - _Requirements: 6.1, 6.5, 15.3, 15.6_
 
-  - [~] 23.2 Rebuild the results region
+  - [x] 23.2 Rebuild the results region
     - Tier 1: total return, net P&L, max drawdown, Sharpe, win rate, trade count in one row. Tier 2:
       equity curve and drawdown curve. Tier 3: Trades / Monthly returns / Extended statistics behind
       `Tabs`, collapsed by default (`§7.4`)
