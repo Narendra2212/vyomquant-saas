@@ -544,6 +544,30 @@ const StageLaneStrip = ({ bands }) => (
 /** Evenly spaced handle offsets, so a block with several ports has several reachable handles. */
 const handleOffset = (index, total) => `${((index + 1) / (total + 1)) * 100}%`;
 
+/** The stroke a reported edge is drawn with — its own severity's colour (Requirement 8.10). */
+const markerStroke = (marker) =>
+  marker.severity === SEVERITY_ERROR ? token.status.error.fg : token.status.warning.fg;
+
+/**
+ * The stroke one edge is drawn with (§9.1): `line.strong` at rest, `brand` when the edge's
+ * source or its target is the selected node.
+ *
+ * A backend verdict outranks both. A severity is a fact about the connection; a selection is a
+ * fact about where the cursor is, and recolouring a failing edge because it happens to touch
+ * the selected block would hide the verdict at the moment the author is looking straight at it.
+ *
+ * Pure and exported because React Flow renders no edge path until both endpoints have been
+ * measured, which jsdom never does — so this is the only place the rule is checkable.
+ */
+export const edgeStrokeFor = (edge, selectedNodeId) => {
+  const marker = edge && edge.data ? edge.data.validation || null : null;
+  if (marker !== null) return markerStroke(marker);
+  const touchesSelection = selectedNodeId !== null
+    && selectedNodeId !== undefined
+    && (edge.source === selectedNodeId || edge.target === selectedNodeId);
+  return touchesSelection ? token.brand.base : token.line.strong;
+};
+
 /**
  * A colour for one runtime state (task 8.5).
  *
@@ -1412,11 +1436,7 @@ function StrategyBuilderCanvas({
         const data = edge.data && typeof edge.data === 'object' ? edge.data : {};
         if ((data.validationSignature || '') === signature) return edge;
         changed = true;
-        const stroke = marker === null
-          ? token.line.strong
-          : marker.severity === SEVERITY_ERROR
-            ? token.status.error.fg
-            : token.status.warning.fg;
+        const stroke = marker === null ? token.line.strong : markerStroke(marker);
         return {
           ...edge,
           animated: marker === null,
@@ -2303,11 +2323,10 @@ function StrategyBuilderCanvas({
    */
   const renderedEdges = useMemo(
     () => edges.map((edge) => {
-      if (edge.data && edge.data.validation) return edge;
-      const touchesSelection = selectedNodeId !== null
-        && (edge.source === selectedNodeId || edge.target === selectedNodeId);
-      const stroke = touchesSelection ? token.brand.base : token.line.strong;
+      const stroke = edgeStrokeFor(edge, selectedNodeId);
       const style = edge.style || {};
+      // An unchanged edge is returned by identity, so a selection re-renders no path it
+      // did not recolour.
       if (style.stroke === stroke && style.strokeWidth === 2) return edge;
       return { ...edge, style: { ...style, stroke, strokeWidth: 2 } };
     }),
