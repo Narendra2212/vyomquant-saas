@@ -1399,7 +1399,7 @@ the decomposition this plan uses instead:
     - Keep the existing port chips (`data-testid="port-chip"`) and validation markers
     - _Requirements: 5.1, 1.5_
 
-  - [~] 24.2 Make the inspector a sibling grid track
+  - [x] 24.2 Make the inspector a sibling grid track
     - Three-track layout: palette 240px / canvas `1fr` / inspector 320px. The inspector has width `0`
       and `display: none` when `selectedNode === null`, so the canvas simply occupies the space and
       nothing overlays it (Requirement 5.3)

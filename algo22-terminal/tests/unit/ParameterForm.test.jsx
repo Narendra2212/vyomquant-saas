@@ -56,6 +56,20 @@ const control = (key) => document.querySelector(`[data-param-key="${key}"]`);
 
 const field = (key) => screen.getByTestId(`param-${key}`);
 
+/**
+ * The Advanced disclosure's button. `ds/Accordion` puts the toggle in a heading and names it
+ * from its `title`, so it is found by role rather than by a test id the primitive does not
+ * take. `null` when the block has nothing advanced to collapse.
+ */
+const advancedToggle = () => screen.queryByRole('button', { name: /^Advanced/ });
+
+/** Open the Advanced section if there is one and it is closed. */
+const openAdvanced = async (user) => {
+  const toggle = advancedToggle();
+  if (toggle && toggle.getAttribute('aria-expanded') === 'false') await user.click(toggle);
+  return toggle;
+};
+
 /** Renders the form with real React state, the way the inspector will drive it. */
 function Harness({ params, initialValues = {}, issues = [], ...rest }) {
   const [values, setValues] = useState(initialValues);
@@ -236,10 +250,10 @@ describe('example and help (Requirement 5.2)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Requirement 5.3 — required visible, optional under Advanced
+// Requirement 5.3 / 15.6 — behaviour-changing and required shown, the rest collapsed
 // ---------------------------------------------------------------------------
 
-describe('required and Advanced grouping (Requirement 5.3)', () => {
+describe('primary and Advanced grouping (Requirements 5.3, 15.6)', () => {
   const params = [
     spec({ key: 'req_a', label: 'Req A', type: 'TEXT', required: true }),
     spec({ key: 'opt_a', label: 'Opt A', type: 'TEXT', required: false }),
@@ -261,14 +275,23 @@ describe('required and Advanced grouping (Requirement 5.3)', () => {
     const user = userEvent.setup();
     render(<Harness params={params} />);
 
-    const toggle = screen.getByTestId('advanced-toggle');
+    const toggle = advancedToggle();
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    expect(toggle.textContent).toContain('Advanced (2)');
-    expect(screen.getByTestId('advanced-params').hasAttribute('hidden')).toBe(true);
-    expect(toggle.getAttribute('aria-controls')).toBe(screen.getByTestId('advanced-params').id);
+    expect(toggle.textContent).toContain('2 settings');
+
+    // The two halves of the split are declared as data, so which parameters are collapsed is
+    // a set the DOM states rather than a count. Set equality, both directions.
+    expect(screen.getByTestId('advanced').getAttribute('data-advanced-fields')).toBe('opt_a opt_b');
+    expect(screen.getByTestId('parameter-form').getAttribute('data-primary-params')).toBe('req_a req_b');
+
+    // Collapsed means not rendered: a `max-height: 0` panel is still tabbable.
+    expect(screen.queryByTestId('advanced-params')).toBeNull();
 
     await user.click(toggle);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.getAttribute('aria-controls')).toBe(
+      screen.getByTestId('advanced-params').closest('[role="region"]').id,
+    );
     expect(within(screen.getByTestId('advanced-params')).getByLabelText('Opt A')).toBeTruthy();
   });
 
@@ -292,13 +315,42 @@ describe('required and Advanced grouping (Requirement 5.3)', () => {
       />,
     );
 
-    expect(screen.getByTestId('advanced-toggle').getAttribute('aria-expanded')).toBe('true');
+    expect(advancedToggle().getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByTestId('issue-opt_a').textContent).toContain('Set Opt A to a short label.');
   });
 
   it('no Advanced section at all when every parameter is required', () => {
     render(<Harness params={[spec({ key: 'only', type: 'TEXT', required: true })]} />);
-    expect(screen.queryByTestId('advanced-toggle')).toBeNull();
+    expect(advancedToggle()).toBeNull();
+  });
+
+  it('shows a behaviour-changing parameter outright even when the payload calls it optional', () => {
+    // `ParamSpec.__post_init__` refuses to publish `limit_price` as optional, but that runs in
+    // the backend's constructor and this form reads `to_dict()` JSON off the wire. A skewed
+    // payload must not bury an unset order price behind a closed chevron (Requirement 5.4).
+    render(
+      <Harness
+        params={[
+          spec({ key: 'limit_price', label: 'Limit price', type: 'NUMBER', required: false }),
+          spec({ key: 'client_tag', label: 'Client tag', type: 'TEXT', required: false }),
+        ]}
+      />,
+    );
+
+    expect(within(screen.getByTestId('required-params')).getByLabelText('Limit price')).toBeTruthy();
+    expect(screen.getByTestId('advanced').getAttribute('data-advanced-fields')).toBe('client_tag');
+  });
+
+  it('opens Advanced and states why when every parameter of the block is advanced', () => {
+    // `xgboost` is the served case: five hyperparameters, all optional, none behaviour
+    // changing. An empty primary section above a closed chevron would show nothing at all.
+    render(<Harness params={descriptors.xgboost.params} blockId="xgboost" />);
+
+    expect(screen.queryByTestId('required-params')).toBeNull();
+    const toggle = advancedToggle();
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.textContent).toContain('nothing above this section');
+    expect(control('n_estimators')).toBeTruthy();
   });
 });
 
@@ -664,7 +716,10 @@ describe('real registry descriptors (BlockRegistry.to_dict())', () => {
 
     // warmup_bars / history_start / history_end are optional -> Advanced
     expect(screen.queryByLabelText('Warmup bars')).toBeNull();
-    expect(screen.getByTestId('advanced-toggle').textContent).toContain('Advanced (3)');
+    expect(advancedToggle().textContent).toContain('3 settings');
+    expect(screen.getByTestId('advanced').getAttribute('data-advanced-fields')).toBe(
+      'warmup_bars history_start history_end',
+    );
   });
 
   it('ohlcv_feed: help text comes from the descriptor verbatim', () => {
@@ -817,8 +872,7 @@ describe('real registry descriptors (BlockRegistry.to_dict())', () => {
       );
 
       // Required fields are visible without expanding (5.3); expand Advanced for the rest.
-      const toggle = screen.queryByTestId('advanced-toggle');
-      if (toggle) await user.click(toggle);
+      await openAdvanced(user);
 
       for (const param of descriptor.params) {
         const where = `${descriptor.block_id}.${param.key}`;
