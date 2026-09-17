@@ -130,9 +130,11 @@ import {
 import { traceFromPreviewBody, traceFromPreviewFailure } from '../lib/nodeTrace';
 import {
   FEED_READ_STATES,
+  FEED_STATES,
   SAVE_STATES,
   SEVERITY_ERROR,
   SEVERITY_WARNING,
+  TRAINING_STATES,
   VALIDATION_DEBOUNCE_MS,
   VALIDATION_STATES,
   collectMarkers,
@@ -540,10 +542,16 @@ const DragLegalityContext = createContext(null);
 // Canvas presentation
 // ---------------------------------------------------------------------------
 
+/*
+  `token.content.muted` twice, from two different shim names: the dot's inactive fill was
+  `C.t3` and the label's was `C.t4`, and the shim resolves both to the same value. The two
+  names were never two greys, so this is the retoken recording that rather than inventing a
+  fourth text tone to keep them apart.
+*/
 const ApiSyncIndicator = ({ color, text, active = true }) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', paddingTop: 6, borderTop: `1px dashed ${C.border}` }}>
-    <div style={{ width: 6, height: 6, borderRadius: '50%', background: active ? color : C.t3, boxShadow: active ? `0 0 8px ${color}` : 'none', transition: 'all 0.3s' }} />
-    <span className="text-micro" style={{ color: active ? C.t2 : C.t4, letterSpacing: 1, fontFamily: 'monospace', textTransform: 'uppercase', fontWeight: 700 }}>{text}</span>
+  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', paddingTop: 6, borderTop: `1px dashed ${token.line.default}` }}>
+    <div style={{ width: 6, height: 6, borderRadius: '50%', background: active ? color : token.content.muted, boxShadow: active ? `0 0 8px ${color}` : 'none', transition: 'all 0.3s' }} />
+    <span className="text-micro" style={{ color: active ? token.content.secondary : token.content.muted, letterSpacing: 1, fontFamily: 'monospace', textTransform: 'uppercase', fontWeight: 700 }}>{text}</span>
   </div>
 );
 
@@ -1104,20 +1112,28 @@ const SEVERITY_COLOUR = {
  */
 const ValidationIssueRow = ({ issue, onFocus }) => {
   const severity = issue.severity;
-  const colour = SEVERITY_COLOUR[severity] || C.t2;
+  /*
+    `token.content.secondary` for a severity word this build does not know — NOT the hue
+    `surfaceTreatment` would fall back to. That fallback is `warning` (see its
+    `FALLBACK_SURFACE`), which is right for a *surface* that must still announce itself, and
+    wrong here: this row already prints the severity as text, so painting an unrecognised word
+    amber would assert a severity the backend never sent. A neutral text tone says only what is
+    true, which is that the row is being shown and its severity is unclassified.
+  */
+  const colour = SEVERITY_COLOUR[severity] || token.content.secondary;
   const target = issue.edge_id ? `connection ${issue.edge_id}` : issue.node_id ? `block ${issue.node_id}` : 'the whole strategy';
   const body = (
     <>
       <span className="text-micro" style={{ color: colour, fontWeight: 700, textTransform: 'uppercase' }}>
         {severity}
       </span>{' '}
-      <span className="text-micro" style={{ color: C.t3, fontFamily: 'monospace' }}>{issue.code}</span>{' '}
-      <span style={{ color: C.t1 }}>{issue.fix_hint ? issue.fix_hint : issue.message}</span>
+      <span className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>{issue.code}</span>{' '}
+      <span style={{ color: token.content.primary }}>{issue.fix_hint ? issue.fix_hint : issue.message}</span>
       {issue.fix_hint && issue.message && issue.fix_hint !== issue.message ? (
-        <span style={{ display: 'block', color: C.t2 }}>{issue.message}</span>
+        <span style={{ display: 'block', color: token.content.secondary }}>{issue.message}</span>
       ) : null}
       {issue.expected !== null && issue.expected !== undefined ? (
-        <span style={{ display: 'block', color: C.t3, fontFamily: 'monospace' }}>
+        <span style={{ display: 'block', color: token.content.muted, fontFamily: 'monospace' }}>
           expected {JSON.stringify(issue.expected)} · got {JSON.stringify(issue.actual ?? null)}
         </span>
       ) : null}
@@ -1141,14 +1157,14 @@ const ValidationIssueRow = ({ issue, onFocus }) => {
   };
 
   return (
-    <li style={{ borderTop: `1px solid ${C.border}`, padding: '4px 0' }} className="text-micro">
+    <li style={{ borderTop: `1px solid ${token.line.default}`, padding: '4px 0' }} className="text-micro">
       {onFocus ? (
         <button
           type="button"
           onClick={onFocus}
           aria-label={`${severity}: ${issue.fix_hint || issue.message} — go to ${target}`}
           {...attributes}
-          style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: C.t1 }}
+          style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: token.content.primary }}
         >
           {body}
         </button>
@@ -1182,8 +1198,10 @@ const RefusedConnectionRow = ({ issue }) => {
       data-has-fix-hint={lines.length > 1 ? 'true' : 'false'}
       className="text-micro"
       style={{
-        // Same rail and rhythm as `ValidationIssueRow`, expressed in tokens: `C.border` is
-        // `token.line.default`, so the two rows sit in one list without a seam.
+        // The same rail and rhythm as `ValidationIssueRow`, and now literally the same
+        // expression — that row read the shim for this line until task 24.4's follow-up, so
+        // the two rows sit in one list without a seam by construction rather than by
+        // coincidence.
         borderTop: `1px solid ${token.line.default}`,
         padding: '4px 0',
         display: 'flex',
@@ -1229,9 +1247,9 @@ const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEd
       data-graph-issue-count={markers.graph.length}
       data-override-count={markers.overrides.length}
       data-refusal-count={refusals.length}
-      style={{ borderTop: `1px solid ${C.border}`, padding: '8px 12px', overflowY: 'auto', maxHeight: 260 }}
+      style={{ borderTop: `1px solid ${token.line.default}`, padding: '8px 12px', overflowY: 'auto', maxHeight: 260 }}
     >
-      <h3 className="text-micro" style={{ color: C.t2, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: 1 }}>
+      <h3 className="text-micro" style={{ color: token.content.secondary, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: 1 }}>
         Validation issues
       </h3>
       {/*
@@ -1258,8 +1276,9 @@ const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEd
       */}
       {refusals.length > 0 && (
         <section aria-label="Connections that were refused" data-testid="refused-connections">
-          {/* `token.content.muted` is what `C.t3` resolves to, so this heading is identical to
-              its three siblings below without adding a call site to the shim. */}
+          {/* All four group headings in this panel read `token.content.muted`. Task 24.4a wrote
+              this one that way while its three siblings still went through the shim; the
+              follow-up moved them onto the same token, so the four are now one decision. */}
           <h4 className="text-micro" style={{ color: token.content.muted, margin: '4px 0 0', textTransform: 'uppercase' }}>
             Refused connections ({refusals.length})
           </h4>
@@ -1273,7 +1292,7 @@ const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEd
 
       {markers.graph.length > 0 && (
         <section aria-label="Issues with the whole strategy" data-testid="graph-issues">
-          <h4 className="text-micro" style={{ color: C.t3, margin: '4px 0 0', textTransform: 'uppercase' }}>
+          <h4 className="text-micro" style={{ color: token.content.muted, margin: '4px 0 0', textTransform: 'uppercase' }}>
             Whole strategy ({markers.graph.length})
           </h4>
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -1292,7 +1311,7 @@ const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEd
             data-node-id={marker.id}
             data-severity={marker.severity}
             data-issue-count={marker.count}
-            style={{ color: C.t3, margin: '4px 0 0', textTransform: 'uppercase' }}
+            style={{ color: token.content.muted, margin: '4px 0 0', textTransform: 'uppercase' }}
           >
             Block {marker.id} — {markerLabel(marker)}
           </h4>
@@ -1316,7 +1335,7 @@ const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEd
             data-edge-id={marker.id}
             data-severity={marker.severity}
             data-issue-count={marker.count}
-            style={{ color: C.t3, margin: '4px 0 0', textTransform: 'uppercase' }}
+            style={{ color: token.content.muted, margin: '4px 0 0', textTransform: 'uppercase' }}
           >
             Connection {marker.id} — {markerLabel(marker)}
           </h4>
@@ -1419,13 +1438,95 @@ const StatusCell = ({ testId, label, state, text, detail, known = true, tone = n
     data-state={state}
     data-known={known ? 'true' : 'false'}
     title={detail || undefined}
-    style={{ color: tone || (known ? C.t2 : C.t3), display: 'inline-flex', gap: 4 }}
+    style={{
+      color: tone || (known ? token.content.secondary : token.content.muted),
+      display: 'inline-flex',
+      gap: 4,
+    }}
   >
-    <span style={{ color: C.t3 }}>{label}</span>
+    <span style={{ color: token.content.muted }}>{label}</span>
     <span style={{ fontWeight: 700 }}>{text}</span>
-    {known ? null : <span style={{ color: C.t3 }}>(unknown)</span>}
+    {known ? null : <span style={{ color: token.content.muted }}>(unknown)</span>}
   </span>
 );
+
+/*
+  ── The status strip's five tone maps (Requirement 8.11, §4.1) ───────────────────────────
+  Five cells, five state vocabularies, one mechanism. Each cell used to decide its hue with a
+  ternary chain naming `C.red` / `C.green` / `C.gold` directly; the hue now comes from
+  `statusToken`, and the only thing spelled here is which of its groups a state belongs to.
+
+  Written as data, not as conditionals, for one reason worth the extra lines: a state this
+  build deliberately does NOT colour is visibly ABSENT from its map, rather than being the
+  tail of an `else` that nobody can tell apart from an oversight. `validating` taking no hue
+  and `COMPLETED` taking no green are decisions, and this is where they are legible.
+
+  An unmapped state gives `null`, which is `StatusCell`'s own tone — `content.secondary` when
+  the cell knows its state, `content.muted` when it does not. Neither is a passing colour,
+  which is what Requirement 8.11 asks for a state nobody has measured.
+*/
+const cellTone = (map, state) =>
+  (Object.prototype.hasOwnProperty.call(map, state) ? statusToken(map[state]).fg : null);
+
+/**
+ * `validationSummary`'s five states. `unvalidated` and `validating` take no hue: a check that
+ * has not run, or is in flight, is not a verdict and must not read as one.
+ */
+const VALIDATION_TONE = Object.freeze({
+  [VALIDATION_STATES.INVALID]: 'error',
+  [VALIDATION_STATES.VALID]: 'ok',
+  [VALIDATION_STATES.UNAVAILABLE]: 'warning',
+});
+
+/**
+ * `deriveFeedState`'s six words. `UNKNOWN` is the only one absent, and that absence is exactly
+ * the `feed.known` test it replaces: `graphValidation.js` returns `known: false` in precisely
+ * the branches that return `UNKNOWN`.
+ *
+ * The four measured-but-not-live states share the WARNING hue rather than each taking the group
+ * `statusToken` would give its own name — `statusToken('stale')` and `statusToken('disconnected')`
+ * are both the error hue. That is preserved from before this retoken, not chosen here: a delayed
+ * or dropped market feed is a condition of the DATA, and this strip keeps the error hue for a
+ * verdict about the strategy. Escalating it is a design decision, not a retoken.
+ */
+const FEED_TONE = Object.freeze({
+  [FEED_STATES.LIVE]: 'live',
+  [FEED_STATES.DELAYED]: 'warning',
+  [FEED_STATES.STALE]: 'warning',
+  [FEED_STATES.DISCONNECTED]: 'warning',
+  [FEED_STATES.INSUFFICIENT_DATA]: 'warning',
+});
+
+/**
+ * `SAVE_STATES`. `UNSAVED` and `SAVING` take no hue — neither is an outcome, and a save in
+ * flight coloured green is a save the author will believe happened.
+ */
+const SAVE_TONE = Object.freeze({
+  [SAVE_STATES.SAVED]: 'ok',
+  [SAVE_STATES.REFUSED]: 'rejected',
+  [SAVE_STATES.FAILED]: 'failed',
+});
+
+/**
+ * `TRAINING_STATES`. Only `FAILED` carries a hue, as before this retoken: `COMPLETED`
+ * deliberately takes no green, because a finished training run is not a statement that the
+ * strategy will run.
+ */
+const TRAINING_TONE = Object.freeze({
+  [TRAINING_STATES.FAILED]: 'failed',
+});
+
+/**
+ * `REALTIME_STATES`. `DISCONNECTED` takes the warning hue and not the error hue
+ * `statusToken('disconnected')` would give it, for the reason {@link FEED_TONE} states: the
+ * socket dropping is a fact about the transport, the cell says so in words, and
+ * `REALTIME_LABELS` is what a screen reader receives. `CONNECTING` and `UNAVAILABLE` take none
+ * — one is mid-flight and the other never had a connection to lose.
+ */
+const REALTIME_TONE = Object.freeze({
+  [REALTIME_STATES.CONNECTED]: 'connected',
+  [REALTIME_STATES.DISCONNECTED]: 'warning',
+});
 
 // ---------------------------------------------------------------------------
 // The builder
@@ -3496,7 +3597,7 @@ function StrategyBuilderCanvas({
         aria-label="Builder status"
         data-testid="status-strip"
         className="text-micro"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px', background: C.bg2, borderTop: `1px solid ${C.border}`, fontFamily: 'monospace', color: C.t3, gap: 12, flexWrap: 'wrap' }}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px', background: token.surface.raised, borderTop: `1px solid ${token.line.default}`, fontFamily: 'monospace', color: token.content.muted, gap: 12, flexWrap: 'wrap' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           <StatusCell
@@ -3509,15 +3610,7 @@ function StrategyBuilderCanvas({
               summary.state === VALIDATION_STATES.VALID ||
               summary.state === VALIDATION_STATES.INVALID
             }
-            tone={
-              summary.state === VALIDATION_STATES.INVALID
-                ? C.red
-                : summary.state === VALIDATION_STATES.VALID
-                  ? C.green
-                  : summary.state === VALIDATION_STATES.UNAVAILABLE
-                    ? C.gold
-                    : null
-            }
+            tone={cellTone(VALIDATION_TONE, summary.state)}
           />
           <StatusCell
             testId="feed-state"
@@ -3526,7 +3619,7 @@ function StrategyBuilderCanvas({
             text={feed.label}
             detail={feed.detail}
             known={feed.known}
-            tone={feed.state === 'LIVE' ? C.green : feed.known ? C.gold : null}
+            tone={cellTone(FEED_TONE, feed.state)}
           />
           {/*
             Requirement 19.8's display clause: the age of the last event together with the
@@ -3546,7 +3639,7 @@ function StrategyBuilderCanvas({
               data-expected-interval-seconds={
                 feed.expectedIntervalSeconds === null ? '' : String(feed.expectedIntervalSeconds)
               }
-              style={{ color: C.t3 }}
+              style={{ color: token.content.muted }}
             >
               {feed.display}
             </span>
@@ -3558,13 +3651,7 @@ function StrategyBuilderCanvas({
             text={saveState || 'Not saved yet'}
             detail={saveIssues.length ? `${saveIssues.length} refusal(s)` : undefined}
             known={saveStatus !== SAVE_STATES.UNSAVED}
-            tone={
-              saveStatus === SAVE_STATES.REFUSED || saveStatus === SAVE_STATES.FAILED
-                ? C.red
-                : saveStatus === SAVE_STATES.SAVED
-                  ? C.green
-                  : null
-            }
+            tone={cellTone(SAVE_TONE, saveStatus)}
           />
           <StatusCell
             testId="training-state"
@@ -3573,7 +3660,7 @@ function StrategyBuilderCanvas({
             text={training.label}
             detail={training.detail}
             known={training.known}
-            tone={training.state === 'FAILED' ? C.red : null}
+            tone={cellTone(TRAINING_TONE, training.state)}
           />
           {/*
             The realtime connection, reported literally (task 8.5, Requirement 23.4).
@@ -3592,21 +3679,20 @@ function StrategyBuilderCanvas({
             text={REALTIME_LABELS[realtimeStatus] || realtimeStatus}
             detail={realtimeReason || `${realtimeChannels.length} channel(s)`}
             known={realtimeStatus === REALTIME_STATES.CONNECTED}
-            tone={
-              realtimeStatus === REALTIME_STATES.CONNECTED
-                ? C.green
-                : realtimeStatus === REALTIME_STATES.DISCONNECTED
-                  ? C.gold
-                  : null
-            }
+            tone={cellTone(REALTIME_TONE, realtimeStatus)}
           />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span>{nodes.length} nodes</span>
           <span>{edges.length} connections</span>
           <span data-testid="registry-state">registry {registry.state}</span>
+          {/*
+            `blocked` rather than `error`: an unset required parameter is a graph the engine will
+            refuse to run, which is `statusToken`'s own word for it, and it resolves to the same
+            error hue the strip already used here.
+          */}
           {blockingParams.length > 0 && (
-            <span style={{ color: C.red }} data-testid="blocking-count">
+            <span style={{ color: statusToken('blocked').fg }} data-testid="blocking-count">
               {blockingParams.length} required parameter{blockingParams.length === 1 ? '' : 's'} unset
             </span>
           )}
@@ -3614,7 +3700,7 @@ function StrategyBuilderCanvas({
             data-testid="validation-requests"
             data-requests={validation.requests}
             data-discarded={validation.discarded}
-            style={{ color: C.t4 }}
+            style={{ color: token.content.muted }}
           >
             {validation.requests} check{validation.requests === 1 ? '' : 's'}
             {validation.discarded > 0 ? `, ${validation.discarded} superseded` : ''}

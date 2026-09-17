@@ -114,22 +114,49 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // survivors in that region were already inside rows the surfaces now own and read
   // `token.content.muted` and `statusToken(...)` directly.
   //
-  // Where the remaining 79 are, counted rather than estimated, so the final retoken can be
-  // scoped from this list instead of re-measuring:
+  // 79 -> 43 at task 24.4's follow-up, part 1, which took the four SEVERITY-LOOKUP regions. The
+  // 36 that went are the status strip's 16, `ValidationIssueRow` and `ValidationIssuePanel`'s
+  // 12, `StatusCell`'s 4 and `ApiSyncIndicator`'s 4.
   //
-  //   18  the palette panel and its block rows, plus the inspector's header and section shells
-  //   16  the status strip — its own surface and rule, and eleven `C.red`/`C.green`/`C.gold`
-  //       tone lookups that each want `statusToken`
-  //   13  the palette's registry-error panel and its retry button
-  //   12  `ValidationIssueRow` and `ValidationIssuePanel`'s four group headings
-  //    6  the page shell and the toolbar's three rules
-  //    6  the inspector body's preview and marker rows
-  //    4  `StatusCell`
-  //    4  `PremiumNodeWrapper`'s remaining border and text tones
+  // Eleven of the 36 were `C.red` / `C.green` / `C.gold` read straight off the shim by a ternary
+  // chain per status cell — validation, feed, save, training and realtime each deciding a hue
+  // from its own state vocabulary in place. They are now five frozen `state -> statusToken group`
+  // maps (`VALIDATION_TONE`, `FEED_TONE`, `SAVE_TONE`, `TRAINING_TONE`, `REALTIME_TONE`) read
+  // through one `cellTone` helper, so §4.1's mapping is the only thing that turns any of those
+  // states into a colour and a state the strip deliberately does NOT colour — `validating`,
+  // `SAVING`, `COMPLETED`, `CONNECTING` — is visibly absent from a map rather than the tail of an
+  // `else`. The other 25 are `token.content.*`, `token.line.default` and `token.surface.raised`
+  // read directly, exactly as 24.4a/b did for the non-state cases.
   //
-  // Task 24.4's follow-up takes the page to 0. None of the eight bands is in that set any more,
-  // and neither is anything §9.3 owns.
-  'pages/StrategyBuilder.jsx': 79,
+  // TWO HUES ARE DELIBERATELY *NOT* THE ONE `statusToken` WOULD PICK, and both are recorded in
+  // the maps: `FEED_TONE` gives `STALE` / `DISCONNECTED` the warning hue and `REALTIME_TONE`
+  // gives `DISCONNECTED` the warning hue, where `statusToken('stale')` and
+  // `statusToken('disconnected')` are both the ERROR hue. That is preserved, not chosen — this is
+  // a retoken, and escalating a dropped feed or socket from amber to red is a design decision.
+  //
+  // Where the remaining 43 are, measured after part 1 landed, so part 2 is scoped from this list
+  // rather than from the pre-24.4 one. (The list this replaces named its last group
+  // `PremiumNodeWrapper`'s tones; it was `ApiSyncIndicator`'s, and the three port-chip references
+  // it folded into the registry-error group are their own entry below.)
+  //
+  //    7  the palette's search field — its bottom rule, label, icon, the input's surface, border
+  //       and text, and the result-count line
+  //    7  the palette's registry-error panel
+  //    6  the page shell's background and the toolbar's surface, bottom rule and three dividers
+  //    5  the palette's block rows
+  //    4  the palette's category headers — label, both chevrons, count
+  //    3  the palette's retry button
+  //    3  the port chips (`data-testid="port-chip"`) — border, label tone, fill
+  //    3  the inspector body's node-status marker row (`C.red` / `C.gold` / `C.t3` in one
+  //       expression — the last severity lookup on the page, and the one place part 2 still
+  //       wants `statusToken`)
+  //    2  the palette's loading and empty notes
+  //    2  the inspector's `Block` heading and its category line
+  //    1  the inspector's "no descriptor for this block" note
+  //
+  // Part 2 takes the page to 0. None of the eight bands is in that set, and neither is anything
+  // §9.3 owns.
+  'pages/StrategyBuilder.jsx': 43,
   // M8. 92 -> 0 at task 21.4a. The 92 were the shim's text, surface and border values
   // spread across the filter grid's eight inline-styled inputs, the eleven-column row
   // template, the two detail cards and the timeline's rail — all of which the rebuild
