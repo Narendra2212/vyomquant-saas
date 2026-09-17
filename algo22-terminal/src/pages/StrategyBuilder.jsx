@@ -74,13 +74,25 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import {
-  AlertTriangle, ArrowLeft, BarChart2, ChevronDown, ChevronRight, Maximize,
+  AlertTriangle, ArrowLeft, BarChart2, ChevronDown, ChevronRight, Lock, Maximize,
   PanelLeft, PanelRight, Play, RefreshCw, Redo, Save, Search, Trash2, Undo, ZoomIn, ZoomOut,
 } from 'lucide-react';
 import { C, Inp, Tag2, PanelTitle } from '../components/ui-legacy/primitives';
 import { Button } from '../components/ui/Button';
-import { Alert } from '../components/ds/Alert';
-import { DECLARED_STAGE_BANDS, STAGE_BANDS, stageBandFor } from '../design/semantic';
+import { CommandButton } from '../components/ds/CommandButton';
+/*
+  §9.3's four surfaces (task 24.4b). Every band below is one of them: the page chooses the
+  severity and the provenance and contributes no hue, no border, no icon and no role — and
+  crucially no wording for "the backend has not validated this version yet", which the surface
+  emits itself from `provenance="local"` so a provisional verdict cannot ship looking
+  authoritative.
+*/
+import {
+  DeployedLockNotice,
+  ValidationSurface,
+  surfaceTreatment,
+} from '../components/builder/validationSurfaces';
+import { DECLARED_STAGE_BANDS, STAGE_BANDS, stageBandFor, statusToken } from '../design/semantic';
 import { token } from '../design/tokens';
 import { DataPipelineProvider } from '../contexts/DataPipelineContext';
 import { IndicatorEngineProvider } from '../contexts/IndicatorEngineContext';
@@ -933,7 +945,11 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
           className="text-micro"
           style={{ marginTop: '2px', color: token.status.warning.fg, fontWeight: 700 }}
         >
-          <span aria-hidden="true">🔒 </span>
+          {/* A real glyph, not an emoji: an emoji's rendering is font-dependent and its
+              accessible name is whatever the platform decides. `aria-hidden`, as the emoji was —
+              the `aria-label` above already says the block is locked. The badge is too small for
+              a `ValidationSurface`; §9.4's full notice is the band at the top of the page. */}
+          <Lock size={10} aria-hidden="true" className="mr-1 inline-block align-middle" />
           Locked (deployed)
         </div>
       )}
@@ -1066,7 +1082,17 @@ const PaletteErrorPanel = ({ error, onRetry, retrying }) => (
 /** The empty marker set. Built once, so "no report" has a stable identity. */
 const NO_MARKERS = collectMarkers(null);
 
-const SEVERITY_COLOUR = { [SEVERITY_ERROR]: C.red, [SEVERITY_WARNING]: C.gold };
+/**
+ * severity → the hue §9.3 gives that surface (task 24.4b).
+ *
+ * Asked of `surfaceTreatment` rather than spelled here, so an issue row and the band that
+ * summarises the same verdict cannot come to disagree about which hue an error is. Built once:
+ * the mapping is static, and `statusToken` resolves the same value on every call.
+ */
+const SEVERITY_COLOUR = {
+  [SEVERITY_ERROR]: statusToken(surfaceTreatment(SEVERITY_ERROR).tokenState).fg,
+  [SEVERITY_WARNING]: statusToken(surfaceTreatment(SEVERITY_WARNING).tokenState).fg,
+};
 
 /**
  * One issue row.
@@ -1096,7 +1122,7 @@ const ValidationIssueRow = ({ issue, onFocus }) => {
         </span>
       ) : null}
       {issue.server_override ? (
-        <span style={{ display: 'block', color: C.gold }} data-testid="server-override">
+        <span style={{ display: 'block', color: statusToken('warning').fg }} data-testid="server-override">
           The server recomputed this value; the strategy will run with the server's version.
         </span>
       ) : null}
@@ -1214,10 +1240,16 @@ const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEd
         one is a worse lie than saying nothing.
       */}
       {stale && markers.issues.length > 0 ? (
-        <p role="status" data-testid="validation-issues-stale" className="text-micro" style={{ color: C.gold, margin: '0 0 4px' }}>
-          This report describes an earlier version of this graph. The canvas has changed since,
-          so these markers are not shown on it.
-        </p>
+        <ValidationSurface
+          surface="guidance"
+          provenance="local"
+          variant="block"
+          title="This report describes an earlier version of this graph."
+          data-testid="validation-issues-stale"
+          className="mb-1"
+        >
+          The canvas has changed since, so these markers are not shown on it.
+        </ValidationSurface>
       ) : null}
 
       {/*
@@ -1330,10 +1362,16 @@ const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEd
  * it, and `pointerEvents: 'none'` guarantees it can neither swallow the next drag nor take
  * focus — it holds no control, so there is nothing in it to reach.
  *
- * The `ds/Alert` `guidance` severity is `§9.3`'s guidance row: `status.guidance`, a dashed
- * border, the `Info` icon and `role="status"`. Dashed and polite is what makes a refused drag
- * read as "not yet" rather than "broken" — the author is mid-action, and nothing is wrong with
- * their saved strategy.
+ * The `guidance` surface is `§9.3`'s guidance row: `status.guidance`, a dashed border, the
+ * `Info` icon and `role="status"`. Dashed and polite is what makes a refused drag read as "not
+ * yet" rather than "broken" — the author is mid-action, and nothing is wrong with their saved
+ * strategy.
+ *
+ * `provenance="local"` because it is: `lib/connectionLegality.js` stamps every refusal
+ * `provisional: true / authority: 'client-provisional'` and lets `reconcileWithBackend()`
+ * override it. So the callout carries the provisional sentence as well as the dashed rail. That
+ * is not hedging — the backend has genuinely not seen this edge, because a refused edge was
+ * never added to the graph any validation request describes.
  */
 const ConnectionRefusalCallout = ({ issue, point }) => {
   const lines = connectionRefusalLines(issue);
@@ -1359,11 +1397,17 @@ const ConnectionRefusalCallout = ({ issue, point }) => {
         boxShadow: token.shadow.raised,
       }}
     >
-      <Alert severity="guidance" title={lines[0]} data-testid="connection-refusal-alert">
+      <ValidationSurface
+        surface="guidance"
+        provenance="local"
+        variant="block"
+        title={lines[0]}
+        data-testid="connection-refusal-alert"
+      >
         {lines.length > 1 ? (
           <span data-testid="connection-refusal-hint">{lines[1]}</span>
         ) : null}
-      </Alert>
+      </ValidationSurface>
     </div>
   );
 };
@@ -2834,43 +2878,57 @@ function StrategyBuilderCanvas({
         the author is never shown two answers that disagree (design.md → advisory vs authority).
       */}
       {!backendAuthoritative && !isValid && errors.length > 0 && (
-        <div
-          role="alert"
+        <ValidationSurface
+          surface="error"
+          provenance="local"
+          title={`${errors.length} error${errors.length !== 1 ? 's' : ''}: ${errors[0]?.message ?? ''}`}
           data-testid="local-advisory"
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', background: `${C.red}20`, borderBottom: `1px solid ${C.red}` }}
-        >
-          <AlertTriangle size={16} style={{ color: C.red }} aria-hidden="true" />
-          <span className="text-small" style={{ color: C.red, fontFamily: 'monospace' }}>
-            {errors.length} error{errors.length !== 1 ? 's' : ''}: {errors[0]?.message}
-            {' '}(local check — the backend has not validated this version yet)
-          </span>
-        </div>
+        />
       )}
 
-      {/* The validation request failed. The last known report is kept, and said to be old. */}
+      {/*
+        The validation request failed. The last known report is kept, and said to be old.
+
+        Warning, not error: nothing about the graph has been found wrong — the page failed to
+        ASK. And `status`, not `alert`, for the same reason (§9.3): a read that did not land is
+        not a verdict, so it does not earn the right to interrupt a screen reader mid-sentence.
+        `local`, because the sentence is the page's own account of its failed request.
+      */}
       {validation.state === VALIDATION_STATES.UNAVAILABLE && (
-        <div
-          role="alert"
+        <ValidationSurface
+          surface="warning"
+          provenance="local"
+          title={summary.headline}
           data-testid="validation-unavailable"
           data-code={validation.error ? validation.error.code : undefined}
           data-status={validation.error && validation.error.status !== null ? validation.error.status : undefined}
-          style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }}
-          className="text-small"
         >
-          {summary.headline} — {summary.detail}
-        </div>
+          {summary.detail}
+        </ValidationSurface>
       )}
 
+      {/* The frontend serializer refused the graph, so nothing was sent — the verdict is this
+          build's, which is exactly what `provenance="local"` says. */}
       {canonical.error && (
-        <div role="alert" data-testid="serializer-error" style={{ padding: '8px 16px', background: `${C.red}20`, borderBottom: `1px solid ${C.red}`, color: C.red, fontFamily: 'monospace' }} className="text-small">
-          {canonical.error.code}: {canonical.error.message}
-        </div>
+        <ValidationSurface
+          surface="error"
+          provenance="local"
+          title={`${canonical.error.code}: ${canonical.error.message}`}
+          data-testid="serializer-error"
+        />
       )}
 
+      {/* Warning rather than guidance: all three messages this can carry report a canvas action
+          that FAILED — a dropped block the registry publishes no descriptor for, a draft that
+          could not be restored, a graph that could not be loaded. Guidance means "not yet, keep
+          going", and none of them is that. */}
       {canvasNotice && (
-        <div role="status" data-testid="canvas-notice" style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }} className="text-small">
-          {canvasNotice}
-        </div>
+        <ValidationSurface
+          surface="warning"
+          provenance="local"
+          title={canvasNotice}
+          data-testid="canvas-notice"
+        />
       )}
 
       {/*
@@ -2879,22 +2937,19 @@ function StrategyBuilderCanvas({
         nothing and decides nothing. That is the point of the backend publishing the block: the
         canvas cannot offer an edit that migration 004c's immutability trigger would then
         reject, and it cannot lock a canvas the backend says is editable either.
+
+        `DeployedLockNotice` (§9.4) owns the treatment: the confirmed warning surface, a real
+        `Lock` glyph where the emoji was, and `data-frozen-fields` emitted from the list rather
+        than passed in — which is also how the frozen fields became readable on screen instead of
+        reachable only through dev tools.
       */}
       {deployedLock.locked && (
-        <div
-          role="status"
+        <DeployedLockNotice
+          reason={deployedLock.reason}
+          frozenFields={deployedLock.frozenFields}
           data-testid="deployed-lock"
           data-lifecycle-state={deployedLock.lifecycleState || undefined}
-          data-frozen-fields={deployedLock.frozenFields.join(' ')}
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }}
-          className="text-small"
-        >
-          <span aria-hidden="true">🔒</span>
-          <span>
-            {deployedLock.reason
-              || 'This version is deployed, so the canvas is read-only.'}
-          </span>
-        </div>
+        />
       )}
 
       {/*
@@ -2906,21 +2961,28 @@ function StrategyBuilderCanvas({
         disconnect, which is not what happened. The reason is the server's sentence verbatim.
       */}
       {subscriptionRefusals.length > 0 && (
-        <div
-          role="alert"
-          data-testid="subscription-refusals"
-          style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}` }}
-        >
+        <div data-testid="subscription-refusals" data-refusal-count={subscriptionRefusals.length}>
+          {/*
+            One surface PER refusal rather than one band listing them, so `data-channel` and
+            `data-code` sit on the element that carries the `role` and the sentence. A wrapper
+            holding the whole list would announce every channel as one message and would put the
+            channel identity on a child of the announced element instead of on it.
+
+            `confirmed`: the refusal, its code and its wording are the server's own frame. And
+            `status` rather than the old `alert` — the connection is up and the strategy is
+            unaffected, so interrupting a screen reader for it is the noise §9.3 moves off the
+            assertive channel.
+          */}
           {subscriptionRefusals.map((refusal) => (
-            <div
+            <ValidationSurface
               key={refusal.channel}
-              className="text-small"
-              style={{ color: C.gold, fontFamily: 'monospace' }}
+              surface="warning"
+              provenance="confirmed"
+              title={`Live updates for ${refusal.channel} are unavailable — ${refusal.reason}`}
+              data-testid="subscription-refusal"
               data-channel={refusal.channel}
               data-code={refusal.code}
-            >
-              Live updates for {refusal.channel} are unavailable — {refusal.reason}
-            </div>
+            />
           ))}
         </div>
       )}
@@ -2933,13 +2995,20 @@ function StrategyBuilderCanvas({
         drop, which is why a trader had to look away from it to find out what happened.
       */}
 
+      {/*
+        A save that was refused. The error surface and `role="alert"` are right here and stay:
+        the author asked for something, it did not happen, and nothing on the canvas says so.
+      */}
       {saveIssues.length > 0 && (
-        <div role="alert" data-testid="save-issues" style={{ padding: '8px 16px', background: `${C.red}20`, borderBottom: `1px solid ${C.red}` }}>
+        <ValidationSurface
+          surface="error"
+          provenance="confirmed"
+          title={`This strategy was not saved — ${saveIssues.length} issue${saveIssues.length !== 1 ? 's' : ''}`}
+          data-testid="save-issues"
+        >
           {saveIssues.map((issue, index) => (
             <div
               key={`${issue.code}-${issue.node_id || 'graph'}-${issue.field || index}`}
-              className="text-small"
-              style={{ color: C.red, fontFamily: 'monospace' }}
               data-code={issue.code}
               data-node-id={issue.node_id || undefined}
               data-field={issue.field || undefined}
@@ -2947,23 +3016,29 @@ function StrategyBuilderCanvas({
               {issue.message} {issue.fix_hint}
             </div>
           ))}
-        </div>
+        </ValidationSurface>
       )}
 
       {/*
         Blocking training messages (Requirement 14.9). Each one is rendered with its
         required quantity AND its available quantity, both taken from the payload the
-        admission gate produced — this panel formats, it does not measure. The gold tone
-        rather than red is deliberate and matches what happened: the strategy IS saved, and
-        the version is a real immutable version; it is training that was refused, and no
-        training job row exists (Requirements 14.3, 14.4, 14.7, 14.8).
+        admission gate produced — this panel formats, it does not measure.
+
+        The WARNING surface rather than the error one is deliberate and matches what happened:
+        the strategy IS saved, and the version is a real immutable version; it is training that
+        was refused, and no training job row exists (Requirements 14.3, 14.4, 14.7, 14.8). Gold,
+        not red — and `role="status"` rather than the old `alert` follows from that, because the
+        thing the author asked to be persisted was persisted.
+
+        `confirmed`: every quantity, sentence and fix hint here is the admission gate's.
       */}
       {trainingBlocks.length > 0 && (
-        <div
-          role="alert"
+        <ValidationSurface
+          surface="warning"
+          provenance="confirmed"
+          title="Training was refused. This version is saved; no model was trained."
           data-testid="training-blocks"
           data-block-count={trainingBlocks.length}
-          style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}` }}
         >
           {trainingBlocks.map((block) => (
             <div
@@ -2973,8 +3048,7 @@ function StrategyBuilderCanvas({
               data-node-id={block.nodeId || undefined}
               data-block-id={block.blockId || undefined}
               data-quantity-count={block.quantities.length}
-              className="text-small"
-              style={{ color: C.gold, fontFamily: 'monospace', display: 'flex', flexDirection: 'column', gap: '2px' }}
+              style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}
             >
               <span data-testid="training-block-message">
                 Training blocked — {block.reason}: {block.message}
@@ -2996,7 +3070,7 @@ function StrategyBuilderCanvas({
                   key={issue.key}
                   data-testid="training-block-issue"
                   data-code={issue.code || undefined}
-                  style={{ paddingLeft: '12px', color: C.t3 }}
+                  style={{ paddingLeft: '12px', color: token.content.muted }}
                 >
                   {issue.message}
                   {issue.quantity ? ` (${issue.quantity.text})` : ''}
@@ -3004,18 +3078,18 @@ function StrategyBuilderCanvas({
                 </span>
               ))}
               {block.fixHint ? (
-                <span data-testid="training-block-fix" style={{ paddingLeft: '12px', color: C.t3 }}>
+                <span data-testid="training-block-fix" style={{ paddingLeft: '12px', color: token.content.muted }}>
                   {block.fixHint}
                 </span>
               ) : null}
               {block.jobCreated ? null : (
-                <span data-testid="training-block-no-job" style={{ paddingLeft: '12px', color: C.t3 }}>
+                <span data-testid="training-block-no-job" style={{ paddingLeft: '12px', color: token.content.muted }}>
                   No training job was created, so nothing is queued or running for this graph.
                 </span>
               )}
             </div>
           ))}
-        </div>
+        </ValidationSurface>
       )}
 
       {/*
@@ -3373,9 +3447,23 @@ function StrategyBuilderCanvas({
                     runtime={selectedNode.data.runtime || null}
                   />
 
-                  <Button variant="danger" size="sm" Icon={Trash2} onClick={handleDeleteNode} style={{ width: '100%' }}>
+                  {/*
+                    §9.3's destructive TREATMENT, and deliberately NOT its dialog. Deleting a
+                    node mutates local React state, pushes the result onto the undo stack and
+                    reaches no endpoint — the saved version on the server is immutable and
+                    untouched until the author presses Save. A modal on a reversible local edit
+                    is friction that trains the dismiss-reflex the live-deploy dialog depends on
+                    not existing. `intent` is where the hue comes from; this takes no colour prop.
+                  */}
+                  <CommandButton
+                    intent="destructive"
+                    size="sm"
+                    icon={Trash2}
+                    onClick={handleDeleteNode}
+                    style={{ width: '100%' }}
+                  >
                     Delete Node
-                  </Button>
+                  </CommandButton>
                 </div>
               </div>
             </>

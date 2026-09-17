@@ -100,7 +100,25 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // guidance row, which owns the hue) and the issue-list group reads `token.content.muted`
   // and `token.line.default` directly. Task 24.4b owns the other four banners and the last
   // 111.
-  'pages/StrategyBuilder.jsx': 111,
+  //
+  // 111 -> 79 at task 24.4b, which repointed the banner stack onto
+  // `components/builder/validationSurfaces`. The 32 that went are the eight full-width bands'
+  // entire palette — each one was a `${C.gold}20` or `${C.red}20` wash, a `1px solid C.gold` /
+  // `C.red` bottom rule and a `C.gold` / `C.red` monospace text colour, repeated per band and
+  // again on every nested row inside `subscription-refusals`, `save-issues` and
+  // `training-blocks` — plus the in-panel stale-report note, `SEVERITY_COLOUR`'s two entries,
+  // the `server-override` line and the three `C.t3` detail tones in the training rows. All of
+  // it is gone rather than retokened: `ValidationSurface` and `DeployedLockNotice` derive the
+  // hue, the wash, the border style, the icon and the live-region role from `surface` +
+  // `provenance`, so the page names no colour for any of the eight. The four `C.t3`/`C.gold`
+  // survivors in that region were already inside rows the surfaces now own and read
+  // `token.content.muted` and `statusToken(...)` directly.
+  //
+  // The remaining 79 are the palette panel and its block rows (~30), the inspector body's
+  // field labels, section headers and asset/timeframe rows (~30), the toolbar and canvas
+  // chrome (~7) and the status strip's tone lookups (~12). Task 24.4's follow-up takes the
+  // page to 0; none of the eight bands is in that set any more.
+  'pages/StrategyBuilder.jsx': 79,
   // M8. 92 -> 0 at task 21.4a. The 92 were the shim's text, surface and border values
   // spread across the filter grid's eight inline-styled inputs, the eleven-column row
   // template, the two detail cards and the timeline's rail — all of which the rebuild

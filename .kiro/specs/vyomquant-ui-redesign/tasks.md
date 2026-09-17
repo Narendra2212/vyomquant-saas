@@ -1417,7 +1417,7 @@ the decomposition this plan uses instead:
     - Generate strategy graphs and select each node; assert the canvas node id set, every node
       position and the viewport transform are identical before and after; minimum 100 iterations
 
-  - [~] 24.4 Rework the four validation surfaces
+  - [x] 24.4 Rework the four validation surfaces
     - Keep `lib/connectionLegality.js` and `lib/graphValidation.js` **unchanged** — the R1–R8 rules in
       the backend's own evaluation order, reading the served registry, are already correct and already
       wired to `isValidConnection`, `onConnectStart` port dimming, `onConnectEnd` and
