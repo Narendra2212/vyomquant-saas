@@ -90,7 +90,17 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // collapsed track no longer has anywhere to render. The palette's block rows, the
   // toolbar, the banner stack and the inspector's body still hold the remaining 114 —
   // task 24.4 owns zeroing the page.
-  'pages/StrategyBuilder.jsx': 114,
+  //
+  // 114 -> 111 at task 24.4a, which moved the refused-connection reason off the full-width
+  // top-of-page banner and onto a transient callout anchored at the drop point plus a
+  // persistent entry in the validation issue list. The three that went are that banner's
+  // whole palette — `${C.gold}20` wash, `1px solid ${C.gold}` rule, `C.gold` text — and it
+  // is deleted rather than retokened, because the surface it painted no longer exists. Both
+  // replacements are token-only: the callout is `ds/Alert severity="guidance"` (§9.3's
+  // guidance row, which owns the hue) and the issue-list group reads `token.content.muted`
+  // and `token.line.default` directly. Task 24.4b owns the other four banners and the last
+  // 111.
+  'pages/StrategyBuilder.jsx': 111,
   // M8. 92 -> 0 at task 21.4a. The 92 were the shim's text, surface and border values
   // spread across the filter grid's eight inline-styled inputs, the eleven-column row
   // template, the two detail cards and the timeline's rail — all of which the rebuild

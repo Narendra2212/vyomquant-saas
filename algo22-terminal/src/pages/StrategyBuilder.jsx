@@ -79,6 +79,7 @@ import {
 } from 'lucide-react';
 import { C, Inp, Tag2, PanelTitle } from '../components/ui-legacy/primitives';
 import { Button } from '../components/ui/Button';
+import { Alert } from '../components/ds/Alert';
 import { DECLARED_STAGE_BANDS, STAGE_BANDS, stageBandFor } from '../design/semantic';
 import { token } from '../design/tokens';
 import { DataPipelineProvider } from '../contexts/DataPipelineContext';
@@ -184,6 +185,137 @@ export const MARKET_PARAM_CONTROLS = Object.freeze({
  * (90 s), so a feed that stops is seen well inside the window in which it starts to matter.
  */
 export const FEED_READ_INTERVAL_MS = 15000;
+
+// ---------------------------------------------------------------------------
+// The refused connection: its words, where they appear, and how long for
+// (task 24.4a, design.md §9.3, Requirement 5.4)
+// ---------------------------------------------------------------------------
+
+/** Line one's lead-in. The only frontend-authored words in a refusal. */
+export const REFUSAL_HEADLINE_PREFIX = 'Cannot connect: ';
+
+/** Line two's lead-in, `§9.3`'s arrow. */
+export const REFUSAL_HINT_PREFIX = '→ ';
+
+/**
+ * How long the transient callout stays on screen after a refused drop, in milliseconds.
+ *
+ * Why a timer *and* the next drag, rather than one of them:
+ *
+ * * **The next drag alone is not enough.** An author who reads the reason, understands it and
+ *   then goes to the palette instead of re-dragging would leave the callout pinned over the
+ *   canvas indefinitely, at the exact coordinates they are about to drop a block on.
+ * * **A timer alone is not enough.** An author mid-flow re-drags within a second, and a
+ *   callout still fading at the old drop point is noise sitting on the new one. So
+ *   `onConnectStart` clears it, and so does a connection that succeeds.
+ * * **Nothing is lost when it goes.** The same refusal is also written to the validation
+ *   issue list, which does not expire, so the callout can be aggressively transient without
+ *   making a reason unrecoverable. That is why both surfaces exist rather than one.
+ *
+ * 6 s is roughly four times the time it takes to read two short lines, and it is well inside
+ * the interval in which an author still remembers making the drag it is about.
+ *
+ * The callout is `pointer-events: none` and holds no control, so an expired timer never
+ * strands focus and a live one never swallows the next drag.
+ */
+export const REFUSAL_CALLOUT_MS = 6000;
+
+/**
+ * How many distinct refusals the validation issue list keeps.
+ *
+ * Bounded because `isValidConnection` fires on every handle the pointer passes over, so an
+ * unbounded list would grow by a dozen entries per drag. Newest first, de-duplicated by
+ * {@link refusalSignature}: a trader who tried the same illegal edge three times has one
+ * problem, not three.
+ */
+export const REFUSAL_HISTORY_LIMIT = 4;
+
+/**
+ * The two lines of a refusal, **verbatim from the server** (Requirement 5.4, `§9.3`).
+ *
+ *     Cannot connect: {issue.message}
+ *     → {issue.fix_hint}
+ *
+ * Line two is **omitted** when `fix_hint` is absent. It is not replaced with frontend-authored
+ * rule text, not replaced with the message again, and not replaced with a generic sentence:
+ * this page does not know the rules, `backend_app/backend/strategy_dag/validator.py` does, and
+ * a hint invented here would be a second rule set that can disagree with it (the exact drift
+ * `lib/connectionLegality.js`'s header refuses for the rules themselves).
+ *
+ * A function rather than inline JSX so the wording is assertable without a DOM — task 24.5's
+ * Property 9 asserts a surfaced reason contains the issue's `fix_hint` when present and its
+ * `message` when not, and that is a statement about this return value.
+ *
+ * Total over every input: a non-issue answers `[]`, which renders nothing at all rather than
+ * an empty callout. A non-string `message` or `fix_hint` is treated as absent for the same
+ * reason — `String(undefined)` on screen is worse than a line that is not there.
+ *
+ * @param {object|null|undefined} issue A `schema.make_issue` shape:
+ *   `{ code, severity, node_id, edge_id, field, message, expected, actual, fix_hint }`.
+ * @returns {Array<string>} `[]`, `[headline]`, or `[headline, hint]`. Never longer.
+ */
+export function connectionRefusalLines(issue) {
+  if (issue === null || typeof issue !== 'object' || Array.isArray(issue)) return [];
+  const message = typeof issue.message === 'string' ? issue.message : '';
+  const fixHint = typeof issue.fix_hint === 'string' ? issue.fix_hint : '';
+  if (message.trim() === '' && fixHint.trim() === '') return [];
+  const lines = [`${REFUSAL_HEADLINE_PREFIX}${message}`];
+  if (fixHint.trim() !== '') lines.push(`${REFUSAL_HINT_PREFIX}${fixHint}`);
+  return lines;
+}
+
+/**
+ * What makes two refusals the same refusal, for the issue list's de-duplication.
+ *
+ * The rule code plus the endpoints it was raised about. Two attempts at one illegal edge
+ * collapse; the same code raised about a different pair of ports does not, because those are
+ * two things to fix.
+ */
+export const refusalSignature = (issue) =>
+  [
+    issue.code || '',
+    issue.node_id || '',
+    issue.edge_id || '',
+    issue.field || '',
+    issue.message || '',
+  ].join('\u0000');
+
+/**
+ * A pointer event's position **inside `element`'s own box**, in CSS pixels, or `null`.
+ *
+ * The same measurement `handleDrop` already makes for a dropped block — `clientX` minus the
+ * canvas's own `left` — reused rather than re-derived, because a refusal callout that lands
+ * somewhere other than where a dropped node would have landed is worse than no callout.
+ *
+ * Task 24.2a is what makes this two lines instead of a compensation calculation: the inspector
+ * is a sibling grid track, so nothing is ever laid over the canvas and its bounding box IS the
+ * drawable area. Nothing here reads a scroll offset or a panel width.
+ *
+ * `null` when there is nothing to measure against or the event carries no coordinates (a
+ * keyboard-initiated connection, for one). A refusal with no anchor still reaches the issue
+ * list; it just does not claim to know where the drop was.
+ *
+ * @param {MouseEvent|TouchEvent|null|undefined} event `onConnectEnd`'s argument — React Flow 11
+ *   hands over the raw DOM event, not a React synthetic one.
+ * @param {Element|null|undefined} element The canvas element.
+ * @returns {{x: number, y: number}|null}
+ */
+export function canvasPointFromEvent(event, element) {
+  if (!element || typeof element.getBoundingClientRect !== 'function') return null;
+  if (event === null || event === undefined) return null;
+  const touch =
+    event.changedTouches && event.changedTouches.length > 0 ? event.changedTouches[0] : null;
+  const source = typeof event.clientX === 'number' ? event : touch;
+  if (
+    source === null ||
+    typeof source.clientX !== 'number' ||
+    typeof source.clientY !== 'number'
+  ) {
+    return null;
+  }
+  const bounds = element.getBoundingClientRect();
+  return { x: source.clientX - bounds.left, y: source.clientY - bounds.top };
+}
 
 // ---------------------------------------------------------------------------
 // Save-path validation (SB-06)
@@ -1002,14 +1134,63 @@ const ValidationIssueRow = ({ issue, onFocus }) => {
 };
 
 /**
- * The issue list (Requirements 8.9, 8.10).
+ * A refused connection, in the issue list (task 24.4a, Requirement 5.4).
  *
- * Three groups, because the report has three kinds of subject and the third one is the one a
- * naive per-node projection loses: `MISSING_REQUIRED_CATEGORY` and the other graph-level codes
- * name neither a node nor an edge, so they get their own group rather than being dropped.
+ * The persistent half of the pair. The callout at the drop point is transient by design, so
+ * without this a reason that has faded is gone — and the author who looked away for three
+ * seconds is back to drawing the same illegal edge to find out why it was illegal.
+ *
+ * The words are {@link connectionRefusalLines}', so both surfaces quote the server the same
+ * way and neither can drift from the other. Not a `<button>`, unlike its siblings: a refused
+ * edge is not in the graph, so there is nothing on the canvas to focus.
  */
-const ValidationIssuePanel = ({ markers, stale, onFocusNode, onFocusEdge }) => {
-  if (markers.issues.length === 0) return null;
+const RefusedConnectionRow = ({ issue }) => {
+  const lines = connectionRefusalLines(issue);
+  if (lines.length === 0) return null;
+  return (
+    <li
+      data-testid="refused-connection"
+      data-code={issue.code || undefined}
+      data-node-id={issue.node_id || undefined}
+      data-field={issue.field || undefined}
+      data-has-fix-hint={lines.length > 1 ? 'true' : 'false'}
+      className="text-micro"
+      style={{
+        // Same rail and rhythm as `ValidationIssueRow`, expressed in tokens: `C.border` is
+        // `token.line.default`, so the two rows sit in one list without a seam.
+        borderTop: `1px solid ${token.line.default}`,
+        padding: '4px 0',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '2px',
+      }}
+    >
+      <span data-testid="refused-connection-message" style={{ color: token.status.guidance.fg }}>
+        {lines[0]}
+      </span>
+      {lines.length > 1 ? (
+        <span data-testid="refused-connection-hint" style={{ color: token.content.secondary }}>
+          {lines[1]}
+        </span>
+      ) : null}
+    </li>
+  );
+};
+
+/**
+ * The issue list (Requirements 8.9, 8.10, 5.4).
+ *
+ * Three groups from the report, because it has three kinds of subject and the third one is the
+ * one a naive per-node projection loses: `MISSING_REQUIRED_CATEGORY` and the other graph-level
+ * codes name neither a node nor an edge, so they get their own group rather than being dropped.
+ *
+ * Plus a fourth group the report cannot supply: refused connections. A refused edge was never
+ * added to the graph, so no `POST /api/strategies/validate` will ever mention it — the only
+ * record of it is the client-side refusal that stopped it, and `§9.3` asks for that record to
+ * outlive the transient callout that announced it.
+ */
+const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEdge }) => {
+  if (markers.issues.length === 0 && refusals.length === 0) return null;
   const nodeMarkers = Object.values(markers.nodes);
   const edgeMarkers = Object.values(markers.edges);
 
@@ -1021,17 +1202,42 @@ const ValidationIssuePanel = ({ markers, stale, onFocusNode, onFocusEdge }) => {
       data-warning-count={markers.warningCount}
       data-graph-issue-count={markers.graph.length}
       data-override-count={markers.overrides.length}
+      data-refusal-count={refusals.length}
       style={{ borderTop: `1px solid ${C.border}`, padding: '8px 12px', overflowY: 'auto', maxHeight: 260 }}
     >
       <h3 className="text-micro" style={{ color: C.t2, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: 1 }}>
         Validation issues
       </h3>
-      {stale ? (
+      {/*
+        Only when a report exists. With refusals alone there is no report for this sentence to
+        be about, and telling an author their report is one edit old when they have never had
+        one is a worse lie than saying nothing.
+      */}
+      {stale && markers.issues.length > 0 ? (
         <p role="status" data-testid="validation-issues-stale" className="text-micro" style={{ color: C.gold, margin: '0 0 4px' }}>
           This report describes an earlier version of this graph. The canvas has changed since,
           so these markers are not shown on it.
         </p>
       ) : null}
+
+      {/*
+        Refused connections first: it is the thing the author did most recently, and the
+        transient callout that announced it may already be gone.
+      */}
+      {refusals.length > 0 && (
+        <section aria-label="Connections that were refused" data-testid="refused-connections">
+          {/* `token.content.muted` is what `C.t3` resolves to, so this heading is identical to
+              its three siblings below without adding a call site to the shim. */}
+          <h4 className="text-micro" style={{ color: token.content.muted, margin: '4px 0 0', textTransform: 'uppercase' }}>
+            Refused connections ({refusals.length})
+          </h4>
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {refusals.map((issue) => (
+              <RefusedConnectionRow key={refusalSignature(issue)} issue={issue} />
+            ))}
+          </ul>
+        </section>
+      )}
 
       {markers.graph.length > 0 && (
         <section aria-label="Issues with the whole strategy" data-testid="graph-issues">
@@ -1093,6 +1299,71 @@ const ValidationIssuePanel = ({ markers, stale, onFocusNode, onFocusEdge }) => {
           </ul>
         </section>
       ))}
+    </div>
+  );
+};
+
+/**
+ * The transient refusal callout, anchored at the refused drop point (task 24.4a, `§9.3`).
+ *
+ * WHY IT IS HERE AND NOT AT THE TOP OF THE PAGE
+ * ---------------------------------------------
+ * The reason used to be a full-width banner above the palette, canvas and inspector. A drop is
+ * made at the pointer; the explanation appeared several hundred pixels away, above the fold of
+ * attention, so reading it meant looking away from the cursor and then finding the port again.
+ * This sits where the drop was refused.
+ *
+ * HOW IT IS ANCHORED
+ * ------------------
+ * `left` / `top` are pixel offsets **inside the canvas element's own box**, measured exactly the
+ * way `handleDrop` measures a dropped block: `event.clientX - bounds.left`, with `bounds` from
+ * `reactFlowWrapper`'s `getBoundingClientRect()`. That measurement is only safe because task
+ * 24.2a made the inspector a sibling grid track rather than an overlay — nothing floats over
+ * the canvas, so a client coordinate minus the canvas's own origin is the canvas's own
+ * coordinate, with no compensation for a panel that may or may not be covering it.
+ *
+ * The callout is placed in CSS pixels, not React Flow graph coordinates, and deliberately so:
+ * it is annotating a *gesture*, which happened at a place on screen, not a *node*, which lives
+ * at a place in the graph. Panning the canvas afterwards should not drag the note along.
+ *
+ * `transform: translate(-50%, -100%)` puts it centred just above the pointer rather than under
+ * it, and `pointerEvents: 'none'` guarantees it can neither swallow the next drag nor take
+ * focus — it holds no control, so there is nothing in it to reach.
+ *
+ * The `ds/Alert` `guidance` severity is `§9.3`'s guidance row: `status.guidance`, a dashed
+ * border, the `Info` icon and `role="status"`. Dashed and polite is what makes a refused drag
+ * read as "not yet" rather than "broken" — the author is mid-action, and nothing is wrong with
+ * their saved strategy.
+ */
+const ConnectionRefusalCallout = ({ issue, point }) => {
+  const lines = connectionRefusalLines(issue);
+  if (lines.length === 0 || point === null) return null;
+  return (
+    <div
+      data-testid="connection-refusal-callout"
+      data-anchor-x={Math.round(point.x)}
+      data-anchor-y={Math.round(point.y)}
+      data-has-fix-hint={lines.length > 1 ? 'true' : 'false'}
+      style={{
+        position: 'absolute',
+        left: point.x,
+        top: point.y,
+        transform: 'translate(-50%, -100%)',
+        maxWidth: 320,
+        // Above the canvas and the empty-state hint, below nothing: it is the newest thing
+        // said and the only thing said about this gesture.
+        zIndex: 12,
+        pointerEvents: 'none',
+        background: token.surface.panel,
+        borderRadius: token.radius.md,
+        boxShadow: token.shadow.raised,
+      }}
+    >
+      <Alert severity="guidance" title={lines[0]} data-testid="connection-refusal-alert">
+        {lines.length > 1 ? (
+          <span data-testid="connection-refusal-hint">{lines[1]}</span>
+        ) : null}
+      </Alert>
     </div>
   );
 };
@@ -1184,7 +1455,22 @@ function StrategyBuilderCanvas({
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [libraryOpen, setLibraryOpen] = useState(true);
   const [canvasNotice, setCanvasNotice] = useState(null);
-  const [connectionIssue, setConnectionIssue] = useState(null);
+  /*
+    The two surfaces a refusal reaches (task 24.4a, §9.3).
+
+    `connectionRefusal` is the transient callout: `{ issue, point }`, where `point` is a pixel
+    offset inside the canvas box. `refusalHistory` is the persistent issue-list entry, newest
+    first and bounded — it is what makes a faded callout recoverable.
+
+    Both are written once per drag, on `onConnectEnd`, from `pendingRefusalRef`. There is no
+    `connectionIssue` state any more: it existed to feed the full-width banner this task
+    removed, and React Flow calls `isValidConnection` for every handle the pointer crosses, so
+    holding the mid-drag verdict in state re-rendered the whole page several times per drag to
+    move a band nobody was looking at. The ref carries it instead. The author's mid-drag signal
+    is the dimmed ports (`dragLegality`), which is the right one — it is on the ports.
+  */
+  const [connectionRefusal, setConnectionRefusal] = useState(null);
+  const [refusalHistory, setRefusalHistory] = useState([]);
   const [dragLegality, setDragLegality] = useState(null);
   const [inspectorBlocking, setInspectorBlocking] = useState({});
 
@@ -1528,6 +1814,45 @@ function StrategyBuilderCanvas({
     pushState({ nodes, edges: next });
   }, [nodes, edges, pushState]);
 
+  /*
+    The refusal waiting for a drop point, and whether this drag produced an edge.
+
+    A ref, not state, because React Flow calls `isValidConnection` for **every** handle the
+    pointer passes over: the latest reason changes many times during one drag, and none of those
+    intermediate values is worth a render. The reason is read once, on `onConnectEnd`, and
+    placed at the point where the drop actually happened.
+
+    `dragProducedEdgeRef` exists because React Flow calls `onConnect` *before* `onConnectEnd` on
+    a successful drop, and by then the ref may still hold the reason a handle the pointer merely
+    crossed on the way was illegal. Explaining a refusal after an accepted connection would be a
+    plain lie about what just happened.
+  */
+  const pendingRefusalRef = useRef(null);
+  const dragProducedEdgeRef = useRef(false);
+  const refusalTimerRef = useRef(null);
+
+  /** Take the transient callout down now, and cancel its timer. */
+  const clearRefusalCallout = useCallback(() => {
+    if (refusalTimerRef.current !== null) {
+      clearTimeout(refusalTimerRef.current);
+      refusalTimerRef.current = null;
+    }
+    setConnectionRefusal(null);
+  }, []);
+
+  // A pending timer outliving the page would call `setConnectionRefusal` on an unmounted tree.
+  useEffect(
+    () => () => {
+      if (refusalTimerRef.current !== null) clearTimeout(refusalTimerRef.current);
+    },
+    [],
+  );
+
+  /** Record a refusal for `onConnectEnd` to place. No render: see `pendingRefusalRef`. */
+  const noteRefusal = useCallback((issue) => {
+    pendingRefusalRef.current = issue;
+  }, []);
+
   /**
    * React Flow's `isValidConnection`: the R1–R8 gate from `connectionLegality.js`.
    *
@@ -1543,17 +1868,17 @@ function StrategyBuilderCanvas({
         // on every edit.
         graph: () => canonicalRef.current,
         registry: registryPayload,
-        onReject: (issue) => setConnectionIssue(issue),
+        onReject: (issue) => noteRefusal(issue),
       });
     } catch {
       return null;
     }
-  }, [registryPayload]);
+  }, [registryPayload, noteRefusal]);
 
   const isValidConnection = useCallback(
     (connection) => {
       if (connectionValidator === null) {
-        setConnectionIssue(
+        noteRefusal(
           saveIssue(
             'REGISTRY_UNAVAILABLE',
             'Connections cannot be checked while the block registry is unavailable.',
@@ -1563,7 +1888,7 @@ function StrategyBuilderCanvas({
         return false;
       }
       if (canonicalRef.current === null) {
-        setConnectionIssue(
+        noteRefusal(
           saveIssue(
             canonical.error ? canonical.error.code : 'GRAPH_UNSERIALIZABLE',
             canonical.error ? canonical.error.message : 'This canvas cannot be serialized.',
@@ -1573,16 +1898,20 @@ function StrategyBuilderCanvas({
         return false;
       }
       const accepted = connectionValidator(connection);
-      if (accepted) setConnectionIssue(null);
+      if (accepted) pendingRefusalRef.current = null;
       return accepted;
     },
-    [connectionValidator, canonical.error],
+    [connectionValidator, canonical.error, noteRefusal],
   );
 
   /** Dim every input port that cannot accept the port being dragged, before the drop. */
   const onConnectStart = useCallback(
     (_, { nodeId, handleId, handleType }) => {
-      setConnectionIssue(null);
+      // The next drag is one of the two things that dismisses the callout (the other is its
+      // timer). A note about the last drop point is noise sitting on the new one.
+      pendingRefusalRef.current = null;
+      dragProducedEdgeRef.current = false;
+      clearRefusalCallout();
       if (handleType !== 'source' || registryPayload === null || canonicalRef.current === null) return;
       try {
         setDragLegality(
@@ -1594,10 +1923,41 @@ function StrategyBuilderCanvas({
         setDragLegality(null);
       }
     },
-    [registryPayload],
+    [registryPayload, clearRefusalCallout],
   );
 
-  const onConnectEnd = useCallback(() => setDragLegality(null), []);
+  /**
+   * The drop landed. If it was refused, this is where the reason is placed and recorded.
+   *
+   * Both surfaces are written here and only here (`§9.3`): the transient callout at the drop
+   * point, and the persistent entry in the validation issue list. The list entry is what makes
+   * the callout safe to expire — see {@link REFUSAL_CALLOUT_MS}.
+   */
+  const onConnectEnd = useCallback((event) => {
+    setDragLegality(null);
+
+    const issue = pendingRefusalRef.current;
+    const produced = dragProducedEdgeRef.current;
+    pendingRefusalRef.current = null;
+    dragProducedEdgeRef.current = false;
+    if (produced || issue === null || issue === undefined) return;
+    if (connectionRefusalLines(issue).length === 0) return;
+
+    setConnectionRefusal({ issue, point: canvasPointFromEvent(event, reactFlowWrapper.current) });
+    setRefusalHistory((current) => {
+      const signature = refusalSignature(issue);
+      return [issue, ...current.filter((entry) => refusalSignature(entry) !== signature)].slice(
+        0,
+        REFUSAL_HISTORY_LIMIT,
+      );
+    });
+
+    if (refusalTimerRef.current !== null) clearTimeout(refusalTimerRef.current);
+    refusalTimerRef.current = setTimeout(() => {
+      refusalTimerRef.current = null;
+      setConnectionRefusal(null);
+    }, REFUSAL_CALLOUT_MS);
+  }, []);
 
   const onConnect = useCallback((params) => {
     const edge = {
@@ -1609,12 +1969,16 @@ function StrategyBuilderCanvas({
       animated: true,
       style: { stroke: token.line.strong, strokeWidth: 2 },
     };
+    // Set before the duplicate guard: React Flow only calls this when the connection passed
+    // `isValidConnection`, so the drag succeeded either way and there is no refusal to explain.
+    dragProducedEdgeRef.current = true;
+    pendingRefusalRef.current = null;
     if (edges.some((existing) => existing.id === edge.id)) return;
     const next = [...edges, edge];
     setEdges(next);
     pushState({ nodes, edges: next });
-    setConnectionIssue(null);
-  }, [nodes, edges, pushState]);
+    clearRefusalCallout();
+  }, [nodes, edges, pushState, clearRefusalCallout]);
 
   const onNodeClick = useCallback((_, node) => {
     setSelectedNodeId(node.id);
@@ -2561,12 +2925,13 @@ function StrategyBuilderCanvas({
         </div>
       )}
 
-      {connectionIssue && (
-        <div role="alert" data-testid="connection-issue" style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }} className="text-small">
-          Connection refused — {connectionIssue.message}
-          {connectionIssue.fix_hint ? ` ${connectionIssue.fix_hint}` : ''}
-        </div>
-      )}
+      {/*
+        The refused-connection banner that used to live here is gone (task 24.4a, §9.3). Its two
+        replacements are `ConnectionRefusalCallout`, anchored inside the canvas box at the drop
+        point, and the "Refused connections" group in the validation issue list. A full-width band
+        at the top of the page is the furthest point on screen from the cursor that refused the
+        drop, which is why a trader had to look away from it to find out what happened.
+      */}
 
       {saveIssues.length > 0 && (
         <div role="alert" data-testid="save-issues" style={{ padding: '8px 16px', background: `${C.red}20`, borderBottom: `1px solid ${C.red}` }}>
@@ -2887,6 +3252,18 @@ function StrategyBuilderCanvas({
                 and timeframe are the market this strategy trades.
               </div>
             )}
+
+            {/*
+              The refused drop, explained where it happened (Requirement 5.4, §9.3). Inside this
+              element because its coordinates are measured from this element's box — see
+              `canvasPointFromEvent`.
+            */}
+            {connectionRefusal !== null && (
+              <ConnectionRefusalCallout
+                issue={connectionRefusal.issue}
+                point={connectionRefusal.point}
+              />
+            )}
           </div>
         </div>
 
@@ -3006,10 +3383,15 @@ function StrategyBuilderCanvas({
         </aside>
       </div>
 
-      {/* The report, listed: node issues, connection issues and graph-level issues */}
+      {/*
+        The report, listed: node issues, connection issues and graph-level issues — plus the
+        refusals the report cannot contain, because a refused edge was never added to the graph
+        the report describes (task 24.4a).
+      */}
       <ValidationIssuePanel
         markers={heldMarkers}
         stale={!backendAuthoritative}
+        refusals={refusalHistory}
         onFocusNode={focusNode}
         onFocusEdge={focusEdge}
       />
