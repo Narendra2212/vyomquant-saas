@@ -1384,7 +1384,7 @@ the decomposition this plan uses instead:
 
 - [ ] 24. M9 — Strategy Builder (`/app/builder`)
 
-  - [~] 24.1 Apply the five-stage visual grammar to the canvas
+  - [x] 24.1 Apply the five-stage visual grammar to the canvas
     - Add the stage band layer from `§9.1` over the backend's seven `BlockCategory` values in
       `src/lib/blockRegistry.js` and `src/pages/StrategyBuilder.jsx`: Market data / Transform / Logic /
       Model / Action, with a persistent lane header strip above the canvas and a fixed left-to-right

@@ -75,7 +75,14 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // -- In-scope pages, the six task 1.12 names ------------------------------
   // M9 — the two largest and most behaviourally sensitive files, migrated last.
   'pages/PaperTrading.jsx': 191,
-  'pages/StrategyBuilder.jsx': 148,
+  // 148 -> 120 at task 24.1, which applied §9.1's five-stage visual grammar to the canvas.
+  // The 28 that went are the canvas's own: `PremiumNodeWrapper`'s body, border, text and
+  // two shadow colours, the node's stage strip, block id, marker, runtime and lock tones,
+  // both handle rings, the port-dim fill, `runtimeTone`'s four states, the edge stroke on
+  // creation and on a validation verdict, the React Flow `Background` and `MiniMap`
+  // colours, and the empty-canvas hint. The palette, the toolbar, the banner stack and the
+  // inspector still hold the rest — tasks 24.2 and 24.4 own those.
+  'pages/StrategyBuilder.jsx': 120,
   // M8. 92 -> 0 at task 21.4a. The 92 were the shim's text, surface and border values
   // spread across the filter grid's eight inline-styled inputs, the eleven-column row
   // template, the two detail cards and the timeline's rail — all of which the rebuild
@@ -182,7 +189,13 @@ export const LEGACY_C_BUDGET = Object.freeze({
   'components/DesktopOnlyOverlay.jsx': 9,
   // Not a page: the block-category presentation map. Colours the builder
   // palette, so it clears with the builder work.
-  'lib/blockRegistry.js': 8,
+  //
+  // 8 -> 0 at task 24.1. The eight were one hue per category, chosen here: a `lib/` module
+  // deciding a palette, which is exactly what the note under `no-colour-literals`'s two
+  // roots warns about. `CATEGORY_PRESENTATION` is now *derived* from `design/semantic.js`'s
+  // stage band table (§9.1), so the icon and colour the palette draws and the ones the
+  // canvas draws are one decision, and the module imports nothing from the shim.
+  'lib/blockRegistry.js': 0,
   // New at task 23.3 — the drawdown curve's derivation from the real equity curve
   // (design.md §7.4, Requirement 6.3). A pure data module: no JSX, no import of the shim,
   // nothing to render a colour with. Entered at `0` and held there for the reason

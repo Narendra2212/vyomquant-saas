@@ -74,11 +74,13 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import {
-  Activity, AlertTriangle, ArrowLeft, BarChart2, ChevronDown, ChevronRight, Maximize,
+  AlertTriangle, ArrowLeft, BarChart2, ChevronDown, ChevronRight, Maximize,
   PanelLeft, PanelRight, Play, RefreshCw, Redo, Save, Search, Trash2, Undo, ZoomIn, ZoomOut,
 } from 'lucide-react';
 import { C, Inp, Tag2, PanelTitle } from '../components/ui-legacy/primitives';
 import { Button } from '../components/ui/Button';
+import { DECLARED_STAGE_BANDS, STAGE_BANDS, stageBandFor } from '../design/semantic';
+import { token } from '../design/tokens';
 import { DataPipelineProvider } from '../contexts/DataPipelineContext';
 import { IndicatorEngineProvider } from '../contexts/IndicatorEngineContext';
 import { LogicEngineProvider } from '../contexts/LogicEngineContext';
@@ -406,10 +408,16 @@ const ApiSyncIndicator = ({ color, text, active = true }) => (
  * says the graph has changed since the last verdict, drawn as the design's dotted border.
  * Neither state is carried by the border alone — `DynamicNode` also renders the count and
  * the severity as text with an accessible name.
+ *
+ * `color` and `bandBorder` are the node's stage band edge (§9.1). The body is
+ * `surface.raised` for **every** stage, so the only colour on a node is its band edge and
+ * its validation marker (Requirement 1.5). A stage is told apart by its lane, its number,
+ * its name and its icon — never by a body tint.
  */
 const PremiumNodeWrapper = ({
   children,
   color,
+  bandBorder = 'solid',
   selected = false,
   hasError = false,
   severity = null,
@@ -418,20 +426,23 @@ const PremiumNodeWrapper = ({
   const [isHovered, setIsHovered] = useState(false);
   const borderColor =
     severity === SEVERITY_ERROR || hasError
-      ? C.red
+      ? token.status.error.fg
       : severity === SEVERITY_WARNING
-        ? C.gold
+        ? token.status.warning.fg
         : selected
-          ? C.cyan
+          ? token.brand.base
           : isHovered
             ? color
             : color + '90';
-  const borderStyle = unvalidated && severity === null && !hasError ? 'dotted' : 'solid';
+  // The band's border style is stage 4's and the Unresolved band's fourth axis, so those two
+  // are distinguishable without a hue of their own. A validation state outranks it: an
+  // unvalidated node keeps the dotted border it has today.
+  const borderStyle = unvalidated && severity === null && !hasError ? 'dotted' : bandBorder;
   const shadowStyle = selected
-    ? `0 0 0 2px ${C.cyan}, 0 0 24px rgba(0,212,255,0.28)`
+    ? `0 0 0 2px ${token.brand.base}, ${token.shadow.raised}`
     : isHovered
-      ? `0 4px 14px rgba(0,0,0,0.45), 0 0 12px ${color}35`
-      : `0 2px 8px rgba(0,0,0,0.3), 0 0 8px ${color}15`;
+      ? token.shadow.raised
+      : token.shadow.panel;
 
   return (
     <div
@@ -439,14 +450,14 @@ const PremiumNodeWrapper = ({
       onMouseLeave={() => setIsHovered(false)}
       style={{
         minWidth: 170,
-        background: C.bg3,
+        background: token.surface.raised,
         border: `2px ${borderStyle} ${borderColor}`,
-        borderRadius: 8,
-        color: C.t1,
+        borderRadius: token.radius.lg,
+        color: token.content.primary,
         padding: '8px 10px',
         boxShadow: shadowStyle,
-        fontFamily: 'monospace',
-        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+        fontFamily: token.font.mono,
+        transition: token.transition.base,
         cursor: 'pointer',
         position: 'relative',
       }}
@@ -455,6 +466,80 @@ const PremiumNodeWrapper = ({
     </div>
   );
 };
+
+/**
+ * The stage lane header strip (§9.1, Requirement 5.1).
+ *
+ * Persistent and in a fixed left-to-right order, so the five stages read as a pipeline before
+ * a single block is dropped. Colour is spent on each lane's bottom edge and its icon only —
+ * the strip itself is `surface.raised`, exactly like the node bodies it labels.
+ *
+ * `bands` is `STAGE_BANDS` minus the neutral sixth band unless the canvas actually holds a
+ * node that resolved there. A permanently empty lane would be SB-03 in miniature: the palette
+ * carried an always-empty `FEATURE_ENGINEERING` section for years for exactly that reason. The
+ * lane appears when it has something to label, and the node it labels is never hidden.
+ *
+ * Each lane's icon is its band's first category's icon — `Activity` for Transform, whose three
+ * categories keep their own icons on the nodes themselves (`Activity`, `Sigma`, `Cpu`).
+ */
+const StageLaneStrip = ({ bands }) => (
+  <ul
+    data-testid="stage-lane-strip"
+    aria-label="Strategy stages, in data-flow order"
+    style={{
+      display: 'flex',
+      alignItems: 'stretch',
+      gap: '1px',
+      listStyle: 'none',
+      margin: 0,
+      padding: 0,
+      background: token.surface.raised,
+      borderBottom: `1px solid ${token.line.default}`,
+      flexShrink: 0,
+    }}
+  >
+    {bands.map((band) => {
+      // `band.categories[0]` is `undefined` for the Unresolved band, which is exactly the
+      // input `getCategoryIcon` answers with the fallback glyph for.
+      const LaneIcon = getCategoryIcon(band.categories[0]);
+      return (
+        <li
+          key={band.id}
+          data-testid="stage-lane"
+          data-stage-id={band.id}
+          data-stage-order={band.order}
+          data-categories={band.categories.join(' ')}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '6px 10px',
+            borderBottom: `2px ${band.border} ${band.fg}`,
+          }}
+        >
+          <LaneIcon size={12} aria-hidden="true" style={{ color: band.fg, flexShrink: 0 }} />
+          <span
+            className="text-micro"
+            style={{
+              color: token.content.secondary,
+              fontFamily: token.font.mono,
+              fontWeight: 700,
+              letterSpacing: 1,
+              textTransform: 'uppercase',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {band.order} · {band.label}
+          </span>
+        </li>
+      );
+    })}
+  </ul>
+);
 
 /** Evenly spaced handle offsets, so a block with several ports has several reachable handles. */
 const handleOffset = (index, total) => `${((index + 1) / (total + 1)) * 100}%`;
@@ -467,10 +552,10 @@ const handleOffset = (index, total) => `${((index + 1) / (total + 1)) * 100}%`;
  * know gets the neutral tone rather than a passing one.
  */
 const runtimeTone = (state) => {
-  if (state === 'READY') return C.cyan;
-  if (state === 'WARMING' || state === 'TRAINING') return C.gold;
-  if (state === 'AWAITING_MODEL' || state === 'NOT_READY') return C.t2;
-  return C.t3;
+  if (state === 'READY') return token.brand.base;
+  if (state === 'WARMING' || state === 'TRAINING') return token.status.warning.fg;
+  if (state === 'AWAITING_MODEL' || state === 'NOT_READY') return token.content.secondary;
+  return token.content.muted;
 };
 
 /**
@@ -484,9 +569,19 @@ const runtimeTone = (state) => {
  */
 const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
   const drag = useContext(DragLegalityContext);
-  const category = data.category || null;
-  const CategoryIcon = category ? getCategoryIcon(category) : Activity;
-  const color = category ? getCategoryColor(category) : C.t2;
+  const category = typeof data.category === 'string' && data.category.trim() !== ''
+    ? data.category.trim()
+    : null;
+  /*
+    §9.1's two authorities, kept apart. The stage band decides *layout* — the number, the lane
+    and the border style; the category decides *identity* — the name and the icon. A category
+    this build does not recognise resolves to the neutral sixth band and still draws, with its
+    real name on it: a block the backend says exists must be drawable.
+  */
+  const band = stageBandFor(category);
+  const categoryName = category === null ? 'not reported' : category.replace(/_/g, ' ');
+  const StageIcon = getCategoryIcon(category);
+  const color = band.fg;
   const inputs = Array.isArray(data.inputs) ? data.inputs : [];
   const outputs = Array.isArray(data.outputs) ? data.outputs : [];
   const marker = data.validation || null;
@@ -495,6 +590,7 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
   return (
     <PremiumNodeWrapper
       color={color}
+      bandBorder={band.border}
       selected={selected}
       hasError={hasError}
       severity={marker ? marker.severity : null}
@@ -519,9 +615,9 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
             data-port-legal={drag === null ? undefined : String(!dimmed)}
             style={{
               top: handleOffset(index, inputs.length),
-              background: dimmed ? C.t4 : color,
+              background: dimmed ? token.content.muted : color,
               opacity: dimmed ? 0.3 : 1,
-              border: `1px solid ${C.bg1}`,
+              border: `1px solid ${token.surface.panel}`,
               width: '0.625rem',
               height: '0.625rem',
             }}
@@ -529,12 +625,44 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
         );
       })}
 
-      <div style={{ color, letterSpacing: 1, textTransform: 'uppercase', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-        <CategoryIcon size={10} />
-        <span className="text-micro">{(category || 'UNRESOLVED').replace(/_/g, ' ')}</span>
+      {/*
+        The node's stage band strip: the stage number, the stage icon and the category's own
+        name (§9.1). All three are text or glyph, and the bottom rule is the one place a stage
+        spends colour on a node — the body underneath is `surface.raised` whatever the stage.
+      */}
+      <div
+        data-testid="node-stage"
+        data-node-id={id}
+        data-stage-id={band.id}
+        data-stage-order={band.order}
+        data-category={category || undefined}
+        aria-label={`Stage ${band.order} ${band.label}; block category ${categoryName}`}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          marginBottom: '4px',
+          paddingBottom: '3px',
+          borderBottom: `1px ${band.border} ${color}`,
+          color,
+          letterSpacing: 1,
+          textTransform: 'uppercase',
+        }}
+      >
+        <StageIcon size={10} aria-hidden="true" />
+        <span className="text-micro" data-testid="node-stage-label">
+          {band.order} · {band.label}
+        </span>
+        <span
+          className="text-micro"
+          data-testid="node-category"
+          style={{ marginLeft: 'auto', color: token.content.secondary }}
+        >
+          {categoryName}
+        </span>
       </div>
       <div className="text-body" style={{ fontWeight: 900 }}>{data.label || data.block_id}</div>
-      <div className="text-micro" style={{ color: C.t3 }}>{data.block_id}</div>
+      <div className="text-micro" style={{ color: token.content.muted }}>{data.block_id}</div>
 
       {/*
         The node marker (Requirement 8.10). Severity *and* count are text, and the badge
@@ -554,7 +682,7 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
           className="text-micro"
           style={{
             marginTop: '3px',
-            color: marker.severity === SEVERITY_ERROR ? C.red : C.gold,
+            color: marker.severity === SEVERITY_ERROR ? token.status.error.fg : token.status.warning.fg,
             fontWeight: 700,
           }}
         >
@@ -563,13 +691,13 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
         </div>
       )}
       {marker && marker.issues[0] && (
-        <div className="text-micro" style={{ color: C.t2, marginTop: '2px', whiteSpace: 'normal' }}>
+        <div className="text-micro" style={{ color: token.content.secondary, marginTop: '2px', whiteSpace: 'normal' }}>
           {/* Backend text, verbatim (Requirement 8.9). */}
           {marker.issues[0].fix_hint || marker.issues[0].message}
         </div>
       )}
       {!marker && hasError && (
-        <div className="text-micro" style={{ color: C.red, marginTop: '2px' }}>
+        <div className="text-micro" style={{ color: token.status.error.fg, marginTop: '2px' }}>
           ⚠ {data.errorMessage || 'Error'}
         </div>
       )}
@@ -612,7 +740,7 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
           }}
         >
           {data.runtime.label}
-          {data.runtime.detail ? <span style={{ color: C.t2, fontWeight: 400 }}> — {data.runtime.detail}</span> : null}
+          {data.runtime.detail ? <span style={{ color: token.content.secondary, fontWeight: 400 }}> — {data.runtime.detail}</span> : null}
         </div>
       )}
       {data.deployedLock && (
@@ -622,7 +750,7 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
           aria-label={`Block ${id} is locked: this version is deployed and cannot be edited`}
           title={data.deployedLockReason || undefined}
           className="text-micro"
-          style={{ marginTop: '2px', color: C.gold, fontWeight: 700 }}
+          style={{ marginTop: '2px', color: token.status.warning.fg, fontWeight: 700 }}
         >
           <span aria-hidden="true">🔒 </span>
           Locked (deployed)
@@ -642,7 +770,7 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
           style={{
             top: handleOffset(index, outputs.length),
             background: color,
-            border: `1px solid ${C.bg1}`,
+            border: `1px solid ${token.surface.panel}`,
             width: '0.625rem',
             height: '0.625rem',
           }}
@@ -1285,10 +1413,10 @@ function StrategyBuilderCanvas({
         if ((data.validationSignature || '') === signature) return edge;
         changed = true;
         const stroke = marker === null
-          ? C.cyan
+          ? token.line.strong
           : marker.severity === SEVERITY_ERROR
-            ? C.red
-            : C.gold;
+            ? token.status.error.fg
+            : token.status.warning.fg;
         return {
           ...edge,
           animated: marker === null,
@@ -1424,7 +1552,7 @@ function StrategyBuilderCanvas({
       target: params.target,
       targetHandle: params.targetHandle ?? null,
       animated: true,
-      style: { stroke: C.cyan, strokeWidth: 2 },
+      style: { stroke: token.line.strong, strokeWidth: 2 },
     };
     if (edges.some((existing) => existing.id === edge.id)) return;
     const next = [...edges, edge];
@@ -2148,6 +2276,44 @@ function StrategyBuilderCanvas({
     if (target) focusNode(target.source);
   }, [edges, focusNode]);
 
+  /**
+   * The lanes the header strip draws (§9.1).
+   *
+   * The five declared stages always, plus the neutral sixth band only once the canvas holds a
+   * node that resolved there. The node is drawn either way — the lane is the label, not the
+   * permission.
+   */
+  const laneBands = useMemo(
+    () => (
+      nodes.some((node) => stageBandFor(node.data ? node.data.category : null).id === 'UNRESOLVED')
+        ? STAGE_BANDS
+        : DECLARED_STAGE_BANDS
+    ),
+    [nodes],
+  );
+
+  /**
+   * The edges as drawn (§9.1): `line.strong` at rest, `brand` when the edge's source or its
+   * target is the selected node.
+   *
+   * Derived for rendering, never written back. `edges` state is what `toCanonical` serializes
+   * and what the undo stack holds, so a selection must not reach it — the same reason selection
+   * does not touch the `nodes` array. An edge the backend has reported on keeps its marker
+   * stroke: that is the other place colour is spent on this canvas (Requirement 8.10).
+   */
+  const renderedEdges = useMemo(
+    () => edges.map((edge) => {
+      if (edge.data && edge.data.validation) return edge;
+      const touchesSelection = selectedNodeId !== null
+        && (edge.source === selectedNodeId || edge.target === selectedNodeId);
+      const stroke = touchesSelection ? token.brand.base : token.line.strong;
+      const style = edge.style || {};
+      if (style.stroke === stroke && style.strokeWidth === 2) return edge;
+      return { ...edge, style: { ...style, stroke, strokeWidth: 2 } };
+    }),
+    [edges, selectedNodeId],
+  );
+
   // An unset required parameter deliberately does **not** disable the button. A disabled
   // control says "no" without saying why; clicking through produces the structured refusal that
   // names the node and the field, which is the whole point of the SB-06 fix.
@@ -2538,50 +2704,58 @@ function StrategyBuilderCanvas({
           </div>
         )}
 
-        {/* Canvas */}
-        <div
-          style={{ flex: 1, position: 'relative' }}
-          ref={reactFlowWrapper}
-          data-testid="canvas"
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-        >
-          <DragLegalityContext.Provider value={dragLegality}>
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
-              onConnectStart={onConnectStart}
-              onConnectEnd={onConnectEnd}
-              isValidConnection={isValidConnection}
-              onNodeClick={onNodeClick}
-              nodeTypes={nodeTypes}
-              fitView
-              deleteKeyCode={null}
-              /*
-                `design.md` → Visual states, the Deployed row: "lock affordance, read-only
-                canvas". Selection and panning stay on — reading a locked version is exactly
-                what an author does with one, and the inspector, the previews and the issue
-                panel all still work. What stops is editing.
-              */
-              nodesDraggable={!deployedLock.locked}
-              nodesConnectable={!deployedLock.locked}
-              edgesFocusable={!deployedLock.locked}
-            >
-              <Background color={C.bg3} gap={16} />
-              <Controls />
-              {nodes.length > 15 && <MiniMap nodeColor={C.cyan} nodeStrokeWidth={3} zoomable pannable />}
-            </ReactFlow>
-          </DragLegalityContext.Provider>
+        {/*
+          Canvas column: the persistent stage lane header strip, then the canvas itself. The
+          strip is a sibling above the canvas rather than an overlay on it, so it cannot cover
+          a node and the drop coordinates stay measured from the canvas's own box.
+        */}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <StageLaneStrip bands={laneBands} />
 
-          {nodes.length === 0 && (
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', color: C.t3, fontFamily: 'monospace', textAlign: 'center', padding: '0 24px' }} className="text-small">
-              Drag a block from the palette to start. A strategy needs a DATA block — its symbol
-              and timeframe are the market this strategy trades.
-            </div>
-          )}
+          <div
+            style={{ flex: 1, position: 'relative' }}
+            ref={reactFlowWrapper}
+            data-testid="canvas"
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+          >
+            <DragLegalityContext.Provider value={dragLegality}>
+              <ReactFlow
+                nodes={nodes}
+                edges={renderedEdges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                onConnectStart={onConnectStart}
+                onConnectEnd={onConnectEnd}
+                isValidConnection={isValidConnection}
+                onNodeClick={onNodeClick}
+                nodeTypes={nodeTypes}
+                fitView
+                deleteKeyCode={null}
+                /*
+                  `design.md` → Visual states, the Deployed row: "lock affordance, read-only
+                  canvas". Selection and panning stay on — reading a locked version is exactly
+                  what an author does with one, and the inspector, the previews and the issue
+                  panel all still work. What stops is editing.
+                */
+                nodesDraggable={!deployedLock.locked}
+                nodesConnectable={!deployedLock.locked}
+                edgesFocusable={!deployedLock.locked}
+              >
+                <Background color={token.line.default} gap={16} />
+                <Controls />
+                {nodes.length > 15 && <MiniMap nodeColor={token.brand.base} nodeStrokeWidth={3} zoomable pannable />}
+              </ReactFlow>
+            </DragLegalityContext.Provider>
+
+            {nodes.length === 0 && (
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', color: token.content.muted, fontFamily: token.font.mono, textAlign: 'center', padding: '0 24px' }} className="text-small">
+                Drag a block from the palette to start. A strategy needs a DATA block — its symbol
+                and timeframe are the market this strategy trades.
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Inspector */}

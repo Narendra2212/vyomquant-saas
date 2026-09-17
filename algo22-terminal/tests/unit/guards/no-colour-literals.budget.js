@@ -343,7 +343,13 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // and trade tables shared, which is `ds/DataTable`'s own tokened rule now. The page holds
   // no palette of its own: the two curves take their hue from `ds/Chart`'s series tokens.
   'pages/Backtester.jsx': 0,
-  'pages/StrategyBuilder.jsx': 3,
+  // 3 -> 0 at task 24.1. All three were `PremiumNodeWrapper`'s node shadows: a
+  // `rgba(0,212,255,0.28)` selection glow and two `rgba(0,0,0,…)` drop shadows, each with a
+  // hand-tuned alpha that no other node in the app shared. The node now takes
+  // `token.shadow.raised` and `token.shadow.panel`, and its selection ring is
+  // `token.brand.base` — so a canvas node's elevation is the same decision as every other
+  // raised surface in the app rather than a fourth opinion about black.
+  'pages/StrategyBuilder.jsx': 0,
   'pages/PaperTrading.jsx': 1,
   // Subscription-state elements only (Requirement 13); the rest of the page is
   // out of scope, which is why the number is this large.
