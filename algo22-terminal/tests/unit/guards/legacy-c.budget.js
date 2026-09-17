@@ -134,29 +134,38 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // `statusToken('disconnected')` are both the ERROR hue. That is preserved, not chosen — this is
   // a retoken, and escalating a dropped feed or socket from amber to red is a design decision.
   //
-  // Where the remaining 43 are, measured after part 1 landed, so part 2 is scoped from this list
-  // rather than from the pre-24.4 one. (The list this replaces named its last group
-  // `PremiumNodeWrapper`'s tones; it was `ApiSyncIndicator`'s, and the three port-chip references
-  // it folded into the registry-error group are their own entry below.)
+  // 43 -> 0 at task 24.4's follow-up, PART 2, which finished the page. The 43 were the palette's
+  // search field (7), registry-error panel (7), block rows (5), category headers (4), retry button
+  // (3) and its loading and empty notes (2); the page shell's background with the toolbar's
+  // surface, bottom rule and three dividers (6); the port chips' border, label tone and fill (3);
+  // and the inspector's `Block` heading and category line (2), its "no descriptor" note (1) and
+  // its node-status marker row (3).
   //
-  //    7  the palette's search field — its bottom rule, label, icon, the input's surface, border
-  //       and text, and the result-count line
-  //    7  the palette's registry-error panel
-  //    6  the page shell's background and the toolbar's surface, bottom rule and three dividers
-  //    5  the palette's block rows
-  //    4  the palette's category headers — label, both chevrons, count
-  //    3  the palette's retry button
-  //    3  the port chips (`data-testid="port-chip"`) — border, label tone, fill
-  //    3  the inspector body's node-status marker row (`C.red` / `C.gold` / `C.t3` in one
-  //       expression — the last severity lookup on the page, and the one place part 2 still
-  //       wants `statusToken`)
-  //    2  the palette's loading and empty notes
-  //    2  the inspector's `Block` heading and its category line
-  //    1  the inspector's "no descriptor for this block" note
+  // Forty of the 43 were non-state and are `token.content.primary` / `secondary` / `muted`,
+  // `token.line.default` / `strong` and `token.surface.panel` / `raised` / `inset` read directly,
+  // exactly as 24.4a/b and part 1 did. As in part 1, `C.t3` and `C.t4` collapse onto
+  // `token.content.muted` rather than a fourth grey being invented to keep two shim names apart.
   //
-  // Part 2 takes the page to 0. None of the eight bands is in that set, and neither is anything
-  // §9.3 owns.
-  'pages/StrategyBuilder.jsx': 43,
+  // The other three — the node-status marker row's `C.red` / `C.gold` / `C.t3` in one expression —
+  // were the last severity lookup on the page, and they go through
+  // `statusToken(surfaceTreatment(severity).tokenState).fg`, the mechanism part 1 established, so
+  // the inspector's word for a node's verdict and the marker the canvas draws for it are one
+  // decision. `surfaceTreatment`'s fallback surface is `warning`, which reproduces the old
+  // `: C.gold` arm exactly; no validation at all stays `content.muted`.
+  //
+  // TWO VALUES HAVE NO TOKEN AND ARE RECORDED RATHER THAN REPLACED. The registry-error panel's
+  // wash is `${fg}12` — an 8-digit-hex 7% error tint — and `token.status.error.wash` is 12%, so
+  // switching to it would visibly strengthen the panel. It keeps the composition it had, with
+  // `statusToken('error').fg` as the source instead of `C.red`. Likewise `C.borderLight` on the
+  // retry button is `token.line.strong`, not `line.default`: it is a deliberately brighter rule on
+  // the one interactive control in that panel, and flattening it would be a design change.
+  //
+  // The `C` IMPORT IS GONE from this page. With zero references there is nothing left to import,
+  // and a lingering import is how a reference gets reintroduced by copying a neighbouring line —
+  // the reason `pages/SignalTrace.jsx: 0` and `pages/Backtester.jsx: 0` record the same thing. The
+  // entry stays at `0` and holds the page clean until task 27.2 deletes the shim; `Inp`, `Tag2`
+  // and `PanelTitle` are still imported from `primitives`, and those are components, not colours.
+  'pages/StrategyBuilder.jsx': 0,
   // M8. 92 -> 0 at task 21.4a. The 92 were the shim's text, surface and border values
   // spread across the filter grid's eight inline-styled inputs, the eleven-column row
   // template, the two detail cards and the timeline's rail — all of which the rebuild

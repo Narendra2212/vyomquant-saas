@@ -45,9 +45,11 @@
  * descriptor onto every node it creates. Re-pointing the save path without the palette change
  * would raise on every save.
  *
- * Presentation note: this page uses inline styles off the `C` token object from
- * `components/ui-legacy/primitives`, unlike the Tailwind-classed `components/ui/`. The
- * inspector's `ParameterForm` is Tailwind-classed; that boundary is deliberate and left as is.
+ * Presentation note: this page still styles inline rather than with Tailwind classes, but every
+ * value it names now comes from `design/tokens.js` or, for anything that depends on a state,
+ * from `design/semantic.js`. The legacy `C` shim is no longer imported here at all (task 24.4),
+ * so a colour cannot re-enter by copying a neighbouring line. The inspector's `ParameterForm`
+ * is Tailwind-classed; that boundary is deliberate and left as is.
  */
 
 import React, {
@@ -77,7 +79,7 @@ import {
   AlertTriangle, ArrowLeft, BarChart2, ChevronDown, ChevronRight, Lock, Maximize,
   PanelLeft, PanelRight, Play, RefreshCw, Redo, Save, Search, Trash2, Undo, ZoomIn, ZoomOut,
 } from 'lucide-react';
-import { C, Inp, Tag2, PanelTitle } from '../components/ui-legacy/primitives';
+import { Inp, Tag2, PanelTitle } from '../components/ui-legacy/primitives';
 import { Button } from '../components/ui/Button';
 import { CommandButton } from '../components/ds/CommandButton';
 /*
@@ -1009,12 +1011,12 @@ const PortChips = ({ ports, direction }) => {
           data-port-type={port.type}
           title={`${direction === 'in' ? 'Input' : 'Output'} port "${port.port}": ${port.type}${port.required ? ', required' : ''}${port.variadic ? ', accepts several connections' : ''}`}
           style={{
-            border: `1px solid ${C.border}`,
+            border: `1px solid ${token.line.default}`,
             borderRadius: '0.25rem',
             padding: '1px 4px',
-            color: C.t2,
+            color: token.content.secondary,
             fontFamily: 'monospace',
-            background: C.bg2,
+            background: token.surface.raised,
           }}
         >
           {label} {port.type}
@@ -1030,62 +1032,73 @@ const PortChips = ({ ports, direction }) => {
  * An explicit panel, a real focusable `<button>` for the retry, and zero block entries. The
  * retry is a genuine refetch: `registryClient` drops its cached payload on any error, so it
  * cannot serve a registry the backend has since disowned.
+ *
+ * The hue is asked of `statusToken('error')` rather than named here — the registry being
+ * unreachable is a state, and this is the same entry §9.3's error surface reads, so the panel
+ * cannot drift away from the bands above it.
+ *
+ * The wash stays `${fg}12` — an 8-digit-hex 7% tint — and is deliberately NOT
+ * `token.status.error.wash`. There is no token for a 7% error wash: `status.error.wash` is 12%,
+ * so swapping it in would visibly strengthen this panel, and this is a retoken.
  */
-const PaletteErrorPanel = ({ error, onRetry, retrying }) => (
-  <div
-    role="alert"
-    data-testid="palette-error"
-    data-error-code={error ? error.code : undefined}
-    style={{ border: `1px solid ${C.red}`, background: `${C.red}12`, borderRadius: '0.375rem', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}
-  >
-    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: C.red }}>
-      <AlertTriangle size={14} />
-      <span className="text-micro" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
-        Block palette unavailable
-      </span>
-    </div>
-    <p className="text-micro" style={{ color: C.t2, margin: 0 }}>
-      {error ? error.message : 'The block registry could not be loaded.'}
-    </p>
-    <p className="text-micro" style={{ color: C.t3, margin: 0, fontFamily: 'monospace' }}>
-      {error ? error.code : 'REGISTRY_UNAVAILABLE'}
-      {error && error.status ? ` · HTTP ${error.status}` : ''}
-    </p>
-    {error && error.authExpired ? (
-      <p className="text-micro" style={{ color: C.t2, margin: 0 }}>
-        This session is no longer signed in. Signing in again is the fix; the registry itself may
-        be healthy.
-      </p>
-    ) : null}
-    <p className="text-micro" style={{ color: C.t3, margin: 0 }}>
-      No blocks are shown while the registry is unreachable. The palette never substitutes a
-      local list, because a stale catalogue is how a block the engine cannot run reaches a
-      strategy.
-    </p>
-    <button
-      type="button"
-      onClick={onRetry}
-      disabled={retrying}
-      data-testid="palette-retry"
-      style={{
-        alignSelf: 'flex-start',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '6px',
-        background: C.bg3,
-        border: `1px solid ${C.borderLight}`,
-        borderRadius: '0.375rem',
-        padding: '6px 10px',
-        color: C.t1,
-        fontFamily: 'monospace',
-        cursor: retrying ? 'wait' : 'pointer',
-      }}
+const PaletteErrorPanel = ({ error, onRetry, retrying }) => {
+  const { fg } = statusToken('error');
+  return (
+    <div
+      role="alert"
+      data-testid="palette-error"
+      data-error-code={error ? error.code : undefined}
+      style={{ border: `1px solid ${fg}`, background: `${fg}12`, borderRadius: '0.375rem', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}
     >
-      <RefreshCw size={12} />
-      {retrying ? 'Retrying…' : 'Retry'}
-    </button>
-  </div>
-);
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: fg }}>
+        <AlertTriangle size={14} />
+        <span className="text-micro" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
+          Block palette unavailable
+        </span>
+      </div>
+      <p className="text-micro" style={{ color: token.content.secondary, margin: 0 }}>
+        {error ? error.message : 'The block registry could not be loaded.'}
+      </p>
+      <p className="text-micro" style={{ color: token.content.muted, margin: 0, fontFamily: 'monospace' }}>
+        {error ? error.code : 'REGISTRY_UNAVAILABLE'}
+        {error && error.status ? ` · HTTP ${error.status}` : ''}
+      </p>
+      {error && error.authExpired ? (
+        <p className="text-micro" style={{ color: token.content.secondary, margin: 0 }}>
+          This session is no longer signed in. Signing in again is the fix; the registry itself may
+          be healthy.
+        </p>
+      ) : null}
+      <p className="text-micro" style={{ color: token.content.muted, margin: 0 }}>
+        No blocks are shown while the registry is unreachable. The palette never substitutes a
+        local list, because a stale catalogue is how a block the engine cannot run reaches a
+        strategy.
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        disabled={retrying}
+        data-testid="palette-retry"
+        style={{
+          alignSelf: 'flex-start',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          background: token.surface.inset,
+          border: `1px solid ${token.line.strong}`,
+          borderRadius: '0.375rem',
+          padding: '6px 10px',
+          color: token.content.primary,
+          fontFamily: 'monospace',
+          cursor: retrying ? 'wait' : 'pointer',
+        }}
+      >
+        <RefreshCw size={12} />
+        {retrying ? 'Retrying…' : 'Retry'}
+      </button>
+    </div>
+  );
+};
 
 /** The empty marker set. Built once, so "no report" has a stable identity. */
 const NO_MARKERS = collectMarkers(null);
@@ -2926,9 +2939,9 @@ function StrategyBuilderCanvas({
     deployedLock.locked;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: C.bg1 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: token.surface.panel }}>
       {/* Toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: C.bg2, borderBottom: `1px solid ${C.border}`, gap: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: token.surface.raised, borderBottom: `1px solid ${token.line.default}`, gap: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Button variant="ghost" size="sm" Icon={ArrowLeft} onClick={onBack}>Back</Button>
           <Inp
@@ -2943,14 +2956,14 @@ function StrategyBuilderCanvas({
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Button variant="ghost" size="sm" Icon={Undo} onClick={handleUndo} disabled={!canUndo} title="Undo (Ctrl+Z)" />
           <Button variant="ghost" size="sm" Icon={Redo} onClick={handleRedo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" />
-          <div style={{ width: 1, height: 24, background: C.border }} />
+          <div style={{ width: 1, height: 24, background: token.line.default }} />
           <Button variant="ghost" size="sm" Icon={ZoomOut} onClick={() => zoomOut()} title="Zoom Out" />
           <Button variant="ghost" size="sm" Icon={ZoomIn} onClick={() => zoomIn()} title="Zoom In" />
           <Button variant="ghost" size="sm" Icon={Maximize} onClick={handleFitView} title="Fit View" />
-          <div style={{ width: 1, height: 24, background: C.border }} />
+          <div style={{ width: 1, height: 24, background: token.line.default }} />
           <Button variant="ghost" size="sm" Icon={PanelLeft} onClick={() => setLibraryOpen(!libraryOpen)} title="Toggle Library" />
           <Button variant="ghost" size="sm" Icon={PanelRight} onClick={() => setInspectorOpen(!inspectorOpen)} title="Toggle Inspector" />
-          <div style={{ width: 1, height: 24, background: C.border }} />
+          <div style={{ width: 1, height: 24, background: token.line.default }} />
           <Button variant="outline" size="sm" Icon={Save} onClick={handleSaveStrategy} disabled={saveDisabled}>
             {isSavingStrategy ? 'Saving...' : 'Save'}
           </Button>
@@ -3231,16 +3244,16 @@ function StrategyBuilderCanvas({
             overflow: 'hidden',
           }}
         >
-            <div style={{ padding: '12px', borderBottom: `1px solid ${C.border}` }}>
+            <div style={{ padding: '12px', borderBottom: `1px solid ${token.line.default}` }}>
               <label
                 htmlFor="palette-search"
                 className="text-micro"
-                style={{ color: C.t3, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', display: 'block', marginBottom: '6px' }}
+                style={{ color: token.content.muted, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', display: 'block', marginBottom: '6px' }}
               >
                 Search blocks
               </label>
               <div style={{ position: 'relative' }}>
-                <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.t3 }} />
+                <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: token.content.muted }} />
                 <input
                   id="palette-search"
                   type="search"
@@ -3251,11 +3264,11 @@ function StrategyBuilderCanvas({
                   className="text-small"
                   style={{
                     width: '100%',
-                    background: C.bg3,
-                    border: `1px solid ${C.border}`,
+                    background: token.surface.inset,
+                    border: `1px solid ${token.line.default}`,
                     borderRadius: '0.375rem',
                     padding: '8px 12px 8px 32px',
-                    color: C.t1,
+                    color: token.content.primary,
                     outline: 'none',
                   }}
                 />
@@ -3264,7 +3277,7 @@ function StrategyBuilderCanvas({
                 id="palette-search-result-count"
                 role="status"
                 className="text-micro"
-                style={{ color: C.t3, margin: '6px 0 0', fontFamily: 'monospace' }}
+                style={{ color: token.content.muted, margin: '6px 0 0', fontFamily: 'monospace' }}
               >
                 {registry.isReady
                   ? `${totalMatches} block${totalMatches === 1 ? '' : 's'} · registry ${registry.registryVersion}`
@@ -3278,9 +3291,9 @@ function StrategyBuilderCanvas({
               {registry.isError ? (
                 <PaletteErrorPanel error={registry.error} onRetry={handleRetryRegistry} retrying={retryingRegistry} />
               ) : registry.isLoading && !registry.isReady ? (
-                <p className="text-micro" style={{ color: C.t3, fontFamily: 'monospace' }}>Loading blocks…</p>
+                <p className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>Loading blocks…</p>
               ) : visibleSections.length === 0 ? (
-                <p className="text-micro" style={{ color: C.t3, fontFamily: 'monospace' }} data-testid="palette-empty">
+                <p className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }} data-testid="palette-empty">
                   {searchQuery.trim() === '' ? 'No blocks available.' : `Nothing matches “${searchQuery}”.`}
                 </p>
               ) : (
@@ -3304,16 +3317,16 @@ function StrategyBuilderCanvas({
                           background: 'transparent',
                           border: 'none',
                           cursor: 'pointer',
-                          color: C.t2,
+                          color: token.content.secondary,
                           textAlign: 'left',
                         }}
                       >
-                        {isCollapsed ? <ChevronRight size={14} aria-hidden="true" style={{ color: C.t3 }} /> : <ChevronDown size={14} aria-hidden="true" style={{ color: C.t3 }} />}
+                        {isCollapsed ? <ChevronRight size={14} aria-hidden="true" style={{ color: token.content.muted }} /> : <ChevronDown size={14} aria-hidden="true" style={{ color: token.content.muted }} />}
                         <CategoryIcon size={14} aria-hidden="true" style={{ color: getCategoryColor(section.id) }} />
                         <span className="text-micro" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
                           {section.display_name}
                         </span>
-                        <span className="text-micro" style={{ marginLeft: 'auto', color: C.t3 }} data-testid="palette-category-count">
+                        <span className="text-micro" style={{ marginLeft: 'auto', color: token.content.muted }} data-testid="palette-category-count">
                           {section.matches.length}
                         </span>
                       </button>
@@ -3332,21 +3345,21 @@ function StrategyBuilderCanvas({
                                 e.dataTransfer.effectAllowed = 'move';
                               }}
                               style={{
-                                background: C.bg3,
-                                border: `1px solid ${C.border}`,
+                                background: token.surface.inset,
+                                border: `1px solid ${token.line.default}`,
                                 borderRadius: '0.375rem',
                                 padding: '8px 10px',
                                 cursor: 'grab',
                               }}
                             >
-                              <div className="text-small" style={{ fontWeight: 600, color: C.t1 }}>
+                              <div className="text-small" style={{ fontWeight: 600, color: token.content.primary }}>
                                 {block.display_name || block.block_id}
                               </div>
-                              <div className="text-micro" style={{ color: C.t3, fontFamily: 'monospace' }}>
+                              <div className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>
                                 {block.block_id}
                               </div>
                               {block.description ? (
-                                <div className="text-micro" style={{ color: C.t3 }}>{block.description}</div>
+                                <div className="text-micro" style={{ color: token.content.muted }}>{block.description}</div>
                               ) : null}
                               <PortChips ports={block.inputs} direction="in" />
                               <PortChips ports={block.outputs} direction="out" />
@@ -3472,24 +3485,39 @@ function StrategyBuilderCanvas({
               <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   <div>
-                    <div className="text-micro" style={{ color: C.t3, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', marginBottom: '8px' }}>
+                    <div className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', marginBottom: '8px' }}>
                       Block
                     </div>
                     <Tag2>{selectedNode.data.block_id}</Tag2>
-                    <div className="text-micro" style={{ color: C.t3, marginTop: '4px' }}>
+                    <div className="text-micro" style={{ color: token.content.muted, marginTop: '4px' }}>
                       {selectedNode.data.category}
                     </div>
                     <PortChips ports={selectedNode.data.inputs} direction="in" />
                     <PortChips ports={selectedNode.data.outputs} direction="out" />
 
-                    {/* Node status: the same marker the canvas draws, in words. */}
+                    {/*
+                      Node status: the same marker the canvas draws, in words — and now the same
+                      hue, because the severity goes through `surfaceTreatment` rather than
+                      through a ternary of its own. This is the last severity lookup on the page.
+
+                      `surfaceTreatment`'s fallback surface is `warning`, which is exactly the
+                      `: C.gold` arm this replaces: a severity word the build does not recognise
+                      keeps the amber it has today instead of gaining a hue. No validation at all
+                      is `content.muted`, unchanged — "nothing has been said about this block" is
+                      not a verdict.
+                    */}
                     <p
                       className="text-micro"
                       data-testid="inspector-node-status"
                       data-node-id={selectedNode.id}
                       data-severity={selectedNode.data.validation ? selectedNode.data.validation.severity : undefined}
                       data-issue-count={selectedNode.data.validation ? selectedNode.data.validation.count : 0}
-                      style={{ color: selectedNode.data.validation ? (selectedNode.data.validation.severity === SEVERITY_ERROR ? C.red : C.gold) : C.t3, margin: '6px 0 0' }}
+                      style={{
+                        color: selectedNode.data.validation
+                          ? statusToken(surfaceTreatment(selectedNode.data.validation.severity).tokenState).fg
+                          : token.content.muted,
+                        margin: '6px 0 0',
+                      }}
                     >
                       {selectedNode.data.validation
                         ? markerLabel(selectedNode.data.validation)
@@ -3516,7 +3544,7 @@ function StrategyBuilderCanvas({
                       onBlockingChange={handleInspectorBlocking}
                     />
                   ) : (
-                    <p className="text-micro" style={{ color: C.t3, fontFamily: 'monospace' }}>
+                    <p className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>
                       The registry publishes no descriptor for “{selectedNode.data.block_id}”, so its
                       parameters cannot be shown.
                     </p>
