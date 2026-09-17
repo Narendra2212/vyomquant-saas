@@ -99,68 +99,101 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // character. Reconciling the rest needs either a relabelled badge (which rewrites §8.2 for
   // every other consumer) or an edited test; neither is part 1's to take.
   //
-  // WHERE THE REMAINING 188 ARE. Measured with this guard's own `findLegacyC`, grouped by region,
-  // line ranges as of this commit. Nothing below is estimated and the parts sum to 188.
+  // 188 -> 137 at task 25.1, PART 2, which took the 51 that sat ABOVE the component body: the
+  // eleven shared module-level `style` objects (22) and the seven shared presentation components
+  // (29). Nothing was restructured. Every reference was swapped for the token it already
+  // resolved to, the markup and the reads are untouched, `PanelBody` still renders §11.1's eight
+  // states and `PanelNotice` still its notice chrome, and `pages/__tests__/PaperTrading.test.jsx`
+  // passes byte-unchanged at 49/49. `SimulatedTag` and `TableFrame` were already at 0 and stayed.
   //
-  //   22  module-level style objects, 318-433 — `TONE_COLOR` 4 (319-322), `PAGE_PADDING` 1 (333),
-  //       `panelStyle` 4 (336-339), `labelStyle` 1 (344), `fieldStyle` 4 (356-362), `thStyle` 1
-  //       (367), `tdStyle` 1 (378), `tableCaptionStyle` 1 (388), `stackedRowStyle` 3 (405-407),
-  //       `stackedLabelStyle` 1 (413), `stackedValueStyle` 1 (423). Eleven frozen `style` objects
-  //       shared by the whole page; the cheapest region to take and the one that unblocks the
-  //       tables and the form at once.
-  //   29  the small presentation components, 434-966 — `StatusPill` 3 (506-508), `StaleNote` 1
-  //       (532), `Figure` 5 (574-619), `PanelNotice` 5 (644-668), `PanelBody` 6 (714-737),
-  //       `DataTable` 3 (883-909), `ChartTooltip` 6 (939-954). `SimulatedTag` (462-493) and
-  //       `TableFrame` (848-877) are now at 0. `PanelBody` is §11.1's eight states and
-  //       `PanelNotice` its notice chrome — both are `ds/Panel`'s job, and neither may lose a
-  //       state in the move.
-  //   11  the five tables' column definitions, 1886-2044 — `positionColumns` 3 (1907-1913),
-  //       `orderColumns` 1 (1938), `tradeColumns` 3 (1964-1972), `signalColumns` 1 (1984),
-  //       `executionColumns` 3 (2010-2038). Per-cell profit/loss tones inside `render`
+  // FORTY-SIX OF THE 51 ARE NON-STATE and read `token.*` directly, exactly as 24.4a/b and 24.4's
+  // two follow-up parts did: `content.primary` / `secondary` / `muted`, `line.default` /
+  // `strong`, `surface.panel` / `raised` / `inset`, `brand.base`, `shadow.raised`, `radius.sm` /
+  // `md` / `lg` and `space['2']` / `['4']` / `['5']`. `C.t3` and `C.t4` do not need collapsing
+  // here the way they did on the builder — this page never read `C.t4`, so its two greys were
+  // always `content.secondary` and `content.muted`.
+  //
+  // THE OTHER FIVE ARE STATE → HUE and go through `statusToken`. Four were `TONE_COLOR`, a map
+  // of this page's four tone words onto `C.profit` / `C.warning` / `C.loss` / `C.t2`; it is now
+  // `TONE_STATUS`, a frozen tone -> `statusToken` group map read through one `toneColour` helper,
+  // which is the shape 24.4 part 1 established for its five status-cell maps. `muted` maps to
+  // `idle` rather than to a grey of its own because `token.status.neutral.fg` and
+  // `token.content.secondary` are the same value (`#8B95A5`), so no fourth grey was invented.
+  // An unnamed tone gives `null`, which preserves each call site's existing fallback.
+  //
+  // ONE HUE IS DELIBERATELY *NOT* THE ONE `statusToken` WOULD PICK, and it is recorded on the
+  // component: `StaleNote` is the WARNING hue, where §4.1 puts `stale` in the ERROR group. That
+  // is preserved, not chosen — a figure whose price stopped refreshing is a condition of the
+  // data, the note says so in words and prints the last validated instant, and escalating it to
+  // the red this page uses for a failed read is a design decision. `FEED_TONE` on the builder
+  // records the same divergence for the same reason.
+  //
+  // ONE VALUE HAS NO TOKEN IN THE UNIT IT IS NEEDED IN. `PAGE_PADDING` is the only token on this
+  // page read ARITHMETICALLY — `clientWidth - 2 * PAGE_PADDING` seeds the layout measurement —
+  // and `token.space['5']` is `'1.25rem'`, which that expression would turn into `NaN`. It is
+  // `Math.round(parseFloat(token.space['5']) * 16)`, the same projection `primitives.jsx`'s
+  // `legacyPx` makes for the whole `C.space` scale (and names this very expression as its
+  // reason); the 16 is the browser default root font size, which `tokens.css` does not declare
+  // and which is therefore not a token. The value is unchanged — `C.space.xl` was this same 20.
+  // Alongside it, `ChartTooltip` keeps `line.strong` rather than the panels' `line.default`: a
+  // tooltip floats over the series it describes, and that is the brighter-rule case 24.4 part 2
+  // recorded for the palette's retry button.
+  //
+  // WHERE THE REMAINING 137 ARE. Measured with this guard's own `findLegacyC`, grouped by region,
+  // line ranges as of this commit. Nothing below is estimated and the parts sum to 137. Part 2
+  // added 55 lines of comment and token reads above the first survivor and removed none, so
+  // every range below is the one part 1 recorded, shifted by exactly +55.
+  //
+  //   11  the five tables' column definitions, 1941-2099 — `positionColumns` 3 (1962-1968),
+  //       `orderColumns` 1 (1993), `tradeColumns` 3 (2019-2027), `signalColumns` 1 (2039),
+  //       `executionColumns` 3 (2065-2093). Per-cell profit/loss tones inside `render`
   //       functions, so these are `PnLDisplay`'s and `statusToken`'s, not a wrapper's.
-  //    2  the page shell, 2224-2225 — `background: C.bg0`, `color: C.t1` on the root `<div>`.
-  //    7  the header, 2239-2305 — the row's two spacings (2240), the `<h1>` colour (2243), the
-  //       subtitle (2247) and the reconnecting indicator's 3 (2272-2274). The environment
-  //       statement at 2306-2327 is the badge and holds none.
-  //   16  session controls, 2328-2581 — the card 2 (2329), the field grid's spacings 2
-  //       (2345-2346), a help note 1 (2369), the capital field's error border and help text 4
-  //       (2441-2444) and the two operation `borderTop` dividers with a note 7 (2473-2542).
-  //   17  the stop / reset report, 2582-2669 — the stop card 3 (2584, one arm of which is a
-  //       conditional `complete` border), its definition list 1 (2601) and six `C.t1` value
-  //       tones (2605-2628); the reset card 2 (2639), its list 1 (2648) and four more (2652-2664).
-  //   10  the status strip, 2670-2796 — the grid's spacing 2 (2677-2678) and the four cells'
-  //       label and value tones 8 (2698-2773).
-  //   14  the live event stream, 2797-2916 — the card and its refused-channel border 3 (2798), a
-  //       refusal notice chip 3 (2833-2835), the empty note 1 (2860), and the retention footer's
-  //       rule, spacings and three inline counts 7 (2891-2908).
-  //    3  the "not computed" note, 2917-2940 — `${C.warning}55` border, a spacing and the text.
-  //    2  the figures grid, 2941-3062 — the grid's `gap` and `marginBottom` only. The twelve
-  //       `Figure`s inside it hold none of their own; their colour comes from the component
-  //       above, which is why that 5 is worth more than this 2.
-  //   10  the equity curve, 3063-3130 — the card 2 (3064), the fill gradient's two stops 2
-  //       (3080-3081), the grid and two axes 3 (3084-3086), the starting-capital `ReferenceLine`
-  //       and the `Area` stroke 2 (3107, 3111) and the below-chart note 1 (3115).
-  //   19  PnL and drawdown, 3131-3217 — the two-track grid 2 (3135); the PnL card 2 (3140), its
-  //       grid and axes 3 (3150-3152), its three `Line` strokes 3 (3166-3168) and its note 1
-  //       (3171); the drawdown card 2 (3179), its two gradient stops 2 (3191-3192), its grid and
-  //       axes 3 (3195-3197) and its `Area` stroke 1 (3211). The near-duplication is the point:
+  //    2  the page shell, 2279-2280 — `background: C.bg0`, `color: C.t1` on the root `<div>`.
+  //    7  the header, 2294-2360 — the row's two spacings (2295), the `<h1>` colour (2298), the
+  //       subtitle (2302) and the reconnecting indicator's 3 (2327-2329). The environment
+  //       statement at 2361-2382 is the badge and holds none.
+  //   16  session controls, 2383-2636 — the card 2 (2384), the field grid's spacings 2
+  //       (2400-2401), a help note 1 (2424), the capital field's error border and help text 4
+  //       (2496-2499) and the two operation `borderTop` dividers with a note 7 (2528-2597).
+  //   17  the stop / reset report, 2637-2724 — the stop card 3 (2639, one arm of which is a
+  //       conditional `complete` border), its definition list 1 (2656) and six `C.t1` value
+  //       tones (2660-2683); the reset card 2 (2694), its list 1 (2703) and four more (2707-2719).
+  //   10  the status strip, 2725-2851 — the grid's spacing 2 (2732-2733) and the four cells'
+  //       label and value tones 8 (2753-2828).
+  //   14  the live event stream, 2852-2971 — the card and its refused-channel border 3 (2853), a
+  //       refusal notice chip 3 (2888-2890), the empty note 1 (2915), and the retention footer's
+  //       rule, spacings and three inline counts 7 (2946-2963).
+  //    3  the "not computed" note, 2972-2995 — `${C.warning}55` border, a spacing and the text.
+  //    2  the figures grid, 2996-3117 — the grid's `gap` and `marginBottom` only. The twelve
+  //       `Figure`s inside it hold none of their own, and now neither does `Figure` itself —
+  //       their colour comes from the component part 2 cleared, which is why that 5 was worth
+  //       more than this 2.
+  //   10  the equity curve, 3118-3185 — the card 2 (3119), the fill gradient's two stops 2
+  //       (3135-3136), the grid and two axes 3 (3139-3141), the starting-capital `ReferenceLine`
+  //       and the `Area` stroke 2 (3162, 3166) and the below-chart note 1 (3170).
+  //   19  PnL and drawdown, 3186-3272 — the two-track grid 2 (3190); the PnL card 2 (3195), its
+  //       grid and axes 3 (3205-3207), its three `Line` strokes 3 (3221-3223) and its note 1
+  //       (3226); the drawdown card 2 (3234), its two gradient stops 2 (3246-3247), its grid and
+  //       axes 3 (3250-3252) and its `Area` stroke 1 (3266). The near-duplication is the point:
   //       one `ds/Chart` call site takes both.
-  //   11  the price series and trade markers, 3218-3269 — the card 2 (3219), the grid and axes 3
-  //       (3233-3235), the close line and two fill markers 3 (3250-3252) and the legend row with
-  //       its two arrows 3 (3255-3260).
-  //    3  open positions, 3270-3296 — the card 2 (3271) and the below-table note 1 (3290).
-  //    3  open orders, 3297-3322 — the card 2 (3298) and the below-table note 1 (3317).
-  //    2  completed trades, 3323-3345 — the card only (3324).
-  //    7  signal stream and execution events, 3346-end — the two-track grid 1 (3350), the two
-  //       cards 4 (3352, 3378), the signal note 1 (3371) and the `role="alert"` error line 1
-  //       (3398).
+  //   11  the price series and trade markers, 3273-3324 — the card 2 (3274), the grid and axes 3
+  //       (3288-3290), the close line and two fill markers 3 (3305-3307) and the legend row with
+  //       its two arrows 3 (3310-3315).
+  //    3  open positions, 3325-3351 — the card 2 (3326) and the below-table note 1 (3345).
+  //    3  open orders, 3352-3377 — the card 2 (3353) and the below-table note 1 (3372).
+  //    2  completed trades, 3378-3400 — the card only (3379).
+  //    7  signal stream and execution events, 3401-end — the two-track grid 1 (3405), the two
+  //       cards 4 (3407, 3433), the signal note 1 (3426) and the `role="alert"` error line 1
+  //       (3453).
   //
-  // The largest single win left is the 22 + 29 above the component body: 51 of the 188 sit in
-  // eleven shared `style` objects and seven shared components, and every card, table and figure
-  // region below reads from them. The eleven `Card` + `PanelTitle` call sites are the next 40-odd
-  // between them, and they are all the same two lines — `background: C.bg2, borderColor: C.border`
-  // — which is one `ds/Panel` swap repeated, not eleven decisions.
-  'pages/PaperTrading.jsx': 188,
+  // The largest single win left is now the eleven `Card` call sites — 3119, 3195, 3234, 3274,
+  // 3326, 3353, 3379, 3407, 3433, 2384, 2694 — plus the two conditional ones at 2639 and 2853.
+  // Twenty-eight of the 137 are those, and they are all the same two lines,
+  // `background: C.bg2, borderColor: C.border`, which is one `ds/Panel` swap repeated rather
+  // than thirteen decisions. The four charts hold the next 32 once their cards are counted above,
+  // and they are one `ds/Chart` question — grid, axes, series strokes and gradient stops, four
+  // times over.
+  'pages/PaperTrading.jsx': 137,
   // 148 -> 120 at task 24.1, which applied §9.1's five-stage visual grammar to the canvas.
   // The 28 that went are the canvas's own: `PremiumNodeWrapper`'s body, border, text and
   // two shadow colours, the node's stage strip, block id, marker, runtime and lock tones,

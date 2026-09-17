@@ -179,7 +179,11 @@ import { Button } from '../components/ui/Button';
 // per-figure tag below now takes its hue, wash and border style from — so the indigo
 // treatment lives in `design/semantic.js` and not in two places on this page.
 import { TradingEnvironmentBadge } from '../components/ds/TradingEnvironmentBadge';
-import { ENVIRONMENT } from '../design/semantic';
+// Task 25.1 part 2. `statusToken` is the ONE state → colour mapping (§4.1, Requirement 1.4):
+// the four tone words below name a group in it rather than a hue. `token` is read directly for
+// everything that is NOT a state — surfaces, rules, the three content greys, radii and spacing.
+import { ENVIRONMENT, statusToken } from '../design/semantic';
+import { token } from '../design/tokens';
 import { useAppState } from '../AppState';
 import { api } from '../api';
 import websocketClient from '../websocketClient';
@@ -315,12 +319,40 @@ const initialReads = () =>
 const NOT_COMPUTED = 'Not computed';
 const NOT_REPORTED = 'Not reported';
 
-const TONE_COLOR = {
-  good: C.profit,
-  warn: C.warning,
-  bad: C.loss,
-  muted: C.t2,
-};
+/**
+ * `tone` → the `design/semantic.js` status group whose hue it takes (§4.1, Requirement 1.4).
+ *
+ * The four tone words are this page's own vocabulary: `paperTradingFormat.js`'s
+ * `FEED_STATE_COPY` and `SESSION_STATE_COPY` name them, and every {@link StatusPill},
+ * {@link PanelNotice} and {@link Figure} passes one of them. What they no longer name is a
+ * COLOUR — each entry is a state `statusToken` recognises, so §4.1's table is the only thing
+ * on this page that turns a tone into a hue.
+ *
+ * All four resolve to exactly what they resolved to before this retoken. `profit`, `warning`
+ * and `loss` are the shim's `C.profit`, `C.warning` and `C.loss`; `idle` is its `C.t2`, because
+ * `token.status.neutral.fg` and `token.content.secondary` are one value (`#8B95A5`) — which is
+ * why `muted` can be a status group here without a fourth grey being invented for it. No tone's
+ * hue differs from the one `statusToken` gives its state, so nothing is preserved against the
+ * mapping and nothing is escalated by it.
+ */
+const TONE_STATUS = Object.freeze({
+  good: 'profit',
+  warn: 'warning',
+  bad: 'loss',
+  muted: 'idle',
+});
+
+/**
+ * A tone's hue, or `null` for a tone this page does not name.
+ *
+ * `null` rather than a fallback colour, so each call site keeps the fallback it already had:
+ * `StatusPill` and `PanelNotice` fall through to `token.content.secondary`, and `Figure` — whose
+ * `tone` defaults to `null` — falls through to `token.content.primary`. Same shape as the
+ * builder's `cellTone`: an unnamed tone is visibly absent from the map rather than the tail of
+ * a ternary chain.
+ */
+const toneColour = (tone) =>
+  (Object.prototype.hasOwnProperty.call(TONE_STATUS, tone) ? statusToken(TONE_STATUS[tone]).fg : null);
 
 /**
  * The page root's padding, on every side.
@@ -329,19 +361,30 @@ const TONE_COLOR = {
  * CONTENT box, so a padding that shrank when the layout collapsed would widen the content box,
  * which could push the width back over the threshold and oscillate between two layouts forever.
  * The padding is fixed and the thresholds are compared against the width it leaves.
+ *
+ * WHY THIS ONE IS A PROJECTION AND NOT `token.space['5']` ITSELF
+ * -------------------------------------------------------------
+ * It is the only token value on the page read ARITHMETICALLY — `clientWidth - 2 * PAGE_PADDING`
+ * seeds the width measurement below — and `token.space['5']` is `'1.25rem'`, which that
+ * expression would turn into `NaN`. `tokens.css` declares no `font-size` on `:root`, so the rem
+ * is against the browser default; the 16 below is that default and is NOT a design token. This
+ * is the same projection `ui-legacy/primitives.jsx` makes for the whole `C.space` scale, and the
+ * reason that scale is numeric — it names this very expression. The VALUE is unchanged, since
+ * `C.space.xl` was this same 20; it just comes from `tokens.css` now without the shim in
+ * between, so the padding and `--space-5` cannot drift apart.
  */
-const PAGE_PADDING = C.space.xl;
+const PAGE_PADDING = Math.round(parseFloat(token.space['5']) * 16);
 
 const panelStyle = {
-  background: C.bg2,
-  border: `1px solid ${C.border}`,
-  borderRadius: C.radius.lg,
-  padding: C.space.lg,
+  background: token.surface.raised,
+  border: `1px solid ${token.line.default}`,
+  borderRadius: token.radius.lg,
+  padding: token.space['4'],
   minWidth: 0,
 };
 
 const labelStyle = {
-  color: C.t2,
+  color: token.content.secondary,
   fontSize: 9,
   fontFamily: 'monospace',
   fontWeight: 900,
@@ -353,18 +396,18 @@ const labelStyle = {
 
 const fieldStyle = {
   width: '100%',
-  background: C.bg3,
-  border: `1px solid ${C.border}`,
-  borderRadius: C.radius.lg,
+  background: token.surface.inset,
+  border: `1px solid ${token.line.default}`,
+  borderRadius: token.radius.lg,
   padding: '8px 10px',
   fontSize: 11,
   fontFamily: 'monospace',
-  color: C.t1,
+  color: token.content.primary,
   outline: 'none',
 };
 
 const thStyle = {
-  color: C.t3,
+  color: token.content.muted,
   fontWeight: 700,
   padding: '8px 10px',
   textAlign: 'left',
@@ -375,7 +418,7 @@ const thStyle = {
 };
 
 const tdStyle = {
-  color: C.t1,
+  color: token.content.primary,
   padding: '8px 10px',
   fontSize: 11,
   fontFamily: 'monospace',
@@ -385,7 +428,7 @@ const tdStyle = {
 /** A table's caption, in both layouts, so the two say the same thing in the same voice. */
 const tableCaptionStyle = {
   textAlign: 'left',
-  color: C.t3,
+  color: token.content.muted,
   fontSize: 9,
   fontFamily: 'monospace',
   letterSpacing: 1,
@@ -402,15 +445,15 @@ const stackedRowStyle = {
   alignItems: 'baseline',
   margin: 0,
   padding: '8px 10px',
-  background: C.bg3,
-  border: `1px solid ${C.border}`,
-  borderRadius: C.radius.md,
+  background: token.surface.inset,
+  border: `1px solid ${token.line.default}`,
+  borderRadius: token.radius.md,
   minWidth: 0,
 };
 
 /** The column's header, carried into the stacked row as the `<dt>` it describes. */
 const stackedLabelStyle = {
-  color: C.t3,
+  color: token.content.muted,
   fontSize: 9,
   fontFamily: 'monospace',
   fontWeight: 700,
@@ -420,7 +463,7 @@ const stackedLabelStyle = {
 };
 
 const stackedValueStyle = {
-  color: C.t1,
+  color: token.content.primary,
   fontSize: 11,
   fontFamily: 'monospace',
   margin: 0,
@@ -503,9 +546,9 @@ const StatusPill = ({ tone = 'muted', label, Icon = null, title }) => (
       fontWeight: 800,
       letterSpacing: 0.6,
       textTransform: 'uppercase',
-      color: TONE_COLOR[tone] || C.t2,
-      border: `1px solid ${TONE_COLOR[tone] || C.t2}55`,
-      borderRadius: C.radius.sm,
+      color: toneColour(tone) || token.content.secondary,
+      border: `1px solid ${toneColour(tone) || token.content.secondary}55`,
+      borderRadius: token.radius.sm,
       padding: '2px 7px',
     }}
   >
@@ -521,6 +564,14 @@ const StatusPill = ({ tone = 'muted', label, Icon = null, title }) => (
  * than presenting itself as current. When no such timestamp reached the client, that is said
  * plainly — a substituted "now" would be exactly the value presented as a measurement that is
  * not one.
+ *
+ * THE HUE IS THE WARNING GROUP AND NOT THE ONE `statusToken('stale')` WOULD PICK. §4.1's
+ * vocabulary puts `stale` in the ERROR group, and this note is amber — `C.warning` before this
+ * retoken, `statusToken('warning').fg` after it, the same value either way. It is preserved
+ * rather than chosen: a figure whose price stopped refreshing is a condition of the DATA, the
+ * note says so in words and prints the instant, and escalating it to the red this page uses for
+ * a failed read is a design decision rather than a retoken. The builder's `FEED_TONE` records
+ * the same divergence for the same reason (task 24.4 part 1).
  */
 const StaleNote = ({ lastPriceAt }) => (
   <div
@@ -529,7 +580,7 @@ const StaleNote = ({ lastPriceAt }) => (
       alignItems: 'center',
       gap: 5,
       marginTop: 4,
-      color: C.warning,
+      color: statusToken('warning').fg,
       fontSize: 9,
       fontFamily: 'monospace',
     }}
@@ -571,7 +622,7 @@ const Figure = ({
   const header = (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
       <span style={{ ...labelStyle, marginBottom: 0 }}>{label}</span>
-      {Icon ? <Icon size={13} aria-hidden="true" style={{ color: C.accent, flexShrink: 0 }} /> : null}
+      {Icon ? <Icon size={13} aria-hidden="true" style={{ color: token.brand.base, flexShrink: 0 }} /> : null}
     </div>
   );
 
@@ -604,7 +655,7 @@ const Figure = ({
       {header}
       <div
         style={{
-          color: missing ? C.t3 : (tone ? TONE_COLOR[tone] : C.t1),
+          color: missing ? token.content.muted : (tone ? toneColour(tone) : token.content.primary),
           fontWeight: 900,
           fontFamily: 'monospace',
           fontSize: missing ? 13 : 18,
@@ -613,10 +664,10 @@ const Figure = ({
         }}
       >
         {missing ? absent : value}
-        {!missing && unit ? <span style={{ fontSize: 11, color: C.t2, marginLeft: 4 }}>{unit}</span> : null}
+        {!missing && unit ? <span style={{ fontSize: 11, color: token.content.secondary, marginLeft: 4 }}>{unit}</span> : null}
       </div>
       {hint ? (
-        <div style={{ color: C.t3, fontSize: 9, fontFamily: 'monospace', marginTop: 4 }}>{hint}</div>
+        <div style={{ color: token.content.muted, fontSize: 9, fontFamily: 'monospace', marginTop: 4 }}>{hint}</div>
       ) : null}
       {stale ? <StaleNote lastPriceAt={lastPriceAt} /> : null}
       <div style={{ marginTop: 8 }}>
@@ -641,16 +692,16 @@ const PanelNotice = ({ tone, Icon, heading, testId, children, code = null, foote
     aria-live={role === 'status' ? 'polite' : undefined}
     data-testid={testId}
     data-panel-state={testId}
-    style={{ padding: C.space.lg, display: 'flex', flexDirection: 'column', gap: 8 }}
+    style={{ padding: token.space['4'], display: 'flex', flexDirection: 'column', gap: 8 }}
   >
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
       {Icon ? (
-        <Icon size={13} aria-hidden="true" style={{ flexShrink: 0, marginTop: 1, color: TONE_COLOR[tone] || C.t2 }} />
+        <Icon size={13} aria-hidden="true" style={{ flexShrink: 0, marginTop: 1, color: toneColour(tone) || token.content.secondary }} />
       ) : null}
       <div style={{ minWidth: 0 }}>
         <div
           style={{
-            color: TONE_COLOR[tone] || C.t2,
+            color: toneColour(tone) || token.content.secondary,
             fontSize: 9,
             fontFamily: 'monospace',
             fontWeight: 900,
@@ -661,11 +712,11 @@ const PanelNotice = ({ tone, Icon, heading, testId, children, code = null, foote
         >
           {heading}
         </div>
-        <div style={{ color: C.t2, fontSize: 11, fontFamily: 'monospace', lineHeight: 1.5, whiteSpace: 'normal' }}>
+        <div style={{ color: token.content.secondary, fontSize: 11, fontFamily: 'monospace', lineHeight: 1.5, whiteSpace: 'normal' }}>
           {children}
         </div>
         {code ? (
-          <div style={{ color: C.t3, fontSize: 9, fontFamily: 'monospace', marginTop: 4 }}>
+          <div style={{ color: token.content.muted, fontSize: 9, fontFamily: 'monospace', marginTop: 4 }}>
             Reported by the server as <code>{code}</code>.
           </div>
         ) : null}
@@ -711,7 +762,7 @@ const PanelBody = ({
 }) => {
   if (state === PANEL_IDLE) {
     return (
-      <div data-testid="panel-idle" style={{ padding: C.space.lg, color: C.t3, fontSize: 11, fontFamily: 'monospace' }}>
+      <div data-testid="panel-idle" style={{ padding: token.space['4'], color: token.content.muted, fontSize: 11, fontFamily: 'monospace' }}>
         {idleText}
       </div>
     );
@@ -724,7 +775,7 @@ const PanelBody = ({
         aria-live="polite"
         data-testid="panel-loading"
         data-panel-state="panel-loading"
-        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: C.space.lg, color: C.t2, fontSize: 11, fontFamily: 'monospace' }}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: token.space['4'], color: token.content.secondary, fontSize: 11, fontFamily: 'monospace' }}
       >
         <Spinner size={14} />
         <span>Loading…</span>
@@ -734,7 +785,7 @@ const PanelBody = ({
 
   if (state === PANEL_STATES.EMPTY) {
     return (
-      <div data-testid="panel-empty" data-panel-state="panel-empty" style={{ padding: C.space.lg, color: C.t3, fontSize: 11, fontFamily: 'monospace' }}>
+      <div data-testid="panel-empty" data-panel-state="panel-empty" style={{ padding: token.space['4'], color: token.content.muted, fontSize: 11, fontFamily: 'monospace' }}>
         {emptyText}
       </div>
     );
@@ -880,7 +931,7 @@ const DataTable = ({ caption, columns, rows, rowKey, stacked }) => {
     return (
       <TableFrame caption={caption}>
         <thead>
-          <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+          <tr style={{ borderBottom: `1px solid ${token.line.default}` }}>
             {columns.map((column) => (
               <th key={column.key} scope="col" style={thStyle}>
                 {column.header}
@@ -890,7 +941,7 @@ const DataTable = ({ caption, columns, rows, rowKey, stacked }) => {
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={rowKey(row)} style={{ borderBottom: `1px solid ${C.border}55` }}>
+            <tr key={rowKey(row)} style={{ borderBottom: `1px solid ${token.line.default}55` }}>
               {columns.map((column) => (
                 <td key={column.key} style={{ ...tdStyle, ...(column.cellStyle ? column.cellStyle(row) : null) }}>
                   {column.render(row)}
@@ -906,7 +957,7 @@ const DataTable = ({ caption, columns, rows, rowKey, stacked }) => {
   return (
     <div data-table-layout="stacked" style={{ minWidth: 0 }}>
       <div style={tableCaptionStyle}>{caption}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: C.space.sm, minWidth: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: token.space['2'], minWidth: 0 }}>
         {rows.map((row) => (
           <dl key={rowKey(row)} style={stackedRowStyle}>
             {columns.map((column) => (
@@ -936,14 +987,18 @@ const ChartTooltip = ({ active, payload, rows }) => {
   return (
     <div
       style={{
-        background: C.bg1,
-        border: `1px solid ${C.borderLight}`,
-        borderRadius: C.radius.md,
+        background: token.surface.panel,
+        // `line.strong`, NOT `line.default`: a tooltip floats over the chart it describes, and
+        // the brighter rule is what separates it from the series behind it. `C.borderLight`
+        // resolved here and flattening it onto the panels' `line.default` would be a design
+        // change rather than a retoken.
+        border: `1px solid ${token.line.strong}`,
+        borderRadius: token.radius.md,
         padding: '8px 10px',
         fontFamily: 'monospace',
         fontSize: 10,
-        color: C.t1,
-        boxShadow: C.shadowMd,
+        color: token.content.primary,
+        boxShadow: token.shadow.raised,
       }}
     >
       {rows.map(({ key, label, render }) => {
@@ -951,7 +1006,7 @@ const ChartTooltip = ({ active, payload, rows }) => {
         const text = render ? render(raw) : raw;
         return (
           <div key={key} style={{ display: 'flex', gap: 10, justifyContent: 'space-between' }}>
-            <span style={{ color: C.t3 }}>{label}</span>
+            <span style={{ color: token.content.muted }}>{label}</span>
             <span>{text === null || text === undefined || text === '' ? NOT_REPORTED : text}</span>
           </div>
         );
