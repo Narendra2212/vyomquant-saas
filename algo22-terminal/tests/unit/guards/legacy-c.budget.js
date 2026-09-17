@@ -184,6 +184,19 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // Re-pointed onto the token type scale by task 3.1.
   'components/builder/NodeTrace.jsx': 27,
   'components/builder/NodePreview.jsx': 24,
+  // New at task 24.4b: §9.3's four validation surfaces as their own module. It entered
+  // the tree clean and imports the shim not at all — the three band surfaces are
+  // `ds/Alert`, the destructive one is `ds/ConfirmDialog`, and the only hue it names
+  // comes from `design/semantic.js`'s `statusToken`. Seeded at `0` for the reason
+  // `components/Sidebar.jsx: 0` keeps its entry: a file with no entry is a file whose
+  // cleanliness nothing is holding, and this is the module the builder's eight `C.gold` /
+  // `C.red` bands are about to be repointed onto — a shim reference reaching it would
+  // spread to every one of them at once.
+  //
+  // `tests/unit/builder/validationSurfaces.test.jsx` deliberately has NO entry here: this
+  // guard scans `src/**` only, so an entry naming a path under `tests/` fails both the
+  // `names only files that still exist` and the stray-entry checks below.
+  'components/builder/validationSurfaces.jsx': 0,
   'components/FirstTradeWizard.jsx': 23,
   // Cleared by task 8.6: rebuilt against `shell/navigation.js`, with colour taken from
   // `cssVar()` and token utility classes instead of the shim.

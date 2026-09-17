@@ -350,6 +350,20 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // `token.brand.base` — so a canvas node's elevation is the same decision as every other
   // raised surface in the app rather than a fourth opinion about black.
   'pages/StrategyBuilder.jsx': 0,
+  // New at task 24.4b: §9.3's four validation surfaces, lifted out of the page so the
+  // builder composes them rather than repainting a band per call site. It entered the tree
+  // clean — the three band surfaces are `ds/Alert`, the destructive one is
+  // `ds/ConfirmDialog`, and the one hue it names (the provenance rail's) is asked of
+  // `design/semantic.js`'s `statusToken` with the same state key the alert is given, so the
+  // rail cannot end up a different colour from the band it is attached to. Seeded at `0`
+  // for the reason `pages/StrategyBuilder.jsx: 0` stays there: this is the module eight of
+  // that page's bands are about to point at, so a literal here would be a literal on all
+  // eight.
+  //
+  // `tests/unit/builder/validationSurfaces.test.jsx` deliberately has NO entry: this guard
+  // scans `src/pages`, `src/components` and `src/lib`, so an entry under `tests/` would
+  // fail both `names only files that still exist` and the stray-entry check.
+  'components/builder/validationSurfaces.jsx': 0,
   'pages/PaperTrading.jsx': 1,
   // Subscription-state elements only (Requirement 13); the rest of the page is
   // out of scope, which is why the number is this large.
