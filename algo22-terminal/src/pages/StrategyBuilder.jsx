@@ -2913,11 +2913,11 @@ function StrategyBuilderCanvas({
         >
           {selectedNode && (
             <>
-            <div style={{ padding: '12px', borderBottom: `1px solid ${token.line.default}` }}>
-              <PanelTitle title="Inspector" sub={selectedNode.data.label} />
-            </div>
+              <div style={{ padding: '12px', borderBottom: `1px solid ${token.line.default}` }}>
+                <PanelTitle title="Inspector" sub={selectedNode.data.label} />
+              </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   <div>
                     <div className="text-micro" style={{ color: C.t3, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', marginBottom: '8px' }}>
@@ -3000,7 +3000,7 @@ function StrategyBuilderCanvas({
                     Delete Node
                   </Button>
                 </div>
-            </div>
+              </div>
             </>
           )}
         </aside>
