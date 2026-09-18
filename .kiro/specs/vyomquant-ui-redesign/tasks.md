@@ -829,7 +829,7 @@ the decomposition this plan uses instead:
     - Preserve `StrategyMarketplace.test.jsx`'s existing zero-`window.alert` assertions unchanged
     - _Requirements: 18.3, 19.4_
 
-  - [ ]* 10.12 Write the `no-placeholders` CI guard
+  - [x]* 10.12 Write the `no-placeholders` CI guard
     - `tests/unit/guards/no-placeholders.test.js`: zero `TODO`, `FIXME` or `coming soon` in the
       in-scope page and in-scope component files. Scoped to in-scope files because
       `components/landing/ScreenshotComingSoon.jsx` is an out-of-scope landing component
