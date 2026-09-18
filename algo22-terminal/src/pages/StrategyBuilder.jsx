@@ -77,11 +77,22 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import {
   AlertTriangle, ArrowLeft, BarChart2, ChevronDown, ChevronRight, Lock, Maximize,
-  PanelLeft, PanelRight, Play, RefreshCw, Redo, Save, Search, Trash2, Undo, ZoomIn, ZoomOut,
+  PanelLeft, PanelRight, RefreshCw, Redo, Rocket, Save, Search, Trash2, Undo, ZoomIn, ZoomOut,
 } from 'lucide-react';
 import { Inp, Tag2, PanelTitle } from '../components/ui-legacy/primitives';
 import { Button } from '../components/ui/Button';
 import { CommandButton } from '../components/ds/CommandButton';
+import { Field } from '../components/ds/Field';
+/*
+  Task 10.5's deploy flow, mounted rather than reimplemented (task 24.8, Requirement 19.1).
+
+  `components/deploy/DeployConfirmation.jsx` owns §8.3's Configure → Review → AckLive steps,
+  the real-funds acknowledgement, the preflight gate and the single POST to
+  `endpoints.strategies.deployVersion`. This page contributes the Configure step's target form
+  and the strategy the flow is about, and nothing else: no endpoint, no wire field, no
+  deployability verdict and no second submission path.
+*/
+import { DeployConfirmation } from '../components/deploy/DeployConfirmation';
 /*
   §9.3's four surfaces (task 24.4b). Every band below is one of them: the page chooses the
   severity and the provenance and contributes no hue, no border, no icon and no role — and
@@ -441,6 +452,174 @@ export function buildSavePayload(graph, market, { name }) {
     timeframe: market.timeframe,
   };
 }
+
+// ---------------------------------------------------------------------------
+// The header actions (task 24.8, Requirements 5.6, 5.7, 15.3, 19.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * The version label **the server stated**, or `null` when it stated none.
+ *
+ * ⚠️ THE HONESTY CLAUSE OF REQUIREMENT 5.7 ⚠️
+ * ------------------------------------------
+ * This function reads. It never derives, increments, defaults or formats a version. A save
+ * confirmation that says "Saved as version 4" when the server said nothing is a sentence the
+ * author will act on — they will believe a fourth immutable version exists and is the one a
+ * deployment would bind — and nothing on this page knows whether that is true. Versioning is
+ * the backend's (Requirement 19.1), so the only two honest answers are the label it sent and
+ * no label at all.
+ *
+ * `POST /api/strategies` answers `{id, strategy_id, status, dag_hash?, warmup_bars?,
+ * warnings?}` and carries **no** version label, so a first save toasts *"Saved"*.
+ * `PUT /api/strategies/{id}` answers the stored row, which has a `version` column. Both are
+ * read through the same reader, and so is the `strategy` envelope the clone and detail routes
+ * wrap a row in, so a label that arrives is used and one that does not is not invented.
+ *
+ * A number is accepted because a version column may be numeric; it is stringified, not
+ * arithmetic. `0` and `''` are absences — a version label with no characters names nothing.
+ *
+ * @param {unknown} response A save response, however the client shaped it.
+ * @returns {string|null} The label, trimmed, or `null`.
+ */
+export function serverVersionLabel(response) {
+  if (response === null || typeof response !== 'object' || Array.isArray(response)) return null;
+  const envelope = response.strategy;
+  const nested = envelope !== null && typeof envelope === 'object' && !Array.isArray(envelope)
+    ? envelope
+    : {};
+  const candidates = [
+    response.version,
+    response.version_label,
+    response.current_version,
+    nested.version,
+    nested.version_label,
+    nested.current_version,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate !== 0) {
+      return String(candidate);
+    }
+    if (typeof candidate === 'string' && candidate.trim() !== '') return candidate.trim();
+  }
+  return null;
+}
+
+/**
+ * The save confirmation, from the label the server sent (Requirement 5.7).
+ *
+ * The whole of the rule, in one place so the two callers cannot word it differently: a label
+ * produces *"Saved as version {v}"*, and no label produces *"Saved"*. There is no third
+ * branch, and in particular no branch that counts.
+ *
+ * @param {string|null} label {@link serverVersionLabel}'s answer.
+ * @returns {string}
+ */
+export const saveConfirmation = (label) =>
+  (label === null ? 'Saved' : `Saved as version ${label}`);
+
+/**
+ * Why a header action is refused, or `null` when it is not (Requirement 15.3).
+ *
+ * `disabled` without a stated reason is the dead affordance this redesign removes: a disabled
+ * button cannot be hovered, focused or interrogated, so the author cannot tell an unfinished
+ * graph from a bug. `ds/CommandButton` refuses to render one in development, and this is where
+ * the sentence it demands comes from.
+ *
+ * The count is passed in rather than computed here, because the page has two authorities for it
+ * and only the page knows which one applies — see `validationErrorCount` at the call site.
+ *
+ * @param {string} gerund `'backtesting'` or `'deploying'`, the action in the author's words.
+ * @param {{unsaved: boolean, errorCount: number}} state
+ * @returns {string|null}
+ */
+export function headerActionRefusal(gerund, { unsaved, errorCount }) {
+  if (unsaved) return `Save this strategy before ${gerund}`;
+  if (errorCount > 0) {
+    return `Fix ${errorCount} validation error${errorCount === 1 ? '' : 's'} before ${gerund}`;
+  }
+  return null;
+}
+
+/**
+ * Why a save is refused, or `null` when it is not (Requirement 15.3).
+ *
+ * The precedence is the one `saveRefused` evaluates, so the sentence always names the *first*
+ * thing standing in the way rather than an arbitrary one of several.
+ *
+ * An unset required parameter is deliberately absent from this list. It does not disable the
+ * control: clicking through produces the structured refusal that names the node and the field,
+ * which is the whole point of the SB-06 fix and strictly more useful than a greyed button.
+ *
+ * @param {Object} state
+ * @param {boolean} state.locked The backend's `read_only` verdict (Requirement 9.9).
+ * @param {string} state.lockReason The backend's own sentence for it, or `''`.
+ * @param {boolean} state.registryReady
+ * @param {number} state.nodeCount
+ * @param {boolean} state.serializerRefused `canonical.graph === null`.
+ * @param {number} state.errorCount Local advisory errors.
+ * @returns {string|null}
+ */
+export function saveRefusal({
+  locked,
+  lockReason,
+  registryReady,
+  nodeCount,
+  serializerRefused,
+  errorCount,
+}) {
+  if (locked) {
+    // The backend's wording when it sent one. This page does not paraphrase a verdict it did
+    // not reach; the fallback is only for a lock reported without a reason.
+    return typeof lockReason === 'string' && lockReason.trim() !== ''
+      ? lockReason.trim()
+      : 'This version is deployed, so its graph is frozen and the write would be refused';
+  }
+  if (!registryReady) {
+    return 'The block registry has not loaded, so this graph cannot be compiled or saved yet';
+  }
+  if (nodeCount === 0) return 'This canvas is empty. Add at least one block before saving';
+  if (serializerRefused) {
+    return 'This graph could not be serialised, so there is nothing to save — the refusal is '
+      + 'stated on the canvas';
+  }
+  if (errorCount > 0) {
+    return `Fix ${errorCount} validation error${errorCount === 1 ? '' : 's'} before saving`;
+  }
+  return null;
+}
+
+/**
+ * The deploy target vocabulary, byte-for-byte the pair `pages/Strategies.jsx` offers.
+ *
+ * The two `value`s are the strings `deployPreflight.deploymentModeOf` reads as the binding's
+ * `mode` and `lib/deployFlow.resolveDeployEnvironment` maps onto `design/semantic.js`'s
+ * `ENVIRONMENT`, so this control states the request rather than describing it. Only the labels
+ * are presentation. Anything outside this pair resolves to no environment at all, and
+ * `deployFlow` then holds every forward edge shut rather than assuming the dangerous one.
+ *
+ * No default is selected. §8.3's step 1 is the target, and a builder that pre-picked one would
+ * be answering the only question the flow refuses to answer for the author.
+ */
+export const DEPLOY_TARGET_OPTIONS = Object.freeze([
+  Object.freeze({ value: 'paper', label: 'Paper Simulation (Virtual Execution)' }),
+  Object.freeze({ value: 'live', label: 'Live Execution (Master Executor)' }),
+]);
+
+/**
+ * Deploy's third refusal: the server has named no version to bind.
+ *
+ * The other face of Requirement 5.7's honesty clause. `lib/deployFlow.js` already refuses this
+ * case — `BLOCKER.NO_VERSION`, "a deployment always binds one immutable version" — and that
+ * refusal stays the backstop. Saying it on the control as well is Requirement 15.3: an enabled
+ * button that opens a dialog only to say no is the same dead affordance as a disabled one that
+ * says nothing, and the fix for both is to state the reason where the author is looking.
+ *
+ * No remedy is offered, because none is knowable from here: whether a version label appears is
+ * the backend's business (Requirement 19.1) and this page will not guess one to fill the field.
+ */
+export const NO_NAMED_VERSION_REFUSAL =
+  'The server has not named a version for this strategy, and a deployment binds one immutable '
+  + 'version';
 
 // ---------------------------------------------------------------------------
 // Palette
@@ -1587,7 +1766,21 @@ function StrategyBuilderCanvas({
   const location = useLocation();
   const strategy = strategyProp ?? location.state?.strategy ?? null;
   const onBack = onBackProp ?? (() => navigate('/app/strategies'));
-  const onBacktest = onBacktestProp ?? ((payload) => navigate('/app/backtest', { state: { strategy: payload } }));
+  /*
+    Task 24.8, Requirement 5.6. The default hands off by ROUTE, which is the whole of Property
+    24's structural half — this page never imports the page it hands off to.
+
+    `payload.route` carries `?strategy_id=`, the parameter that page actually reads, so the
+    handoff survives a bookmark and a reload. Route state is still passed as well, because that
+    page names the strategy from whichever of its three entry paths answered first and a handed
+    over record spares it a read. A caller that injects `onBacktestProp` receives the same
+    `route`, so it can navigate wherever it likes without re-deriving the address.
+  */
+  const onBacktest = useMemo(
+    () => onBacktestProp
+      ?? ((payload) => navigate(payload.route ?? '/app/backtest', { state: { strategy: payload } })),
+    [onBacktestProp, navigate],
+  );
 
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const { pushState, undo, redo, canUndo, canRedo } = useUndoRedo();
@@ -1609,6 +1802,9 @@ function StrategyBuilderCanvas({
   // training block means the version WAS saved and only training was refused (Requirements
   // 14.3, 14.4, 14.7, 14.8 — and no job row exists either way).
   const [observedTrainingBlock, setObservedTrainingBlock] = useState(null);
+  /** Whether task 10.5's deploy flow is open, and the target its Configure step has been given. */
+  const [deployOpen, setDeployOpen] = useState(false);
+  const [deployTarget, setDeployTarget] = useState('');
   const [collapsedCategories, setCollapsedCategories] = useState({});
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [libraryOpen, setLibraryOpen] = useState(true);
@@ -1637,6 +1833,23 @@ function StrategyBuilderCanvas({
   const loadedStrategy = initialStrategy || strategy || null;
   const [strategyIdState, setStrategyIdState] = useState(loadedStrategy?.id || null);
   const [strategyName, setStrategyName] = useState(loadedStrategy?.name || 'Untitled Strategy');
+  /*
+    Task 24.8. The version label the SERVER last stated, and the graph it stated it for.
+
+    `savedVersion` is written from {@link serverVersionLabel} and from nowhere else — seeded from
+    the record this canvas was opened with, which is a server record, and replaced by each save
+    response. So it is either a label a server sent or `null`. It is never incremented, never
+    defaulted and never written by an edit; the header chip and the save toast both read it, which
+    is what makes them agree by construction rather than by coincidence (Requirement 5.7).
+
+    `savedGraphKey` is the `semanticGraphKey` of the graph a successful save sent. It exists so
+    that "unsaved" is an observation rather than a flag somebody has to remember to set: the graph
+    on the canvas either hashes to what was last sent or it does not. It stays `null` until this
+    session saves, and a graph loaded from the server counts as saved, because it is — see
+    `unsaved` at the header.
+  */
+  const [savedVersion, setSavedVersion] = useState(() => serverVersionLabel(loadedStrategy));
+  const [savedGraphKey, setSavedGraphKey] = useState(null);
 
   // The canvas starts empty. It used to be seeded with a `ccxt_asset_feed` node carrying
   // `symbol: "BTC/USDT"` and `timeframe: "15m"` — a market nobody chose, which is SB-06 — and
@@ -2255,6 +2468,20 @@ function StrategyBuilderCanvas({
 
   // -- save ---------------------------------------------------------------
 
+  /**
+   * The product's notification mechanism, as `AppShell` installs it (Requirement 20.10).
+   *
+   * Read at call time rather than captured, and silent when absent: mounted outside the shell
+   * — an inline embed, a test — there is no host to speak to, and the outcome is on screen
+   * anyway in the status strip, so a missing toast loses nothing. This is a page announcing
+   * its OWN action, not a backend event, so it does not belong to `useNotificationStream`.
+   */
+  const notify = useCallback((type, message) => {
+    if (typeof window !== 'undefined' && typeof window.showToast === 'function') {
+      window.showToast(type, message);
+    }
+  }, []);
+
   const handleSaveStrategy = useCallback(async () => {
     const trimmedName = strategyName.trim() || 'Untitled Strategy';
     setIsSavingStrategy(true);
@@ -2319,6 +2546,22 @@ function StrategyBuilderCanvas({
       setObservedTrainingBlock(response?.training ?? null);
       setSaveStatus(SAVE_STATES.SAVED);
       setSaveState(`Saved · ${market.symbol} ${market.timeframe}`);
+
+      /*
+        Task 24.8, Requirement 5.7. The confirmation and the header chip are the SAME value,
+        read once from the response: `serverVersionLabel` either finds a label the server sent
+        or answers `null`, and `saveConfirmation` turns that into "Saved as version {v}" or
+        "Saved". Nothing here counts, and no versioning logic changes (Requirement 19.1) — a
+        first save through `POST /api/strategies` genuinely carries no label, and saying "Saved"
+        is the honest report of that.
+
+        `savedGraphKey` records WHICH graph this was, so `Backtest this version` and `Deploy`
+        can tell a saved canvas from one that has moved on since.
+      */
+      const versionLabel = serverVersionLabel(response);
+      setSavedVersion(versionLabel);
+      setSavedGraphKey(graphKey);
+      notify('success', saveConfirmation(versionLabel));
     } catch (err) {
       // A 422 from `POST /training/jobs` carries the same block payload on `detail`. Read
       // where the API client put it, without assuming which client shape delivered it.
@@ -2341,7 +2584,7 @@ function StrategyBuilderCanvas({
     } finally {
       setIsSavingStrategy(false);
     }
-  }, [strategyName, nodes, edges, strategyIdState, blockingParams]);
+  }, [strategyName, nodes, edges, strategyIdState, blockingParams, graphKey, notify]);
 
   // -- keyboard -----------------------------------------------------------
 
@@ -2930,13 +3173,141 @@ function StrategyBuilderCanvas({
   // saying "no" silently — and the write it would attempt is one migration 004c's trigger
   // refuses, so offering it would be offering an edit that cannot land. Until a
   // `canvas_state` verdict arrives, `locked` is false and nothing changes.
-  const saveDisabled =
-    isSavingStrategy ||
+  //
+  // `isSavingStrategy` is NOT part of this: a save in flight is `ds/CommandButton`'s `loading`,
+  // which explains itself through `loadingLabel`. Folding it in here would demand a second
+  // explanation and push this page towards `disabledReason="Saving"`, which explains nothing.
+  const saveRefused =
     !isValid ||
     !registry.isReady ||
     canonical.graph === null ||
     nodes.length === 0 ||
     deployedLock.locked;
+
+  const saveDisabledReason = saveRefusal({
+    locked: deployedLock.locked,
+    lockReason: deployedLock.reason,
+    registryReady: registry.isReady,
+    nodeCount: nodes.length,
+    serializerRefused: canonical.graph === null,
+    errorCount: errors.length,
+  });
+
+  /* ── Task 24.8: the three header actions and what refuses them ─────────────────────────
+   *
+   * `[ Save ] [ Backtest this version ] [ Deploy ]` — three DISTINCT actions, which is the
+   * reconciliation this task asks for. This header used to carry two buttons, `Save` and
+   * `Compile`, both calling `handleSaveStrategy`: the same request behind two labels, one of
+   * which named an internal step of the other. `handleSaveStrategy` compiles and then saves,
+   * so `Compile` was never a separate operation and its removal takes nothing away.
+   */
+
+  /**
+   * How many errors stand between this graph and a downstream action.
+   *
+   * Counted where this page already counts, and only once. When a backend report applies to the
+   * graph on the canvas the backend's own `errorCount` is the number — that is the page's
+   * standing rule (advisory vs authority: once a report applies, its verdict is the only verdict
+   * on screen, so the author is never shown two answers that disagree). Otherwise the local
+   * advisory count plus the unset required parameters the save gate holds, which the local
+   * validator does not report and which refuse a save on their own. The two halves are never
+   * added to a backend count: when the backend has spoken it has already judged the parameters.
+   */
+  const validationErrorCount = backendAuthoritative
+    ? markers.errorCount
+    : errors.length + blockingParams.length;
+
+  /**
+   * The canvas differs from what was last saved, or was never saved at all.
+   *
+   * An observation, not a flag: `savedGraphKey` is the `semanticGraphKey` a successful save
+   * sent, and `graphKey` is the one on screen now. A strategy opened from the server counts as
+   * saved — it is, and `savedGraphKey` is `null` only because THIS session has not saved it —
+   * so the second clause is gated on a key having been recorded. Without an id there is no
+   * saved version to backtest or deploy at all, whatever the canvas holds.
+   */
+  const unsaved =
+    strategyIdState === null
+    || strategyIdState === ''
+    || (savedGraphKey !== null && savedGraphKey !== graphKey);
+
+  const backtestRefusal = headerActionRefusal('backtesting', {
+    unsaved,
+    errorCount: validationErrorCount,
+  });
+  const deployRefusal =
+    headerActionRefusal('deploying', { unsaved, errorCount: validationErrorCount })
+    ?? (savedVersion === null ? NO_NAMED_VERSION_REFUSAL : null);
+
+  /**
+   * The market the graph names, or `null` when it does not name one yet.
+   *
+   * Requirement 8.1's `Market` row for the deploy review, read from the DATA node's own params
+   * through the one function that resolves them. `resolveMarketIdentity` raises when the market
+   * is unset, and that refusal belongs to the save path, not to a review grid — so an unset
+   * market becomes `null` here and `lib/deployFlow.js` renders the not-available marker with its
+   * own reason. No literal is substituted (SB-06, Requirement 12.4).
+   */
+  const graphMarket = useMemo(() => {
+    if (canonical.graph === null) return null;
+    try {
+      return resolveMarketIdentity(canonical.graph);
+    } catch {
+      return null;
+    }
+  }, [canonical.graph]);
+
+  /**
+   * The deployment task 10.5's flow is asked to confirm.
+   *
+   * Three fields decide whether the flow can be *addressed* — `strategyId`, `version` and a
+   * resolvable `environment` — and all three are read, never derived: the id the server issued,
+   * the version label the server stated, and the target the author picked on the Configure step.
+   * `null` on the version is a real state and `deployFlow` refuses on it in words ("Save a
+   * version first"), which is the correct answer for a strategy whose save response carried no
+   * label rather than a number invented to fill the field.
+   *
+   * Capital, sizing, the exchange account and the risk configuration are not on this page and
+   * are not fabricated here: the review grid renders each as the not-available marker with its
+   * own reason, and `deployPreflight` — not this page — decides whether the deployment is
+   * permitted (Requirement 19.1).
+   */
+  const deployConfig = useMemo(
+    () => ({
+      strategyId: strategyIdState ? String(strategyIdState) : null,
+      version: savedVersion,
+      environment: deployTarget,
+      strategyName: strategyName.trim() || null,
+      market: graphMarket ? graphMarket.symbol : null,
+    }),
+    [strategyIdState, savedVersion, deployTarget, strategyName, graphMarket],
+  );
+
+  /**
+   * `Backtest this version` (Requirement 5.6).
+   *
+   * ⚠️ THE QUERY PARAMETER IS `strategy_id`, NOT `strategy` ⚠️
+   * Task 23.1 rebuilt that page to read `searchParams.get("strategy_id")` and nothing else, so
+   * `?strategy=` would arrive and be ignored — a deep link that silently loses its subject. The
+   * name here is the one the code on the other side reads.
+   *
+   * And there is no version parameter, because that page takes no version from the URL: it reads
+   * the strategy's versions and runs the one the backend marks `is_current`, so the version is
+   * pre-selected BY THE SERVER. Appending `&version=` would be a parameter nothing reads, and a
+   * URL that appears to pin a version while the run binds whichever one is current is worse than
+   * no parameter at all. `route` is handed to the injected `onBacktest` so a host can replace the
+   * navigation without re-deriving the address.
+   */
+  const handleBacktestVersion = useCallback(() => {
+    const id = strategyIdState ? String(strategyIdState) : '';
+    onBacktest({
+      id: strategyIdState,
+      name: strategyName,
+      nodes,
+      edges,
+      route: `/app/backtest?strategy_id=${encodeURIComponent(id)}`,
+    });
+  }, [onBacktest, strategyIdState, strategyName, nodes, edges]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: token.surface.panel }}>
@@ -2951,6 +3322,29 @@ function StrategyBuilderCanvas({
             val={strategyName}
             onChange={(e) => setStrategyName(e.target.value)}
           />
+          {/*
+            The version chip (task 24.8, Requirement 5.7). It reads `savedVersion` — the label a
+            save response carried — and nothing else, so it and the save toast cannot disagree.
+
+            When the server has stated no label the chip says so rather than showing a number:
+            `POST /api/strategies` genuinely answers without one, and "no version label yet"
+            is a true sentence where "version 1" would be a guess the author would then deploy.
+          */}
+          <span
+            data-testid="builder-version-chip"
+            data-version={savedVersion === null ? undefined : savedVersion}
+            className="text-micro"
+            style={{
+              padding: '2px 8px',
+              borderRadius: '4px',
+              border: `1px solid ${token.line.default}`,
+              background: token.surface.panel,
+              color: savedVersion === null ? token.content.muted : token.content.secondary,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {savedVersion === null ? 'No version label yet' : `Version ${savedVersion}`}
+          </span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -2964,25 +3358,102 @@ function StrategyBuilderCanvas({
           <Button variant="ghost" size="sm" Icon={PanelLeft} onClick={() => setLibraryOpen(!libraryOpen)} title="Toggle Library" />
           <Button variant="ghost" size="sm" Icon={PanelRight} onClick={() => setInspectorOpen(!inspectorOpen)} title="Toggle Inspector" />
           <div style={{ width: 1, height: 24, background: token.line.default }} />
-          <Button variant="outline" size="sm" Icon={Save} onClick={handleSaveStrategy} disabled={saveDisabled}>
-            {isSavingStrategy ? 'Saving...' : 'Save'}
-          </Button>
-          <Button variant="primary" size="sm" Icon={Play} onClick={handleSaveStrategy} disabled={saveDisabled} title="Compile & Save">
-            Compile
-          </Button>
-          {onBacktest && (
-            <Button
-              variant="primary"
+          {/*
+            §5.6's three header actions (task 24.8). Each is a `ds/CommandButton`, which refuses
+            in development to render an inoperable control without a visible reason, and each
+            disabled one carries the sentence `headerActionRefusal` / `saveRefusal` composed
+            (Requirement 15.3).
+
+            The cluster wraps rather than stretching the toolbar: `CommandButton` renders its
+            reason as visible text beside the control, because a disabled button has
+            `pointer-events-none` and is not focusable, so a tooltip on it can never be read.
+            Three refused actions therefore put three sentences here, and they belong here — a
+            greyed button with a hidden reason is the dead affordance this redesign removes.
+          */}
+          <div
+            data-testid="builder-header-actions"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              flexWrap: 'wrap',
+              gap: '8px',
+              maxWidth: '46ch',
+            }}
+          >
+            <CommandButton
+              intent="primary"
               size="sm"
-              Icon={BarChart2}
-              disabled={canonical.graph === null || nodes.length === 0}
-              onClick={() => onBacktest({ id: strategyIdState, name: strategyName, nodes, edges })}
+              icon={Save}
+              loading={isSavingStrategy}
+              loadingLabel="Saving…"
+              disabled={saveRefused}
+              disabledReason={saveDisabledReason ?? undefined}
+              onClick={handleSaveStrategy}
+              title="Save (Ctrl+S)"
             >
-              Backtest
-            </Button>
-          )}
+              Save
+            </CommandButton>
+            <CommandButton
+              intent="secondary"
+              size="sm"
+              icon={BarChart2}
+              disabled={backtestRefusal !== null}
+              disabledReason={backtestRefusal ?? undefined}
+              onClick={handleBacktestVersion}
+            >
+              Backtest this version
+            </CommandButton>
+            <CommandButton
+              intent="secondary"
+              size="sm"
+              icon={Rocket}
+              disabled={deployRefusal !== null}
+              disabledReason={deployRefusal ?? undefined}
+              onClick={() => setDeployOpen(true)}
+            >
+              Deploy
+            </CommandButton>
+          </div>
         </div>
       </div>
+
+      {/*
+        Task 10.5's deploy flow (Requirement 5.6). Mounted only while open, so no flow is
+        constructed — and in particular no real-funds acknowledgement is constructed — for a
+        deployment nobody has asked for.
+
+        Everything about the deployment is that component's and `lib/deployFlow.js`'s: the step
+        list, the review grid, the acknowledgement, the preflight gate and the single POST. This
+        page supplies §8.3 step 1's target form as `children`, which is where a page's own form
+        belongs, and the strategy the flow is about. No second deploy path exists here.
+      */}
+      {deployOpen && (
+        <DeployConfirmation
+          open
+          config={deployConfig}
+          onCancel={() => setDeployOpen(false)}
+          onDeployed={() => {
+            setDeployOpen(false);
+            notify('success', 'Deployment submitted. Its state is reported on the Strategies page.');
+          }}
+        >
+          <Field
+            id="builder-deploy-target"
+            label="Deployment target"
+            value={deployTarget}
+            onChange={(event) => setDeployTarget(event.target.value)}
+            options={DEPLOY_TARGET_OPTIONS}
+            placeholder="Choose a target…"
+            hint={
+              'Nothing is assumed. An unchosen target holds every forward step shut rather than '
+              + 'defaulting to paper, because defaulting would place real orders without the '
+              + 'real-funds step if the value were ever misread.'
+            }
+            required
+          />
+        </DeployConfirmation>
+      )}
 
       {/*
         Blocking states, each stated in words with the node and field named.

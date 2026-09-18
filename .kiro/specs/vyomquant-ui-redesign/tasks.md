@@ -1466,7 +1466,7 @@ the decomposition this plan uses instead:
       the blanket blur it replaces because a trader on a tablet can still read what a strategy does
     - _Requirements: 17.4, 15.3_
 
-  - [~] 24.8 Wire the builder header actions and the save confirmation
+  - [x] 24.8 Wire the builder header actions and the save confirmation
     - `[ Save ] [ Backtest this version ] [ Deploy ]`; `Backtest` navigates to
       `/app/backtest?strategy={id}&version={v}` with the version pre-selected; `Deploy` opens Task
       10.5's flow
