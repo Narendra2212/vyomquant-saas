@@ -820,7 +820,7 @@ the decomposition this plan uses instead:
       the same change — removing them now would turn a 404 into a `TypeError`
     - _Requirements: 19.4_
 
-  - [ ]* 10.11 Write the `no-native-dialogs` CI guard
+  - [x]* 10.11 Write the `no-native-dialogs` CI guard
     - `tests/unit/guards/no-native-dialogs.test.js`: zero `window.confirm` / `window.alert` /
       `window.prompt` in `src/pages/**` and `src/components/**`, with an out-of-scope allowlist of
       exactly `pages/TwoFA.jsx` and `components/NotificationCenter.jsx` (both explicitly deferred by

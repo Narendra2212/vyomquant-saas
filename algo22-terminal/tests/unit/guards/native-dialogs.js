@@ -9,16 +9,21 @@
  * ===========================================================================
  * design.md §1.8 lists six native dialog call sites (two in `pages/Strategies.jsx`,
  * four in `pages/StrategyDetail.jsx`). Tasks 10.3 and 10.4 replace them with
- * `ds/ConfirmDialog`, and task 10.11 ships `no-native-dialogs.test.js` — a
- * repo-wide guard over `src/pages/**` and `src/components/**` with an
- * out-of-scope allowlist of exactly `pages/TwoFA.jsx` and
- * `components/NotificationCenter.jsx`.
+ * `ds/ConfirmDialog`, and task 10.11 ships `no-native-dialogs.test.js`.
+ *
+ * That guard landed wider than this note first predicted, in both directions, and
+ * the prediction is corrected here rather than left to mislead: it scans the whole
+ * of `src/` — a dialog blocks the tab from any module, not only a page or a
+ * component — and its out-of-scope allowlist is FIVE files, not the two named
+ * here. `pages/TwoFA.jsx` and `components/NotificationCenter.jsx` were right;
+ * `pages/ExchangeManager.jsx`, `pages/Landing.jsx` and
+ * `components/admin/AdminDashboard.jsx` each hold one too, and all three were
+ * inside the narrower scope as well. See `no-native-dialogs.budget.js`.
  *
  * The per-page assertion (`strategyArchive.test.jsx`) and that repo-wide guard
- * ask the same question, so they ask it with the same function. 10.11 should
- * `import { findNativeDialogs } from './native-dialogs.js'` rather than write its
- * own pattern: two detectors for one rule is two detectors that can disagree
- * about whether the rule is met.
+ * ask the same question, so they ask it with the same function: 10.11 imports
+ * `findNativeDialogs` rather than writing its own pattern. Two detectors for one
+ * rule is two detectors that can disagree about whether the rule is met.
  *
  * ===========================================================================
  * WHY THIS IS NOT A GREP FOR `window.confirm`
