@@ -421,6 +421,13 @@ describe('legacy-c-budget: scope', () => {
     // per-file budgets below; none of them moved here, and none of them may be
     // raised. At task 27.2 the shim goes and this whole guard goes with it.
     //
+    // 1000 -> 500 at task 27.2, BATCH 2, for the third time and for the same reason: that
+    // batch took `components/SupportCenter.jsx` from 160 to 0 and
+    // `components/NotificationCenter.jsx` from 77 to 0, carrying the tree from 1095 to 858.
+    // Re-measuring to 858 would trip on the next batch, so it is set to 500 — still nearly
+    // three times the shim's own 176, so a scan firing ONLY inside primitives.jsx cannot
+    // satisfy it, which is the whole point of the line.
+    //
     // THE FILE-COUNT FLOOR IS THE SAME KIND OF TRIPWIRE and fell for the same reason at
     // task 27.3. It was 20 and the tree held 21 carriers; deleting
     // `components/DesktopOnlyOverlay.jsx` — 9 references in a component nothing had
@@ -433,7 +440,7 @@ describe('legacy-c-budget: scope', () => {
     // broken, and this still says so.
     const carriers = SCANNED.filter((f) => f.count > 0);
     expect(carriers.length).toBeGreaterThan(10);
-    expect(carriers.reduce((n, f) => n + f.count, 0)).toBeGreaterThan(1000);
+    expect(carriers.reduce((n, f) => n + f.count, 0)).toBeGreaterThan(500);
   });
 
   it('does not lose references to the string mask', () => {

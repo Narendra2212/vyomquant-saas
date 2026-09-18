@@ -370,7 +370,34 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // shell, all retokened by M1 but not restructured (§14.4). They are budgeted
   // rather than ignored because the shim cannot be deleted at task 27.2 while
   // any of them still reads from it.
-  'components/SupportCenter.jsx': 160,
+  // 160 -> 0 at task 27.2, batch 2, and the `C` import is deleted rather than narrowed for
+  // the reason `pages/LegalPage.jsx`'s was: `C` was the only specifier this file took from
+  // the shim, so the specifier and the module both go and `token` is read straight from
+  // `design/tokens.js`. Every one of the 160 is the value the shim already gave it, so
+  // nothing on this page changed on screen.
+  //
+  // By shim name: `C.border` 34 -> `token.line.default`; `C.cyan` 23 -> `token.brand.base`;
+  // `C.t1` 23, `C.t2` 20, `C.t3` 19 -> `token.content.primary` / `secondary` / `muted`;
+  // `C.bg3` 19, `C.bg2` 11, `C.bg1` 1 -> `token.surface.inset` / `raised` / `panel`;
+  // `C.green` 5 -> `token.status.profit.fg`; `C.red` 5 -> `token.status.loss.fg`. No
+  // `C.space.*`, `C.radius.*`, `C.shadow*`, `C.glow.*` or `C.gradient.*` read on the page,
+  // so neither the rem-string substitution nor the dead-declaration deletion arose here.
+  //
+  // THE TEN STATE HUES STAY OFF `statusToken`, AND THAT IS PRESERVED RATHER THAN CHOSEN.
+  // Every `C.green` / `C.red` read on this page is a ticket-lifecycle affordance, not a
+  // status verdict: the Reopen and Close buttons, the created-ticket success banner, the
+  // load/submit error banner and its dismiss control. There is no frozen `state -> group`
+  // map in the file to route them through — what colour a ticket gets is decided by
+  // `STATUS_CONFIG` and `PRIORITY_CONFIG`, two module-level maps of raw `rgba()`/hex pairs
+  // that were never shim reads and so are not this batch's to take. Both ternaries keep
+  // their condition, operand order and `40` alpha suffix; only the source of each hue moved.
+  //
+  // THIS PAGE'S 37 `no-colour-literals` ENTRIES ARE UNTOUCHED, and they are why the two
+  // config maps above stand: `STATUS_CONFIG`'s six wash/text pairs, `PRIORITY_CONFIG`'s
+  // four, the seven hand-mixed `rgba(0, 212, 255, …)` cyans, the staff-comment tint and the
+  // `#000` button labels all predate the shim. None was a `C.` read, none is introduced, and
+  // the count is the same 37 before and after.
+  'components/SupportCenter.jsx': 0,
   'pages/Profile.jsx': 160,
   // `components/DashboardUpgrades.jsx: 135` stood here until task 19.4 deleted the file.
   // It is removed rather than lowered to `0`, per this header's rule: an entry reaching
@@ -406,7 +433,37 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // ternaries — those painted a flat figure profit green and an UNREAD one loss red.
   'pages/StrategyDetail.jsx': 0,
   'pages/Billing.jsx': 111,
-  'components/NotificationCenter.jsx': 77,
+  // 77 -> 0 at task 27.2, batch 2, on the same terms as `components/SupportCenter.jsx`
+  // above — one `C` import, the file's only specifier from the shim, deleted. Every one of
+  // the 77 is the value the shim already gave it.
+  //
+  // By shim name: `C.cyan` 24 and `C.accent` 1 -> `token.brand.base` (the shim collapsed
+  // both onto the one brand hue, and they are collapsed here rather than a second brand
+  // value being invented to keep the two names apart — the lone `C.accent` was the loading
+  // spinner, every `C.cyan` the unread/active affordance); `C.t3` 12, `C.t2` 6, `C.t1` 4 ->
+  // `token.content.muted` / `secondary` / `primary`; `C.red` 10 -> `token.status.loss.fg`;
+  // `C.border` 7 -> `token.line.default`; `C.bg2` 5, `C.bg` 2, `C.bg3` 1 ->
+  // `token.surface.raised` / `canvas` / `inset`; `C.green` 4 -> `token.status.profit.fg`;
+  // `C.orange` 1 -> `token.status.warning.fg`. No `C.space.*`, `C.radius.*` or `C.shadow*`
+  // read here either.
+  //
+  // `SEVERITY_COLORS` KEEPS ITS SHAPE AND ITS FOUR ENTRIES, for the reason
+  // `components/builder/NodeTrace.jsx`'s `STATUS_COLOUR` kept its. It is already a frozen
+  // `severity -> colour` map, so there was nothing to restructure — only the source of each
+  // hue moved, to `token.brand.base` / `status.warning.fg` / `status.loss.fg` /
+  // `status.loss.fg`. It is deliberately NOT repointed onto `design/semantic.js`'s
+  // `statusToken`: `info` reads the BRAND hue here rather than a status hue, and `critical`
+  // and `emergency` share one red where `statusToken` would give the two severities distinct
+  // groups. Preserved, not chosen; this is a retoken.
+  //
+  // THE THREE LIVE/OFFLINE TERNARIES ARE UNCHANGED apart from the hue source. The WebSocket
+  // pill's wash, its `40`-suffixed rule, its dot and its label all read
+  // `wsConnected ? profit : loss`, with the same condition and the same operand order they
+  // had as `C.green` / `C.red`.
+  //
+  // THE ONE `no-colour-literals` ENTRY IS UNTOUCHED — the `#000` on the unread-count badge,
+  // which was never a `C.` read. 1 before, 1 after.
+  'components/NotificationCenter.jsx': 0,
   'components/ResearchConsole.jsx': 60,
   'pages/AuthPage.jsx': 57,
   'pages/Wizard.jsx': 56,

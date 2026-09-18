@@ -38,10 +38,12 @@ import { api } from '../api';
 import wsClient from '../websocketClient';
 // ═══════════════════════════════════════════════════════════════════════════
 // COLOR PALETTE — Requirement 1.1: the single token source.
-// This page used to declare a competing local `C`. The layout is unchanged,
-// only the token source is corrected (design.md §17.2).
+// This page used to declare a competing local `C`, then read the
+// `ui-legacy/primitives` shim; it reads `design/tokens.js` directly now
+// (task 27.2). The layout is unchanged — every value below is the one the shim
+// already returned (design.md §17.2).
 // ═══════════════════════════════════════════════════════════════════════════
-import { C } from './ui-legacy/primitives';
+import { token } from '../design/tokens';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CATEGORY CONFIGURATION
@@ -59,10 +61,10 @@ const CATEGORIES = [
 ];
 
 const SEVERITY_COLORS = {
-  info: C.cyan,
-  warning: C.orange,
-  critical: C.red,
-  emergency: C.red
+  info: token.brand.base,
+  warning: token.status.warning.fg,
+  critical: token.status.loss.fg,
+  emergency: token.status.loss.fg
 };
 
 const SEVERITY_ICONS = {
@@ -258,10 +260,10 @@ function NotificationCenter() {
         display: 'flex', 
         alignItems: 'center', 
         justifyContent: 'center',
-        background: C.bg 
+        background: token.surface.canvas 
       }}>
-        <Loader2 size={32} color={C.accent} style={{ animation: 'spin 1s linear infinite' }} />
-        <span style={{ color: C.t2, marginLeft: 12 }}>Loading notifications...</span>
+        <Loader2 size={32} color={token.brand.base} style={{ animation: 'spin 1s linear infinite' }} />
+        <span style={{ color: token.content.secondary, marginLeft: 12 }}>Loading notifications...</span>
       </div>
     );
   }
@@ -271,24 +273,24 @@ function NotificationCenter() {
       padding: '24px', 
       maxWidth: '1200px', 
       margin: '0 auto',
-      background: C.bg,
+      background: token.surface.canvas,
       minHeight: '100vh'
     }}>
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ background: `${C.cyan}15`, border: `1px solid ${C.cyan}40`, borderRadius: 10, padding: 8 }}>
-              <Bell size={24} color={C.cyan} />
+            <div style={{ background: `${token.brand.base}15`, border: `1px solid ${token.brand.base}40`, borderRadius: 10, padding: 8 }}>
+              <Bell size={24} color={token.brand.base} />
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <h1 style={{ fontSize: 22, fontWeight: 800, color: C.t1, margin: 0, letterSpacing: '-0.02em' }}>
+                <h1 style={{ fontSize: 22, fontWeight: 800, color: token.content.primary, margin: 0, letterSpacing: '-0.02em' }}>
                   Notifications
                 </h1>
                 {unreadCount > 0 && (
                   <span style={{
-                    background: C.cyan,
+                    background: token.brand.base,
                     color: '#000',
                     fontSize: 11,
                     padding: '2px 8px',
@@ -299,7 +301,7 @@ function NotificationCenter() {
                   </span>
                 )}
               </div>
-              <p style={{ margin: '2px 0 0', fontSize: 12, color: C.t3, fontFamily: 'monospace' }}>
+              <p style={{ margin: '2px 0 0', fontSize: 12, color: token.content.muted, fontFamily: 'monospace' }}>
                 LIVE EVENT TELEMETRY & SYSTEM ALERTS
               </p>
             </div>
@@ -310,8 +312,8 @@ function NotificationCenter() {
               display: 'flex', 
               alignItems: 'center', 
               gap: 6,
-              background: wsConnected ? `${C.green}15` : `${C.red}15`,
-              border: `1px solid ${wsConnected ? C.green : C.red}40`,
+              background: wsConnected ? `${token.status.profit.fg}15` : `${token.status.loss.fg}15`,
+              border: `1px solid ${wsConnected ? token.status.profit.fg : token.status.loss.fg}40`,
               borderRadius: 20,
               padding: '4px 12px',
             }}>
@@ -319,12 +321,12 @@ function NotificationCenter() {
                 width: 7, 
                 height: 7, 
                 borderRadius: '50%', 
-                background: wsConnected ? C.green : C.red,
+                background: wsConnected ? token.status.profit.fg : token.status.loss.fg,
                 animation: wsConnected ? 'pulse 2s infinite' : 'none'
               }} />
               <span style={{ 
                 fontSize: 11, 
-                color: wsConnected ? C.green : C.red,
+                color: wsConnected ? token.status.profit.fg : token.status.loss.fg,
                 fontFamily: 'monospace',
                 fontWeight: 700
               }}>
@@ -336,11 +338,11 @@ function NotificationCenter() {
               onClick={handleRefresh}
               disabled={refreshing}
               style={{
-                background: C.bg2,
-                border: `1px solid ${C.border}`,
+                background: token.surface.raised,
+                border: `1px solid ${token.line.default}`,
                 borderRadius: 8,
                 padding: '8px 12px',
-                color: C.t2,
+                color: token.content.secondary,
                 cursor: refreshing ? 'not-allowed' : 'pointer',
                 display: 'flex',
                 alignItems: 'center',
@@ -357,11 +359,11 @@ function NotificationCenter() {
               <button
                 onClick={markAllAsRead}
                 style={{
-                  background: `${C.cyan}15`,
-                  border: `1px solid ${C.cyan}50`,
+                  background: `${token.brand.base}15`,
+                  border: `1px solid ${token.brand.base}50`,
                   borderRadius: 8,
                   padding: '8px 14px',
-                  color: C.cyan,
+                  color: token.brand.base,
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
@@ -380,10 +382,10 @@ function NotificationCenter() {
                 onClick={deleteAllNotifications}
                 style={{
                   background: 'transparent',
-                  border: `1px solid ${C.border}`,
+                  border: `1px solid ${token.line.default}`,
                   borderRadius: 8,
                   padding: '8px 12px',
-                  color: C.t3,
+                  color: token.content.muted,
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
@@ -406,14 +408,14 @@ function NotificationCenter() {
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            background: C.bg2,
-            border: `1px solid ${C.border}`,
+            background: token.surface.raised,
+            border: `1px solid ${token.line.default}`,
             borderRadius: 8,
             padding: '6px 12px',
             flex: '1 1 240px',
             minWidth: 200
           }}>
-            <Search size={14} color={C.t3} />
+            <Search size={14} color={token.content.muted} />
             <input
               type="text"
               placeholder="Search notifications..."
@@ -422,7 +424,7 @@ function NotificationCenter() {
               style={{
                 background: 'transparent',
                 border: 'none',
-                color: C.t1,
+                color: token.content.primary,
                 fontSize: 12,
                 outline: 'none',
                 width: '100%'
@@ -431,7 +433,7 @@ function NotificationCenter() {
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                style={{ background: 'transparent', border: 'none', color: C.t3, cursor: 'pointer', padding: 0 }}
+                style={{ background: 'transparent', border: 'none', color: token.content.muted, cursor: 'pointer', padding: 0 }}
               >
                 <X size={13} />
               </button>
@@ -442,11 +444,11 @@ function NotificationCenter() {
           <button
             onClick={() => setUnreadOnly(!unreadOnly)}
             style={{
-              background: unreadOnly ? `${C.cyan}20` : C.bg2,
-              border: `1px solid ${unreadOnly ? C.cyan : C.border}`,
+              background: unreadOnly ? `${token.brand.base}20` : token.surface.raised,
+              border: `1px solid ${unreadOnly ? token.brand.base : token.line.default}`,
               borderRadius: 8,
               padding: '6px 14px',
-              color: unreadOnly ? C.cyan : C.t2,
+              color: unreadOnly ? token.brand.base : token.content.secondary,
               fontSize: 12,
               fontWeight: 600,
               cursor: 'pointer',
@@ -459,7 +461,7 @@ function NotificationCenter() {
               width: 7,
               height: 7,
               borderRadius: '50%',
-              background: unreadOnly ? C.cyan : C.t3
+              background: unreadOnly ? token.brand.base : token.content.muted
             }} />
             Unread Only
           </button>
@@ -475,11 +477,11 @@ function NotificationCenter() {
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
                 style={{
-                  background: active ? `${C.cyan}18` : C.bg2,
-                  border: `1px solid ${active ? C.cyan : C.border}`,
+                  background: active ? `${token.brand.base}18` : token.surface.raised,
+                  border: `1px solid ${active ? token.brand.base : token.line.default}`,
                   borderRadius: 6,
                   padding: '6px 12px',
-                  color: active ? C.cyan : C.t2,
+                  color: active ? token.brand.base : token.content.secondary,
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
@@ -501,8 +503,8 @@ function NotificationCenter() {
       {/* Error Banner */}
       {error && (
         <div style={{
-          background: `${C.red}15`,
-          border: `1px solid ${C.red}40`,
+          background: `${token.status.loss.fg}15`,
+          border: `1px solid ${token.status.loss.fg}40`,
           borderRadius: 8,
           padding: '12px 16px',
           marginBottom: 20,
@@ -510,15 +512,15 @@ function NotificationCenter() {
           alignItems: 'center',
           gap: 8,
         }}>
-          <AlertCircle size={16} color={C.red} />
-          <span style={{ color: C.red, fontSize: 13 }}>{error}</span>
+          <AlertCircle size={16} color={token.status.loss.fg} />
+          <span style={{ color: token.status.loss.fg, fontSize: 13 }}>{error}</span>
         </div>
       )}
 
       {/* Notifications Feed */}
       <div style={{
-        background: C.bg2,
-        border: `1px solid ${C.border}`,
+        background: token.surface.raised,
+        border: `1px solid ${token.line.default}`,
         borderRadius: 12,
         overflow: 'hidden'
       }}>
@@ -528,18 +530,18 @@ function NotificationCenter() {
               width: 52,
               height: 52,
               borderRadius: '50%',
-              background: C.bg3,
+              background: token.surface.inset,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               margin: '0 auto 16px'
             }}>
-              <Bell size={24} color={C.t3} />
+              <Bell size={24} color={token.content.muted} />
             </div>
-            <h3 style={{ color: C.t1, fontSize: 15, fontWeight: 700, marginBottom: 6 }}>
+            <h3 style={{ color: token.content.primary, fontSize: 15, fontWeight: 700, marginBottom: 6 }}>
               {unreadOnly ? "No Unread Notifications" : "No Notifications"}
             </h3>
-            <p style={{ color: C.t3, fontSize: 13, maxWidth: 380, margin: '0 auto' }}>
+            <p style={{ color: token.content.muted, fontSize: 13, maxWidth: 380, margin: '0 auto' }}>
               {searchQuery 
                 ? `No notifications matching "${searchQuery}".`
                 : selectedCategory === 'all'
@@ -560,9 +562,9 @@ function NotificationCenter() {
                 onClick={() => handleNotificationClick(notification)}
                 style={{
                   padding: '16px 20px',
-                  borderBottom: idx < filteredNotifications.length - 1 ? `1px solid ${C.border}` : 'none',
-                  background: isUnread ? `${C.cyan}07` : 'transparent',
-                  borderLeft: `3px solid ${isUnread ? C.cyan : 'transparent'}`,
+                  borderBottom: idx < filteredNotifications.length - 1 ? `1px solid ${token.line.default}` : 'none',
+                  background: isUnread ? `${token.brand.base}07` : 'transparent',
+                  borderLeft: `3px solid ${isUnread ? token.brand.base : 'transparent'}`,
                   cursor: 'pointer',
                   transition: 'background 0.15s',
                 }}
@@ -573,15 +575,15 @@ function NotificationCenter() {
                     width: 32,
                     height: 32,
                     borderRadius: 8,
-                    background: `${SEVERITY_COLORS[notification.severity] || C.cyan}18`,
-                    border: `1px solid ${SEVERITY_COLORS[notification.severity] || C.cyan}35`,
+                    background: `${SEVERITY_COLORS[notification.severity] || token.brand.base}18`,
+                    border: `1px solid ${SEVERITY_COLORS[notification.severity] || token.brand.base}35`,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     flexShrink: 0,
                     marginTop: 2
                   }}>
-                    <SeverityIcon size={16} color={SEVERITY_COLORS[notification.severity] || C.cyan} />
+                    <SeverityIcon size={16} color={SEVERITY_COLORS[notification.severity] || token.brand.base} />
                   </div>
 
                   {/* Content Area */}
@@ -597,13 +599,13 @@ function NotificationCenter() {
                         <span style={{ 
                           fontSize: 13.5, 
                           fontWeight: isUnread ? 700 : 600, 
-                          color: isUnread ? C.t1 : C.t2,
+                          color: isUnread ? token.content.primary : token.content.secondary,
                         }}>
                           {notification.title}
                         </span>
                         <span style={{
-                          background: `${C.cyan}15`,
-                          color: C.cyan,
+                          background: `${token.brand.base}15`,
+                          color: token.brand.base,
                           fontSize: 10,
                           padding: '1px 6px',
                           borderRadius: 4,
@@ -618,13 +620,13 @@ function NotificationCenter() {
                             width: 6,
                             height: 6,
                             borderRadius: '50%',
-                            background: C.cyan
+                            background: token.brand.base
                           }} />
                         )}
                       </div>
                       <span style={{ 
                         fontSize: 11, 
-                        color: C.t3, 
+                        color: token.content.muted, 
                         fontFamily: 'monospace',
                         flexShrink: 0
                       }}>
@@ -635,7 +637,7 @@ function NotificationCenter() {
                     <p style={{ 
                       margin: 0, 
                       fontSize: 13, 
-                      color: isUnread ? C.t2 : C.t3,
+                      color: isUnread ? token.content.secondary : token.content.muted,
                       lineHeight: 1.45,
                       marginBottom: (notification.strategy_id || notification.exchange || notification.metadata?.ticket_id) ? 8 : 0
                     }}>
@@ -644,9 +646,9 @@ function NotificationCenter() {
 
                     {/* Metadata & Navigation Badges */}
                     {(notification.strategy_id || notification.exchange || notification.metadata?.ticket_id) && (
-                      <div style={{ display: 'flex', gap: 10, fontSize: 11, color: C.t3, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: 10, fontSize: 11, color: token.content.muted, flexWrap: 'wrap' }}>
                         {notification.metadata?.ticket_id && (
-                          <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: C.cyan, fontWeight: 600 }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: token.brand.base, fontWeight: 600 }}>
                             <HelpCircle size={11} />
                             Ticket: #{notification.metadata.ticket_id}
                           </span>
@@ -677,7 +679,7 @@ function NotificationCenter() {
                         style={{
                           background: 'transparent',
                           border: 'none',
-                          color: C.t3,
+                          color: token.content.muted,
                           cursor: 'pointer',
                           padding: 6,
                           borderRadius: 4,
@@ -695,7 +697,7 @@ function NotificationCenter() {
                       style={{
                         background: 'transparent',
                         border: 'none',
-                        color: C.t3,
+                        color: token.content.muted,
                         cursor: 'pointer',
                         padding: 6,
                         borderRadius: 4,
