@@ -1481,7 +1481,7 @@ the decomposition this plan uses instead:
 
 - [ ] 25. M9 — Paper Trading (`/app/paper-trading`)
 
-  - [~] 25.1 Retoken `src/pages/PaperTrading.jsx` and deduplicate the environment indicator
+  - [x] 25.1 Retoken `src/pages/PaperTrading.jsx` and deduplicate the environment indicator
     - **Do not restructure this page.** Behaviourally it is the most correct page in the app:
       `paperTradingFormat.js` already implements exact minor-unit money handling, the eight-state
       panel model, server-error→state classification and per-figure simulated labelling with a

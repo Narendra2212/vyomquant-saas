@@ -166,7 +166,7 @@ import {
   XCircle,
 } from 'lucide-react';
 
-import { C, PanelTitle, Spinner } from '../components/ui-legacy/primitives';
+import { PanelTitle, Spinner } from '../components/ui-legacy/primitives';
 // Task 10.8: every failure on this page is worded by `design/errorCopy.js` and nothing else.
 // `extractErrorMessage` used to fill these slots and fell through to `JSON.stringify(detail)`
 // and then `err.message`, so an axios message and a FastAPI dump reached the screen verbatim
@@ -1937,6 +1937,17 @@ export default function PaperTrading() {
   // formatted — and the header a value is announced with in the stacked layout is the header it sat
   // under in the wide one. Nothing here changes a figure or its source: every `render` below is the
   // cell expression the wide table already had.
+  //
+  // THE TWO P&L CELLS KEEP `cellStyle` + `statusToken` AND DO NOT BECOME `ds/PnLDisplay` (task
+  // 25.1, final pass). That component owns this exact decision — sign -> hue on a money figure —
+  // but adopting it here would be a restructure rather than a retoken: it formats through
+  // `ds/Metric`'s `formatFigure`, where these cells format through `formatMoneyDecimal`, which
+  // shifts the server's exact decimal digit for digit; it renders the not-available marker where
+  // these render `NOT_COMPUTED` / `NOT_REPORTED`; and it wraps the figure in a `<span>` of its own
+  // instead of leaving a text node in the cell. It would also repick both hues, because `pnlToken`
+  // reads zero as neutral and any gain as profit, where `unrealized` leaves a gain in
+  // `content.primary` and `realized` prints a `+` on zero in the profit hue. Only the SOURCE of
+  // each hue moved here; every string these cells display is the one they displayed before.
 
   const positionColumns = useMemo(
     () => [
@@ -1959,13 +1970,13 @@ export default function PaperTrading() {
         key: 'unrealized',
         header: 'Unrealized PnL',
         render: (row) => formatMoneyDecimal(row.unrealized_pnl, sessionCurrency) ?? NOT_COMPUTED,
-        cellStyle: (row) => ({ color: String(row.unrealized_pnl ?? '').startsWith('-') ? C.loss : C.t1 }),
+        cellStyle: (row) => ({ color: String(row.unrealized_pnl ?? '').startsWith('-') ? statusToken('loss').fg : token.content.primary }),
       },
       {
         key: 'pricedAt',
         header: 'Priced at',
         render: (row) => formatInstant(row.price_at) ?? NOT_REPORTED,
-        cellStyle: () => ({ color: C.t2 }),
+        cellStyle: () => ({ color: token.content.secondary }),
       },
     ],
     [sessionCurrency],
@@ -1990,7 +2001,7 @@ export default function PaperTrading() {
         key: 'signal',
         header: 'Signal',
         render: (row) => row.signal_id ?? '—',
-        cellStyle: () => ({ color: C.t2 }),
+        cellStyle: () => ({ color: token.content.secondary }),
       },
     ],
     [sessionCurrency],
@@ -2016,7 +2027,7 @@ export default function PaperTrading() {
           );
         },
         cellStyle: (row) => ({
-          color: String(row.realized_pnl ?? '').trim().startsWith('-') ? C.loss : C.profit,
+          color: String(row.realized_pnl ?? '').trim().startsWith('-') ? statusToken('loss').fg : statusToken('profit').fg,
         }),
       },
       { key: 'fee', header: 'Fee', render: (row) => formatMinorUnits(row.fee_minor, sessionCurrency) ?? NOT_REPORTED },
@@ -2024,7 +2035,7 @@ export default function PaperTrading() {
         key: 'closedAt',
         header: 'Closed at',
         render: (row) => formatInstant(row.closed_at) ?? NOT_REPORTED,
-        cellStyle: () => ({ color: C.t2 }),
+        cellStyle: () => ({ color: token.content.secondary }),
       },
     ],
     [sessionCurrency],
@@ -2036,7 +2047,7 @@ export default function PaperTrading() {
         key: 'at',
         header: 'At',
         render: (signal) => formatInstant(signal.generatedAt ?? signal.emittedAt) ?? NOT_REPORTED,
-        cellStyle: () => ({ color: C.t2 }),
+        cellStyle: () => ({ color: token.content.secondary }),
       },
       { key: 'decision', header: 'Decision', render: (signal) => signal.decision ?? NOT_REPORTED },
       { key: 'symbol', header: 'Symbol', render: (signal) => signal.symbol ?? '—' },
@@ -2062,14 +2073,14 @@ export default function PaperTrading() {
               key: 'seq',
               header: 'Seq',
               render: (event) => formatCount(event.sequence),
-              cellStyle: () => ({ color: C.t3 }),
+              cellStyle: () => ({ color: token.content.muted }),
             }
           : null,
         {
           key: 'at',
           header: 'At',
           render: (event) => formatInstant(event.at ?? event.emittedAt) ?? NOT_REPORTED,
-          cellStyle: () => ({ color: C.t2 }),
+          cellStyle: () => ({ color: token.content.secondary }),
         },
         {
           key: 'event',
@@ -2090,7 +2101,7 @@ export default function PaperTrading() {
           key: 'detail',
           header: 'Detail',
           render: (event) => event.rejectionReason || event.message || event.sessionState || event.orderState || '—',
-          cellStyle: () => ({ color: C.t2, whiteSpace: 'normal' }),
+          cellStyle: () => ({ color: token.content.secondary, whiteSpace: 'normal' }),
         },
       ].filter(Boolean),
     [uiMode],
@@ -2276,8 +2287,8 @@ export default function PaperTrading() {
       style={{
         padding: PAGE_PADDING,
         flex: 1,
-        background: C.bg0,
-        color: C.t1,
+        background: token.surface.canvas,
+        color: token.content.primary,
         fontFamily: 'monospace',
         // The three page-level guards behind Requirement 20.7. `minWidth: 0` lets this page shrink
         // inside the shell's flex column instead of forcing it wider; `maxWidth: '100%'` keeps it
@@ -2292,14 +2303,14 @@ export default function PaperTrading() {
       }}
     >
       {/* ── header ─────────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: C.space.md, alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: C.space.lg }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: token.space['3'], alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: token.space['4'] }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <h1 style={{ fontSize: '1.25rem', fontWeight: 900, color: C.t1, margin: 0, letterSpacing: '-0.02em' }}>
+            <h1 style={{ fontSize: '1.25rem', fontWeight: 900, color: token.content.primary, margin: 0, letterSpacing: '-0.02em' }}>
               Paper Trading
             </h1>
           </div>
-          <p style={{ fontSize: 11, color: C.t3, margin: '4px 0 0' }}>
+          <p style={{ fontSize: 11, color: token.content.muted, margin: '4px 0 0' }}>
             Every figure on this page is produced by the paper simulator against validated market
             data. None of it reaches an exchange.
           </p>
@@ -2324,9 +2335,9 @@ export default function PaperTrading() {
                 fontWeight: 800,
                 letterSpacing: 0.6,
                 textTransform: 'uppercase',
-                color: C.warning,
-                border: `1px solid ${C.warning}55`,
-                borderRadius: C.radius.sm,
+                color: statusToken('warning').fg,
+                border: `1px solid ${statusToken('warning').fg}55`,
+                borderRadius: token.radius.sm,
                 padding: '2px 7px',
               }}
             >
@@ -2397,8 +2408,8 @@ export default function PaperTrading() {
             style={{
               display: 'grid',
               gridTemplateColumns: gridColumns(180),
-              gap: C.space.md,
-              marginBottom: C.space.md,
+              gap: token.space['3'],
+              marginBottom: token.space['3'],
               minWidth: 0,
             }}
           >
@@ -2421,7 +2432,7 @@ export default function PaperTrading() {
                 ))}
               </select>
               {selectedEntry ? (
-                <div style={{ color: C.t3, fontSize: 9, marginTop: 4 }}>
+                <div style={{ color: token.content.muted, fontSize: 9, marginTop: 4 }}>
                   {selectedEntry.ownership === 'SUBSCRIBED'
                     ? 'Subscribed. The strategy definition stays with its owner — the server resolves it from the Listing.'
                     : 'Owned.'}
@@ -2493,10 +2504,10 @@ export default function PaperTrading() {
                 aria-invalid={capitalError ? 'true' : 'false'}
                 style={{
                   ...fieldStyle,
-                  borderColor: capitalError ? C.loss : C.border,
+                  borderColor: capitalError ? statusToken('loss').fg : token.line.default,
                 }}
               />
-              <div id="paper-capital-help" style={{ fontSize: 9, marginTop: 4, color: capitalError ? C.loss : C.t3 }}>
+              <div id="paper-capital-help" style={{ fontSize: 9, marginTop: 4, color: capitalError ? statusToken('loss').fg : token.content.muted }}>
                 {capitalError
                   || (capitalPreview.ok
                     ? `Sent as ${formatCount(capitalPreview.minor)} minor units — an exact whole number, never a rounded float.`
@@ -2525,7 +2536,7 @@ export default function PaperTrading() {
             one. These four are decided by `session_state`: a `CREATED` session admits none of
             them, and that is what `disabled` reports — a control that is genuinely unavailable in
             the state the server reported, named rather than silently greyed out. */}
-        <div style={{ marginTop: C.space.md, borderTop: `1px solid ${C.border}`, paddingTop: C.space.md }}>
+        <div style={{ marginTop: token.space['3'], borderTop: `1px solid ${token.line.default}`, paddingTop: token.space['3'] }}>
           <span style={labelStyle}>Session operations</span>
           <PanelBody
             state={operationsState}
@@ -2587,14 +2598,14 @@ export default function PaperTrading() {
                 <RotateCcw size={13} aria-hidden="true" />
                 <span style={{ marginLeft: 6 }}>{busy === 'reset' ? 'Resetting…' : 'Reset'}</span>
               </Button>
-              <span style={{ color: C.t3, fontSize: 9, minWidth: 0, flexBasis: singleColumn ? undefined : '100%' }}>
+              <span style={{ color: token.content.muted, fontSize: 9, minWidth: 0, flexBasis: singleColumn ? undefined : '100%' }}>
                 {`Admitted from ${sessionState || 'the reported state'}: ${availableOperations.join(', ')}.`}
               </span>
             </div>
           </PanelBody>
         </div>
 
-        <div style={{ marginTop: C.space.lg, borderTop: `1px solid ${C.border}`, paddingTop: C.space.md }}>
+        <div style={{ marginTop: token.space['4'], borderTop: `1px solid ${token.line.default}`, paddingTop: token.space['3'] }}>
           <label htmlFor="paper-session" style={labelStyle}>
             Session
           </label>
@@ -2653,34 +2664,34 @@ export default function PaperTrading() {
           <ul
             data-responsive-grid="stop-report"
             data-single-column={String(singleColumn)}
-            style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gridTemplateColumns: gridColumns(220), gap: 6, fontSize: 10, color: C.t2, minWidth: 0 }}
+            style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gridTemplateColumns: gridColumns(220), gap: 6, fontSize: 10, color: token.content.secondary, minWidth: 0 }}
           >
             <li>
               Outstanding:{' '}
-              <span style={{ color: C.t1 }}>
+              <span style={{ color: token.content.primary }}>
                 {Array.isArray(stopReport.outstanding) && stopReport.outstanding.length
                   ? stopReport.outstanding.join(', ')
                   : 'none reported'}
               </span>
             </li>
             <li>
-              Finals committed: <span style={{ color: C.t1 }}>{String(stopReport.finals_committed)}</span>
+              Finals committed: <span style={{ color: token.content.primary }}>{String(stopReport.finals_committed)}</span>
             </li>
             <li>
-              Finals reason: <span style={{ color: C.t1 }}>{stopReport.finals_reason ?? 'none'}</span>
+              Finals reason: <span style={{ color: token.content.primary }}>{stopReport.finals_reason ?? 'none'}</span>
             </li>
             <li>
               Finals stale:{' '}
-              <span style={{ color: C.t1 }}>
+              <span style={{ color: token.content.primary }}>
                 {stopReport.stale === null || stopReport.stale === undefined ? NOT_REPORTED : String(stopReport.stale)}
               </span>
             </li>
             <li>
-              Loop settled: <span style={{ color: C.t1 }}>{String(stopReport.loop_settled)}</span>
+              Loop settled: <span style={{ color: token.content.primary }}>{String(stopReport.loop_settled)}</span>
             </li>
             <li>
               Channel registrations closed:{' '}
-              <span style={{ color: C.t1 }}>
+              <span style={{ color: token.content.primary }}>
                 {stopReport.registrations_closed === null || stopReport.registrations_closed === undefined
                   ? NOT_REPORTED
                   : formatCount(stopReport.registrations_closed)}
@@ -2700,23 +2711,23 @@ export default function PaperTrading() {
           <ul
             data-responsive-grid="reset-report"
             data-single-column={String(singleColumn)}
-            style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gridTemplateColumns: gridColumns(220), gap: 6, fontSize: 10, color: C.t2, minWidth: 0 }}
+            style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gridTemplateColumns: gridColumns(220), gap: 6, fontSize: 10, color: token.content.secondary, minWidth: 0 }}
           >
             <li>
               Restored capital:{' '}
-              <span style={{ color: C.t1 }}>
+              <span style={{ color: token.content.primary }}>
                 {formatMinorUnits(resetReport.initial_capital_minor, sessionCurrency) ?? NOT_REPORTED} {sessionCurrency}
               </span>
             </li>
             <li>
-              Orders cancelled: <span style={{ color: C.t1 }}>{formatCount(resetReport.cancelled_orders?.length) ?? '0'}</span>
+              Orders cancelled: <span style={{ color: token.content.primary }}>{formatCount(resetReport.cancelled_orders?.length) ?? '0'}</span>
             </li>
             <li>
               Orders not cancellable:{' '}
-              <span style={{ color: C.t1 }}>{formatCount(resetReport.orders_not_cancellable?.length) ?? '0'}</span>
+              <span style={{ color: token.content.primary }}>{formatCount(resetReport.orders_not_cancellable?.length) ?? '0'}</span>
             </li>
             <li>
-              Positions closed: <span style={{ color: C.t1 }}>{formatCount(resetReport.closed_positions?.length) ?? '0'}</span>
+              Positions closed: <span style={{ color: token.content.primary }}>{formatCount(resetReport.closed_positions?.length) ?? '0'}</span>
             </li>
           </ul>
         </Card>
@@ -2729,8 +2740,8 @@ export default function PaperTrading() {
         style={{
           display: 'grid',
           gridTemplateColumns: gridColumns(230),
-          gap: C.space.md,
-          marginBottom: C.space.md,
+          gap: token.space['3'],
+          marginBottom: token.space['3'],
           minWidth: 0,
         }}
       >
@@ -2750,11 +2761,11 @@ export default function PaperTrading() {
                 />
                 <StatusPill tone="muted" Icon={Radio} label={`Transport ${session?.feed_transport ?? 'not reported'}`} />
               </div>
-              <div style={{ color: C.t3, fontSize: 9 }}>
+              <div style={{ color: token.content.muted, fontSize: 9 }}>
                 {feedCopy?.note ?? 'This feed state is not one of the five the platform records; it is shown verbatim.'}
               </div>
-              <div style={{ color: C.t2, fontSize: 9 }}>
-                Source: <span style={{ color: C.t1 }}>{session?.market_data_source ?? NOT_REPORTED}</span>
+              <div style={{ color: token.content.secondary, fontSize: 9 }}>
+                Source: <span style={{ color: token.content.primary }}>{session?.market_data_source ?? NOT_REPORTED}</span>
               </div>
               <SimulatedTag />
             </div>
@@ -2773,12 +2784,12 @@ export default function PaperTrading() {
                 />
                 <StatusPill tone="muted" label={`Events ${formatCount(session?.event_sequence) ?? '0'}`} />
               </div>
-              <div style={{ color: C.t2, fontSize: 9 }}>
+              <div style={{ color: token.content.secondary, fontSize: 9 }}>
                 {session?.symbol ?? '—'} · {session?.timeframe ?? '—'} · {session?.exchange_id ?? '—'}
               </div>
-              <div style={{ color: C.t2, fontSize: 9 }}>
+              <div style={{ color: token.content.secondary, fontSize: 9 }}>
                 Recorded capital{' '}
-                <span style={{ color: C.t1 }}>
+                <span style={{ color: token.content.primary }}>
                   {formatMinorUnits(session?.initial_capital_minor, sessionCurrency) ?? NOT_REPORTED} {sessionCurrency}
                 </span>
               </div>
@@ -2822,10 +2833,10 @@ export default function PaperTrading() {
             emptyText="No market event has been recorded for this session yet."
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ color: C.t1, fontWeight: 900, fontSize: 16 }}>
+              <div style={{ color: token.content.primary, fontWeight: 900, fontSize: 16 }}>
                 {formatLatency(latestTick?.latencyMs) ?? NOT_REPORTED}
               </div>
-              <div style={{ color: C.t3, fontSize: 9 }}>
+              <div style={{ color: token.content.muted, fontSize: 9 }}>
                 Delivery latency of the last validated candle. A negative value means the clocks
                 disagree and is shown as recorded; an unmeasured one reads “{NOT_REPORTED}” rather
                 than zero.
@@ -2885,9 +2896,9 @@ export default function PaperTrading() {
                     fontWeight: 800,
                     letterSpacing: 0.6,
                     textTransform: 'uppercase',
-                    color: C.warning,
-                    border: `1px solid ${C.warning}55`,
-                    borderRadius: C.radius.sm,
+                    color: statusToken('warning').fg,
+                    border: `1px solid ${statusToken('warning').fg}55`,
+                    borderRadius: token.radius.sm,
                     padding: '2px 7px',
                   }}
                 >
@@ -2912,7 +2923,7 @@ export default function PaperTrading() {
               ) : null}
             </div>
 
-            <div style={{ color: C.t3, fontSize: 9 }}>
+            <div style={{ color: token.content.muted, fontSize: 9 }}>
               On reconnect the page asks{' '}
               <code>events(sessionId, {formatCount(retained.lastSequence) ?? '0'})</code> for the
               frames the drop swallowed, and discards any whose <code>event_id</code> it has already
@@ -2943,24 +2954,24 @@ export default function PaperTrading() {
           data-events-discarded={retained.eventsDiscarded}
           data-ticks-discarded={retained.ticksDiscarded}
           style={{
-            color: C.t2,
+            color: token.content.secondary,
             fontSize: 10,
             fontFamily: 'monospace',
             lineHeight: 1.6,
-            marginTop: C.space.md,
-            borderTop: `1px solid ${C.border}`,
-            paddingTop: C.space.md,
+            marginTop: token.space['3'],
+            borderTop: `1px solid ${token.line.default}`,
+            paddingTop: token.space['3'],
           }}
         >
           Retained in memory:{' '}
-          <span style={{ color: C.t1 }}>
+          <span style={{ color: token.content.primary }}>
             {formatCount(retained.events.length)} / {formatCount(MAX_RETAINED_EVENTS)} events
           </span>
           ,{' '}
-          <span style={{ color: C.t1 }}>
+          <span style={{ color: token.content.primary }}>
             {formatCount(retained.ticks.length)} / {formatCount(MAX_RETAINED_TICKS)} ticks
           </span>
-          , and at most <span style={{ color: C.t1 }}>{formatCount(MAX_CHART_POINTS_PER_SERIES)}</span>{' '}
+          , and at most <span style={{ color: token.content.primary }}>{formatCount(MAX_CHART_POINTS_PER_SERIES)}</span>{' '}
           points per chart series. The oldest are discarded first, by position in the
           session&rsquo;s sequence rather than by arrival order.
           {retained.eventsDiscarded > 0 || retained.ticksDiscarded > 0
@@ -2975,13 +2986,13 @@ export default function PaperTrading() {
           role="status"
           style={{
             ...panelStyle,
-            borderColor: `${C.warning}55`,
-            marginBottom: C.space.md,
+            borderColor: `${statusToken('warning').fg}55`,
+            marginBottom: token.space['3'],
             display: 'flex',
             alignItems: 'flex-start',
             gap: 8,
             fontSize: 11,
-            color: C.warning,
+            color: statusToken('warning').fg,
           }}
         >
           <AlertTriangle size={14} aria-hidden="true" style={{ flexShrink: 0, marginTop: 1 }} />
@@ -3000,8 +3011,8 @@ export default function PaperTrading() {
         style={{
           display: 'grid',
           gridTemplateColumns: gridColumns(200),
-          gap: C.space.md,
-          marginBottom: C.space.md,
+          gap: token.space['3'],
+          marginBottom: token.space['3'],
           minWidth: 0,
         }}
       >
@@ -3342,7 +3353,7 @@ export default function PaperTrading() {
             rowKey={(row) => row.id}
             columns={positionColumns}
           />
-          <div style={{ color: C.t3, fontSize: 9, marginTop: 6 }}>
+          <div style={{ color: token.content.muted, fontSize: 9, marginTop: 6 }}>
             A current price, an unrealized figure or a priced-at instant that the server did not
             report reads “{NOT_REPORTED}” — no price is carried forward and none is synthesised.
           </div>
@@ -3369,7 +3380,7 @@ export default function PaperTrading() {
             rowKey={(row) => row.id}
             columns={orderColumns}
           />
-          <div style={{ color: C.t3, fontSize: 9, marginTop: 6 }}>
+          <div style={{ color: token.content.muted, fontSize: 9, marginTop: 6 }}>
             Fees are the integer Minor_Units the order recorded, decimal-shifted for display only.
           </div>
         </PanelBody>
@@ -3402,7 +3413,7 @@ export default function PaperTrading() {
       <div
         data-responsive-grid="streams"
         data-single-column={String(singleColumn)}
-        style={{ display: 'grid', gridTemplateColumns: gridColumns(320), gap: C.space.md, minWidth: 0 }}
+        style={{ display: 'grid', gridTemplateColumns: gridColumns(320), gap: token.space['3'], minWidth: 0 }}
       >
         <Card style={{ background: token.surface.raised, borderColor: token.line.default, minWidth: 0 }}>
           <PanelTitle
@@ -3423,7 +3434,7 @@ export default function PaperTrading() {
               rowKey={(signal) => signal.eventId ?? `${signal.sequence}`}
               columns={signalColumns}
             />
-            <div style={{ color: C.t3, fontSize: 9, marginTop: 6 }}>
+            <div style={{ color: token.content.muted, fontSize: 9, marginTop: 6 }}>
               A signal recorded without a validated price shows “{NOT_REPORTED}” for its price
               rather than a zero.
             </div>
@@ -3450,7 +3461,7 @@ export default function PaperTrading() {
               columns={executionColumns}
             />
             {derived.errors.length ? (
-              <div role="alert" style={{ marginTop: 8, color: C.loss, fontSize: 10 }}>
+              <div role="alert" style={{ marginTop: 8, color: statusToken('loss').fg, fontSize: 10 }}>
                 {formatCount(derived.errors.length)} error frame(s) recorded on this session. The most
                 recent: {derived.errors[derived.errors.length - 1].code ?? NOT_REPORTED} —{' '}
                 {derived.errors[derived.errors.length - 1].message ?? NOT_REPORTED}

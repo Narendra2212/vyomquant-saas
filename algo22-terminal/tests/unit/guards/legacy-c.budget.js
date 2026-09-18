@@ -194,71 +194,39 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // NO HUE DIVERGENCE WAS INTRODUCED BY THIS PART. Every one of the 60 is the value the shim
   // already gave it. The page's one recorded divergence is still `StaleNote`'s amber, from part 2.
   //
-  // WHERE THE REMAINING 77 ARE. Measured with this guard's own `findLegacyC`, grouped by region,
-  // line ranges as of this commit. Nothing below is estimated and the parts sum to 77. Part 2
-  // added 55 lines of comment and token reads above the first survivor and removed none, and part 3
-  // added and removed none, so every range below is the one part 1 recorded, shifted by exactly +55.
+  // 77 -> 0 at task 25.1, the FINAL PASS, which took every reference that was left. Counted by
+  // shim name, because after part 3 the region split said nothing the name does not: 42 TEXT TONES
+  // (`C.t1` 19, `C.t2` 12, `C.t3` 11 -> `token.content.primary` / `secondary` / `muted`), 16
+  // SPACINGS (`C.space.md` 14, `C.space.lg` 2 -> `token.space['3']` / `['4']`), 7 SURFACE, RULE AND
+  // RADIUS reads (`C.border` 4, `C.radius.sm` 2, `C.bg0` 1 -> `token.line.default`,
+  // `token.radius.sm`, `token.surface.canvas`) and 12 STATE HUES (`C.warning` 6, `C.loss` 5,
+  // `C.profit` 1 -> `statusToken`). Nothing was restructured, no read changed, no markup moved,
+  // and `pages/__tests__/PaperTrading.test.jsx` passes byte-unchanged at 49/49.
   //
-  //   11  the five tables' column definitions, 1941-2099 — `positionColumns` 3 (1962-1968),
-  //       `orderColumns` 1 (1993), `tradeColumns` 3 (2019-2027), `signalColumns` 1 (2039),
-  //       `executionColumns` 3 (2065-2093). Per-cell profit/loss tones inside `render`
-  //       functions, so these are `PnLDisplay`'s and `statusToken`'s, not a wrapper's.
-  //    2  the page shell, 2279-2280 — `background: C.bg0`, `color: C.t1` on the root `<div>`.
-  //    7  the header, 2294-2360 — the row's two spacings (2295), the `<h1>` colour (2298), the
-  //       subtitle (2302) and the reconnecting indicator's 3 (2327-2329). The environment
-  //       statement at 2361-2382 is the badge and holds none.
-  //   14  session controls, 2383-2636 — the field grid's spacings 2 (2400-2401), a help note 1
-  //       (2424), the capital field's error border and help text 4 (2496-2499) and the two
-  //       operation `borderTop` dividers with a note 7 (2528-2597). The card at 2384 is part 3's.
-  //   12  the stop / reset report, 2637-2724 — the stop card's definition list 1 (2656) and six
-  //       `C.t1` value tones (2660-2683); the reset card's list 1 (2703) and four more
-  //       (2707-2719). Both cards, including the conditional `complete` border, are part 3's.
-  //   10  the status strip, 2725-2851 — the grid's spacing 2 (2732-2733) and the four cells'
-  //       label and value tones 8 (2753-2828).
-  //   11  the live event stream, 2852-2971 — a refusal notice chip 3 (2888-2890), the empty note 1
-  //       (2915), and the retention footer's rule, spacings and three inline counts 7 (2946-2963).
-  //       The card with its refused-channel border is part 3's.
-  //    3  the "not computed" note, 2972-2995 — `${C.warning}55` border, a spacing and the text.
-  //    2  the figures grid, 2996-3117 — the grid's `gap` and `marginBottom` only. The twelve
-  //       `Figure`s inside it hold none of their own, and now neither does `Figure` itself —
-  //       their colour comes from the component part 2 cleared, which is why that 5 was worth
-  //       more than this 2.
-  //    0  the equity curve, 3118-3185 — cleared by part 3.
-  //    0  PnL and drawdown, 3186-3272 — cleared by part 3, including the two-track grid at 3190.
-  //    0  the price series and trade markers, 3273-3324 — cleared by part 3.
-  //    1  open positions, 3325-3351 — the below-table note (3345). The card is part 3's.
-  //    1  open orders, 3352-3377 — the below-table note (3372). The card is part 3's.
-  //    0  completed trades, 3378-3400 — it held only its card, which is part 3's.
-  //    3  signal stream and execution events, 3401-end — the two-track grid 1 (3405), the signal
-  //       note 1 (3426) and the `role="alert"` error line 1 (3453). Both cards are part 3's.
+  // THE `C` IMPORT IS GONE from the file. With no reference left there is nothing to import, and a
+  // lingering import is how one gets reintroduced by copying a neighbouring line. `PanelTitle` and
+  // `Spinner` stay on that import — they are components from the same module, not colours.
   //
-  // WHAT THE FINAL PASS TAKES, counted by SHIM NAME rather than by region, because after part 3
-  // the region split no longer says anything the name does not. These four groups sum to 77.
+  // THE TWO P&L CELLS WERE THE ONE JUDGEMENT IN THE PASS, AND THEY STAYED ON `statusToken`.
+  // `ds/PnLDisplay` owns exactly their decision — sign -> hue on a money figure — but adopting it
+  // is a restructure rather than a retoken: it formats through `ds/Metric`'s `formatFigure` where
+  // these cells format through `formatMoneyDecimal`, which shifts the server's exact decimal digit
+  // for digit; it renders the not-available marker where they render `NOT_COMPUTED` /
+  // `NOT_REPORTED`; and it wraps the figure in a `<span>` of its own instead of leaving a text node
+  // in the cell. It would also repick both hues, because `pnlToken` reads zero as neutral and any
+  // gain as profit, where `unrealized` leaves a gain in `content.primary` and `realized` prints a
+  // `+` on zero in the profit hue. What each cell displays is unchanged; only the source of its hue
+  // moved. The reason is recorded on the columns themselves.
   //
-  //   42  TEXT TONES, the bulk of what is left and the least of a decision: `C.t1` 19, `C.t2` 12,
-  //       `C.t3` 11. `token.content.primary` / `secondary` / `muted` read directly, exactly the
-  //       swap part 2 made 46 times. The 19 `C.t1` are almost all definition-list VALUES — the
-  //       stop report's six, the reset report's four, the status strip's three, the retention
-  //       footer's three — plus the `<h1>`, the shell and one table cell.
-  //   16  SPACING: `C.space.md` 14 and `C.space.lg` 2 — nine on five grids (the header row, the
-  //       field grid, the status strip, the figures grid, the signal/execution row), six on three
-  //       dividers (the two session operations and the retention footer) and one on the "not
-  //       computed" note. `token.space['3']` and `['4']`, as part 2 and part 3 both did.
-  //    7  SURFACE, RULE AND RADIUS: `C.border` 4 (three `borderTop: `1px solid ...`` dividers and
-  //       one arm of the capital field's ternary), `C.radius.sm` 2 (the reconnecting indicator and
-  //       the refusal chip) and `C.bg0` 1 (the page shell). `token.line.default`,
-  //       `token.radius.sm`, `token.surface.canvas`.
-  //   12  STATE → HUE, the only ones with a decision in them: `C.warning` 6, `C.loss` 5,
-  //       `C.profit` 1. THREE ARE THE TABLES' and are `PnLDisplay`'s question, not a wrapper's —
-  //       `C.loss : C.t1` at 1962 and `C.loss : C.profit` at 2019, each parsing a leading `-` off
-  //       a signed string inside its own `cellStyle` closure. THE OTHER NINE go through
-  //       `statusToken` unchanged: the reconnecting indicator's amber pair (2327-2328), the
-  //       capital field's error border and help text (2496, 2499), the refusal chip's amber pair
-  //       (2888-2889), the "not computed" note's border and text (2978, 2984) and the
-  //       `role="alert"` error line (3453).
+  // NO HUE DIVERGENCE AND NO MISSING TOKEN WERE ADDED BY THIS PART. Every one of the 77 is the
+  // value the shim already gave it, in the same unit or in one React writes identically — `12px`
+  // from `token.space['3']`'s `0.75rem`, `4px` from `token.radius.sm`. The page's two recorded
+  // exceptions are still part 2's: `StaleNote`'s amber, and `PAGE_PADDING`'s arithmetic on a rem.
   //
-  // No `Card` and no chart internals remain, so the final pass is text, spacing and `PnLDisplay`.
-  'pages/PaperTrading.jsx': 77,
+  // THE PAGE NOW READS THE SHIM NOWHERE. The five `C.` mentions a plain `grep` still finds in it
+  // are prose inside comments recording what a value used to be, which `findLegacyC` excludes by
+  // construction — and it is `findLegacyC` this 0 is measured with.
+  'pages/PaperTrading.jsx': 0,
   // 148 -> 120 at task 24.1, which applied §9.1's five-stage visual grammar to the canvas.
   // The 28 that went are the canvas's own: `PremiumNodeWrapper`'s body, border, text and
   // two shadow colours, the node's stage strip, block id, marker, runtime and lock tones,
