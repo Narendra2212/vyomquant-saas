@@ -449,8 +449,18 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // colour coming from a token utility class. The `LiveStatusV2` import went with the
   // hardcoded `status="running"` (§1.3), and `C` went with it.
   'components/TopBar.jsx': 0,
-  // Replaced by `ResponsiveGate` in M4; entry goes with the file.
-  'components/DesktopOnlyOverlay.jsx': 9,
+  // `components/DesktopOnlyOverlay.jsx: 9` stood here until task 27.3 deleted the file.
+  // Removed rather than lowered to `0`, for the reason given at
+  // `components/DashboardUpgrades.jsx` above: a deleted file has no source to measure and
+  // `names only files that still exist` fails on an entry pointing at nothing.
+  //
+  // `shell/ResponsiveGate.jsx` (task 8.4) superseded the component and task 8.5 rewired
+  // `App.jsx` onto it, so nothing had imported the overlay for the whole of M4-M9. The 9
+  // were `C.bg2` and `C.bg3` on the card and its inner box, `C.border` twice, `C.cyan`
+  // twice on the icon row and the "Minimum width: 1000px" line, and `C.t1` / `C.t2` /
+  // `C.t3` on the heading and the two paragraphs — a whole surface's palette, none of it
+  // reachable. So this is 9 fewer call sites standing between here and task 27.2, taken
+  // by deleting dead code rather than by migrating anything.
   // Not a page: the block-category presentation map. Colours the builder
   // palette, so it clears with the builder work.
   //

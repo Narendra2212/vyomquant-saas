@@ -4,8 +4,9 @@
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * vyomquant-ui-redesign task 8.4. design.md §11.6, §1.11. Requirements 17.1, 17.4.
- * Replaces `components/DesktopOnlyOverlay.jsx` (deleted by task 27.3, still wired into
- * `App.jsx` until task 8.5 rebuilds the shell — both files exist for those two tasks).
+ * Replaced `components/DesktopOnlyOverlay.jsx`, which task 8.5 unwired from `App.jsx` and
+ * task 27.3 then deleted. The description of it below is of a file that no longer exists;
+ * it is kept because it is the argument for why this module looks the way it does.
  *
  * ---------------------------------------------------------------------------
  * WHAT WAS WRONG WITH THE THING THIS REPLACES

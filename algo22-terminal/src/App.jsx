@@ -10,9 +10,8 @@ import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import SupportCenter from './components/SupportCenter';
 import NotificationCenter from './components/NotificationCenter';
-// `DesktopOnlyOverlay` is no longer imported — the shell is gated by
-// `shell/ResponsiveGate` instead (task 8.4/8.5). The component FILE still exists;
-// task 27.3 owns deleting it. Keeping a dead import here would only trip no-unused-vars.
+// `DesktopOnlyOverlay` is gone — the shell is gated by `shell/ResponsiveGate` instead
+// (task 8.4/8.5), and task 27.3 deleted the component file once nothing imported it.
 import ResponsiveGate, { SIDEBAR_WIDTH_PX, useViewportAccess } from './components/shell/ResponsiveGate';
 // The sidebar's footer slot (task 8.8). It is the app's ONLY route to the seven pages
 // §6.4 defers out of primary nav — profile, security log, billing, exchanges, risk,

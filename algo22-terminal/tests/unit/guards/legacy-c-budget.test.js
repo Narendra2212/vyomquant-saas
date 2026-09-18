@@ -347,10 +347,19 @@ describe('legacy-c-budget: the spot check', () => {
     // line does not read the shim, and 20.1's other edit (the route element on what is now
     // line 615) is below the last counted reference, so the COUNT did not move:
     // `LEGACY_C_BUDGET['App.jsx']` stays at 13.
+    //
+    // Task 27.3 then REMOVED one line above the first surviving group, so every number is
+    // now 1 lower again (217→216 … 320→319). That task deleted
+    // `components/DesktopOnlyOverlay.jsx`, and the three-line note here explaining that the
+    // overlay was no longer imported but its file still existed became two lines: the file
+    // does not exist any more, so there is nothing left to say about when it goes. No
+    // reference moved relative to any other and none was added or removed —
+    // `LEGACY_C_BUDGET['App.jsx']` stays at 13, and this is the "only the spot check's line
+    // array moved" case its budget note has described since task 8.5.
     const source = readFileSync(path.join(SRC, 'App.jsx'), 'utf8');
     const lines = findLegacyC(source).map((r) => r.line);
 
-    expect(lines).toEqual([217, 218, 218, 219, 223, 223, 241, 304, 309, 315, 316, 317, 320]);
+    expect(lines).toEqual([216, 217, 217, 218, 222, 222, 240, 303, 308, 314, 315, 316, 319]);
     expect(lines).toHaveLength(13);
     expect(LEGACY_C_BUDGET['App.jsx']).toBe(13);
   });
@@ -411,8 +420,19 @@ describe('legacy-c-budget: scope', () => {
     // and it still catches it. The assertions that measure REMAINING WORK are the
     // per-file budgets below; none of them moved here, and none of them may be
     // raised. At task 27.2 the shim goes and this whole guard goes with it.
+    //
+    // THE FILE-COUNT FLOOR IS THE SAME KIND OF TRIPWIRE and fell for the same reason at
+    // task 27.3. It was 20 and the tree held 21 carriers; deleting
+    // `components/DesktopOnlyOverlay.jsx` — 9 references in a component nothing had
+    // imported since task 8.5 rewired the shell — took the tree to 20 and tripped it. The
+    // deletion is progress toward task 27.2, so re-measuring the floor to 19 would only
+    // trip it again on the next file to go, exactly as re-measuring the magnitude floor
+    // would have. It is set to 10 instead: comfortably below the current 20 so ordinary
+    // progress does not trip it, and still far above the "a handful of files" case it
+    // exists to catch. A scan matching in ten or fewer of the 100+ files under `src/` is
+    // broken, and this still says so.
     const carriers = SCANNED.filter((f) => f.count > 0);
-    expect(carriers.length).toBeGreaterThan(20);
+    expect(carriers.length).toBeGreaterThan(10);
     expect(carriers.reduce((n, f) => n + f.count, 0)).toBeGreaterThan(1000);
   });
 

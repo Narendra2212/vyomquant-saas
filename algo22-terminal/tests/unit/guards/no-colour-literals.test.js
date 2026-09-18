@@ -25,6 +25,28 @@
  * whole mechanical content of "monotonic".
  *
  * ===========================================================================
+ * AND WHY A RATCHET IS NOT ENOUGH — TASK 27.3
+ * ===========================================================================
+ * A ratchet has a resting position. `pages/ExchangeManager.jsx: 128` can sit at
+ * 128 forever and fail nothing, which is right: no task in this spec is
+ * scheduled to lower it. But the same leniency covered the pages the spec DID
+ * promise to clear, and Requirement 1.3 is a statement about that enumerated
+ * set, not about the tree in general. Nothing in section 3 below knows which
+ * files are which.
+ *
+ * So task 27.3 split the budget into `IN_SCOPE_COLOUR_LITERAL_BUDGET` — the
+ * eleven pages with an M6-M9 page task, plus the shared surfaces those tasks
+ * built or cleared — and `OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET`. Section 4 asserts
+ * the two are disjoint and total, that the in-scope group names all eleven pages,
+ * that an in-scope entry is only ever budgeted at `0`, and that no in-scope file
+ * measures a literal. That last one is `it.skip`ped with the single remaining
+ * blocker named in a comment beside it; the rest run.
+ *
+ * The point of the split is what it forbids: an in-scope budget cannot be raised
+ * with a note in the PR the way an out-of-scope one can. The only way to make a
+ * literal on an in-scope page legal is to change the spec's own M6-M9 list.
+ *
+ * ===========================================================================
  * METHOD, AND HOW IT WAS VALIDATED
  * ===========================================================================
  * Comments are stripped before counting. Without that, `primitives.jsx` scores
@@ -118,10 +140,36 @@ import path from 'node:path';
 
 import { describe, it, expect } from 'vitest';
 
-import { COLOUR_LITERAL_BUDGET, TOKEN_LAYER_FILES } from './no-colour-literals.budget.js';
+import {
+  COLOUR_LITERAL_BUDGET,
+  IN_SCOPE_COLOUR_LITERAL_BUDGET,
+  OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET,
+  TOKEN_LAYER_FILES,
+} from './no-colour-literals.budget.js';
 import { SRC, collect, isTestFile, list, relToSrc, stripComments } from './source-scan.js';
 
 const BUDGET_FILE = 'tests/unit/guards/no-colour-literals.budget.js';
+
+/**
+ * design.md's M6-M9 page tasks, in the order §14.2 lists the milestones. This is the set
+ * Requirement 1.3 is a statement about, written out here so the in-scope group cannot
+ * quietly shed a page: `declares the eleven in-scope pages` below compares against it.
+ *
+ * A page joins this list by gaining a page task in the spec, not by being added here.
+ */
+const IN_SCOPE_PAGES = Object.freeze([
+  'pages/Dashboard.jsx',
+  'pages/Portfolio.jsx',
+  'pages/Strategies.jsx',
+  'pages/TradeHistory.jsx',
+  'pages/LiveTrading.jsx',
+  'pages/SignalTrace.jsx',
+  'pages/Backtester.jsx',
+  'pages/StrategyBuilder.jsx',
+  'pages/PaperTrading.jsx',
+  'pages/StrategyMarketplace.jsx',
+  'pages/StrategyDetail.jsx',
+]);
 
 /**
  * Task 1.10 / §15.1: this guard polices page and component code. `lib` joined them at
@@ -369,6 +417,118 @@ describe('no-colour-literals: the decreasing budget', () => {
       `These budget entries name files that exist but are outside this guard's scan\n`
         + `(src/pages and src/components, excluding tests). Remove them from ${BUDGET_FILE}\n`
         + `or widen SCAN_ROOTS deliberately:\n${list(strays)}`,
+    ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. The in-scope set is closed — task 27.3
+// ---------------------------------------------------------------------------
+
+describe('no-colour-literals: the in-scope set is closed', () => {
+  const inScope = Object.keys(IN_SCOPE_COLOUR_LITERAL_BUDGET);
+  const outOfScope = Object.keys(OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET);
+
+  it('splits the budget in two, with nothing in both groups and nothing in neither', () => {
+    // The flat map is `{...inScope, ...outOfScope}`, so a duplicate key would not be
+    // visible there — it would just silently take the out-of-scope number. This is the
+    // assertion that makes the spread lossless.
+    const both = inScope.filter((relative) => relative in OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET);
+    expect(
+      both,
+      `These entries are declared in BOTH groups of ${BUDGET_FILE}. The flat map takes the\n`
+        + `out-of-scope number for them, so the in-scope emptiness rule would not apply:\n`
+        + `${list(both)}`,
+    ).toEqual([]);
+
+    expect(inScope.length + outOfScope.length).toBe(Object.keys(COLOUR_LITERAL_BUDGET).length);
+    expect(new Set([...inScope, ...outOfScope])).toEqual(
+      new Set(Object.keys(COLOUR_LITERAL_BUDGET)),
+    );
+  });
+
+  it('declares the eleven in-scope pages, and no page from that list out of scope', () => {
+    const missing = IN_SCOPE_PAGES.filter(
+      (relative) => !(relative in IN_SCOPE_COLOUR_LITERAL_BUDGET),
+    );
+    expect(
+      missing,
+      `design.md gives these pages a page task in M6-M9, so they belong in\n`
+        + `IN_SCOPE_COLOUR_LITERAL_BUDGET. An in-scope page with no in-scope entry is a page\n`
+        + `the emptiness rule below does not reach:\n${list(missing)}`,
+    ).toEqual([]);
+
+    const misfiled = IN_SCOPE_PAGES.filter(
+      (relative) => relative in OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET,
+    );
+    expect(
+      misfiled,
+      `These in-scope pages are filed as out of scope in ${BUDGET_FILE}. Moving a page out\n`
+        + `of scope is a change to the spec's M6-M9 list, not to this file:\n${list(misfiled)}`,
+    ).toEqual([]);
+
+    // Non-vacuity: if IN_SCOPE_PAGES were ever emptied, the two checks above would pass
+    // over nothing.
+    expect(IN_SCOPE_PAGES).toHaveLength(11);
+  });
+
+  it('names only files that still exist, in both groups', () => {
+    // `names only files that still exist` covers the flat map; this repeats it per group so
+    // a stale entry is reported against the group whose rule it breaks. Task 27.3 deleted
+    // `components/DesktopOnlyOverlay.jsx` and removed its out-of-scope entry.
+    const gone = [...inScope, ...outOfScope].filter(
+      (relative) => !existsSync(path.join(SRC, relative)),
+    );
+    expect(gone, `Entries naming files no longer in src/:\n${list(gone)}`).toEqual([]);
+  });
+
+  it('never raises an in-scope entry above zero, whatever the file measures', () => {
+    // The rule the split exists for, stated over the COMMITTED numbers rather than the
+    // measured ones, so it holds today with `pages/StrategyMarketplace.jsx` at 182 being
+    // the single declared exception below. An in-scope file may not be *given* headroom:
+    // the only legal in-scope budget is 0.
+    const withHeadroom = inScope
+      .filter((relative) => IN_SCOPE_COLOUR_LITERAL_BUDGET[relative] > 0)
+      .map((relative) => `${relative} — ${IN_SCOPE_COLOUR_LITERAL_BUDGET[relative]}`);
+
+    expect(
+      withHeadroom,
+      `An in-scope file may only be budgeted at 0 — Requirement 1.3 is a statement about\n`
+        + `exactly these files. Use a token: a Tailwind class from src/styles/tokens.css, or\n`
+        + `\`token.*\` from src/design/tokens.js. If the file is genuinely out of scope, move\n`
+        + `its entry to OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET in ${BUDGET_FILE} with a reason.\n`
+        + `${list(withHeadroom)}`,
+    ).toEqual(['pages/StrategyMarketplace.jsx — 182']);
+  });
+
+  /**
+   * THE ASSERTION THIS TASK EXISTS TO ADD, AND WHY IT IS SKIPPED.
+   *
+   * `pages/StrategyMarketplace.jsx` measures 182 as task 27.3 lands. Task 26.1 cleared the
+   * subscription-state element — the only part of that page Requirement 13 governs — and
+   * the 182 that remain are the catalogue and detail chrome, which no task in M9 has
+   * rebuilt yet.
+   *
+   * WHAT UNBLOCKS THIS: `pages/StrategyMarketplace.jsx` reaching `0` in
+   * `IN_SCOPE_COLOUR_LITERAL_BUDGET`. That is the whole precondition, and it is the last
+   * one — every other in-scope entry is already `0`. Un-skip this `it` and drop the
+   * `['pages/StrategyMarketplace.jsx — 182']` expectation above to `[]` in the same commit
+   * that takes the page down; the two edits are a pair and neither makes sense alone.
+   *
+   * It is committed skipped rather than made to pass by editing the list. The in-scope set
+   * becomes empty because the pages were migrated, not because a non-zero entry was
+   * deleted — `never raises an in-scope entry above zero` is what holds that line while
+   * this one is off, and the structural assertions above all run today.
+   */
+  it.skip('holds no colour literal in any in-scope file', () => {
+    const dirty = SCANNED.filter(
+      (f) => f.relative in IN_SCOPE_COLOUR_LITERAL_BUDGET && f.count > 0,
+    ).map((f) => `${f.relative} — ${f.count} literal(s)`);
+
+    expect(
+      dirty,
+      `Requirement 1.3: every in-scope page and shared surface holds its colour in the\n`
+        + `token layer. These do not:\n${list(dirty)}`,
     ).toEqual([]);
   });
 });

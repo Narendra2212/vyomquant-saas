@@ -31,7 +31,12 @@
  *
  * An entry reaching `0` is expected and stays (task 19.2 takes Dashboard.jsx to
  * zero, for instance). Delete an entry only when the file itself is deleted —
- * `components/ui-legacy/primitives.jsx` goes at task 27.2 with the shim.
+ * `components/ui-legacy/primitives.jsx` goes at task 27.2 with the shim, and
+ * `components/DesktopOnlyOverlay.jsx` went at task 27.3 with this one.
+ *
+ * A new entry goes in ONE of the two groups below, and the test asserts the two
+ * are disjoint and cover the whole budget, so "which group" is a decision that
+ * has to be made rather than skipped.
  *
  * ---------------------------------------------------------------------------
  * SEEDED FROM THE TREE ON THE DAY TASK 1.10 LANDED
@@ -59,10 +64,81 @@
  * test's stray-entry failure names this as the deliberate move rather than
  * dropping the entry, and the entry it was added for — `lib/drawdownSeries.js` —
  * is at the bottom of the list.
+ *
+ * ---------------------------------------------------------------------------
+ * SPLIT INTO TWO GROUPS AT TASK 27.3
+ * ---------------------------------------------------------------------------
+ * Until this task the budget was one flat map and every entry was governed by
+ * the same rule: hold at the recorded number, lower it when the file improves.
+ * That is a ratchet, and a ratchet still has a resting position — `pages/
+ * ExchangeManager.jsx: 128` can sit at 128 forever without failing anything,
+ * which is correct, because no task in this spec is scheduled to lower it.
+ *
+ * The problem is that the same leniency covered the pages the spec DID promise
+ * to clear. Once `pages/Dashboard.jsx` reaches `0` the entry holds it at `0`,
+ * but nothing said it had to get there, and nothing says the next in-scope page
+ * added to this file has to either. Requirement 1.3 is a statement about a
+ * specific, enumerated set of pages, and the guard could not see that set.
+ *
+ * So the map is now two maps:
+ *
+ *   IN_SCOPE   — the pages design.md gives a page task in M6-M9, plus the
+ *                shared surfaces those tasks built or cleared on the way. The
+ *                test asserts EVERY entry here is `0`. There is no headroom to
+ *                hold; the number is the constant zero.
+ *   OUT_OF_SCOPE — everything else. Budgeted so it cannot grow, with no
+ *                promise in this spec that it shrinks.
+ *
+ * `COLOUR_LITERAL_BUDGET` is the two spread together and is what every existing
+ * assertion still reads, so the ratchet is unchanged for both groups; the
+ * emptiness assertion is added on top of it, not in place of it.
+ *
+ * Two consequences worth stating, because they are the whole point:
+ *
+ *   * An in-scope entry can never be raised above `0`, not even with a reason in
+ *     the PR. The only way to legitimise a literal on an in-scope page is to
+ *     move the page out of scope, which means editing the spec's own M6-M9 list.
+ *   * The in-scope group is where a NEW in-scope page's entry goes, and it can
+ *     only be seeded at `0`. A page cannot enter this tree carrying a palette.
+ *
+ * WHAT DECIDED THE SPLIT. The in-scope list is design.md's M6-M9 page tasks, not
+ * a judgement made here: Dashboard (19.1/19.2), Portfolio (16.1/16.2),
+ * Strategies (17.1/17.2), Trade History (15.1), Live Trading (20.1), Signal
+ * Trace (21.4a), Backtester (23.1/23.2), Strategy Builder (24.1), Paper Trading
+ * (25.1), Strategy Marketplace (26.1) and Strategy Detail (27.1). The
+ * non-page files in the in-scope group are there because an in-scope task is
+ * what put them at `0` — see the note above that sub-block.
+ *
+ * `components/ui/**` and `components/ui-legacy/**` are OUT of scope here even
+ * though task 6.6 is scheduled to move `ui/Badge.jsx`'s 40 #10B981/#EF4444
+ * occurrences to the trading palette. Out-of-scope does not mean unscheduled; it
+ * means this guard does not assert the file reads zero. Badge will still be a
+ * ratchet at whatever number 6.6 leaves it at.
+ *
+ * ---------------------------------------------------------------------------
+ * THE ONE NON-ZERO IN-SCOPE ENTRY, AND WHY THE ASSERTION IS SKIPPED
+ * ---------------------------------------------------------------------------
+ * `pages/StrategyMarketplace.jsx` reads 182 as this split lands. Task 26.1 took
+ * the subscription-state element — the one thing on the page Requirement 13
+ * governs — down to zero literals; the remaining 182 are the catalogue and
+ * detail chrome, which no task in M9 has rebuilt yet.
+ *
+ * The assertion is therefore committed as `it.skip` with the reason recorded in
+ * the test. It was NOT made to pass by deleting the entry or lowering it: the
+ * in-scope set becomes empty because the page is migrated, not because the list
+ * was edited. Un-skip it in the same commit that takes
+ * `pages/StrategyMarketplace.jsx` to `0` — that one edit is the entire
+ * precondition, and the structural assertions beside it (total, disjoint, names
+ * the eleven pages, in-scope entries are never raised) run today.
  */
 
-/** Paths are relative to `src/`, forward-slashed, matching the spec's notation. */
-export const COLOUR_LITERAL_BUDGET = Object.freeze({
+/**
+ * The pages design.md gives a page task in M6-M9, plus the shared surfaces those
+ * tasks built or cleared. Every entry here must be `0` — see the SPLIT note above.
+ *
+ * Paths are relative to `src/`, forward-slashed, matching the spec's notation.
+ */
+export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // -- §1.1 G5, the four hotspots task 1.10 names explicitly ----------------
   // 240 inline styles, zero `C.` references, Tailwind-default #ef4444/#64748b
   // with no token source at all. Tasks 19.1 and 19.2 take this to 0 between them — that is
@@ -264,7 +340,7 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // chrome is token utilities, and the stack it used to print is Sentry-only.
   'components/ErrorBoundary.jsx': 0,
 
-  // -- In-scope pages, migrated M6-M9 ---------------------------------------
+  // -- In-scope pages, migrated M6-M9 (continued) ---------------------------
   // Included the single `border-[#ef4444]` arbitrary-value utility task 1.4 recorded, plus
   // 24 further #10b981/#ef4444 occurrences in inline styles.
   //
@@ -408,6 +484,51 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // 0` gives.
   'pages/StrategyDetail.jsx': 0,
 
+  // -- Shared surfaces an in-scope task cleared or created ------------------
+  // These are not pages and so are not on design.md's M6-M9 page list, but each one is
+  // here because an IN-SCOPE task is what put it at `0`, and each is rendered by an
+  // in-scope page. A literal creeping back into one of them is a literal on the pages
+  // above, which is the thing the emptiness assertion exists to prevent — so they are
+  // governed by it rather than parked in the out-of-scope group where a `1` would be legal.
+  // Their individual notes are with them.
+  //
+  //   components/Sidebar.jsx, components/TopBar.jsx  — cleared by tasks 8.6 / 8.7 (M4 shell)
+  //   components/ErrorBoundary.jsx                   — rewritten by task 6.25 (M3)
+  //   components/SignalTraceVisualization.jsx        — cleared by task 21.6 (M8)
+  //   components/trading/*                           — created by task 20.2 (M8)
+  //   components/builder/validationSurfaces.jsx      — created by task 24.4b (M9)
+  //   lib/drawdownSeries.js                          — created by task 23.3 (M9)
+  //
+  // The first four of those sit further up this object, beside the page whose task cleared
+  // them. The three below were in the out-of-scope blocks before task 27.3 and moved here.
+  //
+  // Cleared by task 8.6, which rebuilt it against `shell/navigation.js`. The five were
+  // the brand tile's `linear-gradient(135deg,#00d4ff,#0055ff)` and its `#000` glyph, the
+  // notification badge's `#000`, and the active row's `rgba(0,212,255,0.07)`. The
+  // gradient went for a second reason: Requirement 1.5 retires gradient washes.
+  'components/Sidebar.jsx': 0,
+  // Cleared by task 8.7. The one literal was the notification badge's `#000` text on a
+  // `C.cyan` circle; the badge now takes `text-brand` on `bg-surface-raised`.
+  'components/TopBar.jsx': 0,
+  // New at task 23.3, along with the `lib` scan root that makes the entry real — see the
+  // SCOPE note above. The drawdown curve's derivation from the real equity curve
+  // (design.md §7.4, Requirement 6.3) holds no colour: it answers with numbers and lets
+  // `ds/Chart` decide what they look like. Entered at `0` and held there, for the reason
+  // `components/Sidebar.jsx: 0` keeps its entry — a file with no entry is a file whose
+  // cleanliness nothing is holding.
+  'lib/drawdownSeries.js': 0,
+});
+
+/**
+ * Everything else. Budgeted so it cannot grow; no promise in this spec that it shrinks,
+ * and no emptiness assertion over it. An entry here may legitimately be non-zero forever.
+ *
+ * Task 27.3 named this group from the redesign spec's own scope: `Profile`, `Landing`,
+ * `Billing`, `AuthPage`, `Wizard`, `TwoFA`, `SecurityLogs`, `RiskSettings`,
+ * `ExchangeManager`, `LegalPage`, `SupportCenter`, `NotificationCenter`, `CopilotChat`,
+ * `FirstTradeWizard`, `DeployPreflightPanel`, `landing/*`, `ui/*` and `ui-legacy/*`.
+ */
+export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // -- Shared primitives, retokened in M3 -----------------------------------
   // 40 of these 68 are #10B981 (24) and #EF4444 (16), across the
   // profit/green/success/running/deployed/active and loss/red/danger/failed
@@ -429,18 +550,20 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // Removed rather than lowered to `0`, per this header: a `0` records that a live file is
   // clean and holds it there, but a deleted file has no source to measure and
   // `names only files that still exist` fails on an entry pointing at nothing.
-  // Cleared by task 8.6, which rebuilt it against `shell/navigation.js`. The five were
-  // the brand tile's `linear-gradient(135deg,#00d4ff,#0055ff)` and its `#000` glyph, the
-  // notification badge's `#000`, and the active row's `rgba(0,212,255,0.07)`. The
-  // gradient went for a second reason: Requirement 1.5 retires gradient washes.
-  'components/Sidebar.jsx': 0,
+  //
+  // `components/DesktopOnlyOverlay.jsx: 1` stood here until task 27.3 deleted the file, and
+  // went the same way for the same reason. The one literal was the scrim's
+  // `rgba(8, 10, 14, 0.85)` — a hand-mixed 85% `C.bg0` with the comment `// C.bg0 with
+  // opacity` beside it, because the shim exported no scrim. `shell/ResponsiveGate` (task
+  // 8.4) superseded the component: it renders a gate screen on token utilities instead of
+  // blurring the live app behind 8px, so there is no scrim to mix. Nothing imported the
+  // overlay after task 8.5 rewired `App.jsx`.
+  //
+  // `components/Sidebar.jsx: 0` and `components/TopBar.jsx: 0` stood here too, and moved
+  // into the in-scope group at task 27.3 rather than being deleted — see the note on that
+  // sub-block. They are live files at `0`, which is the case a `0` entry exists for.
   'components/CopilotChat.jsx': 3,
   'components/FirstTradeWizard.jsx': 3,
-  // Replaced by `ResponsiveGate` in M4 (task 12.x); entry goes with the file.
-  'components/DesktopOnlyOverlay.jsx': 1,
-  // Cleared by task 8.7. The one literal was the notification badge's `#000` text on a
-  // `C.cyan` circle; the badge now takes `text-brand` on `bg-surface-raised`.
-  'components/TopBar.jsx': 0,
 
   // -- Deferred pages: retokened by M1, layouts stay older (§14.4) ----------
   'pages/ExchangeManager.jsx': 128,
@@ -466,15 +589,21 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   'components/landing/ScreenshotsSection.jsx': 3,
   'components/landing/PortfolioAnalytics.jsx': 2,
   'components/landing/ScreenshotComingSoon.jsx': 2,
+});
 
-  // -- src/lib: the pure decision and derivation modules --------------------
-  // New at task 23.3, along with the `lib` scan root that makes the entry real — see the
-  // SCOPE note above. The drawdown curve's derivation from the real equity curve
-  // (design.md §7.4, Requirement 6.3) holds no colour: it answers with numbers and lets
-  // `ds/Chart` decide what they look like. Entered at `0` and held there, for the reason
-  // `components/Sidebar.jsx: 0` keeps its entry — a file with no entry is a file whose
-  // cleanliness nothing is holding.
-  'lib/drawdownSeries.js': 0,
+/**
+ * The whole budget, and what every assertion in `no-colour-literals.test.js` reads. The
+ * ratchet is unchanged by task 27.3's split: each file still has exactly one recorded
+ * number and still fails in both directions against it. The two groups above add one thing
+ * on top — that the in-scope half of this map is all zeroes.
+ *
+ * Spread rather than hand-maintained, so the flat map cannot fall out of step with the
+ * groups. The test asserts the two groups are disjoint, which is what makes the spread
+ * lossless: an entry declared in both would silently take the out-of-scope number here.
+ */
+export const COLOUR_LITERAL_BUDGET = Object.freeze({
+  ...IN_SCOPE_COLOUR_LITERAL_BUDGET,
+  ...OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET,
 });
 
 /**
