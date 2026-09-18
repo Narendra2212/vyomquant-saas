@@ -43,7 +43,7 @@
 
 import React from 'react';
 
-import { C } from '../ui-legacy/primitives';
+import { token } from '../../design/tokens';
 import {
   TRACE_STATUSES,
   UNRECORDED_TEXT,
@@ -54,7 +54,7 @@ const label = (text) => (
   <div
     className="text-micro"
     style={{
-      color: C.t3,
+      color: token.content.muted,
       fontFamily: 'monospace',
       letterSpacing: 1,
       textTransform: 'uppercase',
@@ -66,10 +66,10 @@ const label = (text) => (
 );
 
 const STATUS_COLOUR = {
-  [TRACE_STATUSES.SUCCESS]: C.t1,
-  [TRACE_STATUSES.FAIL]: C.red,
-  [TRACE_STATUSES.PENDING]: C.gold,
-  [TRACE_STATUSES.NOT_EXECUTED]: C.t3,
+  [TRACE_STATUSES.SUCCESS]: token.content.primary,
+  [TRACE_STATUSES.FAIL]: token.status.loss.fg,
+  [TRACE_STATUSES.PENDING]: token.status.warning.fg,
+  [TRACE_STATUSES.NOT_EXECUTED]: token.content.muted,
 };
 
 const mono = {
@@ -91,9 +91,9 @@ const InputRow = ({ input, index }) => (
     data-port={input.port || undefined}
     data-source={input.source || undefined}
     title={input.source ? `from ${input.source}` : undefined}
-    style={{ ...mono, color: C.t2, listStyle: 'none' }}
+    style={{ ...mono, color: token.content.secondary, listStyle: 'none' }}
   >
-    <span style={{ color: C.t3 }}>{input.label}</span>
+    <span style={{ color: token.content.muted }}>{input.label}</span>
     {' · '}
     <span>{input.type || UNRECORDED_TEXT}</span>
     {' · '}
@@ -108,9 +108,9 @@ const ExecutionPanel = ({ execution, position }) => (
   <div
     data-testid={`trace-execution-${position}`}
     data-status={execution.status || undefined}
-    style={{ borderLeft: `2px solid ${C.border}`, paddingLeft: 8, marginTop: 6 }}
+    style={{ borderLeft: `2px solid ${token.line.default}`, paddingLeft: 8, marginTop: 6 }}
   >
-    <p className="text-micro" style={{ ...mono, color: STATUS_COLOUR[execution.status] || C.t2 }}>
+    <p className="text-micro" style={{ ...mono, color: STATUS_COLOUR[execution.status] || token.content.secondary }}>
       <span data-testid={`trace-execution-status-${position}`}>{execution.status || UNRECORDED_TEXT}</span>
       {' · '}
       {/* The tracer's own figure. Requirement 24.6's "duration". */}
@@ -118,7 +118,7 @@ const ExecutionPanel = ({ execution, position }) => (
       {execution.nodeType && (
         <>
           {' · '}
-          <span style={{ color: C.t3 }}>{execution.nodeType}</span>
+          <span style={{ color: token.content.muted }}>{execution.nodeType}</span>
         </>
       )}
     </p>
@@ -128,7 +128,7 @@ const ExecutionPanel = ({ execution, position }) => (
       <p
         className="text-micro"
         data-testid={`trace-execution-error-${position}`}
-        style={{ ...mono, color: C.red, marginTop: 2 }}
+        style={{ ...mono, color: token.status.loss.fg, marginTop: 2 }}
       >
         {execution.errorMessage}
       </p>
@@ -137,7 +137,7 @@ const ExecutionPanel = ({ execution, position }) => (
     <div style={{ marginTop: 4 }}>
       {label(`Inputs (${execution.inputs.length})`)}
       {execution.inputs.length === 0 ? (
-        <p className="text-micro" data-testid={`trace-no-inputs-${position}`} style={{ ...mono, color: C.t3 }}>
+        <p className="text-micro" data-testid={`trace-no-inputs-${position}`} style={{ ...mono, color: token.content.muted }}>
           The run bound no inputs to this block.
         </p>
       ) : (
@@ -155,7 +155,7 @@ const ExecutionPanel = ({ execution, position }) => (
         className="text-micro"
         data-testid={`trace-output-${position}`}
         data-output-type={execution.output.type || undefined}
-        style={{ ...mono, color: C.t2 }}
+        style={{ ...mono, color: token.content.secondary }}
       >
         {execution.output.type || UNRECORDED_TEXT}
         {' · '}
@@ -176,10 +176,10 @@ export function NodeTrace({ trace = null, runtime = null }) {
       <section
         data-testid="node-trace"
         data-state="absent"
-        style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8, marginTop: 4 }}
+        style={{ borderTop: `1px solid ${token.line.default}`, paddingTop: 8, marginTop: 4 }}
       >
         {label('Execution trace')}
-        <p className="text-micro" data-testid="trace-absent" style={{ ...mono, color: C.t3 }}>
+        <p className="text-micro" data-testid="trace-absent" style={{ ...mono, color: token.content.muted }}>
           {/* The client's own state: nothing has been run, which is not a verdict about the
               block. A preview records the trace, so asking for one is what fills this in. */}
           No execution has been recorded for this block yet. Run a preview and the inputs,
@@ -198,14 +198,14 @@ export function NodeTrace({ trace = null, runtime = null }) {
       data-node-id={trace.nodeId}
       data-status={trace.status}
       data-recorded={trace.recorded ? 'true' : 'false'}
-      style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8, marginTop: 4 }}
+      style={{ borderTop: `1px solid ${token.line.default}`, paddingTop: 8, marginTop: 4 }}
     >
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
         {label('Execution trace')}
         <span
           className="text-micro"
           data-testid="trace-status"
-          style={{ ...mono, color: STATUS_COLOUR[trace.status] || C.t2 }}
+          style={{ ...mono, color: STATUS_COLOUR[trace.status] || token.content.secondary }}
         >
           {/* The status word before any colour. */}
           {trace.statusLabel}
@@ -217,14 +217,14 @@ export function NodeTrace({ trace = null, runtime = null }) {
         <p
           className="text-micro"
           data-testid="trace-summary"
-          style={{ ...mono, color: C.t2 }}
+          style={{ ...mono, color: token.content.secondary }}
           aria-live="polite"
         >
           {trace.summary}
         </p>
       )}
 
-      <p className="text-micro" data-testid="trace-duration" style={{ ...mono, color: C.t3, marginTop: 4 }}>
+      <p className="text-micro" data-testid="trace-duration" style={{ ...mono, color: token.content.muted, marginTop: 4 }}>
         {`Recorded duration: ${trace.durationText}`}
       </p>
 
@@ -235,7 +235,7 @@ export function NodeTrace({ trace = null, runtime = null }) {
           className="text-micro"
           data-testid="trace-runtime-state"
           data-runtime-state={live.state || undefined}
-          style={{ ...mono, color: C.t3, marginTop: 2 }}
+          style={{ ...mono, color: token.content.muted, marginTop: 2 }}
         >
           {`Live runtime state: ${live.label}${live.detail ? ` — ${live.detail}` : ''}`}
         </p>
@@ -251,7 +251,7 @@ export function NodeTrace({ trace = null, runtime = null }) {
           style={{ marginTop: 6 }}
         >
           {label(trace.blockedUpstream ? 'Blocked upstream' : 'Failure')}
-          <p className="text-micro" style={{ ...mono, color: C.red }}>
+          <p className="text-micro" style={{ ...mono, color: token.status.loss.fg }}>
             {trace.blockedUpstream
               ? `${trace.blockingFailure.nodeId}: ${trace.blockingFailure.errorMessage || 'no reason recorded'}`
               : trace.blockingFailure.errorMessage || 'no reason recorded'}
@@ -270,7 +270,7 @@ export function NodeTrace({ trace = null, runtime = null }) {
                 key={`${condition.code}-${position}`}
                 data-testid={`trace-condition-${condition.code}`}
                 className="text-micro"
-                style={{ ...mono, color: C.gold }}
+                style={{ ...mono, color: token.status.warning.fg }}
               >
                 {condition.display}
               </li>
@@ -280,7 +280,7 @@ export function NodeTrace({ trace = null, runtime = null }) {
       )}
 
       {trace.executions.length === 0 ? (
-        <p className="text-micro" data-testid="trace-not-executed" style={{ ...mono, color: C.t3, marginTop: 6 }}>
+        <p className="text-micro" data-testid="trace-not-executed" style={{ ...mono, color: token.content.muted, marginTop: 6 }}>
           {/* Distinct from "produced nothing": the tracer holds no entry at all for this
               block, so it was never started. */}
           The run recorded no execution of this block.
@@ -307,7 +307,7 @@ export function NodeTrace({ trace = null, runtime = null }) {
                 data-testid={`trace-failure-${position}`}
                 data-failed-node={failure.nodeId || undefined}
                 className="text-micro"
-                style={{ ...mono, color: C.red }}
+                style={{ ...mono, color: token.status.loss.fg }}
               >
                 {`${failure.nodeId || UNRECORDED_TEXT}: ${failure.errorMessage || 'no reason recorded'}`}
               </li>
@@ -325,7 +325,7 @@ export function NodeTrace({ trace = null, runtime = null }) {
             className="text-micro"
             data-testid="trace-provenance-message"
             data-available={trace.signalProvenance.available ? 'true' : 'false'}
-            style={{ ...mono, color: C.t3 }}
+            style={{ ...mono, color: token.content.muted }}
           >
             {trace.signalProvenance.message}
           </p>
@@ -337,12 +337,12 @@ export function NodeTrace({ trace = null, runtime = null }) {
                 key={record.traceId || position}
                 data-testid={`trace-provenance-record-${position}`}
                 className="text-micro"
-                style={{ ...mono, color: C.t2 }}
+                style={{ ...mono, color: token.content.secondary }}
               >
                 {/* The market, never a venue. */}
                 {`${record.recordedAt || UNRECORDED_TEXT} · ${record.symbol || UNRECORDED_TEXT} · ${record.status || UNRECORDED_TEXT}`}
                 {record.executions.length > 0 && (
-                  <span style={{ color: C.t3 }}>{` · ${record.executions[0].durationText}`}</span>
+                  <span style={{ color: token.content.muted }}>{` · ${record.executions[0].durationText}`}</span>
                 )}
               </li>
             ))}

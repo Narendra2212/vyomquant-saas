@@ -411,12 +411,89 @@ export const LEGACY_C_BUDGET = Object.freeze({
   'pages/AuthPage.jsx': 57,
   'pages/Wizard.jsx': 56,
   'components/DeploymentConsole.jsx': 38,
-  'pages/LegalPage.jsx': 36,
+  // 36 -> 0 at task 27.2, batch 1. The `C` import is deleted, not narrowed: this page
+  // imported `C` and nothing else from the shim, so the specifier and the module both go
+  // and `token` is read straight from `design/tokens.js`. Every one of the 36 is the value
+  // the shim already gave it, and no colour literal was introduced, so this page's three
+  // `no-colour-literals` entries are untouched.
+  //
+  // By shim name: `C.accent` 14 (the eleven uppercase section headings, the Shield glyph,
+  // the active tab's `${C.accent}15` wash and its 2px rule) -> `token.brand.base`; `C.t1`
+  // 7 (the four tab bodies' base colour, the page `<h1>`, the active tab label, the back
+  // button's hover) -> `token.content.primary`; `C.t2` 3 -> `token.content.secondary`;
+  // `C.t3` 1 (the inactive tab label) -> `token.content.muted`; `C.loss` 1 (the risk
+  // tab's high-risk heading) -> `token.status.loss.fg`; `C.border` 4 (the card rule, the
+  // back button's, the tab strip's, the content panel's `${C.border}80`) ->
+  // `token.line.default`; `C.bg3` 2 and `C.bg4` 1 -> `token.surface.inset`.
+  //
+  // THE THREE NUMERIC `C.radius.*` READS IN THE TREE ARE ALL ON THIS PAGE, and all three
+  // are a plain `borderRadius`, so they take the token STRING safely: `C.radius.xl` was
+  // the number 12 (`legacyPx('12px')`) and `token.radius.xl` is `'12px'`, which React
+  // writes identically; likewise `md` (6 -> `'6px'`) and `lg` (8 -> `'8px'`). No
+  // arithmetic reads either of them, so the `Math.round(parseFloat(...) * 16)` projection
+  // `pages/PaperTrading.jsx`'s `PAGE_PADDING` needed is not needed here.
+  //
+  // THE BACK BUTTON'S HOVER IS A NO-OP AND STAYS ONE. `onMouseEnter` set the background
+  // to `C.bg4` where `onMouseLeave` set it to `C.bg3`, and the shim collapsed both onto
+  // `token.surface.inset` — so the hover has changed only the label colour since M1. Both
+  // handlers now say `token.surface.inset` in as many words. Repairing it would be a
+  // design decision; this is a retoken.
+  'pages/LegalPage.jsx': 0,
   'components/CopilotChat.jsx': 31,
-  'pages/TwoFA.jsx': 30,
+  // 30 -> 0 at task 27.2, batch 1, and the `C` import goes with them for the same reason
+  // `LegalPage.jsx`'s did. By shim name: `C.t1` 2, `C.t2` 3, `C.t3` 4, `C.t4` 1 ->
+  // `token.content.primary` / `secondary` / `muted` (`C.t3` and `C.t4` collapse onto
+  // `content.muted`, as they do on every page that read both — here `C.t4` was the Reset
+  // Authenticator link and `C.t3` its Back-to-QR sibling, which have always been the same
+  // grey); `C.cyan` 6 ->
+  // `token.brand.base`; `C.green` 1 (the copied-secret tick) ->
+  // `token.status.profit.fg`; `C.border` 5 -> `token.line.default`; `C.bg0` 1, `C.bg1` 1,
+  // `C.bg2` 1, `C.bg3` 3, `C.bg4` 2 -> `token.surface.canvas` / `panel` / `raised` /
+  // `inset` (`bg3` and `bg4` are one surface in the shim and stay one here).
+  //
+  // THIS PAGE'S 12 `no-colour-literals` ENTRIES ARE UNTOUCHED: the ShieldCheck halo's two
+  // hand-mixed cyans, the error and success alerts' four washes and four hex text/glyph
+  // colours, and the QR plate's `#ffffff` with its shadow. All twelve are hand-mixed rgba
+  // and hex that predate the shim; none of them was a `C.` read, so none of them is this
+  // batch's to take, and the count is the same 12 before and after.
+  'pages/TwoFA.jsx': 0,
   // Re-pointed onto the token type scale by task 3.1.
-  'components/builder/NodeTrace.jsx': 27,
-  'components/builder/NodePreview.jsx': 24,
+  // 27 -> 0 at task 27.2, batch 1. Presentation-only component, one `C` import, deleted.
+  // By shim name: `C.t1` 1 (`STATUS_COLOUR`'s SUCCESS arm), `C.t2` 6, `C.t3` 11 ->
+  // `token.content.primary` / `secondary` / `muted`; `C.red` 4 (the FAIL status, the
+  // execution error, the blocking failure, the per-run failure list) ->
+  // `token.status.loss.fg`; `C.gold` 2 (the PENDING status, the recorded numeric
+  // conditions) -> `token.status.warning.fg`; `C.border` 3 (the two section rules and the
+  // execution panel's left rail) -> `token.line.default`.
+  //
+  // `STATUS_COLOUR` KEEPS ITS SHAPE AND ITS FOUR HUES. It is already a frozen
+  // `state -> colour` map of the four `TRACE_STATUSES`, which is the shape 24.4's follow-up
+  // established for the builder's status cells, so there was nothing to restructure — only
+  // the source of each hue moved. It is deliberately NOT repointed onto
+  // `design/semantic.js`'s `statusToken`: `SUCCESS` reads `content.primary` here rather
+  // than the profit hue (a trace that ran is not a trade that made money), and
+  // `NOT_EXECUTED` reads `content.muted`, neither of which `statusToken` would pick.
+  // Preserved, not chosen.
+  //
+  // NO `no-colour-literals` ENTRY, BEFORE OR AFTER. `components/builder/` IS scanned by
+  // that guard, so this file being absent from its budget is a live claim rather than an
+  // omission, and it still holds: every value here is a `token.*` read.
+  'components/builder/NodeTrace.jsx': 0,
+  // 24 -> 0 at task 27.2, batch 1, on the same terms as its sibling above — one `C`
+  // import, deleted, and no `no-colour-literals` entry before or after. By shim name:
+  // `C.t1` 2 (a present numeric cell, a present scalar), `C.t2` 1 (the column chips'
+  // label), `C.t3` 15 -> `token.content.primary` / `secondary` / `muted`; `C.gold` 3 (the truncated-sample
+  // note, an unrenderable output's message, the engine's recorded conditions) ->
+  // `token.status.warning.fg`; `C.red` 1 (the classified failure) ->
+  // `token.status.loss.fg`; `C.border` 2 (the section rule, the column chips) ->
+  // `token.line.default`.
+  //
+  // THE EMPTY-VALUE PAIR IS THE ONE DECISION AND IT IS UNCHANGED. `ValueCell` and the
+  // scalar both read `cell.empty ? C.t3 : C.t1`, now `token.content.muted` :
+  // `token.content.primary` — the same two greys, the same condition, the same operand
+  // order. An empty bar is not a status, so it takes no `statusToken` group; the `aria-label`
+  // and `EMPTY_VALUE_TEXT` are what actually report it, and neither moved.
+  'components/builder/NodePreview.jsx': 0,
   // New at task 24.4b: §9.3's four validation surfaces as their own module. It entered
   // the tree clean and imports the shim not at all — the three band surfaces are
   // `ds/Alert`, the destructive one is `ds/ConfirmDialog`, and the only hue it names
@@ -430,7 +507,31 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // guard scans `src/**` only, so an entry naming a path under `tests/` fails both the
   // `names only files that still exist` and the stray-entry checks below.
   'components/builder/validationSurfaces.jsx': 0,
-  'components/FirstTradeWizard.jsx': 23,
+  // 23 -> 0 at task 27.2, batch 1. One `C` import, deleted. By shim name: `C.accent` 6
+  // (the progress rail's fill, the active step's disc and its glow, the STEP n-of-5
+  // micro-label, the Complete Step button and its `onMouseLeave` restore) and
+  // `C.accentHover` 1 (that button's `onMouseEnter`) -> `token.brand.base` /
+  // `token.brand.hover`; `C.t1` 3, `C.t2` 2, `C.t3` 3 -> `token.content.primary` /
+  // `secondary` / `muted`; `C.bg` 1, `C.bg2` 2, `C.bg3` 2 -> `token.surface.canvas` /
+  // `raised` / `inset`; `C.border` 1 -> `token.line.default`; `C.borderLight` 1 ->
+  // `token.line.strong` (the active-step panel's deliberately brighter rule, kept as
+  // `line.strong` rather than flattened onto `line.default` — the same brighter-rule case
+  // `pages/StrategyBuilder.jsx`'s retry button records).
+  //
+  // THE 23rd WAS `C.success`, WHICH THE SHIM DOES NOT DECLARE, so it has always evaluated
+  // to `undefined` and a completed step has never had a fill — it shows the card surface
+  // through, and the `CheckCircle` glyph is what distinguishes it. The ternary now says
+  // `isCompleted ? undefined : …` in as many words, with the reason on the line. Giving it
+  // a hue would be a design decision and a visible change; this is a retoken, so it is
+  // preserved and recorded instead. It is also why the guard counted 23 rather than 22:
+  // `findLegacyC` measures member ACCESSES on the shim, not resolved values, so a read of
+  // a key the shim never had is a reference like any other and cleared like any other.
+  //
+  // THIS FILE'S 3 `no-colour-literals` ENTRIES ARE UNTOUCHED — the card's
+  // `rgba(0,0,0,0.3)` drop shadow and the two `#fff` glyph colours (the active/completed
+  // disc, the Complete Step button). None of the three was a `C.` read, so none of them is
+  // this batch's to take, and the count is the same 3 before and after.
+  'components/FirstTradeWizard.jsx': 0,
   // Cleared by task 8.6: rebuilt against `shell/navigation.js`, with colour taken from
   // `cssVar()` and token utility classes instead of the shim.
   'components/Sidebar.jsx': 0,

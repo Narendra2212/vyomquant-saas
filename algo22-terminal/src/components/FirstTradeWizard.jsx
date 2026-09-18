@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { useAppState } from '../AppState';
 
-import { C } from './ui-legacy/primitives';
+import { token } from '../design/tokens';
 
 
 const STEPS = [
@@ -51,8 +51,8 @@ export default function FirstTradeWizard({ onComplete }) {
 
   return (
     <div style={{
-      background: C.bg2,
-      border: `1px solid ${C.border}`,
+      background: token.surface.raised,
+      border: `1px solid ${token.line.default}`,
       borderRadius: 12,
       padding: 24,
       marginBottom: 24,
@@ -60,12 +60,12 @@ export default function FirstTradeWizard({ onComplete }) {
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
         <div>
-          <h2 style={{ color: C.t1, fontSize: 18, fontWeight: 700, marginBottom: 4 }}>First Trade Wizard</h2>
-          <p style={{ color: C.t2, fontSize: 13 }}>Complete these steps to deploy your first automated strategy.</p>
+          <h2 style={{ color: token.content.primary, fontSize: 18, fontWeight: 700, marginBottom: 4 }}>First Trade Wizard</h2>
+          <p style={{ color: token.content.secondary, fontSize: 13 }}>Complete these steps to deploy your first automated strategy.</p>
         </div>
         <button 
           onClick={handleComplete}
-          style={{ background: "transparent", border: "none", color: C.t3, cursor: "pointer", padding: 4 }}
+          style={{ background: "transparent", border: "none", color: token.content.muted, cursor: "pointer", padding: 4 }}
         >
           <X size={20} />
         </button>
@@ -80,12 +80,12 @@ export default function FirstTradeWizard({ onComplete }) {
           left: 20,
           right: 20,
           height: 2,
-          background: C.bg3,
+          background: token.surface.inset,
           zIndex: 0
         }}>
           <div style={{
             height: "100%",
-            background: C.accent,
+            background: token.brand.base,
             width: `${((currentStep - 1) / 4) * 100}%`,
             transition: "width 0.4s ease"
           }} />
@@ -108,20 +108,25 @@ export default function FirstTradeWizard({ onComplete }) {
                 width: 32,
                 height: 32,
                 borderRadius: "50%",
-                background: isCompleted ? C.success : (isActive ? C.accent : C.bg3),
-                border: `2px solid ${C.bg2}`,
+                // `undefined` is what the completed arm has always rendered: this read was
+                // `C.success`, and the shim declares no `success` key, so a completed step has
+                // never had a fill of its own — it shows the card surface through, and the
+                // CheckCircle glyph is what tells it apart. Preserved rather than repaired,
+                // because giving it a hue is a design decision and this is a retoken.
+                background: isCompleted ? undefined : (isActive ? token.brand.base : token.surface.inset),
+                border: `2px solid ${token.surface.raised}`,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                color: (isCompleted || isActive) ? "#fff" : C.t3,
+                color: (isCompleted || isActive) ? "#fff" : token.content.muted,
                 marginBottom: 8,
                 transition: "all 0.3s ease",
-                boxShadow: isActive ? `0 0 10px ${C.accent}80` : "none"
+                boxShadow: isActive ? `0 0 10px ${token.brand.base}80` : "none"
               }}>
                 {isCompleted ? <CheckCircle size={16} /> : <step.icon size={16} />}
               </div>
               <div style={{ 
-                color: isActive ? C.t1 : C.t3, 
+                color: isActive ? token.content.primary : token.content.muted, 
                 fontSize: 11, 
                 fontWeight: isActive ? 700 : 500,
                 textAlign: "center",
@@ -136,8 +141,8 @@ export default function FirstTradeWizard({ onComplete }) {
 
       {/* Active Step Content */}
       <div style={{
-        background: C.bg,
-        border: `1px solid ${C.borderLight}`,
+        background: token.surface.canvas,
+        border: `1px solid ${token.line.strong}`,
         borderRadius: 8,
         padding: 20,
         display: "flex",
@@ -145,13 +150,13 @@ export default function FirstTradeWizard({ onComplete }) {
         alignItems: "center"
       }}>
         <div>
-          <div style={{ color: C.accent, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>
+          <div style={{ color: token.brand.base, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>
             Step {currentStep} of 5
           </div>
-          <h3 style={{ color: C.t1, fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
+          <h3 style={{ color: token.content.primary, fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
             {STEPS[currentStep - 1].title}
           </h3>
-          <p style={{ color: C.t2, fontSize: 13 }}>
+          <p style={{ color: token.content.secondary, fontSize: 13 }}>
             {STEPS[currentStep - 1].desc}
           </p>
         </div>
@@ -159,7 +164,7 @@ export default function FirstTradeWizard({ onComplete }) {
         <button
           onClick={handleNext}
           style={{
-            background: C.accent,
+            background: token.brand.base,
             color: "#fff",
             border: "none",
             borderRadius: 6,
@@ -172,8 +177,8 @@ export default function FirstTradeWizard({ onComplete }) {
             gap: 6,
             transition: "background 0.2s"
           }}
-          onMouseEnter={(e) => e.target.style.background = C.accentHover}
-          onMouseLeave={(e) => e.target.style.background = C.accent}
+          onMouseEnter={(e) => e.target.style.background = token.brand.hover}
+          onMouseLeave={(e) => e.target.style.background = token.brand.base}
         >
           {currentStep === 5 ? "Finish Setup" : "Complete Step"} <ChevronRight size={16} />
         </button>
