@@ -462,9 +462,59 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // label and the date, and `#E6EDF3` on the state word. The panel is now
   // `bg-surface-canvas` / `border-line-default` / `text-content-secondary` / `text-brand`, and
   // the state word is `ds/StatusBadge`, which asks `statusToken` for the hue — so the one
-  // element on this page that paints a STATE names no colour at all. The remaining 182 are
+  // element on this page that paints a STATE names no colour at all. The remaining 182 were
   // catalogue and detail chrome, out of Requirement 1.3's scope for this page.
-  'pages/StrategyMarketplace.jsx': 182,
+  //
+  // 182 -> 0 at task 27.3, which took that chrome to the token layer as well, so the last
+  // in-scope page holds no palette of its own. This page carried no inline `style` at all —
+  // all 182 were a hex inside an arbitrary-value Tailwind class — so the change is a mapping
+  // rather than a rebuild, and the whole map is recorded in the page's own header where a
+  // reader can check it against `tokens.css`. Fourteen distinct values across four families:
+  //
+  //   * SURFACES — 32. `#080A0D` (16 of its 17, the nested tiles and pill fills), `#131722`
+  //     (10, the card and panel fills), `#0d1117` (2, the two gradients' far stop),
+  //     `#08090c` (1, the page canvas) and `#1A222C` (1, the tag fill) become
+  //     `surface-canvas`, `surface-panel` and `surface-inset`. Two of the 33 `#202938` go
+  //     here too, not to a line token: they were a border value used as a disabled control's
+  //     FILL, which is the inset surface.
+  //   * LINES — 31. The other `#202938`, all of it the default line token.
+  //   * CONTENT — 69. `#8B949E` (48) is `content-secondary`; `#E6EDF3` (17), `#e2e8f0` (1)
+  //     and `#C9D1D9` (2) are `content-primary`; and the one `#080A0D` that was TEXT, on the
+  //     amber Featured chip, is `content-inverse` rather than a surface token.
+  //   * BRAND AND STATE — 50. `#00D4FF` (22) is the brand token. `#26A69A` (10) and
+  //     `#EF5350` (9) split by the group `statusToken` would return for what each site
+  //     marks — profit/loss for the signed return figures, live for the Subscribe action and
+  //     the Subscribed button, connected for the success notice, error for the failure notice
+  //     and the load-error banner. `#FFB74D` (9) has no token of its own: `tokens.css`
+  //     retires it into `--color-status-warning`, which is where all nine go.
+  //
+  // The two `0 0 20px rgba(…)` glows on the Subscribe / Clone action are NOT in these
+  // numbers and never were — `FUNCTIONAL_COLOUR`'s lookbehind rejects `rgba(` preceded by
+  // the `_` of a Tailwind arbitrary value, so a `shadow-[…_rgba(38,166,154,0.3)]` measured as
+  // zero literals. They are gone anyway, replaced by the raised elevation token:
+  // Requirement 1.5 retires coloured glows and `tokens.css` declares no coloured shadow to
+  // migrate them to. Worth recording because it is a gap in this guard's reach rather than a
+  // gap in the page — a colour inside an arbitrary-value utility whose preceding character is
+  // `_` is invisible here.
+  //
+  // THREE HUE DIVERGENCES PRESERVED AND REPORTED, NOT SILENTLY RESOLVED. Task 27.3 reads the
+  // colour out of the token layer; it does not re-decide the design. So where the page's own
+  // hue disagreed with what `design/semantic.js` would pick, the hue stayed and the
+  // disagreement was written down: nine decorative uses of a state hue — the amber Featured
+  // chip, the two Sharpe figures, the three star ratings, the Featured-section heading glyph
+  // and the hero's Trending count, all in the warning amber, plus the hero's Featured count
+  // in the profit green. None of the nine marks a state, and Requirement 1.5 spends colour on
+  // state. (The hero's third count is brand cyan, which is not a state hue and so is not a
+  // divergence; nor is the historical-results statement, which is a genuine caution.) Then the
+  // per-environment chip, brand cyan for BACKTEST, PAPER and LIVE alike where `ENVIRONMENT`
+  // gives three distinct treatments; and the signed figures' `value >= 0`, which renders a
+  // flat 0.00% in profit green where `pnlToken` calls zero neutral. All three are in the
+  // page's header. Resolving any of them means changing markup or a threshold, which is a
+  // different task from reading the colour out of the token layer.
+  //
+  // The `0` entry stays, for the reason `pages/Dashboard.jsx: 0` gives: it records that the
+  // page is clean and holds it there. An entry is deleted only when the file is.
+  'pages/StrategyMarketplace.jsx': 0,
   // M9. 4 -> 0 at task 27.1, and the entry moves up here out of the deferred block below,
   // because the page is no longer deferred.
   //

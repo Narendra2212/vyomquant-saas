@@ -44,6 +44,73 @@
  * The `PAPER` and `LIVE` groups read the same `{summary, risk}` pair under their own
  * environment prefix; the projection carries no such figures today, which is exactly why
  * those two sections are omitted rather than zero-filled.
+ *
+ * EVERY COLOUR COMES FROM THE TOKEN LAYER (Requirements 1.1, 1.3, 1.5)
+ * -------------------------------------------------------------------
+ * This file used to name 182 colours of its own, all of them a hex sitting inside an
+ * arbitrary-value Tailwind class — a background, a border or a text colour, over fourteen
+ * distinct values. Task 26.1 replaced the six on the subscription indicator; the other
+ * 176 go here, and the class names are deliberately not spelled out in this comment:
+ * Tailwind v4's content scanner is a text scanner over the whole project, so a retired
+ * class named in prose would keep materialising in the production stylesheet. Nothing in
+ * this file names a colour now: every surface, line and content utility resolves through
+ * `src/styles/tokens.css`, and the one element that paints a STATE — the subscription
+ * badge — asks `ds/StatusBadge`, which asks `design/semantic.js`. The map applied, so a
+ * reader can check it against `tokens.css` rather than re-deriving it:
+ *
+ *   #080A0D #08090c #0d1117  -> surface-canvas    #131722 -> surface-panel
+ *   #1A222C                  -> surface-inset     #202938 -> line-default
+ *   #00D4FF                  -> brand             #E6EDF3 #e2e8f0 #C9D1D9 -> content-primary
+ *   #8B949E                  -> content-secondary #FFB74D -> status-warning
+ *   #26A69A                  -> status-profit / status-live / status-connected
+ *   #EF5350                  -> status-loss / status-error
+ *
+ * WHICH GREEN, AND WHY THREE NAMES FOR ONE HUE
+ * -------------------------------------------
+ * `tokens.css` gives `status.live`, `status.connected` and `status.profit` one green and
+ * `status.loss` and `status.error` one red — two hue families, five names (see the KNOWN
+ * TOKEN COLLISION note in `design/semantic.js`). The names are still worth choosing
+ * correctly, because the name is what a reader checks: each site below is given the group
+ * `statusToken` would return for the fact it marks, not the nearest-looking one.
+ *
+ *   * the signed return figures -> `profit` / `loss`, which is `pnlToken`'s pair;
+ *   * the Subscribed button and the Subscribe action -> `live`, which is
+ *     `statusToken('active')`'s group for the ACTIVE subscription they are about, and the
+ *     same group the badge beside them renders;
+ *   * the fallback notice's success arm -> `connected`, which is `statusToken('ok')`;
+ *     its failure arm and the load-error banner -> `error`, `statusToken('error')`.
+ *
+ * FOUR THINGS THIS RETOKEN DID NOT DECIDE, RECORDED RATHER THAN QUIETLY CHANGED
+ * ---------------------------------------------------------------------------
+ *   1. #FFB74D has no token: `tokens.css` retires it into `--color-status-warning`
+ *      (#F59E0B), so that is where all nine of its sites go. Exactly one of them is a
+ *      genuine caution — the historical-results statement. The other eight are DECORATIVE
+ *      uses of the warning hue, which Requirement 1.5 spends on state: the Featured chip,
+ *      the two Sharpe figures, the three star ratings, the Featured-section heading glyph
+ *      and the hero's Trending count. The hue is preserved rather than re-decided here.
+ *      The hero's Featured count is the same finding in the profit green, which makes nine
+ *      in all. The hero's third count is brand cyan, which is not a state hue and so is
+ *      not one of them.
+ *   2. The per-environment chip in `renderEnvironmentSection` is brand cyan for BACKTEST,
+ *      PAPER and LIVE alike, where `design/semantic.js`'s `ENVIRONMENT` gives the three
+ *      distinct treatments Requirement 12.3 asks for (`env.live` red, `env.paper` indigo,
+ *      `env.backtest` grey, each with its own icon and border style). Routing it through
+ *      `ds/TradingEnvironmentBadge` is a markup change, not a colour change, so it is not
+ *      this task's; the hue is preserved and the divergence is on the record.
+ *   3. The signed figures branch on `value >= 0`, so a flat 0.00% renders profit green.
+ *      `pnlToken` calls zero NEUTRAL on purpose — "a position that has made nothing has
+ *      not made a profit". The threshold is left exactly as it was; only the hue's source
+ *      moved.
+ *   4. #C9D1D9 (the description and review prose) has no token either. It sits between
+ *      `content-primary` (#F0F2F5) and `content-secondary` (#8B95A5); it takes
+ *      `content-primary`, because it is the Listing's own prose and the micro-labels
+ *      around it are already `content-secondary`. `tokens.css`'s note moves DIM body text
+ *      up to secondary, and this was never the dim end.
+ *
+ * The two `shadow-[0_0_20px_rgba(…)]` glows on the Subscribe / Clone action are gone
+ * rather than migrated: Requirement 1.5 retires coloured glows and `tokens.css` declares
+ * no coloured shadow to migrate them to. Both arms take `shadow-raised`, the same
+ * elevation every other raised surface in the app reads.
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -469,18 +536,21 @@ const StrategyMarketplace = () => {
       <section
         key={environment}
         data-environment={environment}
-        className="bg-[#080A0D] border border-[#202938] rounded-xl p-5 flex flex-col gap-4"
+        className="bg-surface-canvas border border-line-default rounded-xl p-5 flex flex-col gap-4"
       >
-        <header className="flex flex-wrap items-center justify-between gap-2 border-b border-[#202938] pb-3">
+        <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line-default pb-3">
           <div className="flex items-center gap-3">
-            <span className="bg-[#131722] border border-[#00D4FF] text-[#00D4FF] text-[10px] font-bold font-mono uppercase tracking-widest px-3 py-1 rounded">
+            {/* Brand cyan for all three environments — see finding 2 in the header. The
+                distinct per-environment treatment lives in `design/semantic.js` and is
+                reached through `ds/TradingEnvironmentBadge`, which is a markup change. */}
+            <span className="bg-surface-panel border border-brand text-brand text-[10px] font-bold font-mono uppercase tracking-widest px-3 py-1 rounded">
               {environment}
             </span>
-            <h3 className="text-[#E6EDF3] font-bold font-mono text-sm uppercase tracking-wider">
+            <h3 className="text-content-primary font-bold font-mono text-sm uppercase tracking-wider">
               {environment === 'BACKTEST' ? 'Backtest Performance' : `${environment} Performance`}
             </h3>
           </div>
-          <span className="text-[#8B949E] text-[11px] font-mono">
+          <span className="text-content-secondary text-[11px] font-mono">
             {ENVIRONMENT_DESCRIPTIONS[environment]}
           </span>
         </header>
@@ -489,21 +559,21 @@ const StrategyMarketplace = () => {
           {figures.map((figure) => {
             const Icon = figure.icon;
             const tone = figure.signed
-              ? (figure.value >= 0 ? 'text-[#26A69A]' : 'text-[#EF5350]')
-              : 'text-[#E6EDF3]';
+              ? (figure.value >= 0 ? 'text-status-profit' : 'text-status-loss')
+              : 'text-content-primary';
             return (
               <div
                 key={figure.key}
-                className="bg-[#131722] border border-[#202938] rounded-lg p-3 flex flex-col gap-1"
+                className="bg-surface-panel border border-line-default rounded-lg p-3 flex flex-col gap-1"
               >
-                <span className="text-[#8B949E] text-[9px] font-mono uppercase tracking-widest flex items-center gap-1">
+                <span className="text-content-secondary text-[9px] font-mono uppercase tracking-widest flex items-center gap-1">
                   <Icon size={11} /> {figure.label}
                 </span>
                 <span className={`text-lg font-bold font-mono ${tone}`}>
                   {figure.format(figure.value)}
                 </span>
                 {/* Every figure carries its Execution_Environment label (Requirement 6.6). */}
-                <span className="text-[#8B949E] text-[9px] font-mono uppercase tracking-widest">
+                <span className="text-content-secondary text-[9px] font-mono uppercase tracking-widest">
                   {environment}
                 </span>
               </div>
@@ -513,7 +583,7 @@ const StrategyMarketplace = () => {
 
         {conditions.length > 0 && (
           <div className="flex flex-col gap-2">
-            <div className="text-[#8B949E] text-[10px] font-mono uppercase tracking-widest">
+            <div className="text-content-secondary text-[10px] font-mono uppercase tracking-widest">
               Per-condition results
               {conditionCount !== null ? ` (${formatCount(conditionCount)} conditions)` : ''}
             </div>
@@ -528,20 +598,20 @@ const StrategyMarketplace = () => {
                 return (
                   <div
                     key={label}
-                    className="bg-[#131722] border border-[#202938] rounded-lg px-3 py-2 flex flex-wrap items-center gap-x-5 gap-y-1"
+                    className="bg-surface-panel border border-line-default rounded-lg px-3 py-2 flex flex-wrap items-center gap-x-5 gap-y-1"
                   >
-                    <span className="text-[#E6EDF3] font-mono text-xs font-bold min-w-[96px]">
+                    <span className="text-content-primary font-mono text-xs font-bold min-w-[96px]">
                       {label}
                     </span>
                     {metrics.length === 0 ? (
-                      <span className="text-[#8B949E] font-mono text-[11px]">
+                      <span className="text-content-secondary font-mono text-[11px]">
                         No figures recorded for this condition.
                       </span>
                     ) : (
                       metrics.map(({ def, value }) => (
-                        <span key={def.key} className="font-mono text-[11px] text-[#8B949E]">
+                        <span key={def.key} className="font-mono text-[11px] text-content-secondary">
                           {def.label}{' '}
-                          <span className="text-[#E6EDF3] font-bold">{def.format(value)}</span>
+                          <span className="text-content-primary font-bold">{def.format(value)}</span>
                         </span>
                       ))
                     )}
@@ -555,7 +625,7 @@ const StrategyMarketplace = () => {
         {environment === 'BACKTEST' && (
           <p
             data-testid="historical-results-statement"
-            className="text-[#FFB74D] text-[11px] font-mono leading-relaxed flex items-start gap-2 border-t border-[#202938] pt-3"
+            className="text-status-warning text-[11px] font-mono leading-relaxed flex items-start gap-2 border-t border-line-default pt-3"
           >
             <Info size={14} className="mt-0.5 shrink-0" />
             {HISTORICAL_RESULTS_STATEMENT}
@@ -571,7 +641,7 @@ const StrategyMarketplace = () => {
       .filter(Boolean);
     if (sections.length === 0) {
       return (
-        <div className="bg-[#080A0D] border border-dashed border-[#202938] rounded-xl p-5 text-[#8B949E] font-mono text-xs">
+        <div className="bg-surface-canvas border border-dashed border-line-default rounded-xl p-5 text-content-secondary font-mono text-xs">
           No performance figures have been recorded for this listing.
         </div>
       );
@@ -592,54 +662,54 @@ const StrategyMarketplace = () => {
       <div
         key={strat.listing_id}
         onClick={() => loadDetail(strat.listing_id)}
-        className="relative bg-gradient-to-br from-[#131722] to-[#0d1117] border border-[#00D4FF]/30 rounded-2xl p-6 cursor-pointer group hover:border-[#00D4FF] transition-all overflow-hidden"
+        className="relative bg-gradient-to-br from-surface-panel to-surface-canvas border border-brand/30 rounded-2xl p-6 cursor-pointer group hover:border-brand transition-all overflow-hidden"
       >
-        <div className="absolute top-0 right-0 bg-gradient-to-l from-[#00D4FF] to-transparent w-32 h-32 opacity-10 group-hover:opacity-20 transition-opacity" />
-        <div className="absolute top-3 right-3 bg-[#FFB74D] text-[#080A0D] text-[10px] font-bold px-3 py-1 rounded-full font-mono uppercase flex items-center gap-1">
+        <div className="absolute top-0 right-0 bg-gradient-to-l from-brand to-transparent w-32 h-32 opacity-10 group-hover:opacity-20 transition-opacity" />
+        <div className="absolute top-3 right-3 bg-status-warning text-content-inverse text-[10px] font-bold px-3 py-1 rounded-full font-mono uppercase flex items-center gap-1">
           <Sparkles size={12} /> Featured
         </div>
         <div className="relative z-10">
           <div className="flex items-start gap-4">
-            <div className="w-16 h-16 rounded-xl bg-[#080A0D] border border-[#202938] flex items-center justify-center">
-              <Cpu className="text-[#00D4FF]" size={32} />
+            <div className="w-16 h-16 rounded-xl bg-surface-canvas border border-line-default flex items-center justify-center">
+              <Cpu className="text-brand" size={32} />
             </div>
             <div className="flex-1">
-              <h3 className="font-bold text-xl text-[#E6EDF3] group-hover:text-[#00D4FF] transition-colors">{strat.name}</h3>
+              <h3 className="font-bold text-xl text-content-primary group-hover:text-brand transition-colors">{strat.name}</h3>
               {strat.creator_alias && (
-                <div className="text-[#8B949E] text-xs font-mono mt-1">
-                  by <span className="text-[#00D4FF] font-bold">{strat.creator_alias}</span>
+                <div className="text-content-secondary text-xs font-mono mt-1">
+                  by <span className="text-brand font-bold">{strat.creator_alias}</span>
                 </div>
               )}
             </div>
           </div>
           <div className="grid grid-cols-4 gap-3 mt-6">
-            <div className="bg-[#080A0D] p-3 rounded-lg border border-[#202938]">
-              <div className="text-[#8B949E] text-[9px] font-mono uppercase">Sharpe · BACKTEST</div>
-              <div className="text-[#FFB74D] font-bold font-mono text-lg">
+            <div className="bg-surface-canvas p-3 rounded-lg border border-line-default">
+              <div className="text-content-secondary text-[9px] font-mono uppercase">Sharpe · BACKTEST</div>
+              <div className="text-status-warning font-bold font-mono text-lg">
                 {sharpe === null ? NOT_MEASURED : formatRatio(sharpe)}
               </div>
             </div>
-            <div className="bg-[#080A0D] p-3 rounded-lg border border-[#202938]">
-              <div className="text-[#8B949E] text-[9px] font-mono uppercase">Return · BACKTEST</div>
+            <div className="bg-surface-canvas p-3 rounded-lg border border-line-default">
+              <div className="text-content-secondary text-[9px] font-mono uppercase">Return · BACKTEST</div>
               <div
                 className={`font-bold font-mono text-lg ${
                   totalReturn === null
-                    ? 'text-[#8B949E]'
-                    : (totalReturn >= 0 ? 'text-[#26A69A]' : 'text-[#EF5350]')
+                    ? 'text-content-secondary'
+                    : (totalReturn >= 0 ? 'text-status-profit' : 'text-status-loss')
                 }`}
               >
                 {totalReturn === null ? NOT_MEASURED : formatSignedPercent(totalReturn)}
               </div>
             </div>
-            <div className="bg-[#080A0D] p-3 rounded-lg border border-[#202938]">
-              <div className="text-[#8B949E] text-[9px] font-mono uppercase">Subs</div>
-              <div className="text-[#E6EDF3] font-bold font-mono text-lg">
+            <div className="bg-surface-canvas p-3 rounded-lg border border-line-default">
+              <div className="text-content-secondary text-[9px] font-mono uppercase">Subs</div>
+              <div className="text-content-primary font-bold font-mono text-lg">
                 {subscribers === null ? NOT_MEASURED : formatCount(subscribers)}
               </div>
             </div>
-            <div className="bg-[#080A0D] p-3 rounded-lg border border-[#202938]">
-              <div className="text-[#8B949E] text-[9px] font-mono uppercase">Price</div>
-              <div className="text-[#00D4FF] font-bold font-mono text-lg">{price.text}</div>
+            <div className="bg-surface-canvas p-3 rounded-lg border border-line-default">
+              <div className="text-content-secondary text-[9px] font-mono uppercase">Price</div>
+              <div className="text-brand font-bold font-mono text-lg">{price.text}</div>
             </div>
           </div>
         </div>
@@ -657,46 +727,46 @@ const StrategyMarketplace = () => {
       <div
         key={strat.listing_id}
         onClick={() => loadDetail(strat.listing_id)}
-        className="bg-[#131722] border border-[#202938] rounded-xl p-5 cursor-pointer group hover:border-[#00D4FF]/50 transition-all relative overflow-hidden"
+        className="bg-surface-panel border border-line-default rounded-xl p-5 cursor-pointer group hover:border-brand/50 transition-all relative overflow-hidden"
       >
         <div className="flex justify-between items-start mb-4">
           <div>
-            <h3 className="font-bold text-[#E6EDF3] group-hover:text-[#00D4FF] transition-colors">{strat.name}</h3>
+            <h3 className="font-bold text-content-primary group-hover:text-brand transition-colors">{strat.name}</h3>
             {strat.creator_alias && (
-              <div className="text-[#8B949E] text-xs font-mono mt-1">
-                by <span className="text-[#00D4FF] font-bold">{strat.creator_alias}</span>
+              <div className="text-content-secondary text-xs font-mono mt-1">
+                by <span className="text-brand font-bold">{strat.creator_alias}</span>
               </div>
             )}
           </div>
           {strat.category && (
-            <span className="bg-[#080A0D] border border-[#202938] px-2 py-1 rounded text-[10px] font-mono text-[#8B949E] uppercase">
+            <span className="bg-surface-canvas border border-line-default px-2 py-1 rounded text-[10px] font-mono text-content-secondary uppercase">
               {strat.category}
             </span>
           )}
         </div>
 
-        <div className="grid grid-cols-3 gap-2 py-4 border-y border-[#202938]">
+        <div className="grid grid-cols-3 gap-2 py-4 border-y border-line-default">
           <div className="flex flex-col gap-1">
-            <span className="text-[#8B949E] text-[9px] font-mono uppercase flex items-center gap-1"><Users size={10} /> Subs</span>
-            <span className="text-[#E6EDF3] font-bold font-mono">
+            <span className="text-content-secondary text-[9px] font-mono uppercase flex items-center gap-1"><Users size={10} /> Subs</span>
+            <span className="text-content-primary font-bold font-mono">
               {subscribers === null ? NOT_MEASURED : formatCount(subscribers)}
             </span>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-[#8B949E] text-[9px] font-mono uppercase flex items-center gap-1"><TrendingUp size={10} /> Return · BACKTEST</span>
+            <span className="text-content-secondary text-[9px] font-mono uppercase flex items-center gap-1"><TrendingUp size={10} /> Return · BACKTEST</span>
             <span
               className={`font-bold font-mono ${
                 totalReturn === null
-                  ? 'text-[#8B949E]'
-                  : (totalReturn >= 0 ? 'text-[#26A69A]' : 'text-[#EF5350]')
+                  ? 'text-content-secondary'
+                  : (totalReturn >= 0 ? 'text-status-profit' : 'text-status-loss')
               }`}
             >
               {totalReturn === null ? NOT_MEASURED : formatSignedPercent(totalReturn)}
             </span>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-[#8B949E] text-[9px] font-mono uppercase flex items-center gap-1"><Activity size={10} /> Sharpe · BACKTEST</span>
-            <span className="text-[#FFB74D] font-bold font-mono">
+            <span className="text-content-secondary text-[9px] font-mono uppercase flex items-center gap-1"><Activity size={10} /> Sharpe · BACKTEST</span>
+            <span className="text-status-warning font-bold font-mono">
               {sharpe === null ? NOT_MEASURED : formatRatio(sharpe)}
             </span>
           </div>
@@ -704,13 +774,13 @@ const StrategyMarketplace = () => {
 
         <div className="flex justify-between items-center mt-4">
           {rating === null ? (
-            <span className="text-[10px] font-mono text-[#8B949E]">No rating recorded</span>
+            <span className="text-[10px] font-mono text-content-secondary">No rating recorded</span>
           ) : (
-            <span className="text-[10px] font-mono font-bold flex items-center gap-1 text-[#FFB74D]">
+            <span className="text-[10px] font-mono font-bold flex items-center gap-1 text-status-warning">
               <Star size={10} fill="currentColor" /> {rating.toFixed(1)}
             </span>
           )}
-          <span className="text-[#00D4FF] font-bold font-mono">
+          <span className="text-brand font-bold font-mono">
             {price.state === 'paid' ? `${price.text}/mo` : price.text}
           </span>
         </div>
@@ -788,35 +858,35 @@ const StrategyMarketplace = () => {
 
     return (
       <div className="flex flex-col gap-6">
-        <button onClick={() => setView('browse')} className="flex items-center gap-2 text-[#8B949E] hover:text-[#E6EDF3] transition-colors w-max font-mono text-sm">
+        <button onClick={() => setView('browse')} className="flex items-center gap-2 text-content-secondary hover:text-content-primary transition-colors w-max font-mono text-sm">
           <ArrowLeft size={16} /> Back to Marketplace
         </button>
 
-        <div className="bg-[#131722] border border-[#202938] rounded-2xl p-8 shadow-lg flex flex-col gap-8">
+        <div className="bg-surface-panel border border-line-default rounded-2xl p-8 shadow-lg flex flex-col gap-8">
           {/* Header */}
           <div className="flex justify-between items-start gap-6 flex-wrap">
             <div className="flex-1 min-w-[260px]">
               <div className="flex items-center gap-3 mb-3 flex-wrap">
                 {strat.category && (
-                  <span className="bg-[#080A0D] border border-[#202938] px-3 py-1 rounded text-[10px] font-mono text-[#8B949E] uppercase">
+                  <span className="bg-surface-canvas border border-line-default px-3 py-1 rounded text-[10px] font-mono text-content-secondary uppercase">
                     {strat.category}
                   </span>
                 )}
                 {strat.difficulty && (
-                  <span className="bg-[#080A0D] border border-[#202938] px-3 py-1 rounded text-[10px] font-mono text-[#8B949E] uppercase">
+                  <span className="bg-surface-canvas border border-line-default px-3 py-1 rounded text-[10px] font-mono text-content-secondary uppercase">
                     {strat.difficulty}
                   </span>
                 )}
                 {strat.validation_status && (
-                  <span className="bg-[#080A0D] border border-[#202938] px-3 py-1 rounded text-[10px] font-mono text-[#8B949E] uppercase">
+                  <span className="bg-surface-canvas border border-line-default px-3 py-1 rounded text-[10px] font-mono text-content-secondary uppercase">
                     {strat.validation_status}
                   </span>
                 )}
               </div>
-              <h1 className="text-4xl font-black tracking-tight text-[#E6EDF3] mb-2">{strat.name}</h1>
+              <h1 className="text-4xl font-black tracking-tight text-content-primary mb-2">{strat.name}</h1>
               {strat.creator_alias && (
-                <div className="text-[#8B949E] font-mono text-sm">
-                  Created by <span className="text-[#00D4FF] font-bold">{strat.creator_alias}</span>
+                <div className="text-content-secondary font-mono text-sm">
+                  Created by <span className="text-brand font-bold">{strat.creator_alias}</span>
                 </div>
               )}
             </div>
@@ -824,12 +894,12 @@ const StrategyMarketplace = () => {
             {/* Pricing section + subscribe action (Requirement 20.9) */}
             <div className="flex flex-col gap-3 items-end">
               <div className="text-right">
-                <div className="text-[#8B949E] text-xs font-mono uppercase mb-1">
+                <div className="text-content-secondary text-xs font-mono uppercase mb-1">
                   Monthly Price
                 </div>
-                <div className="text-3xl font-black text-[#00D4FF] font-mono">{price.text}</div>
+                <div className="text-3xl font-black text-brand font-mono">{price.text}</div>
                 {price.state === 'paid' && (
-                  <div className="text-[#8B949E] text-[10px] font-mono mt-1">
+                  <div className="text-content-secondary text-[10px] font-mono mt-1">
                     Billed each calendar month.
                   </div>
                 )}
@@ -838,7 +908,7 @@ const StrategyMarketplace = () => {
                 <button
                   type="button"
                   disabled
-                  className="px-8 py-3 rounded-xl text-sm font-bold font-mono bg-[#202938] text-[#8B949E] cursor-not-allowed"
+                  className="px-8 py-3 rounded-xl text-sm font-bold font-mono bg-surface-inset text-content-secondary cursor-not-allowed"
                 >
                   Price unavailable
                 </button>
@@ -846,7 +916,7 @@ const StrategyMarketplace = () => {
                 <button
                   type="button"
                   disabled
-                  className="px-8 py-3 rounded-xl text-sm font-bold font-mono bg-[#202938] text-[#26A69A] cursor-not-allowed"
+                  className="px-8 py-3 rounded-xl text-sm font-bold font-mono bg-surface-inset text-status-live cursor-not-allowed"
                 >
                   Subscribed
                 </button>
@@ -855,10 +925,10 @@ const StrategyMarketplace = () => {
                   type="button"
                   onClick={() => (price.state === 'paid' ? handleSubscribe(strat) : handleClone(strat))}
                   disabled={cloneLoading || subscribeLoading}
-                  className={`px-8 py-3 rounded-xl text-sm font-bold font-mono flex items-center gap-2 transition-colors disabled:opacity-50 ${
+                  className={`px-8 py-3 rounded-xl text-sm font-bold font-mono flex items-center gap-2 transition-colors shadow-raised disabled:opacity-50 ${
                     price.state === 'paid'
-                      ? 'bg-[#26A69A] hover:bg-[#26A69A]/90 text-white shadow-[0_0_20px_rgba(38,166,154,0.3)]'
-                      : 'bg-[#00D4FF] hover:bg-[#00D4FF]/90 text-white shadow-[0_0_20px_rgba(0,212,255,0.3)]'
+                      ? 'bg-status-live hover:bg-status-live/90 text-white'
+                      : 'bg-brand hover:bg-brand/90 text-white'
                   }`}
                 >
                   {price.state === 'paid' ? 'Subscribe' : 'Clone Free'} <ArrowRight size={16} />
@@ -870,7 +940,7 @@ const StrategyMarketplace = () => {
           {renderSubscriptionIndicator()}
 
           {/* Owner-supplied description, rendered as a text child */}
-          <div className="text-[#C9D1D9] leading-relaxed max-w-4xl text-sm whitespace-pre-line">
+          <div className="text-content-primary leading-relaxed max-w-4xl text-sm whitespace-pre-line">
             {strat.description || 'No description provided.'}
           </div>
 
@@ -881,7 +951,7 @@ const StrategyMarketplace = () => {
           {Array.isArray(strat.tags) && strat.tags.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {strat.tags.map((tag) => (
-                <span key={String(tag)} className="text-[10px] border border-[#202938] bg-[#1A222C] text-[#8B949E] px-3 py-1 rounded-full font-mono uppercase">
+                <span key={String(tag)} className="text-[10px] border border-line-default bg-surface-inset text-content-secondary px-3 py-1 rounded-full font-mono uppercase">
                   {tag}
                 </span>
               ))}
@@ -889,29 +959,29 @@ const StrategyMarketplace = () => {
           )}
 
           {/* Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-6 border-t border-[#202938]">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-6 border-t border-line-default">
             <div className="flex flex-col gap-1">
-              <span className="text-[#8B949E] text-[10px] font-mono uppercase">Subscribers</span>
-              <span className="text-xl font-bold font-mono text-[#E6EDF3]">
+              <span className="text-content-secondary text-[10px] font-mono uppercase">Subscribers</span>
+              <span className="text-xl font-bold font-mono text-content-primary">
                 {subscriberCount === null ? NOT_MEASURED : formatCount(subscriberCount)}
               </span>
             </div>
             <div className="flex flex-col gap-1">
-              <span className="text-[#8B949E] text-[10px] font-mono uppercase">Rating</span>
+              <span className="text-content-secondary text-[10px] font-mono uppercase">Rating</span>
               {rating === null ? (
-                <span className="text-xl font-bold font-mono text-[#8B949E]">{NOT_MEASURED}</span>
+                <span className="text-xl font-bold font-mono text-content-secondary">{NOT_MEASURED}</span>
               ) : (
-                <span className="text-xl font-bold font-mono text-[#FFB74D] flex items-center gap-2">
+                <span className="text-xl font-bold font-mono text-status-warning flex items-center gap-2">
                   <Star size={16} fill="currentColor" /> {rating.toFixed(1)}
                   {ratingCount !== null && (
-                    <span className="text-[#8B949E] font-normal text-sm">({formatCount(ratingCount)})</span>
+                    <span className="text-content-secondary font-normal text-sm">({formatCount(ratingCount)})</span>
                   )}
                 </span>
               )}
             </div>
             <div className="flex flex-col gap-1">
-              <span className="text-[#8B949E] text-[10px] font-mono uppercase">Published</span>
-              <span className="text-xl font-bold font-mono text-[#E6EDF3]">
+              <span className="text-content-secondary text-[10px] font-mono uppercase">Published</span>
+              <span className="text-xl font-bold font-mono text-content-primary">
                 {publishedAt || NOT_MEASURED}
               </span>
             </div>
@@ -919,8 +989,8 @@ const StrategyMarketplace = () => {
 
           {/* Reviews — owner/subscriber supplied text, rendered as text children */}
           {reviews.length > 0 && (
-            <div className="flex flex-col gap-3 pt-6 border-t border-[#202938]">
-              <div className="text-[#8B949E] text-[10px] font-mono uppercase tracking-widest">
+            <div className="flex flex-col gap-3 pt-6 border-t border-line-default">
+              <div className="text-content-secondary text-[10px] font-mono uppercase tracking-widest">
                 Recent reviews
               </div>
               {reviews.map((review, index) => {
@@ -929,18 +999,18 @@ const StrategyMarketplace = () => {
                 return (
                   <div
                     key={`${review?.created_at || 'review'}-${index}`}
-                    className="bg-[#080A0D] border border-[#202938] rounded-xl p-4 flex flex-col gap-2"
+                    className="bg-surface-canvas border border-line-default rounded-xl p-4 flex flex-col gap-2"
                   >
                     <div className="flex items-center gap-3 font-mono text-[11px]">
                       {reviewRating !== null && (
-                        <span className="text-[#FFB74D] font-bold flex items-center gap-1">
+                        <span className="text-status-warning font-bold flex items-center gap-1">
                           <Star size={11} fill="currentColor" /> {reviewRating.toFixed(1)}
                         </span>
                       )}
-                      {reviewedAt && <span className="text-[#8B949E]">{reviewedAt}</span>}
+                      {reviewedAt && <span className="text-content-secondary">{reviewedAt}</span>}
                     </div>
                     {review?.review_text && (
-                      <p className="text-[#C9D1D9] text-sm leading-relaxed whitespace-pre-line">
+                      <p className="text-content-primary text-sm leading-relaxed whitespace-pre-line">
                         {review.review_text}
                       </p>
                     )}
@@ -955,29 +1025,29 @@ const StrategyMarketplace = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#08090c] text-[#e2e8f0] font-['Inter']">
+    <div className="flex-1 overflow-y-auto bg-surface-canvas text-content-primary font-['Inter']">
       <div className="max-w-7xl mx-auto p-6 flex flex-col gap-8">
 
         {/* Hero Section */}
-        <div className="relative bg-gradient-to-br from-[#131722] to-[#0d1117] border border-[#202938] rounded-2xl p-8 overflow-hidden">
-          <div className="absolute top-0 right-0 w-96 h-96 bg-[#00D4FF]/5 rounded-full blur-3xl" />
+        <div className="relative bg-gradient-to-br from-surface-panel to-surface-canvas border border-line-default rounded-2xl p-8 overflow-hidden">
+          <div className="absolute top-0 right-0 w-96 h-96 bg-brand/5 rounded-full blur-3xl" />
           <div className="relative z-10">
             <div className="flex items-center gap-3 mb-4">
-              <Hexagon className="text-[#00D4FF]" size={32} />
-              <h1 className="text-4xl font-black tracking-tight text-[#E6EDF3]">Strategy Marketplace</h1>
+              <Hexagon className="text-brand" size={32} />
+              <h1 className="text-4xl font-black tracking-tight text-content-primary">Strategy Marketplace</h1>
             </div>
-            <p className="text-[#8B949E] font-mono text-sm max-w-2xl mb-6">
+            <p className="text-content-secondary font-mono text-sm max-w-2xl mb-6">
               Browse published strategies, review the recorded results behind each one, and
               subscribe to run them without ever holding their logic.
             </p>
             <div className="flex gap-4 flex-wrap">
-              <div className="flex items-center gap-2 text-[#26A69A] font-mono text-sm">
+              <div className="flex items-center gap-2 text-status-live font-mono text-sm">
                 <Trophy size={16} /> {featuredStrategies.length} Featured
               </div>
-              <div className="flex items-center gap-2 text-[#FFB74D] font-mono text-sm">
+              <div className="flex items-center gap-2 text-status-warning font-mono text-sm">
                 <Flame size={16} /> {trendingStrategies.length} Trending
               </div>
-              <div className="flex items-center gap-2 text-[#00D4FF] font-mono text-sm">
+              <div className="flex items-center gap-2 text-brand font-mono text-sm">
                 <Users size={16} /> {strategies.length} Strategies
               </div>
             </div>
@@ -985,7 +1055,7 @@ const StrategyMarketplace = () => {
         </div>
 
         {error && (
-          <div className="bg-[#EF5350]/20 border border-[#EF5350] text-[#EF5350] p-4 rounded-lg flex items-center gap-3 font-mono text-sm">
+          <div className="bg-status-error/20 border border-status-error text-status-error p-4 rounded-lg flex items-center gap-3 font-mono text-sm">
             <AlertTriangle size={18} /> {error}
           </div>
         )}
@@ -995,15 +1065,15 @@ const StrategyMarketplace = () => {
           <div
             className={`p-4 rounded-lg flex items-center justify-between gap-3 font-mono text-sm border ${
               notice.type === 'error'
-                ? 'bg-[#EF5350]/20 border-[#EF5350] text-[#EF5350]'
-                : 'bg-[#26A69A]/20 border-[#26A69A] text-[#26A69A]'
+                ? 'bg-status-error/20 border-status-error text-status-error'
+                : 'bg-status-connected/20 border-status-connected text-status-connected'
             }`}
           >
             <span>{notice.message}</span>
             <button
               type="button"
               onClick={() => setNotice(null)}
-              className="text-[#8B949E] hover:text-[#E6EDF3] text-xs uppercase"
+              className="text-content-secondary hover:text-content-primary text-xs uppercase"
             >
               Dismiss
             </button>
@@ -1011,9 +1081,9 @@ const StrategyMarketplace = () => {
         )}
 
         {/* Search & Filter Bar */}
-        <div className="bg-[#131722] border border-[#202938] rounded-xl p-4 flex flex-wrap gap-4 items-center">
-          <div className="flex items-center gap-2 px-4 bg-[#080A0D] border border-[#202938] rounded-lg flex-1 min-w-[250px]">
-            <Search size={16} className="text-[#8B949E]" />
+        <div className="bg-surface-panel border border-line-default rounded-xl p-4 flex flex-wrap gap-4 items-center">
+          <div className="flex items-center gap-2 px-4 bg-surface-canvas border border-line-default rounded-lg flex-1 min-w-[250px]">
+            <Search size={16} className="text-content-secondary" />
             <input
               type="text"
               value={searchQuery}
@@ -1021,7 +1091,7 @@ const StrategyMarketplace = () => {
               onKeyDown={(e) => e.key === 'Enter' && fetchStrategies()}
               placeholder="Search strategies..."
               aria-label="Search strategies"
-              className="bg-transparent border-none outline-none text-sm p-2 w-full font-mono text-[#E6EDF3] placeholder-[#8B949E]"
+              className="bg-transparent border-none outline-none text-sm p-2 w-full font-mono text-content-primary placeholder-content-secondary"
             />
           </div>
 
@@ -1032,8 +1102,8 @@ const StrategyMarketplace = () => {
               onClick={() => setSelectedCategory(null)}
               className={`px-3 py-1.5 rounded-full text-xs font-mono transition-colors ${
                 selectedCategory === null
-                  ? 'bg-[#00D4FF] text-white'
-                  : 'bg-[#080A0D] border border-[#202938] text-[#8B949E] hover:text-[#E6EDF3]'
+                  ? 'bg-brand text-white'
+                  : 'bg-surface-canvas border border-line-default text-content-secondary hover:text-content-primary'
               }`}
             >
               All
@@ -1047,8 +1117,8 @@ const StrategyMarketplace = () => {
                   onClick={() => setSelectedCategory(cat.name)}
                   className={`px-3 py-1.5 rounded-full text-xs font-mono transition-colors ${
                     selectedCategory === cat.name
-                      ? 'bg-[#00D4FF] text-white'
-                      : 'bg-[#080A0D] border border-[#202938] text-[#8B949E] hover:text-[#E6EDF3]'
+                      ? 'bg-brand text-white'
+                      : 'bg-surface-canvas border border-line-default text-content-secondary hover:text-content-primary'
                   }`}
                 >
                   {cat.name}{count === null ? '' : ` (${formatCount(count)})`}
@@ -1058,7 +1128,7 @@ const StrategyMarketplace = () => {
           </div>
 
           <select
-            className="bg-[#080A0D] border border-[#202938] text-[#8B949E] font-mono text-xs rounded-lg px-4 py-2 outline-none"
+            className="bg-surface-canvas border border-line-default text-content-secondary font-mono text-xs rounded-lg px-4 py-2 outline-none"
             value={sort}
             aria-label="Sort listings"
             onChange={(e) => { setSort(e.target.value); setPage(1); }}
@@ -1080,7 +1150,7 @@ const StrategyMarketplace = () => {
             {featuredStrategies.length > 0 && (
               <div className="flex flex-col gap-4">
                 <div className="flex items-center gap-2">
-                  <Sparkles className="text-[#FFB74D]" size={20} />
+                  <Sparkles className="text-status-warning" size={20} />
                   <h2 className="text-xl font-bold font-mono">Featured Strategies</h2>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -1091,11 +1161,11 @@ const StrategyMarketplace = () => {
 
             {/* Strategy Grid */}
             {loading ? (
-              <div className="flex justify-center items-center py-20 text-[#8B949E] font-mono">
+              <div className="flex justify-center items-center py-20 text-content-secondary font-mono">
                 <Activity className="animate-spin mr-2" size={20} /> Loading Marketplace...
               </div>
             ) : strategies.length === 0 ? (
-              <div className="flex flex-col justify-center items-center py-20 text-[#8B949E] font-mono gap-4 border border-dashed border-[#202938] rounded-xl">
+              <div className="flex flex-col justify-center items-center py-20 text-content-secondary font-mono gap-4 border border-dashed border-line-default rounded-xl">
                 <Search size={48} className="opacity-20" />
                 No strategies found matching your criteria.
               </div>
@@ -1112,16 +1182,16 @@ const StrategyMarketplace = () => {
                       type="button"
                       disabled={page === 1}
                       onClick={() => { setPage((p) => p - 1); }}
-                      className="px-4 py-2 bg-[#131722] border border-[#202938] rounded-lg hover:border-[#8B949E] disabled:opacity-50"
+                      className="px-4 py-2 bg-surface-panel border border-line-default rounded-lg hover:border-content-secondary disabled:opacity-50"
                     >
                       Previous
                     </button>
-                    <span className="text-[#8B949E]">Page {page} of {totalPages}</span>
+                    <span className="text-content-secondary">Page {page} of {totalPages}</span>
                     <button
                       type="button"
                       disabled={page === totalPages}
                       onClick={() => { setPage((p) => p + 1); }}
-                      className="px-4 py-2 bg-[#131722] border border-[#202938] rounded-lg hover:border-[#8B949E] disabled:opacity-50"
+                      className="px-4 py-2 bg-surface-panel border border-line-default rounded-lg hover:border-content-secondary disabled:opacity-50"
                     >
                       Next
                     </button>

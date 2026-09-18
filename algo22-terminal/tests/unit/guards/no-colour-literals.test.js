@@ -484,9 +484,10 @@ describe('no-colour-literals: the in-scope set is closed', () => {
 
   it('never raises an in-scope entry above zero, whatever the file measures', () => {
     // The rule the split exists for, stated over the COMMITTED numbers rather than the
-    // measured ones, so it holds today with `pages/StrategyMarketplace.jsx` at 182 being
-    // the single declared exception below. An in-scope file may not be *given* headroom:
-    // the only legal in-scope budget is 0.
+    // measured ones. It carried a single declared exception — `pages/StrategyMarketplace.jsx`
+    // at 182 — from task 27.3's first part until the page was migrated; that exception is
+    // gone, so the expectation is now `[]` and no in-scope entry has headroom of any size.
+    // An in-scope file may not be *given* headroom: the only legal in-scope budget is 0.
     const withHeadroom = inScope
       .filter((relative) => IN_SCOPE_COLOUR_LITERAL_BUDGET[relative] > 0)
       .map((relative) => `${relative} — ${IN_SCOPE_COLOUR_LITERAL_BUDGET[relative]}`);
@@ -498,29 +499,31 @@ describe('no-colour-literals: the in-scope set is closed', () => {
         + `\`token.*\` from src/design/tokens.js. If the file is genuinely out of scope, move\n`
         + `its entry to OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET in ${BUDGET_FILE} with a reason.\n`
         + `${list(withHeadroom)}`,
-    ).toEqual(['pages/StrategyMarketplace.jsx — 182']);
+    ).toEqual([]);
   });
 
   /**
-   * THE ASSERTION THIS TASK EXISTS TO ADD, AND WHY IT IS SKIPPED.
+   * THE ASSERTION THIS TASK EXISTS TO ADD. IT IS NOW LIVE.
    *
-   * `pages/StrategyMarketplace.jsx` measures 182 as task 27.3 lands. Task 26.1 cleared the
-   * subscription-state element — the only part of that page Requirement 13 governs — and
-   * the 182 that remain are the catalogue and detail chrome, which no task in M9 has
-   * rebuilt yet.
+   * `pages/StrategyMarketplace.jsx` measured 182 when task 27.3's structural half landed:
+   * task 26.1 had cleared the subscription-state element — the only part of that page
+   * Requirement 13 governs — and the 182 that remained were the catalogue and detail chrome.
+   * It was the last in-scope entry above zero, so this `it` was committed skipped rather
+   * than made to pass by editing a list.
    *
-   * WHAT UNBLOCKS THIS: `pages/StrategyMarketplace.jsx` reaching `0` in
-   * `IN_SCOPE_COLOUR_LITERAL_BUDGET`. That is the whole precondition, and it is the last
-   * one — every other in-scope entry is already `0`. Un-skip this `it` and drop the
-   * `['pages/StrategyMarketplace.jsx — 182']` expectation above to `[]` in the same commit
-   * that takes the page down; the two edits are a pair and neither makes sense alone.
+   * That precondition is met. The chrome is on the token layer, the entry is `0`, and this
+   * assertion is un-skipped in the same commit — paired, as the note it replaces required,
+   * with dropping the `withHeadroom` expectation above to `[]`. The in-scope set is empty
+   * because every page in it was migrated, not because an entry was deleted: `never raises
+   * an in-scope entry above zero` and `names only files that still exist` are what keep
+   * those two facts from being confused, and both run beside this one.
    *
-   * It is committed skipped rather than made to pass by editing the list. The in-scope set
-   * becomes empty because the pages were migrated, not because a non-zero entry was
-   * deleted — `never raises an in-scope entry above zero` is what holds that line while
-   * this one is off, and the structural assertions above all run today.
+   * Note what each of the pair does now. The one above reads the COMMITTED numbers, so it
+   * refuses headroom being written down; this one reads the MEASURED counts, so it refuses a
+   * literal that is really in the tree. Neither subsumes the other — a literal added to an
+   * in-scope page with its budget left at 0 is caught only here.
    */
-  it.skip('holds no colour literal in any in-scope file', () => {
+  it('holds no colour literal in any in-scope file', () => {
     const dirty = SCANNED.filter(
       (f) => f.relative in IN_SCOPE_COLOUR_LITERAL_BUDGET && f.count > 0,
     ).map((f) => `${f.relative} — ${f.count} literal(s)`);
