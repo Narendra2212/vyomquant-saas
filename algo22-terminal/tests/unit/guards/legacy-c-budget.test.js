@@ -399,9 +399,21 @@ describe('legacy-c-budget: scope', () => {
   it('finds references across many files, not just the shim', () => {
     // A pattern that only ever fires inside primitives.jsx would satisfy the
     // check above and still be broken for every page.
+    //
+    // THE MAGNITUDE FLOOR IS A LIVENESS TRIPWIRE, NOT A BUDGET, and it is the one
+    // number in this guard that has to fall as the migration proceeds. It was 1500
+    // when the guard was written; task 25.1 part 3 took `pages/PaperTrading.jsx`
+    // from 137 to 77 and carried the total from 1502 to 1442, which tripped it.
+    // Re-measuring it to the current total would only trip it again on the next
+    // page, so it is set well below — but still far enough above the shim's own
+    // ~178 that a scan firing ONLY inside primitives.jsx, or in a handful of
+    // files, cannot satisfy it. That is the failure this line exists to catch,
+    // and it still catches it. The assertions that measure REMAINING WORK are the
+    // per-file budgets below; none of them moved here, and none of them may be
+    // raised. At task 27.2 the shim goes and this whole guard goes with it.
     const carriers = SCANNED.filter((f) => f.count > 0);
     expect(carriers.length).toBeGreaterThan(20);
-    expect(carriers.reduce((n, f) => n + f.count, 0)).toBeGreaterThan(1500);
+    expect(carriers.reduce((n, f) => n + f.count, 0)).toBeGreaterThan(1000);
   });
 
   it('does not lose references to the string mask', () => {
