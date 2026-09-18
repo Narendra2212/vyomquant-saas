@@ -1453,7 +1453,7 @@ the decomposition this plan uses instead:
       guidance token and never the destructive or error token, and that a saved-data error surface
       never resolves to guidance; minimum 100 iterations
 
-  - [~] 24.7 Implement the tablet review mode
+  - [x] 24.7 Implement the tablet review mode
     - Below 1024px (`ROUTE_MIN_VIEWPORT['/app/builder'] === 'LAPTOP'`), the canvas renders with pan,
       pinch/scroll zoom, `fitView` on mount and a zoom control cluster — scrollable and zoomable,
       never clipped (`§11.6`)

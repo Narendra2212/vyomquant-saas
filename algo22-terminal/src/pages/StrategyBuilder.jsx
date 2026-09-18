@@ -45,6 +45,26 @@
  * descriptor onto every node it creates. Re-pointing the save path without the palette change
  * would raise on every save.
  *
+ * * **24.7 — review mode below `LAPTOP`.** One boolean, `reviewMode`, read from
+ *   `shell/ResponsiveGate`'s published `access` and never re-derived from a width here. It
+ *   collapses the palette track to a disabled trigger, moves the inspector into a bottom
+ *   `ds/Drawer` as a read-only form, and turns WRITING off while leaving pan, zoom, `fitView`
+ *   and node selection on — which is the whole point: a trader on a tablet can still read what
+ *   a strategy does (§11.6, Requirement 17.4).
+ *
+ *   Editing is off at the writes, not at the controls. Search this file for `reviewMode` and
+ *   every hit is either a control's `disabled`/`draggable` or the function that would have
+ *   performed the write: `onNodesChange`, `onEdgesChange`, `onConnect`, `isValidConnection`,
+ *   `handleDragOver`, `handleDrop`, `handleDeleteNode`, `handleParamChange`, `handleUndo`,
+ *   `handleRedo`, `handleSaveStrategy` and the `keydown` listener behind `Ctrl+S`, `Ctrl+Z`,
+ *   `Ctrl+Shift+Z`, `Delete` and `Backspace`. A control that is merely hidden is not off, and
+ *   none of those five shortcuts passes through a control at all.
+ *
+ *   The `status.guidance` strip §11.6 asks for is NOT rendered here. `shell/ResponsiveGate`
+ *   renders it once for whichever route is restricted, and its own note forbids a second copy;
+ *   the width refusal this page owns is the sentence on each disabled control, which is the
+ *   half a shell-level strip cannot carry.
+ *
  * Presentation note: this page still styles inline rather than with Tailwind classes, but every
  * value it names now comes from `design/tokens.js` or, for anything that depends on a state,
  * from `design/semantic.js`. The legacy `C` shim is no longer imported here at all (task 24.4),
@@ -72,6 +92,7 @@ import ReactFlow, {
   applyNodeChanges,
   applyEdgeChanges,
   MiniMap,
+  useNodesInitialized,
   useReactFlow,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
@@ -83,6 +104,16 @@ import { Inp, Tag2, PanelTitle } from '../components/ui-legacy/primitives';
 import { Button } from '../components/ui/Button';
 import { CommandButton } from '../components/ds/CommandButton';
 import { Field } from '../components/ds/Field';
+/*
+  §11.6's bottom drawer for task 24.7's review-mode inspector. `placement="bottom"` is one of
+  the two placements `ds/Drawer` exists for, and this page is the consumer its header names.
+
+  `dismissOnScrim` is left at its default `true` on purpose: passing `false` makes the scrim a
+  DISABLED `<button aria-label="Close">`, which puts a control named "Close" in the
+  accessibility tree that cannot close anything. A drawer over a canvas is a navigational
+  surface, not a decision point, so tapping outside it should close it anyway.
+*/
+import { Drawer } from '../components/ds/Drawer';
 /*
   Task 10.5's deploy flow, mounted rather than reimplemented (task 24.8, Requirement 19.1).
 
@@ -105,6 +136,22 @@ import {
   ValidationSurface,
   surfaceTreatment,
 } from '../components/builder/validationSurfaces';
+/*
+  Task 24.7 reads the shell's capability decision; it does not measure a width of its own.
+
+  `shell/ResponsiveGate` already classifies the viewport against `ROUTE_MIN_VIEWPORT`, publishes
+  `access === 'restricted'` for this route below `LAPTOP`, and renders §11.6's `status.guidance`
+  strip once — that module's own note forbids this page rendering a second copy of it. Reading
+  the decision rather than re-deriving it is what keeps the strip and the mode from disagreeing:
+  a page that measured its own box would enter review mode at widths where the shell says
+  nothing, and the trader would get a read-only canvas with no sentence explaining why.
+*/
+import {
+  ACCESS,
+  ROUTE_MIN_VIEWPORT,
+  VIEWPORT,
+  useViewportAccess,
+} from '../components/shell/ResponsiveGate';
 import { DECLARED_STAGE_BANDS, STAGE_BANDS, stageBandFor, statusToken } from '../design/semantic';
 import { token } from '../design/tokens';
 import { DataPipelineProvider } from '../contexts/DataPipelineContext';
@@ -518,6 +565,41 @@ export const saveConfirmation = (label) =>
   (label === null ? 'Saved' : `Saved as version ${label}`);
 
 /**
+ * This route's own path, and the pixel width `ROUTE_MIN_VIEWPORT` puts it at (§11.6).
+ *
+ * `ROUTE_MIN_VIEWPORT['/app/builder']` is `'LAPTOP'`, and `VIEWPORT.LAPTOP.min` is that tier's
+ * first pixel, which `shell/ResponsiveGate` parses out of `token.breakpoint.laptop`. So the
+ * number in every sentence below is the same number the gate switches on and the same number
+ * `tokens.css` declares — there is no `1024` written on this page, and a breakpoint change moves
+ * the gate, the strip and these refusals together.
+ */
+export const BUILDER_ROUTE_PATH = '/app/builder';
+export const REVIEW_MODE_MIN_WIDTH_PX =
+  VIEWPORT[ROUTE_MIN_VIEWPORT[BUILDER_ROUTE_PATH] ?? 'LAPTOP'].min;
+
+/**
+ * Why review mode refuses a write, or `null` when the width is not the problem (Req 17.4, 15.3).
+ *
+ * One sentence, composed into BOTH refusal functions below rather than sitting on a disabled
+ * path of its own, so there is exactly one place a control's reason can come from. It is stated
+ * first in both, because it is the only cause in either list that no amount of editing can
+ * clear: telling a trader on a tablet to "fix 2 validation errors" when the parameter fields are
+ * read-only would be an instruction they cannot follow.
+ *
+ * The strip above the shell already says *why* the page is in review mode; this says what that
+ * means for the control the trader just reached for, which is the half a strip cannot carry.
+ *
+ * @param {string} gerund The action in the trader's words — `'saving'`, `'deploying'`.
+ * @param {number|null} minimumWidthPx {@link REVIEW_MODE_MIN_WIDTH_PX} in review mode, `null`
+ *   outside it. A non-finite value answers `null`: an unmeasured width is not a refusal.
+ * @returns {string|null}
+ */
+export function reviewModeRefusal(gerund, minimumWidthPx) {
+  if (typeof minimumWidthPx !== 'number' || !Number.isFinite(minimumWidthPx)) return null;
+  return `Open this strategy on a screen at least ${minimumWidthPx}px wide before ${gerund}`;
+}
+
+/**
  * Why a header action is refused, or `null` when it is not (Requirement 15.3).
  *
  * `disabled` without a stated reason is the dead affordance this redesign removes: a disabled
@@ -529,10 +611,12 @@ export const saveConfirmation = (label) =>
  * and only the page knows which one applies — see `validationErrorCount` at the call site.
  *
  * @param {string} gerund `'backtesting'` or `'deploying'`, the action in the author's words.
- * @param {{unsaved: boolean, errorCount: number}} state
+ * @param {{unsaved: boolean, errorCount: number, reviewMinimumWidthPx?: number|null}} state
  * @returns {string|null}
  */
-export function headerActionRefusal(gerund, { unsaved, errorCount }) {
+export function headerActionRefusal(gerund, { unsaved, errorCount, reviewMinimumWidthPx = null }) {
+  const width = reviewModeRefusal(gerund, reviewMinimumWidthPx);
+  if (width !== null) return width;
   if (unsaved) return `Save this strategy before ${gerund}`;
   if (errorCount > 0) {
     return `Fix ${errorCount} validation error${errorCount === 1 ? '' : 's'} before ${gerund}`;
@@ -550,6 +634,11 @@ export function headerActionRefusal(gerund, { unsaved, errorCount }) {
  * control: clicking through produces the structured refusal that names the node and the field,
  * which is the whole point of the SB-06 fix and strictly more useful than a greyed button.
  *
+ * Review mode is checked before the lock (task 24.7): both are true refusals, and both already
+ * have their explanation on screen, but review mode is the one that refuses all THREE header
+ * actions at once — Save saying something the other two do not would read as three unrelated
+ * problems rather than one width.
+ *
  * @param {Object} state
  * @param {boolean} state.locked The backend's `read_only` verdict (Requirement 9.9).
  * @param {string} state.lockReason The backend's own sentence for it, or `''`.
@@ -557,6 +646,7 @@ export function headerActionRefusal(gerund, { unsaved, errorCount }) {
  * @param {number} state.nodeCount
  * @param {boolean} state.serializerRefused `canonical.graph === null`.
  * @param {number} state.errorCount Local advisory errors.
+ * @param {number|null} [state.reviewMinimumWidthPx] {@link reviewModeRefusal}'s width, or `null`.
  * @returns {string|null}
  */
 export function saveRefusal({
@@ -566,7 +656,10 @@ export function saveRefusal({
   nodeCount,
   serializerRefused,
   errorCount,
+  reviewMinimumWidthPx = null,
 }) {
+  const width = reviewModeRefusal('saving', reviewMinimumWidthPx);
+  if (width !== null) return width;
   if (locked) {
     // The backend's wording when it sent one. This page does not paraphrase a verdict it did
     // not reach; the fallback is only for a lock reported without a reason.
@@ -1783,6 +1876,29 @@ function StrategyBuilderCanvas({
   );
 
   const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const nodesInitialized = useNodesInitialized();
+
+  /* ── Task 24.7: the tablet review mode (§11.6, Requirements 17.4, 15.3) ─────────────────
+   *
+   * REPLACES A BLANKET GATE, NOT A LAYER ON TOP OF ONE. Below `LAPTOP` this route used to get
+   * the shell's restricted branch and nothing else: `shell/ResponsiveGate` stated the
+   * restriction in a strip and then rendered this page completely unchanged, so every editing
+   * control was live at a width the three-track shell cannot lay out — 240px of palette plus
+   * 320px of inspector out of 712–967px leaves the canvas under 400px. (Before task 8.5 the
+   * answer below 1000px was `DesktopOnlyOverlay`'s blur over the whole app, which §11.6 calls
+   * the absence of behaviour rather than a behaviour.) This is the defined behaviour both were
+   * missing: the canvas takes the full width and reading stays on, writing stops.
+   *
+   * ONE BOOLEAN, READ FROM THE GATE. Everything below branches on `reviewMode` and nothing
+   * re-derives a breakpoint. The page does not measure its own box for this decision — see the
+   * import comment on `shell/ResponsiveGate` for why a second measurement would put the mode
+   * and the strip that explains it at different widths.
+   */
+  const { access: viewportAccessState } = useViewportAccess();
+  const reviewMode = viewportAccessState === ACCESS.RESTRICTED;
+  /** `REVIEW_MODE_MIN_WIDTH_PX` in review mode, `null` outside it. Feeds every refusal. */
+  const reviewMinimumWidthPx = reviewMode ? REVIEW_MODE_MIN_WIDTH_PX : null;
+
   const { pushState, undo, redo, canUndo, canRedo } = useUndoRedo();
   // Local checks are advisory. They render only while the backend has no verdict for the
   // graph currently on the canvas; see `backendAuthoritative` below.
@@ -2171,19 +2287,29 @@ function StrategyBuilderCanvas({
   // the undo history. Selection lives in `selectedNodeId`; `renderedNodes` draws it from
   // there, so nothing is lost by not storing it. A change list that is nothing but selection
   // returns without a write at all, so no re-render and no history entry follow a click.
+  //
+  // Task 24.7 refuses the remaining edits at the WRITE, not at the control. `nodesDraggable`
+  // and `nodesConnectable` are already false in review mode, so React Flow should not report a
+  // position or an `add`/`remove` change at all — and if it ever did (a programmatic change, a
+  // library regression, a future `NodeResizer`) this is the line that decides whether it lands
+  // in the array `toCanonical` serialises. Node DIMENSIONS are refused with the rest: React
+  // Flow keeps its own measured copy in the store, which is what `fitView` and `MiniMap` read,
+  // so nothing here needs them and a read-only canvas should write nothing at all.
   const onNodesChange = useCallback((changes) => {
     const edits = changes.filter((change) => change.type !== 'select');
     if (edits.length === 0) return;
+    if (reviewMode) return;
     const next = applyNodeChanges(edits, nodes);
     setNodes(next);
     pushState({ nodes: next, edges });
-  }, [nodes, edges, pushState]);
+  }, [nodes, edges, pushState, reviewMode]);
 
   const onEdgesChange = useCallback((changes) => {
+    if (reviewMode) return;
     const next = applyEdgeChanges(changes, edges);
     setEdges(next);
     pushState({ nodes, edges: next });
-  }, [nodes, edges, pushState]);
+  }, [nodes, edges, pushState, reviewMode]);
 
   /*
     The refusal waiting for a drop point, and whether this drag produced an edge.
@@ -2248,6 +2374,22 @@ function StrategyBuilderCanvas({
 
   const isValidConnection = useCallback(
     (connection) => {
+      if (reviewMode) {
+        // Review mode refuses through the SAME surface every other refusal uses, so a drag that
+        // somehow started (a synthetic event, a pointer device React Flow's `nodesConnectable`
+        // does not cover) is told why rather than silently doing nothing.
+        noteRefusal(
+          saveIssue(
+            'REVIEW_MODE_READ_ONLY',
+            'This screen is in review mode, so connections cannot be drawn here.',
+            {
+              fixHint: `Open this strategy on a screen at least ${REVIEW_MODE_MIN_WIDTH_PX}px wide `
+                + 'to edit the graph.',
+            },
+          ),
+        );
+        return false;
+      }
       if (connectionValidator === null) {
         noteRefusal(
           saveIssue(
@@ -2272,7 +2414,7 @@ function StrategyBuilderCanvas({
       if (accepted) pendingRefusalRef.current = null;
       return accepted;
     },
-    [connectionValidator, canonical.error, noteRefusal],
+    [connectionValidator, canonical.error, noteRefusal, reviewMode],
   );
 
   /** Dim every input port that cannot accept the port being dragged, before the drop. */
@@ -2331,6 +2473,10 @@ function StrategyBuilderCanvas({
   }, []);
 
   const onConnect = useCallback((params) => {
+    // Task 24.7. `isValidConnection` already refuses in review mode and React Flow only calls
+    // this after that gate passes, so this is the second of two locks on the same door — the
+    // one that holds if a caller reaches `onConnect` without going through the gate.
+    if (reviewMode) return;
     const edge = {
       id: `e-${params.source}:${params.sourceHandle || ''}-${params.target}:${params.targetHandle || ''}`,
       source: params.source,
@@ -2349,16 +2495,29 @@ function StrategyBuilderCanvas({
     setEdges(next);
     pushState({ nodes, edges: next });
     clearRefusalCallout();
-  }, [nodes, edges, pushState, clearRefusalCallout]);
+  }, [nodes, edges, pushState, clearRefusalCallout, reviewMode]);
 
   const onNodeClick = useCallback((_, node) => {
     setSelectedNodeId(node.id);
   }, []);
 
+  /*
+    Task 24.7 turns the DROP TARGET off, not just the palette.
+
+    Withholding `preventDefault()` here is what does it: the HTML drag-and-drop model only fires
+    `drop` on an element whose `dragover` handler cancelled the event, so in review mode the
+    browser never delivers a drop to this canvas at all. `dropEffect = 'none'` makes the cursor
+    say so mid-drag. `handleDrop` refuses as well — a drag that originated somewhere this page
+    does not control still has to be declined — but this is the lock that holds first.
+  */
   const handleDragOver = useCallback((event) => {
+    if (reviewMode) {
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'none';
+      return;
+    }
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
-  }, []);
+  }, [reviewMode]);
 
   const mintNodeId = useCallback(() => {
     const taken = new Set(nodes.map((node) => node.id));
@@ -2379,6 +2538,7 @@ function StrategyBuilderCanvas({
    */
   const handleDrop = useCallback((event) => {
     event.preventDefault();
+    if (reviewMode) return;
     const bounds = reactFlowWrapper.current?.getBoundingClientRect();
     const blockId = event.dataTransfer.getData(DRAG_BLOCK_ID_MIME);
     if (!blockId || !bounds) return;
@@ -2405,10 +2565,10 @@ function StrategyBuilderCanvas({
     setNodes(next);
     pushState({ nodes: next, edges });
     setSelectedNodeId(newNode.id);
-  }, [nodes, edges, mintNodeId, pushState]);
+  }, [nodes, edges, mintNodeId, pushState, reviewMode]);
 
   const handleDeleteNode = useCallback(() => {
-    if (!selectedNodeId) return;
+    if (!selectedNodeId || reviewMode) return;
     setNodes((nds) => nds.filter((node) => node.id !== selectedNodeId));
     setEdges((eds) => eds.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
     setSelectedNodeId(null);
@@ -2416,27 +2576,60 @@ function StrategyBuilderCanvas({
       nodes: nodes.filter((node) => node.id !== selectedNodeId),
       edges: edges.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId),
     });
-  }, [selectedNodeId, nodes, edges, pushState]);
+  }, [selectedNodeId, nodes, edges, pushState, reviewMode]);
 
+  // Undo and redo REWRITE the graph from the history stack, so they are edits like any other
+  // and review mode refuses both (task 24.7). The toolbar's two buttons are disabled with them,
+  // but the refusal is here because `Ctrl+Z` / `Ctrl+Shift+Z` never touch a button.
   const handleUndo = useCallback(() => {
+    if (reviewMode) return;
     const previousState = undo();
     if (previousState) {
       setNodes(previousState.nodes);
       setEdges(previousState.edges);
     }
-  }, [undo]);
+  }, [undo, reviewMode]);
 
   const handleRedo = useCallback(() => {
+    if (reviewMode) return;
     const nextState = redo();
     if (nextState) {
       setNodes(nextState.nodes);
       setEdges(nextState.edges);
     }
-  }, [redo]);
+  }, [redo, reviewMode]);
 
   const handleFitView = useCallback(() => {
     fitView({ duration: 800 });
   }, [fitView]);
+
+  /*
+    §11.6's "`fitView` on mount" for the review surface.
+
+    The `fitView` PROP on `<ReactFlow>` is React Flow's initial fit and it is spent the first
+    time a node is measured, so it cannot answer this on its own: entering review mode WIDENS
+    the canvas (the palette track collapses and the inspector leaves the grid for a drawer), and
+    a graph fitted to the old 3-track width would then sit off to one side of the only thing
+    this mode exists to do — read it.
+
+    It is gated on `useNodesInitialized()` because `fitView` needs measured nodes to compute
+    bounds; a strategy loaded from the server arrives after mount, so "on mount" in practice
+    means "once there is something to fit". The ref makes it once per entry into the mode.
+
+    THIS IS NOT THE FIT TASK 24.2a FORBADE. P8 says SELECTION must not call `fitView`, and
+    `selectedNodeId` is deliberately absent from these dependencies — a click changes neither
+    `reviewMode` nor `nodesInitialized`, so no selection can reach this line.
+  */
+  const reviewFittedRef = useRef(false);
+  useEffect(() => {
+    if (!reviewMode) {
+      reviewFittedRef.current = false;
+      return;
+    }
+    if (reviewFittedRef.current || !nodesInitialized) return;
+    reviewFittedRef.current = true;
+    fitView({ duration: 0 });
+  }, [reviewMode, nodesInitialized, fitView]);
 
   const handleRetryRegistry = useCallback(async () => {
     setRetryingRegistry(true);
@@ -2447,13 +2640,18 @@ function StrategyBuilderCanvas({
     }
   }, []);
 
+  // Parameter editing is off in review mode (task 24.7). `ParameterForm` is handed
+  // `disabled={reviewMode}` as well — Requirement 9.9's read-only form, reused — but that
+  // disables CONTROLS, and this is the write those controls would reach. A form rendered
+  // read-only whose `onChange` still applied would be the "merely hidden" failure.
   const handleParamChange = useCallback((key, value) => {
+    if (reviewMode) return;
     setNodes((nds) => nds.map((node) => (
       node.id === selectedNodeId
         ? { ...node, data: { ...node.data, params: { ...node.data.params, [key]: value } } }
         : node
     )));
-  }, [selectedNodeId]);
+  }, [selectedNodeId, reviewMode]);
 
   const handleInspectorBlocking = useCallback((keys) => {
     if (!selectedNodeId) return;
@@ -2483,6 +2681,10 @@ function StrategyBuilderCanvas({
   }, []);
 
   const handleSaveStrategy = useCallback(async () => {
+    // Task 24.7. The Save button is disabled in review mode with the width as its stated reason,
+    // and `Ctrl+S` is swallowed without reaching here — but a save is a WRITE TO THE SERVER, so
+    // it gets the same refusal at the function that performs it and not only at its two callers.
+    if (reviewMode) return;
     const trimmedName = strategyName.trim() || 'Untitled Strategy';
     setIsSavingStrategy(true);
     setSaveIssues([]);
@@ -2584,20 +2786,34 @@ function StrategyBuilderCanvas({
     } finally {
       setIsSavingStrategy(false);
     }
-  }, [strategyName, nodes, edges, strategyIdState, blockingParams, graphKey, notify]);
+  }, [strategyName, nodes, edges, strategyIdState, blockingParams, graphKey, notify, reviewMode]);
 
   // -- keyboard -----------------------------------------------------------
 
+  /*
+    Review mode has to reach the SHORTCUTS, not only the buttons (task 24.7).
+
+    `Ctrl+S`, `Ctrl+Z`, `Ctrl+Shift+Z`, `Delete` and `Backspace` never touch a control, so
+    disabling Save, Undo, Redo and Delete Node leaves all five live. Each one is declined here.
+
+    `Ctrl+S` and `Ctrl+Z` keep their `preventDefault()` in review mode even though nothing
+    follows: unswallowed, `Ctrl+S` opens the browser's "save page" dialog over the canvas, which
+    is a worse answer to "editing is off" than doing nothing at all.
+
+    `Escape` is untouched. Clearing the selection closes the inspector, and reading is the mode's
+    entire purpose — so is the only key here that still does what it says.
+  */
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.ctrlKey || e.metaKey) {
         switch (e.key) {
           case 's':
             e.preventDefault();
-            handleSaveStrategy();
+            if (!reviewMode) handleSaveStrategy();
             break;
           case 'z':
             e.preventDefault();
+            if (reviewMode) break;
             if (e.shiftKey) handleRedo();
             else handleUndo();
             break;
@@ -2609,7 +2825,7 @@ function StrategyBuilderCanvas({
       switch (e.key) {
         case 'Delete':
         case 'Backspace':
-          if (selectedNodeId) {
+          if (selectedNodeId && !reviewMode) {
             e.preventDefault();
             handleDeleteNode();
           }
@@ -2624,7 +2840,7 @@ function StrategyBuilderCanvas({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNodeId, handleDeleteNode, handleUndo, handleRedo, handleSaveStrategy]);
+  }, [selectedNodeId, handleDeleteNode, handleUndo, handleRedo, handleSaveStrategy, reviewMode]);
 
   // -- load and autosave --------------------------------------------------
 
@@ -2745,6 +2961,22 @@ function StrategyBuilderCanvas({
     onto nothing.
   */
   const inspectorShown = inspectorOpen && selectedNode !== null;
+
+  /*
+    Where the inspector goes, and whether the palette track exists at all (task 24.7, §11.6).
+
+    In review mode the two outer tracks are gone and the canvas takes the whole shell: the
+    palette because nothing can be dragged out of it, and the inspector because a 320px column
+    beside a canvas in 712–967px of shell leaves neither readable. The inspector becomes a bottom
+    `Drawer` over the full width instead, which is the placement §11.6 names.
+
+    `paletteShown` is composed from `libraryOpen` rather than replacing it, so the author's own
+    toggle state survives a rotation back to laptop width — a trader who had the palette closed
+    does not find it open again on the way back.
+  */
+  const paletteShown = libraryOpen && !reviewMode;
+  const inspectorTrackShown = inspectorShown && !reviewMode;
+  const inspectorDrawerOpen = reviewMode && inspectorShown;
 
   const selectedDescriptor = useMemo(() => {
     if (!selectedNode) return null;
@@ -3177,12 +3409,18 @@ function StrategyBuilderCanvas({
   // `isSavingStrategy` is NOT part of this: a save in flight is `ds/CommandButton`'s `loading`,
   // which explains itself through `loadingLabel`. Folding it in here would demand a second
   // explanation and push this page towards `disabledReason="Saving"`, which explains nothing.
+  //
+  // Task 24.7 adds review mode as a CAUSE in this list rather than a second disabled path
+  // beside it. `saveRefusal` states it first, so `saveRefused` and `saveDisabledReason` stay the
+  // pair `ds/CommandButton` demands — disabled implies a sentence, and there is still exactly
+  // one function that can produce that sentence.
   const saveRefused =
     !isValid ||
     !registry.isReady ||
     canonical.graph === null ||
     nodes.length === 0 ||
-    deployedLock.locked;
+    deployedLock.locked ||
+    reviewMode;
 
   const saveDisabledReason = saveRefusal({
     locked: deployedLock.locked,
@@ -3191,6 +3429,7 @@ function StrategyBuilderCanvas({
     nodeCount: nodes.length,
     serializerRefused: canonical.graph === null,
     errorCount: errors.length,
+    reviewMinimumWidthPx,
   });
 
   /* ── Task 24.8: the three header actions and what refuses them ─────────────────────────
@@ -3234,9 +3473,14 @@ function StrategyBuilderCanvas({
   const backtestRefusal = headerActionRefusal('backtesting', {
     unsaved,
     errorCount: validationErrorCount,
+    reviewMinimumWidthPx,
   });
   const deployRefusal =
-    headerActionRefusal('deploying', { unsaved, errorCount: validationErrorCount })
+    headerActionRefusal('deploying', {
+      unsaved,
+      errorCount: validationErrorCount,
+      reviewMinimumWidthPx,
+    })
     ?? (savedVersion === null ? NO_NAMED_VERSION_REFUSAL : null);
 
   /**
@@ -3309,17 +3553,156 @@ function StrategyBuilderCanvas({
     });
   }, [onBacktest, strategyIdState, strategyName, nodes, edges]);
 
+  /*
+    The inspector's body, defined ONCE and rendered in whichever container this width gets: the
+    sibling grid track at laptop width and up (§9.2, Requirement 5.3), or task 24.7's bottom
+    `ds/Drawer` in review mode (§11.6).
+
+    One definition rather than two is what makes "read-only form" true rather than approximate.
+    A second copy written for the drawer would be a second set of fields to keep in step with
+    `ParameterForm`'s specs, the backend's per-field issues, and the preview and trace regions —
+    and the copy nobody edits is the copy that drifts. The read-only surface IS the editable
+    surface with `disabled` set and the write refused behind it.
+  */
+  const inspectorFields = selectedNode === null ? null : (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <div>
+        <div className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', marginBottom: '8px' }}>
+          Block
+        </div>
+        <Tag2>{selectedNode.data.block_id}</Tag2>
+        <div className="text-micro" style={{ color: token.content.muted, marginTop: '4px' }}>
+          {selectedNode.data.category}
+        </div>
+        <PortChips ports={selectedNode.data.inputs} direction="in" />
+        <PortChips ports={selectedNode.data.outputs} direction="out" />
+
+        {/*
+          Node status: the same marker the canvas draws, in words — and now the same
+          hue, because the severity goes through `surfaceTreatment` rather than
+          through a ternary of its own. This is the last severity lookup on the page.
+
+          `surfaceTreatment`'s fallback surface is `warning`, which is exactly the
+          `: C.gold` arm this replaces: a severity word the build does not recognise
+          keeps the amber it has today instead of gaining a hue. No validation at all
+          is `content.muted`, unchanged — "nothing has been said about this block" is
+          not a verdict.
+        */}
+        <p
+          className="text-micro"
+          data-testid="inspector-node-status"
+          data-node-id={selectedNode.id}
+          data-severity={selectedNode.data.validation ? selectedNode.data.validation.severity : undefined}
+          data-issue-count={selectedNode.data.validation ? selectedNode.data.validation.count : 0}
+          style={{
+            color: selectedNode.data.validation
+              ? statusToken(surfaceTreatment(selectedNode.data.validation.severity).tokenState).fg
+              : token.content.muted,
+            margin: '6px 0 0',
+          }}
+        >
+          {selectedNode.data.validation
+            ? markerLabel(selectedNode.data.validation)
+            : backendAuthoritative
+              ? 'No issues reported for this block'
+              : 'Not validated yet'}
+        </p>
+      </div>
+
+      {selectedDescriptor ? (
+        <ParameterForm
+          params={selectedDescriptor.params}
+          values={selectedNode.data.params}
+          onChange={handleParamChange}
+          /*
+            Requirement 9.9's read-only form, reused for §11.6's read-only inspector (task
+            24.7). Every control the form renders goes `disabled`, and `handleParamChange`
+            refuses the write behind them — the control and the write, not one or the other.
+          */
+          disabled={reviewMode}
+          // Requirement 8.9: the backend's own issues, matched to fields by
+          // `issue.field` and rendered with `fix_hint` verbatim by the form.
+          issues={selectedNodeIssues}
+          nodeId={selectedNode.id}
+          blockId={selectedNode.data.block_id}
+          // Requirements 11.7 / 11.8: the symbol and timeframe controls are
+          // populated from the discovery and registry endpoints. No symbol or
+          // interval list exists in this client to fall back to.
+          controls={MARKET_PARAM_CONTROLS}
+          onBlockingChange={handleInspectorBlocking}
+        />
+      ) : (
+        <p className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>
+          The registry publishes no descriptor for “{selectedNode.data.block_id}”, so its
+          parameters cannot be shown.
+        </p>
+      )}
+
+      {/*
+        Requirements 24.7 / 24.8: the last values this block produces, computed by
+        the executors that run it, over a window the server bounds. A
+        FEATURE_ENGINEERING node's produced column names come with it.
+      */}
+      <NodePreview
+        state={preview.state}
+        preview={preview.preview}
+        error={preview.error}
+        availability={previewAvailable}
+        onRequest={requestPreview}
+      />
+
+      {/*
+        Requirement 24.6: the trace the run already recorded for this block — its
+        bound inputs, its output, its duration and every recorded failure — read
+        out of `dag_engine.ExecutionTracer` and `signal_trace_engine`, which is
+        what makes "why did nothing happen?" answerable. `runtime` is task 8.5's
+        reading, already stamped onto the node by the canvas effect: a block that
+        is warming never ran, and that is a different answer from one that failed.
+      */}
+      <NodeTrace
+        trace={selectedNodeTrace}
+        runtime={selectedNode.data.runtime || null}
+      />
+
+      {/*
+        §9.3's destructive TREATMENT, and deliberately NOT its dialog. Deleting a
+        node mutates local React state, pushes the result onto the undo stack and
+        reaches no endpoint — the saved version on the server is immutable and
+        untouched until the author presses Save. A modal on a reversible local edit
+        is friction that trains the dismiss-reflex the live-deploy dialog depends on
+        not existing. `intent` is where the hue comes from; this takes no colour prop.
+      */}
+      <CommandButton
+        intent="destructive"
+        size="sm"
+        icon={Trash2}
+        disabled={reviewMode}
+        disabledReason={reviewModeRefusal('deleting a block', reviewMinimumWidthPx) ?? undefined}
+        onClick={handleDeleteNode}
+        style={{ width: '100%' }}
+      >
+        Delete Node
+      </CommandButton>
+    </div>
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: token.surface.panel }}>
       {/* Toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: token.surface.raised, borderBottom: `1px solid ${token.line.default}`, gap: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Button variant="ghost" size="sm" Icon={ArrowLeft} onClick={onBack}>Back</Button>
+          {/*
+            The name is part of the record a save writes, so review mode disables it with the
+            rest of the editing surface (task 24.7). Leaving it live would let a trader retype
+            the strategy's name on a tablet and lose it, with the only Save on the page refused.
+          */}
           <Inp
             id="strategy-name"
             aria-label="Strategy name"
             ph="Strategy Name"
             val={strategyName}
+            disabled={reviewMode}
             onChange={(e) => setStrategyName(e.target.value)}
           />
           {/*
@@ -3348,15 +3731,39 @@ function StrategyBuilderCanvas({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Button variant="ghost" size="sm" Icon={Undo} onClick={handleUndo} disabled={!canUndo} title="Undo (Ctrl+Z)" />
-          <Button variant="ghost" size="sm" Icon={Redo} onClick={handleRedo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" />
+          {/*
+            Undo and redo replay graph edits, so review mode disables both (task 24.7). The zoom
+            cluster between the dividers does NOT change: §11.6 asks for pan, pinch/scroll zoom
+            and a zoom control cluster in review mode, and these three buttons plus React Flow's
+            own `<Controls />` are it. Zooming a canvas writes nothing.
+          */}
+          <Button variant="ghost" size="sm" Icon={Undo} onClick={handleUndo} disabled={!canUndo || reviewMode} title="Undo (Ctrl+Z)" aria-label="Undo" />
+          <Button variant="ghost" size="sm" Icon={Redo} onClick={handleRedo} disabled={!canRedo || reviewMode} title="Redo (Ctrl+Shift+Z)" aria-label="Redo" />
           <div style={{ width: 1, height: 24, background: token.line.default }} />
-          <Button variant="ghost" size="sm" Icon={ZoomOut} onClick={() => zoomOut()} title="Zoom Out" />
-          <Button variant="ghost" size="sm" Icon={ZoomIn} onClick={() => zoomIn()} title="Zoom In" />
-          <Button variant="ghost" size="sm" Icon={Maximize} onClick={handleFitView} title="Fit View" />
+          <Button variant="ghost" size="sm" Icon={ZoomOut} onClick={() => zoomOut()} title="Zoom Out" aria-label="Zoom out" />
+          <Button variant="ghost" size="sm" Icon={ZoomIn} onClick={() => zoomIn()} title="Zoom In" aria-label="Zoom in" />
+          <Button variant="ghost" size="sm" Icon={Maximize} onClick={handleFitView} title="Fit View" aria-label="Fit view" />
           <div style={{ width: 1, height: 24, background: token.line.default }} />
-          <Button variant="ghost" size="sm" Icon={PanelLeft} onClick={() => setLibraryOpen(!libraryOpen)} title="Toggle Library" />
-          <Button variant="ghost" size="sm" Icon={PanelRight} onClick={() => setInspectorOpen(!inspectorOpen)} title="Toggle Inspector" />
+          {/*
+            §11.6's "the palette collapses into a disabled trigger". The trigger stays on screen
+            and stays named, because a control that vanished would leave a trader wondering where
+            the blocks went; disabled, with the reason in its accessible name, says which it is.
+          */}
+          <Button
+            variant="ghost"
+            size="sm"
+            Icon={PanelLeft}
+            onClick={() => setLibraryOpen(!libraryOpen)}
+            disabled={reviewMode}
+            data-testid="palette-trigger"
+            title={reviewMode ? reviewModeRefusal('adding blocks', reviewMinimumWidthPx) : 'Toggle Library'}
+            aria-label={
+              reviewMode
+                ? `Block palette unavailable. ${reviewModeRefusal('adding blocks', reviewMinimumWidthPx)}`
+                : 'Toggle Library'
+            }
+          />
+          <Button variant="ghost" size="sm" Icon={PanelRight} onClick={() => setInspectorOpen(!inspectorOpen)} title="Toggle Inspector" aria-label="Toggle Inspector" />
           <div style={{ width: 1, height: 24, background: token.line.default }} />
           {/*
             §5.6's three header actions (task 24.8). Each is a `ds/CommandButton`, which refuses
@@ -3694,23 +4101,24 @@ function StrategyBuilderCanvas({
       */}
       <div
         data-testid="builder-shell"
+        data-review-mode={reviewMode ? 'true' : 'false'}
         style={{
           flex: 1,
           display: 'grid',
-          gridTemplateColumns: shellTemplateColumns(libraryOpen, inspectorShown),
+          gridTemplateColumns: shellTemplateColumns(paletteShown, inspectorTrackShown),
           overflow: 'hidden',
         }}
       >
         {/* Palette track */}
         <div
           data-testid="palette"
-          data-open={libraryOpen ? 'true' : 'false'}
+          data-open={paletteShown ? 'true' : 'false'}
           style={{
-            width: libraryOpen ? '100%' : 0,
+            width: paletteShown ? '100%' : 0,
             minWidth: 0,
             background: token.surface.panel,
             borderRight: `1px solid ${token.line.default}`,
-            display: libraryOpen ? 'flex' : 'none',
+            display: paletteShown ? 'flex' : 'none',
             flexDirection: 'column',
             overflow: 'hidden',
           }}
@@ -3805,13 +4213,24 @@ function StrategyBuilderCanvas({
                       {!isCollapsed && (
                         <div id={sectionId} style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
                           {section.matches.map((block) => (
+                            /*
+                              Task 24.7: the drag SOURCE is off in review mode too, not merely
+                              inside a collapsed track. `display: none` on the track above already
+                              makes these unreachable by pointer, and that is exactly the kind of
+                              "hidden, not off" guarantee that stops holding the moment a layout
+                              changes — so the attribute goes false and `dragstart` is cancelled.
+                            */
                             <div
                               key={block.block_id}
-                              draggable
+                              draggable={!reviewMode}
                               data-testid="palette-block"
                               data-block-id={block.block_id}
                               data-category={block.category}
                               onDragStart={(e) => {
+                                if (reviewMode) {
+                                  e.preventDefault();
+                                  return;
+                                }
                                 e.dataTransfer.setData(DRAG_BLOCK_ID_MIME, block.block_id);
                                 e.dataTransfer.effectAllowed = 'move';
                               }}
@@ -3820,7 +4239,7 @@ function StrategyBuilderCanvas({
                                 border: `1px solid ${token.line.default}`,
                                 borderRadius: '0.375rem',
                                 padding: '8px 10px',
-                                cursor: 'grab',
+                                cursor: reviewMode ? 'not-allowed' : 'grab',
                               }}
                             >
                               <div className="text-small" style={{ fontWeight: 600, color: token.content.primary }}>
@@ -3882,10 +4301,12 @@ function StrategyBuilderCanvas({
                 nodeTypes={nodeTypes}
                 /*
                   `fitView` here is React Flow's *initial* fit and nothing else. Selection never
-                  fits: `handleFitView` is the toolbar button and the only caller of `fitView()`,
-                  and the inspector track appearing resizes the canvas without re-fitting it,
-                  because the initial fit is spent the first time a node is measured. So the
-                  viewport an author panned and zoomed to survives every selection (§9.2, P8).
+                  fits: the only two callers of `fitView()` are the toolbar's Fit View button and
+                  task 24.7's review-mode effect, which runs on the mode edge and takes no
+                  dependency on `selectedNodeId`. The inspector track appearing resizes the canvas
+                  without re-fitting it, because the initial fit is spent the first time a node is
+                  measured. So the viewport an author panned and zoomed to survives every
+                  selection (§9.2, P8).
                 */
                 fitView
                 deleteKeyCode={null}
@@ -3894,10 +4315,34 @@ function StrategyBuilderCanvas({
                   canvas". Selection and panning stay on — reading a locked version is exactly
                   what an author does with one, and the inspector, the previews and the issue
                   panel all still work. What stops is editing.
+
+                  Task 24.7 adds review mode to the SAME three props rather than a parallel
+                  read-only path, because the two states want the identical canvas: a version
+                  the backend froze and a screen too narrow to author on are both "read this,
+                  do not change it". `nodesDraggable` off is what makes a drag on a node pan
+                  the canvas instead of moving the node, so pan gets better in this mode, not
+                  worse.
                 */
-                nodesDraggable={!deployedLock.locked}
-                nodesConnectable={!deployedLock.locked}
-                edgesFocusable={!deployedLock.locked}
+                nodesDraggable={!deployedLock.locked && !reviewMode}
+                nodesConnectable={!deployedLock.locked && !reviewMode}
+                edgesFocusable={!deployedLock.locked && !reviewMode}
+                /*
+                  §11.6's "pan and pinch/scroll zoom … scrollable and zoomable, never clipped".
+                  These are React Flow's defaults, and they are stated because the mode's whole
+                  promise rests on them — a library default that changed would take the
+                  requirement with it silently.
+                */
+                panOnDrag
+                zoomOnScroll
+                zoomOnPinch
+                /*
+                  Selection and node focus stay ON in review mode, deliberately. Tapping a node
+                  to read its parameters in the bottom drawer IS the mode, and selection is
+                  already a no-write path (task 24.2a): it lives in `selectedNodeId`, and
+                  `onNodesChange` drops `select` changes before they can reach the array.
+                */
+                elementsSelectable
+                nodesFocusable
               >
                 <Background color={token.line.default} gap={16} />
                 <Controls />
@@ -3907,8 +4352,16 @@ function StrategyBuilderCanvas({
 
             {nodes.length === 0 && (
               <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', color: token.content.muted, fontFamily: token.font.mono, textAlign: 'center', padding: '0 24px' }} className="text-small">
-                Drag a block from the palette to start. A strategy needs a DATA block — its symbol
-                and timeframe are the market this strategy trades.
+                {/*
+                  The hint names the action the author can actually take. In review mode there is
+                  no palette to drag from, so telling them to drag from one would be an
+                  instruction that cannot be followed (task 24.7).
+                */}
+                {reviewMode
+                  ? 'This strategy has no blocks to review. Open it on a screen at least '
+                    + `${REVIEW_MODE_MIN_WIDTH_PX}px wide to build one.`
+                  : 'Drag a block from the palette to start. A strategy needs a DATA block — its '
+                    + 'symbol and timeframe are the market this strategy trades.'}
               </div>
             )}
 
@@ -3931,145 +4384,65 @@ function StrategyBuilderCanvas({
           width `0` and `display: none` without one. It stays in the DOM as a collapsed track so
           the grid keeps three columns for three children, and it holds nothing while it is
           collapsed — a hidden panel has no content to offer.
+
+          In review mode the track is collapsed for a third reason and the same body goes into the
+          bottom drawer below (task 24.7, §11.6). It is the same three children either way, so the
+          grid never loses a column to a mode change.
         */}
         <aside
           data-testid="inspector"
-          data-open={inspectorShown ? 'true' : 'false'}
+          data-open={inspectorTrackShown ? 'true' : 'false'}
           aria-label="Inspector"
-          aria-hidden={inspectorShown ? undefined : 'true'}
+          aria-hidden={inspectorTrackShown ? undefined : 'true'}
           style={{
-            width: inspectorShown ? '100%' : 0,
+            width: inspectorTrackShown ? '100%' : 0,
             minWidth: 0,
             background: token.surface.panel,
             borderLeft: `1px solid ${token.line.default}`,
-            display: inspectorShown ? 'flex' : 'none',
+            display: inspectorTrackShown ? 'flex' : 'none',
             flexDirection: 'column',
             overflow: 'hidden',
           }}
         >
-          {selectedNode && (
+          {selectedNode && inspectorTrackShown && (
             <>
               <div style={{ padding: '12px', borderBottom: `1px solid ${token.line.default}` }}>
                 <PanelTitle title="Inspector" sub={selectedNode.data.label} />
               </div>
 
               <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div>
-                    <div className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', marginBottom: '8px' }}>
-                      Block
-                    </div>
-                    <Tag2>{selectedNode.data.block_id}</Tag2>
-                    <div className="text-micro" style={{ color: token.content.muted, marginTop: '4px' }}>
-                      {selectedNode.data.category}
-                    </div>
-                    <PortChips ports={selectedNode.data.inputs} direction="in" />
-                    <PortChips ports={selectedNode.data.outputs} direction="out" />
-
-                    {/*
-                      Node status: the same marker the canvas draws, in words — and now the same
-                      hue, because the severity goes through `surfaceTreatment` rather than
-                      through a ternary of its own. This is the last severity lookup on the page.
-
-                      `surfaceTreatment`'s fallback surface is `warning`, which is exactly the
-                      `: C.gold` arm this replaces: a severity word the build does not recognise
-                      keeps the amber it has today instead of gaining a hue. No validation at all
-                      is `content.muted`, unchanged — "nothing has been said about this block" is
-                      not a verdict.
-                    */}
-                    <p
-                      className="text-micro"
-                      data-testid="inspector-node-status"
-                      data-node-id={selectedNode.id}
-                      data-severity={selectedNode.data.validation ? selectedNode.data.validation.severity : undefined}
-                      data-issue-count={selectedNode.data.validation ? selectedNode.data.validation.count : 0}
-                      style={{
-                        color: selectedNode.data.validation
-                          ? statusToken(surfaceTreatment(selectedNode.data.validation.severity).tokenState).fg
-                          : token.content.muted,
-                        margin: '6px 0 0',
-                      }}
-                    >
-                      {selectedNode.data.validation
-                        ? markerLabel(selectedNode.data.validation)
-                        : backendAuthoritative
-                          ? 'No issues reported for this block'
-                          : 'Not validated yet'}
-                    </p>
-                  </div>
-
-                  {selectedDescriptor ? (
-                    <ParameterForm
-                      params={selectedDescriptor.params}
-                      values={selectedNode.data.params}
-                      onChange={handleParamChange}
-                      // Requirement 8.9: the backend's own issues, matched to fields by
-                      // `issue.field` and rendered with `fix_hint` verbatim by the form.
-                      issues={selectedNodeIssues}
-                      nodeId={selectedNode.id}
-                      blockId={selectedNode.data.block_id}
-                      // Requirements 11.7 / 11.8: the symbol and timeframe controls are
-                      // populated from the discovery and registry endpoints. No symbol or
-                      // interval list exists in this client to fall back to.
-                      controls={MARKET_PARAM_CONTROLS}
-                      onBlockingChange={handleInspectorBlocking}
-                    />
-                  ) : (
-                    <p className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>
-                      The registry publishes no descriptor for “{selectedNode.data.block_id}”, so its
-                      parameters cannot be shown.
-                    </p>
-                  )}
-
-                  {/*
-                    Requirements 24.7 / 24.8: the last values this block produces, computed by
-                    the executors that run it, over a window the server bounds. A
-                    FEATURE_ENGINEERING node's produced column names come with it.
-                  */}
-                  <NodePreview
-                    state={preview.state}
-                    preview={preview.preview}
-                    error={preview.error}
-                    availability={previewAvailable}
-                    onRequest={requestPreview}
-                  />
-
-                  {/*
-                    Requirement 24.6: the trace the run already recorded for this block — its
-                    bound inputs, its output, its duration and every recorded failure — read
-                    out of `dag_engine.ExecutionTracer` and `signal_trace_engine`, which is
-                    what makes "why did nothing happen?" answerable. `runtime` is task 8.5's
-                    reading, already stamped onto the node by the canvas effect: a block that
-                    is warming never ran, and that is a different answer from one that failed.
-                  */}
-                  <NodeTrace
-                    trace={selectedNodeTrace}
-                    runtime={selectedNode.data.runtime || null}
-                  />
-
-                  {/*
-                    §9.3's destructive TREATMENT, and deliberately NOT its dialog. Deleting a
-                    node mutates local React state, pushes the result onto the undo stack and
-                    reaches no endpoint — the saved version on the server is immutable and
-                    untouched until the author presses Save. A modal on a reversible local edit
-                    is friction that trains the dismiss-reflex the live-deploy dialog depends on
-                    not existing. `intent` is where the hue comes from; this takes no colour prop.
-                  */}
-                  <CommandButton
-                    intent="destructive"
-                    size="sm"
-                    icon={Trash2}
-                    onClick={handleDeleteNode}
-                    style={{ width: '100%' }}
-                  >
-                    Delete Node
-                  </CommandButton>
-                </div>
+                {inspectorFields}
               </div>
             </>
           )}
         </aside>
       </div>
+
+      {/*
+        §11.6's tablet inspector: the same body, in a bottom `ds/Drawer` instead of a side track
+        (task 24.7). The drawer is the placement `ds/Drawer` was given for this page, and its
+        clamp — `max-height: calc(100dvh - 2 * --spacing-8)` with one internal scroll region — is
+        what keeps a long parameter list from pushing the panel past the viewport (Req 17.3, P34).
+
+        `onClose` clears the SELECTION rather than a local `open` flag. Closing the inspector on a
+        tablet means "done reading this node", and if it only flipped a flag the next tap on a
+        node would select it and open nothing. It also makes the drawer's Escape and its scrim do
+        exactly what the page's own Escape handler already does, so there is one way out and not
+        three that differ.
+
+        Mounted unconditionally with `open` as a prop, because `ds/Drawer` renders `null` when it
+        is not active and claims the single-overlay slot from an effect — a conditionally mounted
+        drawer would claim and release that slot on every selection change.
+      */}
+      <Drawer
+        open={inspectorDrawerOpen}
+        onClose={() => setSelectedNodeId(null)}
+        placement="bottom"
+        title={selectedNode === null ? 'Inspector' : `Inspector · ${selectedNode.data.label}`}
+        closeLabel="Close the inspector"
+      >
+        {inspectorFields}
+      </Drawer>
 
       {/*
         The report, listed: node issues, connection issues and graph-level issues — plus the
