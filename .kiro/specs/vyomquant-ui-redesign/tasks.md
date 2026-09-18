@@ -1511,7 +1511,7 @@ the decomposition this plan uses instead:
 
 - [ ] 26. M9 — Marketplace subscription states (`/app/marketplace`)
 
-  - [~] 26.1 Implement the 7→4 subscription-state mapping
+  - [x] 26.1 Implement the 7→4 subscription-state mapping
     - Declare the collapse from `§7.9` once, driven **only** by the server's
       `entry.subscription.state`, and the entitling decision from `entry.entitling` /
       `entry.unavailable_reason`; the frontend computes neither

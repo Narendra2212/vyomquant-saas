@@ -374,11 +374,19 @@ describe('StrategyMarketplace transport (Requirements 20.2, 20.10)', () => {
 
     expect(forbiddenConstructsIn(source)).toEqual([]);
 
-    // And the only module it reaches the network through is `../api`.
+    // And the only module it reaches the network through is `../api`. The other two arrived
+    // with task 26.1 and are presentation, not transport: `design/subscriptionState` is §7.9's
+    // subscription-state → badge mapping and `ds/StatusBadge` is the chip that renders it.
+    // Still an EXACT set and not a subset — a fourth relative import, or `../apiClient` in
+    // place of `../api`, fails here exactly as it did before.
     const specifiers = [...stripComments(source).matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)]
       .map((m) => m[1])
       .filter((s) => s.startsWith('.'));
-    expect(specifiers).toEqual(['../api']);
+    expect(specifiers).toEqual([
+      '../api',
+      '../components/ds/StatusBadge',
+      '../design/subscriptionState',
+    ]);
   });
 });
 

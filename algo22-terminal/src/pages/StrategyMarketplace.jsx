@@ -53,6 +53,8 @@ import {
   AlertTriangle, ArrowLeft, Sparkles, Flame, Trophy, BarChart3, Info, Clock,
 } from 'lucide-react';
 import api from '../api';
+import { StatusBadge } from '../components/ds/StatusBadge';
+import { BADGE_SUBSCRIBED, resolveSubscriptionView } from '../design/subscriptionState';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Measurement honesty helpers (Requirements 28.1, 28.5)
@@ -80,6 +82,15 @@ const formatPercent = (value) => `${value.toFixed(2)}%`;
 const formatSignedPercent = (value) => `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
 const formatRatio = (value) => value.toFixed(2);
 const formatCount = (value) => String(Math.trunc(value));
+
+/**
+ * `GET /api/library/{id}/subscribe`'s answer for "there is no subscription row".
+ *
+ * It is a sentinel of that one response, not one of the seven `SubscriptionState` values, which
+ * is why it is named here beside the read that receives it and not in
+ * `design/subscriptionState.js`. See {@link loadSubscription} for what it maps to.
+ */
+const NO_SUBSCRIPTION_ROW = 'not_subscribed';
 
 /** A date the server sent, or `null`. Never "today" as a stand-in. */
 const formatDate = (value) => {
@@ -217,7 +228,9 @@ const StrategyMarketplace = () => {
   const [strategies, setStrategies] = useState([]);
   const [categories, setCategories] = useState([]);
   const [selectedStrategy, setSelectedStrategy] = useState(null);
-  const [subscription, setSubscription] = useState(null);
+  // §7.9's resolved badge for the open Listing, or `null` when nothing has been read.
+  // The resolution happens once, beside the read; nothing downstream re-derives it.
+  const [subscriptionView, setSubscriptionView] = useState(null);
 
   // Pagination & Filter state
   const [page, setPage] = useState(1);
@@ -317,21 +330,56 @@ const StrategyMarketplace = () => {
 
   /**
    * The caller's Subscription state for one Listing (Requirement 20.9's
-   * subscription-status indication). Authenticated-only — there is nothing to report for an
-   * anonymous visitor — and a read that does not complete leaves the indicator absent rather
-   * than claiming "not subscribed".
+   * subscription-status indication, and Requirement 13.1's badge). Authenticated-only — there
+   * is nothing to report for an anonymous visitor — and a read that does not complete leaves
+   * the indicator absent rather than claiming "not subscribed".
+   *
+   * THE ADAPTER, AND WHY IT IS HERE RATHER THAN IN `design/subscriptionState.js`
+   * ---------------------------------------------------------------------------
+   * `resolveSubscriptionView` reads §7.9's entry shape — `{subscription: {state,
+   * period_expiry, renewal_state}, entitling, unavailable_reason}`, which is what
+   * `library_entries.py::subscription_view` publishes. `GET /api/library/{id}/subscribe` is a
+   * different response: `{status, subscription_id, library_id, started_at, expires_at,
+   * message}`, where `status` is the raw lower-case `library_subscriptions.status` column, and
+   * it carries no `subscription` object, no `entitling` and no `unavailable_reason`. So the two
+   * shapes are reconciled here, at the one call site that knows which endpoint it read:
+   *
+   *   * `status` → `subscription.state`. The mapping normalises `'active'` and `'ACTIVE'` to
+   *     the same state, so the column value goes across verbatim rather than being reshaped.
+   *   * `expires_at` → `subscription.period_expiry`. Same fact, this endpoint's name for it.
+   *   * `renewal_state` is `null`: this response does not carry it, and absent is not a value.
+   *
+   * `'not_subscribed'` IS A SENTINEL OF THIS ENDPOINT, NOT A SUBSCRIPTION STATE
+   * -------------------------------------------------------------------------
+   * The route answers `'not_subscribed'` when there is no `library_subscriptions` row at all,
+   * and a body with no readable `status` is the same absence. Both must become
+   * `subscription: null` — §7.9's **Available** row — because passing them through as a state
+   * word would land on `{state: 'not_subscribed'}`, which is outside the seven and therefore
+   * fails closed to **Expired**: a strategy nobody has subscribed to would be badged as though
+   * a subscription had ended. `'unknown'` — what the route answers when the column itself is
+   * missing — is deliberately NOT treated as absence: a row exists and its state cannot be
+   * read, which is exactly the input the mapping fails closed on. A `status` that is present
+   * but blank is treated the same way, for the same reason.
+   *
+   * Part 1 kept this sentinel out of `design/subscriptionState.js` on purpose: it belongs to
+   * one endpoint's response shape, not to the state vocabulary the whole app shares.
    */
   const loadSubscription = useCallback(async (listingId) => {
     if (!hasAuthToken()) {
-      setSubscription(null);
+      setSubscriptionView(null);
       return;
     }
     try {
       const data = await api.library.subscriptionStatus(listingId);
-      setSubscription(data && typeof data === 'object' ? data : null);
+      const status = typeof data?.status === 'string' ? data.status : null;
+      const hasRow = status !== null && status.trim().toLowerCase() !== NO_SUBSCRIPTION_ROW;
+      const row = hasRow
+        ? { state: status, period_expiry: data.expires_at ?? null, renewal_state: null }
+        : null;
+      setSubscriptionView(resolveSubscriptionView({ subscription: row }));
     } catch (err) {
       console.error('Failed to read subscription status:', err);
-      setSubscription(null);
+      setSubscriptionView(null);
     }
   }, []);
 
@@ -340,7 +388,7 @@ const StrategyMarketplace = () => {
     if (!listingId) return;
     setLoading(true);
     setError(null);
-    setSubscription(null);
+    setSubscriptionView(null);
     try {
       const data = hasAuthToken()
         ? await api.library.detail(listingId)
@@ -674,15 +722,42 @@ const StrategyMarketplace = () => {
   // Detail
   // ───────────────────────────────────────────────────────────────────────────
 
+  /**
+   * §7.9's badge — one of four words, for every shape the status read can return.
+   *
+   * WHAT THIS USED TO RENDER
+   * -----------------------
+   * The raw `library_subscriptions.status` column, uppercased by CSS, beside a date labelled
+   * "Renews / expires". A trader with a failed card read `PAYMENT_FAILED`, one whose settlement
+   * had been reversed read `REFUNDED`, and both dates claimed to be a renewal and an expiry at
+   * once. Worse, the whole element was skipped whenever `status` was not a string — so the one
+   * response that most needs explaining, a row whose state this build cannot read, showed
+   * nothing at all. `resolveSubscriptionView` is total, so there is now always exactly one
+   * badge: `label` is the declared word and never the server's, and the date appears only where
+   * §7.9 says it is a fact worth stating.
+   *
+   * `showsExpiry` is true for `CANCELLED` alone, and it is not a renewal date: the backend keeps
+   * the entitlement alive to the unchanged period end (backend Requirement 11.9), so this is the
+   * last day the strategy runs. It is worded as that and nothing else. A `CANCELLED` row that
+   * carries no date renders the badge without one rather than inventing a day.
+   *
+   * The hue is not named here. `tokenState` is a semantic state and `ds/StatusBadge` resolves it
+   * through `design/semantic.js`, the one module allowed to turn a state into a colour
+   * (Requirement 1.4) — which is also why the badge takes no colour prop to give it.
+   *
+   * Absent when nothing has been read: an anonymous visitor, a read still in flight, or a read
+   * that failed. Rendering **Available** there would be a claim that this trader holds no
+   * subscription, which is precisely what a failed read did not establish.
+   */
   const renderSubscriptionIndicator = () => {
-    if (!subscription || typeof subscription.status !== 'string') return null;
-    const expires = formatDate(subscription.expires_at);
+    if (!subscriptionView) return null;
+    const expires = subscriptionView.showsExpiry ? formatDate(subscriptionView.periodExpiry) : null;
     return (
-      <div className="bg-[#080A0D] border border-[#202938] rounded-xl px-4 py-3 flex flex-wrap items-center gap-3 font-mono text-xs">
-        <Clock size={14} className="text-[#00D4FF]" />
-        <span className="text-[#8B949E] uppercase tracking-widest text-[10px]">Your subscription</span>
-        <span className="text-[#E6EDF3] font-bold uppercase">{subscription.status}</span>
-        {expires && <span className="text-[#8B949E]">Renews / expires {expires}</span>}
+      <div className="bg-surface-canvas border border-line-default rounded-xl px-4 py-3 flex flex-wrap items-center gap-3 font-mono text-xs">
+        <Clock size={14} className="text-brand" />
+        <span className="text-content-secondary uppercase tracking-widest text-[10px]">Your subscription</span>
+        <StatusBadge state={subscriptionView.tokenState} label={subscriptionView.label} size="md" />
+        {expires && <span className="text-content-secondary">Access ends {expires}</span>}
       </div>
     );
   };
@@ -695,7 +770,20 @@ const StrategyMarketplace = () => {
     const rating = toFiniteNumber(strat.avg_rating);
     const ratingCount = toFiniteNumber(strat.rating_count);
     const publishedAt = formatDate(strat.published_at);
-    const isSubscribed = subscription?.status === 'active';
+    /*
+     * Requirement 13.1. This was `subscription?.status === 'active'` — the frontend deciding
+     * entitlement by comparing one of seven server words against a string literal, which got
+     * `CANCELLED` wrong in the direction that costs money: a trader who has stopped the next
+     * charge is still entitled to the unchanged period end, and was being offered a second
+     * purchase of a subscription they already hold. The badge is the whole answer now, and it
+     * says **Subscribed** for `ACTIVE` and `CANCELLED` alike.
+     *
+     * `view.badge`, not `view.entitling`: this endpoint carries no `entitling` field at all
+     * (the resolver's verdict rides on §7.9's `browse()` / `myStrategies()` entry, not on
+     * `GET /api/library/{id}/subscribe`), so reading it here would evaluate a field that is
+     * always absent — false for every subscriber, including an `ACTIVE` one.
+     */
+    const isSubscribed = subscriptionView?.badge === BADGE_SUBSCRIBED;
     const reviews = Array.isArray(strat.recent_ratings) ? strat.recent_ratings : [];
 
     return (

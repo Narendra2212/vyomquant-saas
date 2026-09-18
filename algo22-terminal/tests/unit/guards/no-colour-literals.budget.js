@@ -379,7 +379,16 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   'pages/PaperTrading.jsx': 0,
   // Subscription-state elements only (Requirement 13); the rest of the page is
   // out of scope, which is why the number is this large.
-  'pages/StrategyMarketplace.jsx': 188,
+  //
+  // 188 -> 182 at task 26.1, part 2, which repointed the subscription indicator onto
+  // `design/subscriptionState`. The six were that one element's whole palette: the panel's
+  // `#080A0D` fill and `#202938` rule, the clock glyph's `#00D4FF`, `#8B949E` twice on the
+  // label and the date, and `#E6EDF3` on the state word. The panel is now
+  // `bg-surface-canvas` / `border-line-default` / `text-content-secondary` / `text-brand`, and
+  // the state word is `ds/StatusBadge`, which asks `statusToken` for the hue — so the one
+  // element on this page that paints a STATE names no colour at all. The remaining 182 are
+  // catalogue and detail chrome, out of Requirement 1.3's scope for this page.
+  'pages/StrategyMarketplace.jsx': 182,
 
   // -- Shared primitives, retokened in M3 -----------------------------------
   // 40 of these 68 are #10B981 (24) and #EF4444 (16), across the
