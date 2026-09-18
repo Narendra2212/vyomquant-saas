@@ -398,7 +398,53 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // `#000` button labels all predate the shim. None was a `C.` read, none is introduced, and
   // the count is the same 37 before and after.
   'components/SupportCenter.jsx': 0,
-  'pages/Profile.jsx': 160,
+  // 160 -> 0 at task 27.2, batch 3, and this is the first entry in the series whose `C`
+  // import is NARROWED rather than deleted. `C` was one of three specifiers this page took
+  // from the shim and the other two — `SectionH` and `Inp` — are components, not colours, so
+  // the module import stays for them and `token` is read from `design/tokens.js` beside it.
+  // Re-homing those two is a later pass's. Every one of the 160 is the value the shim already
+  // gave it, so nothing on this page changed on screen.
+  //
+  // By shim name: `C.t3` 35 -> `token.content.muted`; `C.border` 23 -> `token.line.default`;
+  // `C.t1` 20, `C.t2` 19 -> `token.content.primary` / `secondary`; `C.green` 16 ->
+  // `token.status.profit.fg`; `C.accent` 14 and `C.cyan` 7 -> `token.brand.base` (one hue in
+  // the shim, collapsed onto it here rather than a second brand value being invented to keep
+  // the two names apart); `C.bg2` 12, `C.bg3` 9 -> `token.surface.raised` / `inset`; `C.red`
+  // 4 -> `token.status.loss.fg`; `C.gold` 1 -> `token.status.warning.fg`. No `C.space.*`,
+  // `C.radius.*`, `C.shadow*`, `C.glow.*` or `C.gradient.*` read on the page, so neither the
+  // rem-string substitution nor the dead-declaration deletion arose here.
+  //
+  // THE 21 STATUS HUES STAY OFF `statusToken`, AND THAT IS PRESERVED RATHER THAN CHOSEN, on
+  // the same terms as `components/SupportCenter.jsx` above: there is no frozen
+  // `state -> group` map in this file to route them through, and inventing one would be a
+  // restructure. What the 21 paint is account chrome rather than a status verdict — the
+  // account-active badge and its dot, the verified-email chip, the PROTECTED chip, the MFA
+  // `Configured` label and its dot, the isolated-margin note and its dot, the three
+  // copy-confirmation ticks, the subscription-active label and its dot, the two referral
+  // chips and the active-referral figure (green); the sync-error glyph and its heading and
+  // the notification panel's `RISK & CIRCUIT BREAKERS` category label (red); the
+  // lifetime-earnings figure (gold). Every ternary among them keeps its condition and its
+  // operand order; only the source of each hue moved.
+  //
+  // THE ONE SIGNED FIGURE IS THE ONE JUDGEMENT, AND IT STAYED WHERE IT WAS. The total-P&L
+  // read is `(stats?.total_pnl || 0) >= 0 ? profit : loss`, which is exactly what
+  // `design/semantic.js`'s `pnlToken` and `ds/PnLDisplay` own — but adopting either is a
+  // restructure, not a retoken, and `pnlToken` reads zero as NEUTRAL where this ternary
+  // paints a flat figure profit green. Repicking that hue is a design decision. Recorded for
+  // the reason `pages/PaperTrading.jsx`'s two P&L cells are.
+  //
+  // THE LIFETIME-EARNINGS FIGURE KEEPS A DEAD FALLBACK. It read `C.gold || C.accent`, and
+  // `C.gold` is a non-empty string, so the right arm has never been reachable. It is
+  // `token.status.warning.fg || token.brand.base` now — both operands in place, because
+  // collapsing a no-op is a code change and this is a retoken, exactly as
+  // `pages/LegalPage.jsx`'s no-op back-button hover was left standing.
+  //
+  // THIS PAGE'S 7 `no-colour-literals` ENTRIES ARE UNTOUCHED: the five hand-mixed
+  // `rgba(38, 166, 154, …)` values (four washes behind the green chips above, plus the
+  // account-active chip's rule) and the notification toggle's `#fff` knob with its
+  // `rgba(0,0,0,0.3)` shadow. None was a `C.` read, none is introduced, and the count is the
+  // same 7 before and after.
+  'pages/Profile.jsx': 0,
   // `components/DashboardUpgrades.jsx: 135` stood here until task 19.4 deleted the file.
   // It is removed rather than lowered to `0`, per this header's rule: an entry reaching
   // zero records that a file is clean and must stay clean, but a deleted file has no
@@ -407,7 +453,57 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // gamified upgrade prompts no module imported (design.md §7.1, Requirement 1.5) — so
   // this is 135 fewer call sites standing between here and task 27.2's deletion of the
   // shim, taken without migrating anything.
-  'pages/Landing.jsx': 122,
+  // 122 -> 0 at task 27.2, batch 3, and the `C` import is deleted rather than narrowed for the
+  // reason `pages/LegalPage.jsx`'s and `components/SupportCenter.jsx`'s were: `C` was the only
+  // specifier this file took from the shim, so the specifier and the module both go and `token`
+  // is read straight from `design/tokens.js`.
+  //
+  // 114 OF THE 122 ARE STRAIGHT SUBSTITUTIONS, each one the value the shim already gave it. By
+  // shim name: `C.accent` 25 and `C.cyan` 1 (the hero's radial wash) -> `token.brand.base`;
+  // `C.border` 22 -> `token.line.default`; `C.t1` 16, `C.t2` 13 -> `token.content.primary` /
+  // `secondary`; `C.t3` 14 and `C.t4` 1 (the copyright line) -> `token.content.muted`, which
+  // the shim already held as one grey; `C.gold` 7 (the Elite plan's border and badge, the
+  // five-star fill) -> `token.status.warning.fg`; `C.bg2` 5 -> `token.surface.raised`; `C.bg0`
+  // 3 and `C.bg` 2 -> `token.surface.canvas`, likewise one surface in the shim; `C.bg3` 3 (the
+  // demo modal's three fields) -> `token.surface.inset`; `C.profit` 2 ->
+  // `token.status.profit.fg`. No `C.space.*`, `C.radius.*` or `C.shadow*` read on the page.
+  //
+  // THE OTHER EIGHT ARE THE TREE'S LAST `C.glow` READS, AND THEY ARE DELETED RATHER THAN
+  // RETOKENED: `C.glow.accent` 4, `C.glow.gold` 1, the one computed `C.glow[…]`, and the
+  // `C.profit` and `C.gold` that made up that computed key. `glow.*` has been the literal
+  // string `'none'` since M1 (Requirement 1.5), so there was no hue to carry across. With
+  // these gone, the only `C.glow` and `C.gradient` reads left in `src/` are inside the shim.
+  //
+  // ONE OF THE FIVE DECLARATIONS WAS WHOLLY DEAD AND IS GONE ENTIRELY: the pricing card's
+  // `const glowShadow = isElite ? C.glow.gold : (isPro ? C.glow.accent : "none")` — three arms
+  // of one retired value.
+  //
+  // THE OTHER FOUR SAT INSIDE COMPOUND `box-shadow` LISTS THAT ALSO CARRY LIVE SHADOWS, so the
+  // dead TERM goes and the declaration stays. Deleting those four outright would have taken
+  // six of this page's 18 `no-colour-literals` entries with it, and that guard asserts its
+  // counts in BOTH directions. The count is the same 18 before and after, and no colour
+  // literal was introduced.
+  //
+  // REMOVING THE DEAD TERM ALSO MAKES THOSE LISTS VALID CSS FOR THE FIRST TIME, which is worth
+  // stating rather than glossing: `box-shadow` takes `none` OR a shadow list, never `none`
+  // inside one, so every list that interpolated a retired glow was being rejected whole.
+  // `LandingFeatureCard` is unchanged either way — a rejected hover value left the resting
+  // shadow standing, and that is the value its hovered arm now names in as many words, which
+  // is also why its two arms hold identical text and are left as two arms (collapsing them
+  // would move two of the 18). `LandingPricingCard`'s hover is the one difference on the page:
+  // its `0 30px 60px rgba(0,0,0,0.4)` renders now where the rejected list left the resting
+  // `0 20px 40px rgba(0,0,0,0.2)` in place. The `Start Free` CTA is unaffected — its visible
+  // pulse comes from the `ctaPulse` keyframes (four of the 25 `C.accent` reads), and a running
+  // animation outranks the inline declaration those three sites were writing.
+  //
+  // THAT ONE DIFFERENCE IS RECORDED RATHER THAN CHASED, because nothing renders this file.
+  // Its own header has said since before this spec that it is unmounted and that
+  // `components/landing/LandingPage.jsx` is the routed `/` page; it also reads six identifiers
+  // it never imports (`useNavigate`, `GitBranch`, `TrendingUp`, `Bot`, `ChevronUp`,
+  // `ChevronDown`), so mounting it would throw before any shadow was painted. Deleting it is
+  // not this task's to take: task 27.2 is the shim's deletion, and a page that reads no shim
+  // value no longer stands in the way of it.
+  'pages/Landing.jsx': 0,
   // 122 -> 121 at task 10.4. The one reference was `AuditTab`'s
   // `style={{ textAlign: "center", color: C.t3 }}` — the whole component was a single
   // centred placeholder line, and it went with the tab that reached it (design.md §1.9,
