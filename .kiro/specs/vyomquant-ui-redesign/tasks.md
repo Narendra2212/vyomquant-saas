@@ -1562,7 +1562,7 @@ the decomposition this plan uses instead:
 
 - [ ] 27. M9 — Strategy Detail, and the removal of the legacy layer
 
-  - [~] 27.1 Retoken `src/pages/StrategyDetail.jsx`
+  - [x] 27.1 Retoken `src/pages/StrategyDetail.jsx`
     - Route through `PageHeader` with a breadcrumb and the `ds/` primitives; the four native dialogs
       and the "coming soon" panel were already removed in Task 10.4
     - Lower this page's `legacy-c-budget` and `no-colour-literals` entries to zero and add the page to
