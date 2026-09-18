@@ -386,9 +386,25 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // centred placeholder line, and it went with the tab that reached it (design.md §1.9,
   // §7.3, Requirement 19.4). The four `ConfirmDialog`s that replaced this page's four
   // `window.confirm` calls in the same task add none: `ds/ConfirmDialog` is tokens-only,
-  // so a confirmation surface costs zero shim references. The page's other 121 are
-  // untouched and are task 27.1's, which takes this entry to zero.
-  'pages/StrategyDetail.jsx': 121,
+  // so a confirmation surface costs zero shim references.
+  //
+  // 121 -> 0 at task 27.1, and the `C` specifier is gone from the import with them: with no
+  // reference left there is nothing to import, and a lingering specifier is how the next
+  // contributor reintroduces one by copying the line beside it. `Tag2` and `StatusDot`
+  // remain imported from the same module — they are components, not colours, and task 27.2
+  // owns re-pointing them.
+  //
+  // The 121 were, by region: 26 in the page shell (header row, action-error banner, the
+  // identity card and the tab strip), 8 in `OverviewTab`, 12 in `DeploymentsTab` and
+  // `BacktestsTab`, 24 in `VersionsTab`, 17 in `MetricsTab`, 10 in `RiskTab` and
+  // `ConfigurationTab`, 17 in `ExecutionsTab`, 8 in `SignalsTab`, 3 in the three pointer
+  // tabs, 2 in `MarketplaceTab` and 16 in `SubscribersTab` / `RevenueTab`. Non-state values
+  // read `token.content.*` / `token.line.default` / `token.surface.inset` /
+  // `token.brand.base` directly (`C.t3` and `C.t4` both resolved to `content.muted` and are
+  // collapsed onto it rather than a fourth grey); the signed figures go through
+  // `design/semantic.js`'s `pnlToken`, which is also the correction of the old `>= 0`
+  // ternaries — those painted a flat figure profit green and an UNREAD one loss red.
+  'pages/StrategyDetail.jsx': 0,
   'pages/Billing.jsx': 111,
   'components/NotificationCenter.jsx': 77,
   'components/ResearchConsole.jsx': 60,

@@ -389,6 +389,24 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   // element on this page that paints a STATE names no colour at all. The remaining 182 are
   // catalogue and detail chrome, out of Requirement 1.3's scope for this page.
   'pages/StrategyMarketplace.jsx': 182,
+  // M9. 4 -> 0 at task 27.1, and the entry moves up here out of the deferred block below,
+  // because the page is no longer deferred.
+  //
+  // All four were `RevenueTab`'s, and none of them was in the palette at all: `#4ade80`
+  // twice on Total Earnings and "Net Revenue (90%)", `#60a5fa` on Monthly Recurring Revenue
+  // and `#f87171` on Platform Fee Paid — a Tailwind green/blue/red trio, not this app's
+  // `#26A69A`/`#EF5350`. Two now come from `design/tokens.js` (`status.profit.fg` on the
+  // owner's share, `status.loss.fg` on the platform fee) and the other two are gone with the
+  // figures they coloured: every field that tab read is absent from
+  // `GET /api/library/creator/analytics`, so the four cards were rendering `|| 0` and the
+  // blue "recurring revenue" and the green "net (90%)" were quantities the server never
+  // reports. The tab reads the per-currency `earnings[]` ledger instead. There is no token
+  // for the blue and none is invented: a figure with no state takes `content.primary`.
+  //
+  // Cleared with this page's 121 `C.` references in the same change, as §14.4 requires of a
+  // page task. The `0` stays rather than being deleted, for the reason `pages/Strategies.jsx:
+  // 0` gives.
+  'pages/StrategyDetail.jsx': 0,
 
   // -- Shared primitives, retokened in M3 -----------------------------------
   // 40 of these 68 are #10B981 (24) and #EF4444 (16), across the
@@ -432,7 +450,8 @@ export const COLOUR_LITERAL_BUDGET = Object.freeze({
   'pages/Billing.jsx': 9,
   'pages/Profile.jsx': 7,
   'pages/Wizard.jsx': 5,
-  'pages/StrategyDetail.jsx': 4,
+  // `pages/StrategyDetail.jsx: 4` stood here until task 27.1 took it to 0 and moved the
+  // entry into the in-scope block above. It is not a deferred page any more.
   'pages/LegalPage.jsx': 3,
   'pages/SecurityLogs.jsx': 3,
   'components/SupportCenter.jsx': 37,
