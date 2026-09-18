@@ -2381,7 +2381,7 @@ export default function PaperTrading() {
       />
 
       {/* ── controls ───────────────────────────────────────────────────── */}
-      <Card className="mb-4" style={{ background: C.bg2, borderColor: C.border }}>
+      <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
         <PanelTitle title="Session controls" sub="Strategy, simulated capital, market, timeframe and the five session operations" />
 
         <PanelBody
@@ -2636,7 +2636,7 @@ export default function PaperTrading() {
 
       {/* ── the honest report of the last stop / reset ─────────────────── */}
       {stopReport ? (
-        <Card className="mb-4" style={{ background: C.bg2, borderColor: stopReport.complete === true ? C.border : `${C.warning}66` }}>
+        <Card className="mb-4" style={{ background: token.surface.raised, borderColor: stopReport.complete === true ? token.line.default : `${statusToken('warning').fg}66` }}>
           <PanelTitle
             title="Last stop"
             sub="Read from the response's own `complete` flag — not inferred from the call returning"
@@ -2691,7 +2691,7 @@ export default function PaperTrading() {
       ) : null}
 
       {resetReport ? (
-        <Card className="mb-4" style={{ background: C.bg2, borderColor: C.border }}>
+        <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
           <PanelTitle title="Last reset" sub="Nothing was deleted — the pre-reset orders, fills, trades, metrics and equity snapshots stay readable" />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8 }}>
             <StatusPill tone="muted" label={`Series ${formatCount(resetReport.previous_series_index) ?? '—'} → ${formatCount(resetReport.series_index) ?? '—'}`} />
@@ -2850,7 +2850,7 @@ export default function PaperTrading() {
       </div>
 
       {/* ── the live stream, its reconnection, and the bounds on what it retains ────────── */}
-      <Card className="mb-4" style={{ background: C.bg2, borderColor: channelRefusal ? `${C.loss}66` : C.border }}>
+      <Card className="mb-4" style={{ background: token.surface.raised, borderColor: channelRefusal ? `${statusToken('loss').fg}66` : token.line.default }}>
         <PanelTitle
           title="Live event stream"
           sub={`paper.${sessionId ?? '{session}'} — one subscription, released when this route unmounts`}
@@ -3116,7 +3116,7 @@ export default function PaperTrading() {
       </div>
 
       {/* ── equity curve ───────────────────────────────────────────────── */}
-      <Card className="mb-4" style={{ background: C.bg2, borderColor: C.border }}>
+      <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
         <PanelTitle
           title="Equity curve"
           sub="Drawn from the persisted equity snapshots — a reconnect or a remount redraws the same curve"
@@ -3132,13 +3132,13 @@ export default function PaperTrading() {
             <AreaChart data={equityPoints}>
               <defs>
                 <linearGradient id="paperEquityFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={C.profit} stopOpacity={0.28} />
-                  <stop offset="95%" stopColor={C.profit} stopOpacity={0} />
+                  <stop offset="5%" stopColor={statusToken('profit').fg} stopOpacity={0.28} />
+                  <stop offset="95%" stopColor={statusToken('profit').fg} stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-              <XAxis dataKey="label" stroke={C.t3} fontSize={9} tickLine={false} minTickGap={chartAxis.tickGap} />
-              <YAxis stroke={C.t3} fontSize={9} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
+              <CartesianGrid strokeDasharray="3 3" stroke={token.line.default} vertical={false} />
+              <XAxis dataKey="label" stroke={token.content.muted} fontSize={9} tickLine={false} minTickGap={chartAxis.tickGap} />
+              <YAxis stroke={token.content.muted} fontSize={9} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
               <Tooltip
                 content={
                   <ChartTooltip
@@ -3159,15 +3159,15 @@ export default function PaperTrading() {
                 <ReferenceLine
                   key={`series-${boundary}`}
                   x={equityPoints[boundary]?.label}
-                  stroke={C.warning}
+                  stroke={statusToken('warning').fg}
                   strokeDasharray="4 4"
                 />
               ))}
-              <Area dataKey="equity" stroke={C.profit} strokeWidth={2} fill="url(#paperEquityFill)" dot={false} connectNulls={false} />
+              <Area dataKey="equity" stroke={statusToken('profit').fg} strokeWidth={2} fill="url(#paperEquityFill)" dot={false} connectNulls={false} />
             </AreaChart>
           </ResponsiveContainer>
           <div
-            style={{ color: C.t3, fontSize: 9, marginTop: 6 }}
+            style={{ color: token.content.muted, fontSize: 9, marginTop: 6 }}
             data-testid="paper-equity-series"
             data-chart-points={equityPoints.length}
             data-chart-point-cap={MAX_CHART_POINTS_PER_SERIES}
@@ -3187,12 +3187,12 @@ export default function PaperTrading() {
       <div
         data-responsive-grid="pnl-drawdown"
         data-single-column={String(singleColumn)}
-        style={{ display: 'grid', gridTemplateColumns: gridColumns(320), gap: C.space.md, marginBottom: C.space.md, minWidth: 0 }}
+        style={{ display: 'grid', gridTemplateColumns: gridColumns(320), gap: token.space['3'], marginBottom: token.space['3'], minWidth: 0 }}
       >
         {/* `minWidth: 0` on a card that holds a chart is not decoration: a grid item's default
             `min-width: auto` floors the track at the item's min-content width, and a chart inside
             it would then keep the track — and the page — wider than the viewport. */}
-        <Card style={{ background: C.bg2, borderColor: C.border, minWidth: 0 }}>
+        <Card style={{ background: token.surface.raised, borderColor: token.line.default, minWidth: 0 }}>
           <PanelTitle title="Profit and loss" sub="From the session's recorded paper_pnl_updated events" right={<SimulatedTag />} />
           <PanelBody
             state={panelState('events', pnlChart.length === 0)}
@@ -3202,9 +3202,9 @@ export default function PaperTrading() {
           >
             <ResponsiveContainer width="100%" height={chartHeight}>
               <ComposedChart data={pnlChart}>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-                <XAxis dataKey="label" stroke={C.t3} fontSize={9} tickLine={false} minTickGap={chartAxis.tickGap} />
-                <YAxis stroke={C.t3} fontSize={9} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
+                <CartesianGrid strokeDasharray="3 3" stroke={token.line.default} vertical={false} />
+                <XAxis dataKey="label" stroke={token.content.muted} fontSize={9} tickLine={false} minTickGap={chartAxis.tickGap} />
+                <YAxis stroke={token.content.muted} fontSize={9} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
                 <Tooltip
                   content={
                     <ChartTooltip
@@ -3218,12 +3218,12 @@ export default function PaperTrading() {
                     />
                   }
                 />
-                <Line dataKey="realized" name="Realized" stroke={C.accent} strokeWidth={2} dot={false} connectNulls={false} />
-                <Line dataKey="unrealized" name="Unrealized" stroke={C.purple} strokeWidth={2} strokeDasharray="5 3" dot={false} connectNulls={false} />
-                <Line dataKey="total" name="Total" stroke={C.profit} strokeWidth={2} strokeDasharray="1 3" dot={false} connectNulls={false} />
+                <Line dataKey="realized" name="Realized" stroke={token.brand.base} strokeWidth={2} dot={false} connectNulls={false} />
+                <Line dataKey="unrealized" name="Unrealized" stroke={token.status.neutral.fg} strokeWidth={2} strokeDasharray="5 3" dot={false} connectNulls={false} />
+                <Line dataKey="total" name="Total" stroke={statusToken('profit').fg} strokeWidth={2} strokeDasharray="1 3" dot={false} connectNulls={false} />
               </ComposedChart>
             </ResponsiveContainer>
-            <div style={{ color: C.t3, fontSize: 9, marginTop: 6 }}>
+            <div style={{ color: token.content.muted, fontSize: 9, marginTop: 6 }}>
               Realized is solid, unrealized is long-dashed and total is dotted, so the three series
               are distinguishable without relying on colour. An unrealized or total figure that had
               no current price behind it leaves a gap rather than being drawn as zero.
@@ -3231,7 +3231,7 @@ export default function PaperTrading() {
           </PanelBody>
         </Card>
 
-        <Card style={{ background: C.bg2, borderColor: C.border, minWidth: 0 }}>
+        <Card style={{ background: token.surface.raised, borderColor: token.line.default, minWidth: 0 }}>
           <PanelTitle title="Drawdown" sub="From the session's recorded paper_drawdown_updated events" right={<SimulatedTag />} />
           <PanelBody
             state={panelState('events', drawdownChart.length === 0)}
@@ -3243,13 +3243,13 @@ export default function PaperTrading() {
               <AreaChart data={drawdownChart}>
                 <defs>
                   <linearGradient id="paperDrawdownFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={C.loss} stopOpacity={0.28} />
-                    <stop offset="95%" stopColor={C.loss} stopOpacity={0} />
+                    <stop offset="5%" stopColor={statusToken('loss').fg} stopOpacity={0.28} />
+                    <stop offset="95%" stopColor={statusToken('loss').fg} stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-                <XAxis dataKey="label" stroke={C.t3} fontSize={9} tickLine={false} minTickGap={chartAxis.tickGap} />
-                <YAxis stroke={C.t3} fontSize={9} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
+                <CartesianGrid strokeDasharray="3 3" stroke={token.line.default} vertical={false} />
+                <XAxis dataKey="label" stroke={token.content.muted} fontSize={9} tickLine={false} minTickGap={chartAxis.tickGap} />
+                <YAxis stroke={token.content.muted} fontSize={9} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
                 <Tooltip
                   content={
                     <ChartTooltip
@@ -3263,7 +3263,7 @@ export default function PaperTrading() {
                     />
                   }
                 />
-                <Area dataKey="amount" stroke={C.loss} strokeWidth={2} fill="url(#paperDrawdownFill)" dot={false} connectNulls={false} />
+                <Area dataKey="amount" stroke={statusToken('loss').fg} strokeWidth={2} fill="url(#paperDrawdownFill)" dot={false} connectNulls={false} />
               </AreaChart>
             </ResponsiveContainer>
           </PanelBody>
@@ -3271,7 +3271,7 @@ export default function PaperTrading() {
       </div>
 
       {/* ── price series with trade markers ────────────────────────────── */}
-      <Card className="mb-4" style={{ background: C.bg2, borderColor: C.border }}>
+      <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
         <PanelTitle
           title="Price series and trade markers"
           sub="Validated candles from the recorded market_tick events; markers are the fills those candles produced"
@@ -3285,9 +3285,9 @@ export default function PaperTrading() {
         >
           <ResponsiveContainer width="100%" height={chartHeight + 40}>
             <ComposedChart data={priceChart}>
-              <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-              <XAxis dataKey="label" stroke={C.t3} fontSize={9} tickLine={false} minTickGap={chartAxis.tickGap} />
-              <YAxis stroke={C.t3} fontSize={9} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
+              <CartesianGrid strokeDasharray="3 3" stroke={token.line.default} vertical={false} />
+              <XAxis dataKey="label" stroke={token.content.muted} fontSize={9} tickLine={false} minTickGap={chartAxis.tickGap} />
+              <YAxis stroke={token.content.muted} fontSize={9} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
               <Tooltip
                 content={
                   <ChartTooltip
@@ -3302,17 +3302,17 @@ export default function PaperTrading() {
                   />
                 }
               />
-              <Line dataKey="close" name="Close" stroke={C.accent} strokeWidth={2} dot={false} connectNulls={false} />
-              <Scatter dataKey="buyFill" name="Buy fill" fill={C.profit} shape="triangle" />
-              <Scatter dataKey="sellFill" name="Sell fill" fill={C.loss} shape="diamond" />
+              <Line dataKey="close" name="Close" stroke={token.brand.base} strokeWidth={2} dot={false} connectNulls={false} />
+              <Scatter dataKey="buyFill" name="Buy fill" fill={statusToken('buy').fg} shape="triangle" />
+              <Scatter dataKey="sellFill" name="Sell fill" fill={statusToken('sell').fg} shape="diamond" />
             </ComposedChart>
           </ResponsiveContainer>
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6, fontSize: 9, color: C.t3 }}>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6, fontSize: 9, color: token.content.muted }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <ArrowUpRight size={11} aria-hidden="true" style={{ color: C.profit }} /> Buy fill — triangle
+              <ArrowUpRight size={11} aria-hidden="true" style={{ color: statusToken('buy').fg }} /> Buy fill — triangle
             </span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <ArrowDownRight size={11} aria-hidden="true" style={{ color: C.loss }} /> Sell fill — diamond
+              <ArrowDownRight size={11} aria-hidden="true" style={{ color: statusToken('sell').fg }} /> Sell fill — diamond
             </span>
             <span>
               {formatCount(derived.fills.length) ?? '0'} fill marker(s) placed on the last candle at or
@@ -3323,7 +3323,7 @@ export default function PaperTrading() {
       </Card>
 
       {/* ── open positions ─────────────────────────────────────────────── */}
-      <Card className="mb-4" style={{ background: C.bg2, borderColor: C.border }}>
+      <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
         <PanelTitle
           title={`Open positions (${formatCount(positions.length) ?? '0'})`}
           sub="Direction is an explicit side; a size is never negative"
@@ -3350,7 +3350,7 @@ export default function PaperTrading() {
       </Card>
 
       {/* ── open orders ────────────────────────────────────────────────── */}
-      <Card className="mb-4" style={{ background: C.bg2, borderColor: C.border }}>
+      <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
         <PanelTitle
           title={`Open orders (${formatCount(openOrders.length) ?? '0'})`}
           sub={`Non-terminal order states out of ${formatCount(allOrders.length) ?? '0'} order(s) recorded for this session`}
@@ -3376,7 +3376,7 @@ export default function PaperTrading() {
       </Card>
 
       {/* ── completed trades ───────────────────────────────────────────── */}
-      <Card className="mb-4" style={{ background: C.bg2, borderColor: C.border }}>
+      <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
         <PanelTitle
           title={`Completed trades (${formatCount(trades.length) ?? '0'})`}
           sub="Closed round-trips — the set the win rate is computed over"
@@ -3404,7 +3404,7 @@ export default function PaperTrading() {
         data-single-column={String(singleColumn)}
         style={{ display: 'grid', gridTemplateColumns: gridColumns(320), gap: C.space.md, minWidth: 0 }}
       >
-        <Card style={{ background: C.bg2, borderColor: C.border, minWidth: 0 }}>
+        <Card style={{ background: token.surface.raised, borderColor: token.line.default, minWidth: 0 }}>
           <PanelTitle
             title={`Signal stream (${formatCount(derived.signals.length) ?? '0'})`}
             sub="The recorded signal_generated events — decision, side, quantity and price only"
@@ -3430,7 +3430,7 @@ export default function PaperTrading() {
           </PanelBody>
         </Card>
 
-        <Card style={{ background: C.bg2, borderColor: C.border, minWidth: 0 }}>
+        <Card style={{ background: token.surface.raised, borderColor: token.line.default, minWidth: 0 }}>
           <PanelTitle
             title={`Execution events (${formatCount(derived.executions.length) ?? '0'})`}
             sub="Order and session lifecycle frames, newest first"
