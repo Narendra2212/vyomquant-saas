@@ -1579,7 +1579,7 @@ the decomposition this plan uses instead:
     - This is what completes Requirement 1.3 — it is only fully satisfiable here (`§14.4`)
     - _Requirements: 1.1, 1.3_
 
-  - [~] 27.3 Delete `DesktopOnlyOverlay` and close out the guard budgets
+  - [x] 27.3 Delete `DesktopOnlyOverlay` and close out the guard budgets
     - Delete `src/components/DesktopOnlyOverlay.jsx`, superseded by `ResponsiveGate` in Task 8.4
     - Reduce the `no-colour-literals` allowlist to out-of-scope files only and assert the in-scope set
       is empty, so the budget can never grow back
