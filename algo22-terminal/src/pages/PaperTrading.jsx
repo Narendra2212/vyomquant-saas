@@ -123,6 +123,52 @@
  * container and re-renders at its width), so this page adds no second observer for it. What a
  * percentage width cannot fix is `YAxis width` and `XAxis minTickGap` — fixed pixel reservations
  * taken out of the plot — and those come from `chartGeometry(layoutMode)`.
+ *
+ * TASK 25.2 — WHY THE THREE TABLE REGIONS DO NOT CONSUME `components/trading/*`
+ * ----------------------------------------------------------------------------
+ * §7.8 (4) reads Requirement 12.1's "same visual language" structurally: the position, order and
+ * execution surfaces should be the SAME components Live Trading renders — `PositionsPanel`,
+ * `OrdersPanel`, `ExecutionsPanel`, parameterised by environment — and task 20.2 extracted those
+ * three for this consumer specifically. They are not consumed here, and the reason is a shape
+ * mismatch rather than a preference.
+ *
+ * **Those three panels have exactly one content model, and it is `slots`**: a flat array of
+ * declared fields rendered as ONE row of equally-weighted `ds/Metric` figures inside `ds/Panel`.
+ * They expose no `children`, no row set and no column set. That is the right model for Live
+ * Trading, whose position, order and execution surfaces are each a single record's figures — see
+ * `pages/LiveTrading.jsx`'s tier 2 and tier 3, where `slots` is a tier's projected field list.
+ * This page's three surfaces are not single records. `sessions.positions()`, the non-terminal arm
+ * of `sessions.orders()` and the lifecycle frames of `sessions.events()` are each a COLLECTION,
+ * rendered by {@link DataTable} as N rows of 7, 10 and 8–9 columns. There is no projection from N
+ * records onto one row of figures that does not drop records, and dropping records is not a
+ * retoken.
+ *
+ * Two capabilities this page already holds would go with the conversion, and both are named
+ * requirements:
+ *
+ * * **Requirement 20.7's stacked layout.** Below {@link STACKED_TABLE_MAX_WIDTH}
+ *   {@link DataTable} renders each row as a real `<dl>` whose `<dt>` is the column header the
+ *   cell sat under — the programmatic association a stacked table otherwise loses. A row of
+ *   `ds/Metric` carries no column header, so that association has nowhere to survive; it is not a
+ *   matter of restyling the row.
+ * * **Requirement 20.5's eight states.** `ds/Panel` validates `state` against
+ *   `hooks/usePanelState`'s eight and renders every non-`ready` body itself, and
+ *   {@link PANEL_STATES} here is a DIFFERENT eight: `PAPER_TRADING_STATE_TO_PANEL_STATE` maps
+ *   only four of them, collapsing `expired-subscription` and `unavailable-strategy` onto one
+ *   `unavailable`. Routing these panels through it would merge two distinct server refusals, drop
+ *   each read's own reason code, and replace `idle`'s "select or start a session" with nothing at
+ *   all. Driving `ds/Panel` at a permanent `ready` so {@link PanelBody} could stay underneath
+ *   would be worse than either: the `<section>` would then advertise `data-panel-state="ready"`
+ *   over a body reading "This read did not complete", which is the one claim Requirement 14.5
+ *   exists to rule out.
+ *
+ * So the part of Requirement 12.1 that can be met here is met: the environment vocabulary is
+ * shared, `ENVIRONMENT.PAPER` is where both {@link SimulatedTag} and the page-level
+ * `TradingEnvironmentBadge` take their hue, wash, border and glyph, and neither names a colour of
+ * its own (task 25.1). The row-shaped panels are the part that cannot be. What would make the
+ * structural reading available is a collection content model on the shared panels plus a state
+ * vocabulary that admits this page's eight — changes to `components/trading/*` and to §11.1, not
+ * to this page, and not ones to make while Live Trading is the only other consumer.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -3333,7 +3379,12 @@ export default function PaperTrading() {
         </PanelBody>
       </Card>
 
-      {/* ── open positions ─────────────────────────────────────────────── */}
+      {/* ── open positions ─────────────────────────────────────────────────
+           This region, `open orders` below it and `execution events` at the foot of the page are
+           the three §7.8 (4) names as the shared `components/trading/*` panels' second consumer.
+           They stay on {@link DataTable} + {@link PanelBody}: those panels render one row of
+           figures and these three render a collection. See TASK 25.2 in the module docblock for
+           the two requirements a conversion would cost. */}
       <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
         <PanelTitle
           title={`Open positions (${formatCount(positions.length) ?? '0'})`}

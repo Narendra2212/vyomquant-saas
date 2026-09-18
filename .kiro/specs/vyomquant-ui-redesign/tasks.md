@@ -1497,10 +1497,27 @@ the decomposition this plan uses instead:
     - _Requirements: 12.2, 12.3, 1.1_
     - _Property: P12, P22_
 
-  - [~] 25.2 Point Paper Trading at the shared trading panels
+  - [x] 25.2 Point Paper Trading at the shared trading panels
     - Consume the same `components/trading/{PositionsPanel,OrdersPanel,ExecutionsPanel}` components
       Live Trading uses, parameterised by environment — the structural reading of Requirement 12.1
       (`§7.8`)
+    - **Outcome: none of the three regions converted, and the finding is recorded in
+      `pages/PaperTrading.jsx`'s docblock under TASK 25.2.** The three shared panels have one
+      content model — `slots`, a flat field list rendered as ONE row of `ds/Metric` figures — and
+      no `children`, row set or column set. That fits Live Trading, whose position, order and
+      execution surfaces are each a single record's figures. Paper Trading's `open positions`,
+      `open orders` and `execution events` are collections rendered as N rows of 7, 10 and 8–9
+      columns, so a conversion would have to drop records, and would also cost Requirement 20.7's
+      stacked `<dl>` (a `ds/Metric` row carries no column header for the `<dt>`) and Requirement
+      20.5's eight states (`ds/Panel` validates against `usePanelState`'s different eight, and
+      `PAPER_TRADING_STATE_TO_PANEL_STATE` collapses `expired-subscription` and
+      `unavailable-strategy` onto one `unavailable`)
+    - **§7.8 (4)'s structural claim therefore does not hold for this page as written.** Requirement
+      12.1 is satisfied on the axis available here — the environment treatment is shared
+      (`ENVIRONMENT.PAPER`, task 25.1) and the page names no colour of its own. Making the
+      structural reading available needs a collection content model on `components/trading/*` and a
+      state vocabulary admitting this page's eight, which is a change to those components and to
+      `§11.1`, not to this page
     - _Requirements: 12.1_
 
   - [ ]* 25.3 Write the property test for real-order safety
