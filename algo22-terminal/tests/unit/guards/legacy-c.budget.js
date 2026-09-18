@@ -463,6 +463,21 @@ export const LEGACY_C_BUDGET = Object.freeze({
   'components/trading/OrdersPanel.jsx': 0,
   'components/trading/ExecutionsPanel.jsx': 0,
   'components/trading/liveFrame.js': 0,
+  // New at task 26.1 — §7.9's 7 -> 4 subscription-state collapse, declared once
+  // (Requirements 13.1, 13.3). A pure mapping module: no JSX, no import of the shim, and
+  // the one hue it names is asked of `design/semantic.js`'s `statusToken` with the semantic
+  // state word §7.9's table declares, so the badge cannot end up a colour the design
+  // document did not pick. Entered at `0` and held there for the reason
+  // `lib/drawdownSeries.js: 0` is — a file with no entry is a file whose cleanliness
+  // nothing is holding.
+  //
+  // NOTE that this file gets NO `no-colour-literals` entry. That guard's `SCAN_ROOTS` is
+  // `['pages', 'components', 'lib']` — widened to include `lib` at task 23.3 and NOT
+  // widened to `design`, where `design/tokens.js` is named a token-layer file and excluded
+  // outright. An entry for a `design/` file would be a stray and that guard's
+  // "no strays" assertion would fail on it. This budget is the one that covers all of
+  // `src/`, so it is the one that holds this file clean.
+  'design/subscriptionState.js': 0,
 });
 
 /**
