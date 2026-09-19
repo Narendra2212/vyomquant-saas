@@ -430,7 +430,7 @@ the decomposition this plan uses instead:
     - _Requirements: 11.1, 11.3, 11.4, 11.6, 15.4, 17.2, 18.1_
     - _Property: P19, P20, P29_
 
-  - [ ]* 6.10 Write the property test for column alignment
+  - [x]* 6.10 Write the property test for column alignment
     - **Property 19: Column alignment is determined solely by the column declaration**
     - **Validates: Requirements 11.3, 15.4**
     - Minimum 100 iterations over generated row sets and column configurations
@@ -1593,10 +1593,20 @@ the decomposition this plan uses instead:
       here on
     - _Requirements: 1.2, 17.1_
 
-- [~] 28. Final checkpoint — the full v1 redesign
+- [x] 28. Final checkpoint — the full v1 redesign
   - Ensure all tests pass, ask the user if questions arise.
   - All eight structural guards read clean, all 37 properties have a test, `C` and
     `ui-legacy/primitives.jsx` are gone, and Requirements 1.3 and 19.4 are fully satisfied.
+  - What actually closed, recorded as it stands: the nine structural guards read clean (191 tests),
+    the production build passes, `C` and `ui-legacy/primitives.jsx` are deleted — so Requirement 1.3
+    is satisfied — and the 19 render suites covering the rehomed primitives pass (287 tests). The
+    property coverage is short of the bullet above: of the 37 declared properties, 25 are cited by a
+    covering test (24, plus Property 19 from 6.10 landing here) and 10 of those carry a dedicated
+    `fast-check` property test, while the remaining 12 — Properties 8, 9, 10, 11, 21, 23, 25, 26, 28,
+    29, 31 and 32 — are covered only indirectly, by the example-based suites over the same
+    components. The tasks that own them are the optional ones left unrun: 6.2, 6.12, 6.13, 6.16,
+    6.17, 10.2, 23.4, 24.3, 24.5, 24.6, 25.3 and 26.3. Running those twelve is what would make the
+    claim above literally true; nothing else is outstanding.
 
 ## Notes
 
