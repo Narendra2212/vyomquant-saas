@@ -22,15 +22,40 @@
  * object is "really" a palette.
  *
  * ===========================================================================
- * THE ONE SANCTIONED DECLARATION
+ * THERE IS NO SANCTIONED DECLARATION ANY MORE — CLEARED AT TASK 27.2
  * ===========================================================================
- * `src/components/ui-legacy/primitives.jsx` exports `const C`. That is the
- * derived compatibility shim from task 1.3: every one of its values is a
- * `token.*` reference, so it is a *projection* of the single source rather than a
- * competing one. It exists so that the ~700 existing `C.*` call sites keep
- * resolving while the pages are migrated one at a time, and it is deleted at
- * task 27.2. `legacyTokenShim.test.js` asserts it is frozen, derived and closed;
- * task 1.12's `legacy-c-budget.test.js` counts down its call sites.
+ * This section used to describe the one exemption the rule carried.
+ * `src/components/ui-legacy/primitives.jsx` exported `const C`: the derived
+ * compatibility shim from task 1.3, every one of its values a `token.*`
+ * reference, so it was a *projection* of the single source rather than a
+ * competing one. It existed so the ~700 `C.*` call sites kept resolving while
+ * the pages were migrated one at a time, and the plan recorded here was that it
+ * would be deleted at task 27.2.
+ *
+ * TASK 27.2's FINAL STAGE B DID THAT. The shim is deleted. Its eleven components
+ * that still had callers were rehomed to `components/common/primitives.jsx` in
+ * stage A — reading `token` from `design/tokens.js` directly, declaring no `C` —
+ * and the other 25 exports went with the file, reachable only through a
+ * `components/ui/index.js` re-export that nothing imported. `legacyTokenShim.js`'s
+ * test, which asserted the shim was frozen, derived and closed, is deleted too;
+ * so is task 1.12's `legacy-c-budget.test.js`, which had counted the call sites
+ * down to zero and had nothing left to count.
+ *
+ * So the whole of `src/` now declares NO local token object, and this guard
+ * asserts exactly that. §15.1 reads "No `const C =` / `const COLORS =` /
+ * `const THEME =` outside the shim"; with no shim, the qualifier has nothing to
+ * except and the rule is absolute. There is one token source, `tokens.css`, and
+ * one JavaScript projection of it, `design/tokens.js` — and `token` is not a name
+ * on §15.1's list, because a `token.*` read is a reference to the single source
+ * rather than a second declaration of it.
+ *
+ * What this costs is the guard's old fixed point. The shim's own `export const C =`
+ * was what proved the scan had reached real files and the pattern still fired;
+ * an all-clear guard has no such anchor, so a broken path resolution would leave
+ * `FOUND` empty and every assertion below would pass over nothing. Section 2
+ * replaces it: the file list is checked for size and shape, and the pipeline is
+ * re-run over the bytes of a real source file with a declaration appended, which
+ * exercises read, comment-strip and match together on real content.
  *
  * ===========================================================================
  * FINDING: RESOLVED AT TASK 16.2 — `pages/Portfolio.jsx`
@@ -107,8 +132,11 @@ import { describe, it, expect } from 'vitest';
 
 import { SRC, collect, isTestFile, list, relToSrc, stripComments } from './source-scan.js';
 
-/** The derived shim from task 1.3. The one declaration the rule permits. */
-const SHIM = 'components/ui-legacy/primitives.jsx';
+/**
+ * The deleted shim. Kept as a constant only so the test below can assert it is
+ * GONE — `const SHIM` used to name the one declaration the rule permitted.
+ */
+const DELETED_SHIM = 'components/ui-legacy/primitives.jsx';
 
 /**
  * Declarations that exist today, are scheduled for removal, and are known not to
@@ -194,8 +222,9 @@ describe('no-local-tokens: the matching method', () => {
 
   it('is case-sensitive, so ordinary local variables are not violations', () => {
     // `deployPreflight.js` has `const c = normalizeCondition(condition)`, and
-    // `SignalTrace.jsx` and `primitives.jsx` have several `const colors = {…}`
-    // status maps. None of them is a token source and none may fail this guard.
+    // `common/primitives.jsx` has `const colors = {…}` status maps in `Toast` and
+    // `StatusDot` — every value a `token.*` read. None of them is a token source
+    // and none may fail this guard.
     expect(names('const c = normalizeCondition(condition);')).toEqual([]);
     expect(names('const colors = { BUY: "green", SELL: "red" };')).toEqual([]);
     expect(names('const theme = useTheme();')).toEqual([]);
@@ -254,7 +283,7 @@ describe('no-local-tokens: scope', () => {
       ).toBe(true);
     }
     expect(scanned).toContain('App.jsx');
-    expect(scanned).toContain(SHIM);
+    expect(scanned).toContain('components/common/primitives.jsx');
   });
 
   it('leaves test files out', () => {
@@ -262,13 +291,39 @@ describe('no-local-tokens: scope', () => {
     expect(isTestFile('pages/Portfolio.jsx')).toBe(false);
   });
 
-  it('actually finds the shim, so a silent non-run cannot look green', () => {
-    // Non-vacuity. If path resolution broke, or the pattern stopped matching,
-    // `FOUND` would be empty and every assertion below would pass over nothing.
-    // The shim's own `export const C =` is the fixed point that proves the scan
-    // reached real files and the pattern still fires.
-    expect(FOUND.some((h) => h.relative === SHIM && h.name === 'C')).toBe(true);
-    expect(existsSync(path.join(SRC, SHIM))).toBe(true);
+  it('no longer has a shim to except, because the file is gone', () => {
+    // Task 27.2's final stage B. This is asserted rather than only written down
+    // in the docblock: if the shim ever came back, the rule this file enforces
+    // would silently have an exemption again, and the assertions below — which
+    // now demand ZERO declarations of `C` anywhere — would start failing with a
+    // message about a competing palette rather than about a resurrected shim.
+    expect(existsSync(path.join(SRC, DELETED_SHIM))).toBe(false);
+  });
+
+  it('proves the pipeline still fires on real bytes, so an all-clear cannot be vacuous', () => {
+    // Non-vacuity, and the replacement for the shim's `export const C =`. Every
+    // assertion in section 3 is now an emptiness assertion, so if path resolution
+    // broke or the pattern stopped matching, `FOUND` would be empty and the guard
+    // would pass over nothing while looking green.
+    //
+    // The anchor: take a file the scan really collected, read its real bytes, and
+    // append one declaration. Finding it exercises read, comment-strip and match
+    // together on production content — the same three steps `scan()` takes — so a
+    // failure anywhere in the chain fails here instead of passing silently.
+    const [anchorFile] = collect(SRC, SCANNED_EXTENSIONS)
+      .filter((f) => !isTestFile(relToSrc(f)));
+    expect(anchorFile, 'the scan collected no files at all').toBeTruthy();
+
+    const real = readFileSync(anchorFile, 'utf8');
+    expect(real.length, `${relToSrc(anchorFile)}: read no bytes`).toBeGreaterThan(0);
+
+    // Counted against the same file WITHOUT the appended line, so the extra hit
+    // is caused by the line rather than by something the file already held.
+    const baseline = findLocalTokenDeclarations(real);
+    const hits = findLocalTokenDeclarations(`${real}\nconst THEME = { canvas: 0 };\n`);
+
+    expect(hits.length).toBe(baseline.length + 1);
+    expect(hits.map((h) => h.name)).toContain('THEME');
   });
 });
 
@@ -277,34 +332,44 @@ describe('no-local-tokens: scope', () => {
 // ---------------------------------------------------------------------------
 
 describe('no-local-tokens: no second token source', () => {
-  it('permits the derived shim and nothing else to declare C', () => {
+  it('lets NOTHING in src/ declare C — the shim was the last one and it is gone', () => {
     const declarers = [...new Set(FOUND.filter((h) => h.name === 'C').map((h) => h.relative))];
 
     expect(
       declarers,
-      `\`const C =\` may only be declared by the derived compatibility shim.\n\n`
-        + `Import it instead:  import { C } from './ui-legacy/primitives';\n`
-        + `A page-local \`C\` is a second token source — it is how #010608 and #0a0a0a\n`
-        + `became two more canvas colours (design.md §1.1 G2). Requirement 1.1 allows one.\n`
-        + `${list(declarers.filter((d) => d !== SHIM))}`,
-    ).toEqual([SHIM]);
+      `\`const C =\` may not be declared anywhere in src/.\n\n`
+        + `This assertion used to read \`toEqual([SHIM])\`: the derived compatibility shim at\n`
+        + `components/ui-legacy/primitives.jsx was permitted to declare \`C\`, and everything\n`
+        + `else imported it. Task 27.2's final stage B deleted the shim, so there is no\n`
+        + `exemption left and no import to offer in its place.\n\n`
+        + `Read \`token.*\` from src/design/tokens.js, or use a Tailwind token class.\n`
+        + `A local \`C\` is a second token source — it is how #010608 and #0a0a0a became two\n`
+        + `more canvas colours (design.md §1.1 G2). Requirement 1.1 allows ONE, and it is\n`
+        + `src/styles/tokens.css.\n${list(declarers)}`,
+    ).toEqual([]);
   });
 
-  it('holds every other file clear of all three declarations', () => {
+  it('holds every file clear of all three declarations', () => {
     const violations = FOUND.filter(
-      (h) =>
-        !(h.relative === SHIM && h.name === 'C')
-        && SCHEDULED_EXCEPTIONS[h.relative] !== h.name,
+      (h) => SCHEDULED_EXCEPTIONS[h.relative] !== h.name,
     ).map(describeHit);
 
     expect(
       violations,
-      `Local token declarations found outside the shim.\n\n`
+      `Local token declarations found in src/.\n\n`
         + `\`const C\` / \`const COLORS\` / \`const THEME\` name a palette, and a palette\n`
         + `belongs in src/styles/tokens.css (design.md §15.1, Requirement 1.1). Use a\n`
-        + `Tailwind token class, or \`token.*\` from src/design/tokens.js, or — while\n`
-        + `migrating — import { C } from the ui-legacy shim.\n${list(violations)}`,
+        + `Tailwind token class, or \`token.*\` from src/design/tokens.js. The "outside the\n`
+        + `shim" escape §15.1 allowed is spent: the shim went at task 27.2.\n${list(violations)}`,
     ).toEqual([]);
+  });
+
+  it('reads zero declarations in total, which is the state task 27.2 was aiming at', () => {
+    // The whole rule in one line. `FOUND` is every hit from every non-test file
+    // under `src/`, and there is nothing in it: no `C`, no `COLORS`, no `THEME`,
+    // no exemption and no quarantine. §15.1 is satisfied structurally rather than
+    // by a list of files that are allowed to break it.
+    expect(FOUND.map(describeHit)).toEqual([]);
   });
 });
 
@@ -319,8 +384,9 @@ describe('no-local-tokens: the scheduled exceptions', () => {
     // means saying so in the diff.
     //
     // Empty as of task 16.2, which removed `pages/Portfolio.jsx`'s `const COLORS`.
-    // §15.1's guard now holds with no quarantine: the shim is the only declaration
-    // of `C` in `src/`, and there is no `COLORS` or `THEME` anywhere.
+    // §15.1's guard holds with no quarantine — and, since task 27.2's final stage B
+    // deleted the shim, with no sanctioned declaration either. There is no `C`,
+    // `COLORS` or `THEME` anywhere in `src/` at all.
     expect(SCHEDULED_EXCEPTIONS).toEqual({});
   });
 
@@ -364,8 +430,13 @@ describe('no-local-tokens: the scheduled exceptions', () => {
           + `colour. This is a competing palette — remove it from SCHEDULED_EXCEPTIONS and\n`
           + `fix the declaration.`,
       ).toBe(false);
-      // …and it does reference the shim, so it is a projection, not an invention.
-      expect(statement, `${relative}: expected shim references`).toMatch(/\bC\.[A-Za-z_$]/);
+      // …and it does reference the single source, so it is a projection, not an
+      // invention. This read `/\bC\.[A-Za-z_$]/` while the shim existed — a future
+      // exception would be a list of `token.*` reads, since that is the only
+      // projection of `tokens.css` left after task 27.2.
+      expect(statement, `${relative}: expected token.* references`).toMatch(
+        /\btoken\.[A-Za-z_$]/,
+      );
     }
   });
 });

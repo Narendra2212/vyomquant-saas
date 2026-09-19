@@ -31,8 +31,8 @@
  *
  * An entry reaching `0` is expected and stays (task 19.2 takes Dashboard.jsx to
  * zero, for instance). Delete an entry only when the file itself is deleted —
- * `components/ui-legacy/primitives.jsx` goes at task 27.2 with the shim, and
- * `components/DesktopOnlyOverlay.jsx` went at task 27.3 with this one.
+ * `components/ui-legacy/primitives.jsx` went at task 27.2's final stage B with
+ * the shim, and `components/DesktopOnlyOverlay.jsx` went at task 27.3.
  *
  * A new entry goes in ONE of the two groups below, and the test asserts the two
  * are disjoint and cover the whole budget, so "which group" is a decision that
@@ -594,18 +594,20 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // count. See the FINDINGS note in the test file.)
   'components/ui/Badge.jsx': 68,
   'components/ui/Button.jsx': 5,
-  // The `C` shim. Its top-level values are derived from tokens.css, but `Badge`
-  // and `Tag` still carry off-palette rgba() washes inline — see the test's
-  // FINDINGS note. Entry is deleted with the file at task 27.2.
+  // `components/ui-legacy/primitives.jsx: 18` stood here until task 27.2's FINAL STAGE B
+  // deleted the shim. Removed rather than lowered to `0`, per this header and per the
+  // precedent `DashboardUpgrades.jsx` and `DesktopOnlyOverlay.jsx` set below: a `0` records
+  // that a live file is clean and holds it there, but a deleted file has no source to measure
+  // and `names only files that still exist` fails on an entry pointing at nothing.
   //
-  // STILL 18 AFTER TASK 27.2's FINAL STAGE A, AND THAT IS THE MEASUREMENT. Stage A rehomed
-  // the shim's eleven surviving components into `components/common/primitives.jsx` and
-  // repointed their importers; it deleted nothing from this file, because stage B deletes the
-  // module whole. So all 18 are still here — 17 in `Tag2`'s tone map and 1 in `Toast`'s drop
-  // shadow — AND all 18 are now also in the new module, since the components they belong to
-  // were copied across with their bodies intact. That is a duplicate, not a regression: the
-  // two files hold the same 18 literals for as long as both exist, which is until stage B.
-  'components/ui-legacy/primitives.jsx': 18,
+  // The 18 did not disappear, they MOVED. Stage A had already copied the shim's eleven
+  // surviving components into `components/common/primitives.jsx` with their bodies intact, so
+  // for the length of one commit the same 18 literals sat in both files and this budget
+  // carried both entries. Stage B deleted the original; the entry below is where those 18
+  // live now. Nothing was retokened in either stage, and the total this guard reads is
+  // unchanged by the deletion — it is 18 lower in a file that is gone and 18 higher in the
+  // file that replaced it, which nets to the same number it read before stage A.
+  //
   // New at 18 at task 27.2's FINAL STAGE A — the shim's eleven surviving components, rehomed
   // off `ui-legacy` and reading `token.*` directly. Every one of the 18 came across verbatim
   // with the component that owns it:

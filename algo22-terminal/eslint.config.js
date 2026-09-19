@@ -2,7 +2,6 @@ import js from "@eslint/js";
 import globals from "globals";
 import jsxA11y from "eslint-plugin-jsx-a11y-x";
 import reactHooks from "eslint-plugin-react-hooks";
-import vyom from "./eslint-rules/index.js";
 import {
   A11Y_ENFORCED_GLOBS,
   A11Y_PAGE_WAIVERS,
@@ -80,17 +79,17 @@ export default [
     files: Object.keys(A11Y_PAGE_WAIVERS),
     rules: a11yRules("warn"),
   },
-  {
-    // The `C` compatibility shim is CLOSED and DERIVED (design.md §3.4,
-    // Requirement 1.1). Adding a key to it, or writing a literal instead of a
-    // `token.*` reference, is an error — the token belongs in
-    // src/styles/tokens.css. Scoped to the one file allowed to declare `C`.
-    files: ["src/components/ui-legacy/primitives.jsx"],
-    plugins: { vyom },
-    rules: {
-      "vyom/no-new-legacy-token": "error",
-    },
-  },
+  // A block registering the local `vyom` plugin for
+  // `src/components/ui-legacy/primitives.jsx` was here. It turned on one rule,
+  // `vyom/no-new-legacy-token`, which kept the `C` compatibility shim closed and
+  // derived (design.md §3.4, Requirement 1.1) by making a new key on `C`, or a
+  // colour literal where a `token.*` reference belonged, an error.
+  //
+  // Task 27.2's final stage B deleted the shim. The block's `files` named that
+  // one path, so it matched nothing afterwards, and the rule it enabled was
+  // deleted with the file it guarded. The `vyom` import went too — this was its
+  // only use. `eslint-rules/index.js` is kept as the declared home for local
+  // rules under §17.3 and now exports an empty `rules`; see its docblock.
   {
     // Vitest runs with `globals: true` (vitest.config.js) and `environment:
     // 'jsdom'`, so test files legitimately see both the browser surface and the

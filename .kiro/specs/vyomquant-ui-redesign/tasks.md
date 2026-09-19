@@ -1569,7 +1569,7 @@ the decomposition this plan uses instead:
       the Task 8.11 / 8.12 / 10.13 registries
     - _Requirements: 14.1, 14.2, 14.3, 15.1, 19.4_
 
-  - [~] 27.2 Delete the `C` shim and `src/components/ui-legacy/primitives.jsx`
+  - [x] 27.2 Delete the `C` shim and `src/components/ui-legacy/primitives.jsx`
     - Only reachable once every page above has migrated: `C` had 1,296 references across 30 files at
       the start, and the `legacy-c-budget` guard must read zero for every in-scope file before this
       task runs (`§3.4`, `§14.2` M9)
