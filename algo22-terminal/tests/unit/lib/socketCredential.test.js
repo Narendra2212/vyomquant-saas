@@ -1,0 +1,656 @@
+/**
+ * tests/unit/lib/socketCredential.test.js - production-launch-hardening task 1, CLUSTER C
+ * (plus task 2's `fast-check` half, which `tasks.md` places in this file by name).
+ *
+ * Requirements 1.21 / 2.21. `design.md` §Hypothesized Root Cause (wave 3), correction 3.
+ *
+ * WHAT THIS FILE IS
+ * -----------------
+ * **Bug condition exploration tests.** Every test in sections 1-3 is EXPECTED TO FAIL
+ * against the current tree (`F`). The failure is the deliverable: it is the counterexample
+ * that proves the defect exists, and the same assertion is what validates the fix. Nothing
+ * here is a symptom patch and no assertion has been weakened to make a run green.
+ *
+ * THE DEFECT, IN ONE SENTENCE
+ * ---------------------------
+ * Both socket builders put the session JWT in the URL query string, where it is written to
+ * CloudFront and ALB access logs, to browser history, and to `Referer` on anything the page
+ * subsequently loads.
+ *
+ * The two sites, and the store each reads:
+ *
+ * | Site | Store | Origin | What it builds |
+ * |---|---|---|---|
+ * | `src/pages/Billing.jsx:138,142` | `localStorage` | `window.location` | `ws://<page host>/ws/user/<id>?token=<JWT>` |
+ * | `src/websocketClient.js:73-76` | `sessionStorage` | `CONFIG.wsBaseUrl` (`VITE_WS_URL`) | `wss://<configured host><path>?token=<JWT>` (`&` when the path already carries a query) |
+ *
+ * The origin column is a third, smaller finding recorded here rather than asserted: Billing
+ * does not read `CONFIG` at all, so it connects to whatever origin served the page while the
+ * shared client connects to `VITE_WS_URL`. With `algo22-terminal/.env`'s
+ * `VITE_WS_URL=wss://d7d88qs4jmch.cloudfront.net` those are two different hosts, and the
+ * counterexamples below show both because that is what `F` produced.
+ *
+ * `websocketClient.js:77` redacts the credential *from its own console line* - 
+ * `.replace(/token=[^&]+/, 'token=[REDACTED]')` - which is the clearest available evidence
+ * that the author knew the value was sensitive. The redaction applies to the log statement
+ * only. The URL itself is unchanged, and the URL is what reaches the CDN and the load
+ * balancer.
+ *
+ * WHY BOTH SITES ARE ASSERTED, AND WHY THAT IS NOT REDUNDANT
+ * ---------------------------------------------------------
+ * `design.md` correction 3, and the reason this file exists rather than a single case inside
+ * `billingSocketLifecycle.test.jsx`: **asserting only Billing's URL would pass on a fix that
+ * merely consolidates the exposure.** Wave 3's shape is "one socket, through the shared
+ * client" - so the natural first move is to delete Billing's `new WebSocket` and route it
+ * through `wsClient`. That removes one `?token=` and leaves the other, and a Billing-only
+ * test would go green on it while every socket in the application still authenticates through
+ * the query string. The credential clause and the single-socket clause are independent, and
+ * only a both-sites assertion keeps them independent.
+ *
+ * TWO TOKEN STORES FOR ONE SESSION (section 3)
+ * -------------------------------------------
+ * The table above records a second finding that is not in `bugfix.md`'s numbered list: the
+ * two sites do not read the same store. `Billing.jsx:138` reads `localStorage`;
+ * `websocketClient.js:73` and `:118` read `sessionStorage`. One session, two credential
+ * stores, and no code that copies between them - so the two sockets can hold different
+ * tokens, or one can hold a token while the other has none. It also decides how long the
+ * credential outlives the tab: `sessionStorage` is cleared when the tab closes and
+ * `localStorage` is not, so the same JWT has two different lifetimes depending on which
+ * reader you ask. Section 3 asserts one store, behaviourally - by showing that neither store
+ * alone serves both readers.
+ *
+ * THE PROPERTY (section 4)
+ * -----------------------
+ * `tasks.md` task 2: *"over generated tokens and paths, **no** constructed socket URL
+ * contains the token in any position"*. "Any position" is the load-bearing phrase. A fix that
+ * moved the credential out of `?token=` and into the path (`/ws/telemetry/<JWT>`), or into a
+ * fragment, or into a differently-named parameter, would satisfy a `token=`-only assertion
+ * and log the credential exactly as before - and `DataPipelineContext.jsx:371` shows that
+ * credential-in-the-path is not a hypothetical in this codebase. The property is a substring
+ * search over the whole URL, in raw and percent-encoded form.
+ *
+ * CREDENTIALS IN THIS FILE
+ * -----------------------
+ * `bugfix.md` §2.20: a secret is referenced by key name and by position, never by value.
+ * `SYNTHETIC_JWT` below is three base64url segments that decode to nothing of value; the
+ * generated tokens are random. No real token is in this file, and every failure message
+ * redacts the value it observed.
+ */
+
+import React from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, render } from '@testing-library/react';
+import fc from 'fast-check';
+
+// ---------------------------------------------------------------------------
+// The api stub. Hoisted, because Billing imports `api` at module scope.
+// ---------------------------------------------------------------------------
+
+const { mockBilling } = vi.hoisted(() => ({
+  mockBilling: {
+    getPlans: vi.fn(),
+    getEntitlements: vi.fn(),
+    getInvoices: vi.fn(),
+    getPaymentMethods: vi.fn(),
+    createCheckout: vi.fn(),
+    setCurrency: vi.fn(),
+    cancelSubscription: vi.fn(),
+    resumeSubscription: vi.fn(),
+    openPortal: vi.fn(),
+  },
+}));
+
+vi.mock('../../../src/api', () => {
+  const api = { billing: mockBilling };
+  return { api, endpoints: api, default: api };
+});
+
+import Billing from '../../../src/pages/Billing';
+import wsClient from '../../../src/websocketClient';
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+/** A structurally-shaped JWT carrying nothing. Three base64url segments, no credential. */
+const SYNTHETIC_JWT =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9' +
+  '.eyJzdWIiOiJzeW50aGV0aWMtbm90LWEtcmVhbC11c2VyIn0' +
+  '.c3ludGhldGlj';
+
+const USER_ID = 'usr_socket_credential_1';
+
+/**
+ * Every WebSocket route `backend_app/api_ws/ws_routes.py` actually registers, with concrete
+ * parameters. Read from the file, in declaration order: `:333`, `:368`, `:508`, `:568`,
+ * `:641`, `:866`, `:918`, `:1079`, `:1190`.
+ *
+ * The generator draws from this set rather than from arbitrary strings because the property
+ * is about what the client does with a *real* route, and because `/ws/dashboard` is the one
+ * that takes `user_id` as a query parameter - which is the `hasQuery` branch at
+ * `websocketClient.js:74`, where the separator becomes `&` and a naive URL check stops
+ * matching.
+ */
+const WS_ROUTES = Object.freeze([
+  '/ws/telemetry',
+  '/ws/ticker/BTCUSDT',
+  '/ws/orderbook/BTCUSDT',
+  '/ws/candles/BTCUSDT/5m',
+  `/ws/user/${USER_ID}`,
+  `/ws/pnl/${USER_ID}`,
+  `/ws/dashboard?user_id=${USER_ID}`,
+  '/ws/strategy/stg_1',
+  '/ws/signal-trace',
+  // The `hasQuery` branch again, with two parameters already present.
+  '/ws/candles/ETHUSDT/1h?replay=1&from=0',
+]);
+
+// ---------------------------------------------------------------------------
+// The one double: a WebSocket that goes nowhere and records every construction
+//
+// Same class, same recording contract, as `FakeWebSocket` in
+// `tests/unit/builderRealtime.test.jsx` and the three `signalTrace*` suites. It is declared
+// inside those test modules and never exported, so it cannot be imported here without
+// executing them; this is that double, not a second design of one.
+// ---------------------------------------------------------------------------
+
+let constructed = [];
+
+class RecordingWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+
+  constructor(url) {
+    this.url = url;
+    this.readyState = RecordingWebSocket.CONNECTING;
+    this.sent = [];
+    this.closes = 0;
+    constructed.push(this);
+  }
+
+  send(text) {
+    this.sent.push(text);
+  }
+
+  close() {
+    this.closes += 1;
+    this.readyState = RecordingWebSocket.CLOSED;
+    if (this.onclose) this.onclose();
+  }
+
+  open() {
+    this.readyState = RecordingWebSocket.OPEN;
+    if (this.onopen) this.onopen();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Assertions about a URL, stated once
+// ---------------------------------------------------------------------------
+
+/** The query parameter names on `url`, whatever the ws/wss scheme. */
+const queryParams = (url) => Array.from(new URL(String(url)).searchParams.keys());
+
+/**
+ * A JWT-shaped substring of `url`, or `null`.
+ *
+ * Deliberately independent of `SYNTHETIC_JWT`: it matches the *shape* - three base64url runs
+ * separated by dots - so it catches a credential this file never generated, including one
+ * sitting in a path segment or a fragment rather than a parameter.
+ */
+const jwtShapedSubstring = (url) => {
+  const match = /[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{6,}/.exec(String(url));
+  return match ? match[0] : null;
+};
+
+/** `url` with any credential blanked, so no failure message ever prints one. */
+const redact = (url) =>
+  String(url)
+    .replace(/token=[^&]*/g, 'token=<JWT>')
+    .replace(/[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{6,}/g, '<JWT>');
+
+/**
+ * The single assertion this file makes about a constructed URL, in one place.
+ *
+ * Three separate claims, because they fail for three different reasons: the parameter name
+ * (a fix that renames it), the shape (a fix that relocates it), and the exact value (the
+ * belt-and-braces check that this specific credential did not travel).
+ */
+const expectNoCredentialInUrl = (url, token, where) => {
+  const params = queryParams(url);
+  expect(params, `${where}: ${redact(url)} carries a token parameter`).not.toContain('token');
+
+  const shaped = jwtShapedSubstring(url);
+  expect(shaped, `${where}: ${redact(url)} carries a JWT-shaped substring`).toBeNull();
+
+  expect(
+    String(url).includes(token),
+    `${where}: the credential appears verbatim in ${redact(url)}`,
+  ).toBe(false);
+  expect(
+    String(url).includes(encodeURIComponent(token)),
+    `${where}: the credential appears percent-encoded in ${redact(url)}`,
+  ).toBe(false);
+};
+
+// ---------------------------------------------------------------------------
+// Harness
+// ---------------------------------------------------------------------------
+
+/** Reset the shared singleton - it is a module-level object, as builderRealtime.test.jsx notes. */
+const resetSocketClient = () => {
+  wsClient.reconnectEnabled = false;
+  if (wsClient.reconnectTimeoutId) {
+    clearTimeout(wsClient.reconnectTimeoutId);
+    wsClient.reconnectTimeoutId = null;
+  }
+  wsClient.stopHeartbeat();
+  wsClient.ws = null;
+  wsClient.url = null;
+  wsClient.refcount = 0;
+  wsClient.acquiredPath = null;
+  wsClient.savedReconnectPolicy = null;
+  wsClient.channelSubscriptions.clear();
+  wsClient.channelRefusals.clear();
+  wsClient.subscriptions.clear();
+  wsClient.statusListeners.clear();
+  wsClient.openListeners.clear();
+  wsClient.messageQueue = [];
+  wsClient.reconnectAttempts = 0;
+  wsClient.connectionStatus = 'disconnected';
+  wsClient.expectedSequence = 1;
+};
+
+const mountBilling = async () => {
+  let view;
+  await act(async () => {
+    view = render(React.createElement(Billing));
+  });
+  await act(async () => {});
+  return view;
+};
+
+beforeEach(() => {
+  constructed = [];
+  global.WebSocket = RecordingWebSocket;
+  window.WebSocket = RecordingWebSocket;
+
+  mockBilling.getPlans.mockResolvedValue({ plans: [], currency: 'USD', currency_symbol: '$' });
+  mockBilling.getEntitlements.mockResolvedValue({ plan: 'pro', features: [] });
+  mockBilling.getInvoices.mockResolvedValue([]);
+  mockBilling.getPaymentMethods.mockResolvedValue([]);
+  mockBilling.setCurrency.mockResolvedValue({ ok: true });
+
+  window.localStorage.clear();
+  window.sessionStorage.clear();
+  resetSocketClient();
+
+  vi.useFakeTimers();
+  vi.spyOn(console, 'log').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  cleanup();
+  resetSocketClient();
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  window.localStorage.clear();
+  window.sessionStorage.clear();
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// 1. BILLING'S SOCKET  (`Billing.jsx:138,142`, Requirements 1.21 / 2.21)
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("Billing's socket URL", () => {
+  it('carries no credential', async () => {
+    /*
+      COUNTEREXAMPLE OBSERVED ON `F` (src/pages/Billing.jsx:142), credential redacted by
+      position:
+
+          ws://localhost:3000/ws/user/usr_socket_credential_1?token=<JWT>
+                                                              ^^^^^^^^^^^
+          query parameters: ['token']
+
+      The scheme is `ws:` under jsdom because `window.location.protocol` is `http:`; in
+      production the same expression yields `wss://app.vyomquant.in/ws/user/<id>?token=<JWT>`.
+      The scheme is the only part that differs, and it is not the part that leaks: a `wss`
+      URL's query string is still in the CloudFront access log, the ALB access log and
+      `window.history`.
+
+      `:138` is where the value comes from - `localStorage.getItem('token')`, the raw session
+      JWT, interpolated at `:142` with no encoding and no ticket exchange.
+    */
+    window.localStorage.setItem('token', SYNTHETIC_JWT);
+    window.localStorage.setItem('userId', USER_ID);
+
+    await mountBilling();
+
+    expect(constructed.length, 'the effect must have built a URL for this to mean anything')
+      .toBe(1);
+    expectNoCredentialInUrl(constructed[0].url, SYNTHETIC_JWT, 'Billing.jsx:142');
+  });
+
+  it('test_preserved_still_names_the_user_route_it_needs', async () => {
+    /*
+      Passes on `F` and must keep passing. Moving the credential out of the URL must not move
+      the *route* out of it: `/ws/user/{user_id}` is a real endpoint
+      (`ws_routes.py:641`) and the page's subscription updates arrive on it. Pinned because
+      the obvious fix - routing Billing through `wsClient` - changes the path as well as the
+      credential, and the path change has to be deliberate rather than incidental.
+    */
+    window.localStorage.setItem('token', SYNTHETIC_JWT);
+    window.localStorage.setItem('userId', USER_ID);
+
+    await mountBilling();
+
+    expect(String(constructed[0].url)).toContain(`/ws/user/${USER_ID}`);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// 2. THE SHARED CLIENT'S SOCKET  (`websocketClient.js:73-76`, Requirements 1.21 / 2.21)
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("websocketClient.connect()'s URL", () => {
+  it('carries no credential', () => {
+    /*
+      COUNTEREXAMPLE OBSERVED ON `F` (src/websocketClient.js:76), credential redacted by
+      position:
+
+          wss://d7d88qs4jmch.cloudfront.net/ws/telemetry?token=<JWT>
+                                                        ^^^^^^^^^^^
+          query parameters: ['token']
+
+      That host is `VITE_WS_URL` from `algo22-terminal/.env`, and it is the live CloudFront
+      distribution - so this is not a localhost artefact of the test environment. The
+      production build uses `wss://app.vyomquant.in` (`.env.production`), which puts the same
+      credential in the ALB access log instead of the CloudFront one.
+
+      This is the site a Billing-only assertion would miss. It is also the one that matters
+      more in aggregate: `wsClient` is the shared client, so this URL is built for every
+      socket the rest of the application opens, on every reconnect
+      (`scheduleReconnect` -> `connect`, `:392-396`), for the life of the session.
+    */
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+
+    wsClient.connect('/ws/telemetry');
+
+    expect(constructed.length, 'connect() must have built a URL for this to mean anything')
+      .toBe(1);
+    expectNoCredentialInUrl(constructed[0].url, SYNTHETIC_JWT, 'websocketClient.js:76');
+    // Asserted on the client's own record too, because `this.url` is what `scheduleReconnect`
+    // reads back (`:394`) and what `DataPipelineContext.jsx:371` concatenates onto.
+    expectNoCredentialInUrl(wsClient.url, SYNTHETIC_JWT, 'wsClient.url');
+  });
+
+  it('carries no credential on a path that already has a query string', () => {
+    /*
+      `:74-75` switches the separator to `&` when the path already carries a query, so the
+      credential lands mid-query rather than first. Asserted separately because it is the
+      shape that defeats the simplest possible check (`url.endsWith(...)`, or a regex anchored
+      on `?token=`) and because `/ws/dashboard` - which takes `user_id` as a query parameter
+      (`ws_routes.py:918-920`) - is a route the application really uses.
+
+      COUNTEREXAMPLE OBSERVED ON `F`:
+
+          wss://d7d88qs4jmch.cloudfront.net/ws/dashboard?user_id=usr_socket_credential_1&token=<JWT>
+          query parameters: ['user_id', 'token']
+    */
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+
+    wsClient.connect(`/ws/dashboard?user_id=${USER_ID}`);
+
+    expect(constructed.length).toBe(1);
+    expect(queryParams(constructed[0].url)).toContain('user_id');
+    expectNoCredentialInUrl(constructed[0].url, SYNTHETIC_JWT, 'websocketClient.js:76 (&)');
+  });
+
+  it('test_preserved_still_connects_when_there_is_no_credential', () => {
+    /*
+      Passes on `F` and must keep passing - `:75`'s `token ? ... : ''`. A session with no
+      token still builds a URL and still attempts the connection, and the server refuses it
+      (`ws_routes.py` fails closed on every route). That is the correct division of labour:
+      the client does not decide authorisation. A fix that started throwing here would turn a
+      server-side refusal into a client-side crash.
+    */
+    wsClient.connect('/ws/telemetry');
+
+    expect(constructed.length).toBe(1);
+    expect(queryParams(constructed[0].url)).toEqual([]);
+    expect(String(constructed[0].url)).toContain('/ws/telemetry');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// 3. TWO TOKEN STORES FOR ONE SESSION
+//    (`Billing.jsx:138` vs `websocketClient.js:73`)
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('the store the session credential is read from', () => {
+  it('is one store, not two', async () => {
+    /*
+      COUNTEREXAMPLE OBSERVED ON `F`:
+
+          credential in localStorage only   -> Billing builds a socket; wsClient builds a
+                                               URL with no credential at all
+          credential in sessionStorage only -> wsClient carries it; Billing builds NO socket
+                                               (Billing.jsx:139 returns early)
+
+          stores that serve a reader: ['localStorage', 'sessionStorage']  -- two
+
+      Asserted behaviourally rather than by spying on `getItem`, because the claim is about
+      which store *serves* a reader, and a spy would also record reads that find nothing.
+
+      Why this is its own defect and not a detail of 1.21. The two stores have different
+      lifetimes: `sessionStorage` is per-tab and cleared when the tab closes,
+      `localStorage` is not. So the same session has a credential that expires with the tab
+      for one socket and persists on disk for the other, and nothing copies between them - a
+      token refresh that writes one store leaves the other holding a stale JWT. Wave 3's fix
+      consolidates the sockets; if it does not also consolidate the store, the surviving
+      socket inherits whichever lifetime its author happened to pick.
+    */
+    const serving = new Set();
+
+    // -- localStorage only -------------------------------------------------
+    window.localStorage.setItem('token', SYNTHETIC_JWT);
+    window.localStorage.setItem('userId', USER_ID);
+    const billingView = await mountBilling();
+    const billingServedByLocal = constructed.length > 0;
+
+    constructed = [];
+    resetSocketClient();
+    wsClient.connect('/ws/telemetry');
+    const clientServedByLocal = queryParams(constructed[0].url).includes('token');
+
+    await act(async () => {
+      billingView.unmount();
+    });
+    vi.clearAllTimers();
+
+    // -- sessionStorage only ----------------------------------------------
+    window.localStorage.clear();
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+    window.localStorage.setItem('userId', USER_ID); // the id is not the credential
+    constructed = [];
+    resetSocketClient();
+    await mountBilling();
+    const billingServedBySession = constructed.length > 0;
+
+    constructed = [];
+    resetSocketClient();
+    wsClient.connect('/ws/telemetry');
+    const clientServedBySession = queryParams(constructed[0].url).includes('token');
+
+    if (billingServedByLocal || clientServedByLocal) serving.add('localStorage');
+    if (billingServedBySession || clientServedBySession) serving.add('sessionStorage');
+
+    // The evidence, recorded so the count below is readable rather than bare.
+    expect({
+      billingServedByLocal,
+      clientServedByLocal,
+      billingServedBySession,
+      clientServedBySession,
+    }).toEqual({
+      billingServedByLocal,
+      clientServedByLocal,
+      billingServedBySession,
+      clientServedBySession,
+    });
+
+    expect(Array.from(serving), (
+      `the session credential is read from ${serving.size} stores ` +
+      `(${Array.from(serving).join(', ')}). Billing.jsx:138 reads localStorage; ` +
+      'websocketClient.js:73 and :118 read sessionStorage. One session has one credential, ' +
+      'so it has one store.'
+    )).toHaveLength(1);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// 4. THE PROPERTY  (task 2: "no constructed socket URL contains the token in any position")
+// ══════════════════════════════════════════════════════════════════════════
+
+/** base64url, the alphabet a JWT segment is drawn from. */
+const BASE64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'.split('');
+
+/** One base64url run of realistic length. */
+const segment = fc
+  .array(fc.constantFrom(...BASE64URL), { minLength: 12, maxLength: 40 })
+  .map((chars) => chars.join(''));
+
+/**
+ * A JWT-shaped credential: `header.payload.signature`.
+ *
+ * Constrained to base64url on purpose. It is the alphabet a real JWT uses, so the generated
+ * value is percent-encoding-invariant - which means a URL that contains it raw and a URL that
+ * contains it encoded are the same string, and the property cannot pass by accident on an
+ * escaping difference. The encoded form is asserted anyway, for the day the generator widens.
+ */
+const jwtArb = fc.tuple(segment, segment, segment).map((parts) => parts.join('.'));
+
+/** A real route this client connects to. See `WS_ROUTES` for where the set comes from. */
+const pathArb = fc.constantFrom(...WS_ROUTES);
+
+/** An opaque user id, for Billing's `/ws/user/{id}`. */
+const userIdArb = fc
+  .array(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789_'.split('')), {
+    minLength: 4,
+    maxLength: 24,
+  })
+  .map((chars) => `usr_${chars.join('')}`);
+
+describe('Property: no constructed socket URL contains the credential in any position', () => {
+  it('holds for websocketClient.connect() over generated tokens and every real route', () => {
+    /**
+     * **Validates: Requirements 1.21, 2.21**
+     *
+     * `numRuns` is 300: `connect()` is a string build with no I/O, so the run is cheap and
+     * the generator space (tokens x ten routes, two of which already carry a query string) is
+     * worth covering densely.
+     *
+     * COUNTEREXAMPLE OBSERVED ON `F` - failed after 1 test, shrunk 38 times to the minimal
+     * draw, which is every draw:
+     *
+     *     Counterexample: ["AAAAAAAAAAAA.AAAAAAAAAAAA.AAAAAAAAAAAA", "/ws/telemetry"]
+     *     the credential is at index 53 of
+     *     wss://d7d88qs4jmch.cloudfront.net/ws/telemetry?token=<JWT>
+     *
+     * The shrink is informative in itself: fast-check reduced the token to the shortest
+     * base64url triple the generator admits and the path to the first route, and the property
+     * still failed - so the exposure does not depend on the token's content or on which route
+     * is asked for. It is unconditional.
+     *
+     * The property is unfalsifiable only in the sense that `F` fails it on run 1; that is
+     * the point of an exploration test. It is written as a property rather than a case
+     * because "in any position" is a claim about the whole string for all inputs, and the
+     * fixes that would defeat a `token=`-shaped assertion - renaming the parameter, moving
+     * the value into a path segment, into a fragment, into a subprotocol-shaped suffix - are
+     * all still failures, and a substring search is what catches every one of them.
+     */
+    fc.assert(
+      fc.property(jwtArb, pathArb, (token, path) => {
+        constructed = [];
+        resetSocketClient();
+        window.sessionStorage.setItem('token', token);
+
+        wsClient.connect(path);
+
+        expect(constructed.length).toBe(1);
+        for (const socket of constructed) {
+          const url = String(socket.url);
+          expect(
+            url.includes(token),
+            `the credential is at index ${url.indexOf(token)} of ${redact(url)}`,
+          ).toBe(false);
+          expect(url.includes(encodeURIComponent(token))).toBe(false);
+          expect(queryParams(url)).not.toContain('token');
+        }
+      }),
+      { numRuns: 300 },
+    );
+  });
+
+  it("holds for Billing's mount over generated tokens and user ids", () => {
+    /**
+     * **Validates: Requirements 1.21, 2.21**
+     *
+     * `numRuns` is 20, not 300, and the reason is stated rather than tuned: each run renders
+     * the whole Billing page, which is the only way to reach `:142` without reimplementing
+     * it in the test. Twenty draws is enough to establish that the exposure is a property of
+     * the builder and not of one fixture value, and the exhaustive half of the search space
+     * is covered by the `connect()` property above, which shares the same token generator.
+     *
+     * COUNTEREXAMPLE OBSERVED ON `F` - failed after 1 test, shrunk 41 times:
+     *
+     *     Counterexample: ["AAAAAAAAAAAA.AAAAAAAAAAAA.AAAAAAAAAAAA", "usr_aaaa"]
+     *     the credential is at index 43 of
+     *     ws://localhost:3000/ws/user/usr_aaaa?token=<JWT>
+     *
+     * `ws://localhost:3000` here rather than the configured `wss://` host, because
+     * `Billing.jsx:142` builds its origin from `window.location` and never reads
+     * `VITE_WS_URL` - the asymmetry recorded in the module docblock.
+     */
+    fc.assert(
+      fc.property(jwtArb, userIdArb, (token, userId) => {
+        constructed = [];
+        window.localStorage.setItem('token', token);
+        window.localStorage.setItem('userId', userId);
+
+        let view;
+        act(() => {
+          view = render(React.createElement(Billing));
+        });
+
+        const urls = constructed.map((socket) => String(socket.url));
+
+        act(() => {
+          view.unmount();
+        });
+        vi.clearAllTimers();
+        window.localStorage.clear();
+
+        expect(urls.length).toBe(1);
+        for (const url of urls) {
+          expect(
+            url.includes(token),
+            `the credential is at index ${url.indexOf(token)} of ${redact(url)}`,
+          ).toBe(false);
+          expect(url.includes(encodeURIComponent(token))).toBe(false);
+          expect(queryParams(url)).not.toContain('token');
+        }
+      }),
+      { numRuns: 20 },
+    );
+  });
+});
+
+// The shared client's `acquire` / `release` refcounting and its per-channel refcounts are the
+// machinery wave 3's fix is built on, and they are pinned in
+// `tests/unit/lib/singleSocket.test.jsx` beside the single-socket assertion they serve, rather
+// than duplicated here.
