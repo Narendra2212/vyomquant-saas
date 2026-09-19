@@ -428,6 +428,13 @@ describe('legacy-c-budget: scope', () => {
     // three times the shim's own 176, so a scan firing ONLY inside primitives.jsx cannot
     // satisfy it, which is the whole point of the line.
     //
+    // 500 -> 200 at task 27.2, BATCH 4, for the fourth time and on the same precedent. That
+    // batch took `pages/Billing.jsx` from 111 to 0, `components/ResearchConsole.jsx` from 60
+    // to 0 and `components/DeploymentConsole.jsx` from 38 to 0, carrying the tree from 576 to
+    // 367. Re-measuring to 367 would trip on the next batch, so it is set to 200 — still
+    // above the shim's own 176, so a scan firing ONLY inside primitives.jsx still cannot
+    // satisfy it, which is the whole point of the line.
+    //
     // THE FILE-COUNT FLOOR IS THE SAME KIND OF TRIPWIRE and fell for the same reason at
     // task 27.3. It was 20 and the tree held 21 carriers; deleting
     // `components/DesktopOnlyOverlay.jsx` — 9 references in a component nothing had
@@ -438,9 +445,19 @@ describe('legacy-c-budget: scope', () => {
     // progress does not trip it, and still far above the "a handful of files" case it
     // exists to catch. A scan matching in ten or fewer of the 100+ files under `src/` is
     // broken, and this still says so.
+    //
+    // 10 -> 3 at task 27.2, BATCH 4, on that same precedent. That batch zeroed three
+    // carriers — `pages/Billing.jsx`, `components/ResearchConsole.jsx` and
+    // `components/DeploymentConsole.jsx` — taking the tree from 11 carriers to 8 and
+    // tripping this line. Re-measuring to 7 would trip on the next batch, exactly as
+    // re-measuring the magnitude floor would have, so it is set to 3. That is still above
+    // the two cases the line exists to catch: a scan firing only inside primitives.jsx (1
+    // carrier) and one firing in the shim plus a single page (2). The floor necessarily
+    // loses reach as the migration converges on the shim alone; the assertions that measure
+    // REMAINING WORK are the per-file budgets below, and none of them moved here.
     const carriers = SCANNED.filter((f) => f.count > 0);
-    expect(carriers.length).toBeGreaterThan(10);
-    expect(carriers.reduce((n, f) => n + f.count, 0)).toBeGreaterThan(500);
+    expect(carriers.length).toBeGreaterThan(3);
+    expect(carriers.reduce((n, f) => n + f.count, 0)).toBeGreaterThan(200);
   });
 
   it('does not lose references to the string mask', () => {

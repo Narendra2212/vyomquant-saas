@@ -528,7 +528,19 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // `design/semantic.js`'s `pnlToken`, which is also the correction of the old `>= 0`
   // ternaries — those painted a flat figure profit green and an UNREAD one loss red.
   'pages/StrategyDetail.jsx': 0,
-  'pages/Billing.jsx': 111,
+  // 111 -> 0 at task 27.2, batch 4. The `C` specifier is NARROWED out of the import rather
+  // than the import deleted: `SectionH`, `PanelTitle` and `Tag2` stay on it — components from
+  // the same module, not colours, and a later pass rehomes them. `token` is read straight
+  // from `design/tokens.js`. Every one of the 111 is the value the shim already gave it.
+  //
+  // By shim name: `C.cyan` 26 -> `token.brand.base`; `C.red` 16 -> `token.status.loss.fg`;
+  // `C.t3` 15, `C.t1` 7, `C.t2` 5 -> `token.content.muted` / `primary` / `secondary`;
+  // `C.border` 13 -> `token.line.default`; `C.green` 12 -> `token.status.profit.fg`;
+  // `C.bg3` 8, `C.bg1` 4, `C.bg2` 4, `C.bg0` 1 -> `token.surface.inset` / `panel` / `raised`
+  // / `canvas`. No `C.space.*`, `C.radius.*`, `C.shadow*`, `C.glow.*` or `C.gradient.*` read
+  // here, so neither the rem substitution nor the dead-declaration case arose, and no
+  // `no-colour-literals` entry moved.
+  'pages/Billing.jsx': 0,
   // 77 -> 0 at task 27.2, batch 2, on the same terms as `components/SupportCenter.jsx`
   // above — one `C` import, the file's only specifier from the shim, deleted. Every one of
   // the 77 is the value the shim already gave it.
@@ -560,10 +572,31 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // THE ONE `no-colour-literals` ENTRY IS UNTOUCHED — the `#000` on the unread-count badge,
   // which was never a `C.` read. 1 before, 1 after.
   'components/NotificationCenter.jsx': 0,
-  'components/ResearchConsole.jsx': 60,
+  // 60 -> 0 at task 27.2, batch 4. The `C` specifier is NARROWED out of the import, not the
+  // import deleted: `Tag2` and `PanelTitle` stay on it, as components. `token` is read from
+  // `design/tokens.js`. Every one of the 60 is the value the shim already gave it.
+  //
+  // By shim name: `C.t3` 13, `C.t1` 6, `C.t2` 1 -> `token.content.muted` / `primary` /
+  // `secondary`; `C.border` 8 -> `token.line.default`; `C.red` 8 -> `token.status.loss.fg`;
+  // `C.green` 7 and `C.profit` 1 -> `token.status.profit.fg`; `C.bg3` 6, `C.bg2` 4 ->
+  // `token.surface.inset` / `raised`; `C.cyan` 4 and `C.accent` 1 -> `token.brand.base`
+  // (the shim held both names as the one brand hue); `C.warning` 1 ->
+  // `token.status.warning.fg`. No `C.space.*`, `C.radius.*`, `C.shadow*`, `C.glow.*` or
+  // `C.gradient.*` read here, and no `no-colour-literals` entry moved.
+  'components/ResearchConsole.jsx': 0,
   'pages/AuthPage.jsx': 57,
   'pages/Wizard.jsx': 56,
-  'components/DeploymentConsole.jsx': 38,
+  // 38 -> 0 at task 27.2, batch 4. The `C` specifier is NARROWED out of the import, not the
+  // import deleted: `Tag2` and `PanelTitle` stay on it, as components. `token` is read from
+  // `design/tokens.js`. Every one of the 38 is the value the shim already gave it.
+  //
+  // By shim name: `C.t3` 12, `C.t1` 9, `C.t2` 1 -> `token.content.muted` / `primary` /
+  // `secondary`; `C.bg3` 7 -> `token.surface.inset`; `C.cyan` 3 -> `token.brand.base`;
+  // `C.warning` 2 -> `token.status.warning.fg`; `C.border` 2 -> `token.line.default`;
+  // `C.green` 1 -> `token.status.profit.fg`; `C.red` 1 -> `token.status.loss.fg`. No
+  // `C.space.*`, `C.radius.*`, `C.shadow*`, `C.glow.*` or `C.gradient.*` read here, and no
+  // `no-colour-literals` entry moved.
+  'components/DeploymentConsole.jsx': 0,
   // 36 -> 0 at task 27.2, batch 1. The `C` import is deleted, not narrowed: this page
   // imported `C` and nothing else from the shim, so the specifier and the module both go
   // and `token` is read straight from `design/tokens.js`. Every one of the 36 is the value
