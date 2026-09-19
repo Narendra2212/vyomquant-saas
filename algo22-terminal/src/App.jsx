@@ -31,9 +31,10 @@ import { LoadingState } from './components/ds/LoadingState';
 // `design/notificationPolicy`, which is default-closed.
 import { useNotificationStream } from './hooks/useNotificationStream';
 import {
-  C, Inp, ToastContainer,
+  Inp, ToastContainer,
   LoadingProvider,
 } from './components/ui-legacy/primitives';
+import { token } from './design/tokens';
 import { Button } from './components/ui/Button';
 
 // Public routes (lazy)
@@ -213,13 +214,13 @@ function UpdatePasswordPage() {
   };
 
   return (
-    <div style={{ background: C.bg0, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 18, padding: 36, width: 450 }}>
-        <h1 style={{ color: C.t1, fontWeight: 900, fontSize: 22, marginBottom: 20, textAlign: "center" }}>
+    <div style={{ background: token.surface.canvas, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: token.surface.raised, border: `1px solid ${token.line.default}`, borderRadius: 18, padding: 36, width: 450 }}>
+        <h1 style={{ color: token.content.primary, fontWeight: 900, fontSize: 22, marginBottom: 20, textAlign: "center" }}>
           Reset Password
         </h1>
         {success ? (
-          <div style={{ color: C.green, fontSize: 13, textAlign: "center", background: `${C.green}12`, padding: 12, borderRadius: 8 }}>
+          <div style={{ color: token.status.profit.fg, fontSize: 13, textAlign: "center", background: `${token.status.profit.fg}12`, padding: 12, borderRadius: 8 }}>
             Password updated! Redirecting to dashboard...
           </div>
         ) : (
@@ -237,7 +238,7 @@ function UpdatePasswordPage() {
               {loading ? "Updating..." : "Update Password"}
             </Button>
             {!!error && (
-              <div style={{ marginTop: 10, color: C.red, fontSize: 12, textAlign: "center" }}>{error}</div>
+              <div style={{ marginTop: 10, color: token.status.loss.fg, fontSize: 12, textAlign: "center" }}>{error}</div>
             )}
           </form>
         )}
@@ -300,23 +301,23 @@ function AdminGuard() {
 
   if (status === 'loading') {
     return (
-      <div style={{ background: C.bg0, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ background: token.surface.canvas, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {/* `font-mono` rather than the bare `monospace` keyword this carried before:
             the keyword resolves to whatever the browser defaults to, while the class
             resolves `--font-mono` and so actually reaches the JetBrains Mono that
             index.html loads. */}
-        <span className="font-mono" style={{ color: C.t3, fontSize: 12 }}>Verifying access…</span>
+        <span className="font-mono" style={{ color: token.content.muted, fontSize: 12 }}>Verifying access…</span>
       </div>
     );
   }
   if (status === 'denied') {
     return (
-      <div style={{ background: C.bg0, minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
-        <Lock size={32} style={{ color: C.red }} />
-        <div style={{ color: C.t1, fontWeight: 700, fontSize: 16 }}>Access Denied</div>
+      <div style={{ background: token.surface.canvas, minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+        <Lock size={32} style={{ color: token.status.loss.fg }} />
+        <div style={{ color: token.content.primary, fontWeight: 700, fontSize: 16 }}>Access Denied</div>
         {/* Same correction as the loading branch above: the real mono stack, not the
             bare `monospace` keyword. */}
-        <div className="font-mono" style={{ color: C.t3, fontSize: 11 }}>Administrator credentials required.</div>
+        <div className="font-mono" style={{ color: token.content.muted, fontSize: 11 }}>Administrator credentials required.</div>
       </div>
     );
   }

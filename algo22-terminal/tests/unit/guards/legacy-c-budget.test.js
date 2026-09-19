@@ -294,7 +294,26 @@ describe('legacy-c-budget: the counting method', () => {
 // ---------------------------------------------------------------------------
 
 describe('legacy-c-budget: the spot check', () => {
-  it("reproduces App.jsx's 13 references occurrence by occurrence", () => {
+  it('finds none of App.jsx\'s references left, and the enumeration is retired', () => {
+    // Task 27.2's batch 5b cleared this file: the 13 references enumerated below are gone,
+    // `C` is narrowed off its `ui-legacy/primitives` import (`Inp`, `ToastContainer` and
+    // `LoadingProvider` stay), and every value is read from `design/tokens.js` instead. So
+    // the hand-enumeration that this test carried for the whole migration has nothing left
+    // to reproduce, and asserting the empty list is the only honest form of it.
+    //
+    // THE ENUMERATION AND ITS LINE-SHIFT HISTORY ARE KEPT BELOW, unchanged. They are the
+    // record of how the counting method was validated against a real file rather than only
+    // against the synthetic fixtures above — eight tasks' worth of edits moved every one of
+    // those numbers without once changing the count, which is what a correct count looks
+    // like from the outside. Deleting that would delete the evidence.
+    //
+    // THE REAL-FILE PIN NOW LIVES IN `has converged on the shim as the only carrier`, which
+    // measures the shim and asserts its count equals its committed budget. That is the same
+    // kind of claim on the one file that still carries references.
+    //
+    // ---------------------------------------------------------------------------
+    // THE RETIRED ENUMERATION, AS HISTORY
+    // ---------------------------------------------------------------------------
     // Hand-verified against the file, so the counting method is pinned to
     // reality and not only to synthetic fixtures. `App.jsx` is a good choice:
     // small enough to enumerate, and it exercises both the template-literal form
@@ -359,9 +378,11 @@ describe('legacy-c-budget: the spot check', () => {
     const source = readFileSync(path.join(SRC, 'App.jsx'), 'utf8');
     const lines = findLegacyC(source).map((r) => r.line);
 
-    expect(lines).toEqual([216, 217, 217, 218, 222, 222, 240, 303, 308, 314, 315, 316, 319]);
-    expect(lines).toHaveLength(13);
-    expect(LEGACY_C_BUDGET['App.jsx']).toBe(13);
+    expect(lines).toEqual([]);
+    expect(LEGACY_C_BUDGET['App.jsx']).toBe(0);
+    // The file is still read and still measured — the method has not stopped running here,
+    // it has run out of anything to find.
+    expect(source).not.toMatch(/(?<![\w$])C,/);
   });
 });
 
@@ -405,7 +426,46 @@ describe('legacy-c-budget: scope', () => {
     expect(LEGACY_C_BUDGET[SHIM_PATH]).toBeGreaterThan(100);
   });
 
-  it('finds references across many files, not just the shim', () => {
+  it('has converged on the shim as the only carrier', () => {
+    // THE END STATE. Task 27.2's batch 5b cleared the last four consumers —
+    // `components/CopilotChat.jsx` (31), `pages/SecurityLogs.jsx` (21), `App.jsx` (13) and
+    // `pages/RiskSettings.jsx` (6) — so the only file in `src/` that still reads the shim is
+    // the shim itself. This asserts exactly that, and it is the PRECONDITION FOR DELETING
+    // THE SHIM: once nothing outside `primitives.jsx` names `C`, removing the module can
+    // break no page, and this line is where that claim is checked rather than assumed.
+    //
+    // It also fails in the useful direction. If any file reacquires a `C.` reference —
+    // copied off a neighbouring line, or reintroduced with a new import — the carrier list
+    // grows and this objects by name, before the per-file budgets below get a chance to.
+    //
+    // ---------------------------------------------------------------------------
+    // WHY THE TWO FLOORS THAT USED TO LIVE HERE WERE RETIRED RATHER THAN RE-BASED
+    // ---------------------------------------------------------------------------
+    // This test used to hold two liveness tripwires — `carriers.length > 3` and a total
+    // `> 200` — and the history of both is kept below, because the reasoning is the record
+    // of how the migration was policed, not clutter. Each had already been lowered four
+    // times, every time for the same reason: a batch cleared real files, the tree shrank
+    // past the floor, and the floor was re-measured to sit below the new total.
+    //
+    // Batch 5b ends that. The tree is 176 references in ONE carrier, and the carrier is the
+    // shim. A file-count floor cannot be set below 1, and a magnitude floor at or under 176
+    // is satisfied by the shim alone — which is precisely the failure the line existed to
+    // catch. Re-basing a fifth time would leave two assertions that read as though they
+    // still constrained something while constraining nothing, and the claim they were
+    // written to make — "many files" — is no longer true and cannot become true again
+    // without reversing §14.4. So they are replaced by the honest end-state claim above.
+    //
+    // LIVENESS IS NOT LOST. The preceding `it()` asserts that the shim exists on disk, that
+    // the scan reaches it, and that it carries more than 100 references. A scan that
+    // silently matched nothing — the broken-path and broken-pattern cases the floors
+    // guarded against — fails loudly there, with a named reason, before reaching this test.
+    // And this test is stricter than the floors were about the thing that actually matters
+    // now: it pins the shim's count to its committed budget, so the measurement cannot
+    // drift while looking green.
+    //
+    // ---------------------------------------------------------------------------
+    // THE RETIRED MAGNITUDE FLOOR, AS HISTORY
+    // ---------------------------------------------------------------------------
     // A pattern that only ever fires inside primitives.jsx would satisfy the
     // check above and still be broken for every page.
     //
@@ -435,6 +495,9 @@ describe('legacy-c-budget: scope', () => {
     // above the shim's own 176, so a scan firing ONLY inside primitives.jsx still cannot
     // satisfy it, which is the whole point of the line.
     //
+    // ---------------------------------------------------------------------------
+    // THE RETIRED FILE-COUNT FLOOR, AS HISTORY
+    // ---------------------------------------------------------------------------
     // THE FILE-COUNT FLOOR IS THE SAME KIND OF TRIPWIRE and fell for the same reason at
     // task 27.3. It was 20 and the tree held 21 carriers; deleting
     // `components/DesktopOnlyOverlay.jsx` — 9 references in a component nothing had
@@ -456,8 +519,15 @@ describe('legacy-c-budget: scope', () => {
     // loses reach as the migration converges on the shim alone; the assertions that measure
     // REMAINING WORK are the per-file budgets below, and none of them moved here.
     const carriers = SCANNED.filter((f) => f.count > 0);
-    expect(carriers.length).toBeGreaterThan(3);
-    expect(carriers.reduce((n, f) => n + f.count, 0)).toBeGreaterThan(200);
+
+    expect(
+      carriers.map((f) => `${f.relative} — ${f.count}`),
+      `The tree converged on the shim at task 27.2 batch 5b. A second carrier means a \`C.\`\n`
+        + `reference re-entered src/ — use a token class, or \`token.*\` from\n`
+        + `src/design/tokens.js:`,
+    ).toHaveLength(1);
+    expect(carriers[0].relative).toBe(SHIM_PATH);
+    expect(carriers[0].count).toBe(LEGACY_C_BUDGET[SHIM_PATH]);
   });
 
   it('does not lose references to the string mask', () => {

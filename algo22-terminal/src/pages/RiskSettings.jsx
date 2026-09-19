@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Shield, AlertTriangle, Sliders, Target, Zap, CheckCircle, Lock, Activity, TrendingDown, Settings, Save, RefreshCw } from "lucide-react";
 import { api } from "../api";
-import { C, SectionH, PanelTitle, Inp, Toast, ToastContainer, ProgressBar, RiskMeter } from "../components/ui-legacy/primitives";
+import { SectionH, PanelTitle, Inp, Toast, ToastContainer, ProgressBar, RiskMeter } from "../components/ui-legacy/primitives";
+import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import wsClient from "../websocketClient";
@@ -18,9 +19,9 @@ export default function RiskSettings() {
   ]);
   const [strategyLimits, setStrategyLimits] = useState([]);
   const [marginData, setMarginData] = useState([
-    { label: "Margin Ratio", value: 0, max: 100, color: C.green, key: "margin_ratio" },
-    { label: "Free Margin", value: 0, max: 100, color: C.cyan, key: "free_margin" },
-    { label: "Risk Score", value: 0, max: 100, color: C.orange, key: "risk_score" },
+    { label: "Margin Ratio", value: 0, max: 100, color: token.status.profit.fg, key: "margin_ratio" },
+    { label: "Free Margin", value: 0, max: 100, color: token.brand.base, key: "free_margin" },
+    { label: "Risk Score", value: 0, max: 100, color: token.status.warning.fg, key: "risk_score" },
   ]);
   const [isLoadingRisk, setIsLoadingRisk] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -78,9 +79,9 @@ export default function RiskSettings() {
           const m = marginRes.value?.data ?? marginRes.value;
           if (m && typeof m === 'object') {
             setMarginData([
-              { label: "Margin Ratio", value: Number(m.margin_ratio ?? 0), max: 100, color: C.green, key: "margin_ratio" },
-              { label: "Free Margin", value: Number(m.free_margin ?? 0), max: 100, color: C.cyan, key: "free_margin" },
-              { label: "Risk Score", value: Number(m.risk_score ?? 0), max: 100, color: C.orange, key: "risk_score" },
+              { label: "Margin Ratio", value: Number(m.margin_ratio ?? 0), max: 100, color: token.status.profit.fg, key: "margin_ratio" },
+              { label: "Free Margin", value: Number(m.free_margin ?? 0), max: 100, color: token.brand.base, key: "free_margin" },
+              { label: "Risk Score", value: Number(m.risk_score ?? 0), max: 100, color: token.status.warning.fg, key: "risk_score" },
             ]);
           }
         }

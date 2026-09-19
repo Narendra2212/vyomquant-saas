@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Shield, ShieldCheck, AlertCircle, Clock, Search, Download, RefreshCw } from "lucide-react";
-import { C, SectionH, PanelTitle, Tag2 } from "../components/ui-legacy/primitives";
+import { SectionH, PanelTitle, Tag2 } from "../components/ui-legacy/primitives";
+import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { api } from "../api";
@@ -106,13 +107,13 @@ export default function SecurityLogs() {
       {/* Summary Cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 14 }}>
         {[
-          { l: "Logins (30d)", v: isLoading ? "..." : (summary?.logins_30d ?? 0), c: C.cyan },
-          { l: "API Calls (24h)", v: isLoading ? "..." : Number(summary?.api_calls_24h ?? 0).toLocaleString(), c: C.purple },
-          { l: "Failed Attempts", v: isLoading ? "..." : (summary?.failed_attempts ?? 0), c: (summary?.failed_attempts ?? 0) > 0 ? C.red : C.green },
-          { l: "Active Sessions", v: isLoading ? "..." : (summary?.active_sessions ?? 0), c: C.green },
+          { l: "Logins (30d)", v: isLoading ? "..." : (summary?.logins_30d ?? 0), c: token.brand.base },
+          { l: "API Calls (24h)", v: isLoading ? "..." : Number(summary?.api_calls_24h ?? 0).toLocaleString(), c: token.status.neutral.fg },
+          { l: "Failed Attempts", v: isLoading ? "..." : (summary?.failed_attempts ?? 0), c: (summary?.failed_attempts ?? 0) > 0 ? token.status.loss.fg : token.status.profit.fg },
+          { l: "Active Sessions", v: isLoading ? "..." : (summary?.active_sessions ?? 0), c: token.status.profit.fg },
         ].map(s => (
           <Card key={s.l} className="p-4">
-            <div style={{ color: C.t3, fontSize: 9, fontFamily: "monospace", letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 }}>{s.l}</div>
+            <div style={{ color: token.content.muted, fontSize: 9, fontFamily: "monospace", letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 }}>{s.l}</div>
             <div style={{ color: s.c, fontSize: 18, fontWeight: 900, fontFamily: "monospace" }}>{s.v}</div>
           </Card>
         ))}
@@ -126,13 +127,13 @@ export default function SecurityLogs() {
 
       {/* Filterable Table */}
       <Card>
-        <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
-          <Search size={13} style={{ color: C.t3 }} />
+        <div style={{ padding: "14px 16px", borderBottom: `1px solid ${token.line.default}`, display: "flex", alignItems: "center", gap: 10 }}>
+          <Search size={13} style={{ color: token.content.muted }} />
           <input
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search events, IP addresses, locations, user agents..."
-            style={{ background: "transparent", border: "none", outline: "none", color: C.t1, fontSize: 11, fontFamily: "monospace", flex: 1 }}
+            style={{ background: "transparent", border: "none", outline: "none", color: token.content.primary, fontSize: 11, fontFamily: "monospace", flex: 1 }}
             className="placeholder:text-slate-600"
           />
           <Button variant="outline" size="xs" onClick={handleExport} disabled={filteredLogs.length === 0} className="flex items-center gap-1">
@@ -143,36 +144,36 @@ export default function SecurityLogs() {
 
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, fontFamily: "monospace" }}>
           <thead>
-            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+            <tr style={{ borderBottom: `1px solid ${token.line.default}` }}>
               {["Event", "IP Address", "Location", "Device / Client", "Timestamp", "Status"].map(h => (
-                <th key={h} style={{ color: C.t3, fontWeight: 900, padding: "10px 14px", textAlign: "left", fontSize: 8, letterSpacing: 2, textTransform: "uppercase" }}>{h}</th>
+                <th key={h} style={{ color: token.content.muted, fontWeight: 900, padding: "10px 14px", textAlign: "left", fontSize: 8, letterSpacing: 2, textTransform: "uppercase" }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={6} style={{ padding: "28px", textAlign: "center", color: C.t3 }}>
+                <td colSpan={6} style={{ padding: "28px", textAlign: "center", color: token.content.muted }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                    <RefreshCw size={14} className="animate-spin" style={{ color: C.cyan }} />
+                    <RefreshCw size={14} className="animate-spin" style={{ color: token.brand.base }} />
                     <span>Loading security audit records...</span>
                   </div>
                 </td>
               </tr>
             ) : filteredLogs.length === 0 ? (
               <tr>
-                <td colSpan={6} style={{ padding: "28px", textAlign: "center", color: C.t3 }}>
+                <td colSpan={6} style={{ padding: "28px", textAlign: "center", color: token.content.muted }}>
                   No security events found.
                 </td>
               </tr>
             ) : (
               filteredLogs.map(log => (
-                <tr key={log.id} style={{ borderBottom: `1px solid ${C.border}15` }} className="hover:bg-white/5 transition-colors">
-                  <td style={{ padding: "10px 14px", color: log.status === "failed" ? C.red : C.t1, fontWeight: 700 }}>{log.event}</td>
-                  <td style={{ padding: "10px 14px", color: C.t2, fontFamily: "monospace" }}>{log.ip}</td>
-                  <td style={{ padding: "10px 14px", color: C.t2 }}>{log.loc}</td>
-                  <td style={{ padding: "10px 14px", color: C.t3, fontSize: 9 }}>{log.device}</td>
-                  <td style={{ padding: "10px 14px", color: C.t3 }}>{log.time}</td>
+                <tr key={log.id} style={{ borderBottom: `1px solid ${token.line.default}15` }} className="hover:bg-white/5 transition-colors">
+                  <td style={{ padding: "10px 14px", color: log.status === "failed" ? token.status.loss.fg : token.content.primary, fontWeight: 700 }}>{log.event}</td>
+                  <td style={{ padding: "10px 14px", color: token.content.secondary, fontFamily: "monospace" }}>{log.ip}</td>
+                  <td style={{ padding: "10px 14px", color: token.content.secondary }}>{log.loc}</td>
+                  <td style={{ padding: "10px 14px", color: token.content.muted, fontSize: 9 }}>{log.device}</td>
+                  <td style={{ padding: "10px 14px", color: token.content.muted }}>{log.time}</td>
                   <td style={{ padding: "10px 14px" }}>
                     <Tag2 c={log.status === "success" || log.status === "ok" ? "green" : "red"}>{log.status.toUpperCase()}</Tag2>
                   </td>

@@ -640,7 +640,16 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // handlers now say `token.surface.inset` in as many words. Repairing it would be a
   // design decision; this is a retoken.
   'pages/LegalPage.jsx': 0,
-  'components/CopilotChat.jsx': 31,
+  // 31 -> 0 at task 27.2, batch 5b. The `C` specifier is NARROWED out of the import, not the
+  // import deleted: `Spinner` stays on it, as a component. `token` is read from
+  // `design/tokens.js`. Every one of the 31 is the value the shim already gave it. By shim
+  // name: `C.cyan` 7, `C.blue` 1 -> `token.brand.base` (the shim held both names as the one
+  // brand hue, so the launcher's `linear-gradient(135deg, …)` was already a flat fill);
+  // `C.border` 5 -> `token.line.default`; `C.t1` 3, `C.t2` 3, `C.t3` 3, `C.t4` 2 ->
+  // `token.content.primary` / `secondary` / `muted` (`t3` and `t4` collapse, as on every page
+  // that read both); `C.bg3` 2, `C.bg4` 2, `C.bg2` 2, `C.bg1` 1 -> `token.surface.inset` /
+  // `raised` / `panel`.
+  'components/CopilotChat.jsx': 0,
   // 30 -> 0 at task 27.2, batch 1, and the `C` import goes with them for the same reason
   // `LegalPage.jsx`'s did. By shim name: `C.t1` 2, `C.t2` 3, `C.t3` 4, `C.t4` 1 ->
   // `token.content.primary` / `secondary` / `muted` (`C.t3` and `C.t4` collapse onto
@@ -736,7 +745,15 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // Cleared by task 8.6: rebuilt against `shell/navigation.js`, with colour taken from
   // `cssVar()` and token utility classes instead of the shim.
   'components/Sidebar.jsx': 0,
-  'pages/SecurityLogs.jsx': 21,
+  // 21 -> 0 at task 27.2, batch 5b. The `C` specifier is NARROWED out of the import, not the
+  // import deleted: `SectionH`, `PanelTitle` and `Tag2` stay on it, as components. `token` is
+  // read from `design/tokens.js`. Every one of the 21 is the value the shim already gave it.
+  // By shim name: `C.t3` 7, `C.t2` 2, `C.t1` 2 -> `token.content.muted` / `secondary` /
+  // `primary`; `C.border` 3 -> `token.line.default`; `C.cyan` 2 -> `token.brand.base`;
+  // `C.red` 2 -> `token.status.loss.fg`; `C.green` 2 -> `token.status.profit.fg`; `C.purple` 1
+  // -> `token.status.neutral.fg`. The two state ternaries — the failed-attempts summary card
+  // and the failed-event row — keep condition and operand order; only the hue's source moved.
+  'pages/SecurityLogs.jsx': 0,
   // The `AppShell` wrapper and the auth gates live here (task 3.3 touches it).
   // 14 -> 13 at task 8.5: the shell's `return` became a CSS grid on
   // `bg-surface-canvas`, which retired the wrapper's `background: C.bg0`. The
@@ -746,7 +763,16 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // `'navigate'` bridge, the deleted `TENANT_ID`) moved all 13 down by 109 lines
   // without touching one of them, so this number is unchanged and only the spot
   // check's line array in `legacy-c-budget.test.js` moved.
-  'App.jsx': 13,
+  //
+  // 13 -> 0 at task 27.2, batch 5b. The `C` specifier is NARROWED out of the import, not the
+  // import deleted: `Inp`, `ToastContainer` and `LoadingProvider` stay on it. `token` is read
+  // from `design/tokens.js`. Routing, the auth gates, `AdminGuard` and the toast `aria-live`
+  // region are untouched. By shim name: `C.bg0` 3, `C.bg2` 1 -> `token.surface.canvas` /
+  // `raised`; `C.t1` 2, `C.t3` 2 -> `token.content.primary` / `muted`; `C.green` 2 ->
+  // `token.status.profit.fg`; `C.red` 2 -> `token.status.loss.fg`; `C.border` 1 ->
+  // `token.line.default`. Every one is the value the shim already gave it. The spot check's
+  // hand-enumeration is retired in the same commit and kept there as history.
+  'App.jsx': 0,
   // Cleared by task 8.7: rebuilt against `shell/navigation.js` and `ds/`, with every
   // colour coming from a token utility class. The `LiveStatusV2` import went with the
   // hardcoded `status="running"` (§1.3), and `C` went with it.
@@ -787,7 +813,15 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // `C.border` 1 -> `token.line.default`. No `C.space.*`, `C.radius.*`, `C.shadow*`,
   // `C.glow.*` or `C.gradient.*` read here, and no `no-colour-literals` entry moved.
   'pages/UpdatePasswordPage.jsx': 0,
-  'pages/RiskSettings.jsx': 6,
+  // 6 -> 0 at task 27.2, batch 5b, the last of the shim's consumers. The `C` specifier is
+  // NARROWED out of the import, not the import deleted: `SectionH`, `PanelTitle`, `Inp`,
+  // `Toast`, `ToastContainer`, `ProgressBar` and `RiskMeter` all stay on it, as components.
+  // `token` is read from `design/tokens.js`. All 6 sit in `marginData`, three in its
+  // `useState` seed and the same three in the socket update that replaces it: `C.green` 2 ->
+  // `token.status.profit.fg`; `C.cyan` 2 -> `token.brand.base`; `C.orange` 2 ->
+  // `token.status.warning.fg` (the shim held `orange` and `gold` as the one amber). Every one
+  // is the value the shim already gave it, so the three meters render unchanged.
+  'pages/RiskSettings.jsx': 0,
   // New at task 20.2 — §7.8 (4)'s three shared trading panels, extracted from
   // `pages/LiveTrading.jsx` so `pages/PaperTrading.jsx` can render the same components at
   // task 25.2. None of the four imports the shim: every colour comes from `ds/` primitives
