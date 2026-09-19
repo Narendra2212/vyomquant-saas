@@ -3,7 +3,7 @@ import {
   CreditCard, CheckCircle, Star, Zap, Globe, Award, ArrowUpRight, Plus, AlertTriangle, XCircle, Loader2, TrendingUp, Bot, Cpu, Database, BarChart3, Shield, Crown, ChevronRight, RefreshCw, ExternalLink, AlertCircle, X, ChevronDown, MapPin
 } from "lucide-react";
 import { api } from "../api";
-import { SectionH, PanelTitle, Tag2 } from "../components/ui-legacy/primitives";
+import { SectionH, PanelTitle, Tag2 } from "../components/common/primitives";
 import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";

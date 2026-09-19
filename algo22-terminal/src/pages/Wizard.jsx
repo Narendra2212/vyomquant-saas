@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Check, Shield, Zap, Rocket, ChevronRight, Layers, ArrowRight, ShieldCheck, Mail, Bell, CheckCircle, Key, Lock, Wifi, Database, Activity, Loader2 } from "lucide-react";
-import { Inp } from "../components/ui-legacy/primitives";
+import { Inp } from "../components/common/primitives";
 import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";

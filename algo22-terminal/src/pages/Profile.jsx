@@ -7,7 +7,7 @@ import {
   ChevronRight, Send, Globe
 } from "lucide-react";
 import { api } from "../api";
-import { SectionH, Inp } from "../components/ui-legacy/primitives";
+import { SectionH, Inp } from "../components/common/primitives";
 import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";

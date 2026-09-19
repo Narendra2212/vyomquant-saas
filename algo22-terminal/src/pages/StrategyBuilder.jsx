@@ -100,7 +100,7 @@ import {
   AlertTriangle, ArrowLeft, BarChart2, ChevronDown, ChevronRight, Lock, Maximize,
   PanelLeft, PanelRight, RefreshCw, Redo, Rocket, Save, Search, Trash2, Undo, ZoomIn, ZoomOut,
 } from 'lucide-react';
-import { Inp, Tag2, PanelTitle } from '../components/ui-legacy/primitives';
+import { Inp, Tag2, PanelTitle } from '../components/common/primitives';
 import { Button } from '../components/ui/Button';
 import { CommandButton } from '../components/ds/CommandButton';
 import { Field } from '../components/ds/Field';

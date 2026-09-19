@@ -11,7 +11,7 @@ import {
 // figure), so there is nothing left for the shim to supply — and leaving the specifier in
 // place is how a `C.` reference gets reintroduced by copying the line next to it. `Tag2` and
 // `StatusDot` stay: they are components, not colours, and task 27.2 owns re-pointing them.
-import { Tag2, StatusDot } from "../components/ui-legacy/primitives";
+import { Tag2, StatusDot } from "../components/common/primitives";
 import { CONFIG } from "../config";
 import { get, post } from "../apiClient";
 import { Button } from "../components/ui/Button";

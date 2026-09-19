@@ -212,7 +212,7 @@ import {
   XCircle,
 } from 'lucide-react';
 
-import { PanelTitle, Spinner } from '../components/ui-legacy/primitives';
+import { PanelTitle, Spinner } from '../components/common/primitives';
 // Task 10.8: every failure on this page is worded by `design/errorCopy.js` and nothing else.
 // `extractErrorMessage` used to fill these slots and fell through to `JSON.stringify(detail)`
 // and then `err.message`, so an axios message and a FastAPI dump reached the screen verbatim

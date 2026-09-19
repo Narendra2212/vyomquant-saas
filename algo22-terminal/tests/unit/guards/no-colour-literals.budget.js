@@ -577,6 +577,11 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
  * `Billing`, `AuthPage`, `Wizard`, `TwoFA`, `SecurityLogs`, `RiskSettings`,
  * `ExchangeManager`, `LegalPage`, `SupportCenter`, `NotificationCenter`, `CopilotChat`,
  * `FirstTradeWizard`, `DeployPreflightPanel`, `landing/*`, `ui/*` and `ui-legacy/*`.
+ *
+ * `common/*` joined that list at task 27.2's final stage A, and it is the same call
+ * `ui-legacy/*` got: the module is the shim's eleven surviving components rehomed, so its
+ * literals are the ones `ui-legacy/primitives.jsx` was already budgeted for. The set they
+ * belong to did not change when their file did.
  */
 export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // -- Shared primitives, retokened in M3 -----------------------------------
@@ -592,7 +597,39 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // The `C` shim. Its top-level values are derived from tokens.css, but `Badge`
   // and `Tag` still carry off-palette rgba() washes inline — see the test's
   // FINDINGS note. Entry is deleted with the file at task 27.2.
+  //
+  // STILL 18 AFTER TASK 27.2's FINAL STAGE A, AND THAT IS THE MEASUREMENT. Stage A rehomed
+  // the shim's eleven surviving components into `components/common/primitives.jsx` and
+  // repointed their importers; it deleted nothing from this file, because stage B deletes the
+  // module whole. So all 18 are still here — 17 in `Tag2`'s tone map and 1 in `Toast`'s drop
+  // shadow — AND all 18 are now also in the new module, since the components they belong to
+  // were copied across with their bodies intact. That is a duplicate, not a regression: the
+  // two files hold the same 18 literals for as long as both exist, which is until stage B.
   'components/ui-legacy/primitives.jsx': 18,
+  // New at 18 at task 27.2's FINAL STAGE A — the shim's eleven surviving components, rehomed
+  // off `ui-legacy` and reading `token.*` directly. Every one of the 18 came across verbatim
+  // with the component that owns it:
+  //
+  //   17 in `Tag2`'s nine-tone map — the `profit`/`green` and `loss`/`red` tones' border and
+  //      hover washes (`rgba(0,200,83,…)`, the retired #00C853 green; `rgba(255,61,0,…)`,
+  //      #FF3D00) and the `warning`, `purple` and `gold` tones' full background/border/hover
+  //      triples (#FFAB00, #7C4DFF, #FFD600). All five hues are off-palette and none has a
+  //      token: `statusToken('warning').wash` is a 12% #F59E0B, not a 10% #FFAB00, so
+  //      substituting would visibly change the chip.
+  //    1 in `Toast`'s `boxShadow: "0 4px 12px rgba(0,0,0,0.4)"`, which is a hand-tuned
+  //      elevation rather than `token.shadow.raised`'s `0 4px 12px rgba(0, 0, 0, 0.35)`.
+  //
+  // They are NOT retokened here, and that is deliberate: stage A is a rehome. Changing five
+  // chip hues and a shadow alpha is a colour decision affecting `Tag2`'s seven consuming
+  // pages, and it would land in the same diff as fifteen moved import paths, where nobody
+  // could review either. `Tag2`'s successor is `ds/StatusBadge`, which derives its hue from a
+  // state word and accepts no colour prop — adopting it is what actually clears these 17, per
+  // call site, and the module's docblock records that.
+  //
+  // OUT of scope, exactly as `ui-legacy/*` is and for the same reason: this guard does not
+  // assert the file reads zero. It is a ratchet at 18 — the 18 cannot grow, and they come
+  // down when the `ds/` adoption happens rather than on a promise made here.
+  'components/common/primitives.jsx': 18,
 
   // -- Shell and cross-cutting components -----------------------------------
   'components/DeployPreflightPanel.jsx': 30,

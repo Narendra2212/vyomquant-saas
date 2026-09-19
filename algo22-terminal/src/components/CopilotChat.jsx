@@ -9,7 +9,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Bot, X, Send, RotateCcw } from "lucide-react";
 import { useCopilot } from "../contexts/CopilotContext";
-import { Spinner } from "./ui-legacy/primitives";
+import { Spinner } from "./common/primitives";
 import { token } from "../design/tokens";
 import { Button } from "./ui/Button";
 

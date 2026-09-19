@@ -9,7 +9,7 @@
 import React, { useState, useEffect } from "react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Activity, TrendingUp, BarChart3, Zap, Target, AlertTriangle, CheckCircle, Play, RefreshCw, Download, ChevronDown, ChevronRight } from "lucide-react";
-import { Tag2, PanelTitle } from "../components/ui-legacy/primitives";
+import { Tag2, PanelTitle } from "../components/common/primitives";
 import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";

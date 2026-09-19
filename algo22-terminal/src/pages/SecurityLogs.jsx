@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Shield, ShieldCheck, AlertCircle, Clock, Search, Download, RefreshCw } from "lucide-react";
-import { SectionH, PanelTitle, Tag2 } from "../components/ui-legacy/primitives";
+import { SectionH, PanelTitle, Tag2 } from "../components/common/primitives";
 import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";

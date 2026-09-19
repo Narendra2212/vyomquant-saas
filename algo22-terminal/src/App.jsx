@@ -33,7 +33,7 @@ import { useNotificationStream } from './hooks/useNotificationStream';
 import {
   Inp, ToastContainer,
   LoadingProvider,
-} from './components/ui-legacy/primitives';
+} from './components/common/primitives';
 import { token } from './design/tokens';
 import { Button } from './components/ui/Button';
 

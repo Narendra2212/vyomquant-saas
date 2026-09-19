@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Eye, EyeOff, Lock, Mail, Zap, Globe, AlertCircle, CheckCircle, Check, X, ArrowLeft, RefreshCw, ShieldCheck } from "lucide-react";
-import { Inp } from "../components/ui-legacy/primitives";
+import { Inp } from "../components/common/primitives";
 import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { supabase } from "../supabase";

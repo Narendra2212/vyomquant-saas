@@ -70,7 +70,32 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // references — the scrim's `background: `${C.bg0}80`` and the message row's
   // `color: C.t2`. The provider, its context API and `anyLoading` all stay, so
   // nothing else in the file moved.
+  //
+  // STILL 176 AFTER TASK 27.2's FINAL STAGE A, AND THAT IS THE MEASUREMENT RATHER THAN AN
+  // OVERSIGHT. Stage A rehomed the eleven components that still had a caller into
+  // `components/common/primitives.jsx`, repointed the fifteen value importers and deleted
+  // `components/ui/index.js`'s `export *`. It did NOT delete anything from this file — stage
+  // B deletes the module whole — so every one of the 176 references is still here, in
+  // component bodies that now have no importer. Lowering this entry would be recording a
+  // removal that has not happened.
   'components/ui-legacy/primitives.jsx': 176,
+
+  // -- The rehomed components ----------------------------------------------
+  // New at 0 at task 27.2's FINAL STAGE A, which is the entry's whole point: this module is
+  // the shim's eleven surviving components (`Tag2`, `Inp`, `SectionH`, `PanelTitle`,
+  // `ProgressBar`, `Spinner`, `Toast`, `ToastContainer`, `LoadingProvider`, `RiskMeter`,
+  // `StatusDot`) with every `C.` read replaced by the `token.*` it already resolved to, and
+  // it must read the shim NOWHERE. It imports `token` from `design/tokens.js` and nothing
+  // from `ui-legacy` at all.
+  //
+  // Seeded at `0` rather than left unbudgeted, for the reason `Sidebar.jsx: 0` and
+  // `TopBar.jsx: 0` are: an unbudgeted file is one whose cleanliness nothing is holding, and
+  // this is the file where a re-added `C.` would be most natural — its bodies were copied
+  // out of the shim, so the shape the old reads had is still visible in the diff. The entry
+  // is also what makes the shim's own 176 the last 176: with this at 0, `has converged on
+  // the shim as the only carrier` proves nothing outside `primitives.jsx` names `C`, which
+  // is stage B's precondition.
+  'components/common/primitives.jsx': 0,
 
   // -- In-scope pages, the six task 1.12 names ------------------------------
   // M9 — the two largest and most behaviourally sensitive files, migrated last.
