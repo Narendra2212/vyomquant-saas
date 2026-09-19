@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Eye, EyeOff, Lock, Mail, Zap, Globe, AlertCircle, CheckCircle, Check, X, ArrowLeft, RefreshCw, ShieldCheck } from "lucide-react";
-import { C, Inp } from "../components/ui-legacy/primitives";
+import { Inp } from "../components/ui-legacy/primitives";
+import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { supabase } from "../supabase";
 
@@ -33,7 +34,7 @@ export function maskEmail(email) {
 }
 
 export const evaluatePasswordStrength = (pwd) => {
-  if (!pwd) return { score: 0, label: "", color: C.t3, checks: { length: false, upper: false, lower: false, number: false, special: false } };
+  if (!pwd) return { score: 0, label: "", color: token.content.muted, checks: { length: false, upper: false, lower: false, number: false, special: false } };
   
   const checks = {
     length: pwd.length >= 8,
@@ -68,27 +69,27 @@ function PasswordStrengthMeter({ strength }) {
   return (
     <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ color: C.t3, fontSize: 9, fontFamily: "monospace", textTransform: "uppercase" }}>
+        <span style={{ color: token.content.muted, fontSize: 9, fontFamily: "monospace", textTransform: "uppercase" }}>
           Password Strength
         </span>
         <span style={{ color: strength.color, fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>
           {strength.label}
         </span>
       </div>
-      <div style={{ height: 4, background: C.bg3, borderRadius: 2, overflow: "hidden", border: `1px solid ${C.border}` }}>
+      <div style={{ height: 4, background: token.surface.inset, borderRadius: 2, overflow: "hidden", border: `1px solid ${token.line.default}` }}>
         <div style={{ height: "100%", width: `${pct}%`, background: strength.color, transition: "all 0.2s ease" }} />
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 4, fontSize: 9, fontFamily: "monospace" }}>
-        <span style={{ color: strength.checks.length ? "#10B981" : C.t3, display: "inline-flex", alignItems: "center", gap: 3 }}>
+        <span style={{ color: strength.checks.length ? "#10B981" : token.content.muted, display: "inline-flex", alignItems: "center", gap: 3 }}>
           {strength.checks.length ? <Check size={10} /> : <X size={10} />} 8+ chars
         </span>
-        <span style={{ color: strength.checks.upper && strength.checks.lower ? "#10B981" : C.t3, display: "inline-flex", alignItems: "center", gap: 3 }}>
+        <span style={{ color: strength.checks.upper && strength.checks.lower ? "#10B981" : token.content.muted, display: "inline-flex", alignItems: "center", gap: 3 }}>
           {strength.checks.upper && strength.checks.lower ? <Check size={10} /> : <X size={10} />} Upper & lower
         </span>
-        <span style={{ color: strength.checks.number ? "#10B981" : C.t3, display: "inline-flex", alignItems: "center", gap: 3 }}>
+        <span style={{ color: strength.checks.number ? "#10B981" : token.content.muted, display: "inline-flex", alignItems: "center", gap: 3 }}>
           {strength.checks.number ? <Check size={10} /> : <X size={10} />} Number
         </span>
-        <span style={{ color: strength.checks.special ? "#10B981" : C.t3, display: "inline-flex", alignItems: "center", gap: 3 }}>
+        <span style={{ color: strength.checks.special ? "#10B981" : token.content.muted, display: "inline-flex", alignItems: "center", gap: 3 }}>
           {strength.checks.special ? <Check size={10} /> : <X size={10} />} Symbol
         </span>
       </div>
@@ -462,7 +463,7 @@ export default function AuthPage({ mode = "signin" }) {
   return (
     <div
       style={{
-        background: C.bg0,
+        background: token.surface.canvas,
         minHeight: "100vh",
         display: "flex",
         alignItems: "center",
@@ -486,8 +487,8 @@ export default function AuthPage({ mode = "signin" }) {
       {/* Main Terminal Card */}
       <div
         style={{
-          background: C.bg2,
-          border: `1px solid ${C.border}`,
+          background: token.surface.raised,
+          border: `1px solid ${token.line.default}`,
           borderRadius: 18,
           padding: "36px 32px",
           width: 520,
@@ -516,7 +517,7 @@ export default function AuthPage({ mode = "signin" }) {
             )}
           </div>
 
-          <h1 style={{ color: C.t1, fontWeight: 900, fontSize: 22, letterSpacing: -0.5, margin: 0 }}>
+          <h1 style={{ color: token.content.primary, fontWeight: 900, fontSize: 22, letterSpacing: -0.5, margin: 0 }}>
             {!isOtpStage
               ? isUp
                 ? "Create Your Account"
@@ -526,7 +527,7 @@ export default function AuthPage({ mode = "signin" }) {
 
           <p
             style={{
-              color: C.t2,
+              color: token.content.secondary,
               fontSize: 11,
               fontFamily: "monospace",
               marginTop: 6,
@@ -538,7 +539,7 @@ export default function AuthPage({ mode = "signin" }) {
             ) : (
               <span>
                 A 6-digit verification code has been sent to{" "}
-                <span style={{ color: C.cyan, fontWeight: 600 }}>{maskEmail(email)}</span>
+                <span style={{ color: token.brand.base, fontWeight: 600 }}>{maskEmail(email)}</span>
               </span>
             )}
           </p>
@@ -554,8 +555,8 @@ export default function AuthPage({ mode = "signin" }) {
                 disabled={isLoading}
                 aria-label="Sign in with Google"
                 style={{
-                  background: C.bg3,
-                  border: `1px solid ${C.border}`,
+                  background: token.surface.inset,
+                  border: `1px solid ${token.line.default}`,
                   borderRadius: 8,
                   padding: "9px 0",
                   display: "flex",
@@ -564,7 +565,7 @@ export default function AuthPage({ mode = "signin" }) {
                   gap: 6,
                   fontSize: 11,
                   fontFamily: "monospace",
-                  color: C.t2,
+                  color: token.content.secondary,
                   cursor: isLoading ? "not-allowed" : "pointer",
                   transition: "all 0.15s",
                   opacity: isLoading ? 0.6 : 1,
@@ -577,11 +578,11 @@ export default function AuthPage({ mode = "signin" }) {
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
-              <div style={{ height: 1, flex: 1, background: C.border }} />
-              <span style={{ color: C.t3, fontSize: 9, fontFamily: "monospace", letterSpacing: 1 }}>
+              <div style={{ height: 1, flex: 1, background: token.line.default }} />
+              <span style={{ color: token.content.muted, fontSize: 9, fontFamily: "monospace", letterSpacing: 1 }}>
                 OR ENTER CREDENTIALS
               </span>
-              <div style={{ height: 1, flex: 1, background: C.border }} />
+              <div style={{ height: 1, flex: 1, background: token.line.default }} />
             </div>
 
             <form noValidate onSubmit={handlePasswordAuth} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -612,7 +613,7 @@ export default function AuthPage({ mode = "signin" }) {
                 <label
                   htmlFor="auth-password"
                   style={{
-                    color: C.t2,
+                    color: token.content.secondary,
                     fontSize: 9,
                     fontFamily: "monospace",
                     fontWeight: 900,
@@ -626,7 +627,7 @@ export default function AuthPage({ mode = "signin" }) {
                   <Lock
                     size={12}
                     aria-hidden="true"
-                    style={{ color: C.t3, position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }}
+                    style={{ color: token.content.muted, position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }}
                   />
                   <input
                     id="auth-password"
@@ -639,9 +640,9 @@ export default function AuthPage({ mode = "signin" }) {
                     autoComplete={isUp ? "new-password" : "current-password"}
                     required
                     style={{
-                      background: C.bg3,
-                      border: `1px solid ${C.border}`,
-                      color: C.t1,
+                      background: token.surface.inset,
+                      border: `1px solid ${token.line.default}`,
+                      color: token.content.primary,
                       width: "100%",
                       borderRadius: 8,
                       padding: "8px 40px 8px 32px",
@@ -662,7 +663,7 @@ export default function AuthPage({ mode = "signin" }) {
                       right: 10,
                       top: "50%",
                       transform: "translateY(-50%)",
-                      color: C.t3,
+                      color: token.content.muted,
                       background: "transparent",
                       border: "none",
                       cursor: "pointer",
@@ -681,7 +682,7 @@ export default function AuthPage({ mode = "signin" }) {
                   <label
                     htmlFor="auth-confirm-password"
                     style={{
-                      color: C.t2,
+                      color: token.content.secondary,
                       fontSize: 9,
                       fontFamily: "monospace",
                       fontWeight: 900,
@@ -695,7 +696,7 @@ export default function AuthPage({ mode = "signin" }) {
                     <Lock
                       size={12}
                       aria-hidden="true"
-                      style={{ color: C.t3, position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }}
+                      style={{ color: token.content.muted, position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }}
                     />
                     <input
                       id="auth-confirm-password"
@@ -709,9 +710,9 @@ export default function AuthPage({ mode = "signin" }) {
                       autoComplete="new-password"
                       required
                       style={{
-                        background: C.bg3,
-                        border: `1px solid ${C.border}`,
-                        color: C.t1,
+                        background: token.surface.inset,
+                        border: `1px solid ${token.line.default}`,
+                        color: token.content.primary,
                         width: "100%",
                         borderRadius: 8,
                         padding: "8px 40px 8px 32px",
@@ -732,7 +733,7 @@ export default function AuthPage({ mode = "signin" }) {
                         right: 10,
                         top: "50%",
                         transform: "translateY(-50%)",
-                        color: C.t3,
+                        color: token.content.muted,
                         background: "transparent",
                         border: "none",
                         cursor: "pointer",
@@ -775,7 +776,7 @@ export default function AuthPage({ mode = "signin" }) {
                       gap: 8,
                       fontSize: 11,
                       fontFamily: "monospace",
-                      color: C.t2,
+                      color: token.content.secondary,
                       cursor: "pointer",
                       lineHeight: "1.4",
                     }}
@@ -785,13 +786,13 @@ export default function AuthPage({ mode = "signin" }) {
                       required
                       checked={agreedToPolicies}
                       onChange={(e) => setAgreedToPolicies(e.target.checked)}
-                      style={{ accentColor: C.cyan, marginTop: 2 }}
+                      style={{ accentColor: token.brand.base, marginTop: 2 }}
                     />
                     <span>
                       I agree to the{" "}
                       <Link
                         to="/legal/terms"
-                        style={{ color: C.cyan, textDecoration: "underline" }}
+                        style={{ color: token.brand.base, textDecoration: "underline" }}
                         className="hover:text-cyan-300 focus:ring-1 focus:ring-cyan-400 rounded"
                       >
                         Terms
@@ -799,7 +800,7 @@ export default function AuthPage({ mode = "signin" }) {
                       and{" "}
                       <Link
                         to="/legal/risk"
-                        style={{ color: C.cyan, textDecoration: "underline" }}
+                        style={{ color: token.brand.base, textDecoration: "underline" }}
                         className="hover:text-cyan-300 focus:ring-1 focus:ring-cyan-400 rounded"
                       >
                         Risk Disclosure
@@ -837,11 +838,11 @@ export default function AuthPage({ mode = "signin" }) {
                   gap: 12,
                 }}
               >
-                <div style={{ flex: 1, height: 1, background: C.border }} />
-                <span style={{ color: C.t3, fontSize: 10, fontFamily: "monospace", letterSpacing: 1, textTransform: "uppercase" }}>
+                <div style={{ flex: 1, height: 1, background: token.line.default }} />
+                <span style={{ color: token.content.muted, fontSize: 10, fontFamily: "monospace", letterSpacing: 1, textTransform: "uppercase" }}>
                   OR
                 </span>
-                <div style={{ flex: 1, height: 1, background: C.border }} />
+                <div style={{ flex: 1, height: 1, background: token.line.default }} />
               </div>
 
               <button
@@ -856,10 +857,10 @@ export default function AuthPage({ mode = "signin" }) {
                   justifyContent: "center",
                   gap: 10,
                   background: "rgba(255, 255, 255, 0.05)",
-                  border: `1px solid ${C.border}`,
+                  border: `1px solid ${token.line.default}`,
                   borderRadius: 8,
                   padding: "10px 16px",
-                  color: C.t1,
+                  color: token.content.primary,
                   fontSize: 12,
                   fontFamily: "monospace",
                   fontWeight: 600,
@@ -907,7 +908,7 @@ export default function AuthPage({ mode = "signin" }) {
               <label
                 htmlFor="otp-digit-0"
                 style={{
-                  color: C.t2,
+                  color: token.content.secondary,
                   fontSize: 10,
                   fontFamily: "monospace",
                   fontWeight: 700,
@@ -943,9 +944,9 @@ export default function AuthPage({ mode = "signin" }) {
                     disabled={isLoading}
                     aria-label={`Digit ${i + 1} of 6`}
                     style={{
-                      background: C.bg3,
-                      border: `1px solid ${digit ? C.cyan : C.border}`,
-                      color: C.t1,
+                      background: token.surface.inset,
+                      border: `1px solid ${digit ? token.brand.base : token.line.default}`,
+                      color: token.content.primary,
                       width: 46,
                       height: 54,
                       textAlign: "center",
@@ -955,7 +956,7 @@ export default function AuthPage({ mode = "signin" }) {
                       outline: "none",
                       fontFamily: "monospace",
                       transition: "all 0.15s",
-                      boxShadow: digit ? `0 0 10px ${C.cyan}20` : "none",
+                      boxShadow: digit ? `0 0 10px ${token.brand.base}20` : "none",
                       opacity: isLoading ? 0.6 : 1,
                     }}
                     className="focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/30"
@@ -972,7 +973,7 @@ export default function AuthPage({ mode = "signin" }) {
                 alignItems: "center",
                 fontSize: 11,
                 fontFamily: "monospace",
-                color: C.t3,
+                color: token.content.muted,
                 padding: "0 4px",
               }}
             >
@@ -984,7 +985,7 @@ export default function AuthPage({ mode = "signin" }) {
                   onClick={handleResendOtp}
                   disabled={isLoading}
                   style={{
-                    color: C.cyan,
+                    color: token.brand.base,
                     background: "transparent",
                     border: "none",
                     cursor: isLoading ? "not-allowed" : "pointer",
@@ -1003,7 +1004,7 @@ export default function AuthPage({ mode = "signin" }) {
                 onClick={handleBackToPassword}
                 disabled={isLoading}
                 style={{
-                  color: C.t3,
+                  color: token.content.muted,
                   background: "transparent",
                   border: "none",
                   cursor: "pointer",
@@ -1086,7 +1087,7 @@ export default function AuthPage({ mode = "signin" }) {
         {!isOtpStage && (
           <p
             style={{
-              color: C.t3,
+              color: token.content.muted,
               fontSize: 10,
               fontFamily: "monospace",
               textAlign: "center",
@@ -1097,7 +1098,7 @@ export default function AuthPage({ mode = "signin" }) {
             <button
               type="button"
               style={{
-                color: C.cyan,
+                color: token.brand.base,
                 cursor: "pointer",
                 background: "transparent",
                 border: "none",
@@ -1118,7 +1119,7 @@ export default function AuthPage({ mode = "signin" }) {
         <div
           style={{
             marginTop: 24,
-            borderTop: `1px solid ${C.border}`,
+            borderTop: `1px solid ${token.line.default}`,
             paddingTop: 16,
             display: "flex",
             justifyContent: "center",
@@ -1127,28 +1128,28 @@ export default function AuthPage({ mode = "signin" }) {
         >
           <Link
             to="/legal/terms"
-            style={{ color: C.t3, fontSize: 9, fontFamily: "monospace" }}
+            style={{ color: token.content.muted, fontSize: 9, fontFamily: "monospace" }}
             className="hover:underline hover:text-white focus:ring-1 focus:ring-cyan-400 rounded"
           >
             Terms
           </Link>
           <Link
             to="/legal/privacy"
-            style={{ color: C.t3, fontSize: 9, fontFamily: "monospace" }}
+            style={{ color: token.content.muted, fontSize: 9, fontFamily: "monospace" }}
             className="hover:underline hover:text-white focus:ring-1 focus:ring-cyan-400 rounded"
           >
             Privacy
           </Link>
           <Link
             to="/legal/risk"
-            style={{ color: C.t3, fontSize: 9, fontFamily: "monospace" }}
+            style={{ color: token.content.muted, fontSize: 9, fontFamily: "monospace" }}
             className="hover:underline hover:text-white focus:ring-1 focus:ring-cyan-400 rounded"
           >
             Risk Disclosure
           </Link>
           <Link
             to="/legal/refund"
-            style={{ color: C.t3, fontSize: 9, fontFamily: "monospace" }}
+            style={{ color: token.content.muted, fontSize: 9, fontFamily: "monospace" }}
             className="hover:underline hover:text-white focus:ring-1 focus:ring-cyan-400 rounded"
           >
             Refunds

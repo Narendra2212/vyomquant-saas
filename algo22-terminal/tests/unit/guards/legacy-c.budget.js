@@ -584,8 +584,23 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // `token.status.warning.fg`. No `C.space.*`, `C.radius.*`, `C.shadow*`, `C.glow.*` or
   // `C.gradient.*` read here, and no `no-colour-literals` entry moved.
   'components/ResearchConsole.jsx': 0,
-  'pages/AuthPage.jsx': 57,
-  'pages/Wizard.jsx': 56,
+  // 57 -> 0 at task 27.2, batch 5a. The `C` specifier is NARROWED out of the import, not the
+  // import deleted: `Inp` stays on it, as a component. `token` is read from `design/tokens.js`.
+  // Every one of the 57 is the value the shim already gave it. By shim name: `C.t3` 19,
+  // `C.t2` 6, `C.t1` 5 -> `token.content.muted` / `secondary` / `primary`; `C.border` 12 ->
+  // `token.line.default`; `C.cyan` 8 -> `token.brand.base`; `C.bg3` 5, `C.bg0` 1, `C.bg2` 1 ->
+  // `token.surface.inset` / `canvas` / `raised`. No `C.space.*`, `C.radius.*`, `C.shadow*`,
+  // `C.glow.*` or `C.gradient.*` read here, and no `no-colour-literals` entry moved.
+  'pages/AuthPage.jsx': 0,
+  // 56 -> 0 at task 27.2, batch 5a. The `C` specifier is NARROWED out of the import, not the
+  // import deleted: `Inp` stays on it, as a component. `token` is read from `design/tokens.js`.
+  // Every one of the 56 is the value the shim already gave it. By shim name: `C.cyan` 12 ->
+  // `token.brand.base`; `C.t1` 9, `C.t2` 8, `C.t3` 6 -> `token.content.primary` / `secondary` /
+  // `muted`; `C.border` 8 -> `token.line.default`; `C.green` 5 -> `token.status.profit.fg`;
+  // `C.bg3` 4, `C.bg1` 2, `C.bg0` 1, `C.bg2` 1 -> `token.surface.inset` / `panel` / `canvas` /
+  // `raised`. No `C.space.*`, `C.radius.*`, `C.shadow*`, `C.glow.*` or `C.gradient.*` read
+  // here, and no `no-colour-literals` entry moved.
+  'pages/Wizard.jsx': 0,
   // 38 -> 0 at task 27.2, batch 4. The `C` specifier is NARROWED out of the import, not the
   // import deleted: `Tag2` and `PanelTitle` stay on it, as components. `token` is read from
   // `design/tokens.js`. Every one of the 38 is the value the shim already gave it.
@@ -764,7 +779,14 @@ export const LEGACY_C_BUDGET = Object.freeze({
   // cleanliness nothing is holding, and `lib/blockRegistry.js` above is the standing proof
   // that a `lib/` module can end up reaching for the shim.
   'lib/drawdownSeries.js': 0,
-  'pages/UpdatePasswordPage.jsx': 7,
+  // 7 -> 0 at task 27.2, batch 5a. The `C` specifier is NARROWED out of the import, not the
+  // import deleted: `Inp` stays on it, as a component. `token` is read from `design/tokens.js`.
+  // Every one of the 7 is the value the shim already gave it. By shim name: `C.green` 2 ->
+  // `token.status.profit.fg`; `C.t1` 1 -> `token.content.primary`; `C.red` 1 ->
+  // `token.status.loss.fg`; `C.bg0` 1, `C.bg2` 1 -> `token.surface.canvas` / `raised`;
+  // `C.border` 1 -> `token.line.default`. No `C.space.*`, `C.radius.*`, `C.shadow*`,
+  // `C.glow.*` or `C.gradient.*` read here, and no `no-colour-literals` entry moved.
+  'pages/UpdatePasswordPage.jsx': 0,
   'pages/RiskSettings.jsx': 6,
   // New at task 20.2 — §7.8 (4)'s three shared trading panels, extracted from
   // `pages/LiveTrading.jsx` so `pages/PaperTrading.jsx` can render the same components at
