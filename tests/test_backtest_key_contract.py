@@ -38,6 +38,10 @@ THE THREE BOUNDARIES
         reads  results.get("total_return", 0), .get("win_rate", 0), .get("max_drawdown", 0),
                .get("final_capital", 0), .get("equity_curve", []), ...
 
+    TASK 7.8 has replaced that third layer's sixteen literals with the declared table
+    `backtest_service.RESULT_COLUMN_SOURCE_KEYS`, which this file now imports rather than
+    mirrors (:data:`WRITER_COLUMN_SOURCE_KEYS`). The diagram above is the record of `F`.
+
 THE PRIMARY INSTRUMENT (section 1)
 ----------------------------------
 Not "assert `win_rate` is 0.55". The **key-set contract**: the writer's read-key set is a SUBSET
@@ -154,33 +158,40 @@ from tests.test_backtest_evidence_columns_regression import (  # noqa: E402
 #  THE TWO KEY SETS UNDER CONTRACT
 # ══════════════════════════════════════════════════════════════════════════
 
-#: Every key `update_backtest_results` reads out of `results`, in source order
-#: (`backtest_service.py:421-439`). This is the WRITER'S READ-KEY SET, and the contract in
-#: section 1 is that it is a subset of whatever the payload carries. Read off the source rather
-#: than hand-curated, so a column added to the writer without a matching emit reds this file.
-READ_KEYS = (
-    "total_return",              # :424  <- engine emits total_return_pct
-    "total_return_pct",          # :425
-    "win_rate",                  # :426  <- engine emits win_rate_pct
-    "max_drawdown",              # :427  <- engine emits max_drawdown_pct
-    "sharpe_ratio",              # :428
-    "sortino_ratio",             # :429
-    "profit_factor",             # :430
-    "total_trades",              # :431
-    "winning_trades",            # :432  <- emitted by NOTHING on either path
-    "losing_trades",             # :433  <- emitted by NOTHING on either path
-    "equity_curve",              # :434  <- out of band: the engine's 2nd tuple element
-    "monthly_returns",           # :435
-    "daily_returns",             # :436
-    "execution_time_seconds",    # :437
-    "final_capital",             # :438  <- see section 2: NOT zero, the STARTING capital
-    "trades",                    # :439
-)
+#: The writer's column → source-key mapping, as the writer itself declares it.
+#:
+#: TASK 7.8 UPDATE. Until 7.8 these two tables were a hand-copied tuple of the sixteen
+#: `results.get(...)` literals in `update_backtest_results`, annotated with the source line each
+#: came from. The docstring on that tuple claimed it was "read off the source rather than
+#: hand-curated" - it was not, and a hand-copied mirror of a source expression is exactly the
+#: kind of second spelling this whole file exists to catch. Task 7.8 replaced the writer's
+#: literal with a declared table, so the mirror is now the real thing: imported, not retyped.
+#: A column added to the writer without a matching emit reds this file with no edit here.
+WRITER_COLUMN_SOURCE_KEYS = {
+    **bs.RESULT_COLUMN_SOURCE_KEYS,
+    **bs.RESULT_JSON_COLUMN_SOURCE_KEYS,
+}
 
-#: The four columns Requirements 1.7 and 1.8 name. Section 1 asserts every member of
-#: :data:`READ_KEYS`, but these four are parametrised by name so a partial fix - repointing
-#: `win_rate` and forgetting `max_drawdown` - reports which one is still missing.
-REQUIREMENT_NAMED_COLUMNS = ("total_return", "win_rate", "max_drawdown", "final_capital")
+#: Every key `update_backtest_results` reads out of `results`. This is the WRITER'S READ-KEY
+#: SET, and the contract in section 1 is that it is a subset of whatever the payload carries.
+#:
+#: Deduplicated, order preserved: `total_return` and `total_return_pct` are two columns fed by
+#: the one engine key `total_return_pct`, and a repeated parametrisation would report the same
+#: key twice rather than reporting two columns.
+READ_KEYS = tuple(dict.fromkeys(WRITER_COLUMN_SOURCE_KEYS.values()))
+
+#: The four columns Requirements 1.7 and 1.8 name, each against the key task 7.8 declared as its
+#: producer. Section 1 asserts every member of :data:`READ_KEYS`; these four are parametrised by
+#: COLUMN so a partial fix - repointing `win_rate` and forgetting `max_drawdown` - reports which
+#: column is still wrong rather than only which key is absent.
+#:
+#: The right-hand side is read out of the writer rather than restated, so this tuple cannot
+#: drift from what the writer actually does: if a future edit repoints `win_rate` at something
+#: the payload does not carry, this reds without being updated.
+REQUIREMENT_NAMED_COLUMNS = tuple(
+    (column, WRITER_COLUMN_SOURCE_KEYS[column])
+    for column in ("total_return", "win_rate", "max_drawdown", "final_capital")
+)
 
 #: Every `stats.get("<VectorBT display name>")` in `backtest_runtime`, with the column(s) that
 #: collapse when it misses. `stats` at that point is the ENGINE'S `results` dict, which has
@@ -576,9 +587,9 @@ def test_every_key_the_writer_reads_is_a_key_the_engine_emits(engine_run, read_k
     )
 
 
-@pytest.mark.parametrize("column", REQUIREMENT_NAMED_COLUMNS)
+@pytest.mark.parametrize("column, source_key", REQUIREMENT_NAMED_COLUMNS)
 def test_the_four_named_columns_are_not_persisted_as_the_writers_default(
-    runtime_payload, column
+    runtime_payload, column, source_key
 ):
     """The four columns 1.7 and 1.8 name, measured at the hop that actually writes them.
 
@@ -594,12 +605,23 @@ def test_the_four_named_columns_are_not_persisted_as_the_writers_default(
         win_rate       absent -> stored 0
         max_drawdown   absent -> stored 0
         final_capital  PRESENT, and equal to 10000.0 = the STARTING capital (section 2)
+
+    TASK 7.8 UPDATE. `column` used to be both the column name and the key looked up, which was
+    the same conflation the defect was made of. It is now the column name, and `source_key` is
+    the key task 7.8 declared as its producer - read out of the writer, so the assertion is
+    "whatever the writer reads for this column, the payload carries it" rather than "the payload
+    happens to spell it the way the column is spelled"::
+
+        total_return  <- total_return_pct
+        win_rate      <- win_rate_pct
+        max_drawdown  <- max_drawdown_pct
+        final_capital <- final_equity
     """
     payload, _sb = runtime_payload
-    assert column in payload, (
-        f"the runtime payload handed to update_backtest_results has no {column!r}. Its keys "
-        f"are {sorted(payload)}. backtest_service.py reads results.get({column!r}, 0) and "
-        f"persists 0."
+    assert source_key in payload, (
+        f"the writer fills strategy_backtests.{column} from results[{source_key!r}], and the "
+        f"runtime payload handed to update_backtest_results has no such key. Its keys are "
+        f"{sorted(payload)}, so the column is written as SQL NULL."
     )
 
 

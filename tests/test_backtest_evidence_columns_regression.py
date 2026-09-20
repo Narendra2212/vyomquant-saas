@@ -344,12 +344,28 @@ def _running_row(**overrides):
 
 
 def _results(**overrides):
+    """A stand-in for the payload ``BacktestRuntime.run_backtest`` hands the writer.
+
+    PRODUCTION-LAUNCH-HARDENING TASK 7.8 RESPELLED THIS.
+        It used to be spelled ``total_return`` / ``win_rate`` / ``final_capital`` - the
+        DB *column* names - because that is what ``update_backtest_results`` read. The
+        writer now reads the keys ``backtesting_engine.run_backtest_async`` actually
+        emits, declared in :data:`backtest_service.RESULT_COLUMN_SOURCE_KEYS`, so a
+        fixture still spelled the old way would hand the writer a payload it correctly
+        finds nothing in and every metric assertion below would be asserting against
+        SQL ``NULL``. The three columns this file asserts on - ``total_return``,
+        ``final_capital``, ``execution_time_seconds`` - are unchanged; what changed is
+        the key each is sourced from.
+
+        ``total_return`` is fed from ``total_return_pct`` (task 7.8's declared mapping),
+        so the separate ``1234.5`` that used to stand for an absolute return no longer
+        has a producer and is gone rather than restated under a new name.
+    """
     results = {
-        "total_return": 1234.5,
         "total_return_pct": 12.345,
-        "win_rate": 0.55,
+        "win_rate_pct": 0.55,
         "total_trades": 41,
-        "final_capital": 11234.5,
+        "final_equity": 11234.5,
         "execution_time_seconds": 3.5,
     }
     results.update(overrides)
@@ -529,7 +545,11 @@ class TestExecutedBarCountIsPersisted:
             )
 
         assert "executed_bar_count" not in written
-        assert written["total_return"] == 1234.5
+        # Task 7.8: the ``total_return`` column is fed from the engine's
+        # ``total_return_pct`` and ``final_capital`` from its ``final_equity``. The point of
+        # these two lines is unchanged - the metrics survive an unapplied 006 - but they now
+        # read through the declared mapping instead of a name match.
+        assert written["total_return"] == 12.345
         assert written["final_capital"] == 11234.5
         assert written["status"] == "completed"
         assert bs.BACKTEST_EVIDENCE_MIGRATION in caplog.text, (

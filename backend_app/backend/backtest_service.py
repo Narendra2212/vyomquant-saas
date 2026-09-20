@@ -240,6 +240,80 @@ def coerce_executed_bar_count(value: Any) -> Optional[int]:
     return count if count >= 0 else None
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  THE WRITER'S COLUMN → ENGINE-KEY MAPPING
+#  (production-launch-hardening task 7.8, Requirements 1.7, 1.8, 2.7, 2.8, 3.4)
+#
+#  ``update_backtest_results`` used to read ``results.get("total_return", 0)``,
+#  ``.get("win_rate", 0)``, ``.get("max_drawdown", 0)`` and
+#  ``.get("final_capital", 0)``. ``backtesting_engine.run_backtest_async`` emits
+#  NONE of those four names - it emits ``total_return_pct``, ``win_rate_pct``,
+#  ``max_drawdown_pct`` and ``final_equity`` - so each of those four lookups
+#  missed on every run and the writer persisted its own default into a column
+#  that is then rendered to a trader as a measured result.
+#
+#  TWO RULES, AND BOTH OF THEM ARE THE POINT OF THIS TABLE.
+#
+#  1. WHERE A COLUMN NAME DIFFERS FROM THE KEY THAT PRODUCES IT, THE MAPPING IS
+#     DECLARED HERE. It is not implied by a matching string in a dict literal,
+#     because a matching string is exactly what was missing and nothing about a
+#     ``results.get("win_rate")`` sitting next to ``"win_rate":`` says whether
+#     the producer agreed. The four cross-spellings are greppable, reviewable
+#     and asserted by ``tests/test_backtest_key_contract.py``, whose
+#     ``READ_KEYS`` mirrors the right-hand column of this table.
+#
+#  2. NO NUMERIC DEFAULT. ``dict.get(key, 0)`` is a silent, type-preserving
+#     translation of "absent" into "zero": the column comes back a plausible
+#     number rather than an obviously missing one, which is why these four were
+#     *wrong* rather than *missing* for as long as they were. A key the payload
+#     genuinely does not carry now writes SQL ``NULL`` - the same rule wave 1
+#     established - and every one of these columns is nullable in
+#     ``001_strategy_architecture.sql``, whose ``DEFAULT 0`` applies to the
+#     INSERT that ``create_backtest`` performs and not to this UPDATE.
+#
+#  MAP, DO NOT MIGRATE. Requirement 2.8 also permits renaming the columns to the
+#  engine's spelling. That is a migration against a table that already holds
+#  rows; this is reversible by reverting one commit, and a migration is not.
+#
+#  NOT IN THIS TABLE, deliberately:
+#    * ``status`` and ``completed_at`` - written by this method, not read from
+#      ``results``.
+#    * ``executed_bar_count`` - a separate argument with its own availability
+#      handling (see the block above); ``None`` there means "leave the column
+#      alone", not "write NULL".
+# ══════════════════════════════════════════════════════════════════════════
+
+#: ``strategy_backtests`` column → the key in ``results`` that produces it. Read with no
+#: default, so an absent key writes SQL ``NULL`` instead of a fabricated ``0``.
+#: The four marked ``<-`` are the cross-spellings task 7.8 repointed.
+RESULT_COLUMN_SOURCE_KEYS: Dict[str, str] = {
+    "total_return":           "total_return_pct",       # <- was .get("total_return", 0)
+    "total_return_pct":       "total_return_pct",
+    "win_rate":               "win_rate_pct",           # <- was .get("win_rate", 0)
+    "max_drawdown":           "max_drawdown_pct",       # <- was .get("max_drawdown", 0)
+    "sharpe_ratio":           "sharpe_ratio",
+    "sortino_ratio":          "sortino_ratio",
+    "profit_factor":          "profit_factor",
+    "total_trades":           "total_trades",
+    "winning_trades":         "winning_trades",
+    "losing_trades":          "losing_trades",
+    "execution_time_seconds": "execution_time_seconds",
+    "final_capital":          "final_equity",           # <- was .get("final_capital", 0)
+}
+
+#: The JSONB columns, kept separate because their default is ``[]`` and stays ``[]``.
+#: An empty array is not the failure mode rule 2 above is about: it renders as an empty
+#: chart or an empty trade table, not as a number a trader reads as measured. Narrowing
+#: them to ``NULL`` would change what lands in a persisted column beyond what task 7.8
+#: declares, so it is not done here.
+RESULT_JSON_COLUMN_SOURCE_KEYS: Dict[str, str] = {
+    "equity_curve":    "equity_curve",
+    "monthly_returns": "monthly_returns",
+    "daily_returns":   "daily_returns",
+    "trades":          "trades",
+}
+
+
 class BacktestService:
     """
     Central service for all backtest operations.
@@ -397,6 +471,14 @@ class BacktestService:
         applied - see this module's availability block. A results write must never be
         lost to a column that a hand-applied migration has not created yet.
 
+        KEY MAPPING (task 7.8, Requirements 1.7, 1.8, 2.7, 2.8)
+            Which key in ``results`` feeds which column is declared in
+            :data:`RESULT_COLUMN_SOURCE_KEYS` and :data:`RESULT_JSON_COLUMN_SOURCE_KEYS`,
+            including the four columns whose name differs from the engine key that
+            produces them. Nothing here supplies a numeric default, so a metric the
+            payload does not carry is written as SQL ``NULL`` rather than as a ``0`` that
+            reads like a measurement.
+
         Returns:
             The updated backtest record, or ``{}`` when no row belonging to this user
             carries ``backtest_id``.
@@ -418,26 +500,18 @@ class BacktestService:
         sb_res = self._get_supabase(user)
         sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
         
-        update_data = {
+        # Every metric column is read through the declared mapping above (task 7.8), so
+        # the column ↔ producing-key correspondence lives in one reviewable table rather
+        # than in eighteen string literals that happen - or, for four of them, happen not
+        # - to match. No ``.get(key, 0)`` appears here: an absent key writes SQL NULL.
+        update_data: Dict[str, Any] = {
             "status": "completed",
             "completed_at": datetime.now(timezone.utc).isoformat(),
-            "total_return": results.get("total_return", 0),
-            "total_return_pct": results.get("total_return_pct", 0),
-            "win_rate": results.get("win_rate", 0),
-            "max_drawdown": results.get("max_drawdown", 0),
-            "sharpe_ratio": results.get("sharpe_ratio", 0),
-            "sortino_ratio": results.get("sortino_ratio", 0),
-            "profit_factor": results.get("profit_factor", 0),
-            "total_trades": results.get("total_trades", 0),
-            "winning_trades": results.get("winning_trades", 0),
-            "losing_trades": results.get("losing_trades", 0),
-            "equity_curve": results.get("equity_curve", []),
-            "monthly_returns": results.get("monthly_returns", []),
-            "daily_returns": results.get("daily_returns", []),
-            "execution_time_seconds": results.get("execution_time_seconds", 0),
-            "final_capital": results.get("final_capital", 0),
-            "trades": results.get("trades", [])  # Store detailed trade data
         }
+        for column, source_key in RESULT_COLUMN_SOURCE_KEYS.items():
+            update_data[column] = results.get(source_key)
+        for column, source_key in RESULT_JSON_COLUMN_SOURCE_KEYS.items():
+            update_data[column] = results.get(source_key, [])
 
         bar_count = coerce_executed_bar_count(executed_bar_count)
 
