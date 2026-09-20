@@ -894,20 +894,42 @@ class DashboardAggregationService:
                 paper_svc = get_paper_trading_service()
                 acct = paper_svc.get_or_create_account(user["id"])
                 
-                total_equity = float(acct.get("total_equity", 100000.0))
-                available_balance = float(acct.get("available_balance", 100000.0))
+                # Task 6.2 (Requirements 1.1, 1.4, 2.1, 2.4). ``100000.0`` here was the paper
+                # STARTING capital leaking out of a ``dict.get`` fallback into a money field, so
+                # an account row missing the column - a schema or migration fault, exactly when a
+                # stale-looking figure is most likely to be believed - reported as fully funded.
+                # Read through ``_finite_float`` (:314): an absent column is absent, and a figure
+                # that WAS read is reported exactly as read, ``0.0``, ``-0.0`` and a genuine
+                # ``100000.0`` balance alike (preservation 3.2). Absence is a fact about the
+                # READ, never about the number.
+                total_equity = _finite_float(acct.get("total_equity"))
+                available_balance = _finite_float(acct.get("available_balance"))
                 free_balance = available_balance
                 used_balance = float(acct.get("locked_balance", 0.0))
                 realized_pnl = float(acct.get("realized_pnl", 0.0))
                 unrealized_pnl = float(acct.get("unrealized_pnl", 0.0))
-                initial_capital = float(acct.get("initial_capital", 100000.0))
+                initial_capital = _finite_float(acct.get("initial_capital"))
                 
                 # Calculate today's realized PnL from paper trades since 00:00 UTC
                 trades = paper_svc.get_trades(user["id"])
-                today_realized_pnl = sum(
-                    float(t.get("realized_pnl", 0.0))
+                # Defect 48, found by ``tests/property/test_absent_vs_zero.py``. This sum coerced
+                # each same-day fill with a bare ``float()`` INSIDE this branch's ``try``, so one
+                # unreadable realised figure raised and the ``except`` below replaced the ENTIRE
+                # overview with the starting capital: a single malformed ledger row fabricated the
+                # whole account. Read through ``_finite_float`` so an unreadable fill nulls only
+                # the figure it belongs to, and ``None`` rather than a partial sum for the same
+                # reason the lifetime figure below is ``None`` - dropping the unreadable fill
+                # would publish the sum of a DIFFERENT set of fills under this name. A ledger
+                # holding no same-day fills was read fine: nothing realised today is ``0.0``.
+                paper_today_realized = [
+                    _finite_float(t.get("realized_pnl"))
                     for t in trades
                     if (t.get("executed_at") or "") >= today_utc_cutoff
+                ]
+                today_realized_pnl: Optional[float] = (
+                    None
+                    if any(value is None for value in paper_today_realized)
+                    else float(sum(paper_today_realized))
                 )
 
                 # BC-5: lifetime realised P&L. The SAME per-fill expression as
@@ -928,8 +950,22 @@ class DashboardAggregationService:
                     else float(sum(paper_realized))
                 )
 
-                today_pnl = today_realized_pnl + unrealized_pnl
-                today_return_pct = round((today_pnl / initial_capital * 100), 2) if initial_capital > 0 else 0.0
+                # A figure derived from one that was not read was not read either. ``today_pnl``
+                # goes absent with today's realised figure; ``today_return_pct`` goes absent with
+                # either its numerator or its ``initial_capital`` denominator. The denominator is
+                # where the fabrication used to hide: ``100000.0`` was divided BY rather than
+                # published, so an absent capital base surfaced as a precise-looking percentage
+                # and never as the literal itself.
+                today_pnl: Optional[float] = (
+                    None if today_realized_pnl is None else today_realized_pnl + unrealized_pnl
+                )
+                today_return_pct: Optional[float] = None
+                if today_pnl is not None and initial_capital is not None:
+                    today_return_pct = (
+                        round((today_pnl / initial_capital * 100), 2)
+                        if initial_capital > 0
+                        else 0.0
+                    )
                 cumulative_pnl = realized_pnl + unrealized_pnl
                 
                 return {
@@ -955,17 +991,22 @@ class DashboardAggregationService:
             except Exception as paper_err:
                 logger.error(f"Failed to fetch paper portfolio overview for {user['id']}: {paper_err}")
                 return {
-                    "total_equity": 100000.0,
-                    "total_value": 100000.0,
-                    "available_balance": 100000.0,
-                    "free_balance": 100000.0,
+                    # Task 6.2 (Requirements 1.1, 1.2, 2.1, 2.2). The paper store could not be
+                    # read, so there is no balance here to report. A trader whose account has
+                    # been running for a month and has just lost the store was being shown the
+                    # capital they opened with, indistinguishable from a measured balance.
+                    "total_equity": None,
+                    "total_value": None,
+                    "available_balance": None,
+                    "free_balance": None,
                     "used_balance": 0.0,
                     "today_pnl": 0.0,
                     "today_realized_pnl": 0.0,
                     # BC-5: the paper read failed, so there is no lifetime realised figure to
-                    # report. ``None``, not the 0.0 its neighbours carry - those are pre-existing
-                    # and left untouched here (BC-2 dealt with the route that published them as
-                    # a portfolio), but a field added today does not join them.
+                    # report. ``None`` - and as of task 6.2 the four headline money figures above
+                    # say the same thing rather than the starting capital, so this is no longer
+                    # the one honest field in the literal. The remaining ``0.0``s are the P&L
+                    # figures, outside 6.2's scope and left exactly as they were.
                     "realized_pnl": None,
                     "today_return_pct": 0.0,
                     "unrealized_pnl": 0.0,
