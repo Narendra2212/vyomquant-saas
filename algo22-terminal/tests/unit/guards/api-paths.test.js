@@ -423,18 +423,19 @@ describe('api-paths guard: every client API path resolves to a declared route', 
       (literal) =>
         !methodsByPath.has(literal.path) && isBasePathFragment(literal, client.literals),
     );
-    // Not an emptiness assertion: there are two and both are fine. What is asserted is
+    // Not an emptiness assertion: there is one and it is fine. What is asserted is
     // that this is the only kind excused — a named binding that other literals
     // interpolate into routes the backend declares — and that the list of them is
     // short enough to read.
     //
-    // `apiBaseUrl` is `CopilotContext`'s prop default, and it is the reason
-    // `api-surface.js` accepts a destructuring default as a binding: `/api/v1/copilot`
-    // is the mount prefix, it addresses nothing on its own, and the four `fetch` calls
-    // built from it are checked in full — two of which are in the findings list.
+    // `apiBaseUrl → /api/v1/copilot` stood beside it until `production-launch-hardening`
+    // task 9.3 deleted `contexts/CopilotContext.jsx`, where it was a destructured prop
+    // default interpolated into four `fetch` calls — two of which were the last two
+    // entries in `KNOWN_API_DEFECTS`. `api-surface.js` still accepts a destructuring
+    // default as a binding, and that generality is kept deliberately: it is what stops
+    // the next `({ apiBaseUrl = "/api/…" })` reading as an address no router serves.
     expect([...new Set(bases.map((b) => `${b.bindingName} → ${b.path}`))].sort()).toEqual([
       'REGISTRY_BASE_PATH → /api/strategy-operations/registry',
-      'apiBaseUrl → /api/v1/copilot',
     ]);
   });
 });

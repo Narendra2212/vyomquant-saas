@@ -651,7 +651,16 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // `components/Sidebar.jsx: 0` and `components/TopBar.jsx: 0` stood here too, and moved
   // into the in-scope group at task 27.3 rather than being deleted — see the note on that
   // sub-block. They are live files at `0`, which is the case a `0` entry exists for.
-  'components/CopilotChat.jsx': 3,
+  //
+  // `components/CopilotChat.jsx: 3` stood here until `production-launch-hardening` task 9.3
+  // deleted the file, and went the way `DashboardUpgrades.jsx` and `DesktopOnlyOverlay.jsx`
+  // went for the same reason: removed rather than lowered to `0`, because a deleted file has
+  // no source to measure and `names only files that still exist` fails on an entry pointing at
+  // nothing. The three literals were the drawer's own hand-mixed shadows and the `#000`
+  // foreground on the brand-coloured action button — none of them retokened, all of them gone
+  // with the component. It was deleted as the only consumer of `contexts/CopilotContext.jsx`,
+  // which that task removed for holding two addresses no router serves; it was mounted
+  // nowhere and documented itself as dormant and unmounted.
   'components/FirstTradeWizard.jsx': 3,
 
   // -- Deferred pages: retokened by M1, layouts stay older (§14.4) ----------

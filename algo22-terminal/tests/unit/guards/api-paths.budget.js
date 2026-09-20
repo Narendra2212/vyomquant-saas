@@ -54,12 +54,29 @@
  *     read was real and simply was not being reached) and `pages/Backtester.jsx`'s
  *     raw `fetch` to `POST /api/backtests/validate-data`.
  *
- * **The two that remain are not oversights.** Both `CopilotContext.jsx` entries need
- * a product decision before a fix can be right: `generateDAG` has no endpoint at all,
- * so whether Copilot DAG generation is meant to exist is the question, not which path
- * to type; and `loadSession`'s read wants `GET /sessions/{id}/messages`, which returns
- * messages rather than a session, so repointing it changes what the caller receives.
- * Guessing either would be a behaviour change disguised as a path fix.
+ * **The two that remained were not oversights, and they are now gone too.** Both were
+ * `CopilotContext.jsx`, and both needed a product decision before a fix could be right:
+ * `generateDAG` had no endpoint at all, so whether Copilot DAG generation was meant to
+ * exist was the question rather than which path to type; and `loadSession`'s read wanted
+ * `GET /sessions/{id}/messages`, which returns messages rather than a session, so
+ * repointing it would have changed what the caller received. Guessing either would have
+ * been a behaviour change disguised as a path fix.
+ *
+ * `production-launch-hardening` task **9.3** took the decision the other way and deleted
+ * the module, which Requirement 2.28 permits explicitly: `CopilotProvider` was mounted
+ * nowhere, the file documented itself as "Intentionally DORMANT", and it bypassed the
+ * `api` client entirely with raw `fetch` + its own `getAuthHeaders()` — so deleting it
+ * removed a second authentication path and a second error surface that did not go through
+ * `design/errorCopy.js`, as well as the two dead addresses. `src/components/CopilotChat.jsx`
+ * went with it: it was the only consumer of `useCopilot`, was mounted nowhere, and could
+ * not have built without the context. `src/hooks/useCopilotSSE.js` went too — it held no
+ * code, only a comment saying the logic lived in `CopilotContext`.
+ *
+ * **The list is now empty, and an empty list is the strongest state this file can be in.**
+ * It is kept rather than deleted because `api-paths.test.js` asserts the measured set equals
+ * these keys exactly, so an empty map is the assertion that every client address the routers
+ * do not serve has been dealt with. The next one that appears fails the guard with nowhere
+ * to hide.
  *
  * ---------------------------------------------------------------------------
  * KEY FORMAT
@@ -84,8 +101,15 @@
  * ---------------------------------------------------------------------------
  * WHAT THE SCAN NOW READS
  * ---------------------------------------------------------------------------
- * 2 keys over 1 file, from 185 transport call sites and 215 path literals checked
- * against the 338 routes `main.py`'s mounts resolve to. Measured, not estimated.
+ * 0 keys, from 181 transport call sites and 209 path literals checked against the 338
+ * routes `main.py`'s mounts resolve to. Measured, not estimated.
+ *
+ * The reading before task 9.3 was 2 keys over 1 file, from 185 transport call sites and
+ * 215 path literals against 338 routes. Deleting `CopilotContext.jsx` took its four raw
+ * `fetch` call sites and six literals out of the client side. **338 is the same number
+ * both days**, which is the check that the reduction is on the client side only — a scanner
+ * that had actually broken would have taken the route count down with it. Both client
+ * floors below are unchanged and both still clear.
  *
  * The seeding day read 263 call sites and 308 literals. The drop is almost entirely
  * `typed-client.ts`: that one file held 78 of the call sites and 93 of the literals,
@@ -101,24 +125,24 @@
  * missing required parameters (the address is right and every call is refused).
  */
 export const KNOWN_API_DEFECTS = Object.freeze({
-  /* ── Dead addresses in LIVE code ─────────────────────────────────────────
-   * These are reachable from the running app. Each is a total failure of the
-   * feature that calls it, not a degradation. */
-
-  // `CopilotContext.generateDAG`. `routers/copilot.py` declares `/chat/stream`,
-  // `/sessions`, `/sessions/{id}/messages` and `DELETE /sessions/{id}`. There is no DAG
-  // generation endpoint, so the "generate a strategy from a description" action cannot
-  // work as written.
-  'wrong-path|src/contexts/CopilotContext.jsx|/api/v1/copilot/dag/generate':
-    'POST; routers/copilot.py declares no /dag/* route.',
-
-  // `CopilotContext.loadSession` GETs `/api/v1/copilot/sessions/{id}`, which is declared
-  // for DELETE only. The read it wants is `GET /sessions/{session_id}/messages`. Its
-  // sibling `deleteSession` sends DELETE to the same address and is correct, which is why
-  // this survived: one of the two callers works.
-  'wrong-method|src/contexts/CopilotContext.jsx|GET /api/v1/copilot/sessions/{}':
-    'loadSession; routers/copilot.py declares DELETE for that path. The read is ' +
-    'GET /sessions/{session_id}/messages.',
+  // Empty, as of `production-launch-hardening` task 9.3. Every client address the routers
+  // do not serve as written has been fixed, repointed or deleted.
+  //
+  // The last two entries stood here until that task, and both were `CopilotContext.jsx`:
+  //
+  //   wrong-path   | src/contexts/CopilotContext.jsx | /api/v1/copilot/dag/generate
+  //       `generateDAG`. `routers/copilot.py` declares `/chat/stream`, `/sessions`,
+  //       `/sessions/{id}/messages` and `DELETE /sessions/{id}` — no `/dag/*` route at
+  //       all, so "generate a strategy from a description" could not work as written.
+  //
+  //   wrong-method | src/contexts/CopilotContext.jsx | GET /api/v1/copilot/sessions/{}
+  //       `loadSession`, against a path declared for DELETE only. Its sibling
+  //       `deleteSession` sends DELETE to the same address and was correct, which is why
+  //       this survived: one of the two callers worked.
+  //
+  // Removed rather than lowered or relaxed: the module was deleted, so there is no call
+  // site left to record. See the header for why deletion was the right disposition and
+  // what else went with it.
 });
 
 /**
@@ -129,9 +153,11 @@ export const KNOWN_API_DEFECTS = Object.freeze({
  * examines zero paths passes for free, which is how a guard becomes decoration —
  * `source-scan.js`'s header calls that the green-looking non-run.
  *
- * Currently measured: 338 declared routes, 185 transport call sites, 215 path
- * literals. Set about 10% below, so ordinary churn does not touch them and a
- * collapse does.
+ * Currently measured: 338 declared routes, 181 transport call sites, 209 path
+ * literals. Set about 10% below when they were 338/185/215, so ordinary churn does not
+ * touch them and a collapse does. Task 9.3's deletion of `CopilotContext.jsx` moved the
+ * client readings by four and six and none of the floors, which is what a floor with
+ * headroom is for.
  *
  * THE TWO CLIENT FLOORS WERE LOWERED WHEN `typed-client.ts` WAS DELETED, and that is
  * the one move a floor like this has to be defended for. They were 235 and 275,

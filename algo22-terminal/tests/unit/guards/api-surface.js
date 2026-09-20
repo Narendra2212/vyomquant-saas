@@ -161,11 +161,18 @@ export function maskLiterals(code) {
 /**
  * The name a literal is bound to, if any.
  *
- * `const NAME = '…'` is the common form. The looser `NAME = '…'` arm is needed for
- * `contexts/CopilotContext.jsx`, whose base path is a **destructured prop default**
- * — `({ children, apiBaseUrl = "/api/v1/copilot" })` — and is interpolated into
- * four `fetch` calls. Without the name, that literal reads as an address that no
- * router serves instead of as the base path it is.
+ * `const NAME = '…'` is the common form. The looser `NAME = '…'` arm was added for
+ * `contexts/CopilotContext.jsx`, whose base path was a **destructured prop default**
+ * — `({ children, apiBaseUrl = "/api/v1/copilot" })` — interpolated into four `fetch`
+ * calls. Without the name, that literal read as an address that no router serves
+ * instead of as the base path it was.
+ *
+ * `production-launch-hardening` task 9.3 deleted that module, so no file in the tree
+ * currently needs the looser arm — `REGISTRY_BASE_PATH`, the one remaining base-path
+ * binding, is a plain `export const`. The arm is kept anyway: it is parser generality,
+ * not dead code, and dropping it would make the next destructured default read as a
+ * phantom address. `api-paths.test.js`'s base-path assertion records which bindings are
+ * actually excused, and it is down to one.
  */
 const BINDING_BEFORE =
   /(?:(?:export\s+)?(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*(?::[^=]*)?=\s*$/;

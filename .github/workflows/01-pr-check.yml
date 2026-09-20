@@ -192,15 +192,19 @@ jobs:
       # Task 9.2 removed those three dead call paths, so the flags are deleted and this gate
       # now reads all of `src/` with no exclusions. Measured after that change: 0 errors.
       #
-      # The cap moved 227 -> 230 in the same commit, and that is scope growth rather than
+      # The cap moved 227 -> 230 in task 9.2's commit, and that was scope growth rather than
       # backlog growth: the three files entered the gate carrying three `'React' is defined
       # but never used` warnings between them -- the same warning 63 files under `src/`
       # already carry, because ESLint does not count a JSX-only reference. No new warning
       # class appeared, and the error count went from 5 to 0.
+      #
+      # 230 -> 226 in task 9.3's commit, which deleted `contexts/CopilotContext.jsx`,
+      # `components/CopilotChat.jsx` and `hooks/useCopilotSSE.js`. Lowered in the same commit
+      # rather than left with the headroom open, which is what the ratchet is for.
       - name: Lint frontend
         if: steps.changes.outputs.frontend == 'true'
         working-directory: ./algo22-terminal
-        run: node node_modules/eslint/bin/eslint.js src --max-warnings 230
+        run: node node_modules/eslint/bin/eslint.js src --max-warnings 226
 
       - name: Build frontend
         if: steps.changes.outputs.frontend == 'true'
