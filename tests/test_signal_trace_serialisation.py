@@ -634,12 +634,17 @@ def _python_sources(root):
 
 
 def test_measured_the_broken_path_has_one_caller_and_that_caller_has_none():
-    """MEASURED ON `F` - every `.py` file under `backend_app/` searched for both names.
+    """MEASURED - every `.py` file under `backend_app/` searched for both names.
 
-        to_frontend_format        -> defined at signal_trace_engine.py:301
-                                     called at  signal_trace_engine.py:798  (1 call site)
-        get_traces_for_frontend   -> defined at signal_trace_engine.py:791
+        to_frontend_format        -> defined at signal_trace_engine.py:329
+                                     called at  signal_trace_engine.py:817  (1 call site)
+        get_traces_for_frontend   -> defined at signal_trace_engine.py:810
                                      called nowhere in backend_app/        (0 call sites)
+
+    The counts are the measurement and they are unchanged from `F`. The line numbers moved by
+    +19 in task 9.4, which inserted the named `project_node_trace` above `SignalTraceRecord`;
+    on `F` the three sites were `:301`, `:798` and `:791`. Nothing about the caller graph
+    changed - the extraction added no call site and removed none.
 
     So the defect is **latent**: no route, task or subscriber reaches
     `to_frontend_format` today. That does not weaken 1.29 - both methods are public API on a
@@ -662,7 +667,7 @@ def test_measured_the_broken_path_has_one_caller_and_that_caller_has_none():
         return hits
 
     assert call_sites("to_frontend_format") == [
-        "backend_app/backend/signal_trace_engine.py:798",
+        "backend_app/backend/signal_trace_engine.py:817",
     ]
     assert call_sites("get_traces_for_frontend") == []
 
@@ -702,3 +707,221 @@ def test_measured_a_second_complete_projection_of_the_same_dataclass_already_exi
         assert excluded not in projection, (
             f"the router's projection filters on {excluded}, so it is not type-complete after all"
         )
+
+# ══════════════════════════════════════════════════════════════════════════
+# 6. THE NAMED PROJECTION AND THE SHARED FIXTURE AGREE  (task 9.4)
+#
+# These tests PASS on the post-9.4 tree. Task 9.4 extracts stage 3's inline expression into
+# `project_node_trace` and declares its output in `tests/fixtures/signal_trace_node_projection.json`
+# - the one file both sides read: pytest here, vitest through `node:fs` in task 9.6.
+#
+# The fixture is a declaration, and a declaration nobody checks goes stale. Section 6 is that
+# check: it compares the file against what the function actually returns for a constructed
+# `DAGNodeTrace`, so the file cannot drift from the code while both keep passing.
+#
+# This is the one place in this file that imports the subject. Sections 1-4 deliberately do not -
+# `_stage_three_projection` is a transcription, because a test that read its expectation out of the
+# code under test would pass whatever that code did. Here the code IS one of the two things being
+# compared, and the fixture is the independent statement of the contract.
+# ══════════════════════════════════════════════════════════════════════════
+
+FIXTURE_PATH = REPO_ROOT / "tests" / "fixtures" / "signal_trace_node_projection.json"
+
+#: The two `NodeIO.value` objects the fixture's worked example uses, written out as Python rather
+#: than evaluated from the file. The fixture records them as `"Decimal('101.5')"` and `"True"` for
+#: the frontend's benefit; a test must not `eval` a data file to get them back.
+_EXAMPLE_PORT_VALUES = {"Decimal('101.5')": Decimal("101.5"), "True": True}
+
+#: `json_type` names in the fixture, mapped to what `isinstance` should see. `bool` is excluded
+#: from `number` on purpose: `True` is an `int` in Python and would otherwise satisfy it.
+_JSON_TYPES = {
+    "string": str,
+    "number": (int, float),
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+}
+
+
+def _load_fixture():
+    """The shared contract file, parsed. Its absence is a failure, not a skip."""
+    assert FIXTURE_PATH.exists(), (
+        f"{FIXTURE_PATH.relative_to(REPO_ROOT).as_posix()} is missing - it is the single copy of "
+        f"this contract, read by pytest here and by vitest in task 9.6"
+    )
+    return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def _node_from_fixture_example(example):
+    """The `DAGNodeTrace` the fixture says produced its worked output.
+
+    Built field by field from `example["node_trace"]`, so the fixture - not this function - is
+    what decides which node is being projected. Timestamps are the file-level constants and
+    `execution_ms` is read from the fixture, because `DAGNodeTrace.complete()` would put the wall
+    clock into the result.
+    """
+    described = example["node_trace"]
+    return DAGNodeTrace(
+        node_id=described["node_id"],
+        node_type=NodeType(described["node_type"]),
+        node_label=described["node_label"],
+        start_time=NODE_START,
+        end_time=NODE_END,
+        execution_ms=described["execution_ms"],
+        inputs=[
+            NodeIO(key=port["key"], value=_EXAMPLE_PORT_VALUES[port["python_value"]], dtype=port["dtype"])
+            for port in described["inputs"]
+        ],
+        outputs=[
+            NodeIO(key=port["key"], value=_EXAMPLE_PORT_VALUES[port["python_value"]], dtype=port["dtype"])
+            for port in described["outputs"]
+        ],
+        status=ValidationResult(described["status"]),
+        error_message=described["error_message"],
+    )
+
+
+def test_the_projection_exists_as_a_named_module_level_function():
+    """Task 9.4's deliverable, asserted as a fact about the module rather than about a response.
+
+    `project_node_trace` is importable from `signal_trace_engine` and callable on a bare
+    `DAGNodeTrace` - which is what makes it reusable by the two stages that were written without
+    it. An inline expression inside a stage literal satisfies none of this, which is why the
+    stages could disagree in the first place.
+    """
+    from backend_app.backend import signal_trace_engine
+
+    projection = getattr(signal_trace_engine, "project_node_trace", None)
+    assert callable(projection), (
+        "signal_trace_engine.project_node_trace is missing: the DAGNodeTrace -> dict projection "
+        "still has no name, so it cannot be shared between the three stages"
+    )
+
+    node = _node(NodeType.OPERATOR, "n_op", "Crossover")
+    assert projection(node) == _stage_three_projection(node), (
+        "the named projection does not produce stage 3's shape - 9.5's preservation clause "
+        "(3.7) requires stage 3's node detail unchanged, byte for byte"
+    )
+
+
+def test_the_shared_fixture_matches_what_the_projection_actually_returns():
+    """The fixture cannot go stale: its worked example is recomputed from the function every run.
+
+    Three claims, each failing for its own reason:
+
+      1. `key_order` is the projection's keys, in the projection's own insertion order. Order is
+         part of the contract because section 4 compares stage 3's serialised text, and
+         `json.dumps` writes keys in insertion order.
+      2. The declared `json_type` of every key describes the value actually produced, with
+         `nullable` honoured - so `error: null` is legal and `error: 0` is not.
+      3. `example.output` equals `project_node_trace(example.node_trace)` exactly.
+
+    Together they mean a change to the projection that nobody reflected in the fixture fails
+    here, rather than in task 9.6's vitest run or, later, on a Signal Trace screen.
+    """
+    fixture = _load_fixture()
+    from backend_app.backend.signal_trace_engine import project_node_trace
+
+    node = _node_from_fixture_example(fixture["example"])
+    produced = project_node_trace(node)
+
+    # 1. Key order, as declared and as produced.
+    assert list(produced) == fixture["key_order"], (
+        f"the projection emits {list(produced)}, the fixture declares {fixture['key_order']}"
+    )
+    assert tuple(fixture["key_order"]) == EXPECTED_NODE_KEYS, (
+        "the fixture's key order disagrees with this file's hand-transcribed contract"
+    )
+
+    # 2. Declared types describe the produced values.
+    for key, declared in fixture["keys"].items():
+        value = produced[key]
+        if value is None:
+            assert declared["nullable"], f"{key} came back null but the fixture declares it non-nullable"
+            continue
+        assert isinstance(value, _JSON_TYPES[declared["json_type"]]) and not (
+            declared["json_type"] == "number" and isinstance(value, bool)
+        ), f"{key} is {type(value).__name__}, the fixture declares {declared['json_type']}"
+
+    # Port sub-shape: same two claims, one level down.
+    port_contract = fixture["port"]
+    for field_name in ("inputs", "outputs"):
+        for port in produced[field_name]:
+            assert list(port) == port_contract["key_order"], (
+                f"{field_name} port emits {list(port)}, the fixture declares "
+                f"{port_contract['key_order']}"
+            )
+            for key, declared in port_contract["keys"].items():
+                assert isinstance(port[key], _JSON_TYPES[declared["json_type"]]), (
+                    f"{field_name} port {key} is {type(port[key]).__name__}, the fixture declares "
+                    f"{declared['json_type']}"
+                )
+
+    # 3. The worked example, value for value and then byte for byte.
+    assert produced == fixture["example"]["output"], (
+        "tests/fixtures/signal_trace_node_projection.json has gone stale: its worked example is "
+        "not what project_node_trace returns for the node it describes"
+    )
+    assert json.dumps(produced) == json.dumps(fixture["example"]["output"]), (
+        "the fixture's example serialises to different text than the projection does"
+    )
+
+    # And the enums the fixture publishes to the frontend are the enums the backend has.
+    assert fixture["keys"]["type"]["enum"] == [member.value for member in NodeType]
+    assert fixture["keys"]["status"]["enum"] == [member.value for member in ValidationResult]
+
+
+def test_the_projection_serialises_every_node_type_and_both_awkward_port_values():
+    """`json.dumps(project_node_trace(node))` succeeds for all nine `NodeType` members.
+
+    The function is now the single thing three stages will call, so it is asserted on its own -
+    not through a response, where stage 3's exclusion list hides six of the nine. `str(io.value)`
+    is the step under test: the fixtures carry a `Decimal` input and a `bool` output, and a
+    projection that forwarded either unchanged would serialise the `bool` and raise on the
+    `Decimal`.
+
+    Stage coverage for those six types is task 9.5's; that a node of any type CAN be projected
+    is this task's.
+    """
+    from backend_app.backend.signal_trace_engine import project_node_trace
+
+    for node_type in NodeType:
+        node = _node(node_type, f"n_{node_type.value}", f"a {node_type.value} node")
+        produced = project_node_trace(node)
+
+        assert _non_serialisable_sites(produced) == [], (
+            f"{node_type.value}: the projection emitted objects json.dumps cannot write"
+        )
+        assert json.loads(json.dumps(produced))["type"] == node_type.value
+        assert produced["inputs"] == [{"key": "close", "value": "101.5", "dtype": "float"}], (
+            f"{node_type.value}: the Decimal input port did not come through as a string"
+        )
+        assert produced["outputs"] == [{"key": "passed", "value": "True", "dtype": "bool"}], (
+            f"{node_type.value}: the bool output port did not come through as a string"
+        )
+
+    failed = _node(NodeType.LOGIC, "n_bad", "RSI > 70", status=ValidationResult.FAIL, error="upstream gap")
+    assert project_node_trace(failed)["status"] == "fail"
+    assert project_node_trace(failed)["error"] == "upstream gap", "error_message maps to `error`"
+
+
+def test_stage_three_now_routes_through_the_named_projection():
+    """Stage 3 calls the function rather than carrying its own copy of the expression.
+
+    Asserted against the source text, because the two are indistinguishable from the outside -
+    which is the point of the refactor, and also the reason a behavioural test cannot tell whether
+    it happened. If the inline literal came back, the three stages could drift apart again even
+    with all of sections 1-5 green.
+    """
+    source = (BACKEND_ROOT / "backend" / "signal_trace_engine.py").read_text(encoding="utf-8")
+
+    stage_three = source.split('"stage": "dag_nodes"', 1)[1].split('"stage": "ml_inference"', 1)[0]
+    assert "project_node_trace(" in stage_three, "the dag_nodes stage no longer calls the projection"
+    assert '"node_id": n.node_id' not in stage_three, (
+        "the dag_nodes stage still holds an inline copy of the projection"
+    )
+
+    # The exclusion list is 9.5's to revisit, and is pinned here as observed so that 9.4 is
+    # readable as a refactor with no behaviour change.
+    assert "NodeType.MARKET_DATA, NodeType.INDICATOR, NodeType.ML_MODEL, NodeType.RISK, NodeType.EXECUTION" in stage_three
+    assert 'if len(self.node_traces) > 2 else "pending"' in stage_three

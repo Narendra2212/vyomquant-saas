@@ -100,6 +100,34 @@ class DAGNodeTrace:
             self.outputs = outputs
 
 
+def project_node_trace(n: "DAGNodeTrace") -> Dict[str, Any]:
+    """The one `DAGNodeTrace -> dict` projection the pipeline stages publish.
+
+    Extracted verbatim from the `dag_nodes` stage literal in
+    `SignalTraceRecord.to_frontend_format`, where it lived only as an inline
+    expression inside one of the three stages that carry nodes - so it could not be
+    reused, and the other two stages were written without it. Naming it is the fix:
+    the stages can no longer disagree about the shape of a node.
+
+    Eight keys, in this order. The shape is declared once, for both sides of the
+    wire, in `tests/fixtures/signal_trace_node_projection.json`.
+
+    `str(io.value)` is what keeps the result serialisable. `NodeIO.value` is typed
+    `Any`, so a `Decimal` port would otherwise raise from `json.dumps` and a `bool`
+    would slip through untyped; every port value leaves here as a string.
+    """
+    return {
+        "node_id": n.node_id,
+        "type": n.node_type.value,
+        "label": n.node_label,
+        "inputs": [{"key": io.key, "value": str(io.value), "dtype": io.dtype} for io in n.inputs],
+        "outputs": [{"key": io.key, "value": str(io.value), "dtype": io.dtype} for io in n.outputs],
+        "execution_ms": n.execution_ms,
+        "status": n.status.value,
+        "error": n.error_message,
+    }
+
+
 @dataclass
 class MLInferenceTrace:
     """
@@ -323,16 +351,7 @@ class SignalTraceRecord:
                 {
                     "stage": "dag_nodes",
                     "nodes": [
-                        {
-                            "node_id": n.node_id,
-                            "type": n.node_type.value,
-                            "label": n.node_label,
-                            "inputs": [{"key": io.key, "value": str(io.value), "dtype": io.dtype} for io in n.inputs],
-                            "outputs": [{"key": io.key, "value": str(io.value), "dtype": io.dtype} for io in n.outputs],
-                            "execution_ms": n.execution_ms,
-                            "status": n.status.value,
-                            "error": n.error_message
-                        }
+                        project_node_trace(n)
                         for n in self.node_traces
                         if n.node_type not in [NodeType.MARKET_DATA, NodeType.INDICATOR, NodeType.ML_MODEL, NodeType.RISK, NodeType.EXECUTION]
                     ],
