@@ -266,9 +266,40 @@ jobs:
           echo "Source bundle: ${{ steps.build-metadata.outputs.BUNDLE_NAME }}"
           echo "Source checksum: ${{ steps.build-metadata.outputs.BUNDLE_CHECKSUM }}"
           
+          # Cache policy is keyed on whether the name carries a content hash, not on the
+          # file extension. Vite emits hashed names only under assets/ (index-<hash>.js and
+          # friends), so assets/ is the only prefix where a one-year immutable header is
+          # safe: a new build produces a new filename, so the old object is never asked for
+          # again. Everything else keeps its name across builds — robots.txt, sitemap.xml
+          # and the four SVGs — and an immutable year on a stable name means a correction
+          # cannot reach a returning visitor for up to a year.
+          #
+          # --delete coverage is preserved by splitting it the same way: the assets/ pass
+          # prunes stale hashed bundles, the unhashed pass prunes everything else, and the
+          # HTML pass prunes stale HTML. Source maps stay excluded from every pass, so they
+          # are still never published.
+          #
+          # NOTE: this header change applies to newly uploaded objects only. It does NOT
+          # reach objects already in CloudFront edge caches — those were served with
+          # max-age=31536000, immutable and will not re-fetch on their own for up to a
+          # year. Task 13.5 invalidates those specific paths after this deploy lands. The
+          # /* invalidation below clears the edge, but any client that already cached an
+          # unhashed object keeps it until its year expires.
+          echo "=== Syncing content-hashed assets with immutable cache ==="
           aws s3 sync dist/ s3://${{ env.S3_BUCKET }}/ \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
+            --exclude "*" \
+            --include "assets/*" \
+            --exclude "*.map"
+          
+          echo "=== Syncing unhashed assets with a short revalidating cache ==="
+          # 5 minutes of edge offload, then revalidate. Short enough that a corrected
+          # robots.txt, sitemap.xml or icon reaches a returning visitor the same day.
+          aws s3 sync dist/ s3://${{ env.S3_BUCKET }}/ \
+            --delete \
+            --cache-control "public, max-age=300, must-revalidate" \
+            --exclude "assets/*" \
             --exclude "*.html" \
             --exclude "*.map"
           
