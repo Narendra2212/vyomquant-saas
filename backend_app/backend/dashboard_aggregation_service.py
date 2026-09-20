@@ -1730,10 +1730,22 @@ class DashboardAggregationService:
             if isinstance(portfolio, Exception):
                 logger.error(f"Portfolio fetch failed: {portfolio}")
                 portfolio = {
-                    "total_equity": 100000.0 if norm_env == "paper" else 0.0,
-                    "total_value": 100000.0 if norm_env == "paper" else 0.0,
-                    "available_balance": 100000.0 if norm_env == "paper" else 0.0,
-                    "free_balance": 100000.0 if norm_env == "paper" else 0.0,
+                    # Task 6.3 (Requirements 1.2, 2.2). ``100000.0 if norm_env == "paper" else
+                    # 0.0`` was one expression fabricating a different number per environment,
+                    # and the ``0.0`` limb was the worse of the two: ``100000.0`` is at least
+                    # implausible enough for a trader to question, while a live account can
+                    # genuinely hold zero, so an outage rendered as a wiped-out portfolio with
+                    # nothing for anyone to notice. ``None`` in BOTH environments - the read
+                    # failed, and that is not a fact about which environment asked. Task 6.1
+                    # retyped the ``overview`` block below so this ``None`` now reaches the
+                    # response instead of being coerced back into a number.
+                    # Preservation 3.2: a live account genuinely at zero still reports ``0.0``,
+                    # because that value arrives on a portfolio that WAS read and never through
+                    # this branch.
+                    "total_equity": None,
+                    "total_value": None,
+                    "available_balance": None,
+                    "free_balance": None,
                     "used_balance": 0.0,
                     "today_pnl": 0.0,
                     "today_realized_pnl": 0.0,
