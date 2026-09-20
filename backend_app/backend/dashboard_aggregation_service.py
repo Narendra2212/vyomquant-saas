@@ -1355,8 +1355,11 @@ class DashboardAggregationService:
             return []
 
     async def get_equity_curve(self, user: dict, days: int = 30, environment: str = "live") -> List[Dict]:
-        """
-        Get equity curve data with environment awareness.
+        """Get equity curve data: the rows that were read, or an empty series.
+
+        ``environment`` is accepted for call-site symmetry with the other reads on this class and
+        is no longer branched on. As of task 6.4 both environments answer an empty read with
+        ``[]``; the paper limb used to synthesise a flat curve instead (see the comment below).
         """
         telemetry = self._get_telemetry()
         safe_uid = self._safe_uid(user["id"])
@@ -1374,15 +1377,18 @@ class DashboardAggregationService:
         except Exception as eq_err:
             logger.debug(f"QuestDB equity curve fetch error: {eq_err}")
 
-        # If paper mode and no QuestDB data, synthesize default baseline
-        if environment == "paper":
-            from datetime import timezone, timedelta
-            now = datetime.now(timezone.utc)
-            return [
-                {"timestamp": (now - timedelta(days=days)).isoformat(), "equity": 100000.0},
-                {"timestamp": now.isoformat(), "equity": 100000.0}
-            ]
-        
+        # Task 6.4 (Requirements 1.3, 2.3). The paper branch that used to stand here synthesised
+        # a two-point flat curve at ``100000.0`` spanning the requested window, for both absent
+        # cases: a successful read that found no rows, and a read that raised. "No history" drawn
+        # as "perfectly flat performance" is the fabrication, and it HONOURED ``days`` - so a
+        # 90-day request rendered as ninety days of measured break-even performance. The lie was
+        # shaped to be convincing.
+        #
+        # ``[]`` for every environment, which is what the live limb has always answered for the
+        # same condition; the two branches disagreed about what "no rows" means and the paper one
+        # was the outlier. Preservation 3.1: rows that WERE read are returned above, unmodified,
+        # ascending by timestamp, with no synthesised endpoints appended - an equity series
+        # genuinely passing through ``0.0`` is a measurement and is reported as one.
         return []
     
     async def get_strategies(self, user: dict, environment: str = "live", sb: Optional[Any] = None) -> List[Dict]:
