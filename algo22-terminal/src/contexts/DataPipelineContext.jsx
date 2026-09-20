@@ -360,55 +360,73 @@ export const DataPipelineProvider = ({ children, mode = 'backtest' }) => {
     }
   }, [activeExchange]);
 
-  // Connect to live WebSocket for real-time data
+  /**
+   * Take a hold on the session socket and read live bars off it.
+   *
+   * production-launch-hardening task 8.1. Requirement 1.23 / 2.23.
+   *
+   * What was here opened a second socket at `` `${wsClient.url}/ws/market-data` ``, and
+   * `wsClient.url` already ends in `?token=<JWT>` (`websocketClient.js:76`). Concatenating a
+   * path onto a URL that already carries a query string does not produce a path — it extends
+   * the last parameter's *value*:
+   *
+   *     wss://host/ws/telemetry?token=<JWT>/ws/market-data
+   *       pathname ................. /ws/telemetry
+   *       token .................... <JWT>/ws/market-data
+   *
+   * So the connection went to `/ws/telemetry` presenting a credential that cannot verify, and
+   * the route it meant to ask for is not one of the nine `backend_app/api_ws/ws_routes.py`
+   * registers. This path has never delivered a frame, which is why this is a deletion rather
+   * than a migration: there was no working feed to move.
+   *
+   * What replaces it is the same shape over the one session connection — a refcounted hold, so
+   * no second socket can be opened here by construction, and a subscription to the `candle`
+   * and `tick` frame types this code already read. `liveData` fills in if the session socket
+   * carries those frames and stays null otherwise, which is what it has always been, now
+   * without a malformed URL and a phantom route. Publishing them is not this task's change:
+   * the real market feeds are `/ws/ticker/{symbol}` and `/ws/candles/{symbol}/{timeframe}`,
+   * separate routes, and dialling one of those from here would be the third socket again.
+   */
   const connectLiveData = useCallback((symbol, timeframe) => {
     if (pipelineMode !== 'live') return null;
 
-    setIsLiveConnected(true);
+    // A frame that names a different market is not this subscription's. One that names none
+    // is taken, because the session socket's own frames do not all carry a symbol.
+    const describesThisMarket = (frame) =>
+      (!frame.symbol || frame.symbol === symbol) &&
+      (!frame.timeframe || frame.timeframe === timeframe);
 
-    // WebSocket connection for live tick data
-    const wsUrl = `${wsClient.url}/ws/market-data`;
-    const ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => {
-      console.log('Live data WebSocket connected');
-      ws.send(JSON.stringify({
-        action: 'subscribe',
-        symbol,
-        timeframe,
-        exchange: activeExchange?.name || 'binance'
-      }));
+    const applyFrame = (frame) => {
+      if (!frame || typeof frame !== 'object') return;
+      if (!describesThisMarket(frame)) return;
+      setLiveData({
+        timestamp: frame.timestamp,
+        open: frame.open,
+        high: frame.high,
+        low: frame.low,
+        close: frame.close,
+        volume: frame.volume,
+        source: 'websocket'
+      });
     };
 
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'candle' || data.type === 'tick') {
-        setLiveData({
-          timestamp: data.timestamp,
-          open: data.open,
-          high: data.high,
-          low: data.low,
-          close: data.close,
-          volume: data.volume,
-          source: 'websocket'
-        });
-      }
-    };
-
-    ws.onerror = (err) => {
-      console.error('Live WebSocket error:', err);
-      setIsLiveConnected(false);
-    };
-
-    ws.onclose = () => {
-      setIsLiveConnected(false);
-    };
+    wsClient.acquire();
+    const releases = [
+      wsClient.subscribe('candle', applyFrame),
+      wsClient.subscribe('tick', applyFrame),
+      // Reported from the connection's own status rather than asserted on the way in: the
+      // socket may already be down, or go down, and this flag is read as "live data is
+      // arriving".
+      wsClient.onStatusChange((status) => setIsLiveConnected(status === 'connected')),
+    ];
+    setIsLiveConnected(wsClient.isConnected());
 
     return () => {
-      ws.close();
+      releases.forEach((release) => release());
+      wsClient.release();
       setIsLiveConnected(false);
     };
-  }, [pipelineMode, activeExchange]);
+  }, [pipelineMode]);
 
   // Clear cache
   const clearCache = useCallback(() => {

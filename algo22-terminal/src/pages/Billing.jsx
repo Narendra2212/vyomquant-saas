@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   CreditCard, CheckCircle, Star, Zap, Globe, Award, ArrowUpRight, Plus, AlertTriangle, XCircle, Loader2, TrendingUp, Bot, Cpu, Database, BarChart3, Shield, Crown, ChevronRight, RefreshCw, ExternalLink, AlertCircle, X, ChevronDown, MapPin
 } from "lucide-react";
 import { api } from "../api";
+import wsClient from "../websocketClient";
 import { SectionH, PanelTitle, Tag2 } from "../components/common/primitives";
 import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
@@ -131,46 +132,94 @@ export default function Billing() {
     loadBilling();
   }, [loadBilling]);
 
-  // WebSocket listener for real-time subscription updates
+  /**
+   * The currency the page is showing, readable from the socket handler below.
+   *
+   * A ref rather than a dependency, because `currency` in the effect's dependency array is
+   * what made a currency change tear the socket down and build a new one — once per pick.
+   * The handler needs the *current* value at the moment a frame arrives, which is what a ref
+   * is for; the connection does not need rebuilding to learn it.
+   */
+  const currencyRef = useRef(currency);
   useEffect(() => {
-    let ws = null;
-    const connectWebSocket = () => {
-      const token = localStorage.getItem('token');
-      if (!token) return;
-      const userId = localStorage.getItem('userId');
-      if (!userId) return;
-      const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/user/${userId}?token=${token}`;
-      try {
-        ws = new WebSocket(wsUrl);
-        ws.onopen = () => { console.log('Billing WebSocket connected'); };
-        ws.onmessage = (event) => {
-          try {
-            const message = JSON.parse(event.data);
-            if (
-              message.type === 'subscription_update' ||
-              message.type === 'plan_changed' ||
-              message.event === 'subscription_cancelled' ||
-              message.event === 'cancellation_reversed' ||
-              message.event === 'payment_failed'
-            ) {
-              loadBilling();
-              loadPlans(currency);
-            }
-          } catch (err) {
-            console.error('Failed to parse WebSocket message:', err);
-          }
-        };
-        ws.onerror = (error) => { console.error('WebSocket error:', error); };
-        ws.onclose = () => {
-          setTimeout(connectWebSocket, 5000);
-        };
-      } catch (err) {
-        console.error('Failed to connect WebSocket:', err);
-      }
+    currencyRef.current = currency;
+  }, [currency]);
+
+  /*
+    Real-time subscription updates, over the one session socket.
+    production-launch-hardening task 8.1. Requirements 1.22, 1.23 / 2.22, 2.23.
+
+    This effect used to call `new WebSocket` itself and schedule its own reconnect from inside
+    `onclose` — and `onclose` is exactly what the effect's cleanup fires, so tearing the page
+    down was the event that armed the next connection. There was no id to clear and no
+    `clearTimeout` anywhere in the effect, so five seconds after the page was gone a socket
+    opened that nothing held a reference to.
+
+    Both halves are gone, and neither is replaced by a local fix:
+
+    - The socket is the shared client's. `acquire` / `release` are refcounted
+      (`websocketClient.js:705-737`), so this page is a *hold* on the one session connection
+      rather than a second connection. The last release closes it.
+    - The reconnect is the shared client's too. It already owns capped jittered backoff and —
+      the part the handler here got wrong — the distinction between an intentional teardown
+      (`release` → `disconnect`, which disables reconnection before it closes) and a dropped
+      connection. Deleting the scheduling outright is the fix; a `clearTimeout` would have
+      kept a second reconnect implementation alive.
+
+    Unchanged on purpose: the route is still `/ws/user/{user_id}` (`ws_routes.py:641`), which
+    is where the backend publishes what a Stripe webhook produces, and the credential is still
+    read from `localStorage` and still travels as `?token=`. It is now built in one place
+    instead of two. Task 8.2 replaces it with a single-use ticket and 8.3 unifies the store;
+    this step deliberately changes no authentication.
+  */
+  useEffect(() => {
+    const sessionToken = localStorage.getItem('token');
+    if (!sessionToken) return undefined;
+    const userId = localStorage.getItem('userId');
+    if (!userId) return undefined;
+
+    /*
+      The five frame kinds that mean "your entitlements changed, re-read them". Two are keyed
+      on `type` and three on `event`, which is the backend's shape, not a choice made here —
+      preserved exactly, because these five are the reason the socket exists: a webhook lands,
+      the backend publishes, and the page re-reads without the trader refreshing.
+    */
+    const namesABillingChange = (message) =>
+      message.type === 'subscription_update' ||
+      message.type === 'plan_changed' ||
+      message.event === 'subscription_cancelled' ||
+      message.event === 'cancellation_reversed' ||
+      message.event === 'payment_failed';
+
+    // One frame, one refresh. `processMessage` hands the same object to an event-type
+    // subscriber and then to a channel subscriber (`websocketClient.js:303-330`), and this
+    // page holds both routings, so a frame naming the channel would otherwise refresh twice.
+    const alreadyRefreshed = new WeakSet();
+
+    const handleBillingFrame = (message) => {
+      if (!message || typeof message !== 'object') return;
+      if (!namesABillingChange(message)) return;
+      if (alreadyRefreshed.has(message)) return;
+      alreadyRefreshed.add(message);
+      loadBilling();
+      loadPlans(currencyRef.current);
     };
-    connectWebSocket();
-    return () => { if (ws) ws.close(); };
-  }, [loadBilling, loadPlans, currency]);
+
+    wsClient.acquire(`/ws/user/${userId}`);
+    const releases = [
+      // The server-side hold, refcounted per channel by the shared client.
+      wsClient.subscribeChannel('billing', handleBillingFrame),
+      // And the client-side routing for the frames that name a type rather than a channel,
+      // which is how the two `type` kinds above arrive.
+      wsClient.subscribe('subscription_update', handleBillingFrame),
+      wsClient.subscribe('plan_changed', handleBillingFrame),
+    ];
+
+    return () => {
+      releases.forEach((release) => release());
+      wsClient.release();
+    };
+  }, [loadBilling, loadPlans]);
 
   const handleCheckout = useCallback(async (planId) => {
     if (isCheckoutLoading) return;
