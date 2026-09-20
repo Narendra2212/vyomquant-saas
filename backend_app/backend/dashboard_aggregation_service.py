@@ -1799,21 +1799,34 @@ class DashboardAggregationService:
             return {
                 "environment": norm_env,
                 "overview": {
-                    "total_value": float(portfolio.get("total_value", portfolio.get("total_equity", 0.0))),
-                    "total_equity": float(portfolio.get("total_equity", 0.0)),
-                    "available_balance": float(portfolio.get("available_balance", 0.0)),
-                    "free_balance": float(portfolio.get("free_balance", portfolio.get("available_balance", 0.0))),
-                    "used_balance": float(portfolio.get("used_balance", 0.0)),
-                    "today_pnl": float(portfolio.get("today_pnl", 0.0)),
-                    "today_realized_pnl": float(portfolio.get("today_realized_pnl", 0.0)),
-                    # BC-5: lifetime realised P&L, carried through as read - ``None`` stays
-                    # ``None`` rather than being coerced to 0.0 by the ``float()`` its neighbours
-                    # get, which is the entire point of the field (Requirements 10.1, 19.2).
+                    # Wave 1 step 1 (task 6.1). Every figure in this block is read through
+                    # ``_finite_float`` (:314), exactly as ``realized_pnl`` below already was:
+                    # a figure that WAS read is published as read - ``0.0`` and ``-0.0``
+                    # included, because a zero is a measurement (preservation 3.2) - and a
+                    # figure that was NOT read is ``None``. The ``float(portfolio.get(key, 0.0))``
+                    # this replaces had two outcomes and no third, so absence was unrepresentable
+                    # at the response boundary and every producer upstream was forced to invent a
+                    # number (Requirements 1.1, 1.2).
+                    #
+                    # The two chained reads keep their by-PRESENCE fallback: ``total_value`` falls
+                    # back to ``total_equity`` only when the key is absent, never when it is
+                    # present and unreadable. A figure that was not read must not be answered with
+                    # a different figure.
+                    "total_value": _finite_float(portfolio.get("total_value", portfolio.get("total_equity"))),
+                    "total_equity": _finite_float(portfolio.get("total_equity")),
+                    "available_balance": _finite_float(portfolio.get("available_balance")),
+                    "free_balance": _finite_float(portfolio.get("free_balance", portfolio.get("available_balance"))),
+                    "used_balance": _finite_float(portfolio.get("used_balance")),
+                    "today_pnl": _finite_float(portfolio.get("today_pnl")),
+                    "today_realized_pnl": _finite_float(portfolio.get("today_realized_pnl")),
+                    # BC-5: lifetime realised P&L, carried through as read (Requirements 10.1,
+                    # 19.2). Its neighbours above now read the same way, so this field is no
+                    # longer the one exception in the block.
                     "realized_pnl": _finite_float(portfolio.get("realized_pnl")),
-                    "today_return_pct": float(portfolio.get("today_return_pct", 0.0)),
-                    "unrealized_pnl": float(portfolio.get("unrealized_pnl", 0.0)),
-                    "cumulative_pnl": float(portfolio.get("cumulative_pnl", 0.0)),
-                    "total_exposure": float(portfolio.get("total_exposure", 0.0)),
+                    "today_return_pct": _finite_float(portfolio.get("today_return_pct")),
+                    "unrealized_pnl": _finite_float(portfolio.get("unrealized_pnl")),
+                    "cumulative_pnl": _finite_float(portfolio.get("cumulative_pnl")),
+                    "total_exposure": _finite_float(portfolio.get("total_exposure")),
                     "currency": portfolio.get("currency", "USDT"),
                     "updated_at": portfolio.get("updated_at", datetime.now(timezone.utc).isoformat())
                 },
