@@ -821,3 +821,284 @@ async def test_a_present_return_pct_still_rounds_exactly_as_it_did(
     assert data["risk"]["current_drawdown_pct"] == round(
         data["overview"]["today_return_pct"], 2
     ), "the deprecated field is still today_return_pct rounded to 2dp, unchanged"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 7. THE ROUTE DISPOSITION  (6.7 - `routers/dashboard.py`, Requirements 2.1, 2.2, 3.8, 3.9)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# Task 6.7 changes no behaviour. It pins the two dispositions `routers/dashboard.py` already
+# takes, because wave 1 made figures nullable and a nullable figure is exactly what turned into a
+# 503 in section 6 - so the codes a client receives are now load-bearing and previously untested
+# from the route's side:
+#
+# * `GET /api/dashboard/overview` REFUSES with 503. All five figures it returns come from one
+#   portfolio read and all five are headline money figures; nothing survives the failure, so
+#   there is no partial truth for a `degraded` marker to qualify. That judgement is correct and
+#   this section preserves it - these tests fail if it is ever converted to a degraded 200.
+# * `GET /api/dashboard` DEGRADES with 200. Balances, equity curve and executions on the same
+#   response are separate reads that succeeded. A nullable *figure* needs no marker (it carries
+#   its own `null`); a *list* uses the `degraded` channel because a list has nowhere to put one.
+#
+# And on both: NEVER A 500. `TestClient` is constructed with `raise_server_exceptions=False`
+# throughout, so an unhandled exception arrives here as the 500 a real client would receive
+# instead of being re-raised into the test - which is what makes "never a 500" an assertion
+# rather than an absence of one.
+
+
+def _dashboard_router_import_error():
+    """Why the dashboard route cannot be exercised here, or `None` if it can.
+
+    Same probe `test_positions_degraded_projection.py` uses for its own route section: the app is
+    importable in some environments and not others, and a run that could not build it must be
+    reported as skipped rather than as passing.
+    """
+    try:
+        import backend_app.routers.dashboard  # noqa: F401
+        import backend_app.routers.risk  # noqa: F401
+    except Exception as exc:  # the reason is the useful part, so it is carried into the skip
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
+_DASHBOARD_ROUTER_IMPORT_ERROR = _dashboard_router_import_error()
+
+requires_app = pytest.mark.skipif(
+    _DASHBOARD_ROUTER_IMPORT_ERROR is not None,
+    reason="backend_app.routers.dashboard is not importable here: "
+    + str(_DASHBOARD_ROUTER_IMPORT_ERROR),
+)
+
+#: The wave-1 limb. `get_risk_data` fed a present `None` into `float()` and the resulting
+#: `TypeError` travelled out of the composer to `routers/dashboard.py:157`. Section 6 fixed the
+#: coercion; this section pins what the route does with whatever reaches it next, and a
+#: `TypeError` is the shape that actually got there.
+_WAVE_1_TYPE_ERROR = TypeError("float() argument must be a string or a real number, not 'NoneType'")
+
+
+def _client(app):
+    """A client that reports a 500 instead of re-raising it, so the code can be asserted on."""
+    from fastapi.testclient import TestClient
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _no_dashboard_cache():
+    """The route's 10-second Redis cache patched to miss.
+
+    `GET /api/dashboard` reads `dashboard:{user}:{env}:{days}` before it composes anything, so a
+    payload left by an earlier request could answer a later test. Patched to `None` so every test
+    below exercises the composition it set up.
+    """
+    return patch(
+        "backend_app.core.cache.redis_manager.redis_manager.get",
+        new_callable=AsyncMock,
+        return_value=None,
+    )
+
+
+def _positions_read_down():
+    """The Redis key scan behind the live positions read, broken.
+
+    The same patch target and the same failure `test_positions_degraded_projection.py` uses.
+    `get_health_status` and `get_exchange_data` scan the same client and both catch their own
+    failure, so this breaks the positions read and nothing else: a PARTIAL failure, which is the
+    premise of the degraded disposition.
+    """
+    return patch(
+        "backend_app.core.cache.redis_manager.redis_manager.keys",
+        new_callable=AsyncMock,
+        side_effect=_PaperStoreDown("redis unavailable"),
+    )
+
+
+@requires_app
+@pytest.mark.parametrize(
+    "failure",
+    [
+        _PaperStoreDown("portfolio store unavailable"),
+        _WAVE_1_TYPE_ERROR,
+        KeyError("total_equity"),
+    ],
+    ids=["store_outage", "wave_1_type_error", "missing_key"],
+)
+def test_the_overview_route_still_answers_503_when_nothing_survived_the_read(mock_user, failure):
+    """Total read failure on the overview route is a 503, whatever the failure was. Never a 500.
+
+    The handler's five figures all come from `get_portfolio_overview`. When that read fails there
+    is no figure left to publish, so the response is a refusal - not a 200 carrying a `degraded`
+    block over an empty body, and not the zero-state it used to return (`total_value: 0.0`, which
+    is a claim a wiped account also makes).
+
+    Parameterised over three failure types because the handler catches `Exception` and the
+    disposition must not depend on which one arrived. `TypeError` is in the list for a reason:
+    that is the shape section 6's regression actually had.
+    """
+    from backend_app.core.dependencies import get_current_user
+    from backend_app.main import app
+
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    try:
+        with patch(
+            "backend_app.routers.dashboard.get_dashboard_service", new_callable=AsyncMock
+        ) as mock_get_service:
+            service = AsyncMock()
+            service.get_portfolio_overview = AsyncMock(side_effect=failure)
+            mock_get_service.return_value = service
+
+            response = _client(app).get(
+                "/api/dashboard/overview",
+                headers={"Authorization": "Bearer valid_jwt_token"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code != 500, (
+        f"an unhandled {type(failure).__name__} reached the client as a 500; the handler catches "
+        f"Exception precisely so a read failure is reported as unavailability"
+    )
+    assert response.status_code == 503
+    body = response.json()
+    assert body["detail"]["error"] == "DASHBOARD_FETCH_FAILED"
+    # 3.8: the message is copy, not diagnostics. Nothing from the exception reaches the client.
+    rendered = json.dumps(body)
+    assert "Traceback" not in rendered and "float()" not in rendered
+    # And no body was served alongside the refusal - there is nothing true to put in one.
+    assert "overview" not in body
+
+
+@requires_app
+def test_the_overview_route_still_serves_its_figures_when_the_read_worked(mock_user):
+    """Preservation. The refusal is for the failure only; a successful read is a 200 as before."""
+    from backend_app.core.dependencies import get_current_user
+    from backend_app.main import app
+
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    try:
+        with patch(
+            "backend_app.routers.dashboard.get_dashboard_service", new_callable=AsyncMock
+        ) as mock_get_service:
+            service = AsyncMock()
+            service.get_portfolio_overview = AsyncMock(
+                return_value={
+                    "total_equity": 4200.0,
+                    "daily_pnl": 500.0,
+                    "pnl_pct": 12.5,
+                    "unrealized_pnl": 500.0,
+                    "available_balance": 4200.0,
+                }
+            )
+            mock_get_service.return_value = service
+
+            response = _client(app).get(
+                "/api/dashboard/overview",
+                headers={"Authorization": "Bearer valid_jwt_token"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200
+    assert response.json()["overview"]["total_value"] == 4200.0
+
+
+@requires_app
+def test_the_data_route_still_answers_200_with_a_populated_degraded_block(mock_user):
+    """A PARTIAL failure on `GET /api/dashboard` is a 200 that says what it could not read.
+
+    Driven through the real app AND the real aggregation service, with only the positions read
+    broken, so this is the whole path: the service composes the marker, and the route serves it
+    as a 200 rather than converting a partial failure into a blanket refusal.
+
+    The complement of the test above, and the reason the two dispositions coexist: here the
+    balances, the equity curve and the executions on this same response are real reads that
+    succeeded. A refusal would throw them away to report a failure that a marker reports better.
+    """
+    from backend_app.backend.dashboard_aggregation_service import POSITIONS_UNREADABLE
+    from backend_app.core.dependencies import get_current_user
+    from backend_app.main import app
+
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    try:
+        with _positions_read_down(), _no_dashboard_cache(), patch.object(
+            DashboardAggregationService, "_get_telemetry", return_value=_EmptyQuestDB()
+        ):
+            response = _client(app).get(
+                "/api/dashboard?environment=live&equity_days=30",
+                headers={"Authorization": "Bearer valid_jwt_token"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code != 500, "a partial read failure is not a server error"
+    assert response.status_code == 200, (
+        "the balances, curve and executions on this response were read successfully; a 503 here "
+        "would discard every one of them to report the one read that did not"
+    )
+    body = response.json()
+    assert body["degraded"] is not None, (
+        "an empty positions list on a 200 with no marker is indistinguishable from a flat "
+        "account - `degraded` is the only thing that tells them apart (Requirement 14.5)"
+    )
+    assert body["degraded"]["positions"] == POSITIONS_UNREADABLE
+    assert body["degraded"]["reason"], "the marker carries renderable prose, not a code alone"
+    assert body["positions"] == []
+    # The sections that DID read are still on the response. That is what the 200 is for.
+    assert "overview" in body and "equity_curve" in body and "exchange" in body
+
+
+@requires_app
+def test_the_data_route_still_answers_503_rather_than_a_500_when_nothing_survived(mock_user):
+    """A TOTAL failure on the data route is `routers/dashboard.py:157`'s 503, not a 500.
+
+    This is the limb section 6's regression reached: one `TypeError` inside the composer took the
+    whole dashboard down. Section 6 removed that coercion; this pins what the route does with
+    whatever arrives there next - report unavailability, with copy, and without a traceback.
+    """
+    from backend_app.core.dependencies import get_current_user
+    from backend_app.main import app
+
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    try:
+        with _no_dashboard_cache(), patch(
+            "backend_app.routers.dashboard.get_dashboard_service", new_callable=AsyncMock
+        ) as mock_get_service:
+            service = AsyncMock()
+            service.get_dashboard_data = AsyncMock(side_effect=_WAVE_1_TYPE_ERROR)
+            mock_get_service.return_value = service
+
+            response = _client(app).get(
+                "/api/dashboard?environment=live&equity_days=30",
+                headers={"Authorization": "Bearer valid_jwt_token"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code != 500
+    assert response.status_code == 503
+    body = response.json()
+    assert body["detail"]["error"] == "DASHBOARD_FETCH_FAILED"
+    rendered = json.dumps(body)
+    assert "Traceback" not in rendered and "float()" not in rendered, (
+        "3.8: the traceback is logged, and what reaches the user is copy"
+    )
+
+
+def test_positions_unreadable_stays_a_service_layer_exception():
+    """`PositionsUnreadable` is not an `HTTPException`, and must not become one.
+
+    Which code an unreadable positions read deserves depends on how much of the response
+    survives without it - 200 with a marker on `GET /api/dashboard`, and nothing else on a
+    route where positions were the whole body. A service-layer type carrying a status code would
+    settle that question at the wrong layer, in the one place that cannot see the answer.
+
+    Asserted without the app, so it holds on every run.
+    """
+    from fastapi import HTTPException
+
+    from backend_app.backend.dashboard_aggregation_service import PositionsUnreadable
+
+    assert issubclass(PositionsUnreadable, RuntimeError)
+    assert not issubclass(PositionsUnreadable, HTTPException), (
+        "the service must not decide the status code; only the route knows how much of the "
+        "response survived the failed read"
+    )
