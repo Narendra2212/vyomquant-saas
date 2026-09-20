@@ -45,6 +45,46 @@ from backend_app.backend.backtest_service import BacktestService
 logger = logging.getLogger("BacktestRuntime")
 
 
+#: The keys BOTH producers compute, and which producer owns each. ``backtesting_engine``'s
+#: ``results`` and :meth:`BacktestRuntime._calculate_performance_metrics` overlap on exactly
+#: these three, and until this was declared the overlap was resolved by the argument order of a
+#: dict literal - ``{**stats, **performance_metrics}`` - which handed all three to the runtime
+#: and got two of them wrong.
+#:
+#:   ``expectancy``     ENGINE.  ``(win_rate * avg_win) - ((1 - win_rate) * avg_loss)`` over
+#:                      ``portfolio.trades.pnl``, the real per-trade P&L array. The runtime's
+#:                      version was ``0.0``, computed from three VectorBT display names that
+#:                      could never match, and it won the merge on every run.
+#:   ``calmar_ratio``   ENGINE.  VectorBT's own ``Calmar Ratio`` stat. Overwritten the same way.
+#:   ``sortino_ratio``  RUNTIME. Downside deviation of the equity series. The engine also emits
+#:                      a VectorBT ``Sortino Ratio``; both are real measurements of different
+#:                      things, and the runtime's is the one that has always been persisted, so
+#:                      it stays the owner. Named here rather than left to ordering precisely
+#:                      because a plain precedence inversion would have re-pointed this stored
+#:                      column in silence while fixing the other two.
+ENGINE_OWNED_METRICS = ("expectancy", "calmar_ratio")
+RUNTIME_OWNED_METRICS = ("sortino_ratio",)
+
+
+def _merge_contested_metrics(stats: Dict, performance_metrics: Dict) -> Dict:
+    """``stats`` merged with ``performance_metrics``, with the contested keys decided by name.
+
+    The base merge keeps the runtime's value on a collision, as it always has - that is what
+    :data:`RUNTIME_OWNED_METRICS` relies on. The loop then restores the engine's value for the
+    keys :data:`ENGINE_OWNED_METRICS` names, so the outcome does not depend on which dict is
+    spread second and a future edit to the literal cannot re-point a persisted column by
+    accident.
+    """
+    merged = {**stats, **performance_metrics}
+    for key in ENGINE_OWNED_METRICS:
+        if key in stats:
+            merged[key] = stats[key]
+    for key in RUNTIME_OWNED_METRICS:
+        if key in performance_metrics:
+            merged[key] = performance_metrics[key]
+    return merged
+
+
 def _engine_metric(stats: Dict, key: str, default: float = 0.0) -> float:
     """One of ``backtesting_engine``'s own snake_case payload keys, as a usable float.
 
@@ -481,8 +521,7 @@ class BacktestRuntime:
 
             # Prepare results
             results = {
-                **stats,
-                **performance_metrics,
+                **_merge_contested_metrics(stats, performance_metrics),
                 "charts": charts,
                 "execution_time_seconds": execution_time,
                 # ``stats.get("Total Trades", 0)`` missed the same way, and published

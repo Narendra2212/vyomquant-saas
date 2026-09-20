@@ -129,6 +129,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from backend_app.backend import backtest_service as bs
+from backend_app.backend import backtest_runtime as rt
 from backend_app.backend.backtest_runtime import BacktestRuntime
 from backend_app.backend.backtesting_engine import BacktestEngine
 
@@ -251,6 +252,25 @@ BAR_COUNT = 240
 INITIAL_CAPITAL = 10_000.0
 
 BASE_MS = 1_700_000_000_000  # 2023-11-14T22:13:20Z, an arbitrary fixed epoch
+
+#: The engine's own `results` dict from the run :func:`runtime_payload` drives, snapshotted
+#: before the runtime merges anything into it. A module-level box rather than a third element on
+#: the fixture's return, so the fifteen `payload, _sb = runtime_payload` unpack sites keep
+#: working, and rather than a second fixture, so the expensive simulation still runs once.
+#:
+#: WHY A CROSS-RUN COMPARISON IS NOT GOOD ENOUGH - discovered by task 7.7.
+#:   `vectorbt_engine_run` is a DIFFERENT run from the one the runtime drives. It declares
+#:   `timeframe: "1m"`; `_StubStrategyPackage.metadata` declares `"15m"`, and the engine injects
+#:   that as VectorBT's `freq` (`backtesting_engine.py` VALID_FREQ_MAP), which is what VectorBT
+#:   annualises Calmar and Sortino against. So the two runs legitimately disagree on
+#:   `calmar_ratio` - 2.7933e+26 at `1T` against 2545.382 at `15T` - and "the engine's value
+#:   survived the merge" is not a claim a cross-run equality can express for that column.
+#:
+#:   The columns that do NOT depend on the declared frequency - `total_return_pct`,
+#:   `profit_factor`, `total_trades`, `winning_trades`, `losing_trades`, `expectancy`,
+#:   `final_equity` - are identical on both runs, which is why section 7 and section 2 compare
+#:   across them safely. Only the annualised ratios need the same-run snapshot.
+ENGINE_PAYLOAD_FROM_THE_RUNTIME_RUN = {}
 
 
 def _bars(count=BAR_COUNT):
@@ -436,6 +456,19 @@ def runtime_payload():
     sb = _Supabase(RECONCILED_FOR_BAR_COUNT, rows={TABLE: [_running_row()]})
     runtime = _runtime(sb)
     runtime.backtest_service = _CapturingService(_service(sb))
+
+    # The engine's own payload from THIS run, snapshotted before the runtime merges anything
+    # into it. See ENGINE_PAYLOAD_FROM_THE_RUNTIME_RUN for why a cross-run comparison is not
+    # good enough for the frequency-sensitive stats.
+    _real_engine_run = runtime.vectorbt_engine.run_backtest_async
+
+    async def _capturing_engine_run(**kwargs):
+        engine_results, engine_curve = await _real_engine_run(**kwargs)
+        ENGINE_PAYLOAD_FROM_THE_RUNTIME_RUN.clear()
+        ENGINE_PAYLOAD_FROM_THE_RUNTIME_RUN.update(engine_results)
+        return engine_results, engine_curve
+
+    runtime.vectorbt_engine.run_backtest_async = _capturing_engine_run
 
     async def _go():
         return await runtime.run_backtest(
@@ -976,12 +1009,32 @@ def test_the_engines_computed_calmar_ratio_survives_the_dict_merge(
     is the one the engine chose to emit, and it is discarded. If task 7.x decides the runtime's
     Calmar is the better definition, then the engine should stop emitting one; two producers
     silently racing on one column is the defect either way.
+
+    TASK 7.7 CORRECTION - this now compares within ONE run, and it had to.
+        The assertion was `payload["calmar_ratio"] == vectorbt_engine_run[0]["calmar_ratio"]`,
+        which is a cross-run equality on a column that depends on an input the two runs do not
+        share: `vectorbt_engine_run` declares `timeframe: "1m"` and the runtime's package
+        declares `"15m"`, and that value becomes VectorBT's `freq`. After 7.7 made the engine's
+        value win the merge, the payload carried the engine's 15-minute Calmar (2545.382) and
+        the assertion still failed - against the engine's 1-minute Calmar (2.7933e+26). The
+        code was right and the instrument was measuring two runs.
+        :data:`ENGINE_PAYLOAD_FROM_THE_RUNTIME_RUN` is the same-run snapshot, so the assertion
+        now says what it always meant: the value the engine produced *on this run* is the value
+        the payload carries. That is strictly stronger than the cross-run form, not weaker - it
+        would still catch the runtime overwriting the column, and it no longer passes or fails
+        on a frequency coincidence.
     """
     payload, _sb = runtime_payload
     engine_results, _curve = vectorbt_engine_run
-    assert payload["calmar_ratio"] == engine_results["calmar_ratio"], (
-        f"engine calmar_ratio {engine_results['calmar_ratio']} was overwritten with "
-        f"{payload['calmar_ratio']} by the merge at backtest_runtime.py:383-384"
+    same_run = ENGINE_PAYLOAD_FROM_THE_RUNTIME_RUN
+
+    assert same_run, "the engine payload snapshot was not captured; harness failure"
+    assert payload["calmar_ratio"] == same_run["calmar_ratio"], (
+        f"engine calmar_ratio {same_run['calmar_ratio']} was overwritten with "
+        f"{payload['calmar_ratio']} by the merge in backtest_runtime.run_backtest. "
+        f"(The separately-parametrised 1-minute run reports "
+        f"{engine_results['calmar_ratio']}; the frequencies differ, which is why this "
+        f"asserts against the snapshot and not against that.)"
     )
 
 
@@ -1007,9 +1060,29 @@ def test_sortino_ratio_comes_from_the_runtime_not_the_engine(
 
     Two producers, two answers 38x apart, and no way to tell from the persisted column which
     one wrote it.
+
+    TASK 7.7 UPDATE - the producer is now named, not merely inferred from a difference.
+        Task 7.7 could not fix `expectancy` and `calmar_ratio` by inverting the merge
+        precedence, because the same inversion would have handed THIS column to the engine and
+        silently re-pointed it. So ownership is declared per key in
+        `backtest_runtime.ENGINE_OWNED_METRICS` / `RUNTIME_OWNED_METRICS`, and the two
+        assertions below read that declaration by name. A future edit that moves
+        `sortino_ratio` from one tuple to the other now reds this test instead of quietly
+        changing what the column means.
     """
     payload, _sb = runtime_payload
     engine_results, _curve = vectorbt_engine_run
+
+    assert "sortino_ratio" in rt.RUNTIME_OWNED_METRICS, (
+        f"sortino_ratio is no longer declared as the runtime's: engine-owned "
+        f"{rt.ENGINE_OWNED_METRICS}, runtime-owned {rt.RUNTIME_OWNED_METRICS}. The persisted "
+        f"column's meaning changed - it is now VectorBT's Sortino, a different measure."
+    )
+    assert "sortino_ratio" not in rt.ENGINE_OWNED_METRICS, (
+        "sortino_ratio is declared as owned by both producers, so the merge outcome is once "
+        "again decided by ordering"
+    )
+
     assert isinstance(payload["sortino_ratio"], (int, float))
     assert payload["sortino_ratio"] != engine_results["sortino_ratio"], (
         "the two producers happened to agree on this run, which makes this file unable to "
