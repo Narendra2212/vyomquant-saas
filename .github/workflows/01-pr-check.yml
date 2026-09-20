@@ -174,6 +174,33 @@ jobs:
         working-directory: ./algo22-terminal
         run: npm ci
 
+      # No workflow invoked eslint before this step, so the error count was unbounded and
+      # undetected: `no-undef` is what would have caught the three `post is not defined`
+      # ReferenceErrors, each of which threw before reaching the network.
+      #
+      # The binary is called by path, not through `npx`, deliberately: `npx` swallows stdout
+      # on at least one maintainer machine, which makes a local reproduction of a CI failure
+      # look like a pass.
+      #
+      # `--max-warnings 227` pins the warnings at their count on 2026-09-20 rather than
+      # driving them to zero. Errors fail the job outright; the cap means the warning
+      # backlog cannot grow either. Lowering it as warnings are fixed is the intent.
+      #
+      # DATED EXCEPTION -- 2026-09-20. The three engine contexts are excluded because each
+      # holds a live `no-undef` on `post`, which is the defect tasks 9.2 and 9.3 exist to
+      # fix. They are excluded so this gate can go in now and start catching new errors,
+      # instead of waiting on another task. Delete the three --ignore-pattern flags as part
+      # of 9.2/9.3; the gate is incomplete until they are gone.
+      - name: Lint frontend
+        if: steps.changes.outputs.frontend == 'true'
+        working-directory: ./algo22-terminal
+        run: |
+          node node_modules/eslint/bin/eslint.js src \
+            --ignore-pattern 'src/contexts/IndicatorEngineContext.jsx' \
+            --ignore-pattern 'src/contexts/LogicEngineContext.jsx' \
+            --ignore-pattern 'src/contexts/StrategyEngineContext.jsx' \
+            --max-warnings 227
+
       - name: Build frontend
         if: steps.changes.outputs.frontend == 'true'
         working-directory: ./algo22-terminal

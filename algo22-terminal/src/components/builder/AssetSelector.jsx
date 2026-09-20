@@ -493,6 +493,12 @@ export function AssetSelector({
         data-testid="asset-listbox"
       >
         {assets.map((asset, index) => (
+          /* eslint-disable-next-line jsx-a11y-x/click-events-have-key-events -- The rule is
+             wrong about this element. This is an ARIA 1.2 `aria-activedescendant` combobox:
+             focus stays on the input, which carries the Up/Down/Home/End/Enter/Escape
+             handler, and the options are deliberately not focusable. The ARIA APG requires
+             that a `role="option"` in this pattern NOT have its own key listener, so adding
+             one to satisfy the rule would break the very keyboard support it asks for. */
           <li
             key={asset.symbol}
             id={optionId(index)}

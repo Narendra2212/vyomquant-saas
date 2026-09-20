@@ -195,9 +195,26 @@ export default function RiskSettings() {
     }, 800);
   };
 
-  const Toggle = ({ active, onClick, disabled = false }) => (
+  const Toggle = ({ active, onClick, disabled = false, label }) => (
     <div 
-      onClick={!disabled ? onClick : undefined}
+      // A pointer-only toggle cannot be reached without a mouse. It is a switch, so it gets
+      // the switch role, its checked/disabled state, a tab stop and Enter/Space activation.
+      // The visible text sits in the parent row, so the name arrives as `label`.
+      role="switch"
+      aria-checked={active}
+      aria-label={label}
+      aria-disabled={disabled || undefined}
+      tabIndex={0}
+      onClick={disabled ? undefined : onClick}
+      onKeyDown={(event) => {
+        if (disabled) return;
+        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+          // Space scrolls the page by default, which would move the control out from
+          // under the setting just toggled.
+          event.preventDefault();
+          onClick?.(event);
+        }
+      }}
       style={{
         width: 44, 
         height: 24, 
@@ -377,7 +394,7 @@ export default function RiskSettings() {
                     <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>{ks.description}</div>
                   </div>
                 </div>
-                <Toggle active={ks.active} onClick={() => handleToggleSwitch(ks.key)} />
+                <Toggle active={ks.active} label={ks.label} onClick={() => handleToggleSwitch(ks.key)} />
               </div>
             ))}
           </div>

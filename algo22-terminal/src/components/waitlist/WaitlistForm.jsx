@@ -117,10 +117,11 @@ export default function WaitlistForm() {
 
         <div className="grid grid-cols-2 gap-5">
           <div className="space-y-1.5 col-span-2 sm:col-span-1">
-            <label className="text-xs font-semibold text-text-secondary ml-1">Full Name <span className="text-accent-loss">*</span></label>
+            <label htmlFor="waitlist-name" className="text-xs font-semibold text-text-secondary ml-1">Full Name <span className="text-accent-loss">*</span></label>
             <div className="relative">
               <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
               <input
+                id="waitlist-name"
                 type="text"
                 value={formData.name}
                 onChange={e => handleChange('name', e.target.value)}
@@ -133,10 +134,11 @@ export default function WaitlistForm() {
           </div>
 
           <div className="space-y-1.5 col-span-2 sm:col-span-1">
-            <label className="text-xs font-semibold text-text-secondary ml-1">Email Address <span className="text-accent-loss">*</span></label>
+            <label htmlFor="waitlist-email" className="text-xs font-semibold text-text-secondary ml-1">Email Address <span className="text-accent-loss">*</span></label>
             <div className="relative">
               <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
               <input
+                id="waitlist-email"
                 type="email"
                 value={formData.email}
                 onChange={e => handleChange('email', e.target.value)}
@@ -150,10 +152,11 @@ export default function WaitlistForm() {
         </div>
 
         <div className="space-y-1.5">
-          <label className="text-xs font-semibold text-text-secondary ml-1">Trader Type <span className="text-accent-loss">*</span></label>
+          <label htmlFor="waitlist-trader-type" className="text-xs font-semibold text-text-secondary ml-1">Trader Type <span className="text-accent-loss">*</span></label>
           <div className="relative">
             <Briefcase className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
             <select
+              id="waitlist-trader-type"
               value={formData.trader_type}
               onChange={e => handleChange('trader_type', e.target.value)}
               onBlur={() => handleBlur('trader_type')}
@@ -169,10 +172,11 @@ export default function WaitlistForm() {
         </div>
 
         <div className="space-y-1.5">
-          <label className="text-xs font-semibold text-text-secondary ml-1">Experience Level <span className="text-accent-loss">*</span></label>
+          <label htmlFor="waitlist-experience-level" className="text-xs font-semibold text-text-secondary ml-1">Experience Level <span className="text-accent-loss">*</span></label>
           <div className="relative">
             <BarChart3 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
             <select
+              id="waitlist-experience-level"
               value={formData.experience_level}
               onChange={e => handleChange('experience_level', e.target.value)}
               onBlur={() => handleBlur('experience_level')}
@@ -188,10 +192,11 @@ export default function WaitlistForm() {
         </div>
 
         <div className="space-y-1.5">
-          <label className="text-xs font-semibold text-text-secondary ml-1">Expected Monthly Volume <span className="text-accent-loss">*</span></label>
+          <label htmlFor="waitlist-monthly-volume" className="text-xs font-semibold text-text-secondary ml-1">Expected Monthly Volume <span className="text-accent-loss">*</span></label>
           <div className="relative">
             <TrendingUp className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
             <select
+              id="waitlist-monthly-volume"
               value={formData.monthly_volume}
               onChange={e => handleChange('monthly_volume', e.target.value)}
               onBlur={() => handleBlur('monthly_volume')}

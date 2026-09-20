@@ -559,7 +559,19 @@ function NotificationCenter() {
             return (
               <div
                 key={notification.id}
+                // A pointer-only row cannot be opened without a mouse. It activates a
+                // notification, so it gets the button role, a tab stop and Enter/Space.
+                role="button"
+                tabIndex={0}
                 onClick={() => handleNotificationClick(notification)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+                    // Space scrolls the page by default, which would move the list out from
+                    // under the row just activated.
+                    event.preventDefault();
+                    handleNotificationClick(notification);
+                  }
+                }}
                 style={{
                   padding: '16px 20px',
                   borderBottom: idx < filteredNotifications.length - 1 ? `1px solid ${token.line.default}` : 'none',

@@ -8,9 +8,11 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
-  Zap, ChevronRight, Shield, Cpu, Activity, ArrowUpRight, Check, BarChart2,
-  Lock, Terminal, Globe, Award, HelpCircle, User, Star, Layers, Play, Loader2
+  Zap, ChevronRight, ChevronDown, ChevronUp, Shield, Cpu, Activity, ArrowUpRight,
+  Check, BarChart2, Lock, Terminal, Globe, Award, HelpCircle, User, Star, Layers,
+  Play, Loader2, GitBranch, TrendingUp, Bot
 } from 'lucide-react';
 import { token } from '../design/tokens';
 import { Button } from '../components/ui/Button';
@@ -60,6 +62,9 @@ function LandingFeatureCard({ f, i }) {
 }
 
 function LandingPricingCard({ plan }) {
+  // The CTA below navigates, and `navigate` is not in scope from the parent — this
+  // component has to obtain it itself.
+  const navigate = useNavigate();
   const [isHovered, setIsHovered] = useState(false);
   const isElite = plan.name === "Elite";
   const isPro = plan.name === "Pro";
@@ -606,16 +611,16 @@ export default function Landing() {
               style={{ display: "flex", flexDirection: "column", gap: 14 }}
             >
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <label style={{ color: token.content.secondary, fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 2, textTransform: "uppercase" }}>Name</label>
-                <input required type="text" placeholder="John Doe" style={{ background: token.surface.inset, border: `1px solid ${token.line.default}`, color: token.content.primary, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontFamily: "monospace", outline: "none" }} />
+                <label htmlFor="landing-demo-name" style={{ color: token.content.secondary, fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 2, textTransform: "uppercase" }}>Name</label>
+                <input id="landing-demo-name" required type="text" placeholder="John Doe" style={{ background: token.surface.inset, border: `1px solid ${token.line.default}`, color: token.content.primary, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontFamily: "monospace", outline: "none" }} />
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <label style={{ color: token.content.secondary, fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 2, textTransform: "uppercase" }}>Email</label>
-                <input required type="email" placeholder="john@company.com" style={{ background: token.surface.inset, border: `1px solid ${token.line.default}`, color: token.content.primary, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontFamily: "monospace", outline: "none" }} />
+                <label htmlFor="landing-demo-email" style={{ color: token.content.secondary, fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 2, textTransform: "uppercase" }}>Email</label>
+                <input id="landing-demo-email" required type="email" placeholder="john@company.com" style={{ background: token.surface.inset, border: `1px solid ${token.line.default}`, color: token.content.primary, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontFamily: "monospace", outline: "none" }} />
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <label style={{ color: token.content.secondary, fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 2, textTransform: "uppercase" }}>Strategy Scale</label>
-                <select style={{ background: token.surface.inset, border: `1px solid ${token.line.default}`, color: token.content.primary, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontFamily: "monospace", outline: "none" }}>
+                <label htmlFor="landing-demo-scale" style={{ color: token.content.secondary, fontSize: 9, fontFamily: "monospace", fontWeight: 900, letterSpacing: 2, textTransform: "uppercase" }}>Strategy Scale</label>
+                <select id="landing-demo-scale" style={{ background: token.surface.inset, border: `1px solid ${token.line.default}`, color: token.content.primary, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontFamily: "monospace", outline: "none" }}>
                   <option>Personal (1-5 bots)</option>
                   <option>Professional (5-20 bots)</option>
                   <option>Institutional (20+ bots)</option>

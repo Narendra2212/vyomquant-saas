@@ -238,7 +238,7 @@ export const DataPipelineProvider = ({ children, mode = 'backtest' }) => {
       return result;
     } catch (err) {
       console.error("OHLCV fetch failed:", err);
-      throw new Error(`Failed to fetch historical data: ${err.message}`);
+      throw new Error(`Failed to fetch historical data: ${err.message}`, { cause: err });
     } finally {
       setIsFetchingData(false);
       setTimeout(() => setFetchProgress(0), 500);

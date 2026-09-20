@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 
-const EMAIL_REGEX = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/
-const NAME_REGEX = /^[\p{L}\s'\-]{2,60}$/u
+const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
+const NAME_REGEX = /^[\p{L}\s'-]{2,60}$/u
 const TELEGRAM_REGEX = /^@?[a-zA-Z0-9_]{5,32}$/
 
 export function useWaitlistValidation() {

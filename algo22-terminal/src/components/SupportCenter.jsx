@@ -348,7 +348,21 @@ export default function SupportCenter() {
                       background: token.surface.raised, border: `1px solid ${isExpanded ? token.brand.base : token.line.default}`,
                       borderRadius: 10, padding: "14px 18px", transition: "all 0.15s", cursor: "pointer"
                     }}
+                    // A pointer-only disclosure cannot be opened without a mouse. It is a
+                    // button that expands a region, so it gets the role, aria-expanded, a
+                    // tab stop and Enter/Space activation.
+                    role="button"
+                    aria-expanded={isExpanded}
+                    tabIndex={0}
                     onClick={() => setExpandedFaq(isExpanded ? null : item.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+                        // Space scrolls the page by default, which would move the entry out
+                        // from under the reader who just opened it.
+                        event.preventDefault();
+                        setExpandedFaq(isExpanded ? null : item.id);
+                      }
+                    }}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -465,7 +479,20 @@ export default function SupportCenter() {
                 return (
                   <div
                     key={t.id}
+                    // A pointer-only row cannot be opened without a mouse. It activates a
+                    // ticket, so it gets the button role, a tab stop and Enter/Space.
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open ticket ${t.subject || t.id}`}
                     onClick={() => loadTicketDetail(t.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+                        // Space scrolls the page by default, which would move the list out
+                        // from under the row just activated.
+                        event.preventDefault();
+                        loadTicketDetail(t.id);
+                      }
+                    }}
                     style={{
                       background: token.surface.raised, border: `1px solid ${token.line.default}`, borderRadius: 10,
                       padding: "14px 18px", display: "flex", alignItems: "center", gap: 14,
@@ -536,10 +563,11 @@ export default function SupportCenter() {
           <form onSubmit={handleCreateTicket} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {/* Subject */}
             <div>
-              <label style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
+              <label htmlFor="support-ticket-subject" style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
                 Issue Subject *
               </label>
               <input
+                id="support-ticket-subject"
                 value={formData.subject}
                 onChange={e => setFormData({ ...formData, subject: e.target.value })}
                 placeholder="E.g., Bybit Testnet WebSocket Disconnect on BTCUSDT Linear"
@@ -552,10 +580,11 @@ export default function SupportCenter() {
             {/* Category & Priority */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
               <div>
-                <label style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
+                <label htmlFor="support-ticket-category" style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
                   Category *
                 </label>
                 <select
+                  id="support-ticket-category"
                   value={formData.category}
                   onChange={e => setFormData({ ...formData, category: e.target.value })}
                   style={{ width: "100%", background: token.surface.inset, border: `1px solid ${token.line.default}`, color: token.content.primary, padding: "10px 12px", borderRadius: 6, fontSize: 11, fontFamily: "monospace", outline: "none", cursor: "pointer" }}
@@ -570,10 +599,11 @@ export default function SupportCenter() {
               </div>
 
               <div>
-                <label style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
+                <label htmlFor="support-ticket-priority" style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
                   Priority Level *
                 </label>
                 <select
+                  id="support-ticket-priority"
                   value={formData.priority}
                   onChange={e => setFormData({ ...formData, priority: e.target.value })}
                   style={{ width: "100%", background: token.surface.inset, border: `1px solid ${token.line.default}`, color: token.content.primary, padding: "10px 12px", borderRadius: 6, fontSize: 11, fontFamily: "monospace", outline: "none", cursor: "pointer" }}
@@ -589,10 +619,11 @@ export default function SupportCenter() {
             {/* Optional References */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
               <div>
-                <label style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
+                <label htmlFor="support-ticket-strategy-id" style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
                   Strategy ID (Optional)
                 </label>
                 <input
+                  id="support-ticket-strategy-id"
                   value={formData.strategy_id}
                   onChange={e => setFormData({ ...formData, strategy_id: e.target.value })}
                   placeholder="strat_..."
@@ -601,10 +632,11 @@ export default function SupportCenter() {
               </div>
 
               <div>
-                <label style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
+                <label htmlFor="support-ticket-order-id" style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
                   Order / Execution ID (Optional)
                 </label>
                 <input
+                  id="support-ticket-order-id"
                   value={formData.order_id}
                   onChange={e => setFormData({ ...formData, order_id: e.target.value })}
                   placeholder="ord_..."
@@ -615,10 +647,11 @@ export default function SupportCenter() {
 
             {/* Description */}
             <div>
-              <label style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
+              <label htmlFor="support-ticket-description" style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
                 Description & Reproduction Steps *
               </label>
               <textarea
+                id="support-ticket-description"
                 value={formData.description}
                 onChange={e => setFormData({ ...formData, description: e.target.value })}
                 placeholder="Provide detailed diagnostic logs, steps to reproduce, or order context. Never include raw API secrets or private keys."
@@ -634,12 +667,13 @@ export default function SupportCenter() {
 
             {/* Safe Attachment Simulation */}
             <div>
-              <label style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
+              <label htmlFor="support-ticket-attachment-name" style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 6 }}>
                 Attachment Filename / Log Trace (Optional)
               </label>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <Paperclip size={14} color={token.content.muted} />
                 <input
+                  id="support-ticket-attachment-name"
                   value={formData.attachment_name}
                   onChange={e => setFormData({ ...formData, attachment_name: e.target.value })}
                   placeholder="e.g. execution_trace_bybit.log or signal_screenshot.png"
@@ -788,10 +822,11 @@ export default function SupportCenter() {
           {/* Reply Form */}
           {selectedTicket.status !== 'closed' ? (
             <form onSubmit={handleAddComment} style={{ background: token.surface.raised, border: `1px solid ${token.line.default}`, borderRadius: 10, padding: 16 }}>
-              <label style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 8 }}>
+              <label htmlFor="support-ticket-reply" style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", display: "block", marginBottom: 8 }}>
                 Post Reply
               </label>
               <textarea
+                id="support-ticket-reply"
                 value={commentText}
                 onChange={e => setCommentText(e.target.value)}
                 placeholder="Type your reply or additional diagnostic information..."

@@ -253,7 +253,21 @@ export default function Profile() {
   function NotificationSwitch({ label, description, icon: Icon, checked, onChange }) {
     return (
       <div 
+        // A pointer-only toggle cannot be reached without a mouse. It is a switch, so it
+        // gets the switch role, its checked state, a tab stop and Enter/Space activation.
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        tabIndex={0}
         onClick={() => onChange(!checked)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+            // Space scrolls the page by default, which would move the row out from
+            // under the setting just toggled.
+            event.preventDefault();
+            onChange(!checked);
+          }
+        }}
         style={{
           display: "flex",
           alignItems: "center",
@@ -517,30 +531,34 @@ export default function Profile() {
               <div style={{ marginTop: 14, padding: 14, background: token.surface.inset, borderRadius: 8, border: `1px solid ${token.line.default}` }}>
                 <div style={{ display: "grid", gap: 10 }}>
                   <div>
-                    <label style={{ color: token.content.secondary, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Username</label>
+                    <label htmlFor="profile-edit-username" style={{ color: token.content.secondary, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Username</label>
                     <Inp
+                      id="profile-edit-username"
                       value={editData.username}
                       onChange={(e) => setEditData({ ...editData, username: e.target.value })}
                     />
                   </div>
                   <div>
-                    <label style={{ color: token.content.secondary, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Display Name</label>
+                    <label htmlFor="profile-edit-display-name" style={{ color: token.content.secondary, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Display Name</label>
                     <Inp
+                      id="profile-edit-display-name"
                       value={editData.display_name}
                       onChange={(e) => setEditData({ ...editData, display_name: e.target.value })}
                     />
                   </div>
                   <div>
-                    <label style={{ color: token.content.secondary, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Telegram Handle (@)</label>
+                    <label htmlFor="profile-edit-telegram-id" style={{ color: token.content.secondary, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Telegram Handle (@)</label>
                     <Inp
+                      id="profile-edit-telegram-id"
                       value={editData.telegram_id}
                       onChange={(e) => setEditData({ ...editData, telegram_id: e.target.value })}
                       placeholder="@yourtelegram"
                     />
                   </div>
                   <div>
-                    <label style={{ color: token.content.secondary, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Trader Bio / Strategy Notes</label>
+                    <label htmlFor="profile-edit-bio" style={{ color: token.content.secondary, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Trader Bio / Strategy Notes</label>
                     <textarea
+                      id="profile-edit-bio"
                       value={editData.bio}
                       onChange={(e) => setEditData({ ...editData, bio: e.target.value })}
                       style={{

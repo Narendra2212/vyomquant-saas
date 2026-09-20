@@ -147,7 +147,7 @@ export default function Wizard() {
                   <Button variant="primary" onClick={async () => {
                     setBacktestStatus("running");
                     try {
-                      const res = await endpoints.strategies.backtest({
+                      await api.strategies.backtest({
                         strategies: ["macd"],
                         symbols: ["BTCUSDT"],
                         timeframe: "15m",
@@ -220,7 +220,6 @@ export default function Wizard() {
             <p style={{ color: token.content.secondary, fontSize: 11, fontFamily: "monospace", marginBottom: 24, textAlign: "center" }}>Select a plan to unlock powerful features.</p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
               {plans.map(p => {
-                const isActive = currentPlan?.id === p.id;
                 const isRecommended = p.recommended;
                 const priceINR = p.inr || 0;
                 const priceUSD = p.usd || 0;

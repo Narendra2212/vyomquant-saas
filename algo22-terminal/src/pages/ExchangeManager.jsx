@@ -543,8 +543,10 @@ export default function ExchangeManager() {
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
           {/* Left Column: Exchange Selection */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <label style={{ color: "#94a3b8", fontSize: 12, fontWeight: 600, letterSpacing: 1 }}>SELECT EXCHANGE</label>
+          {/* Heading for the list below, not a label for a single control, so it is a group
+              label rather than a <label> with nothing to associate itself with. */}
+          <div role="group" aria-labelledby="exchange-select-heading" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div id="exchange-select-heading" style={{ color: "#94a3b8", fontSize: 12, fontWeight: 600, letterSpacing: 1 }}>SELECT EXCHANGE</div>
             <div style={{
               background: "#0f172a", 
               border: "1px solid #334155", 
@@ -583,7 +585,21 @@ export default function ExchangeManager() {
                       {exchanges.map(ex => (
                         <div
                           key={ex.id}
+                          // A pointer-only row cannot be selected without a mouse. It picks
+                          // the exchange, so it gets the button role, its selected state, a
+                          // tab stop and Enter/Space activation.
+                          role="button"
+                          tabIndex={0}
+                          aria-pressed={selectedExchange?.id === ex.id}
                           onClick={() => setSelectedExchange(ex)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+                              // Space scrolls the page by default, which would move the list
+                              // out from under the row just selected.
+                              event.preventDefault();
+                              setSelectedExchange(ex);
+                            }
+                          }}
                           style={{
                             padding: "10px 16px 10px 24px",
                             cursor: "pointer",
@@ -631,8 +647,9 @@ export default function ExchangeManager() {
           </div>
 
           {/* Right Column: Credentials */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <label style={{ color: "#94a3b8", fontSize: 12, fontWeight: 600, letterSpacing: 1 }}>API CREDENTIALS</label>
+          {/* Heading for the credential field group, not a label for a single control. */}
+          <div role="group" aria-labelledby="exchange-credentials-heading" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div id="exchange-credentials-heading" style={{ color: "#94a3b8", fontSize: 12, fontWeight: 600, letterSpacing: 1 }}>API CREDENTIALS</div>
             
             {!selectedExchange ? (
               <div style={{ 
