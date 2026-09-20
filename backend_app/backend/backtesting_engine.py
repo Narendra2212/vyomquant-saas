@@ -228,6 +228,11 @@ class BacktestEngine:
             results = {
                 "total_return_pct": round(total_return_pct, 4),
                 "final_equity": round(final_equity, 4),
+                # Emitted on this path too, and for a reason beyond symmetry: the runtime's
+                # ``recovery_factor`` and ``average_trade`` are derived from it, and a
+                # deployment without VectorBT runs this branch. A key present on only one
+                # engine path is how the equity curve came to be path-dependent (:243).
+                "total_pnl": round(float(final_equity - self.initial_capital), 4),
                 "win_rate_pct": round(win_rate * 100, 4),
                 "max_drawdown_pct": round(max_dd, 4),
                 "total_trades": max(trades_count, 1),
@@ -482,6 +487,14 @@ class BacktestEngine:
         results = {
             "total_return_pct": _safe_stat(stats, "Total Return [%]", 0.0),
             "final_equity": round(float(final_equity), 4),
+            # ``total_pnl`` was computed at :405 and spent entirely on the ``[CAPITAL]`` log
+            # line below it, so the Net P&L field on the Backtester results screen had no
+            # producer on any code path - not this dict, not ``performance_metrics``, not the
+            # literals ``backtest_runtime`` adds. Requirement 2.10 accepts either emitting it
+            # or removing the field; emitting is the smaller change, because the value already
+            # exists and is already correct. It is declared here, beside the ``final_equity``
+            # it is derived from, so the two cannot disagree.
+            "total_pnl": round(float(total_pnl), 4),
             "win_rate_pct": round(float(win_rate * 100), 4) if not pd.isna(win_rate) else 0.0,
             "max_drawdown_pct": _safe_stat(stats, "Max Drawdown [%]", 0.0),
             "total_trades": int(stats.get("Total Trades", 0) or 0),
