@@ -14,8 +14,14 @@
  * `signal_service.SIGNAL_TIMELINE_EVENTS` declares.
  */
 
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
+import { createElement } from 'react';
+import { act, cleanup, render } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import SignalTraceVisualization from '../../../src/components/SignalTraceVisualization';
 import {
   EVENT_EXCHANGE_RESPONSE,
   EVENT_EXECUTED,
@@ -569,5 +575,390 @@ describe('total over garbage', () => {
     expect(stageById(result, STAGE_INDICATORS).latencyMs).toBe(8);
     expect(stageById(result, STAGE_LOGIC).latencyMs).toBe(1);
     expect(stageById(result, STAGE_EXECUTION).latencyMs).toBe(86);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════
+// production-launch-hardening task 9.6 — the ONE node projection, read off the ONE fixture
+// ════════════════════════════════════════════════════════════════════════════════════════
+//
+// Requirements 1.29, 2.29, 3.7. Task 9.4 named the `DAGNodeTrace -> dict` projection and
+// declared its shape in `tests/fixtures/signal_trace_node_projection.json`; task 9.5 made all
+// six nodes-bearing stages of `SignalTraceRecord.to_frontend_format()` call it, so `market_data`
+// and `indicators` stopped carrying raw `DAGNodeTrace` instances that `json.dumps` could not
+// serialise. This section is the consuming half: the same fixture, read through `node:fs` at a
+// repo-relative path, asserting the frontend renders that projected shape on every stage that
+// carries it.
+//
+// WHICH "STAGE 1/2/3" THESE ARE, BECAUSE THIS FILE ALREADY HAS NINE OF ITS OWN
+// ---------------------------------------------------------------------------
+// The task's stages 1, 2 and 3 are the ENGINE's `pipeline` entries — `market_data`,
+// `indicators`, `dag_nodes` — not this module's canonical nine. The engine frame is the only
+// producer of the fixture's shape, and `components/SignalTraceVisualization.jsx` is its only
+// consumer: it maps `market_data -> market-data`, `indicators -> indicators` and
+// `dag_nodes -> logic` through one table and attaches the entry to the canonical row. So the
+// three engine stages arrive here as canonical rows 1, 2 and 4, and the rendering is asserted
+// through that component.
+//
+// `lib/signalTraceStages.js` consumes a DIFFERENT projection — `signal_service._dag_node_entry`,
+// which the REST body carries on `trace.dag_nodes.nodes` and which spells the type `node_type`.
+// The last case below covers it: the projected fields the two shapes share (`status`,
+// `execution_ms`, `error`) are read by name there too.
+
+/**
+ * The shared contract, one file. pytest reads this exact path directly
+ * (`tests/test_signal_trace_serialisation.py`); vitest resolves up one level out of its
+ * `algo22-terminal/` root to the same bytes, so a second copy cannot drift out of step with
+ * the producing side.
+ */
+const PROJECTION = JSON.parse(
+  readFileSync(
+    resolve(process.cwd(), '..', 'tests', 'fixtures', 'signal_trace_node_projection.json'),
+    'utf8',
+  ),
+);
+
+/** A `NodeIO` port in the fixture's declared key order. `value` is always a string. */
+const port = (values) =>
+  Object.fromEntries(PROJECTION.port.key_order.map((key) => [key, values[key]]));
+
+/**
+ * A node in the fixture's declared key order, defaulted from the worked example — so a test
+ * node cannot quietly carry a key the projection does not declare, or omit one it does.
+ */
+const projectedNode = (overrides = {}) => {
+  const merged = { ...PROJECTION.example.output, ...overrides };
+  return Object.fromEntries(PROJECTION.key_order.map((key) => [key, merged[key]]));
+};
+
+/** Engine stage 3's node: the fixture's own worked example, untouched. */
+const WORKED_NODE = projectedNode();
+
+/** Engine stage 1's node. */
+const MARKET_DATA_NODE = projectedNode({
+  node_id: 'n_md_1',
+  type: 'market_data',
+  label: 'BTC/USDT 15m',
+  inputs: [port({ key: 'symbol', value: 'BTC/USDT', dtype: 'string' })],
+  outputs: [port({ key: 'close', value: '63120.0', dtype: 'float' })],
+  execution_ms: 3.5,
+});
+
+/** Engine stage 2's node. */
+const INDICATOR_NODE = projectedNode({
+  node_id: 'n_ind_1',
+  type: 'indicator',
+  label: 'RSI 14',
+  inputs: [port({ key: 'close', value: '63120.0', dtype: 'float' })],
+  outputs: [port({ key: 'rsi_14', value: '28.4', dtype: 'float' })],
+  execution_ms: 7,
+});
+
+/**
+ * One `to_frontend_format()` frame. The three summary entries carry NO `nodes` key at all —
+ * task 9.5 omits it rather than sending `[]` when a stage recorded no node traces, so `nodes`
+ * is OPTIONAL on `ml_inference`, `risk_validation` and `execution` and this frame is the shape
+ * a trace without ML/risk/execution node traces actually has.
+ */
+const engineFrame = (overrides = {}) => ({
+  id: 't-1',
+  signal_id: 'sig-1',
+  strategy: 'Crossover v2',
+  symbol: 'BTC/USDT',
+  timestamp: '2024-05-01T12:04:00.000Z',
+  status: 'completed',
+  final_decision: 'BUY',
+  latency_ms: 240,
+  pipeline: [
+    { stage: 'market_data', nodes: [MARKET_DATA_NODE], status: 'completed' },
+    { stage: 'indicators', nodes: [INDICATOR_NODE], status: 'completed' },
+    { stage: 'dag_nodes', nodes: [WORKED_NODE], status: 'completed' },
+    {
+      stage: 'ml_inference',
+      model: null,
+      confidence: null,
+      prediction: null,
+      inference_ms: null,
+      status: 'pending',
+    },
+    {
+      stage: 'risk_validation',
+      passed: null,
+      blocked: false,
+      block_reason: null,
+      exposure_pct: null,
+      validation_ms: null,
+      status: 'pending',
+    },
+    {
+      stage: 'execution',
+      order_id: null,
+      filled_size: null,
+      filled_price: null,
+      fill_percent: null,
+      fees: null,
+      slippage: null,
+      exchange_latency_ms: null,
+      status: 'pending',
+    },
+  ],
+  errors: [],
+  ...overrides,
+});
+
+/** Renders the live panel and pushes one frame at it through the channel handler. */
+const renderFrame = (frame) => {
+  const handlers = [];
+  const wsClient = {
+    subscribe: (_channel, handler) => {
+      handlers.push(handler);
+      return () => {};
+    },
+  };
+  render(createElement(SignalTraceVisualization, { wsClient }));
+  act(() => {
+    handlers[0](frame);
+  });
+};
+
+/** One canonical stage row. Its region is always in the DOM, hidden until expanded. */
+const row = (id) => document.querySelector(`[data-stage-id="${id}"]`);
+
+/** The node rows a stage drew, which is `StageDetail`'s `<li>` per projected node. */
+const nodeRows = (id) => [...row(id).querySelectorAll('li')];
+
+/**
+ * Which of the projected node's fields this stage actually put on screen. One reader, so the
+ * same five answers are expected for every stage that carries nodes.
+ */
+const renderedFields = (id, node) => {
+  const text = nodeRows(id)[0].textContent;
+  return {
+    node_id: text.includes(node.node_id),
+    type: text.includes(node.type),
+    execution_ms: text.includes(`${node.execution_ms}ms`),
+    inputs: text.includes(JSON.stringify(node.inputs)),
+    outputs: text.includes(JSON.stringify(node.outputs)),
+  };
+};
+
+const ALL_FIVE = { node_id: true, type: true, execution_ms: true, inputs: true, outputs: true };
+
+/** Engine stage → the canonical row it lands on, per the component's `LIVE_STAGE_KEY`. */
+const ENGINE_STAGE_ROW = Object.freeze({
+  market_data: STAGE_MARKET_DATA,
+  indicators: STAGE_INDICATORS,
+  dag_nodes: STAGE_LOGIC,
+});
+
+describe('the shared node projection fixture', () => {
+  afterEach(cleanup);
+
+  it('declares the eight keys, the port sub-shape and the nine node types this file reads', () => {
+    expect(PROJECTION.key_order).toEqual([
+      'node_id',
+      'type',
+      'label',
+      'inputs',
+      'outputs',
+      'execution_ms',
+      'status',
+      'error',
+    ]);
+    expect(PROJECTION.port.key_order).toEqual(['key', 'value', 'dtype']);
+    expect(PROJECTION.keys.type.enum).toHaveLength(9);
+    expect(PROJECTION.keys.error.nullable).toBe(true);
+    expect(PROJECTION.keys.node_id.nullable).toBe(false);
+  });
+
+  it('carries a worked pair whose output is the projection of its own node trace', () => {
+    const { node_trace: trace, output } = PROJECTION.example;
+
+    expect(Object.keys(output)).toEqual(PROJECTION.key_order);
+    expect(output.node_id).toBe(trace.node_id);
+    expect(output.type).toBe(trace.node_type);
+    expect(output.label).toBe(trace.node_label);
+    expect(output.execution_ms).toBe(trace.execution_ms);
+    expect(output.status).toBe(trace.status);
+    expect(output.error).toBe(trace.error_message);
+
+    // `str()` is the step that makes a port safe: a Decimal input and a bool output arrive as
+    // strings, so `value` is ALWAYS a string even where the Python value was neither.
+    for (const io of [...output.inputs, ...output.outputs]) {
+      expect(Object.keys(io)).toEqual(PROJECTION.port.key_order);
+      expect(typeof io.value).toBe('string');
+      expect(typeof io.dtype).toBe('string');
+    }
+    expect(output.inputs[0].value).toBe('101.5'); // Decimal('101.5')
+    expect(output.outputs[0].value).toBe('True'); // True
+  });
+});
+
+describe('engine stages 1, 2 and 3 render node detail from the projected shape', () => {
+  afterEach(cleanup);
+
+  it('renders the projected fields on market_data and indicators, not an opaque object', () => {
+    renderFrame(engineFrame());
+
+    expect(renderedFields(STAGE_MARKET_DATA, MARKET_DATA_NODE)).toEqual(ALL_FIVE);
+    expect(renderedFields(STAGE_INDICATORS, INDICATOR_NODE)).toEqual(ALL_FIVE);
+
+    // The symptom of the pre-9.5 shape: a node that is not a dict stringifies to this, or
+    // fails to serialise before it ever arrives. Neither may appear on screen.
+    expect(document.body.textContent).not.toContain('[object Object]');
+  });
+
+  it('leaves the dag_nodes rendering exactly as it was: the fixture example, unchanged', () => {
+    renderFrame(engineFrame());
+
+    expect(renderedFields(STAGE_LOGIC, WORKED_NODE)).toEqual(ALL_FIVE);
+
+    const logic = row(STAGE_LOGIC);
+    expect(logic.dataset.stageState).toBe(STAGE_COMPLETE);
+    expect(logic.textContent).toContain('1 node evaluated');
+    expect(logic.textContent).toContain(`${WORKED_NODE.execution_ms}ms`);
+    expect(nodeRows(STAGE_LOGIC)).toHaveLength(1);
+  });
+
+  it('counts and times the nodes per stage from that stage\u2019s own projected list', () => {
+    renderFrame(engineFrame());
+
+    expect(row(STAGE_MARKET_DATA).textContent).toContain('1 market data node');
+    expect(row(STAGE_MARKET_DATA).textContent).toContain(`${MARKET_DATA_NODE.execution_ms}ms`);
+    expect(row(STAGE_INDICATORS).textContent).toContain('1 indicator node');
+    expect(row(STAGE_INDICATORS).textContent).toContain(`${INDICATOR_NODE.execution_ms}ms`);
+
+    for (const id of Object.values(ENGINE_STAGE_ROW)) {
+      expect(row(id).dataset.stageState).toBe(STAGE_COMPLETE);
+    }
+  });
+
+  it('pins the three stages to ONE shape: the same reader, the same markup, every field', () => {
+    renderFrame(engineFrame());
+
+    const nodeOf = {
+      [STAGE_MARKET_DATA]: MARKET_DATA_NODE,
+      [STAGE_INDICATORS]: INDICATOR_NODE,
+      [STAGE_LOGIC]: WORKED_NODE,
+    };
+
+    // Same five fields read on all three — a per-stage shape would answer differently on one.
+    for (const id of Object.values(ENGINE_STAGE_ROW)) {
+      expect(renderedFields(id, nodeOf[id])).toEqual(ALL_FIVE);
+    }
+
+    // And the same renderer drew them: one `StageDetail`, so the node row's classes, its
+    // element tags and its field labels are identical across the three.
+    const shapeOf = (id) => {
+      const li = nodeRows(id)[0];
+      return {
+        className: li.className,
+        tags: [...li.querySelectorAll('*')].map((element) => element.tagName).join(','),
+        labels: [...li.querySelectorAll('span')]
+          .map((span) => span.textContent)
+          .filter((text) => text === 'inputs' || text === 'outputs'),
+      };
+    };
+    const shapes = Object.values(ENGINE_STAGE_ROW).map(shapeOf);
+    expect(shapes[0].labels).toEqual(['inputs', 'outputs']);
+    expect(shapes[1]).toEqual(shapes[0]);
+    expect(shapes[2]).toEqual(shapes[0]);
+  });
+
+  it('treats `nodes` as OPTIONAL on ml_inference, risk_validation and execution', () => {
+    // The frame omits the key on all three (task 9.5 sends no `nodes` rather than `[]`).
+    renderFrame(engineFrame());
+
+    for (const id of [STAGE_MODEL, STAGE_ORDER_DECISION, STAGE_EXECUTION]) {
+      expect(row(id)).not.toBeNull();
+      expect(nodeRows(id)).toEqual([]);
+      expect(STAGE_STATES).toContain(row(id).dataset.stageState);
+    }
+
+    // The omission costs no row and reorders nothing: all nine, in canonical order.
+    expect([...document.querySelectorAll('[data-stage-id]')].map((el) => el.dataset.stageId))
+      .toEqual(CANONICAL_IDS);
+  });
+
+  it('reads the same projected shape when those three stages DO carry nodes', () => {
+    const frame = engineFrame();
+    const riskNode = projectedNode({
+      node_id: 'n_risk_1',
+      type: 'risk',
+      label: 'Exposure cap',
+      inputs: [port({ key: 'exposure', value: '0.42', dtype: 'float' })],
+      outputs: [port({ key: 'allowed', value: 'True', dtype: 'bool' })],
+      execution_ms: 2,
+    });
+    frame.pipeline[4] = { ...frame.pipeline[4], nodes: [riskNode], status: 'completed' };
+
+    renderFrame(frame);
+
+    expect(renderedFields(STAGE_ORDER_DECISION, riskNode)).toEqual(ALL_FIVE);
+  });
+
+  it('surfaces a failed projected node by its own `status` and `error`', () => {
+    const frame = engineFrame();
+    const failed = projectedNode({
+      node_id: 'n_op_2',
+      type: 'operator',
+      status: 'fail',
+      error: 'Divide by zero in crossover window',
+    });
+    frame.pipeline[2] = { ...frame.pipeline[2], nodes: [failed] };
+
+    renderFrame(frame);
+
+    expect(row(STAGE_LOGIC).dataset.stageState).toBe(STAGE_BLOCKED);
+    expect(row(STAGE_LOGIC).textContent).toContain('Divide by zero in crossover window');
+  });
+});
+
+describe('the REST reader over the projected fields the two shapes share', () => {
+  /**
+   * `trace.dag_nodes.nodes` is `signal_service._dag_node_entry`'s shape, not the engine
+   * frame's, but `status`, `execution_ms` and `error` are spelled the same in both — which is
+   * what lets one set of readers serve either. Feeding the projected nodes here proves those
+   * three are read by name rather than by position, and that a section with no `nodes` key is
+   * not indexed.
+   */
+  const restPayload = (nodes) => ({
+    signal: { decision: 'BUY', market_info: { symbol: 'BTC/USDT' }, indicators: { rsi_14: 28.4 } },
+    trace: {
+      dag_nodes: { source: 'signal_trace_engine', nodes },
+      ml_inference: { source: 'signal_trace_engine', applicable: true, detail: { model_id: 'm-1' } },
+      risk_validation: { source: 'signals_row', detail: { passed: true } },
+      execution: { source: 'signals_row', outcome: {}, exchange_response: null },
+    },
+    timeline: [],
+  });
+
+  it('sums `execution_ms` and carries the node dicts through to the stage detail', () => {
+    const result = buildSignalTraceStages(restPayload([MARKET_DATA_NODE, INDICATOR_NODE]));
+    const indicators = stageById(result, STAGE_INDICATORS);
+
+    expect(result.stages.map((stage) => stage.id)).toEqual(CANONICAL_IDS);
+    expect(indicators.state).toBe(STAGE_COMPLETE);
+    expect(indicators.latencyMs).toBe(MARKET_DATA_NODE.execution_ms + INDICATOR_NODE.execution_ms);
+    expect(indicators.detail.nodes).toEqual([MARKET_DATA_NODE, INDICATOR_NODE]);
+    expect(indicators.detail.nodes.every((node) => Object.keys(node).length === 8)).toBe(true);
+  });
+
+  it('reads a projected node\u2019s `status` and `error`, and null `error` as absence', () => {
+    const passing = buildSignalTraceStages(restPayload([projectedNode()]));
+    expect(stageById(passing, STAGE_INDICATORS).state).toBe(STAGE_COMPLETE);
+    expect(stageById(passing, STAGE_INDICATORS).reason).toBeNull();
+
+    const failing = buildSignalTraceStages(
+      restPayload([projectedNode({ status: 'fail', error: 'Upstream port missing' })]),
+    );
+    expect(stageById(failing, STAGE_INDICATORS).state).toBe(STAGE_BLOCKED);
+    expect(stageById(failing, STAGE_INDICATORS).reason).toBe('Upstream port missing');
+  });
+
+  it('never indexes a `nodes` key the summary sections do not carry', () => {
+    const payload = restPayload([WORKED_NODE]);
+    expect(() => buildSignalTraceStages(payload)).not.toThrow();
+    expect(buildSignalTraceStages(payload).stages.map((stage) => stage.id)).toEqual(CANONICAL_IDS);
   });
 });
