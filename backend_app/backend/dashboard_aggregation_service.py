@@ -1660,10 +1660,21 @@ class DashboardAggregationService:
             # unreadable count from a count of zero.
             "degraded": positions_degradation(positions_error, environment),
             # DEPRECATED (BC-1, design.md §1.5): this is ``today_return_pct``, not a drawdown, so
-            # a profitable day reads as a positive "drawdown". Left in place unchanged for its
-            # deprecation window - BC-1 is an additive read projection (Requirement 19.1) and no
-            # existing consumer is repointed by it. Read ``current_drawdown_pct_v2`` instead.
-            "current_drawdown_pct": round(float((portfolio or {}).get("today_return_pct", 0.0)), 2),
+            # a profitable day reads as a positive "drawdown". Still not repointed - BC-1 is an
+            # additive read projection (Requirement 19.1) and no existing consumer moves off it.
+            # Read ``current_drawdown_pct_v2`` instead.
+            #
+            # NULLABLE as of 6.1-6.3. The old ``.get(..., 0.0)`` default only fired for an ABSENT
+            # key, and those tasks made ``today_return_pct`` present-and-``None`` on an unreadable
+            # portfolio, so ``float(None)`` raised ``TypeError`` out through ``get_dashboard_data``
+            # (whose outer ``except`` re-raises) and took the whole of ``GET /api/dashboard`` to
+            # its ``503 DASHBOARD_FETCH_FAILED`` limb. ``_finite_float`` is the same
+            # channel every figure beside it uses; ``or 0.0`` behind it would re-fabricate a number
+            # in the one field BC-1 already documents as incorrect, which is worse than a null.
+            # "Left in place unchanged" was about not moving consumers, not about keeping a crash -
+            # and ``current_drawdown_pct_v2`` one line down already reports ``None`` this way. A
+            # present, finite figure still rounds to 2dp exactly as before; only absence changes.
+            "current_drawdown_pct": (None if (deprecated_dd := _finite_float((portfolio or {}).get("today_return_pct"))) is None else round(deprecated_dd, 2)),
             # BC-1: the honest peak-to-trough figure, from the equity series this request already
             # read. ``None`` when no drawdown can be measured - never 0.0 as a stand-in
             # (Requirements 3.1, 10.2, 19.2).

@@ -674,3 +674,150 @@ async def test_whether_the_composer_is_the_only_gate_forcing_a_number(
             "on this path substitutes a number. Wave 1 is larger than designed; find that site "
             "before writing task 6.1."
         )
+
+# ══════════════════════════════════════════════════════════════════════════
+# 6. THE WAVE-1 AVAILABILITY REGRESSION  (`get_risk_data` :1666, 6.1 follow-up)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# Tasks 6.1-6.3 made `today_return_pct` PRESENT AND `None` on an unreadable portfolio. One
+# consumer of it was still coercing:
+#
+#     "current_drawdown_pct": round(float((portfolio or {}).get("today_return_pct", 0.0)), 2)
+#
+# `.get(key, 0.0)` reaches its default only for an ABSENT key, so a present `None` went straight
+# into `float(None)` -> `TypeError`. `get_risk_data` is awaited inside `get_dashboard_data`'s
+# `try` and the outer `except` re-raises (:1970-1972), which the route turns into a
+# `503 DASHBOARD_FETCH_FAILED` - the WHOLE dashboard, over one deprecated field. Sections 1-4
+# traded a fabrication for an outage; this section is the assertion that neither is shipped.
+#
+# The two reproductions below are the ones wave 1 actually created, and nothing in sections 1-5
+# covers them: section 2 patches `get_portfolio_overview` out, so it never composes a dashboard
+# over a REAL paper overview carrying a real `None`.
+
+
+def _paper_store(row, trades):
+    """A stub paper service with a full surface: account row, fill ledger, positions.
+
+    Unlike `_paper_account_row` this also answers `get_positions`, so the positions read succeeds
+    and `degraded` stays `None`. That matters here: the subject is a dashboard whose ONLY absent
+    figure is `today_return_pct`, so a degraded-positions response cannot be what keeps it alive.
+    """
+
+    class _StubPaperService:
+        def get_or_create_account(self, user_id):
+            return dict(row)
+
+        def get_trades(self, user_id):
+            return [dict(trade) for trade in trades]
+
+        def get_positions(self, user_id):
+            return []
+
+    return patch(
+        "backend_app.backend.paper_trading_service.get_paper_trading_service",
+        return_value=_StubPaperService(),
+    )
+
+
+def _same_day_fill(realized_pnl):
+    """A fill executed today, whose realised figure is whatever `realized_pnl` is.
+
+    `executed_at` is `now`, which sorts at or after the `00:00 UTC` ISO cutoff both
+    `get_portfolio_overview` and `get_risk_data` compare against, so the fill is inside the day
+    window for certain rather than by luck of the clock.
+    """
+    from datetime import datetime, timezone
+
+    return {
+        "trade_id": "fill_stub",
+        "symbol": "BTC/USDT",
+        "executed_at": datetime.now(timezone.utc).isoformat(),
+        "realized_pnl": realized_pnl,
+    }
+
+
+_ROW_WITHOUT_INITIAL_CAPITAL = {
+    key: value for key, value in COMPLETE_PAPER_ROW.items() if key != "initial_capital"
+}
+
+
+@requires_routers
+@pytest.mark.parametrize(
+    "why_absent, row, trades",
+    [
+        # 6.2: the denominator is not there, so the percentage is not there.
+        ("initial_capital absent from the account row", _ROW_WITHOUT_INITIAL_CAPITAL, []),
+        # 6.1/defect 48: the numerator is not there. One malformed realised figure on one
+        # same-day fill nulls today_realized_pnl -> today_pnl -> today_return_pct.
+        ("a same-day fill's realised figure is unreadable", COMPLETE_PAPER_ROW, [_same_day_fill("n/a")]),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_dashboard_over_an_absent_return_pct_still_composes(
+    mock_user, dashboard_service, why_absent, row, trades
+):
+    """A full dashboard composes and returns. It does not raise, and the endpoint does not 503.
+
+    COUNTEREXAMPLE OBSERVED BEFORE THE FIX (dashboard_aggregation_service.py:1666)::
+
+        TypeError: float() argument must be a string or a real number, not 'NoneType'
+            "current_drawdown_pct": round(float((portfolio or {}).get("today_return_pct", 0.0)), 2)
+
+    Both rows here are otherwise healthy - a readable account, a readable positions list, a
+    reachable QuestDB. The single absent figure is `today_return_pct`, and on the unfixed tree it
+    was enough to take every other figure on the response down with it.
+
+    `current_drawdown_pct` is asserted `None` rather than `0.0` because BC-1 documents this field
+    as wrong (it is `today_return_pct`, not a drawdown), so a float-preserving fallback would
+    re-fabricate inside a field already known to be misreported. `current_drawdown_pct_v2`
+    beside it has always answered this way.
+    """
+    with _paper_store(row, trades), _no_cached_balances(), patch.object(
+        DashboardAggregationService, "_get_telemetry", return_value=_EmptyQuestDB()
+    ):
+        data = await dashboard_service.get_dashboard_data(
+            mock_user, equity_days=30, environment="paper"
+        )
+
+    # 200, not 503: a response body exists at all.
+    assert isinstance(data, dict) and "risk" in data, why_absent
+
+    assert data["overview"]["today_return_pct"] is None, (
+        f"{why_absent}, so the percentage was not read"
+    )
+    assert data["risk"]["current_drawdown_pct"] is None, (
+        f"{why_absent}: the deprecated drawdown field is derived from today_return_pct, which "
+        f"was not read, so it is None. Got {data['risk']['current_drawdown_pct']!r}."
+    )
+    assert data["risk"]["current_drawdown_pct_v2"] is None, (
+        "no equity rows were read, so there is no peak-to-trough figure either"
+    )
+    # The rest of the response is unharmed - this is the availability half of the assertion.
+    assert data["degraded"] is None, "nothing on this request was unreadable except the one figure"
+    assert data["overview"]["total_equity"] == 4200.0, "a figure that WAS read is still reported"
+
+
+@requires_routers
+@pytest.mark.asyncio
+async def test_a_present_return_pct_still_rounds_exactly_as_it_did(
+    mock_user, dashboard_service
+):
+    """Preservation. Only the absent case changes; a figure that was read reads the same.
+
+    The complete row with no fills gives `today_pnl` 500.0 over `initial_capital` 4000.0 ->
+    `today_return_pct` 12.5, and the deprecated field must still publish that same figure rounded
+    to 2dp. Asserted against the overview's own value rather than against a bare literal, so the
+    two cannot drift apart without this failing.
+    """
+    with _paper_store(COMPLETE_PAPER_ROW, []), _no_cached_balances(), patch.object(
+        DashboardAggregationService, "_get_telemetry", return_value=_EmptyQuestDB()
+    ):
+        data = await dashboard_service.get_dashboard_data(
+            mock_user, equity_days=30, environment="paper"
+        )
+
+    assert data["overview"]["today_return_pct"] == 12.5
+    assert data["risk"]["current_drawdown_pct"] == 12.5
+    assert data["risk"]["current_drawdown_pct"] == round(
+        data["overview"]["today_return_pct"], 2
+    ), "the deprecated field is still today_return_pct rounded to 2dp, unchanged"
