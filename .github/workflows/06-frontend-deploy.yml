@@ -89,6 +89,53 @@ jobs:
           VITE_WS_URL: ${{ secrets.VITE_WS_URL }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
 
+      - name: Reject implausible release artifacts in dist/
+        working-directory: ./algo22-terminal
+        run: |
+          echo "=== Checking dist/ release artifacts are real build outputs ==="
+          # Runs after the build and before the S3 sync, so a placeholder fails the deploy
+          # instead of being published. A placeholder installer is a text file of a few dozen
+          # bytes; serving one gives every visitor a download that cannot install.
+          #
+          # Minimums are far below any real build — the Windows installer is ~112 MB — so a
+          # genuine artifact never trips this. Only a file that is not a build output does.
+          min_bytes_for() {
+            case "$1" in
+              *.exe|*.dmg)      echo 20971520 ;;  # 20 MiB
+              *.AppImage|*.deb) echo 10485760 ;;  # 10 MiB
+              *)                echo 0 ;;
+            esac
+          }
+
+          ARTIFACT_LIST="${RUNNER_TEMP:-/tmp}/dist-release-artifacts.txt"
+          find dist -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \) \
+            > "$ARTIFACT_LIST" 2>/dev/null || true
+
+          GATE_FAILED=0
+          CHECKED=0
+          # Redirected from a file, not piped, so the counters survive the loop.
+          while IFS= read -r artifact; do
+            [ -n "$artifact" ] || continue
+            MIN_BYTES=$(min_bytes_for "$artifact")
+            [ "$MIN_BYTES" -gt 0 ] || continue
+            SIZE=$(stat -c%s "$artifact" 2>/dev/null || stat -f%z "$artifact" 2>/dev/null || wc -c < "$artifact")
+            CHECKED=$((CHECKED + 1))
+            if [ "$SIZE" -lt "$MIN_BYTES" ]; then
+              echo "❌ $artifact: $SIZE bytes, below the $MIN_BYTES byte minimum for its type"
+              GATE_FAILED=1
+            else
+              echo "✅ $artifact: $SIZE bytes"
+            fi
+          done < "$ARTIFACT_LIST"
+
+          if [ "$GATE_FAILED" -ne 0 ]; then
+            echo "Error: dist/ contains a release artifact that is not a real build output"
+            echo "Refusing to publish. Remove the placeholder, or upload the real installer."
+            exit 1
+          fi
+
+          echo "=== $CHECKED release artifact(s) checked, all plausible ==="
+
       - name: Verify Supabase configuration embedded in build
         working-directory: ./algo22-terminal
         run: |
