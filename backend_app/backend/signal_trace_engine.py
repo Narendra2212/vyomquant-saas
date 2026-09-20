@@ -327,7 +327,43 @@ class SignalTraceRecord:
             self.total_latency_ms = (self.completed_at - self.started_at).total_seconds() * 1000
     
     def to_frontend_format(self) -> Dict[str, Any]:
-        """Convert to format expected by frontend."""
+        """Convert to format expected by frontend.
+
+        Every stage that carries nodes projects them through `project_node_trace`, so the
+        six `nodes` lists cannot disagree about the shape of a node and the payload as a
+        whole is `json.dumps`-able. Stages 1 and 2 previously held the raw `DAGNodeTrace`
+        instances the comprehension selected, which is why the response could not be
+        serialised at all.
+
+        The nine `NodeType` members now partition across the six stages with no overlap
+        and nothing left over: `market_data` and `indicators` take one type each,
+        `dag_nodes` takes the four remaining DAG-shaped types, and `ml_inference`,
+        `risk_validation` and `execution` take `ML_MODEL`, `RISK` and `EXECUTION`. Those
+        last three types previously reached no stage - the three stages named after them
+        project from `ml_trace`, `risk_trace` and `execution_trace`, which are different
+        objects a node trace never reaches - so a node the engine had recorded was
+        dropped from the response silently.
+
+        On the three summary stages `nodes` is additive: their trace-derived fields are
+        unchanged, and the key is omitted entirely when that stage recorded no nodes, so
+        a trace without ML/risk/execution node traces serialises to the shape it always
+        did.
+
+        Every stage's `status` is derived from that stage's own contents. `dag_nodes`
+        previously read `len(self.node_traces) > 2`, a count of every trace in the record
+        including the five types it excludes, so a two-node DAG reported `pending` while
+        carrying node detail and a record of three market-data nodes reported `completed`
+        while carrying none.
+        """
+        ml_nodes = [
+            project_node_trace(n) for n in self.node_traces if n.node_type == NodeType.ML_MODEL
+        ]
+        risk_nodes = [
+            project_node_trace(n) for n in self.node_traces if n.node_type == NodeType.RISK
+        ]
+        execution_nodes = [
+            project_node_trace(n) for n in self.node_traces if n.node_type == NodeType.EXECUTION
+        ]
         return {
             "id": self.trace_id,
             "signal_id": self.signal_id,
@@ -340,42 +376,49 @@ class SignalTraceRecord:
             "pipeline": [
                 {
                     "stage": "market_data",
-                    "nodes": [n for n in self.node_traces if n.node_type == NodeType.MARKET_DATA],
+                    "nodes": [project_node_trace(n) for n in self.node_traces if n.node_type == NodeType.MARKET_DATA],
                     "status": "completed" if any(n.node_type == NodeType.MARKET_DATA for n in self.node_traces) else "pending"
                 },
                 {
                     "stage": "indicators",
-                    "nodes": [n for n in self.node_traces if n.node_type == NodeType.INDICATOR],
+                    "nodes": [project_node_trace(n) for n in self.node_traces if n.node_type == NodeType.INDICATOR],
                     "status": "completed" if any(n.node_type == NodeType.INDICATOR for n in self.node_traces) else "pending"
                 },
                 {
                     "stage": "dag_nodes",
-                    "nodes": [
+                    # Bound here so `status` below reads this stage's own nodes rather than
+                    # recounting `self.node_traces`. The comprehension itself is unchanged.
+                    "nodes": (dag_nodes := [
                         project_node_trace(n)
                         for n in self.node_traces
                         if n.node_type not in [NodeType.MARKET_DATA, NodeType.INDICATOR, NodeType.ML_MODEL, NodeType.RISK, NodeType.EXECUTION]
-                    ],
-                    "status": "completed" if len(self.node_traces) > 2 else "pending"
+                    ]),
+                    "status": "completed" if dag_nodes else "pending"
                 },
                 {
                     "stage": "ml_inference",
+                    # Additive, and omitted when this stage recorded none, so a trace with
+                    # no ML_MODEL node traces keeps the exact shape it had before.
+                    **({"nodes": ml_nodes} if ml_nodes else {}),
                     "model": self.ml_trace.model_id if self.ml_trace else None,
                     "confidence": self.ml_trace.confidence if self.ml_trace else None,
                     "prediction": self.ml_trace.prediction if self.ml_trace else None,
                     "inference_ms": self.ml_trace.inference_ms if self.ml_trace else None,
-                    "status": "completed" if self.ml_trace else "pending"
+                    "status": "completed" if (self.ml_trace or ml_nodes) else "pending"
                 },
                 {
                     "stage": "risk_validation",
+                    **({"nodes": risk_nodes} if risk_nodes else {}),
                     "passed": self.risk_trace.passed if self.risk_trace else None,
                     "blocked": self.risk_trace.blocked if self.risk_trace else False,
                     "block_reason": self.risk_trace.block_reason if self.risk_trace else None,
                     "exposure_pct": self.risk_trace.exposure_pct if self.risk_trace else None,
                     "validation_ms": self.risk_trace.validation_ms if self.risk_trace else None,
-                    "status": "completed" if self.risk_trace else "pending"
+                    "status": "completed" if (self.risk_trace or risk_nodes) else "pending"
                 },
                 {
                     "stage": "execution",
+                    **({"nodes": execution_nodes} if execution_nodes else {}),
                     "order_id": self.execution_trace.order_id if self.execution_trace else None,
                     "filled_size": str(self.execution_trace.filled_size) if self.execution_trace else None,
                     "filled_price": str(self.execution_trace.filled_price) if self.execution_trace else None,
@@ -383,7 +426,9 @@ class SignalTraceRecord:
                     "fees": str(self.execution_trace.fees) if self.execution_trace else None,
                     "slippage": str(self.execution_trace.slippage) if self.execution_trace else None,
                     "exchange_latency_ms": self.execution_trace.exchange_latency_ms if self.execution_trace else None,
-                    "status": self.execution_trace.status if self.execution_trace else "pending"
+                    # The exchange's own status still wins when there is an execution trace;
+                    # the node fallback only speaks when there is nothing else to report.
+                    "status": self.execution_trace.status if self.execution_trace else ("completed" if execution_nodes else "pending")
                 }
             ],
             "errors": self.errors

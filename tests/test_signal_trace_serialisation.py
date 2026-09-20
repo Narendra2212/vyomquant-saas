@@ -528,9 +528,12 @@ def test_preserved_stage_three_node_detail_is_unchanged():
     # The envelope around it, pinned with the nodes so a fix cannot move the field.
     assert sorted(stage) == ["nodes", "stage", "status"]
     assert stage["stage"] == "dag_nodes"
-    # `:341` - `len(self.node_traces) > 2`, counting EVERY node trace and not just this
-    # stage's. Pinned as observed rather than as it arguably should be: this file changes no
-    # behaviour, and a fix that repaired the count would have to say so.
+    # `completed`, and now for the right reason. On `F` this came from
+    # `len(self.node_traces) > 2` - a count of EVERY node trace, including the five types this
+    # stage excludes - and was pinned as observed with the note that a fix repairing the count
+    # would have to say so. Task 9.5 repaired it: the flag is read off this stage's own four
+    # projected nodes. The asserted value is the same either way, which is why this preservation
+    # test stayed green across the change; what moved is the trace for which it is true.
     assert stage["status"] == "completed"
 
 
@@ -637,14 +640,22 @@ def test_measured_the_broken_path_has_one_caller_and_that_caller_has_none():
     """MEASURED - every `.py` file under `backend_app/` searched for both names.
 
         to_frontend_format        -> defined at signal_trace_engine.py:329
-                                     called at  signal_trace_engine.py:817  (1 call site)
-        get_traces_for_frontend   -> defined at signal_trace_engine.py:810
+                                     called at  signal_trace_engine.py:862  (1 call site)
+        get_traces_for_frontend   -> defined at signal_trace_engine.py:855
                                      called nowhere in backend_app/        (0 call sites)
 
-    The counts are the measurement and they are unchanged from `F`. The line numbers moved by
-    +19 in task 9.4, which inserted the named `project_node_trace` above `SignalTraceRecord`;
-    on `F` the three sites were `:301`, `:798` and `:791`. Nothing about the caller graph
-    changed - the extraction added no call site and removed none.
+    The counts are the measurement and they are unchanged from `F`. The line numbers have moved
+    twice and the caller graph has not moved at all - neither task added a call site or removed
+    one:
+
+      * `F`      -> `:301`, `:798`, `:791`
+      * task 9.4 -> `:329`, `:817`, `:810`  (+19: `project_node_trace` inserted above
+                    `SignalTraceRecord`)
+      * task 9.5 -> `:329`, `:862`, `:855`  (+45 below the method: six stages now project
+                    through that function, three of them gained a `nodes` key, and the
+                    method's docstring records the partition over `NodeType`)
+
+    The definition site did not move in 9.5 because every line 9.5 added is inside the method.
 
     So the defect is **latent**: no route, task or subscriber reaches
     `to_frontend_format` today. That does not weaken 1.29 - both methods are public API on a
@@ -667,7 +678,7 @@ def test_measured_the_broken_path_has_one_caller_and_that_caller_has_none():
         return hits
 
     assert call_sites("to_frontend_format") == [
-        "backend_app/backend/signal_trace_engine.py:817",
+        "backend_app/backend/signal_trace_engine.py:862",
     ]
     assert call_sites("get_traces_for_frontend") == []
 
@@ -921,7 +932,24 @@ def test_stage_three_now_routes_through_the_named_projection():
         "the dag_nodes stage still holds an inline copy of the projection"
     )
 
-    # The exclusion list is 9.5's to revisit, and is pinned here as observed so that 9.4 is
-    # readable as a refactor with no behaviour change.
+    # The exclusion list is unchanged, and stays pinned: task 9.5 gave the three excluded types
+    # stages of their own rather than widening this list, so stage 3 carries exactly the four
+    # types it always did (preservation 3.7).
     assert "NodeType.MARKET_DATA, NodeType.INDICATOR, NodeType.ML_MODEL, NodeType.RISK, NodeType.EXECUTION" in stage_three
-    assert 'if len(self.node_traces) > 2 else "pending"' in stage_three
+
+    # UPDATED BY TASK 9.5. This read `'if len(self.node_traces) > 2 else "pending"'`, pinned as
+    # observed while 9.4 was a pure refactor. 9.5 repaired the count, which is the change that
+    # `test_the_stage_status_flags_still_agree_with_the_node_detail` demands: the old expression
+    # counted EVERY trace in the record, including the five types this stage excludes, so the
+    # flag agreed with this stage's own node detail only by coincidence. The status is now read
+    # off the list the stage actually publishes - hence the `:=`, which binds the unchanged
+    # comprehension so the two cannot be computed from different things.
+    assert '"nodes": (dag_nodes := [' in stage_three, (
+        "the dag_nodes stage no longer binds its projected node list"
+    )
+    assert 'if dag_nodes else "pending"' in stage_three, (
+        "the dag_nodes stage's status is not derived from its own node list"
+    )
+    assert "len(self.node_traces) > 2" not in stage_three, (
+        "the global node count came back: the status flag can disagree with the node detail again"
+    )
