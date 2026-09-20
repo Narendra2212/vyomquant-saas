@@ -1,50 +1,43 @@
+/**
+ * /download — production-launch-hardening task 4.3.
+ *
+ * WHAT CHANGED, AND WHY THERE IS NO URL IN THIS FILE ANY MORE
+ * ---------------------------------------------------------
+ * This page advertised four installers — with four hardcoded sizes (84.2 / 78.5 / 75.4 /
+ * 68.2 MB), four SHA-256 strings and a "Code Signed / Verified Publisher / Production Build"
+ * row — and served none of them. All four URLs return 403: CI's `dist/` carries no
+ * `releases/` directory and `aws s3 sync dist/ --delete` deletes that prefix from the bucket
+ * on every deploy. A size or a checksum for a file that does not exist is a fabricated figure
+ * on a rendered surface, so the whole advertisement is withdrawn rather than relabelled.
+ *
+ * The four cards now render through the SAME convention every absent figure in this app uses:
+ * `design/pageFields` declares each platform `VERDICT.UNAVAILABLE` with a reason,
+ * `usePanelState` short-circuits to `unavailable` on that reason — issuing no request at all
+ * (Requirement 19.3) — and `ds/Panel` renders the not-available marker carrying it. No new
+ * primitive, no new copy path, no new state.
+ *
+ * Restoring a platform is one edit in `pageFields.js` once its artifact is actually
+ * published; nothing here needs to change for that, because nothing here holds a URL.
+ */
+
 import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Download, Check, AlertCircle, Cpu, HardDrive, MemoryStick, Wifi, ArrowRight, Calendar, GitBranch, FileText, Loader2, Monitor, Globe, Sparkles } from 'lucide-react'
-import { downloadAnalyticsApi } from '../../lib/downloadAnalyticsApi'
+import { Cpu, HardDrive, MemoryStick, Wifi, ArrowRight, Calendar, GitBranch, FileText, Monitor, Globe, Sparkles } from 'lucide-react'
 import Navbar from '../landing/Navbar'
 import Footer from '../landing/Footer'
+import { PlatformArtifact } from './PlatformArtifact'
 
 const RELEASE_CONFIG = {
   version: 'v0.1.0',
   buildDate: '2026-07-24',
-  publisher: 'Aerora Dynamics Private Limited',
-  windows: {
-    title: 'Windows Installer',
-    url: '/releases/windows/VyomQuant-Setup-0.1.0.exe',
-    filename: 'VyomQuant-Setup-0.1.0.exe',
-    size: '84.2 MB',
-    architecture: 'x64',
-    checksum: 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-  },
-  macos: {
-    title: 'macOS DMG',
-    url: '/releases/mac/VyomQuant-0.1.0-universal.dmg',
-    filename: 'VyomQuant-0.1.0-universal.dmg',
-    size: '78.5 MB',
-    architecture: 'Universal (Apple Silicon & Intel)',
-    checksum: 'sha256:d41d8cd98f00b204e9800998ecf8427e657a8f1f8b4c73a219036c84b1f6d901'
-  },
-  linuxAppImage: {
-    title: 'Linux AppImage',
-    url: '/releases/linux/VyomQuant-0.1.0.AppImage',
-    filename: 'VyomQuant-0.1.0.AppImage',
-    size: '75.4 MB',
-    architecture: 'x64',
-    checksum: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08'
-  },
-  linuxDeb: {
-    title: 'Linux DEB Package',
-    url: '/releases/linux/vyomquant_0.1.0_amd64.deb',
-    filename: 'vyomquant_0.1.0_amd64.deb',
-    size: '68.2 MB',
-    architecture: 'amd64',
-    checksum: 'sha256:7c9e6679b4d81c3d9a1f2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e'
-  }
+  publisher: 'Aerora Dynamics Private Limited'
 }
 
 const RELEASE_NOTES = [
-  { version: 'v0.1.0', date: '2026-07-24', changes: ['Initial production desktop release for Windows, macOS, and Linux', 'Integrated Tauri & Electron dual runtime for high-performance execution', 'Direct connection to AWS ECS production backend cluster', 'Supabase authentication & encrypted local security vault integration', 'Real-time WebSocket market feeds and interactive charts'] }
+  // The first line used to read "Initial production desktop release for Windows, macOS, and
+  // Linux". No installer is published for any of the three, so it claimed a release that did
+  // not reach a user — the same fabrication as the sizes, in the next column.
+  { version: 'v0.1.0', date: '2026-07-24', changes: ['Initial release, on the web platform. No desktop installer is published yet — see the platform card above', 'Integrated Tauri & Electron dual runtime for high-performance execution', 'Direct connection to AWS ECS production backend cluster', 'Supabase authentication & encrypted local security vault integration', 'Real-time WebSocket market feeds and interactive charts'] }
 ]
 
 const SYSTEM_REQUIREMENTS = {
@@ -63,9 +56,6 @@ const PLATFORM_TABS = [
 export default function DownloadPage() {
   const [activePlatform, setActivePlatform] = useState('windows')
   const [detectedOS, setDetectedOS] = useState('windows')
-  const [downloading, setDownloading] = useState(false)
-  const [downloadComplete, setDownloadComplete] = useState(false)
-  const [error, setError] = useState(null)
 
   useEffect(() => {
     const ua = navigator.userAgent.toLowerCase()
@@ -81,34 +71,12 @@ export default function DownloadPage() {
     }
   }, [])
 
-  const handleDownload = async (platformKey = activePlatform) => {
-    const platformData = RELEASE_CONFIG[platformKey]
-    if (!platformData) return
-    setDownloading(true)
-    setError(null)
-    try {
-      if (downloadAnalyticsApi?.track) {
-        await downloadAnalyticsApi.track({ version: RELEASE_CONFIG.version, platform: platformKey, architecture: platformData.architecture })
-      }
-      const link = document.createElement('a')
-      link.href = platformData.url
-      link.download = platformData.filename
-      link.target = '_blank'
-      link.rel = 'noopener noreferrer'
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      setDownloadComplete(true)
-      setTimeout(() => setDownloadComplete(false), 5000)
-    } catch (err) {
-      setError('Download failed. Direct file link fallback available below.')
-    } finally {
-      setDownloading(false)
-    }
-  }
+  // No `handleDownload`. There is nothing to hand a click to, and a control that starts a
+  // request which can only 403 is exactly the non-functional control Requirement 19.4 forbids.
+  // `downloadAnalyticsApi` is not imported here for the same reason: an artifact nobody can
+  // fetch has no download to count.
 
   const activeReqs = SYSTEM_REQUIREMENTS[activePlatform.startsWith('linux') ? 'linux' : activePlatform] || SYSTEM_REQUIREMENTS.windows
-  const platformRelease = RELEASE_CONFIG[activePlatform]
 
   return (
     <div className="min-h-screen bg-bg-primary">
@@ -134,7 +102,9 @@ export default function DownloadPage() {
             {detectedOS && (
               <div className="mt-2 text-xs text-accent-cyan flex items-center justify-center gap-1.5 font-medium">
                 <Sparkles className="w-3.5 h-3.5" />
-                Detected your Operating System: <span className="capitalize font-bold text-text-primary">{detectedOS}</span> (Auto-selected recommended download)
+                {/* Names what was detected and what was selected. It no longer says a download
+                    was selected for you: none is offered. */}
+                Detected your Operating System: <span className="capitalize font-bold text-text-primary">{detectedOS}</span> (your platform is selected below)
               </div>
             )}
           </div>
@@ -168,7 +138,7 @@ export default function DownloadPage() {
                                       (detectedOS === 'macos' && tab.id === 'macos') ||
                                       (detectedOS === 'linux' && tab.id.startsWith('linux'))
                 return (
-                  <button key={tab.id} onClick={() => { setActivePlatform(tab.id); setDownloadComplete(false); setError(null) }}
+                  <button key={tab.id} onClick={() => setActivePlatform(tab.id)}
                     className={`relative flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-medium transition-all ${isActive ? 'bg-accent-cyan-dim text-accent-cyan border border-accent-cyan/30' : 'text-text-secondary hover:text-text-primary hover:bg-bg-elevated border border-transparent'}`}>
                     {tab.label}
                     {isRecommended && <span className="ml-1 text-[10px] bg-accent-cyan text-text-inverse px-1.5 py-0.5 rounded-full font-bold">Recommended</span>}
@@ -177,38 +147,12 @@ export default function DownloadPage() {
               })}
             </div>
 
-            {/* Download Card */}
-            <div className="card-surface p-8 sm:p-10 mb-8 border border-border-default hover:border-accent-cyan/30 transition-all">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
-                    <h2 className="text-xl font-bold text-text-primary">{platformRelease?.title} — VyomQuant {RELEASE_CONFIG.version}</h2>
-                    <span className="text-xs font-mono text-text-muted bg-bg-elevated px-2 py-1 rounded">{platformRelease?.architecture}</span>
-                  </div>
-                  <p className="text-sm text-text-secondary mb-3">{platformRelease?.filename} · {platformRelease?.size}</p>
-                  <div className="flex flex-wrap items-center gap-4 text-xs font-mono text-text-muted">
-                    <span className="flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-accent-profit" />Code Signed</span>
-                    <span className="flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-accent-profit" />Verified Publisher ({RELEASE_CONFIG.publisher})</span>
-                    <span className="flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-accent-profit" />Production Build</span>
-                  </div>
-                </div>
-                <button onClick={() => handleDownload(activePlatform)} disabled={downloading}
-                  className={`btn-primary text-base px-8 py-4 min-w-[220px] justify-center ${downloadComplete ? 'bg-accent-profit hover:bg-accent-profit' : ''}`}>
-                  {downloading ? <><Loader2 className="w-5 h-5 mr-2 animate-spin" />Downloading...</> :
-                   downloadComplete ? <><Check className="w-5 h-5 mr-2" />Download Started</> :
-                   <><Download className="w-5 h-5 mr-2" />Download {platformRelease?.title}</>}
-                </button>
-              </div>
-              {error && (
-                <div className="mt-6 p-4 rounded-xl bg-accent-loss-dim border border-accent-loss/20 flex items-start gap-3">
-                  <AlertCircle className="w-5 h-5 text-accent-loss flex-shrink-0 mt-0.5" />
-                  <p className="text-sm text-text-primary">{error}</p>
-                </div>
-              )}
-              <div className="mt-6 pt-6 border-t border-border-default">
-                <div className="text-xs font-mono text-text-muted mb-2">SHA-256 Checksum</div>
-                <code className="block p-3 rounded-lg bg-bg-elevated text-xs font-mono text-text-secondary break-all">{platformRelease?.checksum}</code>
-              </div>
+            {/* The selected platform's artifact, as declared. In `unavailable` the panel
+                renders the marker and its reason and nothing else — no filename, no size, no
+                checksum, no control. The size strings and checksums that used to sit here
+                described files this site does not serve. */}
+            <div className="mb-8">
+              <PlatformArtifact platform={activePlatform} />
             </div>
 
             {/* Grid for Release Notes & System Requirements */}

@@ -126,7 +126,14 @@ export const PERMANENT_ABSENCES = Object.freeze([
   ABSENCE.RETENTION,
 ]);
 
-/** The pages with a per-field verdict table in §7 / §10.1. */
+/**
+ * The pages with a per-field verdict table in §7 / §10.1, plus `download`.
+ *
+ * `DOWNLOAD` is not one of §7's pages and carries no figure. It is here because
+ * production-launch-hardening task 4.3 withdrew four advertised installers, and the thing
+ * being withdrawn is an artifact rather than a number — see the DOWNLOAD section below for
+ * why that belongs in this declaration rather than in a flag beside the page.
+ */
 export const PAGES = Object.freeze({
   DASHBOARD: 'dashboard',
   STRATEGIES: 'strategies',
@@ -135,6 +142,7 @@ export const PAGES = Object.freeze({
   PORTFOLIO: 'portfolio',
   TRADE_HISTORY: 'trade-history',
   SIGNAL_TRACE: 'signal-trace',
+  DOWNLOAD: 'download',
 });
 
 /** Migration 015, named so a warning and this declaration spell it the same way. */
@@ -1805,6 +1813,116 @@ const SIGNAL_TRACE_FIELDS = [
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════
+ * /download and the landing download section — production-launch-hardening 4.3
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * THE ONE PAGE HERE THAT DECLARES ARTIFACTS RATHER THAN FIGURES
+ * ------------------------------------------------------------
+ * Every other entry in this module is a number or a list a backend reports. These four are
+ * desktop installers a CDN serves, and they are declared here for the reason the module
+ * exists: the page advertised four of them with four hardcoded sizes — 84.2, 78.5, 75.4 and
+ * 68.2 MB — and served none. Verified against production during that task's design: **all
+ * four URLs return 403.** A size string for a file that does not exist is the same
+ * fabrication as a hardcoded balance, on a rendered surface, so it is withdrawn through the
+ * same convention: `VERDICT.UNAVAILABLE` with a reason, rendered by `ds/Panel`'s
+ * `unavailable` state, which `usePanelState` reaches WITHOUT issuing a request.
+ *
+ * WHY 403 AND NOT 404, AND WHY IT WILL NOT HEAL ON ITS OWN
+ * -------------------------------------------------------
+ * CI's `dist/` contains no `releases/` directory, and `aws s3 sync dist/ --delete` therefore
+ * *deletes* the `/releases/` prefix from the bucket on every deploy. The real 112 MB Windows
+ * installer lives at `algo22-terminal/releases/`, a SIBLING of `public/` that Vite never
+ * copies, so it never enters `dist/` and never survives a sync. Publishing was considered and
+ * rejected: it means either committing 112 MB to the repository or adding an upload step
+ * outside the `dist/` sync, and the mac and linux builds do not exist at all.
+ *
+ * `absence: 'unreported'` therefore reads, for these four, as "nothing published carries it".
+ * It is permanent in this module's sense — no backend change resolves it — and restoring a
+ * platform is additive rather than a code change to a page: produce the artifact, upload it,
+ * and flip that one entry's `verdict` here. The page reads the verdict; it holds no URL.
+ *
+ * `field` IS THE PLATFORM KEY THE PAGE ALREADY USES
+ * ------------------------------------------------
+ * `windows`, `macos`, `linuxAppImage`, `linuxDeb` are `DownloadPage.jsx`'s own tab ids, so
+ * the page looks an entry up with the id it already holds and there is no second spelling of
+ * a platform to keep in step.
+ *
+ * `endpoint` NAMES THE PATH THAT 403s, AND `path` IS STILL NULL
+ * ------------------------------------------------------------
+ * `endpoint` records where the artifact WOULD be served from, which is the measurement this
+ * task made and the address a future upload has to satisfy. `path` stays `null` because these
+ * are not values on a response — a page that read one would be reading a URL to render, which
+ * is precisely the link being withdrawn.
+ */
+const DOWNLOAD_READ = 'the browser fetching the artifact directly from the CDN';
+const RUN_IN_BROWSER = ' Run VyomQuant in the browser instead — the web platform is the '
+  + 'supported way to trade today.';
+
+const DOWNLOAD_FIELDS = [
+  entry({
+    page: PAGES.DOWNLOAD,
+    field: 'windows',
+    label: 'Windows installer',
+    requirement: '1.30',
+    read: DOWNLOAD_READ,
+    endpoint: 'GET /releases/windows/VyomQuant-Setup-0.1.0.exe',
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'No Windows installer is published for this release, so there is nothing to '
+      + 'download here.' + RUN_IN_BROWSER,
+    note: 'The one platform whose artifact EXISTS: `algo22-terminal/releases/windows/'
+      + 'VyomQuant-Setup-0.1.0.exe`, 112,117,309 bytes. It is a sibling of `public/`, so Vite '
+      + 'never copies it into `dist/` and the S3 sync never publishes it. The reason therefore '
+      + 'says "not published" and not "not built" — the two are different facts and a trader '
+      + 'reading the second would be told something untrue.',
+  }),
+  entry({
+    page: PAGES.DOWNLOAD,
+    field: 'macos',
+    label: 'macOS DMG',
+    requirement: '1.30',
+    read: DOWNLOAD_READ,
+    endpoint: 'GET /releases/mac/VyomQuant-0.1.0-universal.dmg',
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'No macOS build has been produced for this release, so there is nothing to '
+      + 'download here.' + RUN_IN_BROWSER,
+    note: 'No universal DMG exists anywhere in the tree. The page previously advertised it at '
+      + '78.5 MB with a SHA-256 that is the hash of the empty string.',
+  }),
+  entry({
+    page: PAGES.DOWNLOAD,
+    field: 'linuxAppImage',
+    label: 'Linux AppImage',
+    requirement: '1.30',
+    read: DOWNLOAD_READ,
+    endpoint: 'GET /releases/linux/VyomQuant-0.1.0.AppImage',
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'No Linux AppImage has been produced for this release, so there is nothing to '
+      + 'download here.' + RUN_IN_BROWSER,
+    note: 'No AppImage exists. A 64-byte text file named `.AppImage` sat under '
+      + '`public/releases/` and was publishable; task 4.2 removed it and added the deploy-time '
+      + 'size gate that rejects its return.',
+  }),
+  entry({
+    page: PAGES.DOWNLOAD,
+    field: 'linuxDeb',
+    label: 'Linux DEB package',
+    requirement: '1.30',
+    read: DOWNLOAD_READ,
+    endpoint: 'GET /releases/linux/vyomquant_0.1.0_amd64.deb',
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'No Debian package has been produced for this release, so there is nothing to '
+      + 'download here.' + RUN_IN_BROWSER,
+    note: 'No .deb exists. Same provenance as the AppImage: a 67-byte placeholder on a '
+      + 'publishable path, removed by task 4.2.',
+  }),
+];
+
+/*
+ * ═══════════════════════════════════════════════════════════════════════════
  * The declaration, and the two indexes over it
  * ═══════════════════════════════════════════════════════════════════════════
  */
@@ -1825,6 +1943,7 @@ export const PAGE_FIELDS = Object.freeze([
   ...PORTFOLIO_FIELDS,
   ...TRADE_HISTORY_FIELDS,
   ...SIGNAL_TRACE_FIELDS,
+  ...DOWNLOAD_FIELDS,
 ]);
 
 /**
