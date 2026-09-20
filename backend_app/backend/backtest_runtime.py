@@ -350,7 +350,7 @@ class BacktestRuntime:
                 exits = pd.Series(False, index=df.index)
             
             # Run VectorBT backtest
-            stats, equity_curve = await self.vectorbt_engine.run_backtest_async(
+            stats, returned_equity_curve = await self.vectorbt_engine.run_backtest_async(
                 ohlcv_list=ohlcv_data,
                 feature_matrix=np.zeros((len(df), 1)),  # Placeholder for ML features
                 model_path="",  # No ML model by default
@@ -364,7 +364,22 @@ class BacktestRuntime:
                     "take_profit_pct": 0.15
                 }
             )
-            
+
+            # ── The curve is read from the PAYLOAD, not from the tuple ─────────
+            # It used to be unpacked into a local, read twice (by
+            # ``_calculate_performance_metrics`` and ``_generate_charts``) and then left out
+            # of the ``results`` literal below, so ``strategy_backtests.equity_curve``
+            # persisted as ``[]`` for a run that produced one point per bar and the chart
+            # rendered empty. The engine now carries the curve as a payload key on both of
+            # its paths, so the ``{**stats}`` spread below carries it through on its own -
+            # there is no longer a hand-off to forget.
+            #
+            # ``setdefault`` rather than ``get``: an engine that still answers with the
+            # tuple alone (a caller's own subclass, or a double) has its curve adopted into
+            # the payload here, so from this line on there is exactly one place the curve
+            # lives regardless of which engine produced it.
+            equity_curve = stats.setdefault("equity_curve", returned_equity_curve)
+
             # PHASE G: Performance Analytics
             performance_metrics = self._calculate_performance_metrics(
                 stats, equity_curve, df

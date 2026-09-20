@@ -582,7 +582,20 @@ class BacktestEngine:
         # Add detailed trades to results
         results["trades"] = trades_list
 
-        return results, eq_df.to_dict(orient="records")
+        # ── The curve travels IN BAND, on both engine paths ────────────────
+        # This path used to return the curve as the second tuple element only, while the
+        # fallback at :243 also set it as a payload key. So the curve's fate was
+        # path-dependent: a deployment without VectorBT persisted a curve and a deployment
+        # with it did not, which is the more damaging half and the only half that reproduces
+        # in production. A value carried out of band has to be re-inserted by hand at every
+        # hop, and ``backtest_runtime.run_backtest`` forgot - it unpacked the curve, read it
+        # twice, and assembled its payload without it. Setting the key here removes the drop
+        # site rather than patching it. The tuple return is unchanged, so every existing
+        # caller that unpacks two values keeps working (Requirement 3.4).
+        equity_curve = eq_df.to_dict(orient="records")
+        results["equity_curve"] = equity_curve
+
+        return results, equity_curve
 
     def _generate_ml_predictions(
         self, model_path: str, feature_matrix: np.ndarray
