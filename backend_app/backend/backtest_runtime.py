@@ -45,6 +45,70 @@ from backend_app.backend.backtest_service import BacktestService
 logger = logging.getLogger("BacktestRuntime")
 
 
+def _engine_metric(stats: Dict, key: str, default: float = 0.0) -> float:
+    """One of ``backtesting_engine``'s own snake_case payload keys, as a usable float.
+
+    ``_safe_stat`` in the engine deliberately answers ``None`` when a VectorBT stat is
+    genuinely unavailable rather than faking a ``0`` - ``max_drawdown_pct``, ``calmar_ratio``
+    and ``sortino_ratio`` can all arrive as ``None``. Every arithmetic read of those keys has
+    to survive it, so the coercion lives in one place instead of at each call site.
+
+    ``default`` is returned for a missing key, a ``None``, a non-numeric value and a
+    NaN/inf - not because those are equivalent, but because none of them can be divided by.
+    """
+    value = stats.get(key, default)
+    if value is None:
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number != number or number in (float("inf"), float("-inf")):  # NaN / ±inf
+        return default
+    return number
+
+
+def _closed_trade_net_pnls(stats: Dict) -> List[float]:
+    """The per-trade net P&L the engine already puts on ``stats["trades"]``.
+
+    ``net_pnl`` and not the gross ``gross_pnl``: a trade whose fees exceed its gross profit
+    is a loss, and counting it as a win is how a fee-heavy strategy comes to read as
+    profitable. This is the one source the win/loss aggregates in
+    :meth:`BacktestRuntime._calculate_performance_metrics` are derived from, so they cannot
+    disagree with the ``trades`` rows a trader can expand and check.
+    """
+    pnls: List[float] = []
+    for trade in stats.get("trades") or []:
+        if not isinstance(trade, dict):
+            continue
+        value = trade.get("net_pnl")
+        if value is None:
+            continue
+        try:
+            pnls.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return pnls
+
+
+def _longest_streak(trade_pnls: List[float], winning: bool) -> int:
+    """The longest run of consecutive winning (or losing) trades, in execution order.
+
+    ``stats.get("Win Streak", 0)`` and ``stats.get("Loss Streak", 0)`` read display names
+    VectorBT does not publish under those spellings and the engine never emitted, so both
+    columns were ``0`` on every run. Break-even trades end a streak without starting one.
+    """
+    longest = 0
+    current = 0
+    for pnl in trade_pnls:
+        if (pnl > 0) if winning else (pnl < 0):
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
 class BacktestRuntime:
     """
     Integrated backtesting runtime that executes Strategy Packages.
@@ -392,15 +456,44 @@ class BacktestRuntime:
             
             # Calculate execution time
             execution_time = (datetime.now(timezone.utc) - start_time).total_seconds()
-            
+
+            # ── The engine's key names, not VectorBT's display names ───────────
+            # ``stats.get("Final Equity", self.vectorbt_engine.initial_capital)`` is the
+            # single most damaging read in this module. ``Final Equity`` is a VectorBT
+            # *display* name; ``stats`` is the engine's own ``results`` dict, which
+            # normalised it to ``final_equity`` before returning. So the lookup missed on
+            # every run and the default won unconditionally: **every completed backtest
+            # reported its starting capital as its final capital**. Worse than a zero - a
+            # zero looks like a bug and gets questioned, whereas the starting capital reads
+            # as "this strategy broke exactly even", and a profitable run and a ruinous one
+            # render identically.
+            #
+            # The fallback is kept for an engine that emits no ``final_equity`` at all, but
+            # it no longer does so in silence: substituting the starting capital for a
+            # measured result is a claim worth a log line.
+            final_equity = stats.get("final_equity")
+            if final_equity is None:
+                logger.warning(
+                    "[BACKTEST] engine payload carried no 'final_equity'; reporting the "
+                    "starting capital as final_capital. Payload keys: %s", sorted(stats)
+                )
+                final_equity = self.vectorbt_engine.initial_capital
+
             # Prepare results
             results = {
                 **stats,
                 **performance_metrics,
                 "charts": charts,
                 "execution_time_seconds": execution_time,
-                "trades_count": stats.get("Total Trades", 0),
-                "final_capital": stats.get("Final Equity", self.vectorbt_engine.initial_capital)
+                # ``stats.get("Total Trades", 0)`` missed the same way, and published
+                # ``trades_count: 0`` beside the engine's real ``total_trades`` in this very
+                # literal - a payload that contradicted itself about how many trades the run
+                # made. Repointed rather than dropped because the results surface declares
+                # it as the fallback input for the trade count (``Backtester.jsx``
+                # ``tradeCount``, ``pageFields.js`` ``inputs``), so it is a live key, not a
+                # dead one. It now agrees with ``total_trades`` instead of contradicting it.
+                "trades_count": stats.get("total_trades", 0),
+                "final_capital": final_equity,
             }
             
             # PHASE K: Update backtest with results
@@ -453,23 +546,72 @@ class BacktestRuntime:
         PHASE G: Calculate comprehensive performance analytics.
         
         Args:
-            stats: VectorBT stats dictionary
+            stats: the ENGINE'S ``results`` payload, whose keys are snake_case. It is *not*
+                ``portfolio.stats()`` and it does not carry VectorBT's display names.
             equity_curve: Equity curve data
             price_data: Price data DataFrame
-            
+
         Returns:
             Dictionary of performance metrics
+
+        WHY EVERY ``stats`` READ BELOW IS snake_case
+            This method used to read ten VectorBT *display* names out of ``stats`` -
+            ``Max Drawdown [%]``, ``Net Profit``, ``Total Trades``, ``Best Trade``,
+            ``Worst Trade``, ``Win Streak``, ``Loss Streak``, ``Win Rate [%]``,
+            ``Avg Winning Trade`` and ``Avg Losing Trade`` - and ``run_backtest`` read two
+            more. ``stats`` is the engine's already-normalised ``results`` dict, so all
+            twelve missed on **every single run** and each ``, 0)`` default won, fabricating
+            twelve columns out of arithmetic on zeros: ``calmar_ratio``,
+            ``recovery_factor``, ``average_trade``, ``largest_win``, ``largest_loss``,
+            ``consecutive_wins``, ``consecutive_losses``, ``expectancy``, ``kelly``,
+            ``sqn``, ``trades_count`` and ``final_capital``. Every one of them was rendered
+            to a trader as a measured result.
+
+            Six had a snake_case counterpart to point at. The other six - best and worst
+            trade, the two streaks, the two averages - have no engine key at all, so there
+            was nothing to repoint them at; they are derived below from the per-trade
+            ``net_pnl`` values the engine already puts on ``stats["trades"]``.
         """
+        # ── The equity series, on the index the run actually ran on ────────
+        # DEFECT 49. This used to build the series with a default RangeIndex and then, at
+        # the bottom of the method, do ``equity_series.index = pd.to_datetime(index)`` on
+        # it - which reads ``0..239`` as NANOSECONDS since the epoch. All 240 points landed
+        # inside one 240ns window in January 1970, so ``resample('M')`` and ``resample('D')``
+        # each produced a single bucket and ``pct_change().dropna()`` returned nothing:
+        # ``monthly_returns`` and ``daily_returns`` persisted as ``[]`` on every run, for
+        # runs that carried a timestamp on every point. Both columns are in the writer's
+        # read-key set and both were written, so the key-set contract reported them present
+        # and correct while the values were empty - a flat result is indistinguishable from
+        # a destroyed index once the list is stored.
+        #
+        # The timestamps are taken from the curve itself, where they already are, normalised
+        # the same way :meth:`_generate_charts` normalises this identical argument.
+        timestamps = None
         if isinstance(equity_curve, list) and len(equity_curve) > 0 and isinstance(equity_curve[0], dict):
             equity_series = pd.Series([float(e.get("equity", 0.0)) for e in equity_curve])
+            stamps = [e.get("timestamp") for e in equity_curve]
+            if all(stamp is not None for stamp in stamps):
+                timestamps = pd.to_datetime(pd.Index(stamps), errors="coerce", utc=True)
         else:
             equity_series = pd.Series(equity_curve, dtype=float)
-        
+
         if len(equity_series) == 0:
             return {"sortino_ratio": 0.0, "calmar_ratio": 0.0, "recovery_factor": 0.0}
-            
+
+        # A curve whose own timestamps are unusable falls back to the bar index the run
+        # executed over - the same instants, read off the other end of the same simulation -
+        # and only then to leaving the positional index alone. What it must never do again is
+        # reinterpret ``0..n-1`` as epoch nanoseconds.
+        if timestamps is not None and timestamps.isna().any():
+            timestamps = None
+        if timestamps is None and isinstance(price_data.index, pd.DatetimeIndex) \
+                and len(price_data.index) == len(equity_series):
+            timestamps = price_data.index
+        if timestamps is not None:
+            equity_series.index = timestamps
+
         returns = equity_series.pct_change().dropna()
-        
+
         # Calculate additional metrics
         metrics = {}
         
@@ -485,38 +627,55 @@ class BacktestRuntime:
             annual_return = (equity_series.iloc[-1] / equity_series.iloc[0] - 1) * (252 / len(equity_series))
         else:
             annual_return = 0.0
-        max_dd = stats.get("Max Drawdown [%]", 0) / 100
+        # ``max_drawdown_pct``, not ``Max Drawdown [%]``.
+        max_dd = _engine_metric(stats, "max_drawdown_pct") / 100
         if max_dd > 0:
             metrics["calmar_ratio"] = annual_return / max_dd
         else:
             metrics["calmar_ratio"] = 0.0
         
         # Recovery Factor (net profit / max drawdown)
-        net_profit = stats.get("Net Profit", 0)
+        # ``total_pnl``, not ``Net Profit``. The engine computed this figure all along and
+        # spent it on a log line; it is a payload key now, which is what gives this read
+        # something to point at.
+        net_profit = _engine_metric(stats, "total_pnl")
         if max_dd > 0:
             metrics["recovery_factor"] = net_profit / max_dd
         else:
             metrics["recovery_factor"] = 0.0
         
         # Average Trade
-        total_trades = stats.get("Total Trades", 0)
+        # ``total_trades``, not ``Total Trades``.
+        total_trades = int(_engine_metric(stats, "total_trades"))
         if total_trades > 0:
             metrics["average_trade"] = net_profit / total_trades
         else:
             metrics["average_trade"] = 0.0
-        
+
+        # ── Per-trade aggregates, from the engine's own trade rows ─────────
+        # ``Best Trade``, ``Worst Trade``, ``Win Streak``, ``Loss Streak``,
+        # ``Avg Winning Trade`` and ``Avg Losing Trade`` have no counterpart in the engine's
+        # payload, so there is no key to repoint them at. What they wanted is on
+        # ``stats["trades"]``: one ``net_pnl`` per closed trade, emitted all along. Deriving
+        # all six from that one list also means one definition of "winning" across the
+        # method, rather than six lookups that could disagree.
+        trade_pnls = _closed_trade_net_pnls(stats)
+        wins = [pnl for pnl in trade_pnls if pnl > 0]
+        losses = [pnl for pnl in trade_pnls if pnl < 0]
+
         # Largest Win/Loss
-        metrics["largest_win"] = stats.get("Best Trade", 0)
-        metrics["largest_loss"] = stats.get("Worst Trade", 0)
+        metrics["largest_win"] = max(wins) if wins else 0.0
+        metrics["largest_loss"] = min(losses) if losses else 0.0
         
         # Consecutive Wins/Losses
-        metrics["consecutive_wins"] = stats.get("Win Streak", 0)
-        metrics["consecutive_losses"] = stats.get("Loss Streak", 0)
+        metrics["consecutive_wins"] = _longest_streak(trade_pnls, winning=True)
+        metrics["consecutive_losses"] = _longest_streak(trade_pnls, winning=False)
         
         # Expectancy
-        win_rate = stats.get("Win Rate [%]", 0) / 100
-        avg_win = stats.get("Avg Winning Trade", 0)
-        avg_loss = stats.get("Avg Losing Trade", 0)
+        # ``win_rate_pct``, not ``Win Rate [%]``; the two averages from the trade rows.
+        win_rate = _engine_metric(stats, "win_rate_pct") / 100
+        avg_win = (sum(wins) / len(wins)) if wins else 0.0
+        avg_loss = abs(sum(losses) / len(losses)) if losses else 0.0
         if avg_loss != 0:
             metrics["expectancy"] = (win_rate * avg_win) - ((1 - win_rate) * abs(avg_loss))
         else:
@@ -534,14 +693,29 @@ class BacktestRuntime:
         else:
             metrics["kelly"] = 0.0
         
-        # Monthly Returns
-        equity_series.index = pd.to_datetime(equity_series.index)
-        monthly_returns = equity_series.resample('M').last().pct_change().dropna()
-        metrics["monthly_returns"] = monthly_returns.tolist()
-        
-        # Daily Returns
-        daily_returns = equity_series.resample('D').last().pct_change().dropna()
-        metrics["daily_returns"] = daily_returns.tolist()
+        # ── Monthly and Daily Returns (DEFECT 49) ──────────────────────────
+        # Resampled on the DatetimeIndex established at the top of this method. The
+        # ``equity_series.index = pd.to_datetime(equity_series.index)`` that used to sit here
+        # is gone: by this point the index is already the run's real instants, and re-reading
+        # a RangeIndex as epoch nanoseconds is the whole defect.
+        #
+        # A run shorter than the bucket legitimately yields no rows - a four-hour backtest
+        # has no month-over-month return - which is a different thing from the empty lists
+        # the nanosecond index produced for every run regardless of span.
+        if isinstance(equity_series.index, pd.DatetimeIndex):
+            monthly_returns = equity_series.resample('M').last().pct_change().dropna()
+            daily_returns = equity_series.resample('D').last().pct_change().dropna()
+            metrics["monthly_returns"] = monthly_returns.tolist()
+            metrics["daily_returns"] = daily_returns.tolist()
+        else:
+            # No timestamps anywhere - neither on the curve nor on the bars. An empty list
+            # is the honest answer; a positional index resampled as time is not.
+            logger.warning(
+                "[BACKTEST] equity curve carried no usable timestamps; monthly and daily "
+                "returns are not derivable for this run"
+            )
+            metrics["monthly_returns"] = []
+            metrics["daily_returns"] = []
         
         return metrics
     

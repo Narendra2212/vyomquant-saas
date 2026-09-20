@@ -1025,18 +1025,30 @@ def test_sortino_ratio_comes_from_the_runtime_not_the_engine(
 
 #: The columns that genuinely round-trip from the engine's output to the persisted row, captured
 #: **from the engine's output rather than from today's stored values** exactly as task 2
-#: requires. `tasks.md`'s list is ten names; four of them are not here, and each exclusion is a
+#: requires. `tasks.md`'s list is ten names; two of them are not here, and each exclusion is a
 #: finding rather than an omission:
 #:
 #:   expectancy      - overwritten with 0.0 by the merge (section 6). Nothing to preserve.
 #:   sortino_ratio   - produced by the runtime, not the engine (section 6). Not the engine's to
 #:                     preserve.
-#:   winning_trades  - emitted by NO producer on either path (section 1). Persists as 0. There
-#:   losing_trades     is no correct value being preserved; there is a default being stored.
 #:
-#: Capturing those four from today's row would pin the bug in place, which is the failure mode
+#: Capturing those two from today's row would pin the bug in place, which is the failure mode
 #: `tasks.md`'s "from the engine's output, not from today's stored values" exists to prevent.
-PRESERVED_FROM_ENGINE = ("total_return_pct", "sharpe_ratio", "profit_factor", "total_trades")
+#:
+#: TASK 7.6 UPDATE - `winning_trades` and `losing_trades` were excluded here for the same
+#: reason, and are now included: they had no producer on either path and persisted as the
+#: writer's `0`, and task 7.6 gave them one. `backtesting_engine` derives the split from the
+#: per-trade `net_pnl` on the `trades` rows it already emits, so the same assertion that covers
+#: the other four columns covers these two - the engine's count, byte for byte, on the row. This
+#: is the inversion the stale-baseline test below asked for.
+PRESERVED_FROM_ENGINE = (
+    "total_return_pct",
+    "sharpe_ratio",
+    "profit_factor",
+    "total_trades",
+    "winning_trades",
+    "losing_trades",
+)
 
 
 @pytest.mark.parametrize("column", PRESERVED_FROM_ENGINE)
@@ -1099,33 +1111,55 @@ def test_preserved_execution_envelope_is_recorded(runtime_payload):
 
 
 @pytest.mark.parametrize(
-    "absent_column", ("winning_trades", "losing_trades")
+    "split_column, counts",
+    (("winning_trades", "wins"), ("losing_trades", "losses")),
 )
-def test_preserved_nothing_is_being_preserved_for_the_unproduced_columns(
-    runtime_payload, absent_column
+def test_preserved_win_loss_split_is_derived_from_the_trade_rows(
+    runtime_payload, split_column, counts
 ):
-    """The honest record for the two columns `tasks.md`'s preservation list gets wrong.
+    """The inversion the stale baseline asked for: the split against the rows it comes from.
 
-    PASSES on `F`, and it is a `test_preserved_*` because what it pins is the *baseline*: these
-    two columns persist `0` today and no producer computes them. Requirement 3.4 lists them
-    among the "correctly persisted" columns to preserve. They are not correctly persisted; they
-    are defaulted, and asserting the requirement's premise here would have written a false
-    baseline into the suite.
+    WHAT THIS REPLACED, and why the replacement is not a weakening.
+        Until task 7.6 this was `test_preserved_nothing_is_being_preserved_for_the_unproduced_
+        columns`, and it asserted `winning_trades not in payload` and `row[column] == 0`. That
+        was the honest baseline at the time: Requirement 3.4 lists both columns among the
+        "correctly persisted" ones to preserve, and both were in fact the writer's `0` default
+        on a run that closed 12 trades. The old test's own instruction was "this is the
+        assertion to invert when task 7.x gives them a producer".
 
-    OBSERVED ON `F`: `winning_trades` 0, `losing_trades` 0, against 12 closed trades whose
-    individual `net_pnl` values are right there in the `trades` column. The split is derivable
-    and is not derived.
+        Task 7.6 gave them one, so the `== 0` half is now the wrong assertion to hold. It is
+        replaced by a *stronger* one rather than deleted:
+        :data:`PRESERVED_FROM_ENGINE` now covers both columns, which pins each against the
+        engine's own count byte for byte, and this test pins that count against the `trades`
+        rows on the persisted row - so the split cannot drift from the per-trade detail a
+        trader can expand and check, in either direction.
 
-    This is the assertion to invert when task 7.x gives them a producer. Until then it records
-    the truth, which is what a preservation baseline is for.
+    WHY `net_pnl` AND NOT THE GROSS FIGURE
+        A trade whose fees exceed its gross profit is a loss. Deriving the split from
+        `gross_pnl` would count it as a win, which is how a fee-heavy strategy comes to read
+        as profitable. The engine derives from `net_pnl`; this asserts against the same field.
+
+    Break-even trades (`net_pnl == 0`) are in neither count, so the two need not sum to
+    `total_trades` and this deliberately does not assert that they do.
     """
-    payload, sb = runtime_payload
-    assert absent_column not in payload, (
-        f"{absent_column} now has a producer, so this baseline is stale - give it a real "
-        f"preservation assertion against the producer's value"
+    _payload, sb = runtime_payload
+    row = sb.row()
+
+    net_pnls = [float(trade["net_pnl"]) for trade in row["trades"]]
+    assert net_pnls, "no trade rows on the persisted row, so there is no split to check"
+
+    if counts == "wins":
+        expected = sum(1 for pnl in net_pnls if pnl > 0)
+    else:
+        expected = sum(1 for pnl in net_pnls if pnl < 0)
+
+    assert row[split_column] == expected, (
+        f"{split_column} persisted as {row[split_column]!r}; the {len(net_pnls)} net_pnl "
+        f"values on the same row give {expected}"
     )
-    assert sb.row()[absent_column] == 0, (
-        f"{absent_column} persisted as {sb.row()[absent_column]!r}; the writer's default is 0"
+    assert row["winning_trades"] + row["losing_trades"] <= row["total_trades"], (
+        f"the split ({row['winning_trades']} + {row['losing_trades']}) exceeds "
+        f"total_trades ({row['total_trades']})"
     )
 
 

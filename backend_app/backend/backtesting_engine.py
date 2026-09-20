@@ -224,7 +224,20 @@ class BacktestEngine:
             peak = cum_returns.cummax()
             dd = (cum_returns - peak) / peak
             max_dd = float(abs(dd.min()) * 100)
-            
+
+            # ── The win/loss split on this path ───────────────────────────
+            # This branch extracts no per-trade records (``trades`` is ``[]`` below), so the
+            # split cannot come from per-trade net P&L the way the VectorBT path's does. It
+            # is derived instead from the two figures this branch already publishes -
+            # ``win_rate_pct`` and ``total_trades`` determine it by definition - so the three
+            # agree with each other. Emitted here as well as on the primary path because a
+            # key present on only one engine path is exactly how the equity curve came to be
+            # path-dependent, and a deployment without VectorBT runs this one.
+            total_trades_reported = max(trades_count, 1)
+            winning_trades = min(
+                int(round(win_rate * total_trades_reported)), total_trades_reported
+            )
+
             results = {
                 "total_return_pct": round(total_return_pct, 4),
                 "final_equity": round(final_equity, 4),
@@ -235,7 +248,9 @@ class BacktestEngine:
                 "total_pnl": round(float(final_equity - self.initial_capital), 4),
                 "win_rate_pct": round(win_rate * 100, 4),
                 "max_drawdown_pct": round(max_dd, 4),
-                "total_trades": max(trades_count, 1),
+                "total_trades": total_trades_reported,
+                "winning_trades": winning_trades,
+                "losing_trades": total_trades_reported - winning_trades,
                 "profit_factor": 1.5 if trades_count > 0 else 0.0,
                 "sharpe_ratio": round(sharpe, 4),
                 "sortino_ratio": round(sharpe * 1.1, 4),
@@ -581,6 +596,27 @@ class BacktestEngine:
         
         # Add detailed trades to results
         results["trades"] = trades_list
+
+        # ── The win/loss split, derived from the per-trade NET P&L ─────────
+        # ``winning_trades`` and ``losing_trades`` had NO producer anywhere - not this dict,
+        # not ``backtest_runtime``, not the fallback branch above - so
+        # ``update_backtest_results``'s ``results.get("winning_trades", 0)`` default won on
+        # every run and ``strategy_backtests`` carried ``0`` and ``0`` next to a real
+        # ``total_trades``. They are not renames: repointing a key cannot fix a column
+        # nothing computes.
+        #
+        # Derived here rather than in the runtime because this is the layer that owns the
+        # trade records, and derived from ``net_pnl`` rather than the gross ``PnL``: a trade
+        # whose fees exceed its gross profit is a loss, and counting it as a win is how a
+        # fee-heavy strategy comes to read as profitable. The split therefore agrees with
+        # the ``trades`` rows a trader can expand and check.
+        trade_net_pnls = [
+            float(trade["net_pnl"])
+            for trade in trades_list
+            if trade.get("net_pnl") is not None
+        ]
+        results["winning_trades"] = sum(1 for pnl in trade_net_pnls if pnl > 0)
+        results["losing_trades"] = sum(1 for pnl in trade_net_pnls if pnl < 0)
 
         # ── The curve travels IN BAND, on both engine paths ────────────────
         # This path used to return the curve as the second tuple element only, while the
