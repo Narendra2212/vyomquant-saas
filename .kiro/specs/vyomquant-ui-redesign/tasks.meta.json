@@ -1,5 +1,14 @@
 {
-  "pbtResults": {},
+  "pbtResults": {
+    "17.3 Write the property test for the rendered action set": {
+      "status": "passed",
+      "lastRunTimestamp": 1789326550468
+    },
+    "17.4 Write the property test for the destructive partition": {
+      "status": "passed",
+      "lastRunTimestamp": 1789326556062
+    }
+  },
   "executionHistory": {
     "1.1 Create `algo22-terminal/src/styles/tokens.css` as the sole `@theme` token source": [
       {
@@ -339,6 +348,11 @@
         "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
         "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
         "timestamp": 1788961432562
+      },
+      {
+        "executionId": "8784a6f0-0330-4b0e-8b3b-80c602f31374",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789225683148
       }
     ],
     "8.4 Create `src/components/shell/ResponsiveGate.jsx`, replacing `DesktopOnlyOverlay`": [
@@ -346,6 +360,11 @@
         "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
         "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
         "timestamp": 1788961432744
+      },
+      {
+        "executionId": "8784a6f0-0330-4b0e-8b3b-80c602f31374",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789225684453
       }
     ],
     "8.5 Rebuild the shell layout in `src/App.jsx`": [
@@ -353,6 +372,11 @@
         "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
         "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
         "timestamp": 1788961432930
+      },
+      {
+        "executionId": "8784a6f0-0330-4b0e-8b3b-80c602f31374",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789225685092
       }
     ],
     "8.6 Rebuild `src/components/Sidebar.jsx` against the new IA": [
@@ -360,6 +384,11 @@
         "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
         "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
         "timestamp": 1788961433129
+      },
+      {
+        "executionId": "8784a6f0-0330-4b0e-8b3b-80c602f31374",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789225686899
       }
     ],
     "8.7 Rebuild `src/components/TopBar.jsx` with a real connection indicator": [
@@ -367,6 +396,11 @@
         "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
         "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
         "timestamp": 1788961433320
+      },
+      {
+        "executionId": "8784a6f0-0330-4b0e-8b3b-80c602f31374",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789225687799
       }
     ],
     "8.8 Add `src/components/shell/AccountMenu.jsx` and one shared unread-count hook": [
@@ -374,6 +408,11 @@
         "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
         "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
         "timestamp": 1788961433523
+      },
+      {
+        "executionId": "8784a6f0-0330-4b0e-8b3b-80c602f31374",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789225688485
       }
     ],
     "9. Checkpoint — M4 is independently shippable": [
@@ -388,6 +427,11 @@
         "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
         "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
         "timestamp": 1788961434083
+      },
+      {
+        "executionId": "8784a6f0-0330-4b0e-8b3b-80c602f31374",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789228760957
       }
     ],
     "10.3 Replace the two native dialogs in `src/pages/Strategies.jsx`": [
@@ -402,6 +446,11 @@
         "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
         "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
         "timestamp": 1788961434569
+      },
+      {
+        "executionId": "8784a6f0-0330-4b0e-8b3b-80c602f31374",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789256214527
       }
     ],
     "10.5 Build the `Deploy_Confirmation_Flow`": [
@@ -409,6 +458,11 @@
         "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
         "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
         "timestamp": 1788961434760
+      },
+      {
+        "executionId": "8784a6f0-0330-4b0e-8b3b-80c602f31374",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789256215890
       }
     ],
     "10.8 Delete `extractErrorMessage` and `getErrorType` from `ui-legacy/primitives.jsx`": [
@@ -416,6 +470,11 @@
         "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
         "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
         "timestamp": 1788961434962
+      },
+      {
+        "executionId": "8784a6f0-0330-4b0e-8b3b-80c602f31374",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789228762278
       }
     ],
     "10.9 Delete `LoadingProvider`'s full-screen blocking overlay": [
@@ -423,6 +482,11 @@
         "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
         "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
         "timestamp": 1788961435154
+      },
+      {
+        "executionId": "8784a6f0-0330-4b0e-8b3b-80c602f31374",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789228763453
       }
     ],
     "10.10 Remove the six dead methods from `src/api/modules/portfolio.js`": [
@@ -430,6 +494,11 @@
         "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
         "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
         "timestamp": 1788961435381
+      },
+      {
+        "executionId": "8784a6f0-0330-4b0e-8b3b-80c602f31374",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789228765492
       }
     ],
     "11. Checkpoint — M5 is independently shippable": [
@@ -738,6 +807,13 @@
         "executionId": "1efe09e6-a55a-4f71-b3ce-413aab40914d",
         "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
         "timestamp": 1788961447643
+      }
+    ],
+    "8. M4 — Application shell": [
+      {
+        "executionId": "8784a6f0-0330-4b0e-8b3b-80c602f31374",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789225688735
       }
     ]
   }

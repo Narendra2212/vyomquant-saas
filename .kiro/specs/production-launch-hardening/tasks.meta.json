@@ -1,0 +1,10 @@
+{
+  "pbtResults": {
+    "1. Write the bug condition exploration tests": {
+      "status": "passed",
+      "failingExample": "Cluster C, tests/unit/lib/socketCredential.test.js — both fast-check properties failed on `F` after 1 test, which confirms the bug condition.\n\nProperty \"holds for websocketClient.connect() over generated tokens and every real route\"\n  Property failed after 1 tests\n  { seed: -337809765, path: \"0:0:0:...:0\", endOnFailure: true }\n  Counterexample: [\"AAAAAAAAAAAA.AAAAAAAAAAAA.AAAAAAAAAAAA\",\"/ws/telemetry\"]\n  Shrunk 38 time(s)\n  AssertionError: the credential is at index 53 of\n    wss://d7d88qs4jmch.cloudfront.net/ws/telemetry?token=<JWT>\n\nProperty \"holds for Billing's mount over generated tokens and user ids\"\n  Property failed after 1 tests\n  { seed: -753105484, path: \"0:0:0:...:0\", endOnFailure: true }\n  Counterexample: [\"AAAAAAAAAAAA.AAAAAAAAAAAA.AAAAAAAAAAAA\",\"usr_aaaa\"]\n  Shrunk 41 time(s)\n  AssertionError: the credential is at index 43 of\n    ws://localhost:3000/ws/user/usr_aaaa?token=<JWT>\n\nBoth shrank to the minimal token the generator admits and the first route, so the exposure is unconditional — it does not depend on token content or on which route is requested. Requirements 1.21 / 2.21.",
+      "lastRunTimestamp": 1789853068396
+    }
+  },
+  "executionHistory": {}
+}
