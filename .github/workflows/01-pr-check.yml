@@ -182,24 +182,25 @@ jobs:
       # on at least one maintainer machine, which makes a local reproduction of a CI failure
       # look like a pass.
       #
-      # `--max-warnings 227` pins the warnings at their count on 2026-09-20 rather than
-      # driving them to zero. Errors fail the job outright; the cap means the warning
-      # backlog cannot grow either. Lowering it as warnings are fixed is the intent.
+      # `--max-warnings` pins the warning count rather than driving it to zero. Errors fail
+      # the job outright; the cap means the warning backlog cannot grow either. Lowering it
+      # as warnings are fixed is the intent.
       #
-      # DATED EXCEPTION -- 2026-09-20. The three engine contexts are excluded because each
-      # holds a live `no-undef` on `post`, which is the defect tasks 9.2 and 9.3 exist to
-      # fix. They are excluded so this gate can go in now and start catching new errors,
-      # instead of waiting on another task. Delete the three --ignore-pattern flags as part
-      # of 9.2/9.3; the gate is incomplete until they are gone.
+      # THE DATED EXCEPTION IS GONE (task 9.2). Three --ignore-pattern flags used to exclude
+      # `src/contexts/{Indicator,Logic,Strategy}EngineContext.jsx`, each of which held a live
+      # `no-undef` on an unimported `post` -- the defect tasks 9.2 and 9.3 existed to fix.
+      # Task 9.2 removed those three dead call paths, so the flags are deleted and this gate
+      # now reads all of `src/` with no exclusions. Measured after that change: 0 errors.
+      #
+      # The cap moved 227 -> 230 in the same commit, and that is scope growth rather than
+      # backlog growth: the three files entered the gate carrying three `'React' is defined
+      # but never used` warnings between them -- the same warning 63 files under `src/`
+      # already carry, because ESLint does not count a JSX-only reference. No new warning
+      # class appeared, and the error count went from 5 to 0.
       - name: Lint frontend
         if: steps.changes.outputs.frontend == 'true'
         working-directory: ./algo22-terminal
-        run: |
-          node node_modules/eslint/bin/eslint.js src \
-            --ignore-pattern 'src/contexts/IndicatorEngineContext.jsx' \
-            --ignore-pattern 'src/contexts/LogicEngineContext.jsx' \
-            --ignore-pattern 'src/contexts/StrategyEngineContext.jsx' \
-            --max-warnings 227
+        run: node node_modules/eslint/bin/eslint.js src --max-warnings 230
 
       - name: Build frontend
         if: steps.changes.outputs.frontend == 'true'

@@ -193,6 +193,61 @@ const BACKEND_ROOT = join(REPO_ROOT, 'backend_app');
 
 const readSource = (absolutePath) => readFileSync(absolutePath, 'utf8');
 
+/**
+ * `source` with every `//` and block comment replaced by spaces, string and template literals
+ * left intact.
+ *
+ * Sections 2 and 3 ask what a module *calls* and what address it *names*. Both are claims about
+ * code, and both were originally checked against the raw file - which worked only for as long as
+ * no module documented the call it used to make. Task 9.2's three headers describe the removed
+ * `post('/indicator/compute', …)` expressions by name, in prose, which a raw `includes` reads as
+ * the call still being there. The same trap `tests/test_route_contract.py` and
+ * `tests/unit/guards/api-surface.js` both strip comments to avoid: `src/api/modules/orders.js`
+ * quotes `@router.post("/cancel-all")` in a docblock, and a scan that read it would invent a call
+ * site that does not exist.
+ *
+ * Newlines are preserved so a line number taken off the result is the real one.
+ */
+const codeOf = (source) => {
+  let out = '';
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      let j = i + 1;
+      while (j < source.length) {
+        if (source[j] === '\\') { j += 2; continue; }
+        if (source[j] === ch) { j += 1; break; }
+        if (ch !== '`' && source[j] === '\n') break;
+        j += 1;
+      }
+      out += source.slice(i, j);
+      i = j;
+      continue;
+    }
+    if (ch === '/' && source[i + 1] === '/') {
+      const end = source.indexOf('\n', i);
+      const stop = end === -1 ? source.length : end;
+      out += ' '.repeat(stop - i);
+      i = stop;
+      continue;
+    }
+    if (ch === '/' && source[i + 1] === '*') {
+      const end = source.indexOf('*/', i + 2);
+      const stop = end === -1 ? source.length : end + 2;
+      out += source.slice(i, stop).replace(/[^\n]/g, ' ');
+      i = stop;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+};
+
+/** The code of the file at `absolutePath`, comments stripped. */
+const readCode = (absolutePath) => codeOf(readSource(absolutePath));
+
 /** Every `.py` file under `dir`, recursively. */
 const pythonFiles = (dir) => {
   const found = [];
@@ -549,8 +604,12 @@ describe('a module that calls post()', () => {
       would have caught, and task 4.5 puts that check in CI for exactly this reason. Either
       disposition satisfies this assertion: importing `post` binds it, and deleting the dead
       call path removes the premise.
+
+      Read off `readCode`, not the raw file: task 9.2's three headers name the expression they
+      removed, and a raw `includes` would read that prose as the call still being there. See
+      `codeOf`.
     */
-    const source = readSource(join(FRONTEND_ROOT, file));
+    const source = readCode(join(FRONTEND_ROOT, file));
     if (!source.includes(call)) return; // the call is gone - removal disposition, nothing to bind
 
     const bindsPost =
@@ -574,7 +633,7 @@ describe('a module that calls post()', () => {
 const ROUTES = Object.freeze(['/indicator/compute', '/logic/evaluate', '/strategy/execute']);
 
 describe('the route each engine context names', () => {
-  it.each(ROUTES)('is registered somewhere under backend_app/ - %s', (route) => {
+  it.each(ROUTES)('is registered under backend_app/, or is named by no client source - %s', (route) => {
     /*
       COUNTEREXAMPLE OBSERVED ON `F` - all 384 `.py` files under `backend_app/` searched for
       the literal path:
@@ -587,14 +646,28 @@ describe('the route each engine context names', () => {
       decorator could complete into one: the only `APIRouter(prefix=…)` in `backend_app/routers`
       is `dag_tasks.py:28`'s `/api/dag/tasks`.
 
-      So each path exists in exactly one place in the repository - the frontend call site that
-      names it. This is the second, independent defect: binding `post` correctly would turn
-      each `ReferenceError` into a 404.
+      So on `F` each path existed in exactly one place in the repository - the frontend call
+      site that named it. That was the second, independent defect: binding `post` correctly
+      would have turned each `ReferenceError` into a 404.
 
-      The canonical both-directions sweep is `tests/test_route_contract.py` (task 9.1). This
-      check is deliberately narrow - absence of a literal, which is a claim a grep can settle -
-      so that cluster D's second defect is measured here rather than taken on trust from a test
-      in another language that has not been written yet.
+      THE ASSERTION IS A DISJUNCTION, AND WAS NOT WEAKENED TO FIT THE FIX
+      ------------------------------------------------------------------
+      Requirements 2.25-2.27 are disjunctions in their own words: indicator computation "SHALL
+      reach an implemented endpoint through an imported client, **or the client-side path SHALL
+      be removed**". This test originally asserted only the first arm - that the route exists -
+      which quietly encoded the implement disposition as the only acceptable one. Task 9.2 took
+      the other arm, on the evidence in section 6: none of the three capabilities has a
+      consumer, and there is no local computation for any of them to fall back on either.
+
+      So the check now reads the clause as written. For each of the three paths, either a route
+      answers it, or nothing under `src/` names it. What it will not accept is the state `F` was
+      in - a client that names an address the backend does not serve - and that is still
+      measured by exactly this assertion.
+
+      The canonical both-directions sweep is `tests/test_route_contract.py` (task 9.1), which
+      resolves every client address against the app's own OpenAPI schema with the method used.
+      This check stays deliberately narrow - two greps, each settling a claim on its own - so
+      cluster D's second defect is measured here as well as there.
     */
     const files = pythonFiles(BACKEND_ROOT);
     expect(files.length, 'the walk must have found backend sources for this to mean anything').toBeGreaterThan(50);
@@ -603,11 +676,33 @@ describe('the route each engine context names', () => {
       .filter((file) => readSource(file).includes(route))
       .map((file) => relative(REPO_ROOT, file));
 
+    if (hits.length > 0) return; // first arm: a route answers it
+
+    // Second arm: no client source names it. Asserted over the whole of `src/`, not just the
+    // three contexts, so the address cannot reappear somewhere else in the bundle.
+    const jsFiles = [];
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir)) {
+        if (entry === 'node_modules' || entry === 'archive') continue;
+        const full = join(dir, entry);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.jsx?$/.test(full)) jsFiles.push(full);
+      }
+    };
+    walk(SRC);
+    expect(jsFiles.length).toBeGreaterThan(100);
+
+    const callers = jsFiles
+      .filter((file) => readCode(file).includes(route))
+      .map((file) => relative(FRONTEND_ROOT, file));
+
     expect(
-      hits,
-      `${route} is named by no Python source under backend_app/, so no route answers it. ` +
-        `${files.length} files searched.`,
-    ).not.toEqual([]);
+      callers,
+      `${route} is named by no Python source under backend_app/ (${files.length} files ` +
+        'searched), so no route answers it - and it is still named by client code, which is ' +
+        'therefore addressing nothing. Point it at a route that exists, or remove the call ' +
+        'path.',
+    ).toEqual([]);
   });
 });
 
@@ -996,7 +1091,7 @@ describe('measured: where each capability is computed today', () => {
       const owner = join(SRC, 'contexts', `${hook.replace(/^use/, '')}Context.jsx`);
       consumers[hook] = jsFiles
         .filter((file) => file !== owner)
-        .filter((file) => new RegExp(`\\b${hook}\\s*\\(`).test(readSource(file)))
+        .filter((file) => new RegExp(`\\b${hook}\\s*\\(`).test(readCode(file)))
         .map((file) => relative(FRONTEND_ROOT, file));
     }
 
