@@ -382,6 +382,147 @@ def realized_pnl_from_execution_totals(
     return today, lifetime
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# VENUE HEALTH (production-launch-hardening 6.5 - Requirements 1.5, 1.6, 2.5, 2.6, 3.3)
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#
+# ``get_health_status`` has classified a measured exchange latency correctly since Phase 1: a
+# figure a probe wrote into ``exchange_health:{user_id}:*``, ``None`` and ``"unavailable"`` when
+# nothing wrote one, and three bands applied only once there is something to band.
+# ``get_exchange_data`` published two literals instead - a constant ``"connected"`` and a constant
+# millisecond figure - for every row, every venue and every request, from no measurement at all.
+# The thresholds and the vocabulary below are lifted out of
+# ``get_health_status`` rather than restated, so the two methods classify through one function
+# and cannot drift; Requirement 3.3 pins both ceilings, and ``<`` is what it pins (the ceiling
+# itself is NOT in the band beneath it).
+
+#: Upper bound of ``optimal``, exclusive.
+_LATENCY_OPTIMAL_CEILING_MS = 150
+
+#: Upper bound of ``normal``, exclusive. At or above it a measurement reads ``degraded``.
+_LATENCY_NORMAL_CEILING_MS = 500
+
+#: What a latency STATUS reads as when no probe measured one. The figure beside it is ``None``.
+LATENCY_UNAVAILABLE = "unavailable"
+
+#: A venue a probe measured and reached, and whose credential nothing contradicts.
+VENUE_STATUS_CONNECTED = "connected"
+
+#: A venue nothing has probed. The honest reading for a row that exists and was never checked:
+#: not "connected" (nothing answered), not "disconnected" (nothing was asked).
+VENUE_STATUS_UNKNOWN = "unknown"
+
+#: A venue whose stored credential says it cannot be used - revoked, deactivated, or with its
+#: trade permission withdrawn. A KNOWN negative, which is a different finding from "unknown" and
+#: is reported as such rather than collapsed into it.
+VENUE_STATUS_INVALID_CREDENTIALS = "invalid_credentials"
+
+#: Statuses that count a venue as connected. Four spellings rather than one because
+#: ``design/alertCondition.js`` tests the frontend's *connected group* - ``connected``, ``paired``,
+#: ``open``, ``ok`` - and a probe reporting ``ok`` must not be counted disconnected here while the
+#: client counts it connected.
+_CONNECTED_VENUE_STATUSES = frozenset({VENUE_STATUS_CONNECTED, "ok", "open", "paired"})
+
+#: ``validation_status`` spellings that assert a credential was checked and works.
+_CREDENTIAL_VALID_STATUSES = frozenset({"valid", "validated", "verified", "active", "ok"})
+
+#: ``validation_status`` spellings that assert it does not. ``unvalidated`` and ``pending`` are
+#: deliberately in NEITHER set: they are the unknown, and the unknown is not a negative fact
+#: about the credential - it just cannot support a ``can_trade`` of ``True``.
+_CREDENTIAL_INVALID_STATUSES = frozenset(
+    {"revoked", "invalid", "expired", "failed", "error", "unauthorized", "denied", "disabled", "inactive"}
+)
+
+
+def classify_measured_latency(latency_ms: Optional[int]) -> str:
+    """The band a MEASURED latency falls in, or :data:`LATENCY_UNAVAILABLE` for no measurement.
+
+    ``get_health_status``' classification, extracted verbatim so ``get_exchange_data`` shares it.
+    ``None`` in gives ``"unavailable"`` out - there is no band for a figure nobody measured, and
+    returning one would be the fabrication this whole cluster is about.
+    """
+    if latency_ms is None:
+        return LATENCY_UNAVAILABLE
+    if latency_ms < _LATENCY_OPTIMAL_CEILING_MS:
+        return "optimal"
+    if latency_ms < _LATENCY_NORMAL_CEILING_MS:
+        return "normal"
+    return "degraded"
+
+
+def measured_latency_ms(probe: Optional[Dict[str, Any]]) -> Optional[int]:
+    """The latency a probe payload carries, or ``None`` if it carries none.
+
+    ``None`` for a missing probe, a probe with no ``latency_ms``, and a ``latency_ms`` that is not
+    a number. Each of those is "not measured", and they are not worth distinguishing to a reader
+    of the field: what matters is that no figure is invented for any of them.
+    """
+    if not isinstance(probe, dict):
+        return None
+    raw = probe.get("latency_ms")
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def credential_validity(record: Optional[Dict[str, Any]]) -> Optional[bool]:
+    """Whether a record says a venue credential can place an order: ``True``/``False``/``None``.
+
+    ``None`` is the important return: it means the record does not answer, which is the state
+    every ``exchange_keys`` row is in today (see ``get_exchange_data``'s note on the select).
+    Requirement 2.6 makes the unknown non-tradable, so callers must treat ``None`` as "no", but
+    they must not record it as a negative FACT about the credential - :data:`VENUE_STATUS_UNKNOWN`
+    and :data:`VENUE_STATUS_INVALID_CREDENTIALS` are separate statuses for exactly that reason.
+
+    Called on an ``exchange_keys`` row and, when that row says nothing, on the probe payload -
+    one vocabulary, whichever source carries it. ``status`` is deliberately NOT consulted: that
+    field is about the venue answering, not about the credential being usable, and conflating the
+    two is how a socket heartbeat would end up gating an order button.
+    """
+    if not isinstance(record, dict):
+        return None
+
+    # A definitive negative wins wherever it appears. A deactivated key, a revoked one, or one
+    # whose trade permission was withdrawn cannot trade regardless of what else the row says.
+    if record.get("is_active") is False:
+        return False
+    if record.get("can_trade") is False:
+        return False
+    raw_status = record.get("validation_status")
+    status = raw_status.strip().lower() if isinstance(raw_status, str) else ""
+    if status in _CREDENTIAL_INVALID_STATUSES:
+        return False
+
+    # An affirmative needs something that actually checked the credential. ``is_active`` alone is
+    # not it: it says the user enabled the key, not that anything validated it.
+    if status in _CREDENTIAL_VALID_STATUSES or record.get("can_trade") is True:
+        return True
+    return None
+
+
+def venue_status(probe: Optional[Dict[str, Any]], validity: Optional[bool]) -> str:
+    """The ``status`` for one venue row: measured, known-bad, or unknown. Never asserted.
+
+    A known-invalid credential is reported as such before anything else, because a venue that
+    answers a heartbeat for a revoked key is still not a venue this account can trade on. Then
+    the probe's own reading, if it wrote one; then a measurement with no reading, which is itself
+    evidence the venue answered. Absent all of that, unknown.
+    """
+    if validity is False:
+        return VENUE_STATUS_INVALID_CREDENTIALS
+    if not isinstance(probe, dict):
+        return VENUE_STATUS_UNKNOWN
+    reported = probe.get("status")
+    if isinstance(reported, str) and reported.strip():
+        return reported.strip().lower()
+    if measured_latency_ms(probe) is not None:
+        return VENUE_STATUS_CONNECTED
+    return VENUE_STATUS_UNKNOWN
+
+
 class DashboardAggregationService:
     """
     Single source of truth for all Dashboard data.
@@ -576,12 +717,115 @@ class DashboardAggregationService:
                 "is_trial": False
             }
     
+    #: The columns that decide whether a credential can trade, appended to the projection when
+    #: the table carries them. ``migrations/003_create_exchange_keys_table.sql`` creates
+    #: ``exchange_keys`` with NONE of them, and ``006_reconcile_production_database.sql`` adds
+    #: none - so on today's schema the widened select is rejected and
+    #: :meth:`_fetch_exchange_credentials` falls back to the narrow one, leaving validity
+    #: genuinely unknown and ``can_trade`` correspondingly ``False`` (Requirement 2.6). The
+    #: widened projection is asked for first anyway, so the moment a migration records validity
+    #: the dashboard reads it without a change here.
+    _EXCHANGE_KEY_VALIDITY_COLUMNS = "is_active, validation_status, last_validated_at, can_trade"
+
+    #: What the function has always fetched: the venue and when the row last changed.
+    _EXCHANGE_KEY_BASE_COLUMNS = "exchange_id, updated_at"
+
+    #: Set on the instance the first time the widened projection is rejected for naming a column
+    #: this deployment's table does not have, so the wasted round trip is paid once per process
+    #: rather than once per dashboard request. Class-level default; never written on the class.
+    _exchange_key_columns_absent = False
+
+    #: Substrings that identify "no such column" in a PostgREST/Postgres error, as opposed to a
+    #: transient failure. Only the former downgrades the projection permanently - a timeout must
+    #: not cost this process its ability to read validity until it restarts.
+    _MISSING_COLUMN_MARKERS = ("42703", "does not exist", "could not find")
+
+    async def _fetch_exchange_credentials(self, sb: Any, user_id: str) -> List[Dict[str, Any]]:
+        """This user's ``exchange_keys`` rows, with the validity columns when the table has them.
+
+        Two attempts, widest first. A projection naming a column the table does not have is
+        rejected outright, and the narrow fallback - the select this method replaced - is what
+        keeps that from emptying every user's venue list on a schema that predates those columns.
+        ``[]`` when both reads fail, as before.
+        """
+        projections = [self._EXCHANGE_KEY_BASE_COLUMNS]
+        if not self._exchange_key_columns_absent:
+            projections.insert(0, f"{self._EXCHANGE_KEY_BASE_COLUMNS}, {self._EXCHANGE_KEY_VALIDITY_COLUMNS}")
+
+        for columns in projections:
+            try:
+                res = await self._execute_sb_query(
+                    sb.table("exchange_keys").select(columns).eq("user_id", user_id)
+                )
+                rows = res.data or [] if res and hasattr(res, "data") else []
+                return [row for row in rows if isinstance(row, dict)]
+            except Exception as e:
+                detail = str(e).lower()
+                if any(marker in detail for marker in self._MISSING_COLUMN_MARKERS):
+                    self._exchange_key_columns_absent = True
+                logger.warning(f"Failed to fetch exchange_keys ({columns}) in dashboard: {e}")
+        return []
+
+    async def _read_exchange_probes(self, user_id: str) -> Dict[str, Dict[str, Any]]:
+        """Measured venue health for this user, keyed by exchange id. Empty when none was written.
+
+        The same store, the same key shape and the same payload ``get_health_status`` reads
+        (``exchange_health:{user_id}:{exchange}``), resolved per venue rather than collapsed to
+        the first figure found - one row of the response is one venue, so one measurement each.
+
+        An empty mapping means NOTHING WAS MEASURED. It does not mean the venues are down, and
+        callers must report it as unknown rather than as a negative.
+        """
+        probes: Dict[str, Dict[str, Any]] = {}
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            import json
+            keys = await redis_manager.keys(f"exchange_health:{user_id}:*")
+            for k in keys or []:
+                name = k.decode() if isinstance(k, (bytes, bytearray)) else str(k)
+                exchange_id = name.rsplit(":", 1)[-1].strip().lower()
+                if not exchange_id:
+                    continue
+                val = await redis_manager.get(k)
+                if not val:
+                    continue
+                data = json.loads(val) if isinstance(val, (str, bytes, bytearray)) else val
+                if isinstance(data, dict):
+                    probes[exchange_id] = data
+        except Exception as probe_err:
+            # Unreadable probe results are unmeasured results. Same outcome, logged at the level
+            # ``get_health_status`` logs its own lookup failure at.
+            logger.debug(f"Exchange health probe lookup error: {probe_err}")
+        return probes
+
     async def get_exchange_data(self, user: dict, sb: Optional[Any] = None) -> Dict:
         """
-        Get exchange connection data.
-        
+        Get exchange connection data: the venues on the account, what was measured about each,
+        and whether anything on it can place an order.
+
+        MEASURED OR UNKNOWN, NEVER ASSERTED (6.5, Requirements 1.5, 2.5)
+            ``status`` and ``latency_ms`` used to be a constant ``"connected"`` and a constant
+            millisecond figure on every row. They now come from the probe results in Redis - the
+            figures ``get_health_status`` already reads - and are :data:`VENUE_STATUS_UNKNOWN` /
+            ``None`` when no probe wrote one. A venue nobody asked is reported as one nobody asked.
+
+        ``can_trade`` IS A CREDENTIAL QUESTION (Requirements 1.6, 2.6)
+            It used to be ``len(connections) > 0``, which answers "does a row exist in
+            ``exchange_keys``". Revocation happens at the venue, so the row outlives it and that
+            expression answered yes for keys that could not place an order. It is now
+            :func:`credential_validity` over the rows - ``True`` only where something says the
+            credential works, and ``False`` where nothing does.
+
+            Note what the select can and cannot support. ``exchange_keys`` as created by
+            ``migrations/003`` carries no validity column, and nothing persists the result of
+            ``POST /api/v1/exchange/test``'s ``validate_keys()`` - so on today's schema validity
+            is unknown for every row, and ``can_trade`` is ``False`` until a probe or a migration
+            records otherwise. That is the requirement's own direction for the unknown, and it is
+            the safe one: this field is what a client gates its order UI on.
+
         Returns:
-            Connected exchanges, connection status, latency metrics
+            ``total_exchanges``, ``connected_exchanges`` (venues a probe reported connected, not
+            rows), ``exchanges``, ``can_trade``. The same four keys as before.
         """
         try:
             if sb is None:
@@ -596,33 +840,41 @@ class DashboardAggregationService:
                 }
             
             # Get user's exchange connections from exchange_keys
-            try:
-                res = await self._execute_sb_query(sb.table("exchange_keys").select("exchange_id, updated_at").eq("user_id", user["id"]))
-                connections = res.data or [] if res and hasattr(res, "data") else []
-            except Exception as e:
-                logger.warning(f"Failed to fetch exchange_keys in dashboard: {e}")
-                connections = []
-            
-            # Calculate exchange metrics
-            connected_exchanges = connections
+            connections = await self._fetch_exchange_credentials(sb, user["id"])
             total_exchanges = len(connections)
-            
-            # Get exchange health from actual connections
+
+            # No rows is a successful read of an empty set: nothing to probe, nothing to report.
+            probes = await self._read_exchange_probes(user["id"]) if connections else {}
+
+            # Get exchange health from what was actually measured about each connection
             exchange_health = []
-            for conn in connected_exchanges:
+            can_trade = False
+            for conn in connections:
                 exchange_id = conn.get("exchange_id", "unknown")
+                probe = probes.get(str(exchange_id).strip().lower())
+
+                # The row first; the probe only where the row says nothing about the credential.
+                validity = credential_validity(conn)
+                if validity is None:
+                    validity = credential_validity(probe)
+                if validity is True:
+                    can_trade = True
+
                 exchange_health.append({
                     "exchange_id": exchange_id,
-                    "status": "connected",
-                    "latency_ms": 35,
+                    "status": venue_status(probe, validity),
+                    "latency_ms": measured_latency_ms(probe),
                     "last_sync": conn.get("updated_at")
                 })
             
             return {
                 "total_exchanges": total_exchanges,
-                "connected_exchanges": len(connected_exchanges),
+                "connected_exchanges": sum(
+                    1 for entry in exchange_health
+                    if entry["status"] in _CONNECTED_VENUE_STATUSES
+                ),
                 "exchanges": exchange_health,
-                "can_trade": len(connected_exchanges) > 0
+                "can_trade": can_trade
             }
         except Exception as e:
             logger.error(f"Failed to fetch exchange data for user {user['id']}: {e}")
@@ -1501,7 +1753,6 @@ class DashboardAggregationService:
         
         # Check measured latency in Redis
         latency_ms = None
-        latency_status = "unavailable"
         
         if environment == "live":
             try:
@@ -1519,13 +1770,10 @@ class DashboardAggregationService:
             except Exception as health_err:
                 logger.debug(f"Health latency lookup error: {health_err}")
 
-        if latency_ms is not None:
-            if latency_ms < 150:
-                latency_status = "optimal"
-            elif latency_ms < 500:
-                latency_status = "normal"
-            else:
-                latency_status = "degraded"
+        # The bands live in ``classify_measured_latency`` so ``get_exchange_data`` applies the
+        # same three comparisons to a per-venue measurement (6.5). Unchanged behaviour here:
+        # ``None`` still reads "unavailable", and the thresholds are Requirement 3.3's.
+        latency_status = classify_measured_latency(latency_ms)
 
         return {
             "exchange_api_latency_ms": latency_ms,
