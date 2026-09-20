@@ -143,7 +143,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "'self' "
             "ws: wss: "
             "https://*.vyomquant.com wss://*.vyomquant.com "
-            "https://*.vyomquant.in "
+            "https://vyomquant.in https://*.vyomquant.in "
+            "wss://vyomquant.in wss://*.vyomquant.in "
             "https://*.supabase.co wss://*.supabase.co "
             "https://*.sentry.io "
             "https://*.clarity.ms "
@@ -162,7 +163,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "'self' data: blob: "
             "https://cdn.jsdelivr.net "
             "https://fastapi.tiangolo.com "
-            "https://vyomquant.in "
+            "https://vyomquant.in https://*.vyomquant.in "
             "https://*.clarity.ms "
             "https://www.googletagmanager.com"
         )

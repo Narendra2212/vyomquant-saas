@@ -1287,7 +1287,9 @@ async def create_checkout_session(
                     "reference_id": order["id"],
                     "description": f"Aerora Dynamics - {item_key.upper()}",
                     "customer": {
-                        "email": user.get("email", "user@aerora.io")
+                        # Fallback only reached when the user record carries no email. Razorpay
+                        # requires a syntactically valid address; this one is on a domain we own.
+                        "email": user.get("email", "no-reply@vyomquant.in")
                     },
                     "notes": {
                         "user_id": user["id"], 
