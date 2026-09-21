@@ -689,7 +689,7 @@ exists to remove.
     - _Preservation: 3.10 — the paper lifecycle's REST event replay still shares its implementation with the WebSocket history; refcounting under two holds unchanged_
     - _Requirements: 1.22, 1.23, 2.22, 2.23, 3.10_
 
-  - [ ] 8.2 **MUST LAND ALONE** — replace the socket credential with a single-use ticket across nine routes
+  - [-] 8.2 **MUST LAND ALONE** — replace the socket credential with a single-use ticket across nine routes
     - **This is one of the three changes `design.md §Change Ordering` forbids batching**, and it is the
       riskiest change in the pass. Committed on its own with `git commit -q -m`, verified on its own,
       revertable on its own
@@ -824,7 +824,7 @@ exists to remove.
     - _Preservation: 3.7, 3.8 — no user-facing copy path is lost; `design/errorCopy.js` remains the only error surface_
     - _Requirements: 1.28, 2.28, 3.7, 3.8_
 
-  - [ ] 9.4 Declare the Signal Trace node projection in one shared fixture
+  - [x] 9.4 Declare the Signal Trace node projection in one shared fixture
     - Create `tests/fixtures/signal_trace_node_projection.json` — **one file, read by both sides:** pytest
       reads it directly, vitest reads it through `node:fs` at a repo-relative path
     - Extract the inline `DAGNodeTrace -> dict` projection out of the `dag_nodes` stage literal at
@@ -836,7 +836,7 @@ exists to remove.
       matters more than the two current instances
     - _Requirements: 1.29, 2.29_
 
-  - [ ] 9.5 Backend side — every stage's `nodes` is JSON-serialisable
+  - [x] 9.5 Backend side — every stage's `nodes` is JSON-serialisable
     - Call the named projection from **all three** stages. `signal_trace_engine.py:313-323` currently
       places raw `DAGNodeTrace` instances into the `nodes` field of the `market_data` and `indicators`
       stages, so the response fails serialisation and Signal Trace stages 1 and 2 never show node detail
@@ -849,7 +849,7 @@ exists to remove.
     - _Preservation: 3.7 — stage 3's existing node detail is unchanged, byte for byte_
     - _Requirements: 1.29, 2.29, 3.7_
 
-  - [ ] 9.6 Frontend side — stages 1 and 2 render node detail
+  - [x] 9.6 Frontend side — stages 1 and 2 render node detail
     - **Extend** the existing `algo22-terminal/tests/unit/lib/signalTraceStages.test.js`, reading
       **the same** `tests/fixtures/signal_trace_node_projection.json`
     - **Regression test and assertion:** stages 1 and 2 render node detail from the fixture's projected

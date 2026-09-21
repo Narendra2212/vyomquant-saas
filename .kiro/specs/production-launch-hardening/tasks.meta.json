@@ -6,5 +6,49 @@
       "lastRunTimestamp": 1789853068396
     }
   },
-  "executionHistory": {}
+  "executionHistory": {
+    "9.4 Declare the Signal Trace node projection in one shared fixture": [
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789931933548
+      },
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789932525646
+      }
+    ],
+    "9.5 Backend side — every stage's `nodes` is JSON-serialisable": [
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789932528304
+      },
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789933029314
+      }
+    ],
+    "9.6 Frontend side — stages 1 and 2 render node detail": [
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789933030490
+      },
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789933867387
+      }
+    ],
+    "8.2 **MUST LAND ALONE** — replace the socket credential with a single-use ticket across nine routes": [
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789934292909
+      }
+    ]
+  }
 }
