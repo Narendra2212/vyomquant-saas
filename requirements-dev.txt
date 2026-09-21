@@ -12,3 +12,12 @@
 # generated-example behaviour is reproducible across local runs and CI:
 # an unpinned hypothesis can surface or hide failures on a version bump.
 hypothesis==6.165.10
+
+# --- Static undefined-name gate ------------------------------------------
+# tests/test_no_undefined_names.py shells out to `python -m flake8 backend_app
+# --select=E9,F63,F7,F82`, which is the exact selection 01-pr-check.yml's validate-code
+# job runs. That job installs flake8 itself; declaring it here is what lets the same
+# check run inside the pytest lane (the unit-tests job installs this file), so an
+# undefined name cannot land on a branch the PR-only workflow never sees. Pinned to the
+# version the gate was verified against, matching the hypothesis pin above.
+flake8==7.3.0

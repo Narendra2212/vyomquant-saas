@@ -42,6 +42,7 @@ from backend_app.core.rate_limit import limiter
 # these, never a replacement (Requirement 16.7).
 from backend_app.core.subscription_dependencies import check_ml_quota, require_ml_training
 from backend_app.core.performance_monitor import (
+    performance_monitor,
     monitor_performance,
     log_performance_summary,
     verify_database_indexes,
