@@ -15,6 +15,9 @@ from pydantic import BaseModel, EmailStr
 from backend_app.core.dependencies import get_current_user, get_supabase
 from backend_app.core.rate_limit import limiter
 from backend_app.core.supabase_connection import SupabaseConnection
+from backend_app.core.websocket_auth import (WS_TICKET_REDIS_PREFIX,
+                                             WS_TICKET_TTL_SECONDS,
+                                             ws_ticket_redis_key)
 from supabase import Client as SupabaseClient
 
 logger = logging.getLogger(__name__)
@@ -260,8 +263,15 @@ async def login(
 # WEBSOCKET TICKET  (Phase 7B F-05)
 # ----------------------------------
 
-_WS_TICKET_TTL_SECONDS = 30
-_WS_TICKET_REDIS_PREFIX = "ws_ticket:"
+# The TTL and the key prefix are owned by ``core.websocket_auth``, which is where the
+# ticket is REDEEMED. Two spellings of a key prefix is one rename away from issuing
+# into one namespace and redeeming from another, and that failure presents as "every
+# ticket is unknown" with nothing in either module looking wrong. The local names are
+# kept so this module reads as it did.
+_WS_TICKET_TTL_SECONDS = WS_TICKET_TTL_SECONDS
+_WS_TICKET_REDIS_PREFIX = WS_TICKET_REDIS_PREFIX
+
+
 
 
 @router.post("/ws-ticket", status_code=200)
@@ -272,21 +282,47 @@ async def issue_ws_ticket(
 ):
     """
     Phase 7B F-05 REMEDIATION: Issue a short-lived WebSocket authentication ticket.
+
+    A ticket is only issued once it is **stored**. The previous shape logged
+    "Redis unavailable; ticket verification fallback" and returned 200 with a ticket
+    that had never been written — there is no fallback, and a ticket that cannot be
+    redeemed is not a credential, it is a socket that will be closed a moment later
+    for reasons the client cannot see. 503 says the same thing honestly and at the
+    point the client can still do something about it.
     """
     try:
         from backend_app.core.cache import redis_manager
 
         ticket = secrets.token_urlsafe(32)
-        redis_key = f"{_WS_TICKET_REDIS_PREFIX}{ticket}"
+        redis_key = ws_ticket_redis_key(ticket)
 
         user_id = current_user.get("id") or current_user.get("sub")
         if not user_id:
             raise HTTPException(status_code=400, detail="Cannot issue WS ticket: user identity missing.")
 
-        if redis_manager.pool:
-            await redis_manager.setex(redis_key, _WS_TICKET_TTL_SECONDS, user_id)
-        else:
-            logger.warning("[WS-Ticket] Redis unavailable; ticket verification fallback.")
+        # `redis_manager.pool` is a property returning the manager itself, so it is
+        # unconditionally truthy — it never was an availability signal. The signal is
+        # whether the write was acknowledged: `setex` swallows transport errors and
+        # returns a falsy value when there is no client behind it.
+        stored = await redis_manager.setex(redis_key, _WS_TICKET_TTL_SECONDS, user_id)
+        if not stored:
+            logger.error(
+                "[WS-Ticket] Ticket store did not acknowledge the write for user %s; "
+                "refusing to issue an unredeemable ticket.",
+                user_id,
+            )
+            # The code is written as a literal, not through a constant: it is a wire
+            # contract, and `tests/regression/capture_baseline.py` records a literal
+            # `"error"` value into the baseline while recording a name as "computed".
+            # Spelt this way, changing the code a client branches on is a visible
+            # baseline diff rather than an invisible one.
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "WS_TICKET_STORE_UNAVAILABLE",
+                    "message": "WebSocket ticket issuance is temporarily unavailable.",
+                },
+            )
 
         logger.info(f"[WS-Ticket] Issued ticket for user {user_id} (TTL={_WS_TICKET_TTL_SECONDS}s)")
         return {

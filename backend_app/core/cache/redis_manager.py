@@ -66,6 +66,16 @@ class MockRedisClient:
         self._store[key] = value
         return True
 
+    async def getdel(self, key: str) -> Optional[str]:
+        """Read a key and remove it in one step (Redis GETDEL).
+
+        ``dict.pop`` is a single bytecode-level operation on a plain dict and this
+        coroutine awaits nothing, so no other task can observe the value between the
+        read and the removal. That is the same guarantee real GETDEL gives, which is
+        what makes this usable for a single-use credential.
+        """
+        return self._store.pop(key, None)
+
     async def incr(self, key: str) -> int:
         val = int(self._store.get(key, 0)) + 1
         self._store[key] = str(val)
@@ -362,6 +372,16 @@ class MockRedisPubSub:
     
     async def close(self):
         pass
+
+
+#: Read-and-consume in one server-side step, for clients with no native ``GETDEL``.
+#: Redis executes a script to completion before serving another command, so the GET and
+#: the DEL here cannot interleave with a second redemption of the same key.
+_GETDEL_LUA = (
+    "local v = redis.call('GET', KEYS[1]) "
+    "if v then redis.call('DEL', KEYS[1]) end "
+    "return v"
+)
 
 
 class PublishError(RuntimeError):
@@ -697,6 +717,66 @@ class SharedRedisManager:
                 return await client.setex(key, ttl, value)
             except Exception as e:
                 logger.warning(f"SETEX failed for '{key}': {e}")
+        return None
+
+    async def getdel(self, key: str) -> Optional[str]:
+        """Read a key and delete it **atomically**; returns the value, or ``None``.
+
+        The read and the delete are one indivisible step, which is the whole point:
+        this is the primitive a single-use credential is redeemed through, and a
+        ``GET`` followed by a separate ``DEL`` leaves a window in which two concurrent
+        redemptions both read the value before either removes it — i.e. the credential
+        is used twice. Three paths, tried in order:
+
+        1. Native ``GETDEL`` (Redis 6.2+, ``redis-py`` 4+, and ``MockRedisClient``).
+        2. A one-shot Lua script, which Redis runs to completion without interleaving.
+        3. Nothing — ``None``, with an error logged.
+
+        (3) deliberately does **not** fall back to ``GET`` + ``DEL``. A caller asking
+        for this method is asking for single-use semantics; quietly handing back a
+        racy approximation would turn a replayable credential into a silent outcome
+        rather than a loud one. Returning ``None`` fails the redemption closed.
+
+        A missing client, a transport error and a genuinely absent key are all
+        ``None``: from a caller's point of view "no value, and nothing was consumed".
+        """
+        client = await self._get_active_cache()
+        if client is None:
+            return None
+
+        native = getattr(client, "getdel", None)
+        if native is not None:
+            try:
+                return await native(key)
+            except Exception as e:
+                logger.warning(f"GETDEL failed for '{key}': {e}")
+                return None
+
+        evaluate = getattr(client, "eval", None)
+        if evaluate is not None:
+            try:
+                value = await evaluate(_GETDEL_LUA, 1, key)
+            except Exception as e:
+                logger.warning(f"GETDEL (via EVAL) failed for '{key}': {e}")
+                return None
+            # A client whose ``eval`` is a stub rather than a real script evaluator
+            # (several test doubles in this repo are) returns a shape this script
+            # cannot produce. Treat that as "unsupported", never as a hit.
+            if value is None or isinstance(value, (str, bytes)):
+                return value
+            logger.error(
+                "Cache client %s returned %s from EVAL; its eval() is not a real "
+                "script evaluator, so no atomic GETDEL is available.",
+                type(client).__name__,
+                type(value).__name__,
+            )
+            return None
+
+        logger.error(
+            "Cache client %s supports neither GETDEL nor EVAL, so a value cannot be "
+            "read and consumed atomically; refusing rather than racing.",
+            type(client).__name__,
+        )
         return None
 
     async def incr(self, key: str) -> int:

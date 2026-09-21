@@ -61,6 +61,126 @@ def _decode_hs256_token(token: str) -> Optional[dict]:
         return None
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  SINGLE-USE WEBSOCKET TICKET — REDEMPTION
+#
+#  production-launch-hardening task 8.2. Requirements 1.21, 2.21, 3.9.
+#
+#  WHY A TICKET EXISTS AT ALL. The browser ``WebSocket`` constructor cannot set
+#  request headers, so the socket credential has to travel in the URL, and a URL is
+#  written to CloudFront and ALB access logs and to browser history. A session JWT
+#  there is replayable for as long as it is valid. A ticket is not: it is opaque, it
+#  lives ≤ 30 s, and it is consumed by the first connection that presents it, so a
+#  logged ticket buys an attacker nothing.
+#
+#  "CONSUMED BY THE FIRST CONNECTION" IS THE WHOLE PROPERTY, so it is enforced with
+#  an atomic read-and-delete (``redis_manager.getdel``) rather than a read followed by
+#  a delete. Two sockets racing on the same ticket must not both be admitted, and a
+#  separate GET and DEL is exactly the window in which they would be.
+#
+#  FAIL CLOSED, WITHOUT EXCEPTION. No ticket store, an unreachable store, an unknown
+#  ticket, an expired ticket, an already-consumed ticket, a stored value with no
+#  subject in it — every one of these is ``None``. There is no branch here that admits
+#  a connection because it could not find evidence against it. That is the failure
+#  mode this task was raised to remove: the issuance side already returned tickets
+#  that were never stored, which is an admission decision made on absence of evidence.
+#
+#  THE TICKET VALUE IS NEVER LOGGED. It is a bearer credential for its whole life, so
+#  it is referred to by length only. The resolved user id is logged, as every other
+#  authentication path here already does.
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: Redis key prefix for an outstanding ticket. Canonical: ``routers/auth.py`` imports
+#: this rather than re-spelling it, because two spellings of a key prefix is one
+#: rename away from issuing into one namespace and redeeming from another — which
+#: would present exactly as "every ticket is unknown", i.e. as a total outage of the
+#: feature, with nothing in either module looking wrong.
+WS_TICKET_REDIS_PREFIX = "ws_ticket:"
+
+#: Ticket lifetime. Requirement 2.21 caps this at 30 s; it is the TTL on the stored
+#: key, so expiry is enforced by Redis rather than by anything here remembering to
+#: check a timestamp.
+WS_TICKET_TTL_SECONDS = 30
+
+#: Recorded on the resolved identity so a caller can tell *how* a connection
+#: authenticated. Not a JWT claim — deliberately named so it cannot be mistaken for
+#: one if this dict is ever logged or forwarded.
+WS_TICKET_AUTH_METHOD = "ws_ticket"
+
+#: An upper bound on what is worth looking up. ``secrets.token_urlsafe(32)`` is 43
+#: characters; anything remotely near this bound is not a ticket this server minted,
+#: and there is no reason to build a Redis key out of an unbounded query string.
+_WS_TICKET_MAX_LENGTH = 256
+
+
+def ws_ticket_redis_key(ticket: str) -> str:
+    """The Redis key an outstanding ``ticket`` is stored under."""
+    return f"{WS_TICKET_REDIS_PREFIX}{ticket}"
+
+
+async def verify_ws_ticket(ticket: str) -> Optional[dict]:
+    """Redeem a single-use WebSocket ticket, returning the identity it names.
+
+    Returns a dict in the same shape ``_decode_hs256_token`` returns — keyed on
+    ``sub`` — so the nine route handlers can treat a ticket and a JWT
+    interchangeably and no call site has to know which credential it got. The dict
+    carries only the subject: a ticket is a reference to a user, not a claims
+    bundle, and inventing a ``role`` or an ``email`` that was never verified at
+    redemption time would be worse than omitting them. ``auth_method`` says which
+    credential it came from.
+
+    Returns ``None`` on **every** failure, including every failure of the ticket
+    store itself. A ticket that cannot be proven good is not good.
+
+    Consumes the ticket: a second call with the same value returns ``None``,
+    whether or not the first call's caller went on to accept the socket.
+    """
+    if not ticket or not isinstance(ticket, str):
+        return None
+
+    if len(ticket) > _WS_TICKET_MAX_LENGTH:
+        logger.warning(
+            "[WS/Auth] Ticket rejected: %d characters exceeds the %d-character bound.",
+            len(ticket),
+            _WS_TICKET_MAX_LENGTH,
+        )
+        return None
+
+    try:
+        from backend_app.core.cache import redis_manager
+
+        stored = await redis_manager.getdel(ws_ticket_redis_key(ticket))
+    except Exception as exc:  # noqa: BLE001 - an unreachable store denies
+        logger.warning(
+            "[WS/Auth] Ticket redemption could not reach the ticket store (%s); "
+            "refused.",
+            exc,
+        )
+        return None
+
+    if stored is None:
+        # Unknown, expired, or already redeemed. ONE message for all three on
+        # purpose: distinguishing them would tell a holder of a guessed value
+        # whether it ever existed.
+        logger.info(
+            "[WS/Auth] Ticket rejected: unknown, expired or already consumed "
+            "(length=%d).",
+            len(ticket),
+        )
+        return None
+
+    user_id = stored.decode("utf-8", "replace") if isinstance(stored, bytes) else str(stored)
+    user_id = user_id.strip()
+    if not user_id:
+        logger.warning(
+            "[WS/Auth] Ticket rejected: the ticket store holds no subject against it."
+        )
+        return None
+
+    logger.info("[WS/Auth] Ticket redeemed for user %s", user_id)
+    return {"sub": user_id, "auth_method": WS_TICKET_AUTH_METHOD}
+
+
 class WebSocketAuthMiddleware:
     """
     Comprehensive WebSocket authentication middleware.

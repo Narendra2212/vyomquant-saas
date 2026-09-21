@@ -35,7 +35,8 @@ from backend_app.backend.connection_engine import (  # WSR-3: shared pool
 from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.core.dependencies import get_vault, get_ws_manager
 from backend_app.core.state import app_state
-from backend_app.core.websocket_auth import _decode_hs256_token
+from backend_app.core.websocket_auth import (_decode_hs256_token,
+                                             verify_ws_ticket)
 
 logger = logging.getLogger("WSRoutes")
 ws_router = APIRouter()
@@ -290,34 +291,103 @@ async def _check_connection_health():
                             _public_exchange = None
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  THE SOCKET CREDENTIAL
+#
+#  production-launch-hardening task 8.2. Requirements 1.21, 2.21, 3.9.
+#
+#  TWO CREDENTIALS, ONE RELEASE. Every route below accepts `?ticket=` (a single-use,
+#  ≤ 30 s opaque ticket minted over HTTPS by `POST /api/auth/ws-ticket`) and still
+#  accepts `?token=` (the session JWT). Both are resolved through this one pair of
+#  helpers so that "how a socket authenticates" has exactly one implementation across
+#  nine routes rather than nine.
+#
+#  >>> THE `token` ARM IS SCHEDULED FOR REMOVAL. <<<
+#  It is kept accepting for ONE release only, so a browser running a cached bundle
+#  that still builds `?token=` does not lose its socket mid-session. Once the ticket
+#  client has shipped, delete the `token` query parameter and the `token` branch of
+#  `_resolve_ws_credential` / `_resolve_ws_subject`, and `?token=` stops being a
+#  credential this server accepts. Leaving it in place indefinitely would keep the
+#  JWT in access-loggable URLs, which is the whole defect task 8.2 exists to close.
+#
+#  TICKET FIRST, THEN TOKEN. Each credential is verified independently and on its own
+#  merits, so trying the second after the first fails weakens nothing: a rejected
+#  ticket is not "retried" as a token, a token is simply also offered and separately
+#  proven. A presented ticket is consumed whether or not the connection goes on to be
+#  accepted — that is what single-use means.
+#
+#  NEITHER CREDENTIAL PRESENT IS A REFUSAL, on every route. Four of the nine used to
+#  declare `token: str = Query(...)` and let FastAPI reject a missing credential
+#  during the handshake; they now declare it optional so a ticket-only client can
+#  connect, and the "no credential at all" refusal moved into the body, where it
+#  closes with the same 4001 those routes already used.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+async def _resolve_ws_credential(
+    ticket: Optional[str] = None, token: Optional[str] = None
+) -> Optional[dict]:
+    """Resolve whichever credential the connection presented, or ``None``.
+
+    Returns the same claims-shaped dict for both, keyed on ``sub``, so a caller never
+    has to know which one it got.
+    """
+    if ticket:
+        payload = await verify_ws_ticket(ticket)
+        if payload:
+            return payload
+    if token:
+        # DEPRECATED ARM — see the note above; removed after one release.
+        return _decode_hs256_token(token)
+    return None
+
+
+async def _resolve_ws_subject(
+    ticket: Optional[str] = None,
+    token: Optional[str] = None,
+    claimed_user_id: Optional[str] = None,
+) -> Optional[str]:
+    """The authenticated subject, or ``None``.
+
+    When ``claimed_user_id`` is given it must equal the subject the credential
+    resolves to — the tenant-isolation cross-check the private channels already made
+    against the JWT, applied identically to a ticket.
+    """
+    payload = await _resolve_ws_credential(ticket=ticket, token=token)
+    if not payload:
+        return None
+
+    subject = payload.get("sub")
+    if not subject:
+        logger.warning("[WS] Credential resolved to no subject")
+        return None
+
+    if claimed_user_id and subject != claimed_user_id:
+        logger.warning(
+            f"[WS] Credential rejected: user ID mismatch "
+            f"(claimed={claimed_user_id}, credential={subject})"
+        )
+        return None
+
+    return subject
+
+
 async def _validate_ws_token(token: str, claimed_user_id: str) -> bool:
     """
     WSR-1 (FIXED): Local HS256 JWT validation — zero network latency.
     Removed: blocking supabase.auth.get_user() call that caused rate limits.
     Now validates the JWT signature locally using SUPABASE_JWT_SECRET.
+
+    SUPERSEDED by ``_resolve_ws_subject``, which does this and also accepts a ticket.
+    No route calls this any more; it is kept because two architecture documents name
+    it, and it **delegates** rather than keeping its own copy of the check. A second
+    implementation of "is this credential good" is how one of them ends up admitting
+    something the other would refuse.
     """
     try:
-        payload = _decode_hs256_token(token)
-
-        if payload is None:
-            logger.warning("[WS] Token validation failed: invalid or expired token")
-            return False
-
-        token_user_id = payload.get("sub")
-        if not token_user_id:
-            logger.warning("[WS] Token validation failed: missing sub claim")
-            return False
-
-        if token_user_id != claimed_user_id:
-            logger.warning(
-                f"[WS] Token validation failed: user ID mismatch "
-                f"(claimed={claimed_user_id}, token={token_user_id})"
-            )
-            return False
-
-        logger.info(f"[WS] Token validated locally for user {claimed_user_id}")
-        return True
-
+        return bool(
+            await _resolve_ws_subject(token=token, claimed_user_id=claimed_user_id)
+        )
     except Exception as e:
         logger.warning(f"[WS] Token validation failed: {e}")
         return False
@@ -333,18 +403,19 @@ _health_check_task: Optional[asyncio.Task] = None
 @ws_router.websocket("/ws/telemetry")
 async def ws_telemetry(
     websocket: WebSocket,
-    token: str = Query(None)
+    ticket: Optional[str] = Query(None),
+    token: str = Query(None)  # DEPRECATED: removed after one release — see above
 ):
     """
     Real-time telemetry and monitoring endpoint.
     Exposes Strategy Monitoring, Signal Tracing, and Risk Events.
     """
-    if not token:
-        await websocket.close(code=4001, reason="Unauthorized: Missing token")
+    if not ticket and not token:
+        await websocket.close(code=4001, reason="Unauthorized: Missing credential")
         return
     
     try:
-        payload = _decode_hs256_token(token)
+        payload = await _resolve_ws_credential(ticket=ticket, token=token)
         if not payload:
             await websocket.close(code=4001, reason="Unauthorized: Invalid token")
             return
@@ -366,16 +437,21 @@ async def ws_telemetry(
 
 
 @ws_router.websocket("/ws/ticker/{symbol}")
-async def ws_ticker(websocket: WebSocket, symbol: str, token: str = Query(None)):
+async def ws_ticker(
+    websocket: WebSocket,
+    symbol: str,
+    ticket: Optional[str] = Query(None),
+    token: str = Query(None),  # DEPRECATED: removed after one release — see above
+):
     global _health_check_task
     
     # Verify WebSocket auth — FAIL CLOSED
-    if not token:
-        await websocket.close(code=4001, reason="Authentication required: provide ?token=")
+    if not ticket and not token:
+        await websocket.close(code=4001, reason="Authentication required: provide ?ticket=")
         return
     
     try:
-        payload = _decode_hs256_token(token)
+        payload = await _resolve_ws_credential(ticket=ticket, token=token)
         if not payload:
             await websocket.close(code=4001, reason="Unauthorized: Invalid token")
             return
@@ -506,14 +582,20 @@ async def _stream_ticker(data_engine, symbol, manager):
 
 
 @ws_router.websocket("/ws/orderbook/{symbol}")
-async def ws_orderbook(websocket: WebSocket, symbol: str, depth: int = Query(20), token: str = Query(None)):
+async def ws_orderbook(
+    websocket: WebSocket,
+    symbol: str,
+    depth: int = Query(20),
+    ticket: Optional[str] = Query(None),
+    token: str = Query(None),  # DEPRECATED: removed after one release — see above
+):
     # Verify WebSocket auth — FAIL CLOSED
-    if not token:
-        await websocket.close(code=4001, reason="Authentication required: provide ?token=")
+    if not ticket and not token:
+        await websocket.close(code=4001, reason="Authentication required: provide ?ticket=")
         return
     
     try:
-        payload = _decode_hs256_token(token)
+        payload = await _resolve_ws_credential(ticket=ticket, token=token)
         if not payload:
             await websocket.close(code=4001, reason="Unauthorized: Invalid token")
             return
@@ -566,14 +648,20 @@ async def _stream_orderbook(data_engine, symbol, depth, manager):
 
 
 @ws_router.websocket("/ws/candles/{symbol}/{timeframe}")
-async def ws_candles(websocket: WebSocket, symbol: str, timeframe: str = "5m", token: str = Query(None)):
+async def ws_candles(
+    websocket: WebSocket,
+    symbol: str,
+    timeframe: str = "5m",
+    ticket: Optional[str] = Query(None),
+    token: str = Query(None),  # DEPRECATED: removed after one release — see above
+):
     # Verify WebSocket auth — FAIL CLOSED
-    if not token:
-        await websocket.close(code=4001, reason="Authentication required: provide ?token=")
+    if not ticket and not token:
+        await websocket.close(code=4001, reason="Authentication required: provide ?ticket=")
         return
     
     try:
-        payload = _decode_hs256_token(token)
+        payload = await _resolve_ws_credential(ticket=ticket, token=token)
         if not payload:
             await websocket.close(code=4001, reason="Unauthorized: Invalid token")
             return
@@ -642,12 +730,16 @@ async def _stream_candles(data_engine, symbol, timeframe, channel_key, manager):
 async def ws_user(
     websocket: WebSocket,
     user_id: str,
-    token: str = Query(...),
     exchange_id: str = Query(..., description="Exchange ID (e.g., binance, coinbase)"),
+    ticket: Optional[str] = Query(None),
+    # Was `Query(...)`. Optional now so a ticket-only client can connect; "neither
+    # credential present" is refused below with the same 4001, so nothing is admitted
+    # that was not admitted before. DEPRECATED: removed after one release.
+    token: Optional[str] = Query(None),
 ):
     manager = get_ws_manager()
 
-    if not await _validate_ws_token(token, user_id):
+    if not await _resolve_ws_subject(ticket=ticket, token=token, claimed_user_id=user_id):
         await websocket.close(code=4001, reason="Unauthorized")
         return
 
@@ -867,11 +959,13 @@ async def _sync_initial_state(de, user_id, manager, websocket):
 async def ws_pnl(
     websocket: WebSocket,
     user_id: str,
-    token: str = Query(...),
+    ticket: Optional[str] = Query(None),
+    # Was `Query(...)`. See the note on `ws_user`. DEPRECATED: removed after one release.
+    token: Optional[str] = Query(None),
 ):
     manager = get_ws_manager()
 
-    if not await _validate_ws_token(token, user_id):
+    if not await _resolve_ws_subject(ticket=ticket, token=token, claimed_user_id=user_id):
         await websocket.close(code=4001, reason="Unauthorized")
         return
 
@@ -916,7 +1010,13 @@ async def _push_pnl(telemetry, user_id, manager):
 # ══════════════════════════════════════════════════════════════════════════
 
 @ws_router.websocket("/ws/dashboard")
-async def ws_dashboard(websocket: WebSocket, token: str = Query(...), user_id: str = Query(...)):
+async def ws_dashboard(
+    websocket: WebSocket,
+    user_id: str = Query(...),
+    ticket: Optional[str] = Query(None),
+    # Was `Query(...)`. See the note on `ws_user`. DEPRECATED: removed after one release.
+    token: Optional[str] = Query(None),
+):
     """
     PHASE 14: Optimized Dashboard WebSocket for realtime updates only.
     
@@ -938,7 +1038,7 @@ async def ws_dashboard(websocket: WebSocket, token: str = Query(...), user_id: s
     """
     manager = get_ws_manager()
 
-    if not await _validate_ws_token(token, user_id):
+    if not await _resolve_ws_subject(ticket=ticket, token=token, claimed_user_id=user_id):
         await websocket.close(code=4001, reason="Unauthorized")
         return
 
@@ -1080,8 +1180,10 @@ async def broadcast_dashboard_update(user_id: str, update_type: str, data: dict)
 async def ws_strategy(
     websocket: WebSocket,
     strategy_id: str,
-    token: str = Query(...),
-    user_id: str = Query(...)
+    user_id: str = Query(...),
+    ticket: Optional[str] = Query(None),
+    # Was `Query(...)`. See the note on `ws_user`. DEPRECATED: removed after one release.
+    token: Optional[str] = Query(None),
 ):
     """
     PHASE 14: Strategy-specific WebSocket for realtime updates.
@@ -1096,11 +1198,35 @@ async def ws_strategy(
     """
     manager = get_ws_manager()
 
-    if not await _validate_ws_token(token, user_id):
+    if not await _resolve_ws_subject(ticket=ticket, token=token, claimed_user_id=user_id):
         await websocket.close(code=4001, reason="Unauthorized")
         return
 
-    # Verify user owns the strategy
+    # Verify user owns the strategy.
+    #
+    # This is the ONE route whose authorisation needs more than an identity: the
+    # ownership read runs as the user, under their JWT, so `strategies` RLS is what
+    # actually enforces it. A ticket resolves to a subject and carries no JWT, so on a
+    # ticket-only connection there is nothing to scope that read with — and an
+    # unscoped read would move this check from "RLS says it is theirs" to "we compared
+    # two strings we were handed", which is a weaker control than the one that is here
+    # now. So it is refused, explicitly and by name, rather than downgraded.
+    #
+    # KNOWN LIMITATION, and it is the frontend flip's problem to solve, not this
+    # commit's: `/ws/strategy` cannot be served by a ticket alone. Either the ticket
+    # store has to hold the session JWT as well as the subject (a new secret at rest,
+    # with its own decision to make), or this ownership read has to move to a
+    # server-side identity. Until one of those lands, a ticket-only client must not be
+    # pointed at this route expecting it to open.
+    if not token:
+        logger.warning(
+            "[WS/strategy] Refused: the ownership check for %s requires the session "
+            "JWT, and this connection presented a ticket only.",
+            strategy_id,
+        )
+        await websocket.close(code=4003, reason="Forbidden")
+        return
+
     from backend_app.core.dependencies import create_request_supabase_async
     sb_res = create_request_supabase_async(token)
     sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
@@ -1190,9 +1316,11 @@ async def broadcast_strategy_update(strategy_id: str, update_type: str, data: di
 @ws_router.websocket("/ws/signal-trace")
 async def ws_signal_trace(
     websocket: WebSocket,
-    token: str = Query(...),
     user_id: str = Query(...),
-    strategy_id: Optional[str] = Query(None)
+    strategy_id: Optional[str] = Query(None),
+    ticket: Optional[str] = Query(None),
+    # Was `Query(...)`. See the note on `ws_user`. DEPRECATED: removed after one release.
+    token: Optional[str] = Query(None),
 ):
     """
     PHASE 10: Signal Trace WebSocket for realtime updates.
@@ -1208,7 +1336,7 @@ async def ws_signal_trace(
     """
     manager = get_ws_manager()
 
-    if not await _validate_ws_token(token, user_id):
+    if not await _resolve_ws_subject(ticket=ticket, token=token, claimed_user_id=user_id):
         await websocket.close(code=4001, reason="Unauthorized")
         return
 
