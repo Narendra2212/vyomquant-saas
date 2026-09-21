@@ -30,7 +30,10 @@
  *   category. Note this replaced a legacy eight-key lowercase vocabulary
  *   (`indicators`, `ml`, `dl`, …) whose shape is what made the SB-04 category mapping
  *   possible in the first place.
- * * A category → icon/colour map, plus the two lookups the canvas and palette call.
+ * * A category → icon/colour map, plus the two lookups the canvas and palette call. Both
+ *   are now *derived* from `design/semantic.js`'s stage band declaration (`§9.1`,
+ *   Requirement 5.1) rather than chosen here, so the palette icon and the canvas icon for a
+ *   category cannot disagree — see the mapping note on `CATEGORY_PRESENTATION` below.
  *
  * Where blocks come from now
  * --------------------------
@@ -51,8 +54,8 @@
  * `GET /api/strategies/blocks`, and nothing calls it any more.
  */
 
-import { Activity, Brain, Check, Cpu, Database, GitBranch, Settings } from 'lucide-react';
-import { C } from '../components/ui-legacy/primitives';
+import { Activity, Brain, Cpu, Database, GitBranch, HelpCircle, Sigma, Zap } from 'lucide-react';
+import { stageBandFor, stageIconFor } from '../design/semantic';
 import { BLOCK_CATEGORIES, PORT_TYPES } from './canonicalGraph';
 
 /** Identity map over a frozen list of ids: `{ SIGNAL: 'SIGNAL', … }`. */
@@ -75,23 +78,67 @@ export const StreamTypes = identityMap(PORT_TYPES);
 export const BlockCategories = identityMap(BLOCK_CATEGORIES);
 
 /**
+ * The lucide components for the icon *names* `design/semantic.js` declares.
+ *
+ * `semantic.js` names icons as strings rather than importing React, so that guards, tests and
+ * non-component code can read the stage band table. This object is where those names become
+ * components, the same resolution `ds/Panel.jsx` performs for the environment glyphs.
+ */
+const STAGE_ICONS = Object.freeze({
+  Database,
+  Activity,
+  Sigma,
+  Cpu,
+  GitBranch,
+  Brain,
+  Zap,
+  HelpCircle,
+});
+
+/**
  * Category → icon and colour. Presentation only: no ports, no parameters, no defaults,
  * nothing that could change what a strategy does.
+ *
+ * **The seven categories over five stage bands** (`design.md §9.1`, Requirement 5.1). The
+ * backend serves seven `BlockCategory` values and Requirement 5.1 names five data-flow
+ * stages, so three categories collapse into one band:
+ *
+ * | Stage band          | Categories                              | Why they collapse |
+ * | ------------------- | --------------------------------------- | ----------------- |
+ * | 1 · Market data     | `DATA`                                  | the only source stage — every graph starts here |
+ * | 2 · Transform       | `INDICATOR`, `MATH`, `FEATURE_ENGINEERING` | all three read a series and return a series; a trader reads them as one step, and the engine treats them as one too (they share the port-type vocabulary) |
+ * | 3 · Logic          | `LOGIC`                                 | the only stage that turns numbers into a decision |
+ * | 4 · Model          | `ML_DL`                                 | inference is its own stage because it can fail for reasons no other stage has (no trained model, warming) |
+ * | 5 · Action         | `ACTION`                                | the only stage with an external effect |
+ *
+ * The five stages stay authoritative for *layout* — lane order, lane header, stage number —
+ * and the seven categories stay authoritative for *identity*: the name and icon below are
+ * per category, not per band, which is why `FEATURE_ENGINEERING` still draws `Cpu` inside
+ * stage 2 rather than borrowing `INDICATOR`'s `Activity`.
+ *
+ * Derived from `stageBandFor`/`stageIconFor` rather than restated, so this map cannot drift
+ * from the one the canvas draws. The colour is a *band* colour and is spent on an edge — a
+ * border, a rule, an icon — never on a node body (Requirement 1.5).
  */
-export const CATEGORY_PRESENTATION = Object.freeze({
-  DATA: Object.freeze({ icon: Database, color: C.t2 }),
-  INDICATOR: Object.freeze({ icon: Activity, color: C.accent }),
-  MATH: Object.freeze({ icon: GitBranch, color: C.gold }),
-  LOGIC: Object.freeze({ icon: Settings, color: C.gold }),
-  FEATURE_ENGINEERING: Object.freeze({ icon: Cpu, color: C.cyan }),
-  ML_DL: Object.freeze({ icon: Brain, color: C.purple }),
-  ACTION: Object.freeze({ icon: Check, color: C.green }),
-});
+export const CATEGORY_PRESENTATION = Object.freeze(
+  BLOCK_CATEGORIES.reduce((map, category) => {
+    map[category] = Object.freeze({
+      icon: STAGE_ICONS[stageIconFor(category)],
+      color: stageBandFor(category).fg,
+    });
+    return map;
+  }, {}),
+);
 
 /** Neutral presentation for an id this map does not know. Never a thrown error: an unknown
  * category is a display question, and refusing to draw an icon would hide a block that the
- * backend says exists. */
-const FALLBACK_PRESENTATION = Object.freeze({ icon: Activity, color: C.t2 });
+ * backend says exists. It resolves to §9.1's neutral sixth "Unresolved" band, whose
+ * `HelpCircle` is the same "we do not know" glyph an unconfirmed environment gets, so one
+ * unknown reads the same way everywhere. */
+const FALLBACK_PRESENTATION = Object.freeze({
+  icon: STAGE_ICONS[stageIconFor(null)],
+  color: stageBandFor(null).fg,
+});
 
 /**
  * Canonical category id for `category`, or null when it names no known category.

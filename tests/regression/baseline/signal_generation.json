@@ -84,6 +84,14 @@
         "worker_id"
       ],
       "table": "signals"
+    },
+    {
+      "_baseline_note_entry": "AUTHORISED RE-RECORD \u2014 this WHOLE ENTRY IS NEW (vyomquant-ui-redesign task 12.3's follow-up, BC-3). ONE ADDITION to `generate_signal_collaborator_sequence`; nothing else in this file moved. WHY THE WRITE EXISTS: BC-3 added `last_signal_at` to the `GET /api/strategies` list projection, but no migration declared the column and nothing on any path wrote it, so the field reported `null` on every database, permanently \u2014 exactly the condition task 12's preamble rules out (\"no field's not-available state is its permanent outcome\"). A projection that can only ever answer `null` is not a field, it is a promise the backend cannot keep. THE PRODUCER THAT CLOSED IT: `backend_app/migrations/015_strategy_last_signal_at.sql` declares the column, and `backend_app/backend/strategy_last_signal.py::record_last_signal_at` performs the `strategies.update` recorded here. It is called from `signal_service._persist_signal` and from `SignalService.create_signal`, in both cases only AFTER the signal row is confirmed persisted \u2014 which is why it appears at the END of this sequence, after the `signals` insert, never before it. WHY AN ADDED WRITE ON THIS PATH IS ACCEPTABLE AT ALL \u2014 IT IS ISOLATED FROM THE SIGNAL PATH IN BOTH DIRECTIONS: the update is scheduled with `asyncio.create_task` and is NEVER AWAITED by the signal path, so it can neither raise into it nor delay it, and `record_last_signal_at` additionally catches `BaseException` and returns a bool rather than propagating anything to its caller. That isolation is the whole authorisation: a signal is minted, persisted and returned exactly as captured whether this write succeeds, fails, or never runs at all. THE REST OF THE CAPTURE IS THE EVIDENCE: `generate_signal_returns_state` is still `GENERATED`, the `signals` select and insert are unchanged in content and in order, and the recorded record fields, types, values and refusals are all as captured. SCOPE: this note covers this one sequence entry. Any other addition to a recorded collaborator sequence, in this file or another, is a failure in its own right, whether or not this note sits nearby.",
+      "call": "postgrest.update",
+      "columns": [
+        "last_signal_at"
+      ],
+      "table": "strategies"
     }
   ],
   "generate_signal_returns_state": "GENERATED",

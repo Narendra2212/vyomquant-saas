@@ -1,9 +1,41 @@
 /**
  * Portfolio API Module
- * 
+ *
  * Endpoints: /api/portfolio/*
+ *
+ * ---------------------------------------------------------------------------
+ * EIGHT DEAD METHODS REMOVED — vyomquant-ui-redesign tasks 10.10 and 13.1
+ * design.md §1.4, §7.6. Requirement 19.4.
+ * ---------------------------------------------------------------------------
+ * `backend_app/routers/portfolio.py` registers exactly six routes — `/summary`,
+ * `/equity-curve`, `/allocation`, `/heatmap`, `/recent-transactions`,
+ * `/close-all`. This module now declares exactly the five reads among them that
+ * it has a caller for. Eight further methods used to sit here with no route
+ * behind any of them, so every one of the eight always 404d. A documented client
+ * method that cannot succeed is a non-functional API surface (Requirement 19.4).
+ *
+ * Task 10.10 removed the six with no call site: `getPosition`, `closePosition`,
+ * `getPositionHistory`, `getBalance`, `getPnL`, `getPerformance`.
+ * `closePosition` was the one that mattered — it read as a working
+ * position-close and was not one. The only `POST /positions/{id}/close` in the
+ * tree belongs to `backend_app/backend/portfolio_management.py`, mounted at
+ * `/api/internal/portfolio-mgmt` behind `Depends(get_admin_user)`: a different
+ * prefix, and unreachable for a trader either way.
+ *
+ * Task 13.1 removes the last two, `getOpenPositions` and `getPositions`. They
+ * had to wait because `pages/Portfolio.jsx` called them —
+ * `getOpenPositions().catch(() => getPositions())`, a chain that 404d twice and
+ * left the live positions table empty for every trader on every load. Deleting
+ * them ahead of that page would have turned a 404 into a `TypeError`, which is
+ * the worse failure. That read now points at `GET /api/dashboard`, which returns
+ * a real normalised `positions[]` (design.md §7.1, §7.6), so the two methods
+ * have no caller and no route and are gone. The internal admin-only
+ * `GET /positions` remains the only other positions route in the tree, and it is
+ * not this module's to expose.
+ *
+ * This module is a read surface. `get` is the only verb it needs.
  */
-import { get, post, put, del } from '../../apiClient';
+import { get } from '../../apiClient';
 
 /**
  * @typedef {Object} Position
@@ -36,91 +68,6 @@ export const portfolioApi = {
    */
   getSummary: async () => {
     return get('/api/portfolio/summary');
-  },
-
-  /**
-   * Get all positions
-   * @param {Object} [filters] - Optional filters
-   * @param {string} [filters.symbol] - Filter by symbol
- * @param {string} [filters.side] - Filter by side
-   * @returns {Promise<Position[]>}
-   */
-  getPositions: async (filters = {}) => {
-    const params = new URLSearchParams(filters);
-    return get(`/api/portfolio/positions?${params}`);
-  },
-
-  /**
-   * Get position by ID
-   * @param {string} positionId - Position ID
-   * @returns {Promise<Position>}
-   */
-  getPosition: async (positionId) => {
-    return get(`/api/portfolio/positions/${positionId}`);
-  },
-
-  /**
-   * Close a position
-   * @param {string} positionId - Position ID
-   * @param {Object} [options] - Optional parameters
-   * @param {number} [options.quantity] - Quantity to close (default: all)
-   * @returns {Promise<{success: boolean, message: string}>}
-   */
-  closePosition: async (positionId, options = {}) => {
-    return post(`/api/portfolio/positions/${positionId}/close`, options);
-  },
-
-  /**
-   * Get position history
-   * @param {Object} [filters] - Optional filters
-   * @param {string} [filters.symbol] - Filter by symbol
-   * @param {string} [filters.startDate] - Start date
-   * @param {string} [filters.endDate] - End date
-   * @param {number} [filters.limit] - Limit results
-   * @returns {Promise<Position[]>}
-   */
-  getPositionHistory: async (filters = {}) => {
-    const params = new URLSearchParams(filters);
-    return get(`/api/portfolio/positions/history?${params}`);
-  },
-
-  /**
-   * Get portfolio balance
-   * @returns {Promise<{balance: number, available: number, used: number}>}
-   */
-  getBalance: async () => {
-    return get('/api/portfolio/balance');
-  },
-
-  /**
-   * Get portfolio PnL
-   * @param {Object} [filters] - Optional filters
-   * @param {string} [filters.startDate] - Start date
-   * @param {string} [filters.endDate] - End date
-   * @returns {Promise<{realizedPnl: number, unrealizedPnl: number, totalPnl: number}>}
-   */
-  getPnL: async (filters = {}) => {
-    const params = new URLSearchParams(filters);
-    return get(`/api/portfolio/pnl?${params}`);
-  },
-
-  /**
-   * Get portfolio performance metrics
-   * @param {Object} [filters] - Optional filters
-   * @param {string} [filters.period] - Time period: '1d', '1w', '1m', '1y'
-   * @returns {Promise<Object>}
-   */
-  getPerformance: async (filters = {}) => {
-    const params = new URLSearchParams(filters);
-    return get(`/api/portfolio/performance?${params}`);
-  },
-
-  /**
-   * Get open positions only
-   * @returns {Promise<Position[]>}
-   */
-  getOpenPositions: async () => {
-    return get('/api/portfolio/positions/open');
   },
 
   /**

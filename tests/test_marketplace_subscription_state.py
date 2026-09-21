@@ -118,11 +118,22 @@ class TestPaymentGate:
         assert can_transition(source, S.ACTIVE) is True
         assert requires_confirmed_payment(S.ACTIVE) is True
 
-    def test_payment_failed_reaches_active_only_by_way_of_pending(self):
-        """Requirement 11.6 names ``PAYMENT_FAILED`` among the sources that reach ``ACTIVE``,
-        but Requirement 11.2's twelve pairs carry no ``PAYMENT_FAILED -> ACTIVE`` edge: a
-        failed payment goes back to ``PENDING`` and is paid from there. The gate is on the
-        target, so that route is covered by ``PENDING -> ACTIVE`` above."""
+    def test_the_requirement_11_2_table_carries_no_payment_failed_to_active_edge(self):
+        """This module is Requirement 11.2's twelve pairs, and 11.2 gives ``PAYMENT_FAILED``
+        one successor: ``PENDING``. So ``can_transition(PAYMENT_FAILED, ACTIVE)`` is ``False``
+        here, and the route 11.2 describes is ``PAYMENT_FAILED -> PENDING -> ACTIVE``.
+
+        Requirement 11.6 contradicts that by naming ``PAYMENT_FAILED`` among the sources of a
+        transition into ``ACTIVE``. Task 19.2 resolved the contradiction in favour of 11.6 - a
+        retried payment that later confirms must activate the Subscription it paid for - and
+        the resolution lives in the two places that act on it, NOT in this table:
+        ``settlement_service.ELIGIBLE_FOR_ACTIVATION`` (five statuses: these four plus
+        ``payment_failed``) and ``012_subscription_payment_failed_activation.sql``, which seeds
+        the matching edge so ``trg_subscription_transition_guard`` admits it (task 19.15).
+        ``tests/test_submission_state_agreement.py`` holds the two together.
+
+        This table is deliberately left at Requirement 11.2's twelve pairs so the requirement
+        it transcribes stays legible and the addendum stays visible as an addendum."""
         assert can_transition(S.PAYMENT_FAILED, S.ACTIVE) is False
         assert can_transition(S.PAYMENT_FAILED, S.PENDING) is True
         assert can_transition(S.PENDING, S.ACTIVE) is True

@@ -379,7 +379,7 @@ exactly the amount recorded.
 3. IF a write would set a Subscription_State to a value not reachable from its current value under Criterion 2, THEN THE Persistence_Layer SHALL reject the write, SHALL leave the stored Subscription_State and the stored period start and expiry unchanged, and SHALL return an error indicating a disallowed Subscription_State transition.
 4. WHEN a Subscription becomes `ACTIVE`, THE Marketplace SHALL set the period start to the payment confirmation instant in UTC and the period expiry to the same clock time one calendar month later in UTC, clamping the day of month to the last valid day of the target month where the start day does not exist in that month.
 5. WHEN a Subscription is renewed by a confirmed payment, THE Marketplace SHALL set the new expiry to one calendar month after the later of the current expiry and the confirmation instant, computed by the same rule as Criterion 4.
-6. THE Marketplace SHALL require a payment confirmed through the Billing_Integration and recorded as a Settlement_Record before every transition into `ACTIVE`, from any of `PENDING`, `EXPIRED`, `CANCELLED` and `PAYMENT_FAILED`.
+6. THE Marketplace SHALL require a payment confirmed through the Billing_Integration and recorded as a Settlement_Record before every transition into `ACTIVE`, from any of `PENDING`, `EXPIRED`, `CANCELLED` and `PAYMENT_FAILED`, AND from `SUSPENDED` in every case except the Administrative_Reinstatement of Criterion 17.
 7. WHILE the current UTC time is at or after a Subscription's expiry and no renewal payment has been confirmed, THE Entitlement_Resolver SHALL treat that Subscription as not entitling, irrespective of the stored Subscription_State value and irrespective of whether the expiry sweep of Criterion 8 has yet run for that Subscription.
 8. THE Marketplace SHALL run an expiry sweep at an interval no greater than 60 seconds that transitions every Subscription whose expiry is at or before the current UTC time and whose Subscription_State is `ACTIVE` or `SUSPENDED` to `EXPIRED`.
 9. WHEN a purchaser cancels a Subscription, THE Marketplace SHALL perform no further renewal for that Subscription, SHALL retain entitlement until the unchanged current expiry, and SHALL transition the Subscription to `CANCELLED` with the cancellation instant recorded in UTC.
@@ -390,6 +390,25 @@ exactly the amount recorded.
 14. IF a request would transition a Subscription into `ACTIVE` without a payment confirmed through the Billing_Integration for that Subscription_Period, THEN THE Marketplace SHALL reject the request, SHALL leave the stored Subscription_State, period start and expiry unchanged, and SHALL return an error indicating that a confirmed payment is required.
 15. WHEN a Subscription ceases to entitle, THE Marketplace SHALL stop every running deployment and every running Paper_Session for that Listing's strategy owned by that purchaser within 60 seconds of the instant entitlement ceased.
 16. THE Marketplace SHALL remove the existing `renew_subscription` path that transitions a Subscription to `ACTIVE`, clears its expiry and grants deployment permission without a payment confirmed through the Billing_Integration.
+17. WHERE a Subscription's Subscription_State is `SUSPENDED`, THE Marketplace SHALL permit an Administrative_Reinstatement to `ACTIVE` with no payment confirmed through the Billing_Integration for that request, AND THE Marketplace SHALL leave the period start, the period expiry and their retained mirrors unchanged, SHALL write no Settlement_Record, SHALL transfer no value, AND SHALL admit the Administrative_Reinstatement only where a non-reversal Settlement_Record exists for that Subscription whose settlement instant is at or before the stored period expiry.
+18. THE Administrative_Reinstatement SHALL be performed only by an Admin_Reviewer whose identity is resolved from the authenticated server-side session, AND THE Marketplace SHALL refuse the request with an authorisation error, changing nothing, WHERE the caller is not an Admin_Reviewer.
+19. IF an Administrative_Reinstatement request names a Subscription whose Subscription_State is not `SUSPENDED`, or whose stored period expiry is null, or for which no non-reversal Settlement_Record satisfying Criterion 17 exists, or would move the period start or the period expiry, THEN THE Marketplace SHALL reject the request, SHALL leave the stored Subscription_State, period start and expiry unchanged, SHALL write no Settlement_Record, and SHALL return an error indicating that a confirmed payment is required.
+20. IF an Administrative_Reinstatement request carries no reason, or a reason containing no visible text, THEN THE Marketplace SHALL reject the request and SHALL leave the stored Subscription_State, period start and expiry unchanged.
+21. WHEN a Subscription is reinstated under Criterion 17, THE Marketplace SHALL write one Audit_Log entry naming the acting Admin_Reviewer, the Subscription, the prior Subscription_State, the new Subscription_State, the reason and the UTC timestamp, SHALL write one Subscription_State transition record whose prior value is `SUSPENDED`, whose new value is `ACTIVE` and whose cause is distinct from the cause recorded for a transition into `ACTIVE` that a confirmed payment produced, AND SHALL leave the Subscription_State at `SUSPENDED` WHERE the Audit_Log entry cannot be written.
+22. THE Persistence_Layer SHALL admit a transition from `SUSPENDED` to `ACTIVE` with no new Settlement_Record only where the period start and the period expiry are unchanged by the write and a non-reversal Settlement_Record for that Subscription was settled at or before the stored period expiry, AND SHALL continue to reject every other transition into `ACTIVE` for which no non-reversal Settlement_Record settled at or after the stored period expiry exists.
+
+**Decision recorded, Criteria 17–22 (resolving Criterion 2 against Criterion 6 for `SUSPENDED`).**
+Criterion 2 permits `SUSPENDED → ACTIVE` while Criterion 6 omits `SUSPENDED` from the sources
+that require a confirmed payment, so the edge existed with no stated payment rule and the
+implementation took the stricter reading — leaving a purchaser suspended by an administrator with
+no route back to access they had already paid for except buying a fresh month. The resolution is
+that **a suspension is a hold, not a refund**: the Subscription_Period the purchaser paid for
+remains theirs, so lifting the hold restores the *remaining* period rather than selling a new one.
+Criterion 17's settlement condition is what keeps Criterion 14 true — a Subscription that never
+paid has no qualifying Settlement_Record and therefore cannot be reinstated into access it never
+bought — and Criterion 7 keeps an elapsed period non-entitling irrespective of the restored
+Subscription_State value, so a reinstatement after the expiry restores the label and grants
+nothing.
 
 ---
 

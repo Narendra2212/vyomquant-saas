@@ -1,8 +1,48 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
-import { endpoints } from '../api';
-import { useDataPipeline } from './DataPipelineContext';
-import { useIndicatorEngine } from './IndicatorEngineContext';
-import { useLogicEngine } from './LogicEngineContext';
+import React, { createContext, useContext, useState, useCallback } from 'react';
+// Task 10.8. `extractErrorMessage` and `getErrorType` are deleted from
+// `ui-legacy/primitives.jsx`: the first fell through to `JSON.stringify(detail)` and then
+// `err.message`, so a backend traceback reached the screen verbatim (Requirement 14.4). The
+// words now come from `design/errorCopy.js` and no branch below reads `err.message`.
+import { errorLine } from '../design/errorLine';
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * STRATEGY ENGINE — local plan building. No network call path.
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `production-launch-hardening` task **9.2**. Requirements 1.27, 2.27. Preservation 3.7.
+ *
+ * `executeStrategy` used to `await post('/strategy/execute', …)`, with the same two independent
+ * defects as its two sibling contexts: `post` was never imported, so the expression raised
+ * `ReferenceError: post is not defined` before a request existed; and `/strategy/execute` is
+ * declared by no route on this backend. `IndicatorEngineContext.jsx`'s header carries the full
+ * argument. The disposition is removal because nothing in `src/` calls `useStrategyEngine` —
+ * which the comment that used to sit inside `executeStrategy` already said.
+ *
+ * THIS FILE IS THE ONE OF THE THREE WITH REAL LOCAL COMPUTATION, AND IT IS KEPT
+ * ---------------------------------------------------------------------------
+ * `parseGraphToExecutionPlan` below builds the whole execution plan from the canvas with no
+ * network at all: the data source, the indicator list, the logic conditions, the execution
+ * rules, the graph projection, plus connectivity and cycle validation. It is unchanged, byte
+ * for byte, including SB-06 — an unset symbol or timeframe is an error naming the field, never
+ * a substituted default (tasks 3.9 and 7.3, Requirements 12.3 and 12.4).
+ *
+ * What never existed locally is the part that *runs* the plan. That is the half removed.
+ *
+ * REMOVED WITH THE CALL PATH
+ * --------------------------
+ *   * `executionCache` / `clearExecutionCache` and `lastExecution` — written only from a
+ *     response, so with no response the cache could never hold an entry and its lookup branch
+ *     was unreachable.
+ *   * the response mapping onto `{signals, charts, metrics, trades, performance}`.
+ *   * `executionError.type` and the `resolveCategory` import that produced it. That field held
+ *     `ApiError`'s HTTP-status vocabulary, and with no HTTP request no `ApiError` can arrive, so
+ *     it could only ever have read `UNKNOWN_ERROR`. Task 10.8 kept it deliberately, on the
+ *     grounds that a message-translation change should not alter a state shape; this task
+ *     changes the call path, so it goes.
+ *   * `isExecuting` as a state cell — published as the constant `false`, because with no request
+ *     there is no in-flight period.
+ */
 
 export const StrategyEngineContext = createContext(null);
 
@@ -13,10 +53,7 @@ export const useStrategyEngine = () => {
 };
 
 export const StrategyEngineProvider = ({ children }) => {
-  const [executionCache, setExecutionCache] = useState(new Map());
-  const [isExecuting, setIsExecuting] = useState(false);
   const [executionError, setExecutionError] = useState(null);
-  const [lastExecution, setLastExecution] = useState(null);
 
   // Generate unique execution ID using CSPRNG (replaces Math.random)
   const generateExecutionId = useCallback(() => {
@@ -255,77 +292,31 @@ export const StrategyEngineProvider = ({ children }) => {
     };
   }, [generateExecutionId]);
 
-  // Execute strategy via single API call (STEP 3)
-  const executeStrategy = useCallback(async (executionPlan, options = {}) => {
-    if (!executionPlan) {
-      throw new Error('No execution plan provided');
-    }
+  /**
+   * Refuse to run a plan — there is nothing here that runs one.
+   *
+   * Always rejects, and always with a line `design/errorCopy.js` authors. Two distinct causes,
+   * carried on `cause` rather than in the copy: no plan was handed over at all, or there is no
+   * execution engine this client can reach. Building the plan is `parseGraphToExecutionPlan`'s
+   * job and it still does it locally.
+   *
+   * @param {Object} executionPlan - The plan `parseGraphToExecutionPlan` produced.
+   * @returns {Promise<never>}
+   */
+  const executeStrategy = useCallback(async (executionPlan) => {
+    const cause = executionPlan
+      ? new Error('No strategy execution engine is reachable from the client')
+      : new Error('No execution plan provided');
 
-    const cacheKey = `exec_${JSON.stringify(executionPlan.pipeline)}`;
+    const message = errorLine(cause, 'builder');
+    setExecutionError({
+      message,
+      executionId: executionPlan?.executionId ?? null,
+      timestamp: new Date().toISOString(),
+    });
 
-    // Check cache (STEP 8)
-    if (executionCache.has(cacheKey) && !options.skipCache) {
-      console.log('Using cached execution results');
-      return executionCache.get(cacheKey);
-    }
-
-    setIsExecuting(true);
-    setExecutionError(null);
-
-    try {
-      // Single API call to backend
-      const response = await post('/strategy/execute', {
-        plan: executionPlan,
-        options: {
-          mode: options.mode || 'backtest',
-          generateCharts: options.generateCharts !== false,
-          generateMetrics: options.generateMetrics !== false,
-          ...options
-        }
-      });
-
-      if (!response) {
-        throw new Error('Empty response from strategy engine');
-      }
-
-      // Map backend output (STEP 4)
-      const executionResult = {
-        executionId: executionPlan.executionId,
-        status: response.status || 'completed',
-        signals: response.signals || [],
-        charts: response.charts || {},
-        metrics: response.metrics || {},
-        trades: response.trades || [],
-        performance: response.performance || {},
-        metadata: {
-          executedAt: new Date().toISOString(),
-          backendVersion: response.version,
-          ...response.metadata
-        }
-      };
-
-      // Cache results
-      setExecutionCache(prev => new Map(prev).set(cacheKey, executionResult));
-      setLastExecution(executionResult);
-
-      return executionResult;
-    } catch (err) {
-      // 🔴 STEP 11: Extract clear error message from backend response
-      const errorMsg = extractErrorMessage(err, 'Strategy execution failed');
-      const errorType = getErrorType(err);
-
-      setExecutionError({
-        type: errorType,
-        message: errorMsg,
-        executionId: executionPlan.executionId,
-        timestamp: new Date().toISOString()
-      });
-
-      throw new Error(errorMsg);
-    } finally {
-      setIsExecuting(false);
-    }
-  }, [executionCache]);
+    throw new Error(message, { cause });
+  }, []);
 
   // Validate before execution (STEP 6)
   const validateStrategy = useCallback((nodes, edges) => {
@@ -333,20 +324,14 @@ export const StrategyEngineProvider = ({ children }) => {
     return { valid, errors, warnings };
   }, [parseGraphToExecutionPlan]);
 
-  // Clear execution cache
-  const clearExecutionCache = useCallback(() => {
-    setExecutionCache(new Map());
-  }, []);
-
   const value = {
     parseGraphToExecutionPlan,
     executeStrategy,
     validateStrategy,
-    executionCache,
-    clearExecutionCache,
-    isExecuting,
+    // Constant, not a state cell: see the header. Published so a refusal cannot leave the
+    // builder showing a spinner.
+    isExecuting: false,
     executionError,
-    lastExecution,
     generateExecutionId
   };
 

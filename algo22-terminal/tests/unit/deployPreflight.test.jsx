@@ -5,8 +5,10 @@
  *
  * WHAT IS ASSERTED, AND WHY EACH PART MATTERS
  * ===========================================
- * * **The endpoint.** `POST /api/strategy-operations/strategies/{id}/versions/{version}/
- *   deploy`, addressed to the strategy's own current version, with the
+ * * **The endpoint.** `POST /api/strategies/{id}/versions/{version}/deploy` — the
+ *   unprefixed spelling, which is the only one `deploy_version` registers; see the
+ *   `deploy_version path` block below, which pins it against the router source. Addressed
+ *   to the strategy's own current version, with the
  *   `DeploymentBindingRequest` body — and *only* that model's fields. The legacy
  *   `POST /api/strategies/{id}/deploy` binds no account, no risk configuration and no mode
  *   and travels no gate, so a deploy still reaching it would not satisfy Requirement 11.5;
@@ -27,10 +29,23 @@
  * (`"deploy_prerequisites"`), which the summary prepends.
  *
  * The per-condition panel is task 18.1's subject and is deliberately not asserted here.
+ *
+ * TASK 17.2c — THE SURFACE MOVED, THE REQUEST DID NOT
+ * ===================================================
+ * The page-level block at the bottom was written against the hand-rolled modal: an inline
+ * `Deploy` button, a `DEPLOYMENT ORCHESTRATION` eyebrow and a `Confirm & Deploy` footer. Task
+ * 17.2a partitioned the deployment into the row's overflow menu (Requirement 4.3) and task
+ * 17.2c rebuilt the modal on `ds/ConfirmDialog`, so those three handles are gone and the block
+ * had been failing on the first of them. It is repaired here rather than deleted, because what
+ * it asserts — the endpoint, the body, and the gate that stands in front of both — is exactly
+ * what must not have changed, and the four assertions added at the end cover what did: the
+ * live-versus-paper treatment (Requirements 4.3, 8.5), §8.4's real-funds acknowledgement
+ * sitting ON TOP of the preflight gate rather than beside it, a label on every control
+ * (Requirements 15.1, 18.4), and the capital field's own validity.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, renderHook, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, renderHook, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -50,6 +65,10 @@ import {
   normalizePreflight,
   preflightQueryKey,
 } from '../../src/lib/deployPreflight';
+// Task 17.2c: the modal's title, confirm label and real-funds sentence are `deployFlow.js`'s,
+// so they are READ here rather than restated. A test that spelled them out again would pass
+// while the page and the flow disagreed.
+import { ACKNOWLEDGEMENT_LABEL, deployPresentation } from '../../src/lib/deployFlow';
 
 // ══════════════════════════════════════════════════════════════════════════════════════
 // FIXTURES — the wire shapes
@@ -354,7 +373,7 @@ describe('strategiesApi.deployVersion', () => {
 
     expect(mockClient.post).toHaveBeenCalledTimes(1);
     const [url, sent, config] = mockClient.post.mock.calls[0];
-    expect(url).toBe('/api/strategy-operations/strategies/s-1/versions/1.2/deploy');
+    expect(url).toBe('/api/strategies/s-1/versions/1.2/deploy');
     expect(sent).toEqual(body);
     // The legacy column rides the query string; the request model has no field for it.
     expect(config).toEqual({ params: { environment: 'live' } });
@@ -364,8 +383,79 @@ describe('strategiesApi.deployVersion', () => {
     mockClient.post.mockResolvedValue({});
     await strategiesApi.deployVersion('a/b', 'v 1', {});
     expect(mockClient.post.mock.calls[0][0]).toBe(
-      '/api/strategy-operations/strategies/a%2Fb/versions/v%201/deploy',
+      '/api/strategies/a%2Fb/versions/v%201/deploy',
     );
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+// THE PATH ↔ THE REGISTRATION — the pin
+// ══════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * The deploy path, asserted against the backend's own route declarations.
+ *
+ * A hardcoded expected string (the two cases above) says "this is the path"; it cannot say
+ * "and it is the path because that is what the server registers". This block derives the
+ * expectation from `backend_app/routers/strategy_operations.py` and the mount prefix in
+ * `backend_app/main.py`, which is the same technique `src/api/modules/__tests__/
+ * libraryApi.test.js` uses against `library.py`. The repository is a monorepo and CI runs a
+ * full `actions/checkout`, so both files are on disk when this runs.
+ *
+ * Why it is worth deriving: `deploy_version` declares **one** route, the unprefixed
+ * `/strategies/{strategy_id}/versions/{version}/deploy`, while its sibling
+ * `preflight_deploy_version` registers *both* spellings (`_PREFLIGHT_PATHS`) and
+ * `execute_backtest` carries two decorators. That asymmetry is what made the frontend's
+ * `strategy-operations`-prefixed POST look right — the preflight GET answered, the gate
+ * passed, the button enabled, and only the POST 404'd. If the backend ever adds the alias,
+ * this fails and says so rather than quietly permitting either spelling.
+ */
+describe('strategiesApi.deployVersion path ↔ strategy_operations.deploy_version', () => {
+  const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
+  const ROUTER = path.join(REPO_ROOT, 'backend_app', 'routers', 'strategy_operations.py');
+  const MAIN = path.join(REPO_ROOT, 'backend_app', 'main.py');
+
+  /** Every declared route path ending in `/versions/{version}/deploy` — `/preflight` excluded. */
+  const declaredDeployPaths = (source) =>
+    [...source.matchAll(/@router\.post\(\s*["']([^"']+)["']/g)]
+      .map((m) => m[1])
+      .filter((p) => /\/versions\/\{version\}\/deploy$/.test(p));
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('registers exactly one spelling, and it is the unprefixed one', () => {
+    const source = readFileSync(ROUTER, 'utf-8');
+    expect(declaredDeployPaths(source)).toEqual([
+      '/strategies/{strategy_id}/versions/{version}/deploy',
+    ]);
+  });
+
+  it('mounts that router at /api', () => {
+    const main = readFileSync(MAIN, 'utf-8');
+    const mount = main.match(
+      /include_router\(\s*strategy_operations\.router\s*,\s*prefix=["']([^"']+)["']/,
+    );
+    expect(mount, 'strategy_operations.router must be mounted in main.py').not.toBeNull();
+    expect(mount[1]).toBe('/api');
+  });
+
+  it('posts to the mount prefix + the declared route, not the strategy-operations alias', async () => {
+    const source = readFileSync(ROUTER, 'utf-8');
+    const main = readFileSync(MAIN, 'utf-8');
+    const prefix = main.match(
+      /include_router\(\s*strategy_operations\.router\s*,\s*prefix=["']([^"']+)["']/,
+    )[1];
+    const expected = `${prefix}${declaredDeployPaths(source)[0]}`
+      .replace('{strategy_id}', 's-1')
+      .replace('{version}', '1.2');
+
+    mockClient.post.mockResolvedValue({ success: true });
+    await strategiesApi.deployVersion('s-1', '1.2', { mode: 'paper' });
+
+    expect(mockClient.post.mock.calls[0][0]).toBe(expected);
+    // Stated literally too, so the intent survives a change to the derivation above.
+    expect(expected).toBe('/api/strategies/s-1/versions/1.2/deploy');
+    expect(mockClient.post.mock.calls[0][0]).not.toContain('/strategy-operations/');
   });
 });
 
@@ -566,6 +656,19 @@ const connectedAccount = (overrides = {}) => ({
   ...overrides,
 });
 
+/** The two presentations the modal can carry, from the module that owns them. */
+const LIVE = deployPresentation('live');
+const PAPER = deployPresentation('paper');
+
+/**
+ * Open the deploy modal, and answer with the dialog element.
+ *
+ * Two things moved under it since task 16.1 and neither is a change to the request:
+ * task 17.2a partitioned the deployment into the row's overflow menu below a divider
+ * (Requirement 4.3), so it is no longer an inline `Deploy` button; and task 17.2c rebuilt the
+ * modal itself as a `ds/ConfirmDialog`, so the surface is a `role="dialog"` named by
+ * `deployPresentation`'s title rather than a `div` with a `DEPLOYMENT ORCHESTRATION` eyebrow.
+ */
 const openDeployModal = async () => {
   render(
     <MemoryRouter>
@@ -573,11 +676,32 @@ const openDeployModal = async () => {
     </MemoryRouter>,
   );
   await screen.findByText('Momentum v2');
-  fireEvent.click(screen.getByRole('button', { name: 'Deploy' }));
-  await screen.findByText('DEPLOYMENT ORCHESTRATION');
+  fireEvent.click(screen.getByRole('button', { name: 'More actions for Momentum v2' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: LIVE.confirmLabel }));
+  return screen.findByRole('dialog', { name: LIVE.title });
 };
 
-const confirmButton = () => screen.getByRole('button', { name: /Confirm & Deploy/ });
+/**
+ * The dialog's confirm and cancel actions, by the markers `ds/ConfirmDialog` stamps on them
+ * rather than by their labels — the labels are `deployPresentation`'s and change with the
+ * selected target, and the point of these helpers is that the control is the same one.
+ */
+const confirmButton = () => document.querySelector('[data-ds="confirm-dialog-confirm"]');
+const cancelButton = () => document.querySelector('[data-ds="confirm-dialog-cancel"]');
+
+/** No confirmation surface is mounted. `jest-dom` is not set up here, hence the query. */
+const dialogClosed = () =>
+  waitFor(() => expect(document.querySelector('[data-ds="confirm-dialog"]')).toBeNull());
+
+/**
+ * Tick §8.4's real-funds box.
+ *
+ * Present only on the Live path — `deployFlow.js` constructs the acknowledgement inside its
+ * `LIVE` branch and nowhere else — and it gates the confirm control ON TOP OF
+ * `preflight.deployable`, never instead of it, which is what the disabled-while-failing test
+ * below asserts by ticking it and finding the control still shut.
+ */
+const acknowledge = () => fireEvent.click(screen.getByLabelText(ACKNOWLEDGEMENT_LABEL));
 
 describe('Strategies deploy modal', () => {
   beforeEach(() => {
@@ -609,13 +733,16 @@ describe('Strategies deploy modal', () => {
         execution_config: { max_order_notional: 1000 },
       }),
     );
-    // The modal names the version it would deploy (the card names it too, hence two).
-    expect(screen.getAllByText('v1.2').length).toBeGreaterThanOrEqual(2);
+    // The modal names the version it would deploy, in the summary row and in the sentence
+    // that says what is being bound — never a hardcoded label.
+    expect(screen.getByText('v1.2')).toBeTruthy();
+    expect(screen.getByRole('dialog').textContent).toContain('binds version 1.2');
   });
 
   it('deploys through the versioned endpoint with the binding body', async () => {
     await openDeployModal();
 
+    acknowledge();
     await waitFor(() => expect(confirmButton().disabled).toBe(false));
     fireEvent.click(confirmButton());
 
@@ -632,7 +759,7 @@ describe('Strategies deploy modal', () => {
     );
     // Requirement 11.5: the legacy path, which travels no gate, is not called.
     expect(mockStrategies.deploy).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.queryByText('DEPLOYMENT ORCHESTRATION')).toBeNull());
+    await dialogClosed();
   });
 
   it('keeps Deploy disabled while a mandatory condition has not passed (Requirement 13.4)', async () => {
@@ -642,6 +769,10 @@ describe('Strategies deploy modal', () => {
     await waitFor(() => expect(mockStrategies.deployPreflight).toHaveBeenCalled());
     // Give the answer time to be applied, then assert it did not enable anything.
     await waitFor(() => expect(confirmButton().disabled).toBe(true));
+    // And satisfying §8.4's acknowledgement does not open it either: the box is a gate ON TOP
+    // of the preflight's verdict, not an alternative to it.
+    acknowledge();
+    expect(confirmButton().disabled).toBe(true);
     fireEvent.click(confirmButton());
     expect(mockStrategies.deployVersion).not.toHaveBeenCalled();
   });
@@ -673,12 +804,13 @@ describe('Strategies deploy modal', () => {
     );
     await openDeployModal();
 
+    acknowledge();
     await waitFor(() => expect(confirmButton().disabled).toBe(false));
     fireEvent.click(confirmButton());
 
     const banner = await screen.findByTestId('deploy-error');
     expect(banner.textContent).toContain('Version 1.2 is DRAFT');
-    // The row is still there (the modal header names it too, hence "all").
+    // The row is still there (the modal names it too, hence "all").
     expect(screen.getAllByText('Momentum v2').length).toBeGreaterThan(0);
   });
 
@@ -686,12 +818,84 @@ describe('Strategies deploy modal', () => {
     await openDeployModal();
     await waitFor(() => expect(mockStrategies.deployPreflight).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    await waitFor(() => expect(screen.queryByText('DEPLOYMENT ORCHESTRATION')).toBeNull());
+    fireEvent.click(cancelButton());
+    await dialogClosed();
 
     const callsWhenClosed = mockStrategies.deployPreflight.mock.calls.length;
     await new Promise((resolve) => setTimeout(resolve, PREFLIGHT_POLL_INTERVAL_MS + 200));
     expect(mockStrategies.deployPreflight.mock.calls.length).toBe(callsWhenClosed);
+  });
+
+  // ────────────────────────────────────────────────────────────────────────────────────
+  // Task 17.2c — the presentation, which is all that changed
+  // ────────────────────────────────────────────────────────────────────────────────────
+
+  it('gives a live target the live treatment and a paper target the calm one (Req 4.3, 8.5)', async () => {
+    const dialog = await openDeployModal();
+
+    // The title, the confirm label and the intent are `deployPresentation`'s, keyed on the
+    // resolved target — not written at the call site, so the two cannot be told apart wrongly.
+    expect(dialog.getAttribute('data-ds-intent')).toBe('live');
+    expect(confirmButton().textContent).toContain(LIVE.confirmLabel);
+    expect(document.querySelector('[data-ds="environment-strip"]').getAttribute('data-environment'))
+      .toBe('LIVE');
+    // §8.4: a live-funds action, so the acknowledgement exists.
+    expect(screen.getByLabelText(ACKNOWLEDGEMENT_LABEL)).toBeTruthy();
+
+    fireEvent.change(within(dialog).getByLabelText('Execution mode'), {
+      target: { value: 'paper' },
+    });
+
+    const paperDialog = await screen.findByRole('dialog', { name: PAPER.title });
+    expect(paperDialog.getAttribute('data-ds-intent')).toBe('neutral');
+    expect(document.querySelector('[data-ds="environment-strip"]').getAttribute('data-environment'))
+      .toBe('PAPER');
+    // Requirement 8.4 / Property 14: off the Live path the real-funds statement is not merely
+    // hidden — `deployFlow.js` never constructs it, so there is nothing to find.
+    expect(screen.queryByLabelText(ACKNOWLEDGEMENT_LABEL)).toBeNull();
+    // A paper binding names no exchange account, so no control for one is rendered.
+    expect(screen.queryByLabelText('Connected exchange account')).toBeNull();
+  });
+
+  it('associates a visible label with every control in the dialog (Req 15.1, 18.4)', async () => {
+    const dialog = await openDeployModal();
+    await waitFor(() => expect(within(dialog).getByLabelText('Connected exchange account')).toBeTruthy());
+
+    for (const label of ['Execution mode', 'Connected exchange account', 'Capital ($)', 'Trade size %']) {
+      const control = within(dialog).getByLabelText(label);
+      expect(control.id, label).toBeTruthy();
+      expect(dialog.querySelector(`label[for="${control.id}"]`), label).toBeTruthy();
+    }
+
+    // And nothing is left nameless: every control in the dialog, including the
+    // acknowledgement checkbox, is bound to a `<label for>`. This is the assertion the three
+    // `label-has-associated-control` findings this task cleared were about.
+    const controls = [...dialog.querySelectorAll('input, select, textarea')];
+    expect(controls.length).toBeGreaterThanOrEqual(5);
+    for (const control of controls) {
+      expect(dialog.querySelector(`label[for="${control.id}"]`), control.outerHTML).toBeTruthy();
+    }
+  });
+
+  it('refuses a capital that is not a positive number, and says why', async () => {
+    const dialog = await openDeployModal();
+    acknowledge();
+    await waitFor(() => expect(confirmButton().disabled).toBe(false));
+
+    const capital = within(dialog).getByLabelText('Capital ($)');
+    fireEvent.change(capital, { target: { value: '0' } });
+    fireEvent.blur(capital);
+
+    expect(confirmButton().disabled).toBe(true);
+    expect(within(dialog).getByText(/Capital must be a positive number/)).toBeTruthy();
+
+    // The hole the old `Number(capital) <= 0` spelling would have opened once the control
+    // stopped being a native `type="number"`: `Number('abc')` is NaN, and `NaN <= 0` is false.
+    fireEvent.change(capital, { target: { value: 'abc' } });
+    fireEvent.blur(capital);
+    expect(confirmButton().disabled).toBe(true);
+    fireEvent.click(confirmButton());
+    expect(mockStrategies.deployVersion).not.toHaveBeenCalled();
   });
 });
 

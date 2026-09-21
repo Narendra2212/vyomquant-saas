@@ -22,7 +22,6 @@
 
 import { createContext, useContext, useState, useCallback, useMemo } from 'react';
 import { AlertTriangle, AlertCircle, CheckCircle } from 'lucide-react';
-import { C } from '../components/ui-legacy/primitives';
 
 const ValidationContext = createContext(null);
 

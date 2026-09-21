@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, cleanup } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import Dashboard from '../../src/pages/Dashboard';
 import Portfolio from '../../src/pages/Portfolio';
@@ -64,6 +64,22 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wsSubscriptions.clear();
+
+    // Portfolio's LIVE branch issues FIVE reads in one `Promise.allSettled` -- the summary and
+    // positions each test mocks, plus the equity curve, the allocation and the heatmap. Those last
+    // three were left unmocked, so they were dispatched to the real backend through jsdom's XHR and
+    // rejected with `AggregateError` (nothing is listening during a test run). Because the page
+    // holds `isLoading` until all five settle, the whole grid stayed on "Loading..." for as long as
+    // those three sockets took to be refused -- fast on an idle machine, slower than the 1s
+    // `findByText`/`waitFor` window when the full suite is running, which is exactly the
+    // intermittent failure of invariant 1. Stubbing them here removes the network from these tests
+    // without changing what any of them assert: every one of the three resolves to `[]`, which is
+    // the same state the page reached when the read failed (`setEquityCurve([])`,
+    // `setAllocation([])`, `setHeatmapData([])`), so the rendering under test is identical -- only
+    // now it is reached deterministically and immediately.
+    vi.spyOn(portfolioModule.portfolioApi, 'getEquityCurve').mockResolvedValue([]);
+    vi.spyOn(portfolioModule.portfolioApi, 'getAllocation').mockResolvedValue([]);
+    vi.spyOn(portfolioModule.portfolioApi, 'getHeatmap').mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -75,9 +91,30 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
     vi.spyOn(portfolioModule.portfolioApi, 'getSummary').mockResolvedValue({
       account: { total_equity: 50000, unrealized_pnl: 1200, realized_pnl: 400, available_balance: 30000 }
     });
-    vi.spyOn(portfolioModule.portfolioApi, 'getOpenPositions').mockResolvedValue([
-      { id: 'p1', symbol: 'BTC/USDT', exchange: 'binance', side: 'long', size: 1.0, entry_price: 60000, mark_price: 61200, unrealized_pnl: 1200 }
-    ]);
+    // Task 13.1: Portfolio's LIVE positions come from `GET /api/dashboard`. `degraded: null` is
+    // the healthy reading of BC-2's discriminator and is stated, not omitted -- omitting it is
+    // not the healthy case, it is an unreadable response shape.
+    //
+    // Task 16.1: the same read serves tier 1, so the body carries `overview` and answers PER
+    // ENVIRONMENT -- which is exactly what this invariant is about. `get_portfolio_overview`
+    // branches on `environment` server-side, so a PAPER switch cannot be served the live
+    // account's figures unless this page asks for the wrong one. `/api/portfolio/summary` is no
+    // longer read by the page at all (design.md §7.6: it carries no `available_balance`).
+    const overviewFor = (environment) => (environment === 'paper'
+      ? { total_value: 100000, available_balance: 100000, used_balance: 0, unrealized_pnl: 0, today_realized_pnl: 0, realized_pnl: 0, total_exposure: 0, currency: 'USD' }
+      : { total_value: 50000, available_balance: 30000, used_balance: 20000, unrealized_pnl: 1200, today_realized_pnl: 400, realized_pnl: 900, total_exposure: 61200, currency: 'USDT' });
+    vi.spyOn(dashboardModule.dashboardApi, 'getDashboard')
+      .mockImplementation(({ environment } = {}) => Promise.resolve({
+        positions: environment === 'paper' ? [] : [
+          { id: 'p1', symbol: 'BTC/USDT', exchange_id: 'binance', side: 'long', contracts: 1.0, entry_price: 60000, mark_price: 61200, unrealized_pnl: 1200 }
+        ],
+        degraded: null,
+        overview: overviewFor(environment),
+        risk: {
+          open_positions_count: environment === 'paper' ? 0 : 1,
+          current_drawdown_pct_v2: 1.1
+        }
+      }));
     vi.spyOn(paperModule.paperApi, 'getSummary').mockResolvedValue({
       total_equity: 100000, unrealized_pnl: 0, realized_pnl: 0, available_balance: 100000
     });
@@ -85,40 +122,78 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
 
     render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
-    expect(await screen.findByText('$50,000.00')).toBeDefined();
-    expect(screen.getByText('BTC/USDT')).toBeDefined();
+    // No `$` prefix on a tier-1 figure any more: `ds/Metric` groups the digits and the
+    // denomination comes from the server's own `overview.currency`.
+    //
+    // Task 16.2: the market is counted rather than fetched singly, because BTC/USDT now appears
+    // TWICE on the live page — once in the positions table and once above it, in Requirement
+    // 10.3's "Largest position" summary figure. Counting is also the stronger assertion for what
+    // this invariant is about: on the PAPER switch every occurrence has to go, not just the
+    // first one a query happens to find.
+    expect(await screen.findByText('50,000.00')).toBeDefined();
+    expect(screen.getAllByText('BTC/USDT').length).toBeGreaterThan(0);
 
-    // Switch to Paper
-    const paperBtn = screen.getByRole('button', { name: /PAPER/i });
-    fireEvent.click(paperBtn);
+    // Switch to Paper. A labelled radio group as of task 16.2, not two buttons the selected one
+    // of which did nothing when pressed (Requirement 19.4).
+    fireEvent.click(screen.getByRole('radio', { name: 'Paper' }));
 
     await waitFor(() => {
-      expect(screen.getAllByText('$100,000.00').length).toBeGreaterThan(0);
-      expect(screen.queryByText('BTC/USDT')).toBeNull();
+      expect(screen.getAllByText('100,000.00').length).toBeGreaterThan(0);
+      expect(screen.queryAllByText('BTC/USDT')).toHaveLength(0);
     });
+    // No bleed the other way either: the live equity is gone from the screen entirely.
+    expect(screen.queryByText('50,000.00')).toBeNull();
 
     // Switch back to Live
-    const liveBtn = screen.getByRole('button', { name: /LIVE/i });
-    fireEvent.click(liveBtn);
+    fireEvent.click(screen.getByRole('radio', { name: 'Live' }));
 
     await waitFor(() => {
-      expect(screen.getByText('$50,000.00')).toBeDefined();
-      expect(screen.getByText('BTC/USDT')).toBeDefined();
+      expect(screen.getByText('50,000.00')).toBeDefined();
+      expect(screen.getAllByText('BTC/USDT').length).toBeGreaterThan(0);
     });
   });
 
   // 3 & 4: Live & Paper API Failures handled gracefully without fallback mixing
-  it('3 & 4: Live API failure renders zero state and never falls back to paper', async () => {
-    vi.spyOn(portfolioModule.portfolioApi, 'getSummary').mockRejectedValue(new Error('Network error 500'));
-    vi.spyOn(portfolioModule.portfolioApi, 'getOpenPositions').mockRejectedValue(new Error('Network error 500'));
+  //
+  // Invariant 3 used to be spelled "renders zero state": the assertion was that a failed live
+  // read produced `$0.00` cards. That spelling is no longer correct behaviour - a `$0.00` for a
+  // read that never completed presents a fabricated figure as a measurement, which Requirement
+  // 28.5 forbids. The invariant being protected (a failed read must not silently look like a
+  // funded, zeroed account, and must not be papered over with paper data) is unchanged; it is now
+  // pinned as the failure being stated in words, with no figure of any kind shown.
+  //
+  // Invariant 4 - no fallback to the paper reads - is asserted exactly as before.
+  it('3 & 4: Live API failure states the failure instead of a figure and never falls back to paper', async () => {
+    // Task 13.1: one positions read, not a two-step fallback chain. The chain this used to stage
+    // -- `getOpenPositions().catch(() => getPositions())` -- addressed two routes that do not
+    // exist, so both legs 404d and both methods have since been deleted. The read is now
+    // `GET /api/dashboard`, and after task 16.1 it is also the read behind tier 1, so its
+    // rejection is the one failure this page has to state.
+    vi.spyOn(dashboardModule.dashboardApi, 'getDashboard').mockRejectedValue(new Error('Positions read did not complete'));
     const paperSpy = vi.spyOn(paperModule.paperApi, 'getSummary');
 
     render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
+    // Requirement 14.4 / 28.5: the failure is stated in translated copy, and NO figure of any
+    // kind is shown for it -- not a zero, and not a row of markers.
+    //
+    // `getAllByText` as of task 16.2: that ONE rejection puts BOTH regions it serves into
+    // `error`, and each renders `ds/ErrorState` with the `portfolio` context copy. Two
+    // statements of one failure is the correct outcome here — tier 1 and the positions ledger
+    // are two view models over one read, and neither may show a figure.
     await waitFor(() => {
-      expect(screen.getAllByText('$0.00').length).toBeGreaterThan(0);
-      expect(paperSpy).not.toHaveBeenCalled();
+      expect(screen.getAllByText('Could not load your portfolio').length).toBeGreaterThan(0);
     });
+    // The positions region says so too, and says nothing about the account: task 13.1 rendered
+    // the transport error verbatim here, and 16.2 replaced that with the translation, so what
+    // is asserted is the region's state and the absence of any claim of an empty ledger.
+    expect(document.querySelector('[data-region="positions"]').dataset.panelState).toBe('error');
+    expect(screen.queryByText('No open positions')).toBeNull();
+    expect(document.querySelectorAll('table')).toHaveLength(0);
+    expect(screen.queryByText('0.00')).toBeNull();
+    expect(document.querySelectorAll('[data-metric-tier]')).toHaveLength(0);
+    // Invariant 4, unchanged: a failed LIVE read never reaches for the paper account.
+    expect(paperSpy).not.toHaveBeenCalled();
   });
 
   // 5 & 6 & 7 & 8: WebSocket Stale Event & Wrong Environment Rejection
@@ -161,9 +236,15 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByText('Strategy Library')).toBeDefined();
+    // vyomquant-ui-redesign task 17.1: the page is a `ds/DataTable` now. The `<h1>` is
+    // `Strategies` (design.md §7.2) and the focus marker is a badge in the Name cell rather
+    // than the card's `★ FOCUSED TARGET STRATEGY` banner. The claim is the same one — a
+    // `strategy_id` matching no row marks no row — and it is still asserted with the
+    // selector that DOES match when a row is focused (see 3.3 in
+    // `portfolio_phase3_workflow.test.jsx`), so it cannot pass vacuously.
+    expect(await screen.findByRole('heading', { name: 'Strategies' })).toBeDefined();
     expect(screen.getByText('Real Bot')).toBeDefined();
-    expect(screen.queryByText('★ FOCUSED TARGET STRATEGY')).toBeNull();
+    expect(screen.queryByText('Focused target')).toBeNull();
   });
 
   // 12: Failed Strategy with Missing Error Reason renders safe fallback
@@ -178,46 +259,68 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByText('Crashing Bot')).toBeDefined();
+    // Task 17.1: the row is a table row and the fallback reason is stated once above the
+    // table, so the name appears in both places — hence the scoped lookup for the row.
+    expect(await screen.findByRole('table')).toBeDefined();
+    expect(within(screen.getByRole('table')).getByText('Crashing Bot')).toBeDefined();
     expect(screen.getByText('Strategy execution halted due to error.')).toBeDefined();
   });
 
-  // 13 & 14 & 17: Authoritative Exchange ID in Trade History & CSV
-  it('13, 14, 17: Trade history ledger renders canonical venue and rejects placeholder fabrication', async () => {
+  // 13 & 14 & 17: no fabricated venue, strategy or P&L in the Trade History ledger.
+  //
+  // vyomquant-ui-redesign task 15.1 rewrote the assertions this test makes, because the
+  // page it was written against fabricated the value it was checking for. The fixture is
+  // now a real `executions` telemetry row — `telemetry_engine` creates that table with
+  // exactly `(timestamp, user_id, symbol, side, status, amount, price)` — instead of the
+  // `pair`/`entry_price`/`exit_price`/`profit_loss`/`fee`/`slippage`/`strategy` keys the
+  // old fixture invented so that the old alias chains would resolve.
+  //
+  // The `Venue` column is gone with the rebuild (design.md §7.7): neither read reports an
+  // exchange, and the page used to default the cell to `"binance"` on live and `"paper"` on
+  // paper. So "renders the canonical venue" is no longer a claim the data can support, and
+  // what is asserted instead is that no venue, strategy or P&L placeholder appears at all.
+  it('13, 14, 17: Trade history ledger renders recorded fields only, with no fabricated venue, strategy or P&L', async () => {
     vi.spyOn(ordersModule.ordersApi, 'getHistory').mockResolvedValue([
       {
-        id: 777,
-        time: '2026-08-26T15:00:00Z',
-        pair: 'AVAX/USDT',
-        exchange_id: 'binance',
+        timestamp: '2026-08-26T15:00:00Z',
+        user_id: 'user_adversarial',
+        symbol: 'AVAX_USDT',
         side: 'buy',
-        entry_price: 25,
-        exit_price: 26,
-        quantity: 100,
-        profit_loss: 100,
-        fee: 0.5,
-        slippage: 0.01,
-        strategy: 'AVAX Swing'
+        status: 'filled',
+        amount: 100,
+        price: 25
       }
     ]);
 
     render(<MemoryRouter><TradeHistory /></MemoryRouter>);
 
-    expect(await screen.findByText('AVAX/USDT')).toBeDefined();
-    expect(screen.getByText('binance')).toBeDefined();
+    // Scoped to the table: the market select offers the same label as an option.
+    const table = await screen.findByRole('table');
+    expect(within(table).getByText('AVAX/USDT')).toBeDefined();
+    expect(within(table).getByText('Filled')).toBeDefined();
+
+    expect(screen.queryByText('binance')).toBeNull();
     expect(screen.queryByText('live_exchange')).toBeNull();
     expect(screen.queryByText('paper_exchange')).toBeNull();
+    // `routers/orders.py` refuses manual execution outright, so "Direct" cannot be true of
+    // any row — it was the old page's `?? "Direct"` default for a field nothing reports.
+    expect(screen.queryByText('Direct')).toBeNull();
   });
 
   // 15 & 16: Empty State Verification in Portfolio & Trade History
-  it('15 & 16: Empty state displays clean zero/empty notices without NaN or missing keys', async () => {
+  //
+  // Task 15.1: the two zero assertions became `queryByText(...)).toBeNull()`. `0.0%` and
+  // `$0.00` over a ledger with no rows are the fabricated zeros Requirement 14.5 forbids —
+  // the win rate and the totals derive from fields the live read does not report at all —
+  // so the summary now renders the not-available marker with its reason.
+  it('15 & 16: Empty state displays an explained empty notice with no fabricated zeros', async () => {
     vi.spyOn(ordersModule.ordersApi, 'getHistory').mockResolvedValue([]);
 
     render(<MemoryRouter><TradeHistory /></MemoryRouter>);
 
-    expect(await screen.findByText('No trades found for LIVE mode.')).toBeDefined();
-    expect(screen.getByText('0.0%')).toBeDefined();
-    expect(screen.getByText('$0.00')).toBeDefined();
+    expect(await screen.findByText('No trades recorded')).toBeDefined();
+    expect(screen.queryByText('0.0%')).toBeNull();
+    expect(screen.queryByText('$0.00')).toBeNull();
   });
 
   // 18, 19, 20: Kill Switch WebSocket Activation, Recovery, and Cleanup

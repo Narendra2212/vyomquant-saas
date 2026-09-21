@@ -74,29 +74,55 @@ class TestMarketplacePaymentVerification:
 # ---------------------------------------------------------------------------
 
 class TestMarketplaceBillingWebhook:
-    def test_marketplace_item_key_activates_subscription(self):
+    def test_marketplace_item_key_reaches_the_marketplace_branch(self):
         """
-        Before fix: marketplace_{lib_id} item_key was rejected as invalid
-        After fix:  Updates library_subscriptions status to active
+        Before fix: marketplace_{lib_id} item_key was rejected as an invalid billing item key.
+        After fix:  it is dispatched to the marketplace branch, which settles the payment.
+
+        UPDATED BY TASK 19.2 (marketplace-subscriptions-paper-trading, Requirements 9.5, 10.4,
+        11.6, 11.14). This test used to assert that ``_apply_marketplace_entitlement`` flipped
+        ``library_subscriptions.status`` to ``active`` on its own, with no Settlement_Record, no
+        period expiry and no 90/10 split. That is the defect task 19.2 removes: Requirement 11.6
+        admits no transition into ``ACTIVE`` without a payment recorded as a Settlement_Record, and
+        ``trg_subscription_transition_guard`` refuses one in the database regardless of the
+        handler. The activation now happens inside ``settlement_service.settle``, which needs the
+        provider reference, the confirmed amount and the currency from the webhook event.
+
+        What is asserted here is what "FIX 2" was actually about and is still true: a
+        ``marketplace_`` item key is NOT rejected as an invalid billing item key and never reaches
+        the plan-tier writer. The refusal it now gets names the missing settlement context, which
+        is a refusal to activate without a payment record rather than a refusal to understand the
+        item key. The end-to-end settlement path is covered by
+        ``tests/test_billing_e2e.py::TestMarketplaceSettlementWiring``.
         """
         import asyncio
         import backend_app.routers.billing as billing_module
-        
-        # Mock the background supabase to have a pending subscription
+
+        library_id = "550e8400-e29b-41d4-a716-446655440000"
+        profile_writes = []
+
         def mock_background_sb():
             sb = MagicMock()
-            result = MagicMock()
-            result.data = [{"id": "sub_123"}]
-            sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = result
+            sb.table.side_effect = lambda name: profile_writes.append(name) or MagicMock()
             return sb
-        
+
         with patch.object(billing_module, '_background_sb', mock_background_sb):
-            try:
-                # Use valid UUID format for library_id
-                asyncio.run(billing_module._apply_marketplace_entitlement("user_123", "550e8400-e29b-41d4-a716-446655440000"))
-                # Should not raise HTTPException
-            except Exception as e:
-                pytest.fail(f"Should not raise exception for valid marketplace item_key: {e}")
+            with pytest.raises(Exception) as caught:
+                asyncio.run(
+                    billing_module._apply_billing_entitlement(
+                        "user_123", f"marketplace_{library_id}", False, {}
+                    )
+                )
+
+        assert getattr(caught.value, "status_code", None) == 400
+        detail = str(getattr(caught.value, "detail", ""))
+        assert "Invalid billing item key" not in detail, (
+            "REGRESSION: a marketplace item key is being rejected as an invalid plan key again"
+        )
+        assert "settlement context" in detail
+        assert "profiles" not in profile_writes, (
+            "a marketplace payment must never write profiles.subscription_tier"
+        )
 
 
 # ---------------------------------------------------------------------------

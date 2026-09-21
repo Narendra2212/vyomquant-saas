@@ -35,6 +35,7 @@ export { dashboardApi } from './modules/dashboard';
 export { healthApi } from './modules/health';
 export { supportApi } from './modules/support';
 export { paperApi } from './modules/paper';
+export { libraryApi } from './modules/library';
 export { notificationsApi } from './modules/notifications';
 
 // Import all modules for consolidated export
@@ -54,6 +55,7 @@ import { dashboardApi } from './modules/dashboard';
 import { healthApi } from './modules/health';
 import { supportApi } from './modules/support';
 import { paperApi } from './modules/paper';
+import { libraryApi } from './modules/library';
 import { notificationsApi } from './modules/notifications';
 
 /**
@@ -70,6 +72,7 @@ export const api = {
   strategies: strategiesApi,
   portfolio: portfolioApi,
   paper: paperApi,
+  library: libraryApi,
   risk: riskApi,
   billing: billingApi,
   user: userApi,

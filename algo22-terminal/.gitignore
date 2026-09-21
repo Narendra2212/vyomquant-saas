@@ -1,1 +1,6 @@
 .vercel
+
+# Build / test artifacts — regenerated, never committed
+bundle-analysis.html
+vitest-run.log
+report.txt

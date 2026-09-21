@@ -58,6 +58,18 @@ vi.mock('../../src/apiClient', () => ({
 }));
 
 import wsClient from '../../src/websocketClient';
+import { useWsTicketStub } from './helpers/wsTicketStub';
+
+/*
+  production-launch-hardening task 8.2. This session has a JWT in `sessionStorage`, so the
+  shared client exchanges it for a single-use socket ticket over HTTPS before it constructs
+  anything. `useWsTicketStub` is the double for that one request; without it there is no
+  credential to present, and the client — correctly — does not fall back to putting the JWT
+  in the URL. Nothing this file asserts changes: the socket simply arrives a microtask after
+  the `acquire` that asked for it, inside the `act` every mount here already awaits.
+*/
+useWsTicketStub();
+
 import {
   BUILDER_RECONNECT_POLICY,
   SAFETY_POLL_INTERVAL_MS,
@@ -220,8 +232,20 @@ class FakeWebSocket {
 
 const lastSocket = () => sockets[sockets.length - 1];
 
+/**
+ * Let the ticket exchange settle.
+ *
+ * production-launch-hardening task 8.2: `acquire` / `connect` return before the socket
+ * exists, because the client is waiting on `POST /api/auth/ws-ticket`. The stub answers
+ * immediately, so one flushed microtask turn is the whole wait.
+ */
+const settleTicket = async () => {
+  await act(async () => {});
+};
+
 /** Bring the newest socket up and let the client's `handleOpen` run. */
 const openSocket = async () => {
+  if (!lastSocket()) await settleTicket();
   await act(async () => {
     lastSocket().open();
   });
@@ -574,18 +598,20 @@ describe('a refused subscription is reported, not swallowed (Requirement 21.6)',
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('one connection per session, ref-counted (Requirement 23.1)', () => {
-  it('constructs one socket however many holds are taken', () => {
+  it('constructs one socket however many holds are taken', async () => {
     wsClient.acquire('/ws/telemetry');
     wsClient.acquire('/ws/telemetry');
     wsClient.acquire('/ws/telemetry');
+    await settleTicket();
 
     expect(sockets).toHaveLength(1);
     expect(wsClient.holdCount()).toBe(3);
   });
 
-  it('closes only when the last hold goes', () => {
+  it('closes only when the last hold goes', async () => {
     wsClient.acquire('/ws/telemetry');
     wsClient.acquire('/ws/telemetry');
+    await settleTicket();
     const socket = lastSocket();
     socket.readyState = FakeWebSocket.OPEN;
 
@@ -597,12 +623,28 @@ describe('one connection per session, ref-counted (Requirement 23.1)', () => {
     expect(wsClient.holdCount()).toBe(0);
   });
 
-  it('carries the session token on the URL and never logs it', () => {
-    wsClient.acquire('/ws/telemetry');
+  it('carries a single-use ticket on the URL, never the session token', async () => {
+    /*
+      production-launch-hardening task 8.2, Requirements 1.21 / 2.21. This assertion used to
+      read `expect(url).toContain('token=test-token')` — it pinned the defect. The session
+      JWT is no longer in the URL at all: it is exchanged over HTTPS for a single-use,
+      ≤ 30 s opaque ticket, and that is what the handshake presents. A ticket in an access
+      log cannot be replayed, because the first connection to present it consumed it.
 
-    expect(lastSocket().url).toContain('token=test-token');
+      The "never logs it" half is kept and widened: neither credential appears in a console
+      line. The `token=[REDACTED]` rewrite that used to sit in `connect()` is gone with the
+      token it was redacting; the URL is now logged without its query string.
+    */
+    wsClient.acquire('/ws/telemetry');
+    await settleTicket();
+
+    const url = new URL(lastSocket().url);
+    expect(Array.from(url.searchParams.keys())).toEqual(['ticket']);
+    expect(url.searchParams.get('ticket')).toBeTruthy();
+    expect(String(lastSocket().url)).not.toContain('test-token');
     for (const call of console.log.mock.calls) {
       expect(String(call[0])).not.toContain('test-token');
+      expect(String(call[0])).not.toContain(url.searchParams.get('ticket'));
     }
   });
 
@@ -842,9 +884,7 @@ describe('useBuilderRealtime', () => {
     const onSnapshot = vi.fn();
     renderHook(() => useBuilderRealtime({ strategyId: STRATEGY_ID, onSnapshot }));
 
-    await act(async () => {
-      lastSocket().open();
-    });
+    await openSocket();
     onSnapshot.mockClear();
 
     // Connected: the socket is the data path, so the poll must not run at all.

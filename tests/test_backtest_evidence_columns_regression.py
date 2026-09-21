@@ -22,8 +22,8 @@ argument at the runtime call site, or drop the column from ``update_data``, and
 ``test_a_completed_backtest_persists_the_bar_count_it_ran_over`` fails. It is written as a
 guard, not as a red test - the code it guards is already correct.
 
-WHY THE SECOND HALF SKIPS TODAY
--------------------------------
+THE SECOND HALF IS THE REVERT-DETECTOR FOR THE MIGRATION
+--------------------------------------------------------
 ``TestEvidenceColumnsAreWritableAndReadable`` asserts Requirement 3.4's obligation that
 ``version_id``, ``final_capital``, ``engine_version``, ``schema_version``, ``dag_hash``,
 ``dataset_checksum``, ``completed_at`` and ``error_message`` are all writable and readable
@@ -37,14 +37,29 @@ divergent ``strategy_backtests`` definitions:
     reproducibility columns but **no** ``version_id``, ``final_capital`` or
     ``error_message``.
 
-Both are ``CREATE TABLE IF NOT EXISTS``, so whichever ran first decides the shape. That
-migration is task 11.1 and has not landed, so those tests **skip** with a message naming
-the file, in the same way ``tests/test_sb06_exchange_agnostic_save.py`` skips on an absent
-checkout artefact. They pass, without modification, once 11.1 lands.
+Both are ``CREATE TABLE IF NOT EXISTS``, so whichever ran first decides the shape.
 
-``test_the_divergence_is_real_without_006`` does not skip: it exercises the gap that 006
-closes, under each base definition, and is what makes the skip above a statement about a
-missing migration rather than about a missing problem.
+Task 11.1 has landed, so 006 is in the checkout and every one of these assertions runs.
+**An absent 006 is a failure here, not a skip.** While 11.1 was outstanding these tests
+skipped with a message naming the file, in the same way
+``tests/test_sb06_exchange_agnostic_save.py`` skips on an absent checkout artefact - correct
+then, because there was no migration to make a claim about. Once 006 landed the same skip
+meant something entirely different: deleting the SQL half of root-cause fix 6 turned this
+suite into "passed, with skips" instead of red, while reverting the Python half
+(``BacktestService.update_backtest_results``, ``BacktestRuntime.run_backtest``) correctly
+produced five failures. A detector that only watches one half of a two-half fix is not a
+detector. :func:`_migration_006_columns` therefore ASSERTS the file's presence, and
+:func:`test_migration_006_is_in_this_checkout` says so in one sentence at the top of the
+class so a revert reports the cause rather than fourteen consequences.
+
+Nothing else in this file skips, and nothing needs to: the one genuinely
+environment-dependent fact - that CI runs no PostgreSQL - is handled by doubling the
+PostgREST client (see below) rather than by skipping, so there is no environment skip here
+to preserve and none was converted away.
+
+``TestTheDivergenceIsReal`` does not depend on 006 at all: it exercises the gap that 006
+closes, under each base definition, and is what makes the assertions above statements about
+a missing migration rather than about a missing problem.
 
 NO POSTGRESQL, AND NOTHING MOCKED THAT IS UNDER TEST
 ----------------------------------------------------
@@ -157,15 +172,31 @@ def _definition(name: str) -> frozenset:
 
 
 def _migration_006_columns() -> frozenset:
-    """The columns 006 adds, or a skip naming the file when task 11.1 has not landed."""
-    if not MIGRATION_006.is_file():
-        pytest.skip(
-            f"{MIGRATION_006.relative_to(REPO_ROOT)} is not in this checkout "
-            "(marketplace-subscriptions-paper-trading task 11.1). The Requirement 3.4 "
-            "writable/readable contract is a claim about that migration's columns, so it "
-            "cannot be asserted before the migration exists."
-        )
-    return _added_columns(MIGRATION_006, TABLE)
+    """The columns 006 adds. Its ABSENCE is a failure of this file, not a skip.
+
+    This used to ``pytest.skip`` with a message explaining that the contract "cannot be
+    asserted before the migration exists". That was the right answer while task 11.1 was
+    outstanding and there was nothing to assert against. It became the wrong answer the day
+    006 landed: from then on, deleting the migration that reconciles the two divergent
+    ``strategy_backtests`` definitions turned this suite green-with-skips instead of red, so
+    the file no longer detected a revert of the half of root-cause fix 6 that lives in SQL.
+    An absent 006 is now the loudest failure this file can produce.
+    """
+    assert MIGRATION_006.is_file(), (
+        f"{MIGRATION_006.relative_to(REPO_ROOT)} is not in this checkout. It IS the migration "
+        f"half of root-cause fix 6 (marketplace-subscriptions-paper-trading task 11.1, "
+        f"Requirements 3.4 and 3.8): without it, ``strategy_backtests`` keeps whichever of the "
+        f"two divergent CREATE TABLE IF NOT EXISTS definitions ran first, and no row can carry "
+        f"all nine evidence columns. Its absence is a REVERT, not an environment this file has "
+        f"nothing to say about - do not restore the skip that used to stand here."
+    )
+    added = _added_columns(MIGRATION_006, TABLE)
+    assert added, (
+        f"{MIGRATION_006.name} is present but adds no {TABLE} column at all; "
+        f"``ALTER TABLE {TABLE} ADD COLUMN`` is what this file parses, and an empty result "
+        f"means the migration was emptied rather than deleted"
+    )
+    return added
 
 
 #: The reconciled schema this file asserts task 12.1's write against. Hand-named rather
@@ -313,12 +344,28 @@ def _running_row(**overrides):
 
 
 def _results(**overrides):
+    """A stand-in for the payload ``BacktestRuntime.run_backtest`` hands the writer.
+
+    PRODUCTION-LAUNCH-HARDENING TASK 7.8 RESPELLED THIS.
+        It used to be spelled ``total_return`` / ``win_rate`` / ``final_capital`` - the
+        DB *column* names - because that is what ``update_backtest_results`` read. The
+        writer now reads the keys ``backtesting_engine.run_backtest_async`` actually
+        emits, declared in :data:`backtest_service.RESULT_COLUMN_SOURCE_KEYS`, so a
+        fixture still spelled the old way would hand the writer a payload it correctly
+        finds nothing in and every metric assertion below would be asserting against
+        SQL ``NULL``. The three columns this file asserts on - ``total_return``,
+        ``final_capital``, ``execution_time_seconds`` - are unchanged; what changed is
+        the key each is sourced from.
+
+        ``total_return`` is fed from ``total_return_pct`` (task 7.8's declared mapping),
+        so the separate ``1234.5`` that used to stand for an absolute return no longer
+        has a producer and is gone rather than restated under a new name.
+    """
     results = {
-        "total_return": 1234.5,
         "total_return_pct": 12.345,
-        "win_rate": 0.55,
+        "win_rate_pct": 0.55,
         "total_trades": 41,
-        "final_capital": 11234.5,
+        "final_equity": 11234.5,
         "execution_time_seconds": 3.5,
     }
     results.update(overrides)
@@ -498,7 +545,11 @@ class TestExecutedBarCountIsPersisted:
             )
 
         assert "executed_bar_count" not in written
-        assert written["total_return"] == 1234.5
+        # Task 7.8: the ``total_return`` column is fed from the engine's
+        # ``total_return_pct`` and ``final_capital`` from its ``final_equity``. The point of
+        # these two lines is unchanged - the metrics survive an unapplied 006 - but they now
+        # read through the declared mapping instead of a name match.
+        assert written["total_return"] == 12.345
         assert written["final_capital"] == 11234.5
         assert written["status"] == "completed"
         assert bs.BACKTEST_EVIDENCE_MIGRATION in caplog.text, (
@@ -566,7 +617,21 @@ class TestTheDivergenceIsReal:
 
 
 class TestEvidenceColumnsAreWritableAndReadable:
-    """Requirement 3.4, against migration 006. Skips until task 11.1 lands."""
+    """Requirement 3.4, against migration 006 — which must be in the checkout."""
+
+    def test_migration_006_is_in_this_checkout(self):
+        """The migration half of root-cause fix 6, asserted as a file.
+
+        Named first and separately so that removing 006 reports one sentence about the cause
+        instead of fourteen sentences about its consequences. This assertion is what makes the
+        rest of the class a revert-detector rather than a set of tests that quietly stop
+        running when the thing they are about is deleted.
+        """
+        assert MIGRATION_006.is_file(), (
+            f"{MIGRATION_006.relative_to(REPO_ROOT)} is missing. Requirements 3.4 and 3.8 need "
+            f"all nine evidence columns on {TABLE}, and this migration is the only thing that "
+            f"puts them there regardless of which CREATE TABLE IF NOT EXISTS won the race."
+        )
 
     @pytest.mark.parametrize("column", EVIDENCE_COLUMNS)
     def test_migration_006_adds_the_column(self, column):

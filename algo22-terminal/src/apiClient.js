@@ -874,18 +874,14 @@ const isRetryableError = (error) => {
 /**
  * Retry with exponential backoff (only for retryable errors) with logging
  * Checks circuit breaker before each retry attempt
- * Tracks and throws lastError properly
+ * Rethrows the caught error once retries are exhausted or the circuit opens
  */
 const retryWithBackoff = async (fn, retries = MAX_RETRIES, attempt = 0, requestId = null, endpoint = null) => {
-  let lastError = null;
-
   try {
     return await fn();
   } catch (error) {
-    lastError = error;
-
     if (retries <= 0 || !isRetryableError(error)) {
-      throw lastError;
+      throw error;
     }
 
     // Check circuit breaker before retry
@@ -896,7 +892,7 @@ const retryWithBackoff = async (fn, retries = MAX_RETRIES, attempt = 0, requestI
           message: 'Circuit breaker is open, aborting retry'
         });
       }
-      throw lastError; // Don't retry if circuit is open
+      throw error; // Don't retry if circuit is open
     }
 
     const attemptNumber = MAX_RETRIES - retries + 1;
@@ -1165,7 +1161,9 @@ export const put = (url, data = {}, config = {}) => {
         method: 'PUT',
         status: 503,
         statusText: 'Service Unavailable (Circuit Open)',
-        requestId: error.config?.metadata?.requestId
+        // The circuit opened before a request was issued, so there is no axios error to
+        // read a requestId from. Mint one, matching `post` above.
+        requestId: generateRequestId()
       }
     );
     circuitError.log();
@@ -1241,7 +1239,9 @@ export const del = (url, config = {}) => {
         method: 'DELETE',
         status: 503,
         statusText: 'Service Unavailable (Circuit Open)',
-        requestId: error.config?.metadata?.requestId
+        // The circuit opened before a request was issued, so there is no axios error to
+        // read a requestId from. Mint one, matching `post` above.
+        requestId: generateRequestId()
       }
     );
     circuitError.log();
@@ -1318,7 +1318,9 @@ export const patch = (url, data = {}, config = {}) => {
         method: 'PATCH',
         status: 503,
         statusText: 'Service Unavailable (Circuit Open)',
-        requestId: error.config?.metadata?.requestId
+        // The circuit opened before a request was issued, so there is no axios error to
+        // read a requestId from. Mint one, matching `post` above.
+        requestId: generateRequestId()
       }
     );
     circuitError.log();

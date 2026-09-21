@@ -370,7 +370,11 @@ describe('the builder displays each blocking training message with both quantiti
     renderBuilder(ML_REQUIREMENTS_BLOCK);
 
     const panel = await screen.findByTestId('training-blocks');
-    expect(panel.getAttribute('role')).toBe('alert');
+    // `status`, not `alert`, since task 24.4b put this band on §9.3's WARNING surface. The
+    // change of role is the point of that table rather than a weakening of this assertion: the
+    // strategy IS saved and the version is a real immutable version, so nothing here justifies
+    // interrupting a screen reader mid-sentence. It is still a live region and still announced.
+    expect(panel.getAttribute('role')).toBe('status');
     expect(panel.getAttribute('data-block-count')).toBe('1');
     expect(screen.getAllByTestId('training-block')).toHaveLength(1);
   });

@@ -20,7 +20,30 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from backend_app.main import app
+from backend_app.backend.paper import paper_repository as paper_repo
 from backend_app.backend.paper_trading_service import get_paper_trading_service
+from tests.test_paper_repository import FakeSupabase
+
+
+@pytest.fixture(autouse=True)
+def _paper_persistence():
+    """Give the paper service the storage it now requires.
+
+    ``/api/risk/status`` and ``/api/risk/margin-health`` read the paper account, and the
+    execution tests below place paper orders. As of task 23.2 those figures come from the
+    ``paper_*`` tables rather than from process memory, and an absent ``paper_accounts`` is a
+    503 rather than a remembered balance (Requirements 17.2, 28.3) - so each test is given a
+    fresh in-memory Persistence_Layer. The arithmetic and the thresholds these tests assert are
+    unchanged; only where their inputs are stored is.
+    """
+    paper_repo.reset_persistence_probe()
+    service = get_paper_trading_service()
+    service.bind_persistence(FakeSupabase())
+    try:
+        yield service
+    finally:
+        service.bind_persistence(None)
+        paper_repo.reset_persistence_probe()
 
 
 @pytest.fixture

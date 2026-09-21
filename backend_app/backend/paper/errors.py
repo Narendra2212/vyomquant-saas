@@ -63,6 +63,7 @@ from backend_app.backend.marketplace.errors import (
     PAPER_ORDER_INVALID,
     PAPER_OVER_FILL,
     PAPER_PERSISTENCE_UNAVAILABLE,
+    PAPER_READ_FAILED,
     PAPER_SESSION_LIMIT_REACHED,
     PAPER_SESSION_OPERATION_REJECTED,
     PAPER_SIMULATOR_MISCONFIGURED,
@@ -123,6 +124,30 @@ def paper_persistence_unavailable(
     return PaperError(PAPER_PERSISTENCE_UNAVAILABLE, details=merged)
 
 
+def paper_read_failed(
+    details: Optional[Mapping[str, Any]] = None,
+) -> PaperError:
+    """The 503 for a paper Persistence_Layer statement that DID NOT COMPLETE.
+
+    The paper counterpart of ``MARKETPLACE_READ_FAILED``, and the caller-facing status for
+    ``paper_repository.PaperPersistenceError`` - which had none, because ``PaperError`` correctly
+    refuses a ``MARKETPLACE_*`` code and ``PAPER_PERSISTENCE_UNAVAILABLE`` means specifically an
+    unapplied migration. Answering that for a transient driver failure would name a migration that
+    IS applied, and send an operator to a file that changes nothing.
+
+    Distinct from :func:`paper_persistence_unavailable` in exactly that way, and it therefore
+    carries **no** ``migration`` key: there is no file to apply.
+
+    This is emphatically not a substitute for an answer. It exists so that "the read did not
+    complete" reaches the caller AS a failure rather than as a zero balance, an empty position list
+    or an absent order - the first would be the fabricated figure Requirement 28.3 forbids, and the
+    last would place a second order for a request the caller believes it already made (Requirement
+    16.8). ``details`` is scrubbed by ``redact_details`` before it reaches a body, so a driver
+    message must never be put in it; pass only the caller's own values.
+    """
+    return PaperError(PAPER_READ_FAILED, details=dict(details) if details else None)
+
+
 __all__ = [
     "ALLOWED_HTTP_STATUS_FOR_CODE",
     "ERROR_CODES",
@@ -141,6 +166,7 @@ __all__ = [
     "PAPER_ORDER_INVALID",
     "PAPER_OVER_FILL",
     "PAPER_PERSISTENCE_UNAVAILABLE",
+    "PAPER_READ_FAILED",
     "PAPER_SESSION_LIMIT_REACHED",
     "PAPER_SESSION_OPERATION_REJECTED",
     "PAPER_SIMULATOR_MISCONFIGURED",
@@ -155,6 +181,7 @@ __all__ = [
     "is_known_code",
     "message_for_code",
     "paper_persistence_unavailable",
+    "paper_read_failed",
     "redact_details",
     "register_structured_error_handlers",
     "structured_error_body",

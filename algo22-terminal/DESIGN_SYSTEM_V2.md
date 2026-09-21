@@ -50,7 +50,7 @@ JetBrains Mono for data/numbers, cyan accent for brand identity continuity from 
 
 ### Interactive Elements
 - **Buttons:**
-  - Primary: `#00D4FF` background, `#080A0E` dark text. Hover states add glow.
+  - Primary: `#00D4FF` background, `#080A0E` dark text. Hover changes background and border only — no glow (see **Calm by default** below).
   - Secondary: `#151821` background, `#1E2530` border, white text.
 - **Hover States:** All interactive elements must have a defined hover state (opacity change, background lighten, or slight transform).
 - **Active States:** Subtle scale down (`scale(0.98)`).
@@ -62,9 +62,14 @@ JetBrains Mono for data/numbers, cyan accent for brand identity continuity from 
 
 ## Implementation Directives
 - **CSS Architecture:** TailwindCSS will be the primary utility framework, configured with these exact hex codes and typography settings.
-- **Token Source of Truth:** `src/components/ui-legacy/primitives.jsx` exports `const C` — all components must import from here, never define local C objects.
-- **Animations:** Subtle micro-animations for enhanced user experience (150ms ease-in-out transitions for colors and transforms).
+- **Token Source of Truth:** `src/styles/tokens.css` (Tailwind v4 `@theme`) is the sole source of truth. `src/design/tokens.js` is generated from it. `C` in `ui-legacy/primitives.jsx` is a derived compatibility shim scheduled for deletion — never import it into new code.
+- **Calm by default:** Colour, border emphasis and elevation are spent **only** on elements that represent (a) current state, (b) risk, or (c) an action the trader can take. Everything else is `content-primary` / `content-secondary` on `surface-panel`. `C.glow` and `C.gradient` are **retired** — every key resolves to `none`. Motion is kept only where it communicates state rather than decorating it: the connection dot's slow opacity pulse while connected, skeleton shimmer while loading, and 120–180ms colour/opacity transitions on interactive elements.
 
 ## Accessibility
-- `#00D4FF` on `#080A0E`: contrast ratio **7.94:1** — passes WCAG AA and AAA ✅
-- `#F0F2F5` on `#0F1117`: contrast ratio **14.2:1** — passes WCAG AAA ✅
+
+Figures corrected 2026-09-09 — the previously stated 7.94:1 and 14.2:1 were measurement errors.
+Both corrected values still pass AAA, so no colour changes were needed.
+
+- `#00D4FF` on `#080A0E`: contrast ratio **11.2:1** — passes WCAG AA and AAA ✅
+- `#F0F2F5` on `#0F1117`: contrast ratio **16.8:1** — passes WCAG AAA ✅
+- `#5A6578` on `#0F1117`: contrast ratio **3.2:1** — **NON-TEXT ONLY.** Borders, dividers, disabled affordances and decorative icons. Never body copy, labels, or figures.

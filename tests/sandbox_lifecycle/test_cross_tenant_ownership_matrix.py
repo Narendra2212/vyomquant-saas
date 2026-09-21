@@ -134,10 +134,14 @@ from tests.sandbox_lifecycle.harness import (
     MISSING_STRATEGY_ID,
     OWNED_BACKTEST_ID,
     OWNED_DEPLOYMENT_ID,
+    OWNED_PAPER_ACCOUNT_ID,
+    OWNED_PAPER_ORDER_ID,
+    OWNED_PAPER_SESSION_ID,
     OWNED_SIGNAL_ID,
     OWNED_STRATEGY_ID,
     OWNED_VERSION_ID,
     OWNED_VERSION_LABEL,
+    PAPER_SESSION_OWNED_TABLES,
     SandboxWorld,
 )
 
@@ -676,8 +680,20 @@ def ask(client, probe: Probe, ids: Mapping[str, str]):
 
 @pytest.fixture
 def owned(sandbox: SandboxWorld) -> SandboxWorld:
-    """The owner's five resources, seeded, plus the vault and risk rows task 21.1 seeds."""
+    """The owner's five resources, seeded, plus the vault and risk rows task 21.1 seeds.
+
+    ADDITIVE, task 34.4: the owner also holds one Paper_Session and a row in every table
+    ``009_paper_trading.sql`` gives it - ``paper_sessions``, ``paper_accounts``, ``paper_orders``,
+    ``paper_fills``, ``paper_positions``, ``paper_events``, ``paper_equity_snapshots``. Nothing
+    that was asserted about the five original resources changes: those rows are seeded exactly as
+    before, by the same call, and the ``paper_*`` rows are additional rows in additional tables.
+    What they add is reach for the two assertions below that were previously blind to them -
+    :func:`test_the_whole_stranger_matrix_leaves_the_owners_rows_untouched` and
+    :func:`test_another_tenants_rows_are_unobservable_on_the_unfiltered_collections` - plus
+    :func:`test_the_stranger_matrix_never_names_the_owners_paper_session_rows`.
+    """
     sandbox.seed_cross_tenant_rows()
+    sandbox.seed_paper_session_rows()
     return sandbox
 
 
@@ -865,8 +881,12 @@ def test_another_tenants_rows_are_unobservable_on_the_unfiltered_collections(
     with_owner_rows = observable(stranger_client.get(path, params=params))
 
     snapshot = {table: list(rows) for table, rows in owned.db.tables.items()}
+    # ``PAPER_SESSION_OWNED_TABLES`` is appended (task 34.4): the owner now holds a
+    # Paper_Session and its six children, so "with the owner's rows" and "without them" have to
+    # differ in those rows too, or a collection that reported somebody else's session count
+    # would answer identically either way and pass.
     for table in ("strategies", "strategy_versions", "strategy_backtests",
-                  "strategy_deployments", "signals"):
+                  "strategy_deployments", "signals") + PAPER_SESSION_OWNED_TABLES:
         owned.db.tables[table] = []
     try:
         without_owner_rows = observable(stranger_client.get(path, params=params))
@@ -911,6 +931,15 @@ def test_the_whole_stranger_matrix_leaves_the_owners_rows_untouched(
         and its refusal is measured on the rows here rather than argued in a docstring.
         ``backtests.results`` - the other write that used to land on the owner's row -
         is in the matrix and therefore in this loop too.
+
+    THE PAPER_SESSION-OWNED TABLES ARE WATCHED TOO (task 34.4)
+        The owner holds a Paper_Session and a row in each of ``paper_sessions``,
+        ``paper_accounts``, ``paper_orders``, ``paper_fills``, ``paper_positions``,
+        ``paper_events`` and ``paper_equity_snapshots``. They are appended to ``watched`` rather
+        than replacing anything, so every table this test already covered is still covered
+        byte-for-byte. The reach that adds is real: a strategy stop, a deployment stop or a
+        signal export that cascaded into another tenant's simulated orders, fills or events would
+        have been invisible here before, because the tables held no row to change.
     """
     watched = (
         "strategies",
@@ -920,7 +949,7 @@ def test_the_whole_stranger_matrix_leaves_the_owners_rows_untouched(
         "signals",
         "exchange_keys",
         "risk_settings",
-    )
+    ) + PAPER_SESSION_OWNED_TABLES
     before = {table: [dict(row) for row in owned.db.rows(table)] for table in watched}
 
     for probe in ENDPOINT_MATRIX:
@@ -935,6 +964,66 @@ def test_the_whole_stranger_matrix_leaves_the_owners_rows_untouched(
             f"  before -> {before[table]!r}\n"
             f"  after  -> {after[table]!r}"
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 8b. THE OWNER'S PAPER_SESSION IS UNOBSERVABLE TO A STRANGER (task 34.4)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# The paragraph above measures that the stranger's matrix CHANGED no Paper_Session-owned row.
+# This is the other half of Requirement 21.8's third assertion over the same requests: no
+# identifier of the owner's Paper_Session, Paper_Account or paper order may appear in any answer
+# the stranger receives from any endpoint of the matrix.
+#
+# WHY THE /api/paper/sessions/* ENDPOINTS THEMSELVES ARE NOT PROBED HERE
+#     They are, and thoroughly - in ``tests/test_tenant_isolation_library_paper.py``, over the
+#     ONE Persistence_Layer double that implements ``009_paper_trading.sql``'s unique indexes,
+#     column defaults and UPDATE triggers. ``SandboxDatabase`` implements none of those (it is
+#     this package's store for the ``001``/``003``/``005b`` surface and answers ``execute()``
+#     asynchronously, which ``paper_repository`` does not call), so probing the paper routes here
+#     would have meant either teaching it 009's semantics - a SECOND Persistence_Layer double for
+#     the paper tables, which ``tests/paper_seed.py`` records as the thing this repository has
+#     exactly one of - or asserting an equality between two 503s that never reach the tenant
+#     boundary. What belongs here is the claim this package is for: that the owner's paper rows
+#     exist, and that the strategy, backtest, deployment and signal-trace surface neither changes
+#     them nor mentions them.
+
+
+def test_the_stranger_matrix_never_names_the_owners_paper_session_rows(
+    owned: SandboxWorld, stranger_client
+):
+    """Requirement 21.8: no answer to the stranger carries a Paper_Session identifier of the owner's.
+
+    Every probe of the matrix is fired at the owner's identifiers as the stranger, and the whole
+    observable answer - status, headers and body - is searched for the owner's Paper_Session,
+    Paper_Account and paper order identifiers. Searched over the RAW text rather than over parsed
+    keys, so an identifier embedded in a message, a URL or a serialised blob is caught too.
+
+    The premise is asserted first: the rows really are in the database while the stranger is being
+    answered. A version of this test that ran against empty ``paper_*`` tables would pass without
+    measuring anything, which is exactly what it did before task 34.4 seeded them.
+    """
+    for table in PAPER_SESSION_OWNED_TABLES:
+        assert owned.db.rows(table), (
+            f"{table} holds no row, so 'the stranger never saw the owner's Paper_Session' would "
+            f"be true of a database that has no Paper_Session in it. "
+            f"SandboxWorld.seed_paper_session_rows is the premise this test needs."
+        )
+
+    forbidden = (OWNED_PAPER_SESSION_ID, OWNED_PAPER_ACCOUNT_ID, OWNED_PAPER_ORDER_ID)
+
+    leaks = []
+    for probe in ENDPOINT_MATRIX:
+        response = ask(stranger_client, probe, OWNED_IDS)
+        seen = f"{response.status_code} {dict(response.headers)!r} {response.text}"
+        for identifier in forbidden:
+            if identifier in seen:
+                leaks.append(f"{probe.key} carried {identifier!r}")
+
+    assert not leaks, (
+        f"a stranger's answer names the owner's Paper_Session rows: {leaks}. Requirement 21.8 "
+        f"requires that no field value belonging to the second account appears in the response."
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════

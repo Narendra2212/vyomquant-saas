@@ -20,7 +20,8 @@
 
 import React, { useState, useEffect } from "react";
 import { Play, Pause, Square, RotateCcw, Server, Activity, Cpu, Zap, AlertTriangle, CheckCircle, Clock, ChevronDown, ChevronRight } from "lucide-react";
-import { C, Tag2, PanelTitle } from "../components/ui-legacy/primitives";
+import { Tag2, PanelTitle } from "../components/common/primitives";
+import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { post, get } from "../api";
@@ -109,14 +110,14 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
   
   const getStatusColor = (status) => {
     switch (status) {
-      case "running": return C.green;
-      case "paused": return C.warning;
-      case "stopped": return C.t3;
-      case "failed": return C.red;
-      case "starting": return C.cyan;
-      case "stopping": return C.warning;
-      case "restarting": return C.cyan;
-      default: return C.t3;
+      case "running": return token.status.profit.fg;
+      case "paused": return token.status.warning.fg;
+      case "stopped": return token.content.muted;
+      case "failed": return token.status.loss.fg;
+      case "starting": return token.brand.base;
+      case "stopping": return token.status.warning.fg;
+      case "restarting": return token.brand.base;
+      default: return token.content.muted;
     }
   };
   
@@ -144,8 +145,8 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Server size={24} style={{ color: C.cyan }} />
-          <span style={{ fontSize: 18, fontWeight: 700, color: C.t1 }}>Deployment Console</span>
+          <Server size={24} style={{ color: token.brand.base }} />
+          <span style={{ fontSize: 18, fontWeight: 700, color: token.content.primary }}>Deployment Console</span>
         </div>
         <Button variant="primary" size="sm" Icon={Play} onClick={deployStrategy} disabled={isDeploying}>
           {isDeploying ? "Deploying..." : "Deploy Strategy"}
@@ -153,20 +154,20 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
       </div>
       
       {/* Tabs */}
-      <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${C.border}`, paddingBottom: 12 }}>
+      <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${token.line.default}`, paddingBottom: 12 }}>
         {["deployments", "worker", "health", "logs"].map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             style={{
               padding: "8px 16px",
-              background: activeTab === tab ? C.bg3 : "transparent",
-              border: activeTab === tab ? `1px solid ${C.border}` : "none",
+              background: activeTab === tab ? token.surface.inset : "transparent",
+              border: activeTab === tab ? `1px solid ${token.line.default}` : "none",
               borderRadius: 6,
               fontSize: 11,
               fontFamily: "monospace",
               fontWeight: 600,
-              color: activeTab === tab ? C.t1 : C.t3,
+              color: activeTab === tab ? token.content.primary : token.content.muted,
               cursor: "pointer",
               textTransform: "uppercase"
             }}
@@ -181,7 +182,7 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
         {activeTab === "deployments" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {deployments.length === 0 ? (
-              <div style={{ textAlign: "center", padding: 40, color: C.t3 }}>
+              <div style={{ textAlign: "center", padding: 40, color: token.content.muted }}>
                 <Server size={48} style={{ margin: "0 auto 16", opacity: 0.5 }} />
                 <div style={{ fontSize: 14 }}>No active deployments</div>
               </div>
@@ -191,7 +192,7 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       {getStatusIcon(deployment.status)}
-                      <span style={{ fontSize: 14, fontWeight: 600, color: C.t1 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: token.content.primary }}>
                         {deployment.environment.toUpperCase()}
                       </span>
                       <Tag2 cls={getStatusColor(deployment.status)}>{deployment.status}</Tag2>
@@ -221,51 +222,51 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
                   </div>
                   
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
-                    <div style={{ background: C.bg3, padding: 12, borderRadius: 8 }}>
-                      <div style={{ fontSize: 9, color: C.t3, fontFamily: "monospace", textTransform: "uppercase", marginBottom: 4 }}>
+                    <div style={{ background: token.surface.inset, padding: 12, borderRadius: 8 }}>
+                      <div style={{ fontSize: 9, color: token.content.muted, fontFamily: "monospace", textTransform: "uppercase", marginBottom: 4 }}>
                         Worker
                       </div>
-                      <div style={{ fontSize: 12, color: C.t1 }}>
+                      <div style={{ fontSize: 12, color: token.content.primary }}>
                         {deployment.worker || "N/A"}
                       </div>
                     </div>
-                    <div style={{ background: C.bg3, padding: 12, borderRadius: 8 }}>
-                      <div style={{ fontSize: 9, color: C.t3, fontFamily: "monospace", textTransform: "uppercase", marginBottom: 4 }}>
+                    <div style={{ background: token.surface.inset, padding: 12, borderRadius: 8 }}>
+                      <div style={{ fontSize: 9, color: token.content.muted, fontFamily: "monospace", textTransform: "uppercase", marginBottom: 4 }}>
                         Started
                       </div>
-                      <div style={{ fontSize: 12, color: C.t1 }}>
+                      <div style={{ fontSize: 12, color: token.content.primary }}>
                         {new Date(deployment.started_at).toLocaleString()}
                       </div>
                     </div>
-                    <div style={{ background: C.bg3, padding: 12, borderRadius: 8 }}>
-                      <div style={{ fontSize: 9, color: C.t3, fontFamily: "monospace", textTransform: "uppercase", marginBottom: 4 }}>
+                    <div style={{ background: token.surface.inset, padding: 12, borderRadius: 8 }}>
+                      <div style={{ fontSize: 9, color: token.content.muted, fontFamily: "monospace", textTransform: "uppercase", marginBottom: 4 }}>
                         CPU
                       </div>
-                      <div style={{ fontSize: 12, color: C.t1 }}>
+                      <div style={{ fontSize: 12, color: token.content.primary }}>
                         {deployment.health?.cpu_percent?.toFixed(1) || 0}%
                       </div>
                     </div>
-                    <div style={{ background: C.bg3, padding: 12, borderRadius: 8 }}>
-                      <div style={{ fontSize: 9, color: C.t3, fontFamily: "monospace", textTransform: "uppercase", marginBottom: 4 }}>
+                    <div style={{ background: token.surface.inset, padding: 12, borderRadius: 8 }}>
+                      <div style={{ fontSize: 9, color: token.content.muted, fontFamily: "monospace", textTransform: "uppercase", marginBottom: 4 }}>
                         Memory
                       </div>
-                      <div style={{ fontSize: 12, color: C.t1 }}>
+                      <div style={{ fontSize: 12, color: token.content.primary }}>
                         {deployment.health?.memory_percent?.toFixed(1) || 0}%
                       </div>
                     </div>
-                    <div style={{ background: C.bg3, padding: 12, borderRadius: 8 }}>
-                      <div style={{ fontSize: 9, color: C.t3, fontFamily: "monospace", textTransform: "uppercase", marginBottom: 4 }}>
+                    <div style={{ background: token.surface.inset, padding: 12, borderRadius: 8 }}>
+                      <div style={{ fontSize: 9, color: token.content.muted, fontFamily: "monospace", textTransform: "uppercase", marginBottom: 4 }}>
                         Latency
                       </div>
-                      <div style={{ fontSize: 12, color: C.t1 }}>
+                      <div style={{ fontSize: 12, color: token.content.primary }}>
                         {deployment.health?.latency_ms?.toFixed(1) || 0}ms
                       </div>
                     </div>
-                    <div style={{ background: C.bg3, padding: 12, borderRadius: 8 }}>
-                      <div style={{ fontSize: 9, color: C.t3, fontFamily: "monospace", textTransform: "uppercase", marginBottom: 4 }}>
+                    <div style={{ background: token.surface.inset, padding: 12, borderRadius: 8 }}>
+                      <div style={{ fontSize: 9, color: token.content.muted, fontFamily: "monospace", textTransform: "uppercase", marginBottom: 4 }}>
                         Uptime
                       </div>
-                      <div style={{ fontSize: 12, color: C.t1 }}>
+                      <div style={{ fontSize: 12, color: token.content.primary }}>
                         {Math.floor((deployment.health?.uptime_seconds || 0) / 3600)}h
                       </div>
                     </div>
@@ -280,7 +281,7 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
           <Card className="p-5">
             <PanelTitle title="Worker Status" sub="Worker health and metrics" />
             <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 11, color: C.t3 }}>
+              <div style={{ fontSize: 11, color: token.content.muted }}>
                 Worker details for selected deployment
               </div>
             </div>
@@ -291,7 +292,7 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
           <Card className="p-5">
             <PanelTitle title="Health Monitoring" sub="System health metrics" />
             <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 11, color: C.t3 }}>
+              <div style={{ fontSize: 11, color: token.content.muted }}>
                 Health metrics for selected deployment
               </div>
             </div>
@@ -301,7 +302,7 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
         {activeTab === "logs" && selectedDeployment && (
           <Card className="p-5">
             <PanelTitle title="Execution Logs" sub="Runtime logs and events" />
-            <div style={{ marginTop: 12, fontFamily: "monospace", fontSize: 10, color: C.t2 }}>
+            <div style={{ marginTop: 12, fontFamily: "monospace", fontSize: 10, color: token.content.secondary }}>
               <div>Logs will be displayed here</div>
             </div>
           </Card>

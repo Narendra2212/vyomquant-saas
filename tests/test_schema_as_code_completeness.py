@@ -57,7 +57,23 @@ class TestSchemaAsCodeCompleteness:
             # backend_app/migrations/008_marketplace_settlement.sql (task 11.3)
             'marketplace_settlements',
             'library_subscription_transitions',
-            'marketplace_subscription_allowed_transitions'
+            'marketplace_subscription_allowed_transitions',
+            # marketplace-subscriptions-paper-trading, migration
+            # backend_app/migrations/009_paper_trading.sql (task 11.4).
+            # The eleven paper_* tables plus the two transition seed tables.
+            'paper_sessions',
+            'paper_accounts',
+            'paper_orders',
+            'paper_fills',
+            'paper_positions',
+            'paper_balance_events',
+            'paper_trades',
+            'paper_equity_snapshots',
+            'paper_metrics',
+            'paper_events',
+            'paper_market_events',
+            'paper_order_allowed_transitions',
+            'paper_session_allowed_transitions'
         }
         
         # Tables with CREATE TABLE in migrations (from Phase 1 analysis)
@@ -120,7 +136,41 @@ class TestSchemaAsCodeCompleteness:
             # contract is tests/test_library_schema_contract.py's.
             'marketplace_settlements',
             'library_subscription_transitions',
-            'marketplace_subscription_allowed_transitions'
+            'marketplace_subscription_allowed_transitions',
+            # backend_app/migrations/012_subscription_payment_failed_activation.sql
+            # (task 19.15) registers NO new table: it seeds one additional
+            # permitted-transition row - Requirement 11.6's
+            # ('payment_failed','active') - into the
+            # marketplace_subscription_allowed_transitions table 008 above
+            # already creates. This test tracks tables, not rows, so there is
+            # nothing to add for it; the seed's contents are pinned by
+            # tests/test_submission_state_agreement.py.
+            # backend_app/migrations/013_paper_default_account_children.sql
+            # (remediation of task 23.1) also registers NO new table: it
+            # relaxes session_id to NULLABLE on the seven paper_* accounting
+            # child tables below - so the default account (paper_accounts
+            # where session_id IS NULL) can own a row - and adds one partial
+            # unique index plus a tightened append-only guard. This test
+            # tracks tables, not columns or indexes; the column contract is
+            # tests/test_marketplace_paper_schema_contract.py's and the
+            # default-account behaviour is tests/test_paper_repository.py's.
+            # backend_app/migrations/009_paper_trading.sql (task 11.4).
+            # The Paper_Session and its ten owned child tables (Requirement
+            # 17), plus the Paper_Order_State (Requirement 16.2) and
+            # Paper_Session state (Requirement 17.7) transition seed tables.
+            'paper_sessions',
+            'paper_accounts',
+            'paper_orders',
+            'paper_fills',
+            'paper_positions',
+            'paper_balance_events',
+            'paper_trades',
+            'paper_equity_snapshots',
+            'paper_metrics',
+            'paper_events',
+            'paper_market_events',
+            'paper_order_allowed_transitions',
+            'paper_session_allowed_transitions'
         }
         
         # Tables that are Supabase system tables (expected to not have migrations)

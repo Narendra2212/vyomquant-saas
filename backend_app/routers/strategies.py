@@ -14,10 +14,12 @@ import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 import pandas as pd
 from fastapi import (APIRouter, BackgroundTasks, Depends, HTTPException, Query,
                      Request, status)
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend_app.core.dependencies import (create_request_supabase_async,
                                            get_current_user, get_fleet,
@@ -38,6 +40,13 @@ from backend_app.core.rate_limit import limiter
 import ccxt
 from backend_app.backend.optimization_engine import get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
 from backend_app.backend.backtest_runtime import get_backtest_runtime
+# The server half of Requirement 12.7 (design.md -> "Server-side artifact resolution"). It runs
+# BESIDE the owner-scoped predicates in this module, never in place of them: each call site
+# invokes it only where the handler had already decided to refuse, so an owner's behaviour is
+# untouched and a stranger still receives the same 404 a non-existent id gets (Requirement 21.4).
+from backend_app.backend.marketplace import (
+    subscriber_operation_guard as _subscriber_guard,
+)
 
 import inspect
 
@@ -669,6 +678,121 @@ _LIST_COLUMNS: tuple = (
 )
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# BC-3 / BC-4 — TWO ADDITIVE TIMESTAMPS ON THE LIST PROJECTION
+#
+# vyomquant-ui-redesign tasks 12.3 and 12.4, design.md §7.2, Requirements 4.1,
+# 19.1, 19.2. The Strategies table renders a "Last signal" and a "Last execution"
+# column; §7.2 recorded that the first existed only on the *dashboard* projection
+# and the second existed nowhere at all, so both rendered as not-available.
+#
+# Both are published for EVERY row, always, and are ``None`` -> JSON ``null``
+# when there is nothing to report. Never absent: a reader that has to infer
+# "never signalled" from a missing key cannot tell it from "this build does not
+# report signal times", which is the same reasoning ``is_archived`` is always
+# present for (Requirement 19.2 — no fabricated figure, and no silent omission
+# standing in for one). And never a substituted clock read: a fabricated
+# "last execution" is worse than no answer, because a trader uses it to decide
+# whether a strategy is actually running.
+#
+# Neither key is added to :data:`_LIST_COLUMNS`. That tuple is a *row-narrowing*
+# filter — ``if column in row`` — so a name added to it would be silently DROPPED
+# on a database whose ``strategies`` table has no such column, i.e. exactly the
+# "absent rather than null" outcome forbidden above. They are assigned
+# explicitly instead, the way ``is_archived`` and ``archived_at`` already are.
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: BC-3. The strategy row's own column, which is the identical source the dashboard
+#: strategy projection reads (``dashboard_aggregation_service.get_strategies`` publishes
+#: ``s.get("last_signal_at") or None`` as ``last_signal_time``). Reading the same key off
+#: the same table keeps one definition of "last signal" in the codebase.
+#:
+#: ``list_strategies`` already reads ``select("*")``, so this column travels with the row
+#: the moment the schema has it — no join, no second query, and no change whatsoever to
+#: which rows the listing returns or in what order. Where the column does not exist the
+#: key is simply not on the row and the projection reports ``null``, which is the honest
+#: answer and the same one the dashboard projection gives today.
+LAST_SIGNAL_AT_COLUMN = "last_signal_at"
+
+#: BC-4. The response key for the per-strategy max execution timestamp.
+LAST_EXECUTION_AT_FIELD = "last_execution_at"
+
+
+def _iso(value: Any) -> Optional[str]:
+    """A timestamp as an ISO-8601 string, or ``None``. Never a clock read.
+
+    ``created_at`` on ``execution_records`` arrives as a ``datetime`` from SQLAlchemy while
+    every other timestamp on this projection arrives from Supabase already stringified, so
+    the two are normalised to one wire type here. ``None`` in, ``None`` out — this function
+    has no default and cannot substitute "now" for a missing value.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _read_last_execution_at_by_strategy(user_id: str) -> Dict[str, Any]:
+    """``strategy_id`` -> last execution instant, for one tenant. BC-4, blocking.
+
+    Delegates to :meth:`ExecutionRecordRepository.get_last_execution_at_by_strategy`, which
+    is ``MAX(created_at) … GROUP BY strategy_id`` — the same expression ``get_stats`` already
+    uses for its tenant-wide summary, so this router defines no second notion of "last
+    execution". One grouped aggregate for the whole page; no per-strategy query.
+
+    ``execution_records`` lives in the SQLAlchemy/Postgres half of this application while the
+    strategy rows come from Supabase, so this is a separate read rather than a join. It is
+    scoped by ``tenant_id`` and by nothing else, and the caller then indexes the map with ids
+    it has *already* authorised — so a strategy this user does not own cannot be reached
+    through it, and the listing's own ownership predicate remains the only access decision.
+
+    Returns ``{}`` when there is no execution store to read: an unconfigured or unreachable
+    database yields "nothing to report" for every row rather than taking the Strategies page
+    down over an optional column. The failure is logged, not swallowed silently.
+    """
+    try:
+        tenant_id = UUID(str(user_id))
+    except (TypeError, ValueError):
+        # BC-4 is keyed on ``execution_records.tenant_id``, a UUID column. A non-UUID
+        # identity addresses no tenant there, so there is nothing to report — and nothing
+        # is interpolated into a statement either way (the id is bound, never formatted).
+        logger.debug(
+            "[STRATEGIES] last_execution_at not read: %r is not a tenant UUID", user_id
+        )
+        return {}
+
+    from backend_app.core.database import get_db_context
+    from backend_app.core.models.execution_record import ExecutionRecordRepository
+
+    try:
+        with get_db_context() as session:
+            return dict(
+                ExecutionRecordRepository(session).get_last_execution_at_by_strategy(
+                    tenant_id
+                )
+            )
+    except Exception as exc:  # noqa: BLE001 — an optional read must not fail the listing
+        logger.warning(
+            "[STRATEGIES] last_execution_at unavailable for user %s (%s: %s); every row "
+            "reports null rather than a guessed timestamp.",
+            user_id,
+            type(exc).__name__,
+            exc,
+        )
+        return {}
+
+
+async def _last_execution_at_by_strategy(user_id: str) -> Dict[str, Any]:
+    """The BC-4 map, off the event loop.
+
+    The execution store is read through a synchronous SQLAlchemy session, so it runs in a
+    worker thread: a blocking read inside this handler would stall every other request on
+    the loop, including the ones that place orders.
+    """
+    return await asyncio.to_thread(_read_last_execution_at_by_strategy, user_id)
+
+
 @router.get("")
 @router.get("/")
 async def list_strategies(
@@ -746,6 +870,10 @@ async def list_strategies(
 
         rows = resp.data or [] if resp and hasattr(resp, "data") else []
 
+        # BC-4: one grouped aggregate for the whole page, read once before the loop. Inside
+        # the loop this would be an N+1 — one statement per strategy the user owns.
+        last_execution_at = await _last_execution_at_by_strategy(user["id"])
+
         results: List[Dict[str, Any]] = []
         archived_total = 0
         for row in rows:
@@ -761,6 +889,14 @@ async def list_strategies(
             # such, so the caller renders them as history rather than as actionable rows.
             item["is_archived"] = archived
             item[ARCHIVED_AT_COLUMN] = archived_at_of(row)
+            # BC-3 / BC-4 (Requirements 4.1, 19.1, 19.2). Both always present, both ``null``
+            # when unreported. ``row.get`` and ``.get`` on the map, so a strategy that has
+            # never signalled or never executed reports ``null`` rather than dropping the key.
+            item[LAST_SIGNAL_AT_COLUMN] = _iso(row.get(LAST_SIGNAL_AT_COLUMN))
+            strategy_id = row.get("id")
+            item[LAST_EXECUTION_AT_FIELD] = _iso(
+                last_execution_at.get(str(strategy_id)) if strategy_id is not None else None
+            )
             results.append(item)
 
         if include_archived and rows and not any(ARCHIVED_AT_COLUMN in row for row in rows):
@@ -986,6 +1122,19 @@ async def get_strategy_route(
     resp = await query.execute()
     
     if not resp.data:
+        # The owner-scoped read above matched nothing. Before answering "not found" — which
+        # would be a false statement to a caller who holds an entitling Subscription to the
+        # Listing that owns this strategy, and who can see it on their own Strategies page —
+        # resolve the caller's relationship to the artifact server-side. An entitled
+        # subscriber gets 403 MARKETPLACE_OPERATION_NOT_PERMITTED and an audited refusal
+        # (Requirements 7.8, 7.12, 12.7); an unrelated caller still gets this 404,
+        # indistinguishable from a non-existent strategy (Requirement 21.4). The predicate
+        # above is unchanged and still decides first, so an owner's answer cannot change.
+        await _subscriber_guard.refuse_if_entitled_subscriber(
+            user,
+            strategy_id=strategy_id,
+            operation=_subscriber_guard.STRATEGY_READ,
+        )
         raise HTTPException(404, "Strategy not found.")
         
     item = resp.data[0]
@@ -1191,8 +1340,17 @@ async def rename_strategy(
         return dict(rows[0])
     if strategy is None:
         # The update matched nothing and the ownership-scoped read found nothing either:
-        # no such strategy belongs to this caller. The same answer a genuinely
-        # non-existent identifier gets, per Requirement 20.2.
+        # no such strategy belongs to this caller. Before that becomes a 404, resolve the
+        # caller's relationship to the artifact server-side — an entitled subscriber is
+        # refused 403 with a stable code and an audited entry (Requirements 7.8, 7.12,
+        # 12.7), because "no such strategy" is false for them. Everyone else still gets the
+        # same answer a genuinely non-existent identifier gets, per Requirements 20.2 and
+        # 21.4. Nothing was written either way: the UPDATE above is still owner-scoped.
+        await _subscriber_guard.refuse_if_entitled_subscriber(
+            user,
+            strategy_id=strategy_id,
+            operation=_subscriber_guard.STRATEGY_RENAME,
+        )
         raise HTTPException(404, "Strategy not found.")
     # The write raised nothing, so it happened; PostgREST returns a representation only
     # when asked to, and an empty body is not evidence the update matched no row when the
@@ -1257,6 +1415,18 @@ async def update_strategy(
         logger.error(f"[STRATEGIES] Failed to update strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to update strategy. Please try again later.")
     if not resp.data:
+        # The owner-scoped UPDATE matched no row, so nothing was written. Requirement 12.7:
+        # a caller holding an entitling Subscription to the Listing that owns this strategy
+        # is told the operation is not permitted (403, stable code, audited) rather than that
+        # the strategy does not exist — this one route performs all four of Requirement
+        # 12.4's edit actions (edit, edit_blocks, edit_indicator_params, edit_risk_config),
+        # and none of them is permitted on a subscribed strategy. Any other caller still
+        # receives this 404 (Requirement 21.4).
+        await _subscriber_guard.refuse_if_entitled_subscriber(
+            user,
+            strategy_id=strategy_id,
+            operation=_subscriber_guard.STRATEGY_UPDATE,
+        )
         raise HTTPException(404, "Strategy not found.")
     return resp.data[0]
 
@@ -1317,6 +1487,18 @@ async def delete_strategy(
             user.get("id"),
             e.code,
         )
+        if e.code == "STRATEGY_NOT_FOUND":
+            # ``archive_strategy`` reports an unowned strategy as absent, which is right for a
+            # stranger (Requirement 21.4) and wrong for a subscriber: deleting the owner's
+            # strategy is forbidden to them (Requirement 12.4), not impossible. Resolve the
+            # relationship server-side and answer 403 with a stable code plus an audited
+            # refusal for an entitled subscriber only (Requirements 7.8, 7.12, 12.7). Nothing
+            # was archived: the refusal was raised before any write.
+            await _subscriber_guard.refuse_if_entitled_subscriber(
+                user,
+                strategy_id=strategy_id,
+                operation=_subscriber_guard.STRATEGY_ARCHIVE,
+            )
         raise HTTPException(status_code=e.http_status, detail=e.to_detail())
 
     if result.get("status") == STATUS_ARCHIVED:
@@ -1874,10 +2056,37 @@ async def validate_strategy(
     return response
 
 
+class BacktestRequest(BaseModel):
+    """Request body for ``POST /api/strategies/backtest``.
+
+    Deliberately permissive (``extra="allow"``): the DAG graph carries node and edge
+    shapes this router does not own and must forward to ``backtest_internal``
+    untouched, so enumerating them here would couple the two. What the model *does*
+    pin down are the scalars that decide how much compute one request can buy —
+    capital, position size, and the symbol/strategy fan-out — because this endpoint
+    dispatches CPU-bound work onto the shared default executor and an unbounded
+    request body is an unbounded amount of that work.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    sync: bool = False
+    initial_capital: Optional[float] = Field(default=None, gt=0, le=1_000_000_000)
+    trade_size_pct: Optional[float] = Field(default=None, gt=0, le=1.0)
+    symbols: Optional[List[str]] = Field(default=None, max_length=50)
+    strategies: Optional[List[str]] = Field(default=None, max_length=50)
+    timeframe: Optional[str] = Field(default=None, max_length=16)
+    strategy_name: Optional[str] = Field(default=None, max_length=200)
+
+
 # ── POST /api/strategies/backtest ────────────────────────────────────────
 @router.post("/backtest")
 @limiter.limit("30/minute")
-async def backtest(request: Request, payload: dict):
+async def backtest(
+    request: Request,
+    payload: BacktestRequest,
+    user: dict = Depends(get_current_user),
+):
     """Enqueue backtest to background worker via Redis Streams or execute directly if sync/fallback."""
     import asyncio
     import uuid
@@ -1886,24 +2095,36 @@ async def backtest(request: Request, payload: dict):
     from backend_app.core.cache import redis_manager
     from backend_app.worker import _write_status
 
+    # Both backtest_internal and the stream envelope take a plain dict. Extra keys
+    # (the DAG graph) survive via extra="allow"; None-valued optionals are dropped so
+    # backtest_internal's own .get() defaults still apply rather than being overridden
+    # with an explicit None.
+    payload_dict = payload.model_dump(exclude_none=True)
+
     # Direct synchronous execution requested
-    is_sync = bool(payload.get("sync", False)) or request.query_params.get("sync", "false").lower() == "true"
+    is_sync = bool(payload_dict.get("sync", False)) or request.query_params.get("sync", "false").lower() == "true"
     if is_sync:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, backtest_internal, payload)
+        return await loop.run_in_executor(None, backtest_internal, payload_dict)
 
     job_id = str(uuid.uuid4())
     
     try:
-        # Write initial queued status hash
+        # Write initial queued status hash.
+        #
+        # user_id is recorded here, before publish_backtest_job, and the ordering is
+        # load-bearing: GET /backtest/{job_id} authorizes against this field, so a job
+        # that reached the stream before its owner was recorded would be readable by
+        # any caller for that window.
         await _write_status(
             redis_manager,
             job_id,
             status="queued",
+            user_id=user["id"],
             submitted_at=datetime.now(timezone.utc).isoformat()
         )
 
-        entry_id = await publish_backtest_job(job_id, payload)
+        entry_id = await publish_backtest_job(job_id, payload_dict)
         if entry_id:
             return {"job_id": job_id, "status": "queued"}
     except Exception as exc:
@@ -1911,11 +2132,11 @@ async def backtest(request: Request, payload: dict):
 
     # Fallback to direct synchronous execution if Redis Stream was unreachable
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, backtest_internal, payload)
+    return await loop.run_in_executor(None, backtest_internal, payload_dict)
 
 
 @router.get("/backtest/{job_id}")
-async def get_backtest_status(job_id: str):
+async def get_backtest_status(job_id: str, user: dict = Depends(get_current_user)):
     """Poll backtest status from Redis status hash."""
     import json
     from backend_app.core.cache import redis_manager
@@ -1931,6 +2152,17 @@ async def get_backtest_status(job_id: str):
         (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
         for k, v in raw_status_data.items()
     }
+
+    # Ownership gate.
+    #
+    # Answers 404 rather than 403 for another user's job, matching the convention the
+    # rest of this codebase uses: a caller with no claim on an id is not told that the
+    # id exists. A job carrying no user_id at all — every job queued before this field
+    # was recorded — is denied on the same branch rather than grandfathered in, since
+    # fail-open is the wrong default for the fix. The status hash has a 24h TTL, so
+    # that set drains without intervention.
+    if status_data.get("user_id") != user["id"]:
+        raise HTTPException(status_code=404, detail="Job not found")
 
     status = status_data.get("status", "queued")
     response = {"job_id": job_id, "status": status}

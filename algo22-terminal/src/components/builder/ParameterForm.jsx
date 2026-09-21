@@ -41,9 +41,18 @@
  *
  * Severity is normalised the way the backend validator normalises it: `registry.py` says
  * "ERROR", `schema.py` says "error". Anything unrecognised fails closed to `error`.
+ *
+ * Shown and collapsed (Requirement 15.6)
+ * --------------------------------------
+ * The form has two sections: what the inspector shows outright, and a collapsed `ds/Accordion`
+ * for the rest. `isPrimaryParam` below is the whole of that decision and carries the reasoning
+ * for it, including why it is a union rather than `BEHAVIOUR_CHANGING_PARAMS` alone and what
+ * happens to a block whose every parameter is advanced.
  */
 
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+
+import { Accordion } from '../ds/Accordion';
 
 /** The full `ParamType` vocabulary. Every member below is rendered by `controlFor`. */
 export const PARAM_TYPES = Object.freeze([
@@ -95,6 +104,36 @@ export const isUnset = (value) =>
 
 /** True when `key` must never be prefilled (Requirement 5.4). */
 export const isBehaviourChanging = (key) => BEHAVIOUR_CHANGING_PARAMS.includes(key);
+
+/**
+ * Which parameters the inspector shows outright, and which it collapses (Requirement 15.6).
+ *
+ * design.md §9.2 states the rule as "`BEHAVIOUR_CHANGING_PARAMS` are shown; everything else
+ * goes in a collapsed `Advanced` accordion". Read as an exclusive partition that also
+ * collapses `macd.fast`, `feat_lag.lags` and `between.inclusive` — required parameters with
+ * no default, on blocks that declare no behaviour-changing parameter at all — and five of the
+ * nine captured descriptors would then have *nothing* above the chevron. Requirement 5.3 of
+ * the strategy-builder spec says every required parameter of the selected block is displayed
+ * without the author expanding a collapsed section, so the shown set is the union: a
+ * parameter is primary when it is behaviour-changing **or** required. What is left is both
+ * optional and behaviour-neutral — a setting the block already carries a default for, which
+ * is what "advanced or infrequently-used" describes.
+ *
+ * The behaviour-changing half of that union is not redundant with `required`.
+ * `ParamSpec.__post_init__` does refuse to publish one of these keys as optional, but that
+ * check runs in the backend's constructor; this form consumes `to_dict()` JSON off the wire,
+ * where nothing re-runs it. A payload from a skewed or replayed server that marked
+ * `limit_price` `required=false` would, under a `required`-only split, put an unset order
+ * price behind a closed chevron — the silent-position failure Requirement 5.4 exists to
+ * prevent, reached by hiding the field rather than by prefilling it.
+ *
+ * Descriptor order is preserved inside each half rather than floating the behaviour-changing
+ * keys to the top: the registry orders `action_buy_limit` as `price_mode` before `price`
+ * because the first says how to read the second, and Requirement 5.1 makes the descriptor
+ * authoritative for that too.
+ */
+export const isPrimaryParam = (spec) =>
+  Boolean(spec) && (isBehaviourChanging(spec.key) || Boolean(spec.required));
 
 const sameValue = (a, b) => {
   if (Array.isArray(a) && Array.isArray(b)) {
@@ -469,7 +508,7 @@ function ParameterField({
             <input {...commonProps} {...textProps('text')} />
             <p
               role="status"
-              className="mt-1 font-mono text-caption text-accent-gold"
+              className="mt-1 font-mono text-micro text-accent-gold"
               data-testid={`unsupported-${spec.key}`}
               data-unsupported-param-type={String(spec.type)}
             >
@@ -495,18 +534,18 @@ function ParameterField({
       <div className="mb-1 flex items-baseline gap-1.5">
         <label
           htmlFor={controlId}
-          className="font-mono text-caption uppercase tracking-wider text-text-secondary"
+          className="font-mono text-micro uppercase tracking-wider text-text-secondary"
         >
           {spec.label}
         </label>
         {spec.required ? (
-          <span className="font-mono text-caption text-accent-cyan" data-testid={`required-${spec.key}`}>
+          <span className="font-mono text-micro text-accent-cyan" data-testid={`required-${spec.key}`}>
             required
           </span>
         ) : null}
         {field.showingDefault ? (
           <span
-            className="rounded border border-border-default bg-bg-elevated px-1 font-mono text-caption text-text-muted"
+            className="rounded border border-border-default bg-bg-elevated px-1 font-mono text-micro text-text-muted"
             data-testid={`default-badge-${spec.key}`}
             title={`Block default: ${formatScalar(spec.default)}`}
           >
@@ -516,7 +555,7 @@ function ParameterField({
         {hasHelp ? (
           <button
             type="button"
-            className="ml-auto rounded border border-border-default px-1 font-mono text-caption text-text-muted focus:outline-none focus:ring-2 focus:ring-accent-cyan"
+            className="ml-auto rounded border border-border-default px-1 font-mono text-micro text-text-muted focus:outline-none focus:ring-2 focus:ring-accent-cyan"
             aria-expanded={helpOpen}
             aria-controls={helpId}
             aria-label={`Help for ${spec.label}`}
@@ -538,7 +577,7 @@ function ParameterField({
           data-open={helpOpen ? 'true' : 'false'}
           className={
             helpOpen
-              ? 'mt-1 rounded border border-border-default bg-bg-elevated p-1.5 text-caption text-text-secondary'
+              ? 'mt-1 rounded border border-border-default bg-bg-elevated p-1.5 text-micro text-text-secondary'
               : 'sr-only'
           }
         >
@@ -547,13 +586,13 @@ function ParameterField({
       ) : null}
 
       {constraints ? (
-        <p id={constraintsId} className="mt-1 font-mono text-caption text-text-muted">
+        <p id={constraintsId} className="mt-1 font-mono text-micro text-text-muted">
           {constraints}
         </p>
       ) : null}
 
       {optionSetPending ? (
-        <p className="mt-1 font-mono text-caption text-text-muted">
+        <p className="mt-1 font-mono text-micro text-text-muted">
           Options resolved from the graph ({spec.options_source}).
         </p>
       ) : null}
@@ -564,7 +603,7 @@ function ParameterField({
             <p
               key={`${issue.code || 'issue'}-${index}`}
               role={normaliseSeverity(issue.severity) === SEVERITY_ERROR ? 'alert' : 'status'}
-              className={`mt-1 text-caption ${
+              className={`mt-1 text-micro ${
                 normaliseSeverity(issue.severity) === SEVERITY_ERROR
                   ? 'text-accent-loss'
                   : 'text-accent-gold'
@@ -584,7 +623,7 @@ function ParameterField({
           ))}
         </div>
       ) : field.blocking ? (
-        <p id={statusId} className="mt-1 font-mono text-caption text-accent-loss">
+        <p id={statusId} className="mt-1 font-mono text-micro text-accent-loss">
           Required · not set
           {field.behaviourChanging
             ? ' — this parameter changes how the strategy trades, so it has no default.'
@@ -595,7 +634,7 @@ function ParameterField({
       {field.canResetToDefault && !disabled ? (
         <button
           type="button"
-          className="mt-1 font-mono text-caption text-text-muted underline focus:outline-none focus:ring-2 focus:ring-accent-cyan"
+          className="mt-1 font-mono text-micro text-text-muted underline focus:outline-none focus:ring-2 focus:ring-accent-cyan"
           data-testid={`reset-default-${spec.key}`}
           onClick={() => onChange && onChange(spec.key, spec.default, spec)}
         >
@@ -641,7 +680,6 @@ export function ParameterForm({
 }) {
   const reactId = useId();
   const idPrefix = `pf-${nodeId || blockId || reactId}`.replace(/[^\w-]/g, '-');
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const advancedId = `${idPrefix}-advanced`;
 
   const specs = useMemo(
@@ -663,16 +701,33 @@ export function ParameterForm({
     [specs, values, scopedIssues],
   );
 
-  const required = fields.filter((field) => field.spec.required);
-  const optional = fields.filter((field) => !field.spec.required);
+  const primary = fields.filter((field) => isPrimaryParam(field.spec));
+  const advanced = fields.filter((field) => !isPrimaryParam(field.spec));
+  const advancedKeys = advanced.map((field) => field.key);
   const blocking = fields.filter((field) => field.blocking).map((field) => field.key);
   const orphanIssues = useMemo(() => unmatchedIssues(specs, scopedIssues), [specs, scopedIssues]);
 
   // An error against a parameter hidden under "Advanced" would otherwise be unreadable.
-  const optionalHasError = optional.some((field) => field.hasError);
-  useEffect(() => {
-    if (optionalHasError) setAdvancedOpen(true);
-  }, [optionalHasError]);
+  //
+  // `ds/Accordion` owns its own open state, so "open because an error landed underneath you"
+  // is expressed by mounting it open rather than by pushing a prop in. The latch is scoped to
+  // this form instance and only ever set: an error that clears must not snap the panel shut
+  // under an author who is typing in it, and selecting another node produces a new `idPrefix`
+  // and therefore a fresh, collapsed accordion. Adjusted during render rather than in an
+  // effect so the panel is open on the render that first carries the issue.
+  const advancedHasError = advanced.some((field) => field.hasError);
+  const [openedForScope, setOpenedForScope] = useState(null);
+  if (advancedHasError && openedForScope !== idPrefix) setOpenedForScope(idPrefix);
+
+  // A block whose every parameter is optional and behaviour-neutral — `xgboost`'s five
+  // hyperparameters are the served case — has no primary section for the accordion to
+  // declutter. Collapsing all of it would leave the inspector showing a chevron above an
+  // empty box, which is a worse surface than not splitting at all, so the disclosure mounts
+  // open and says why. It is still a disclosure: the author can close it. `ds/Accordion`'s
+  // `defaultOpen` note asks a caller that departs from Requirement 15.6's default to state
+  // its reason, and this is that reason.
+  const everythingIsAdvanced = primary.length === 0 && advanced.length > 0;
+  const advancedOpen = openedForScope === idPrefix || everythingIsAdvanced;
 
   // The callback is held in a ref so an inline arrow prop cannot turn this into a render
   // loop: the notification fires when the blocking set changes, and only then.
@@ -689,7 +744,7 @@ export function ParameterForm({
 
   if (!specs.length) {
     return (
-      <div className="p-2 font-mono text-caption text-text-muted" data-testid="parameter-form-empty">
+      <div className="p-2 font-mono text-micro text-text-muted" data-testid="parameter-form-empty">
         This block declares no parameters.
       </div>
     );
@@ -704,12 +759,17 @@ export function ParameterForm({
       data-block-id={blockId || undefined}
       data-node-id={nodeId || undefined}
       data-blocking-count={blocking.length}
+      // Both halves of the partition are published, so "which parameters are shown and which
+      // are collapsed" is readable from the DOM as a set rather than inferred from what a
+      // query happened to find. `ds/Accordion` publishes its own half as
+      // `data-advanced-fields`; this is the other one.
+      data-primary-params={primary.map((field) => field.key).join(' ')}
     >
       {/* Blocking state is text, not colour: the save gate is stated in words. */}
       {blocking.length ? (
         <p
           role="status"
-          className="mb-1 rounded border border-accent-loss bg-bg-elevated p-1.5 font-mono text-caption text-accent-loss"
+          className="mb-1 rounded border border-accent-loss bg-bg-elevated p-1.5 font-mono text-micro text-accent-loss"
           data-testid="parameter-form-blocking"
           data-blocking-keys={blocking.join(',')}
         >
@@ -719,34 +779,44 @@ export function ParameterForm({
         </p>
       ) : null}
 
-      {/* Requirement 5.3: every required parameter is visible, with nothing to expand. */}
-      <div data-testid="required-params">
-        {required.map((field) => (
-          <ParameterField key={field.key} field={field} {...fieldProps} />
-        ))}
-      </div>
-
-      {optional.length ? (
-        <div className="mt-2">
-          <button
-            type="button"
-            className="flex w-full items-center gap-1 border-t border-border-default pt-2 font-mono text-caption uppercase tracking-wider text-text-secondary focus:outline-none focus:ring-2 focus:ring-accent-cyan"
-            aria-expanded={advancedOpen}
-            aria-controls={advancedId}
-            data-testid="advanced-toggle"
-            onClick={() => setAdvancedOpen((open) => !open)}
-          >
-            <span aria-hidden="true">{advancedOpen ? '▾' : '▸'}</span>
-            Advanced ({optional.length})
-          </button>
-          <div id={advancedId} data-testid="advanced-params" hidden={!advancedOpen}>
-            {advancedOpen
-              ? optional.map((field) => (
-                  <ParameterField key={field.key} field={field} {...fieldProps} />
-                ))
-              : null}
-          </div>
+      {/*
+        Requirement 5.3: every required parameter is visible, with nothing to expand — and
+        every behaviour-changing one with it, whatever `required` the payload carried. Not
+        rendered at all when the set is empty: an empty box above a chevron says less than the
+        open accordion below it does.
+      */}
+      {primary.length ? (
+        <div data-testid="required-params">
+          {primary.map((field) => (
+            <ParameterField key={field.key} field={field} {...fieldProps} />
+          ))}
         </div>
+      ) : null}
+
+      {advanced.length ? (
+        <Accordion
+          // Remounted when the default changes, because the open state lives inside the
+          // accordion: a backend error arriving under a collapsed panel has to open it, and a
+          // new selection has to hand the next block a collapsed one.
+          key={`${advancedId}-${advancedOpen ? 'open' : 'collapsed'}`}
+          id={advancedId}
+          title="Advanced"
+          summary={
+            everythingIsAdvanced
+              ? 'Every parameter of this block is optional and carries a block default, so there is nothing above this section.'
+              : 'Optional settings. Each one already has the block default the registry publishes for it.'
+          }
+          fields={advancedKeys}
+          defaultOpen={advancedOpen}
+          className="mt-2"
+          data-testid="advanced"
+        >
+          <div data-testid="advanced-params">
+            {advanced.map((field) => (
+              <ParameterField key={field.key} field={field} {...fieldProps} />
+            ))}
+          </div>
+        </Accordion>
       ) : null}
 
       {/* An issue naming a field this block does not publish is shown, not discarded. */}
@@ -756,7 +826,7 @@ export function ParameterForm({
             <p
               key={`${issue.code || 'issue'}-${index}`}
               role="alert"
-              className="font-mono text-caption text-accent-gold"
+              className="font-mono text-micro text-accent-gold"
               data-field={issue.field}
             >
               {issue.field}: {issue.fix_hint ? issue.fix_hint : issue.message}

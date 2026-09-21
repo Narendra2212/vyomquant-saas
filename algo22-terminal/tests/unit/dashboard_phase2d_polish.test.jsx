@@ -1,21 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Dashboard from '../../src/pages/Dashboard';
 import * as dashboardModule from '../../src/api/modules/dashboard';
 import * as riskModule from '../../src/api/modules/risk';
 import wsClient from '../../src/websocketClient';
 
-// Mock Recharts responsive container & area chart to avoid DOM measurement issues in JSDOM
-vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div data-testid="responsive-container">{children}</div>,
-  AreaChart: ({ children }) => <div data-testid="area-chart">{children}</div>,
-  Area: () => <div data-testid="area" />,
-  XAxis: () => <div data-testid="x-axis" />,
-  YAxis: () => <div data-testid="y-axis" />,
-  Tooltip: () => <div data-testid="tooltip" />,
-}));
+// `ds/Chart`, lazily imported since task 19.1b, is stubbed rather than recharts mocked —
+// see `dashboard_phase2a_ui.test.jsx` for why the recharts mock that stood here stopped
+// working. Nothing in this file asserts anything about the chart.
+vi.mock('../../src/components/ds/Chart', () => {
+  const Stub = (props) => <figure data-testid="chart" data-chart-kind={props.kind} />;
+  return { __esModule: true, Chart: Stub, default: Stub };
+});
 
 // Mock WebSocket client with event triggering capability
 vi.mock('../../src/websocketClient', () => {
@@ -173,27 +171,12 @@ describe('Phase 2D — Trading Cockpit Polish & WebSocket Invariants', () => {
     vi.spyOn(dashboardModule.dashboardApi, 'getDashboard').mockResolvedValue(mockLivePayload);
   });
 
-  describe('2D.1: Standard / Dense Layout Toggle', () => {
-    it('defaults to Standard layout and toggles to Dense on click', async () => {
-      render(
-        <MemoryRouter>
-          <Dashboard />
-        </MemoryRouter>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText('Standard')).toBeDefined();
-        expect(screen.getByText('Dense')).toBeDefined();
-      });
-
-      // Click Dense toggle
-      const denseBtn = screen.getByText('Dense');
-      fireEvent.click(denseBtn);
-
-      // Verify localStorage was updated
-      expect(localStorage.getItem('vyomquant_dashboard_density')).toBe('dense');
-    });
-  });
+  // The `2D.1: Standard / Dense Layout Toggle` block stood here. Its one test asserted the
+  // toggle rendered `Standard`/`Dense` and wrote `vyomquant_dashboard_density` to
+  // localStorage. vyomquant-ui-redesign task 19.4 deleted the toggle and the key: the
+  // density preference has no requirement behind it and cost a second layout to maintain
+  // (design.md §7.1). The test is deleted with the behaviour it covered rather than relaxed
+  // into an assertion that would pass on any page — there is nothing left to assert.
 
   describe('2D.3: Spot Liquidation Safety Invariants', () => {
     it('renders dash for spot liquidation price and distance without fabrication', async () => {
@@ -265,8 +248,10 @@ describe('Phase 2D — Trading Cockpit Polish & WebSocket Invariants', () => {
         </MemoryRouter>
       );
 
+      // Task 19.1 replaced the hand-styled `REAL CAPITAL ACTIVE` span with
+      // `ds/TradingEnvironmentBadge`, whose LIVE label is "LIVE" (design.md §8.2).
       await waitFor(() => {
-        expect(screen.getByText('REAL CAPITAL ACTIVE')).toBeDefined();
+        expect(screen.getAllByText('LIVE').length).toBeGreaterThan(0);
       });
 
       // Event from paper environment should not alter live state
@@ -275,22 +260,74 @@ describe('Phase 2D — Trading Cockpit Polish & WebSocket Invariants', () => {
         message: 'Simulated kill switch'
       });
 
-      // Live kill switch should remain standby
-      expect(screen.getByText('STANDBY (READY)')).toBeDefined();
+      // The live kill switch must remain standby. `STANDBY (READY)` was the Risk & Safety
+      // Matrix's row, which task 19.1b removed as a second copy of a state the control
+      // itself reports. The control is task 19.2's and untouched, so standby is asserted
+      // where it is now reported: the trigger still offers the halt rather than the resume,
+      // and no halted banner is on screen.
+      expect(screen.getByText('EMERGENCY HALT')).toBeDefined();
+      expect(screen.queryByText('RESUME TRADING')).toBeNull();
+      expect(screen.queryByText(/EMERGENCY KILL SWITCH ACTIVE/i)).toBeNull();
+
+      /*
+       * `Engine Operational` WAS THE DIAGNOSTICS PILL, WHICH 19.2b DELETED.
+       *
+       * The pill's label was one three-way ternary —
+       * `isKillSwitchActive ? "Trading Blocked" : wsStatus === "connected" ? "Engine
+       * Operational" : "Stream Connecting"` — so a single string carried two independent
+       * readings and neither of them was named. Its two halves are now reported separately
+       * and by whoever owns them: the halt by the control and the strip, asserted above, and
+       * the socket by the "Real-time stream" `ds/StatusBadge` that moved into the System &
+       * exchange health panel, which renders `wsClient`'s own state word.
+       *
+       * So the claim is unchanged and is now made against the reading rather than against a
+       * conjunction: this client's stream is connected, and the paper-environment frame did
+       * not disturb it. Awaited, because the reading is inside the health panel's children
+       * and those arrive with the projection, not with the header.
+       */
+      await waitFor(() => {
+        const stream = document.querySelector('[data-health-reading="realtimeStream"]');
+        expect(stream, 'the health panel reported no real-time stream state').not.toBeNull();
+        expect(stream.textContent).toContain('Connected');
+      });
     });
   });
 
   describe('2D.6: Unmeasured Latency Neutral Fallback', () => {
-    it('displays Latency unavailable when venue latency is null', async () => {
+    it('reports no per-venue latency, because neither venue field is measured', async () => {
       render(
         <MemoryRouter>
           <Dashboard />
         </MemoryRouter>
       );
 
+      /*
+       * The old per-venue row read `latency_ms` and printed "Latency unavailable" only for
+       * the `null` one, which presented binance's 28 as a measurement. `pageFields`'
+       * `exchangeHealth` note records that `status` and `latency_ms` are both constants in
+       * the aggregation service, so task 19.1b stopped passing either to
+       * `ds/ExchangeStatus`: every row reports its latency as not measured, with that
+       * component's own reason, and the measured figure is the page-level
+       * `health.exchange_api_latency_ms`.
+       */
+      // Waited on the venue ROWS, not on the panel: `data-region` is on the `ds/Panel`
+      // section, which is in the DOM in its loading state too, so querying on the region
+      // alone would read the skeleton.
       await waitFor(() => {
-        expect(screen.getByText('Latency unavailable')).toBeDefined();
+        expect(document.querySelectorAll('[data-exchange]').length).toBe(2);
       });
+
+      const health = document.querySelector('[data-region="exchangeHealth"]');
+      const venues = health.querySelectorAll('[data-exchange]');
+      expect(venues.length).toBe(2);
+      for (const venue of venues) {
+        expect(venue.getAttribute('data-latency-reported')).toBe('false');
+      }
+      expect(health.textContent).not.toContain('28 ms');
+      // The one measured latency on the page, from `health`, with its unit.
+      const latency = document.querySelector('[data-region="exchangeApiLatencyMs"]');
+      expect(latency.getAttribute('data-metric-available')).toBe('true');
+      expect(latency.textContent).toContain('28');
     });
   });
 });

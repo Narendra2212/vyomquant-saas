@@ -15,11 +15,12 @@
     "mfa.listFactors",
     "mfa.unenroll",
     "mfa.verify",
-    "resetPasswordForEmail",
     "signInWithOAuth",
+    "signInWithOtp",
     "signInWithPassword",
     "signUp",
-    "updateUser"
+    "updateUser",
+    "verifyOtp"
   ],
   "surface": "authentication",
   "unresolved_usages": []

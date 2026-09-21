@@ -1,0 +1,54 @@
+{
+  "pbtResults": {
+    "1. Write the bug condition exploration tests": {
+      "status": "passed",
+      "failingExample": "Cluster C, tests/unit/lib/socketCredential.test.js — both fast-check properties failed on `F` after 1 test, which confirms the bug condition.\n\nProperty \"holds for websocketClient.connect() over generated tokens and every real route\"\n  Property failed after 1 tests\n  { seed: -337809765, path: \"0:0:0:...:0\", endOnFailure: true }\n  Counterexample: [\"AAAAAAAAAAAA.AAAAAAAAAAAA.AAAAAAAAAAAA\",\"/ws/telemetry\"]\n  Shrunk 38 time(s)\n  AssertionError: the credential is at index 53 of\n    wss://d7d88qs4jmch.cloudfront.net/ws/telemetry?token=<JWT>\n\nProperty \"holds for Billing's mount over generated tokens and user ids\"\n  Property failed after 1 tests\n  { seed: -753105484, path: \"0:0:0:...:0\", endOnFailure: true }\n  Counterexample: [\"AAAAAAAAAAAA.AAAAAAAAAAAA.AAAAAAAAAAAA\",\"usr_aaaa\"]\n  Shrunk 41 time(s)\n  AssertionError: the credential is at index 43 of\n    ws://localhost:3000/ws/user/usr_aaaa?token=<JWT>\n\nBoth shrank to the minimal token the generator admits and the first route, so the exposure is unconditional — it does not depend on token content or on which route is requested. Requirements 1.21 / 2.21.",
+      "lastRunTimestamp": 1789853068396
+    }
+  },
+  "executionHistory": {
+    "9.4 Declare the Signal Trace node projection in one shared fixture": [
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789931933548
+      },
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789932525646
+      }
+    ],
+    "9.5 Backend side — every stage's `nodes` is JSON-serialisable": [
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789932528304
+      },
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789933029314
+      }
+    ],
+    "9.6 Frontend side — stages 1 and 2 render node detail": [
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789933030490
+      },
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789933867387
+      }
+    ],
+    "8.2 **MUST LAND ALONE** — replace the socket credential with a single-use ticket across nine routes": [
+      {
+        "executionId": "997f2dce-b20c-4bb6-b25f-ca5bc7727cba",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1789934292909
+      }
+    ]
+  }
+}

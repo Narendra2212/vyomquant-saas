@@ -98,14 +98,20 @@ export const marketApi = {
   getMarketData: (symbol, timeframe = "5m", limit = 200) =>
     get(`/api/market/data/${encodeURIComponent(symbol)}/${timeframe}`, { params: { limit } }),
 
-  /**
-   * Halt all strategies (emergency stop)
-   * @returns {Promise<{status: string}>}
+  /*
+   * `haltStrategies` was deleted here. It POSTed `/api/strategies/stop`, which no router
+   * declares: `routers/strategies.py` has `POST /{strategy_id}/stop` and no `POST /stop`,
+   * and no `POST /{strategy_id}` for the literal `stop` to fall into either. There is no
+   * fleet-wide halt endpoint at all, so this had no correct address to be repointed at.
+   *
+   * THE REAL HALT IS `POST /api/risk/kill-switch`. `riskApi.killSwitch` already reaches it
+   * and `pages/Dashboard.jsx` already calls it, behind a `ds/ConfirmDialog`
+   * acknowledgement. Anything that needs an emergency stop goes there.
+   *
+   * It is deleted rather than repointed because it had no caller: it was dead code shaped
+   * like a safety control, and the failure mode of leaving it was someone wiring an
+   * "emergency halt" button to a call that reports success while halting nothing.
    */
-  haltStrategies: () => {
-    console.log("📡 API CALL:", '/api/strategies/stop (halt)');
-    return post('/api/strategies/stop');
-  },
 
   /**
    * Close all positions (emergency liquidation)

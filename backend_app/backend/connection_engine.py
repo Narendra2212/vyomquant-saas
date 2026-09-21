@@ -188,9 +188,17 @@ class ConnectionEngine:
                         self._apply_mock_interface()
                         return self.exchange
                     else:
+                        # Diagnostic: previously this log omitted exc_info, so a production
+                        # failure (e.g. "[OKX] Failed to load markets after 3 attempts:
+                        # unsupported operand type(s) for +: NoneType and str") gave no
+                        # traceback to locate the failing line inside the CCXT call chain.
+                        # exc_info=True makes the next occurrence self-diagnosing via the
+                        # existing CloudWatch/awslogs pipeline. No change to control flow,
+                        # the raised exception, or any return value.
                         logger.error(
                             f"[{self.exchange_id.upper()}] Failed to load markets after "
-                            f"{max_retries} attempts: {e}"
+                            f"{max_retries} attempts: {type(e).__name__}: {e}",
+                            exc_info=True,
                         )
                         raise ConnectionError(f"Exchange connection failed: {e}")
                 wait = 2**attempt

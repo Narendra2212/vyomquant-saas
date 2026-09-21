@@ -13,14 +13,514 @@ Referral, Signal Trace, Support, Health
 import asyncio
 import inspect
 import logging
+import os
 import re
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend_app.core.dependencies import get_telemetry, create_request_supabase
 
 logger = logging.getLogger("DashboardAggregationService")
+
+#: Fallback used only when neither APP_URL nor FRONTEND_URL is set. Referral links are
+#: user-facing and get pasted into chats and emails, so a stale hostname here outlives any
+#: deployment. Kept deliberately identical to ``routers.referral._get_referral_link`` - the two
+#: are duplicated rather than shared to avoid importing a router module into a service layer, so
+#: they must be changed together.
+_DEFAULT_APP_URL = "https://app.vyomquant.in"
+
+
+def _app_base_url() -> str:
+    """Public base URL of the frontend, for links rendered into user-visible payloads."""
+    return os.getenv("APP_URL", os.getenv("FRONTEND_URL", _DEFAULT_APP_URL)).rstrip("/")
+
+
+def _equity_of(point: Any) -> Optional[float]:
+    """The equity figure carried by one point of an equity curve, or ``None`` if it carries none.
+
+    Accepts what ``get_equity_curve`` actually returns - a mapping keyed by the QuestDB column
+    names (``timestamp``, ``equity``) - and, for callers holding a plainer series, a bare number.
+    ``total_equity`` is accepted as an alias because that is the column name the paper equity
+    snapshots use.
+
+    Returns ``None`` rather than ``0.0`` for an unreadable point. Zero is a real equity: an
+    account can be flat, and a wiped account is the case a drawdown figure matters most for, so
+    substituting zero for "not reported" would invent the very reading it is standing in for.
+    """
+    if isinstance(point, bool):  # bool is an int subclass; an equity is never a flag
+        return None
+    if isinstance(point, (int, float)):
+        return float(point)
+    if isinstance(point, dict):
+        raw = point.get("equity")
+        if raw is None:
+            raw = point.get("total_equity")
+    else:
+        raw = getattr(point, "equity", None)
+        if raw is None:
+            raw = getattr(point, "total_equity", None)
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value != value or value in (float("inf"), float("-inf")):  # NaN / infinity
+        return None
+    return value
+
+
+def current_drawdown_pct_from_equity_curve(equity_curve: Optional[List[Any]]) -> Optional[float]:
+    """Current drawdown as a **percentage** of the series' peak, or ``None`` if unmeasurable.
+
+    vyomquant-ui-redesign BC-1 (`design.md` §1.5, §16). Drawdown is a peak-to-trough decline.
+    The field the dashboard has published until now carries ``today_return_pct`` instead, so a
+    profitable day renders as a positive "drawdown" - the figure a trader reads to decide whether
+    to cut size. This is the honest computation, taken over the equity series the aggregation
+    service already reads; it opens no connection and issues no query of its own.
+
+    The figure is ``(peak_equity - current_equity) / peak_equity * 100``, where ``peak_equity``
+    is the maximum over the series up to and including its last point and ``current_equity`` is
+    that last point. Note this is *current* drawdown, not *maximum* drawdown: it measures the
+    decline still outstanding right now, not the worst decline the series ever suffered. It is
+    therefore a different quantity from ``backend/paper/paper_accounting.max_drawdown``, which
+    answers Requirement 18.9's question about a paper session's worst historical decline, and the
+    two are deliberately not shared.
+
+    Args:
+        equity_curve: The series in ascending time order, as ``get_equity_curve`` returns it.
+            It is read as given and **not** sorted here: the drawdown of a resorted series is
+            the drawdown of a different series, and the read is already ordered by
+            ``ORDER BY timestamp ASC``.
+
+    Returns:
+        A non-negative percentage rounded to two decimals, or ``None``.
+
+        ``None`` - not ``0.0`` - whenever no decline can be measured:
+
+        * an absent or empty series: nothing was read;
+        * a single point: one observation describes no decline. A peak needs something to fall
+          from;
+        * any point whose equity is unreadable: dropping it would silently measure a different
+          series, and the dropped point may have been the peak;
+        * a peak at or below zero: there is no positive base to express the decline against.
+
+        ``0.0`` is reserved for its one honest meaning - a series that was read, that has a
+        positive peak, and whose latest point is at or above that peak. A series that only ever
+        rose is at its peak and its drawdown is zero. The result is clamped at zero for that
+        reason: a gain is not a negative drawdown, it is no drawdown.
+    """
+    if not equity_curve:
+        return None
+
+    equities: List[float] = []
+    for point in equity_curve:
+        equity = _equity_of(point)
+        if equity is None:
+            return None
+        equities.append(equity)
+
+    if len(equities) < 2:
+        return None
+
+    peak = max(equities)
+    if peak <= 0.0:
+        return None
+
+    current = equities[-1]
+    decline_pct = (peak - current) / peak * 100.0
+    return round(max(0.0, decline_pct), 2)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#
+#  BC-2 - a positions read that FAILED is not a positions read that found NONE
+#
+#  Spec: vyomquant-ui-redesign task 12.2. design.md §1.6, §16. Requirements 14.5, 19.1, 19.2.
+#
+#  ``get_open_positions`` used to log a Redis (or paper-store) failure and ``return []``.
+#  That is the one answer a caller cannot tell apart from the truthful one: an empty list
+#  IS what an account with no open positions returns, so an outage rendered as "you have no
+#  positions" and a trader could act on it. Requirement 14.5 forbids exactly this.
+#
+#  THE DISPOSITION, per site:
+#    * ``get_open_positions`` RAISES :class:`PositionsUnreadable`. It returns a bare list with
+#      no envelope to hang a marker on, so the failure has to leave by the only channel a
+#      list has.
+#    * ``get_dashboard_data`` catches it and publishes ``degraded`` alongside the rest of the
+#      dashboard, because the balances, the equity curve and the executions on that response
+#      are still real reads and a blanket 503 would throw them away. ``positions`` stays
+#      ``[]`` - the LIST does not lie, it is simply empty - and ``degraded`` is what says
+#      WHY it is empty. That is the same discriminator ``signal_service`` already uses for
+#      the same problem (``signals: []`` + ``degraded`` vs ``signals: []`` + ``degraded:
+#      None``), so this is one convention rather than a second one.
+#    * ``routers/dashboard.py::get_dashboard_overview`` raises 503 instead, because EVERY
+#      figure it returns is a headline money figure. There is no partial truth left to carry.
+#
+#  HOW A CLIENT TELLS THE TWO APART (this is the whole point of BC-2):
+#    * ``degraded is None``            -> ``positions`` is the truth. ``[]`` means none open.
+#    * ``degraded["positions"]``       -> ``positions`` is ``[]`` because it could not be read.
+#      ``== "unreadable"``               Render the error state, never an empty table.
+#    Redundantly, and from the other end of the response: ``risk.open_positions_count`` is an
+#    ``int`` when counted and ``None`` when unreadable - never ``0`` as a stand-in.
+#
+# ══════════════════════════════════════════════════════════════════════════
+
+#: The value of ``degraded["positions"]`` when the positions read failed. A string rather than
+#: a bare ``True`` so the key can name other position-read degradations later without a second
+#: shape, and so a log line carrying it reads as a sentence.
+POSITIONS_UNREADABLE = "unreadable"
+
+
+class PositionsUnreadable(RuntimeError):
+    """The open-positions read failed, and no list can honestly be returned for it.
+
+    Raised by :meth:`DashboardAggregationService.get_open_positions` where it used to
+    ``return []``. Callers that can degrade catch this and publish
+    :func:`positions_degradation`; callers that cannot let it propagate to the route's 503.
+
+    Deliberately NOT an ``HTTPException``: this is a service-layer fact, and which status
+    code it deserves depends on how much of the response survives without it - a judgement
+    only the route can make.
+    """
+
+    def __init__(self, environment: str, cause: BaseException) -> None:
+        self.environment = environment
+        self.cause = cause
+        super().__init__(
+            f"open positions for the {environment} environment could not be read: {cause}"
+        )
+
+
+def positions_degradation(error: Optional[BaseException], environment: str) -> Optional[Dict[str, Any]]:
+    """The ``degraded`` block for an unreadable positions read, or ``None`` when it read fine.
+
+    Shape and spelling follow ``signal_service._lifecycle_degradation`` /
+    ``_environment_degradation``: a top-level ``degraded`` key that is ``None`` in the healthy
+    case and, in the degraded one, a dict naming what is degraded plus a prose ``reason`` a
+    page can render verbatim.
+
+    ``None`` in / ``None`` out, so the caller writes one expression for both cases and cannot
+    forget the healthy one.
+    """
+    if error is None:
+        return None
+    return {
+        "positions": POSITIONS_UNREADABLE,
+        "environment": environment,
+        "reason": (
+            "Open positions could not be read for this account, so the empty positions list on "
+            "this response is the absence of a reading and not the absence of positions "
+            "(Requirement 14.5). Any position held is still held."
+        ),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#
+#  BC-5 - lifetime REALISED P&L, which nothing on the portfolio overview reported
+#
+#  Spec: vyomquant-ui-redesign task 12.5. design.md §7.6, §16. Requirements 10.1, 19.1, 19.2.
+#
+#  Requirement 10.1 asks the Portfolio page for realised P&L. Two figures on this response look
+#  like it and neither is it:
+#    * ``today_realized_pnl`` IS realised, but only since 00:00 UTC. It is not a lifetime figure.
+#    * ``cumulative_pnl`` IS lifetime, but it is TOTAL P&L - realised plus the mark-to-market on
+#      positions still open. Labelling it "realised" would report unbanked money as banked.
+#  So the page had no source and rendered not-available.
+#
+#  THE FIGURE: the same ``executions.pnl`` sum ``today_realized_pnl`` already comes from, with
+#  the day filter removed. Derived from ONE expression rather than a second definition of
+#  "realised" - the two figures cannot disagree about what realised means, because they read the
+#  same column of the same table and differ only in the window.
+#
+#  ONE ROUND TRIP: the day-filtered sum used to be its own query with the cutoff in its
+#  ``WHERE``. It is now a conditional aggregate inside the same ``SELECT`` as the lifetime sum
+#  (:func:`executions_realized_pnl_query`), so the read that produced one figure produces both.
+#  The cost that did change is the scan: the lifetime sum has to see the user's whole execution
+#  history where the day-filtered one saw today's partition. That is inherent to a lifetime
+#  figure - a separate second query would pay the same scan AND a second round trip.
+#
+#  UNREADABLE IS ``None``; NET-ZERO IS ``0.0`` (Requirement 19.2, and BC-1/BC-2's rule)
+#    An account that has closed trades netting exactly nothing has a realised P&L of zero, and
+#    that is a fact a trader is entitled to read. So ``0.0`` is reserved for it and for the
+#    successfully-read empty ledger, and every case where the figure was NOT read reports
+#    ``None``:
+#      * the query raised, or returned no row                       -> ``None``
+#      * the row carries no ``realized_pnl`` column                 -> ``None``
+#      * the sum is SQL NULL over a ledger that HAS rows            -> ``None`` (the ``pnl``
+#        column is not reporting for those rows, so no sum of it can be published)
+#      * the sum is SQL NULL over a ledger with zero rows           -> ``0.0`` (read fine, and
+#        an account that has never executed has realised nothing)
+#      * the sum is a number, including ``0.0``                     -> that number
+#    ``None`` on the field is the whole honesty channel here, exactly as BC-1's
+#    ``current_drawdown_pct_v2`` is - a nullable FIGURE needs no ``degraded`` block, which BC-2
+#    added only because a LIST has nowhere to put a null. This is those two conventions applied,
+#    not a third one.
+#
+#  ADDITIVE (Requirement 19.1): ``today_realized_pnl`` and ``cumulative_pnl`` keep their names,
+#  their types and their exact values, including the ``0.0`` that ``today_realized_pnl`` has
+#  always published for an unreadable day sum. No consumer is repointed by BC-5.
+#
+# ══════════════════════════════════════════════════════════════════════════
+
+#: Column alias for the day-filtered realised sum. Selected FIRST so a caller reading the row
+#: positionally - which is how the single-figure query it replaces was read, ``dataset[0][0]`` -
+#: still finds today's figure where it has always been.
+TODAY_REALIZED_PNL_COLUMN = "today_realized_pnl"
+
+#: Column alias for the lifetime realised sum (BC-5). Read BY NAME only, never positionally: an
+#: unnamed column is a response whose shape we are guessing at, and a guessed money figure is
+#: the fabrication Requirement 19.2 forbids. ``None`` is the honest answer there.
+REALIZED_PNL_COLUMN = "realized_pnl"
+
+#: Column alias for the row count behind the sums. Not published - it exists so a SQL NULL sum
+#: over an EMPTY ledger can be told from a NULL sum over a ledger that has rows, which is the
+#: difference between "realised nothing" and "cannot say".
+EXECUTION_COUNT_COLUMN = "execution_count"
+
+
+def executions_realized_pnl_query(safe_uid: str, today_date_str: str) -> str:
+    """One QuestDB read yielding the day-filtered realised sum AND the lifetime one.
+
+    BC-5. Both figures are ``sum(pnl)`` over the same ``executions`` rows for this user; the
+    day-filtered one narrows to ``timestamp >= today 00:00 UTC`` as a conditional aggregate
+    rather than in the ``WHERE``, so one round trip answers both.
+
+    Args:
+        safe_uid: A user id ALREADY through :meth:`DashboardAggregationService._safe_uid`. This
+            function interpolates it and validates nothing - callers must not pass raw input.
+        today_date_str: ``YYYY-MM-DD`` for the UTC day whose realised P&L is wanted.
+
+    The day-filtered branch carries ``else 0.0`` rather than falling through to SQL NULL: a row
+    outside today contributes nothing either way, and the published figure is identical, but the
+    ``ELSE``-present form is the one this repository already runs against QuestDB
+    (``routers/analytics.py``).
+    """
+    day_cutoff = (
+        f"to_timestamp('{today_date_str}T00:00:00.000000Z', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ')"
+    )
+    return (
+        f"SELECT "
+        f"sum(case when timestamp >= {day_cutoff} then pnl else 0.0 end) AS {TODAY_REALIZED_PNL_COLUMN}, "
+        f"sum(pnl) AS {REALIZED_PNL_COLUMN}, "
+        f"count(*) AS {EXECUTION_COUNT_COLUMN} "
+        f"FROM executions "
+        f"WHERE user_id = '{safe_uid}';"  # nosec: B608
+    )
+
+
+def _finite_float(raw: Any) -> Optional[float]:
+    """``raw`` as a finite float, or ``None`` if it is not a number. Booleans are not money."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value != value or value in (float("inf"), float("-inf")):  # NaN / infinity
+        return None
+    return value
+
+
+def realized_pnl_from_execution_totals(
+    result: Optional[Dict[str, Any]],
+) -> Tuple[float, Optional[float]]:
+    """Read ``(today_realized_pnl, realized_pnl)`` off :func:`executions_realized_pnl_query`.
+
+    Returns:
+        A 2-tuple of
+
+        * ``today_realized_pnl`` - a ``float``, ``0.0`` when unreadable. Its historical
+          behaviour, preserved exactly: this field has always published ``0.0`` for a failed or
+          empty day sum and BC-5 is additive, so it is not the field that gets a null now.
+        * ``realized_pnl`` - the lifetime figure, or ``None`` when it was not read. ``0.0`` only
+          for a ledger that WAS read: one whose closed trades net to zero, or one with no rows
+          at all. See the BC-5 block above for the case-by-case rule.
+
+    Never raises for a malformed ``result``; an unrecognisable response is an unread one.
+    """
+    today = 0.0
+    lifetime: Optional[float] = None
+
+    if not isinstance(result, dict):
+        return today, lifetime
+    dataset = result.get("dataset")
+    if not dataset:
+        return today, lifetime
+    row = dataset[0]
+    if not isinstance(row, (list, tuple)) or not row:
+        return today, lifetime
+
+    columns = [
+        col.get("name")
+        for col in (result.get("columns") or [])
+        if isinstance(col, dict)
+    ]
+    by_name = dict(zip(columns, row))
+
+    # Today: by name where the response names it, else index 0 - the exact cell the query this
+    # replaced read (``pnl_res["dataset"][0][0]``), so no reader of this figure sees a change.
+    today_cell = by_name[TODAY_REALIZED_PNL_COLUMN] if TODAY_REALIZED_PNL_COLUMN in by_name else row[0]
+    today_value = _finite_float(today_cell)
+    if today_value is not None:
+        today = today_value
+
+    # Lifetime: named only. A missing column means this response is not the one this function
+    # describes, and no figure can be taken from it.
+    if REALIZED_PNL_COLUMN in by_name:
+        lifetime = _finite_float(by_name[REALIZED_PNL_COLUMN])
+        if lifetime is None:
+            # SQL NULL. Zero rows -> the ledger was read and it is empty, so nothing has been
+            # realised: that is 0.0. Rows present -> ``pnl`` is not reporting for them, and a
+            # sum of what is not reported cannot be published.
+            count = _finite_float(by_name.get(EXECUTION_COUNT_COLUMN))
+            if count is not None and count == 0:
+                lifetime = 0.0
+
+    return today, lifetime
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# VENUE HEALTH (production-launch-hardening 6.5 - Requirements 1.5, 1.6, 2.5, 2.6, 3.3)
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#
+# ``get_health_status`` has classified a measured exchange latency correctly since Phase 1: a
+# figure a probe wrote into ``exchange_health:{user_id}:*``, ``None`` and ``"unavailable"`` when
+# nothing wrote one, and three bands applied only once there is something to band.
+# ``get_exchange_data`` published two literals instead - a constant ``"connected"`` and a constant
+# millisecond figure - for every row, every venue and every request, from no measurement at all.
+# The thresholds and the vocabulary below are lifted out of
+# ``get_health_status`` rather than restated, so the two methods classify through one function
+# and cannot drift; Requirement 3.3 pins both ceilings, and ``<`` is what it pins (the ceiling
+# itself is NOT in the band beneath it).
+
+#: Upper bound of ``optimal``, exclusive.
+_LATENCY_OPTIMAL_CEILING_MS = 150
+
+#: Upper bound of ``normal``, exclusive. At or above it a measurement reads ``degraded``.
+_LATENCY_NORMAL_CEILING_MS = 500
+
+#: What a latency STATUS reads as when no probe measured one. The figure beside it is ``None``.
+LATENCY_UNAVAILABLE = "unavailable"
+
+#: A venue a probe measured and reached, and whose credential nothing contradicts.
+VENUE_STATUS_CONNECTED = "connected"
+
+#: A venue nothing has probed. The honest reading for a row that exists and was never checked:
+#: not "connected" (nothing answered), not "disconnected" (nothing was asked).
+VENUE_STATUS_UNKNOWN = "unknown"
+
+#: A venue whose stored credential says it cannot be used - revoked, deactivated, or with its
+#: trade permission withdrawn. A KNOWN negative, which is a different finding from "unknown" and
+#: is reported as such rather than collapsed into it.
+VENUE_STATUS_INVALID_CREDENTIALS = "invalid_credentials"
+
+#: Statuses that count a venue as connected. Four spellings rather than one because
+#: ``design/alertCondition.js`` tests the frontend's *connected group* - ``connected``, ``paired``,
+#: ``open``, ``ok`` - and a probe reporting ``ok`` must not be counted disconnected here while the
+#: client counts it connected.
+_CONNECTED_VENUE_STATUSES = frozenset({VENUE_STATUS_CONNECTED, "ok", "open", "paired"})
+
+#: ``validation_status`` spellings that assert a credential was checked and works.
+_CREDENTIAL_VALID_STATUSES = frozenset({"valid", "validated", "verified", "active", "ok"})
+
+#: ``validation_status`` spellings that assert it does not. ``unvalidated`` and ``pending`` are
+#: deliberately in NEITHER set: they are the unknown, and the unknown is not a negative fact
+#: about the credential - it just cannot support a ``can_trade`` of ``True``.
+_CREDENTIAL_INVALID_STATUSES = frozenset(
+    {"revoked", "invalid", "expired", "failed", "error", "unauthorized", "denied", "disabled", "inactive"}
+)
+
+
+def classify_measured_latency(latency_ms: Optional[int]) -> str:
+    """The band a MEASURED latency falls in, or :data:`LATENCY_UNAVAILABLE` for no measurement.
+
+    ``get_health_status``' classification, extracted verbatim so ``get_exchange_data`` shares it.
+    ``None`` in gives ``"unavailable"`` out - there is no band for a figure nobody measured, and
+    returning one would be the fabrication this whole cluster is about.
+    """
+    if latency_ms is None:
+        return LATENCY_UNAVAILABLE
+    if latency_ms < _LATENCY_OPTIMAL_CEILING_MS:
+        return "optimal"
+    if latency_ms < _LATENCY_NORMAL_CEILING_MS:
+        return "normal"
+    return "degraded"
+
+
+def measured_latency_ms(probe: Optional[Dict[str, Any]]) -> Optional[int]:
+    """The latency a probe payload carries, or ``None`` if it carries none.
+
+    ``None`` for a missing probe, a probe with no ``latency_ms``, and a ``latency_ms`` that is not
+    a number. Each of those is "not measured", and they are not worth distinguishing to a reader
+    of the field: what matters is that no figure is invented for any of them.
+    """
+    if not isinstance(probe, dict):
+        return None
+    raw = probe.get("latency_ms")
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def credential_validity(record: Optional[Dict[str, Any]]) -> Optional[bool]:
+    """Whether a record says a venue credential can place an order: ``True``/``False``/``None``.
+
+    ``None`` is the important return: it means the record does not answer, which is the state
+    every ``exchange_keys`` row is in today (see ``get_exchange_data``'s note on the select).
+    Requirement 2.6 makes the unknown non-tradable, so callers must treat ``None`` as "no", but
+    they must not record it as a negative FACT about the credential - :data:`VENUE_STATUS_UNKNOWN`
+    and :data:`VENUE_STATUS_INVALID_CREDENTIALS` are separate statuses for exactly that reason.
+
+    Called on an ``exchange_keys`` row and, when that row says nothing, on the probe payload -
+    one vocabulary, whichever source carries it. ``status`` is deliberately NOT consulted: that
+    field is about the venue answering, not about the credential being usable, and conflating the
+    two is how a socket heartbeat would end up gating an order button.
+    """
+    if not isinstance(record, dict):
+        return None
+
+    # A definitive negative wins wherever it appears. A deactivated key, a revoked one, or one
+    # whose trade permission was withdrawn cannot trade regardless of what else the row says.
+    if record.get("is_active") is False:
+        return False
+    if record.get("can_trade") is False:
+        return False
+    raw_status = record.get("validation_status")
+    status = raw_status.strip().lower() if isinstance(raw_status, str) else ""
+    if status in _CREDENTIAL_INVALID_STATUSES:
+        return False
+
+    # An affirmative needs something that actually checked the credential. ``is_active`` alone is
+    # not it: it says the user enabled the key, not that anything validated it.
+    if status in _CREDENTIAL_VALID_STATUSES or record.get("can_trade") is True:
+        return True
+    return None
+
+
+def venue_status(probe: Optional[Dict[str, Any]], validity: Optional[bool]) -> str:
+    """The ``status`` for one venue row: measured, known-bad, or unknown. Never asserted.
+
+    A known-invalid credential is reported as such before anything else, because a venue that
+    answers a heartbeat for a revoked key is still not a venue this account can trade on. Then
+    the probe's own reading, if it wrote one; then a measurement with no reading, which is itself
+    evidence the venue answered. Absent all of that, unknown.
+    """
+    if validity is False:
+        return VENUE_STATUS_INVALID_CREDENTIALS
+    if not isinstance(probe, dict):
+        return VENUE_STATUS_UNKNOWN
+    reported = probe.get("status")
+    if isinstance(reported, str) and reported.strip():
+        return reported.strip().lower()
+    if measured_latency_ms(probe) is not None:
+        return VENUE_STATUS_CONNECTED
+    return VENUE_STATUS_UNKNOWN
 
 
 class DashboardAggregationService:
@@ -217,12 +717,115 @@ class DashboardAggregationService:
                 "is_trial": False
             }
     
+    #: The columns that decide whether a credential can trade, appended to the projection when
+    #: the table carries them. ``migrations/003_create_exchange_keys_table.sql`` creates
+    #: ``exchange_keys`` with NONE of them, and ``006_reconcile_production_database.sql`` adds
+    #: none - so on today's schema the widened select is rejected and
+    #: :meth:`_fetch_exchange_credentials` falls back to the narrow one, leaving validity
+    #: genuinely unknown and ``can_trade`` correspondingly ``False`` (Requirement 2.6). The
+    #: widened projection is asked for first anyway, so the moment a migration records validity
+    #: the dashboard reads it without a change here.
+    _EXCHANGE_KEY_VALIDITY_COLUMNS = "is_active, validation_status, last_validated_at, can_trade"
+
+    #: What the function has always fetched: the venue and when the row last changed.
+    _EXCHANGE_KEY_BASE_COLUMNS = "exchange_id, updated_at"
+
+    #: Set on the instance the first time the widened projection is rejected for naming a column
+    #: this deployment's table does not have, so the wasted round trip is paid once per process
+    #: rather than once per dashboard request. Class-level default; never written on the class.
+    _exchange_key_columns_absent = False
+
+    #: Substrings that identify "no such column" in a PostgREST/Postgres error, as opposed to a
+    #: transient failure. Only the former downgrades the projection permanently - a timeout must
+    #: not cost this process its ability to read validity until it restarts.
+    _MISSING_COLUMN_MARKERS = ("42703", "does not exist", "could not find")
+
+    async def _fetch_exchange_credentials(self, sb: Any, user_id: str) -> List[Dict[str, Any]]:
+        """This user's ``exchange_keys`` rows, with the validity columns when the table has them.
+
+        Two attempts, widest first. A projection naming a column the table does not have is
+        rejected outright, and the narrow fallback - the select this method replaced - is what
+        keeps that from emptying every user's venue list on a schema that predates those columns.
+        ``[]`` when both reads fail, as before.
+        """
+        projections = [self._EXCHANGE_KEY_BASE_COLUMNS]
+        if not self._exchange_key_columns_absent:
+            projections.insert(0, f"{self._EXCHANGE_KEY_BASE_COLUMNS}, {self._EXCHANGE_KEY_VALIDITY_COLUMNS}")
+
+        for columns in projections:
+            try:
+                res = await self._execute_sb_query(
+                    sb.table("exchange_keys").select(columns).eq("user_id", user_id)
+                )
+                rows = res.data or [] if res and hasattr(res, "data") else []
+                return [row for row in rows if isinstance(row, dict)]
+            except Exception as e:
+                detail = str(e).lower()
+                if any(marker in detail for marker in self._MISSING_COLUMN_MARKERS):
+                    self._exchange_key_columns_absent = True
+                logger.warning(f"Failed to fetch exchange_keys ({columns}) in dashboard: {e}")
+        return []
+
+    async def _read_exchange_probes(self, user_id: str) -> Dict[str, Dict[str, Any]]:
+        """Measured venue health for this user, keyed by exchange id. Empty when none was written.
+
+        The same store, the same key shape and the same payload ``get_health_status`` reads
+        (``exchange_health:{user_id}:{exchange}``), resolved per venue rather than collapsed to
+        the first figure found - one row of the response is one venue, so one measurement each.
+
+        An empty mapping means NOTHING WAS MEASURED. It does not mean the venues are down, and
+        callers must report it as unknown rather than as a negative.
+        """
+        probes: Dict[str, Dict[str, Any]] = {}
+        try:
+            from backend_app.core.cache.redis_manager import redis_manager
+            import json
+            keys = await redis_manager.keys(f"exchange_health:{user_id}:*")
+            for k in keys or []:
+                name = k.decode() if isinstance(k, (bytes, bytearray)) else str(k)
+                exchange_id = name.rsplit(":", 1)[-1].strip().lower()
+                if not exchange_id:
+                    continue
+                val = await redis_manager.get(k)
+                if not val:
+                    continue
+                data = json.loads(val) if isinstance(val, (str, bytes, bytearray)) else val
+                if isinstance(data, dict):
+                    probes[exchange_id] = data
+        except Exception as probe_err:
+            # Unreadable probe results are unmeasured results. Same outcome, logged at the level
+            # ``get_health_status`` logs its own lookup failure at.
+            logger.debug(f"Exchange health probe lookup error: {probe_err}")
+        return probes
+
     async def get_exchange_data(self, user: dict, sb: Optional[Any] = None) -> Dict:
         """
-        Get exchange connection data.
-        
+        Get exchange connection data: the venues on the account, what was measured about each,
+        and whether anything on it can place an order.
+
+        MEASURED OR UNKNOWN, NEVER ASSERTED (6.5, Requirements 1.5, 2.5)
+            ``status`` and ``latency_ms`` used to be a constant ``"connected"`` and a constant
+            millisecond figure on every row. They now come from the probe results in Redis - the
+            figures ``get_health_status`` already reads - and are :data:`VENUE_STATUS_UNKNOWN` /
+            ``None`` when no probe wrote one. A venue nobody asked is reported as one nobody asked.
+
+        ``can_trade`` IS A CREDENTIAL QUESTION (Requirements 1.6, 2.6)
+            It used to be ``len(connections) > 0``, which answers "does a row exist in
+            ``exchange_keys``". Revocation happens at the venue, so the row outlives it and that
+            expression answered yes for keys that could not place an order. It is now
+            :func:`credential_validity` over the rows - ``True`` only where something says the
+            credential works, and ``False`` where nothing does.
+
+            Note what the select can and cannot support. ``exchange_keys`` as created by
+            ``migrations/003`` carries no validity column, and nothing persists the result of
+            ``POST /api/v1/exchange/test``'s ``validate_keys()`` - so on today's schema validity
+            is unknown for every row, and ``can_trade`` is ``False`` until a probe or a migration
+            records otherwise. That is the requirement's own direction for the unknown, and it is
+            the safe one: this field is what a client gates its order UI on.
+
         Returns:
-            Connected exchanges, connection status, latency metrics
+            ``total_exchanges``, ``connected_exchanges`` (venues a probe reported connected, not
+            rows), ``exchanges``, ``can_trade``. The same four keys as before.
         """
         try:
             if sb is None:
@@ -237,33 +840,41 @@ class DashboardAggregationService:
                 }
             
             # Get user's exchange connections from exchange_keys
-            try:
-                res = await self._execute_sb_query(sb.table("exchange_keys").select("exchange_id, updated_at").eq("user_id", user["id"]))
-                connections = res.data or [] if res and hasattr(res, "data") else []
-            except Exception as e:
-                logger.warning(f"Failed to fetch exchange_keys in dashboard: {e}")
-                connections = []
-            
-            # Calculate exchange metrics
-            connected_exchanges = connections
+            connections = await self._fetch_exchange_credentials(sb, user["id"])
             total_exchanges = len(connections)
-            
-            # Get exchange health from actual connections
+
+            # No rows is a successful read of an empty set: nothing to probe, nothing to report.
+            probes = await self._read_exchange_probes(user["id"]) if connections else {}
+
+            # Get exchange health from what was actually measured about each connection
             exchange_health = []
-            for conn in connected_exchanges:
+            can_trade = False
+            for conn in connections:
                 exchange_id = conn.get("exchange_id", "unknown")
+                probe = probes.get(str(exchange_id).strip().lower())
+
+                # The row first; the probe only where the row says nothing about the credential.
+                validity = credential_validity(conn)
+                if validity is None:
+                    validity = credential_validity(probe)
+                if validity is True:
+                    can_trade = True
+
                 exchange_health.append({
                     "exchange_id": exchange_id,
-                    "status": "connected",
-                    "latency_ms": 35,
+                    "status": venue_status(probe, validity),
+                    "latency_ms": measured_latency_ms(probe),
                     "last_sync": conn.get("updated_at")
                 })
             
             return {
                 "total_exchanges": total_exchanges,
-                "connected_exchanges": len(connected_exchanges),
+                "connected_exchanges": sum(
+                    1 for entry in exchange_health
+                    if entry["status"] in _CONNECTED_VENUE_STATUSES
+                ),
                 "exchanges": exchange_health,
-                "can_trade": len(connected_exchanges) > 0
+                "can_trade": can_trade
             }
         except Exception as e:
             logger.error(f"Failed to fetch exchange data for user {user['id']}: {e}")
@@ -337,7 +948,7 @@ class DashboardAggregationService:
             if not sb:
                 return {
                     "referral_code": default_ref,
-                    "referral_link": f"https://vyomquant.com/ref/{default_ref}",
+                    "referral_link": f"{_app_base_url()}/ref/{default_ref}",
                     "total_referrals": 0,
                     "active_referrals": 0,
                     "pending_earnings": 0.0,
@@ -352,7 +963,7 @@ class DashboardAggregationService:
             
             return {
                 "referral_code": ref_code,
-                "referral_link": f"https://vyomquant.com/ref/{ref_code}",
+                "referral_link": f"{_app_base_url()}/ref/{ref_code}",
                 "total_referrals": profile.get("total_referrals", 0),
                 "active_referrals": profile.get("active_referrals", 0),
                 "pending_earnings": float(profile.get("pending_earnings", 0.0)),
@@ -374,7 +985,12 @@ class DashboardAggregationService:
     async def get_risk_data(self, user: dict, portfolio: Optional[Dict] = None, sb: Optional[Any] = None) -> Dict:
         """
         Get risk management data.
-        
+
+        NOTE: a second ``get_risk_data`` is defined later in this class and, being later in the
+        class body, is the one bound to the attribute - so this definition is unreachable through
+        ``DashboardAggregationService.get_risk_data``. Left as found; BC-1 changed nothing here
+        beyond adding the new field so the two bodies agree in shape.
+
         Args:
             user: User dict
             portfolio: Optional portfolio data (to avoid duplicate query if already fetched)
@@ -408,7 +1024,14 @@ class DashboardAggregationService:
             
             return {
                 "risk_level": risk_level,
+                # DEPRECATED (BC-1, design.md §1.5): ``abs()`` of a P&L percentage, so a
+                # profitable day reads as a positive "drawdown". Unchanged - see the note on the
+                # later definition of this method.
                 "current_drawdown_pct": current_drawdown,
+                # BC-1: this body holds no equity series, so there is nothing to measure a
+                # peak-to-trough decline over and ``None`` is the honest answer. Present so the
+                # two ``get_risk_data`` bodies below and above agree in shape.
+                "current_drawdown_pct_v2": None,
                 "max_daily_loss": max_daily_loss,
                 "max_positions": settings.get("max_positions", 10),
                 "max_leverage": settings.get("max_leverage", 3),
@@ -421,6 +1044,7 @@ class DashboardAggregationService:
             return {
                 "risk_level": "low",
                 "current_drawdown_pct": 0.0,
+                "current_drawdown_pct_v2": None,
                 "max_daily_loss": 500,
                 "max_positions": 10,
                 "max_leverage": 3,
@@ -522,24 +1146,78 @@ class DashboardAggregationService:
                 paper_svc = get_paper_trading_service()
                 acct = paper_svc.get_or_create_account(user["id"])
                 
-                total_equity = float(acct.get("total_equity", 100000.0))
-                available_balance = float(acct.get("available_balance", 100000.0))
+                # Task 6.2 (Requirements 1.1, 1.4, 2.1, 2.4). ``100000.0`` here was the paper
+                # STARTING capital leaking out of a ``dict.get`` fallback into a money field, so
+                # an account row missing the column - a schema or migration fault, exactly when a
+                # stale-looking figure is most likely to be believed - reported as fully funded.
+                # Read through ``_finite_float`` (:314): an absent column is absent, and a figure
+                # that WAS read is reported exactly as read, ``0.0``, ``-0.0`` and a genuine
+                # ``100000.0`` balance alike (preservation 3.2). Absence is a fact about the
+                # READ, never about the number.
+                total_equity = _finite_float(acct.get("total_equity"))
+                available_balance = _finite_float(acct.get("available_balance"))
                 free_balance = available_balance
                 used_balance = float(acct.get("locked_balance", 0.0))
                 realized_pnl = float(acct.get("realized_pnl", 0.0))
                 unrealized_pnl = float(acct.get("unrealized_pnl", 0.0))
-                initial_capital = float(acct.get("initial_capital", 100000.0))
+                initial_capital = _finite_float(acct.get("initial_capital"))
                 
                 # Calculate today's realized PnL from paper trades since 00:00 UTC
                 trades = paper_svc.get_trades(user["id"])
-                today_realized_pnl = sum(
-                    float(t.get("realized_pnl", 0.0))
+                # Defect 48, found by ``tests/property/test_absent_vs_zero.py``. This sum coerced
+                # each same-day fill with a bare ``float()`` INSIDE this branch's ``try``, so one
+                # unreadable realised figure raised and the ``except`` below replaced the ENTIRE
+                # overview with the starting capital: a single malformed ledger row fabricated the
+                # whole account. Read through ``_finite_float`` so an unreadable fill nulls only
+                # the figure it belongs to, and ``None`` rather than a partial sum for the same
+                # reason the lifetime figure below is ``None`` - dropping the unreadable fill
+                # would publish the sum of a DIFFERENT set of fills under this name. A ledger
+                # holding no same-day fills was read fine: nothing realised today is ``0.0``.
+                paper_today_realized = [
+                    _finite_float(t.get("realized_pnl"))
                     for t in trades
                     if (t.get("executed_at") or "") >= today_utc_cutoff
+                ]
+                today_realized_pnl: Optional[float] = (
+                    None
+                    if any(value is None for value in paper_today_realized)
+                    else float(sum(paper_today_realized))
                 )
-                
-                today_pnl = today_realized_pnl + unrealized_pnl
-                today_return_pct = round((today_pnl / initial_capital * 100), 2) if initial_capital > 0 else 0.0
+
+                # BC-5: lifetime realised P&L. The SAME per-fill expression as
+                # ``today_realized_pnl`` above with the day window removed, for the same reason
+                # the live branch derives both figures from one ``sum(pnl)``: the lifetime figure
+                # must not be a second definition of "realised". Deliberately NOT
+                # ``acct["realized_pnl"]`` - that is the account row's own running total, a
+                # different producer that is free to drift from the fill ledger this response
+                # already reports today's figure from.
+                #
+                # ``None`` if any fill's realised figure is unreadable: dropping it would publish
+                # the sum of a DIFFERENT set of fills under this name (the rule BC-1 applies to
+                # an equity series). An empty ledger read fine is ``0.0`` - nothing realised.
+                paper_realized = [_finite_float(t.get("realized_pnl")) for t in trades]
+                lifetime_realized_pnl: Optional[float] = (
+                    None
+                    if any(value is None for value in paper_realized)
+                    else float(sum(paper_realized))
+                )
+
+                # A figure derived from one that was not read was not read either. ``today_pnl``
+                # goes absent with today's realised figure; ``today_return_pct`` goes absent with
+                # either its numerator or its ``initial_capital`` denominator. The denominator is
+                # where the fabrication used to hide: ``100000.0`` was divided BY rather than
+                # published, so an absent capital base surfaced as a precise-looking percentage
+                # and never as the literal itself.
+                today_pnl: Optional[float] = (
+                    None if today_realized_pnl is None else today_realized_pnl + unrealized_pnl
+                )
+                today_return_pct: Optional[float] = None
+                if today_pnl is not None and initial_capital is not None:
+                    today_return_pct = (
+                        round((today_pnl / initial_capital * 100), 2)
+                        if initial_capital > 0
+                        else 0.0
+                    )
                 cumulative_pnl = realized_pnl + unrealized_pnl
                 
                 return {
@@ -550,6 +1228,10 @@ class DashboardAggregationService:
                     "used_balance": used_balance,
                     "today_pnl": today_pnl,
                     "today_realized_pnl": today_realized_pnl,
+                    # BC-5 (Requirement 10.1). Same key, same meaning, both environments - a
+                    # page cannot have a lifetime realised figure in one mode and no such field
+                    # in the other.
+                    "realized_pnl": lifetime_realized_pnl,
                     "today_return_pct": today_return_pct,
                     "unrealized_pnl": unrealized_pnl,
                     "cumulative_pnl": cumulative_pnl,
@@ -561,13 +1243,23 @@ class DashboardAggregationService:
             except Exception as paper_err:
                 logger.error(f"Failed to fetch paper portfolio overview for {user['id']}: {paper_err}")
                 return {
-                    "total_equity": 100000.0,
-                    "total_value": 100000.0,
-                    "available_balance": 100000.0,
-                    "free_balance": 100000.0,
+                    # Task 6.2 (Requirements 1.1, 1.2, 2.1, 2.2). The paper store could not be
+                    # read, so there is no balance here to report. A trader whose account has
+                    # been running for a month and has just lost the store was being shown the
+                    # capital they opened with, indistinguishable from a measured balance.
+                    "total_equity": None,
+                    "total_value": None,
+                    "available_balance": None,
+                    "free_balance": None,
                     "used_balance": 0.0,
                     "today_pnl": 0.0,
                     "today_realized_pnl": 0.0,
+                    # BC-5: the paper read failed, so there is no lifetime realised figure to
+                    # report. ``None`` - and as of task 6.2 the four headline money figures above
+                    # say the same thing rather than the starting capital, so this is no longer
+                    # the one honest field in the literal. The remaining ``0.0``s are the P&L
+                    # figures, outside 6.2's scope and left exactly as they were.
+                    "realized_pnl": None,
                     "today_return_pct": 0.0,
                     "unrealized_pnl": 0.0,
                     "cumulative_pnl": 0.0,
@@ -630,20 +1322,23 @@ class DashboardAggregationService:
             free_balance = available_balance
             used_balance = total_exposure
 
-        # Calculate today's realized PnL from QuestDB executions table since 00:00 UTC
+        # Realized PnL from the QuestDB executions table: today's (since 00:00 UTC) and, as of
+        # BC-5, the lifetime figure. ONE query for both - the day filter moved out of the
+        # ``WHERE`` and into a conditional aggregate, so the lifetime sum comes off the same read
+        # rather than a second round trip and cannot disagree about what "realised" means.
         today_realized_pnl = 0.0
+        realized_pnl: Optional[float] = None
         try:
             today_date_str = now_utc.strftime("%Y-%m-%d")
-            pnl_query = (
-                f"SELECT sum(pnl) as today_realized_pnl FROM executions "
-                f"WHERE user_id = '{safe_uid}' "
-                f"AND timestamp >= to_timestamp('{today_date_str}T00:00:00.000000Z', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ');"  # nosec: B608
+            pnl_res = await telemetry.execute_query(
+                executions_realized_pnl_query(safe_uid, today_date_str)
             )
-            pnl_res = await telemetry.execute_query(pnl_query)
-            if pnl_res and pnl_res.get("dataset") and pnl_res["dataset"][0][0] is not None:
-                today_realized_pnl = float(pnl_res["dataset"][0][0])
+            today_realized_pnl, realized_pnl = realized_pnl_from_execution_totals(pnl_res)
         except Exception as exec_err:
-            logger.debug(f"QuestDB executions today PnL query error: {exec_err}")
+            logger.debug(f"QuestDB executions PnL query error: {exec_err}")
+            # ``today_realized_pnl`` keeps the 0.0 it has always published for this failure
+            # (BC-5 is additive). ``realized_pnl`` stays ``None``: the read failed, so there is
+            # no lifetime realised figure, and 0.0 would assert one (Requirement 19.2).
 
         # Calculate open positions unrealized PnL from Redis live positions
         unrealized_pnl = 0.0
@@ -675,6 +1370,11 @@ class DashboardAggregationService:
             "used_balance": used_balance,
             "today_pnl": today_pnl,
             "today_realized_pnl": today_realized_pnl,
+            # BC-5: lifetime realised P&L (Requirement 10.1). Distinct from
+            # ``today_realized_pnl`` (same figure, today's window only) and from
+            # ``cumulative_pnl`` (realised PLUS open-position mark-to-market). ``None`` when the
+            # executions read could not produce it - never 0.0 as a stand-in.
+            "realized_pnl": realized_pnl,
             "today_return_pct": today_return_pct,
             "unrealized_pnl": unrealized_pnl,
             "cumulative_pnl": cumulative_pnl,
@@ -687,8 +1387,16 @@ class DashboardAggregationService:
     async def get_open_positions(self, user: dict, environment: str = "live") -> List[Dict]:
         """
         Get normalized open trading positions with strict environment isolation.
-        
-        Returns canonical NormalizedPosition list.
+
+        Returns canonical NormalizedPosition list. ``[]`` means, and now only means, that the
+        account holds no open positions.
+
+        Raises
+            :class:`PositionsUnreadable` when the read itself failed (BC-2, Requirement 14.5).
+            Both environments raise: the live branch when the Redis read behind it does, the
+            paper branch when the paper store does. Callers that can publish the rest of their
+            response catch it and attach :func:`positions_degradation`; callers that cannot let
+            it reach their route's 503. What no caller gets any more is ``[]``.
         """
         from datetime import timezone
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -735,7 +1443,10 @@ class DashboardAggregationService:
                 return pos_list
             except Exception as paper_pos_err:
                 logger.error(f"Failed to fetch paper positions for {user['id']}: {paper_pos_err}")
-                return []
+                # BC-2: was ``return []``. An empty list is what a paper account with no open
+                # positions returns, so returning it here published an outage as a fact about
+                # the account (Requirement 14.5).
+                raise PositionsUnreadable("paper", paper_pos_err) from paper_pos_err
 
         # LIVE Environment
         try:
@@ -795,7 +1506,9 @@ class DashboardAggregationService:
             return pos_list
         except Exception as live_pos_err:
             logger.error(f"Failed to fetch live positions for {user['id']}: {live_pos_err}")
-            return []
+            # BC-2: was ``return []``. The Redis read behind this is the one that goes away in
+            # an outage, and ``[]`` made the outage indistinguishable from a flat account.
+            raise PositionsUnreadable("live", live_pos_err) from live_pos_err
 
     async def get_recent_executions(self, user: dict, environment: str = "live", limit: int = 5) -> List[Dict]:
         """
@@ -894,8 +1607,11 @@ class DashboardAggregationService:
             return []
 
     async def get_equity_curve(self, user: dict, days: int = 30, environment: str = "live") -> List[Dict]:
-        """
-        Get equity curve data with environment awareness.
+        """Get equity curve data: the rows that were read, or an empty series.
+
+        ``environment`` is accepted for call-site symmetry with the other reads on this class and
+        is no longer branched on. As of task 6.4 both environments answer an empty read with
+        ``[]``; the paper limb used to synthesise a flat curve instead (see the comment below).
         """
         telemetry = self._get_telemetry()
         safe_uid = self._safe_uid(user["id"])
@@ -913,15 +1629,18 @@ class DashboardAggregationService:
         except Exception as eq_err:
             logger.debug(f"QuestDB equity curve fetch error: {eq_err}")
 
-        # If paper mode and no QuestDB data, synthesize default baseline
-        if environment == "paper":
-            from datetime import timezone, timedelta
-            now = datetime.now(timezone.utc)
-            return [
-                {"timestamp": (now - timedelta(days=days)).isoformat(), "equity": 100000.0},
-                {"timestamp": now.isoformat(), "equity": 100000.0}
-            ]
-        
+        # Task 6.4 (Requirements 1.3, 2.3). The paper branch that used to stand here synthesised
+        # a two-point flat curve at ``100000.0`` spanning the requested window, for both absent
+        # cases: a successful read that found no rows, and a read that raised. "No history" drawn
+        # as "perfectly flat performance" is the fabrication, and it HONOURED ``days`` - so a
+        # 90-day request rendered as ninety days of measured break-even performance. The lie was
+        # shaped to be convincing.
+        #
+        # ``[]`` for every environment, which is what the live limb has always answered for the
+        # same condition; the two branches disagreed about what "no rows" means and the paper one
+        # was the outlier. Preservation 3.1: rows that WERE read are returned above, unmodified,
+        # ascending by timestamp, with no synthesised endpoints appended - an equity series
+        # genuinely passing through ``0.0`` is a measurement and is reported as one.
         return []
     
     async def get_strategies(self, user: dict, environment: str = "live", sb: Optional[Any] = None) -> List[Dict]:
@@ -1034,7 +1753,6 @@ class DashboardAggregationService:
         
         # Check measured latency in Redis
         latency_ms = None
-        latency_status = "unavailable"
         
         if environment == "live":
             try:
@@ -1052,13 +1770,10 @@ class DashboardAggregationService:
             except Exception as health_err:
                 logger.debug(f"Health latency lookup error: {health_err}")
 
-        if latency_ms is not None:
-            if latency_ms < 150:
-                latency_status = "optimal"
-            elif latency_ms < 500:
-                latency_status = "normal"
-            else:
-                latency_status = "degraded"
+        # The bands live in ``classify_measured_latency`` so ``get_exchange_data`` applies the
+        # same three comparisons to a per-venue measurement (6.5). Unchanged behaviour here:
+        # ``None`` still reads "unavailable", and the thresholds are Requirement 3.3's.
+        latency_status = classify_measured_latency(latency_ms)
 
         return {
             "exchange_api_latency_ms": latency_ms,
@@ -1068,9 +1783,43 @@ class DashboardAggregationService:
             "order_state_sync_status": "synchronized" if environment == "paper" else "active"
         }
     
-    async def get_risk_data(self, user: dict, environment: str = "live", portfolio: Optional[Dict] = None, sb: Optional[Any] = None) -> Dict:
+    async def get_risk_data(
+        self,
+        user: dict,
+        environment: str = "live",
+        portfolio: Optional[Dict] = None,
+        sb: Optional[Any] = None,
+        equity_curve: Optional[List[Any]] = None,
+        positions: Optional[Any] = None,
+    ) -> Dict:
         """
         Get authoritative risk management data with synchronized risk_score and risk_level.
+
+        Args:
+            equity_curve: The series ``get_equity_curve`` already produced for this request, for
+                BC-1's ``current_drawdown_pct_v2``. Passed in rather than fetched so this method
+                issues no additional read; ``get_dashboard_data`` hands over the series it
+                gathered. Omitted, ``current_drawdown_pct_v2`` is ``None``, which is what a
+                caller holding no series honestly reports.
+            positions: BC-2. The positions ``get_dashboard_data`` already gathered - a list, or
+                the :class:`PositionsUnreadable` that gathering it produced (that ``asyncio.
+                gather`` runs with ``return_exceptions=True``, so an exception is a value on
+                that path). Handed over for the same reason ``equity_curve`` is: so this method
+                issues no second read, and so one response cannot report the positions
+                unreadable at the top level while reporting a count for them under ``risk``.
+                ``None`` means "not supplied" - this method then reads them itself, and catches
+                the same failure. Note the ``is None`` test: ``[]`` is a supplied, truthful,
+                empty list.
+
+        POSITIONS UNREADABLE (BC-2, Requirement 14.5)
+            ``open_positions_count`` is ``None`` and ``risk_score`` is ``None``, never ``0``.
+            A count of zero and a utilisation of zero are the *safest* readings this endpoint
+            can publish, which is precisely why publishing them unmeasured is the dangerous
+            option: ``risk_score`` folds position utilisation in at 40% weight, so a swallowed
+            failure reads as headroom. ``risk_level`` says ``unavailable`` - the spelling this
+            same service already uses for an unmeasured reading
+            (``health.exchange_api_latency_status``) - except when the kill switch is active,
+            which is a fact about the switch and stays ``blocked`` regardless of any read.
         """
         from backend_app.routers.risk import get_user_risk_settings_store, is_user_kill_switched
         uid = str(user["id"])
@@ -1113,30 +1862,71 @@ class DashboardAggregationService:
 
         loss_util_pct = (daily_loss_utilized / max_daily_loss * 100) if max_daily_loss > 0 else 0.0
         
-        # Calculate open positions count
-        positions = await self.get_open_positions(user, environment=environment)
-        open_pos_count = len(positions)
-        pos_util_pct = (open_pos_count / max_positions * 100) if max_positions > 0 else 0.0
-        
-        # Calculate deterministic numeric risk score (0-100)
-        risk_score = min(100, int((loss_util_pct * 0.6) + (pos_util_pct * 0.4)))
-        
-        # Standardize risk level
-        if kill_active:
-            risk_level = "blocked"
-        elif loss_util_pct >= 100 or pos_util_pct >= 100:
-            risk_level = "critical"
-        elif loss_util_pct >= 75 or pos_util_pct >= 75:
-            risk_level = "high"
-        elif loss_util_pct >= 40 or pos_util_pct >= 40:
-            risk_level = "medium"
+        # Calculate open positions count. BC-2: `positions` may already be in hand from
+        # `get_dashboard_data`'s gather - including as the failure that gathering it produced.
+        if positions is None:
+            try:
+                positions = await self.get_open_positions(user, environment=environment)
+            except PositionsUnreadable as positions_err:
+                positions = positions_err
+        positions_error = positions if isinstance(positions, BaseException) else None
+
+        if positions_error is not None:
+            # BC-2: nothing here is a figure. A count of zero, a utilisation of zero and the
+            # risk score they feed would all be inventions, and all three would read as safe.
+            # ``pos_util_pct`` is bound though this branch publishes nothing from it, so the
+            # day this projection starts reporting utilisation it reports ``None`` here rather
+            # than raising - the same reason the branches below bind the same four names.
+            open_pos_count = None
+            pos_util_pct = None
+            risk_score = None
+            risk_level = "blocked" if kill_active else "unavailable"
         else:
-            risk_level = "low"
+            open_pos_count = len(positions)
+            pos_util_pct = (open_pos_count / max_positions * 100) if max_positions > 0 else 0.0
+
+            # Calculate deterministic numeric risk score (0-100)
+            risk_score = min(100, int((loss_util_pct * 0.6) + (pos_util_pct * 0.4)))
+
+            # Standardize risk level
+            if kill_active:
+                risk_level = "blocked"
+            elif loss_util_pct >= 100 or pos_util_pct >= 100:
+                risk_level = "critical"
+            elif loss_util_pct >= 75 or pos_util_pct >= 75:
+                risk_level = "high"
+            elif loss_util_pct >= 40 or pos_util_pct >= 40:
+                risk_level = "medium"
+            else:
+                risk_level = "low"
 
         return {
             "risk_score": risk_score,
             "risk_level": risk_level,
-            "current_drawdown_pct": round(float((portfolio or {}).get("today_return_pct", 0.0)), 2),
+            # BC-2: ``None`` when the positions read failed, mirroring the response-level
+            # ``degraded`` block so a client reading only the risk section can still tell an
+            # unreadable count from a count of zero.
+            "degraded": positions_degradation(positions_error, environment),
+            # DEPRECATED (BC-1, design.md §1.5): this is ``today_return_pct``, not a drawdown, so
+            # a profitable day reads as a positive "drawdown". Still not repointed - BC-1 is an
+            # additive read projection (Requirement 19.1) and no existing consumer moves off it.
+            # Read ``current_drawdown_pct_v2`` instead.
+            #
+            # NULLABLE as of 6.1-6.3. The old ``.get(..., 0.0)`` default only fired for an ABSENT
+            # key, and those tasks made ``today_return_pct`` present-and-``None`` on an unreadable
+            # portfolio, so ``float(None)`` raised ``TypeError`` out through ``get_dashboard_data``
+            # (whose outer ``except`` re-raises) and took the whole of ``GET /api/dashboard`` to
+            # its ``503 DASHBOARD_FETCH_FAILED`` limb. ``_finite_float`` is the same
+            # channel every figure beside it uses; ``or 0.0`` behind it would re-fabricate a number
+            # in the one field BC-1 already documents as incorrect, which is worse than a null.
+            # "Left in place unchanged" was about not moving consumers, not about keeping a crash -
+            # and ``current_drawdown_pct_v2`` one line down already reports ``None`` this way. A
+            # present, finite figure still rounds to 2dp exactly as before; only absence changes.
+            "current_drawdown_pct": (None if (deprecated_dd := _finite_float((portfolio or {}).get("today_return_pct"))) is None else round(deprecated_dd, 2)),
+            # BC-1: the honest peak-to-trough figure, from the equity series this request already
+            # read. ``None`` when no drawdown can be measured - never 0.0 as a stand-in
+            # (Requirements 3.1, 10.2, 19.2).
+            "current_drawdown_pct_v2": current_drawdown_pct_from_equity_curve(equity_curve),
             "max_daily_loss": max_daily_loss,
             "daily_loss_utilized": round(daily_loss_utilized, 2),
             "max_positions": max_positions,
@@ -1159,6 +1949,14 @@ class DashboardAggregationService:
         
         Returns:
             Comprehensive, environment-isolated dashboard structure.
+
+            BC-2 adds one top-level key, ``degraded``: ``None`` when every read succeeded, and
+            ``{"positions": "unreadable", "environment": ..., "reason": ...}`` when the
+            positions read failed. ``positions`` is ``[]`` in both cases and ``degraded`` is the
+            only thing that tells them apart, so a client MUST consult it before rendering an
+            empty positions state (Requirement 14.5, design.md §1.6). ``risk.degraded`` and a
+            ``null`` ``risk.open_positions_count`` say the same thing from inside the risk
+            section, for a consumer that reads only that.
         """
         from datetime import timezone
         norm_env = environment.lower() if environment in ("live", "paper") else "live"
@@ -1197,13 +1995,27 @@ class DashboardAggregationService:
             if isinstance(portfolio, Exception):
                 logger.error(f"Portfolio fetch failed: {portfolio}")
                 portfolio = {
-                    "total_equity": 100000.0 if norm_env == "paper" else 0.0,
-                    "total_value": 100000.0 if norm_env == "paper" else 0.0,
-                    "available_balance": 100000.0 if norm_env == "paper" else 0.0,
-                    "free_balance": 100000.0 if norm_env == "paper" else 0.0,
+                    # Task 6.3 (Requirements 1.2, 2.2). ``100000.0 if norm_env == "paper" else
+                    # 0.0`` was one expression fabricating a different number per environment,
+                    # and the ``0.0`` limb was the worse of the two: ``100000.0`` is at least
+                    # implausible enough for a trader to question, while a live account can
+                    # genuinely hold zero, so an outage rendered as a wiped-out portfolio with
+                    # nothing for anyone to notice. ``None`` in BOTH environments - the read
+                    # failed, and that is not a fact about which environment asked. Task 6.1
+                    # retyped the ``overview`` block below so this ``None`` now reaches the
+                    # response instead of being coerced back into a number.
+                    # Preservation 3.2: a live account genuinely at zero still reports ``0.0``,
+                    # because that value arrives on a portfolio that WAS read and never through
+                    # this branch.
+                    "total_equity": None,
+                    "total_value": None,
+                    "available_balance": None,
+                    "free_balance": None,
                     "used_balance": 0.0,
                     "today_pnl": 0.0,
                     "today_realized_pnl": 0.0,
+                    # BC-5: the portfolio read failed, so no lifetime realised figure was read.
+                    "realized_pnl": None,
                     "today_return_pct": 0.0,
                     "unrealized_pnl": 0.0,
                     "cumulative_pnl": 0.0,
@@ -1217,8 +2029,17 @@ class DashboardAggregationService:
                 logger.error(f"Equity curve fetch failed: {equity}")
                 equity = []
 
-            if isinstance(positions, Exception):
-                logger.error(f"Open positions fetch failed: {positions}")
+            # BC-2 (design.md §1.6, Requirement 14.5). The fallback below still hands the
+            # response an EMPTY LIST, because a list is all `positions` can be and an empty one
+            # is at least not a fabricated position. What changed is that the emptiness no
+            # longer travels alone: `positions_error` is carried to the `degraded` block at the
+            # bottom of this method, and to `get_risk_data`, so nothing downstream has to guess
+            # whether `[]` means "none open" or "not read". Kept as `[]` rather than `null`
+            # deliberately - a client that iterates it renders an empty table at worst, where a
+            # `null` would throw, and the marker is what stops it rendering that table at all.
+            positions_error = positions if isinstance(positions, BaseException) else None
+            if positions_error is not None:
+                logger.error(f"Open positions fetch failed: {positions_error}")
                 positions = []
 
             if isinstance(executions, Exception):
@@ -1263,8 +2084,22 @@ class DashboardAggregationService:
                 logger.error(f"Marketplace data fetch failed: {marketplace}")
                 marketplace = {"available_count": 0, "user_publications": 0, "total_subscribers": 0, "featured": []}
 
-            # Fetch authoritative risk data
-            risk_data = await self.get_risk_data(user, environment=norm_env, portfolio=portfolio, sb=sb)
+            # Fetch authoritative risk data. ``equity`` is the series already gathered above, and
+            # is handed over so BC-1's ``current_drawdown_pct_v2`` is computed without a second
+            # read. It is ``[]`` when the equity read failed, which yields ``None`` rather than a
+            # fabricated zero.
+            # BC-2 hands over ``positions`` for the same reason: the failure, or the list, that
+            # this request already has. Without it ``get_risk_data`` reads Redis a second time
+            # and one response could report the positions unreadable at the top level while
+            # publishing a count for them under ``risk``.
+            risk_data = await self.get_risk_data(
+                user,
+                environment=norm_env,
+                portfolio=portfolio,
+                sb=sb,
+                equity_curve=equity,
+                positions=positions_error if positions_error is not None else positions,
+            )
             
             active_strategies = [s for s in strategies if s["status"] == "active"]
             paused_strategies = [s for s in strategies if s["status"] == "paused"]
@@ -1282,17 +2117,34 @@ class DashboardAggregationService:
             return {
                 "environment": norm_env,
                 "overview": {
-                    "total_value": float(portfolio.get("total_value", portfolio.get("total_equity", 0.0))),
-                    "total_equity": float(portfolio.get("total_equity", 0.0)),
-                    "available_balance": float(portfolio.get("available_balance", 0.0)),
-                    "free_balance": float(portfolio.get("free_balance", portfolio.get("available_balance", 0.0))),
-                    "used_balance": float(portfolio.get("used_balance", 0.0)),
-                    "today_pnl": float(portfolio.get("today_pnl", 0.0)),
-                    "today_realized_pnl": float(portfolio.get("today_realized_pnl", 0.0)),
-                    "today_return_pct": float(portfolio.get("today_return_pct", 0.0)),
-                    "unrealized_pnl": float(portfolio.get("unrealized_pnl", 0.0)),
-                    "cumulative_pnl": float(portfolio.get("cumulative_pnl", 0.0)),
-                    "total_exposure": float(portfolio.get("total_exposure", 0.0)),
+                    # Wave 1 step 1 (task 6.1). Every figure in this block is read through
+                    # ``_finite_float`` (:314), exactly as ``realized_pnl`` below already was:
+                    # a figure that WAS read is published as read - ``0.0`` and ``-0.0``
+                    # included, because a zero is a measurement (preservation 3.2) - and a
+                    # figure that was NOT read is ``None``. The ``float(portfolio.get(key, 0.0))``
+                    # this replaces had two outcomes and no third, so absence was unrepresentable
+                    # at the response boundary and every producer upstream was forced to invent a
+                    # number (Requirements 1.1, 1.2).
+                    #
+                    # The two chained reads keep their by-PRESENCE fallback: ``total_value`` falls
+                    # back to ``total_equity`` only when the key is absent, never when it is
+                    # present and unreadable. A figure that was not read must not be answered with
+                    # a different figure.
+                    "total_value": _finite_float(portfolio.get("total_value", portfolio.get("total_equity"))),
+                    "total_equity": _finite_float(portfolio.get("total_equity")),
+                    "available_balance": _finite_float(portfolio.get("available_balance")),
+                    "free_balance": _finite_float(portfolio.get("free_balance", portfolio.get("available_balance"))),
+                    "used_balance": _finite_float(portfolio.get("used_balance")),
+                    "today_pnl": _finite_float(portfolio.get("today_pnl")),
+                    "today_realized_pnl": _finite_float(portfolio.get("today_realized_pnl")),
+                    # BC-5: lifetime realised P&L, carried through as read (Requirements 10.1,
+                    # 19.2). Its neighbours above now read the same way, so this field is no
+                    # longer the one exception in the block.
+                    "realized_pnl": _finite_float(portfolio.get("realized_pnl")),
+                    "today_return_pct": _finite_float(portfolio.get("today_return_pct")),
+                    "unrealized_pnl": _finite_float(portfolio.get("unrealized_pnl")),
+                    "cumulative_pnl": _finite_float(portfolio.get("cumulative_pnl")),
+                    "total_exposure": _finite_float(portfolio.get("total_exposure")),
                     "currency": portfolio.get("currency", "USDT"),
                     "updated_at": portfolio.get("updated_at", datetime.now(timezone.utc).isoformat())
                 },
@@ -1353,6 +2205,15 @@ class DashboardAggregationService:
                     "executions": executions
                 },
                 "equity_curve": equity,
+                # BC-2 (Requirement 14.5). ``None`` when every read on this response succeeded;
+                # otherwise the block naming what could not be read. THIS is what makes
+                # ``positions: []`` above unambiguous - with ``degraded`` null it means the
+                # account holds no open positions, and with ``degraded["positions"] ==
+                # "unreadable"`` it means the read failed and the client must show its error
+                # state rather than an empty table. Same top-level key, same ``None``-when-
+                # healthy convention, and the same "name it plus a renderable reason" body as
+                # ``signal_service``'s ``degraded`` (Requirements 16.2, 23.1 there).
+                "degraded": positions_degradation(positions_error, norm_env),
                 "generated_at": datetime.now(timezone.utc).isoformat()
             }
             

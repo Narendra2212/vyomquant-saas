@@ -129,6 +129,11 @@ MODEL_VERSION_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 DEPLOYMENT_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 ACCOUNT_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 NODE_ID = "n_model"
+#: The owner's Paper_Session, for the seventh owned channel family (``paper.{session_id}``,
+#: marketplace-subscriptions-paper-trading task 26.3). It resolves through ``paper_sessions.user_id``
+#: - the only family that reads that relation - so it needs an identifier and a seeded row of its
+#: own rather than reusing ``DEPLOYMENT_ID``.
+SESSION_ID = "99999999-9999-4999-8999-999999999999"
 
 #: The owner-only strings a cross-tenant response must never carry. Every one of these is
 #: on a row the intruder does not own, so any of them in a body addressed to the intruder
@@ -555,6 +560,10 @@ def _seed_rows() -> Dict[str, List[Dict[str, Any]]]:
                 "updated_at": "2024-01-01T00:00:00Z",
             }
         ],
+        # ``paper.{session_id}``'s owner relation. ``_PAPER_SESSIONS_RELATION`` reads
+        # ``id,user_id`` and nothing else, so those are the columns seeded - the same shape
+        # ``risk_settings`` below is seeded in.
+        "paper_sessions": [{"id": SESSION_ID, "user_id": OWNER_ID}],
         "risk_settings": [{"id": "risk_owner", "user_id": OWNER_ID}],
         "exchange_connections": [],
     }
@@ -1085,7 +1094,10 @@ class TestEveryEndpointKeepsItsAuthAndItsLimiter:
 
 
 class TestRealtimeChannelSubscriptions:
-    """Requirements 21.5 and 21.6, over all five owned channel families.
+    """Requirements 21.5 and 21.6, over every owned channel family.
+
+    Parametrised from ``OWNED_CHANNEL_FAMILIES`` itself, so a family added later is covered
+    here the moment it is registered - which is how ``paper.{session_id}`` arrived.
 
     The refusal is *reported* - a code and a sentence - and the frame carries no resource
     data, which is the difference between a refusal and a silent no-op.
@@ -1096,6 +1108,7 @@ class TestRealtimeChannelSubscriptions:
             "job_id": JOB_ID,
             "strategy_id": STRATEGY_ID,
             "deployment_id": DEPLOYMENT_ID,
+            "session_id": SESSION_ID,
         }[family.resource]
         return family.channel(resource)
 

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Shield, AlertTriangle, Sliders, Target, Zap, CheckCircle, Lock, Activity, TrendingDown, Settings, Save, RefreshCw } from "lucide-react";
 import { api } from "../api";
-import { C, SectionH, PanelTitle, Inp, Toast, ToastContainer, ProgressBar, RiskMeter } from "../components/ui-legacy/primitives";
+import { SectionH, PanelTitle, Inp, Toast, ToastContainer, ProgressBar, RiskMeter } from "../components/common/primitives";
+import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import wsClient from "../websocketClient";
@@ -18,9 +19,9 @@ export default function RiskSettings() {
   ]);
   const [strategyLimits, setStrategyLimits] = useState([]);
   const [marginData, setMarginData] = useState([
-    { label: "Margin Ratio", value: 0, max: 100, color: C.green, key: "margin_ratio" },
-    { label: "Free Margin", value: 0, max: 100, color: C.cyan, key: "free_margin" },
-    { label: "Risk Score", value: 0, max: 100, color: C.orange, key: "risk_score" },
+    { label: "Margin Ratio", value: 0, max: 100, color: token.status.profit.fg, key: "margin_ratio" },
+    { label: "Free Margin", value: 0, max: 100, color: token.brand.base, key: "free_margin" },
+    { label: "Risk Score", value: 0, max: 100, color: token.status.warning.fg, key: "risk_score" },
   ]);
   const [isLoadingRisk, setIsLoadingRisk] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -78,9 +79,9 @@ export default function RiskSettings() {
           const m = marginRes.value?.data ?? marginRes.value;
           if (m && typeof m === 'object') {
             setMarginData([
-              { label: "Margin Ratio", value: Number(m.margin_ratio ?? 0), max: 100, color: C.green, key: "margin_ratio" },
-              { label: "Free Margin", value: Number(m.free_margin ?? 0), max: 100, color: C.cyan, key: "free_margin" },
-              { label: "Risk Score", value: Number(m.risk_score ?? 0), max: 100, color: C.orange, key: "risk_score" },
+              { label: "Margin Ratio", value: Number(m.margin_ratio ?? 0), max: 100, color: token.status.profit.fg, key: "margin_ratio" },
+              { label: "Free Margin", value: Number(m.free_margin ?? 0), max: 100, color: token.brand.base, key: "free_margin" },
+              { label: "Risk Score", value: Number(m.risk_score ?? 0), max: 100, color: token.status.warning.fg, key: "risk_score" },
             ]);
           }
         }
@@ -194,9 +195,26 @@ export default function RiskSettings() {
     }, 800);
   };
 
-  const Toggle = ({ active, onClick, disabled = false }) => (
+  const Toggle = ({ active, onClick, disabled = false, label }) => (
     <div 
-      onClick={!disabled ? onClick : undefined}
+      // A pointer-only toggle cannot be reached without a mouse. It is a switch, so it gets
+      // the switch role, its checked/disabled state, a tab stop and Enter/Space activation.
+      // The visible text sits in the parent row, so the name arrives as `label`.
+      role="switch"
+      aria-checked={active}
+      aria-label={label}
+      aria-disabled={disabled || undefined}
+      tabIndex={0}
+      onClick={disabled ? undefined : onClick}
+      onKeyDown={(event) => {
+        if (disabled) return;
+        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+          // Space scrolls the page by default, which would move the control out from
+          // under the setting just toggled.
+          event.preventDefault();
+          onClick?.(event);
+        }
+      }}
       style={{
         width: 44, 
         height: 24, 
@@ -376,7 +394,7 @@ export default function RiskSettings() {
                     <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>{ks.description}</div>
                   </div>
                 </div>
-                <Toggle active={ks.active} onClick={() => handleToggleSwitch(ks.key)} />
+                <Toggle active={ks.active} label={ks.label} onClick={() => handleToggleSwitch(ks.key)} />
               </div>
             ))}
           </div>

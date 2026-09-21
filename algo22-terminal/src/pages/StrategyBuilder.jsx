@@ -45,9 +45,31 @@
  * descriptor onto every node it creates. Re-pointing the save path without the palette change
  * would raise on every save.
  *
- * Presentation note: this page uses inline styles off the `C` token object from
- * `components/ui-legacy/primitives`, unlike the Tailwind-classed `components/ui/`. The
- * inspector's `ParameterForm` is Tailwind-classed; that boundary is deliberate and left as is.
+ * * **24.7 — review mode below `LAPTOP`.** One boolean, `reviewMode`, read from
+ *   `shell/ResponsiveGate`'s published `access` and never re-derived from a width here. It
+ *   collapses the palette track to a disabled trigger, moves the inspector into a bottom
+ *   `ds/Drawer` as a read-only form, and turns WRITING off while leaving pan, zoom, `fitView`
+ *   and node selection on — which is the whole point: a trader on a tablet can still read what
+ *   a strategy does (§11.6, Requirement 17.4).
+ *
+ *   Editing is off at the writes, not at the controls. Search this file for `reviewMode` and
+ *   every hit is either a control's `disabled`/`draggable` or the function that would have
+ *   performed the write: `onNodesChange`, `onEdgesChange`, `onConnect`, `isValidConnection`,
+ *   `handleDragOver`, `handleDrop`, `handleDeleteNode`, `handleParamChange`, `handleUndo`,
+ *   `handleRedo`, `handleSaveStrategy` and the `keydown` listener behind `Ctrl+S`, `Ctrl+Z`,
+ *   `Ctrl+Shift+Z`, `Delete` and `Backspace`. A control that is merely hidden is not off, and
+ *   none of those five shortcuts passes through a control at all.
+ *
+ *   The `status.guidance` strip §11.6 asks for is NOT rendered here. `shell/ResponsiveGate`
+ *   renders it once for whichever route is restricted, and its own note forbids a second copy;
+ *   the width refusal this page owns is the sentence on each disabled control, which is the
+ *   half a shell-level strip cannot carry.
+ *
+ * Presentation note: this page still styles inline rather than with Tailwind classes, but every
+ * value it names now comes from `design/tokens.js` or, for anything that depends on a state,
+ * from `design/semantic.js`. The legacy `C` shim is no longer imported here at all (task 24.4),
+ * so a colour cannot re-enter by copying a neighbouring line. The inspector's `ParameterForm`
+ * is Tailwind-classed; that boundary is deliberate and left as is.
  */
 
 import React, {
@@ -70,15 +92,68 @@ import ReactFlow, {
   applyNodeChanges,
   applyEdgeChanges,
   MiniMap,
+  useNodesInitialized,
   useReactFlow,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import {
-  Activity, AlertTriangle, ArrowLeft, BarChart2, ChevronDown, ChevronRight, Maximize,
-  PanelLeft, PanelRight, Play, RefreshCw, Redo, Save, Search, Trash2, Undo, ZoomIn, ZoomOut,
+  AlertTriangle, ArrowLeft, BarChart2, ChevronDown, ChevronRight, Lock, Maximize,
+  PanelLeft, PanelRight, RefreshCw, Redo, Rocket, Save, Search, Trash2, Undo, ZoomIn, ZoomOut,
 } from 'lucide-react';
-import { C, Inp, Tag2, PanelTitle } from '../components/ui-legacy/primitives';
+import { Inp, Tag2, PanelTitle } from '../components/common/primitives';
 import { Button } from '../components/ui/Button';
+import { CommandButton } from '../components/ds/CommandButton';
+import { Field } from '../components/ds/Field';
+/*
+  §11.6's bottom drawer for task 24.7's review-mode inspector. `placement="bottom"` is one of
+  the two placements `ds/Drawer` exists for, and this page is the consumer its header names.
+
+  `dismissOnScrim` is left at its default `true` on purpose: passing `false` makes the scrim a
+  DISABLED `<button aria-label="Close">`, which puts a control named "Close" in the
+  accessibility tree that cannot close anything. A drawer over a canvas is a navigational
+  surface, not a decision point, so tapping outside it should close it anyway.
+*/
+import { Drawer } from '../components/ds/Drawer';
+/*
+  Task 10.5's deploy flow, mounted rather than reimplemented (task 24.8, Requirement 19.1).
+
+  `components/deploy/DeployConfirmation.jsx` owns §8.3's Configure → Review → AckLive steps,
+  the real-funds acknowledgement, the preflight gate and the single POST to
+  `endpoints.strategies.deployVersion`. This page contributes the Configure step's target form
+  and the strategy the flow is about, and nothing else: no endpoint, no wire field, no
+  deployability verdict and no second submission path.
+*/
+import { DeployConfirmation } from '../components/deploy/DeployConfirmation';
+/*
+  §9.3's four surfaces (task 24.4b). Every band below is one of them: the page chooses the
+  severity and the provenance and contributes no hue, no border, no icon and no role — and
+  crucially no wording for "the backend has not validated this version yet", which the surface
+  emits itself from `provenance="local"` so a provisional verdict cannot ship looking
+  authoritative.
+*/
+import {
+  DeployedLockNotice,
+  ValidationSurface,
+  surfaceTreatment,
+} from '../components/builder/validationSurfaces';
+/*
+  Task 24.7 reads the shell's capability decision; it does not measure a width of its own.
+
+  `shell/ResponsiveGate` already classifies the viewport against `ROUTE_MIN_VIEWPORT`, publishes
+  `access === 'restricted'` for this route below `LAPTOP`, and renders §11.6's `status.guidance`
+  strip once — that module's own note forbids this page rendering a second copy of it. Reading
+  the decision rather than re-deriving it is what keeps the strip and the mode from disagreeing:
+  a page that measured its own box would enter review mode at widths where the shell says
+  nothing, and the trader would get a read-only canvas with no sentence explaining why.
+*/
+import {
+  ACCESS,
+  ROUTE_MIN_VIEWPORT,
+  VIEWPORT,
+  useViewportAccess,
+} from '../components/shell/ResponsiveGate';
+import { DECLARED_STAGE_BANDS, STAGE_BANDS, stageBandFor, statusToken } from '../design/semantic';
+import { token } from '../design/tokens';
 import { DataPipelineProvider } from '../contexts/DataPipelineContext';
 import { IndicatorEngineProvider } from '../contexts/IndicatorEngineContext';
 import { LogicEngineProvider } from '../contexts/LogicEngineContext';
@@ -115,9 +190,11 @@ import {
 import { traceFromPreviewBody, traceFromPreviewFailure } from '../lib/nodeTrace';
 import {
   FEED_READ_STATES,
+  FEED_STATES,
   SAVE_STATES,
   SEVERITY_ERROR,
   SEVERITY_WARNING,
+  TRAINING_STATES,
   VALIDATION_DEBOUNCE_MS,
   VALIDATION_STATES,
   collectMarkers,
@@ -182,6 +259,137 @@ export const MARKET_PARAM_CONTROLS = Object.freeze({
  * (90 s), so a feed that stops is seen well inside the window in which it starts to matter.
  */
 export const FEED_READ_INTERVAL_MS = 15000;
+
+// ---------------------------------------------------------------------------
+// The refused connection: its words, where they appear, and how long for
+// (task 24.4a, design.md §9.3, Requirement 5.4)
+// ---------------------------------------------------------------------------
+
+/** Line one's lead-in. The only frontend-authored words in a refusal. */
+export const REFUSAL_HEADLINE_PREFIX = 'Cannot connect: ';
+
+/** Line two's lead-in, `§9.3`'s arrow. */
+export const REFUSAL_HINT_PREFIX = '→ ';
+
+/**
+ * How long the transient callout stays on screen after a refused drop, in milliseconds.
+ *
+ * Why a timer *and* the next drag, rather than one of them:
+ *
+ * * **The next drag alone is not enough.** An author who reads the reason, understands it and
+ *   then goes to the palette instead of re-dragging would leave the callout pinned over the
+ *   canvas indefinitely, at the exact coordinates they are about to drop a block on.
+ * * **A timer alone is not enough.** An author mid-flow re-drags within a second, and a
+ *   callout still fading at the old drop point is noise sitting on the new one. So
+ *   `onConnectStart` clears it, and so does a connection that succeeds.
+ * * **Nothing is lost when it goes.** The same refusal is also written to the validation
+ *   issue list, which does not expire, so the callout can be aggressively transient without
+ *   making a reason unrecoverable. That is why both surfaces exist rather than one.
+ *
+ * 6 s is roughly four times the time it takes to read two short lines, and it is well inside
+ * the interval in which an author still remembers making the drag it is about.
+ *
+ * The callout is `pointer-events: none` and holds no control, so an expired timer never
+ * strands focus and a live one never swallows the next drag.
+ */
+export const REFUSAL_CALLOUT_MS = 6000;
+
+/**
+ * How many distinct refusals the validation issue list keeps.
+ *
+ * Bounded because `isValidConnection` fires on every handle the pointer passes over, so an
+ * unbounded list would grow by a dozen entries per drag. Newest first, de-duplicated by
+ * {@link refusalSignature}: a trader who tried the same illegal edge three times has one
+ * problem, not three.
+ */
+export const REFUSAL_HISTORY_LIMIT = 4;
+
+/**
+ * The two lines of a refusal, **verbatim from the server** (Requirement 5.4, `§9.3`).
+ *
+ *     Cannot connect: {issue.message}
+ *     → {issue.fix_hint}
+ *
+ * Line two is **omitted** when `fix_hint` is absent. It is not replaced with frontend-authored
+ * rule text, not replaced with the message again, and not replaced with a generic sentence:
+ * this page does not know the rules, `backend_app/backend/strategy_dag/validator.py` does, and
+ * a hint invented here would be a second rule set that can disagree with it (the exact drift
+ * `lib/connectionLegality.js`'s header refuses for the rules themselves).
+ *
+ * A function rather than inline JSX so the wording is assertable without a DOM — task 24.5's
+ * Property 9 asserts a surfaced reason contains the issue's `fix_hint` when present and its
+ * `message` when not, and that is a statement about this return value.
+ *
+ * Total over every input: a non-issue answers `[]`, which renders nothing at all rather than
+ * an empty callout. A non-string `message` or `fix_hint` is treated as absent for the same
+ * reason — `String(undefined)` on screen is worse than a line that is not there.
+ *
+ * @param {object|null|undefined} issue A `schema.make_issue` shape:
+ *   `{ code, severity, node_id, edge_id, field, message, expected, actual, fix_hint }`.
+ * @returns {Array<string>} `[]`, `[headline]`, or `[headline, hint]`. Never longer.
+ */
+export function connectionRefusalLines(issue) {
+  if (issue === null || typeof issue !== 'object' || Array.isArray(issue)) return [];
+  const message = typeof issue.message === 'string' ? issue.message : '';
+  const fixHint = typeof issue.fix_hint === 'string' ? issue.fix_hint : '';
+  if (message.trim() === '' && fixHint.trim() === '') return [];
+  const lines = [`${REFUSAL_HEADLINE_PREFIX}${message}`];
+  if (fixHint.trim() !== '') lines.push(`${REFUSAL_HINT_PREFIX}${fixHint}`);
+  return lines;
+}
+
+/**
+ * What makes two refusals the same refusal, for the issue list's de-duplication.
+ *
+ * The rule code plus the endpoints it was raised about. Two attempts at one illegal edge
+ * collapse; the same code raised about a different pair of ports does not, because those are
+ * two things to fix.
+ */
+export const refusalSignature = (issue) =>
+  [
+    issue.code || '',
+    issue.node_id || '',
+    issue.edge_id || '',
+    issue.field || '',
+    issue.message || '',
+  ].join('\u0000');
+
+/**
+ * A pointer event's position **inside `element`'s own box**, in CSS pixels, or `null`.
+ *
+ * The same measurement `handleDrop` already makes for a dropped block — `clientX` minus the
+ * canvas's own `left` — reused rather than re-derived, because a refusal callout that lands
+ * somewhere other than where a dropped node would have landed is worse than no callout.
+ *
+ * Task 24.2a is what makes this two lines instead of a compensation calculation: the inspector
+ * is a sibling grid track, so nothing is ever laid over the canvas and its bounding box IS the
+ * drawable area. Nothing here reads a scroll offset or a panel width.
+ *
+ * `null` when there is nothing to measure against or the event carries no coordinates (a
+ * keyboard-initiated connection, for one). A refusal with no anchor still reaches the issue
+ * list; it just does not claim to know where the drop was.
+ *
+ * @param {MouseEvent|TouchEvent|null|undefined} event `onConnectEnd`'s argument — React Flow 11
+ *   hands over the raw DOM event, not a React synthetic one.
+ * @param {Element|null|undefined} element The canvas element.
+ * @returns {{x: number, y: number}|null}
+ */
+export function canvasPointFromEvent(event, element) {
+  if (!element || typeof element.getBoundingClientRect !== 'function') return null;
+  if (event === null || event === undefined) return null;
+  const touch =
+    event.changedTouches && event.changedTouches.length > 0 ? event.changedTouches[0] : null;
+  const source = typeof event.clientX === 'number' ? event : touch;
+  if (
+    source === null ||
+    typeof source.clientX !== 'number' ||
+    typeof source.clientY !== 'number'
+  ) {
+    return null;
+  }
+  const bounds = element.getBoundingClientRect();
+  return { x: source.clientX - bounds.left, y: source.clientY - bounds.top };
+}
 
 // ---------------------------------------------------------------------------
 // Save-path validation (SB-06)
@@ -293,6 +501,220 @@ export function buildSavePayload(graph, market, { name }) {
 }
 
 // ---------------------------------------------------------------------------
+// The header actions (task 24.8, Requirements 5.6, 5.7, 15.3, 19.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * The version label **the server stated**, or `null` when it stated none.
+ *
+ * ⚠️ THE HONESTY CLAUSE OF REQUIREMENT 5.7 ⚠️
+ * ------------------------------------------
+ * This function reads. It never derives, increments, defaults or formats a version. A save
+ * confirmation that says "Saved as version 4" when the server said nothing is a sentence the
+ * author will act on — they will believe a fourth immutable version exists and is the one a
+ * deployment would bind — and nothing on this page knows whether that is true. Versioning is
+ * the backend's (Requirement 19.1), so the only two honest answers are the label it sent and
+ * no label at all.
+ *
+ * `POST /api/strategies` answers `{id, strategy_id, status, dag_hash?, warmup_bars?,
+ * warnings?}` and carries **no** version label, so a first save toasts *"Saved"*.
+ * `PUT /api/strategies/{id}` answers the stored row, which has a `version` column. Both are
+ * read through the same reader, and so is the `strategy` envelope the clone and detail routes
+ * wrap a row in, so a label that arrives is used and one that does not is not invented.
+ *
+ * A number is accepted because a version column may be numeric; it is stringified, not
+ * arithmetic. `0` and `''` are absences — a version label with no characters names nothing.
+ *
+ * @param {unknown} response A save response, however the client shaped it.
+ * @returns {string|null} The label, trimmed, or `null`.
+ */
+export function serverVersionLabel(response) {
+  if (response === null || typeof response !== 'object' || Array.isArray(response)) return null;
+  const envelope = response.strategy;
+  const nested = envelope !== null && typeof envelope === 'object' && !Array.isArray(envelope)
+    ? envelope
+    : {};
+  const candidates = [
+    response.version,
+    response.version_label,
+    response.current_version,
+    nested.version,
+    nested.version_label,
+    nested.current_version,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate !== 0) {
+      return String(candidate);
+    }
+    if (typeof candidate === 'string' && candidate.trim() !== '') return candidate.trim();
+  }
+  return null;
+}
+
+/**
+ * The save confirmation, from the label the server sent (Requirement 5.7).
+ *
+ * The whole of the rule, in one place so the two callers cannot word it differently: a label
+ * produces *"Saved as version {v}"*, and no label produces *"Saved"*. There is no third
+ * branch, and in particular no branch that counts.
+ *
+ * @param {string|null} label {@link serverVersionLabel}'s answer.
+ * @returns {string}
+ */
+export const saveConfirmation = (label) =>
+  (label === null ? 'Saved' : `Saved as version ${label}`);
+
+/**
+ * This route's own path, and the pixel width `ROUTE_MIN_VIEWPORT` puts it at (§11.6).
+ *
+ * `ROUTE_MIN_VIEWPORT['/app/builder']` is `'LAPTOP'`, and `VIEWPORT.LAPTOP.min` is that tier's
+ * first pixel, which `shell/ResponsiveGate` parses out of `token.breakpoint.laptop`. So the
+ * number in every sentence below is the same number the gate switches on and the same number
+ * `tokens.css` declares — there is no `1024` written on this page, and a breakpoint change moves
+ * the gate, the strip and these refusals together.
+ */
+export const BUILDER_ROUTE_PATH = '/app/builder';
+export const REVIEW_MODE_MIN_WIDTH_PX =
+  VIEWPORT[ROUTE_MIN_VIEWPORT[BUILDER_ROUTE_PATH] ?? 'LAPTOP'].min;
+
+/**
+ * Why review mode refuses a write, or `null` when the width is not the problem (Req 17.4, 15.3).
+ *
+ * One sentence, composed into BOTH refusal functions below rather than sitting on a disabled
+ * path of its own, so there is exactly one place a control's reason can come from. It is stated
+ * first in both, because it is the only cause in either list that no amount of editing can
+ * clear: telling a trader on a tablet to "fix 2 validation errors" when the parameter fields are
+ * read-only would be an instruction they cannot follow.
+ *
+ * The strip above the shell already says *why* the page is in review mode; this says what that
+ * means for the control the trader just reached for, which is the half a strip cannot carry.
+ *
+ * @param {string} gerund The action in the trader's words — `'saving'`, `'deploying'`.
+ * @param {number|null} minimumWidthPx {@link REVIEW_MODE_MIN_WIDTH_PX} in review mode, `null`
+ *   outside it. A non-finite value answers `null`: an unmeasured width is not a refusal.
+ * @returns {string|null}
+ */
+export function reviewModeRefusal(gerund, minimumWidthPx) {
+  if (typeof minimumWidthPx !== 'number' || !Number.isFinite(minimumWidthPx)) return null;
+  return `Open this strategy on a screen at least ${minimumWidthPx}px wide before ${gerund}`;
+}
+
+/**
+ * Why a header action is refused, or `null` when it is not (Requirement 15.3).
+ *
+ * `disabled` without a stated reason is the dead affordance this redesign removes: a disabled
+ * button cannot be hovered, focused or interrogated, so the author cannot tell an unfinished
+ * graph from a bug. `ds/CommandButton` refuses to render one in development, and this is where
+ * the sentence it demands comes from.
+ *
+ * The count is passed in rather than computed here, because the page has two authorities for it
+ * and only the page knows which one applies — see `validationErrorCount` at the call site.
+ *
+ * @param {string} gerund `'backtesting'` or `'deploying'`, the action in the author's words.
+ * @param {{unsaved: boolean, errorCount: number, reviewMinimumWidthPx?: number|null}} state
+ * @returns {string|null}
+ */
+export function headerActionRefusal(gerund, { unsaved, errorCount, reviewMinimumWidthPx = null }) {
+  const width = reviewModeRefusal(gerund, reviewMinimumWidthPx);
+  if (width !== null) return width;
+  if (unsaved) return `Save this strategy before ${gerund}`;
+  if (errorCount > 0) {
+    return `Fix ${errorCount} validation error${errorCount === 1 ? '' : 's'} before ${gerund}`;
+  }
+  return null;
+}
+
+/**
+ * Why a save is refused, or `null` when it is not (Requirement 15.3).
+ *
+ * The precedence is the one `saveRefused` evaluates, so the sentence always names the *first*
+ * thing standing in the way rather than an arbitrary one of several.
+ *
+ * An unset required parameter is deliberately absent from this list. It does not disable the
+ * control: clicking through produces the structured refusal that names the node and the field,
+ * which is the whole point of the SB-06 fix and strictly more useful than a greyed button.
+ *
+ * Review mode is checked before the lock (task 24.7): both are true refusals, and both already
+ * have their explanation on screen, but review mode is the one that refuses all THREE header
+ * actions at once — Save saying something the other two do not would read as three unrelated
+ * problems rather than one width.
+ *
+ * @param {Object} state
+ * @param {boolean} state.locked The backend's `read_only` verdict (Requirement 9.9).
+ * @param {string} state.lockReason The backend's own sentence for it, or `''`.
+ * @param {boolean} state.registryReady
+ * @param {number} state.nodeCount
+ * @param {boolean} state.serializerRefused `canonical.graph === null`.
+ * @param {number} state.errorCount Local advisory errors.
+ * @param {number|null} [state.reviewMinimumWidthPx] {@link reviewModeRefusal}'s width, or `null`.
+ * @returns {string|null}
+ */
+export function saveRefusal({
+  locked,
+  lockReason,
+  registryReady,
+  nodeCount,
+  serializerRefused,
+  errorCount,
+  reviewMinimumWidthPx = null,
+}) {
+  const width = reviewModeRefusal('saving', reviewMinimumWidthPx);
+  if (width !== null) return width;
+  if (locked) {
+    // The backend's wording when it sent one. This page does not paraphrase a verdict it did
+    // not reach; the fallback is only for a lock reported without a reason.
+    return typeof lockReason === 'string' && lockReason.trim() !== ''
+      ? lockReason.trim()
+      : 'This version is deployed, so its graph is frozen and the write would be refused';
+  }
+  if (!registryReady) {
+    return 'The block registry has not loaded, so this graph cannot be compiled or saved yet';
+  }
+  if (nodeCount === 0) return 'This canvas is empty. Add at least one block before saving';
+  if (serializerRefused) {
+    return 'This graph could not be serialised, so there is nothing to save — the refusal is '
+      + 'stated on the canvas';
+  }
+  if (errorCount > 0) {
+    return `Fix ${errorCount} validation error${errorCount === 1 ? '' : 's'} before saving`;
+  }
+  return null;
+}
+
+/**
+ * The deploy target vocabulary, byte-for-byte the pair `pages/Strategies.jsx` offers.
+ *
+ * The two `value`s are the strings `deployPreflight.deploymentModeOf` reads as the binding's
+ * `mode` and `lib/deployFlow.resolveDeployEnvironment` maps onto `design/semantic.js`'s
+ * `ENVIRONMENT`, so this control states the request rather than describing it. Only the labels
+ * are presentation. Anything outside this pair resolves to no environment at all, and
+ * `deployFlow` then holds every forward edge shut rather than assuming the dangerous one.
+ *
+ * No default is selected. §8.3's step 1 is the target, and a builder that pre-picked one would
+ * be answering the only question the flow refuses to answer for the author.
+ */
+export const DEPLOY_TARGET_OPTIONS = Object.freeze([
+  Object.freeze({ value: 'paper', label: 'Paper Simulation (Virtual Execution)' }),
+  Object.freeze({ value: 'live', label: 'Live Execution (Master Executor)' }),
+]);
+
+/**
+ * Deploy's third refusal: the server has named no version to bind.
+ *
+ * The other face of Requirement 5.7's honesty clause. `lib/deployFlow.js` already refuses this
+ * case — `BLOCKER.NO_VERSION`, "a deployment always binds one immutable version" — and that
+ * refusal stays the backstop. Saying it on the control as well is Requirement 15.3: an enabled
+ * button that opens a dialog only to say no is the same dead affordance as a disabled one that
+ * says nothing, and the fix for both is to state the reason where the author is looking.
+ *
+ * No remedy is offered, because none is knowable from here: whether a version label appears is
+ * the backend's business (Requirement 19.1) and this page will not guess one to fill the field.
+ */
+export const NO_NAMED_VERSION_REFUSAL =
+  'The server has not named a version for this strategy, and a deployment binds one immutable '
+  + 'version';
+
+// ---------------------------------------------------------------------------
 // Palette
 // ---------------------------------------------------------------------------
 
@@ -394,10 +816,16 @@ const DragLegalityContext = createContext(null);
 // Canvas presentation
 // ---------------------------------------------------------------------------
 
+/*
+  `token.content.muted` twice, from two different shim names: the dot's inactive fill was
+  `C.t3` and the label's was `C.t4`, and the shim resolves both to the same value. The two
+  names were never two greys, so this is the retoken recording that rather than inventing a
+  fourth text tone to keep them apart.
+*/
 const ApiSyncIndicator = ({ color, text, active = true }) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', paddingTop: 6, borderTop: `1px dashed ${C.border}` }}>
-    <div style={{ width: 6, height: 6, borderRadius: '50%', background: active ? color : C.t3, boxShadow: active ? `0 0 8px ${color}` : 'none', transition: 'all 0.3s' }} />
-    <span className="text-micro" style={{ color: active ? C.t2 : C.t4, letterSpacing: 1, fontFamily: 'monospace', textTransform: 'uppercase', fontWeight: 700 }}>{text}</span>
+  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', paddingTop: 6, borderTop: `1px dashed ${token.line.default}` }}>
+    <div style={{ width: 6, height: 6, borderRadius: '50%', background: active ? color : token.content.muted, boxShadow: active ? `0 0 8px ${color}` : 'none', transition: 'all 0.3s' }} />
+    <span className="text-micro" style={{ color: active ? token.content.secondary : token.content.muted, letterSpacing: 1, fontFamily: 'monospace', textTransform: 'uppercase', fontWeight: 700 }}>{text}</span>
   </div>
 );
 
@@ -406,10 +834,16 @@ const ApiSyncIndicator = ({ color, text, active = true }) => (
  * says the graph has changed since the last verdict, drawn as the design's dotted border.
  * Neither state is carried by the border alone — `DynamicNode` also renders the count and
  * the severity as text with an accessible name.
+ *
+ * `color` and `bandBorder` are the node's stage band edge (§9.1). The body is
+ * `surface.raised` for **every** stage, so the only colour on a node is its band edge and
+ * its validation marker (Requirement 1.5). A stage is told apart by its lane, its number,
+ * its name and its icon — never by a body tint.
  */
 const PremiumNodeWrapper = ({
   children,
   color,
+  bandBorder = 'solid',
   selected = false,
   hasError = false,
   severity = null,
@@ -418,20 +852,23 @@ const PremiumNodeWrapper = ({
   const [isHovered, setIsHovered] = useState(false);
   const borderColor =
     severity === SEVERITY_ERROR || hasError
-      ? C.red
+      ? token.status.error.fg
       : severity === SEVERITY_WARNING
-        ? C.gold
+        ? token.status.warning.fg
         : selected
-          ? C.cyan
+          ? token.brand.base
           : isHovered
             ? color
             : color + '90';
-  const borderStyle = unvalidated && severity === null && !hasError ? 'dotted' : 'solid';
+  // The band's border style is stage 4's and the Unresolved band's fourth axis, so those two
+  // are distinguishable without a hue of their own. A validation state outranks it: an
+  // unvalidated node keeps the dotted border it has today.
+  const borderStyle = unvalidated && severity === null && !hasError ? 'dotted' : bandBorder;
   const shadowStyle = selected
-    ? `0 0 0 2px ${C.cyan}, 0 0 24px rgba(0,212,255,0.28)`
+    ? `0 0 0 2px ${token.brand.base}, ${token.shadow.raised}`
     : isHovered
-      ? `0 4px 14px rgba(0,0,0,0.45), 0 0 12px ${color}35`
-      : `0 2px 8px rgba(0,0,0,0.3), 0 0 8px ${color}15`;
+      ? token.shadow.raised
+      : token.shadow.panel;
 
   return (
     <div
@@ -439,14 +876,14 @@ const PremiumNodeWrapper = ({
       onMouseLeave={() => setIsHovered(false)}
       style={{
         minWidth: 170,
-        background: C.bg3,
+        background: token.surface.raised,
         border: `2px ${borderStyle} ${borderColor}`,
-        borderRadius: 8,
-        color: C.t1,
+        borderRadius: token.radius.lg,
+        color: token.content.primary,
         padding: '8px 10px',
         boxShadow: shadowStyle,
-        fontFamily: 'monospace',
-        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+        fontFamily: token.font.mono,
+        transition: token.transition.base,
         cursor: 'pointer',
         position: 'relative',
       }}
@@ -456,8 +893,131 @@ const PremiumNodeWrapper = ({
   );
 };
 
+/**
+ * The stage lane header strip (§9.1, Requirement 5.1).
+ *
+ * Persistent and in a fixed left-to-right order, so the five stages read as a pipeline before
+ * a single block is dropped. Colour is spent on each lane's bottom edge and its icon only —
+ * the strip itself is `surface.raised`, exactly like the node bodies it labels.
+ *
+ * `bands` is `STAGE_BANDS` minus the neutral sixth band unless the canvas actually holds a
+ * node that resolved there. A permanently empty lane would be SB-03 in miniature: the palette
+ * carried an always-empty `FEATURE_ENGINEERING` section for years for exactly that reason. The
+ * lane appears when it has something to label, and the node it labels is never hidden.
+ *
+ * Each lane's icon is its band's first category's icon — `Activity` for Transform, whose three
+ * categories keep their own icons on the nodes themselves (`Activity`, `Sigma`, `Cpu`).
+ */
+const StageLaneStrip = ({ bands }) => (
+  <ul
+    data-testid="stage-lane-strip"
+    aria-label="Strategy stages, in data-flow order"
+    style={{
+      display: 'flex',
+      alignItems: 'stretch',
+      gap: '1px',
+      listStyle: 'none',
+      margin: 0,
+      padding: 0,
+      background: token.surface.raised,
+      borderBottom: `1px solid ${token.line.default}`,
+      flexShrink: 0,
+    }}
+  >
+    {bands.map((band) => {
+      // `band.categories[0]` is `undefined` for the Unresolved band, which is exactly the
+      // input `getCategoryIcon` answers with the fallback glyph for.
+      const LaneIcon = getCategoryIcon(band.categories[0]);
+      return (
+        <li
+          key={band.id}
+          data-testid="stage-lane"
+          data-stage-id={band.id}
+          data-stage-order={band.order}
+          data-categories={band.categories.join(' ')}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '6px 10px',
+            borderBottom: `2px ${band.border} ${band.fg}`,
+          }}
+        >
+          <LaneIcon size={12} aria-hidden="true" style={{ color: band.fg, flexShrink: 0 }} />
+          <span
+            className="text-micro"
+            style={{
+              color: token.content.secondary,
+              fontFamily: token.font.mono,
+              fontWeight: 700,
+              letterSpacing: 1,
+              textTransform: 'uppercase',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {band.order} · {band.label}
+          </span>
+        </li>
+      );
+    })}
+  </ul>
+);
+
 /** Evenly spaced handle offsets, so a block with several ports has several reachable handles. */
 const handleOffset = (index, total) => `${((index + 1) / (total + 1)) * 100}%`;
+
+/** The stroke a reported edge is drawn with — its own severity's colour (Requirement 8.10). */
+const markerStroke = (marker) =>
+  marker.severity === SEVERITY_ERROR ? token.status.error.fg : token.status.warning.fg;
+
+/**
+ * The stroke one edge is drawn with (§9.1): `line.strong` at rest, `brand` when the edge's
+ * source or its target is the selected node.
+ *
+ * A backend verdict outranks both. A severity is a fact about the connection; a selection is a
+ * fact about where the cursor is, and recolouring a failing edge because it happens to touch
+ * the selected block would hide the verdict at the moment the author is looking straight at it.
+ *
+ * Pure and exported because React Flow renders no edge path until both endpoints have been
+ * measured, which jsdom never does — so this is the only place the rule is checkable.
+ */
+export const edgeStrokeFor = (edge, selectedNodeId) => {
+  const marker = edge && edge.data ? edge.data.validation || null : null;
+  if (marker !== null) return markerStroke(marker);
+  const touchesSelection = selectedNodeId !== null
+    && selectedNodeId !== undefined
+    && (edge.source === selectedNodeId || edge.target === selectedNodeId);
+  return touchesSelection ? token.brand.base : token.line.strong;
+};
+
+/**
+ * The builder shell's three tracks (§9.2): palette, canvas, inspector.
+ *
+ * Spelled once and exported because the numbers are the layout's contract: the two outer
+ * tracks are fixed, the canvas track takes everything else, and a closed outer track
+ * collapses to `0` instead of being pulled out of the grid — that is what lets the canvas
+ * *grow into* the space rather than have a panel laid over it (Requirement 5.3).
+ */
+export const PALETTE_TRACK_PX = 240;
+export const INSPECTOR_TRACK_PX = 320;
+
+/**
+ * The shell's `grid-template-columns`.
+ *
+ * An explicit template rather than a `grid-cols-*` utility: fixed-pixel outer tracks around a
+ * fluid middle are not a shape `grid-cols-*` can express, and this build's Tailwind emits no
+ * bare `grid-cols-5` and up in any case. The middle is `minmax(0, 1fr)` so a wide node row
+ * inside the canvas cannot push the two fixed tracks off the shell.
+ */
+export const shellTemplateColumns = (paletteShown, inspectorShown) => [
+  `${paletteShown ? PALETTE_TRACK_PX : 0}px`,
+  'minmax(0, 1fr)',
+  `${inspectorShown ? INSPECTOR_TRACK_PX : 0}px`,
+].join(' ');
 
 /**
  * A colour for one runtime state (task 8.5).
@@ -467,10 +1027,10 @@ const handleOffset = (index, total) => `${((index + 1) / (total + 1)) * 100}%`;
  * know gets the neutral tone rather than a passing one.
  */
 const runtimeTone = (state) => {
-  if (state === 'READY') return C.cyan;
-  if (state === 'WARMING' || state === 'TRAINING') return C.gold;
-  if (state === 'AWAITING_MODEL' || state === 'NOT_READY') return C.t2;
-  return C.t3;
+  if (state === 'READY') return token.brand.base;
+  if (state === 'WARMING' || state === 'TRAINING') return token.status.warning.fg;
+  if (state === 'AWAITING_MODEL' || state === 'NOT_READY') return token.content.secondary;
+  return token.content.muted;
 };
 
 /**
@@ -484,9 +1044,19 @@ const runtimeTone = (state) => {
  */
 const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
   const drag = useContext(DragLegalityContext);
-  const category = data.category || null;
-  const CategoryIcon = category ? getCategoryIcon(category) : Activity;
-  const color = category ? getCategoryColor(category) : C.t2;
+  const category = typeof data.category === 'string' && data.category.trim() !== ''
+    ? data.category.trim()
+    : null;
+  /*
+    §9.1's two authorities, kept apart. The stage band decides *layout* — the number, the lane
+    and the border style; the category decides *identity* — the name and the icon. A category
+    this build does not recognise resolves to the neutral sixth band and still draws, with its
+    real name on it: a block the backend says exists must be drawable.
+  */
+  const band = stageBandFor(category);
+  const categoryName = category === null ? 'not reported' : category.replace(/_/g, ' ');
+  const StageIcon = getCategoryIcon(category);
+  const color = band.fg;
   const inputs = Array.isArray(data.inputs) ? data.inputs : [];
   const outputs = Array.isArray(data.outputs) ? data.outputs : [];
   const marker = data.validation || null;
@@ -495,6 +1065,7 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
   return (
     <PremiumNodeWrapper
       color={color}
+      bandBorder={band.border}
       selected={selected}
       hasError={hasError}
       severity={marker ? marker.severity : null}
@@ -519,9 +1090,9 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
             data-port-legal={drag === null ? undefined : String(!dimmed)}
             style={{
               top: handleOffset(index, inputs.length),
-              background: dimmed ? C.t4 : color,
+              background: dimmed ? token.content.muted : color,
               opacity: dimmed ? 0.3 : 1,
-              border: `1px solid ${C.bg1}`,
+              border: `1px solid ${token.surface.panel}`,
               width: '0.625rem',
               height: '0.625rem',
             }}
@@ -529,12 +1100,44 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
         );
       })}
 
-      <div style={{ color, letterSpacing: 1, textTransform: 'uppercase', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-        <CategoryIcon size={10} />
-        <span className="text-micro">{(category || 'UNRESOLVED').replace(/_/g, ' ')}</span>
+      {/*
+        The node's stage band strip: the stage number, the stage icon and the category's own
+        name (§9.1). All three are text or glyph, and the bottom rule is the one place a stage
+        spends colour on a node — the body underneath is `surface.raised` whatever the stage.
+      */}
+      <div
+        data-testid="node-stage"
+        data-node-id={id}
+        data-stage-id={band.id}
+        data-stage-order={band.order}
+        data-category={category || undefined}
+        aria-label={`Stage ${band.order} ${band.label}; block category ${categoryName}`}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          marginBottom: '4px',
+          paddingBottom: '3px',
+          borderBottom: `1px ${band.border} ${color}`,
+          color,
+          letterSpacing: 1,
+          textTransform: 'uppercase',
+        }}
+      >
+        <StageIcon size={10} aria-hidden="true" />
+        <span className="text-micro" data-testid="node-stage-label">
+          {band.order} · {band.label}
+        </span>
+        <span
+          className="text-micro"
+          data-testid="node-category"
+          style={{ marginLeft: 'auto', color: token.content.secondary }}
+        >
+          {categoryName}
+        </span>
       </div>
-      <div className="text-body-lg" style={{ fontWeight: 900 }}>{data.label || data.block_id}</div>
-      <div className="text-micro" style={{ color: C.t3 }}>{data.block_id}</div>
+      <div className="text-body" style={{ fontWeight: 900 }}>{data.label || data.block_id}</div>
+      <div className="text-micro" style={{ color: token.content.muted }}>{data.block_id}</div>
 
       {/*
         The node marker (Requirement 8.10). Severity *and* count are text, and the badge
@@ -554,7 +1157,7 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
           className="text-micro"
           style={{
             marginTop: '3px',
-            color: marker.severity === SEVERITY_ERROR ? C.red : C.gold,
+            color: marker.severity === SEVERITY_ERROR ? token.status.error.fg : token.status.warning.fg,
             fontWeight: 700,
           }}
         >
@@ -563,13 +1166,13 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
         </div>
       )}
       {marker && marker.issues[0] && (
-        <div className="text-micro" style={{ color: C.t2, marginTop: '2px', whiteSpace: 'normal' }}>
+        <div className="text-micro" style={{ color: token.content.secondary, marginTop: '2px', whiteSpace: 'normal' }}>
           {/* Backend text, verbatim (Requirement 8.9). */}
           {marker.issues[0].fix_hint || marker.issues[0].message}
         </div>
       )}
       {!marker && hasError && (
-        <div className="text-micro" style={{ color: C.red, marginTop: '2px' }}>
+        <div className="text-micro" style={{ color: token.status.error.fg, marginTop: '2px' }}>
           ⚠ {data.errorMessage || 'Error'}
         </div>
       )}
@@ -612,7 +1215,7 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
           }}
         >
           {data.runtime.label}
-          {data.runtime.detail ? <span style={{ color: C.t2, fontWeight: 400 }}> — {data.runtime.detail}</span> : null}
+          {data.runtime.detail ? <span style={{ color: token.content.secondary, fontWeight: 400 }}> — {data.runtime.detail}</span> : null}
         </div>
       )}
       {data.deployedLock && (
@@ -622,9 +1225,13 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
           aria-label={`Block ${id} is locked: this version is deployed and cannot be edited`}
           title={data.deployedLockReason || undefined}
           className="text-micro"
-          style={{ marginTop: '2px', color: C.gold, fontWeight: 700 }}
+          style={{ marginTop: '2px', color: token.status.warning.fg, fontWeight: 700 }}
         >
-          <span aria-hidden="true">🔒 </span>
+          {/* A real glyph, not an emoji: an emoji's rendering is font-dependent and its
+              accessible name is whatever the platform decides. `aria-hidden`, as the emoji was —
+              the `aria-label` above already says the block is locked. The badge is too small for
+              a `ValidationSurface`; §9.4's full notice is the band at the top of the page. */}
+          <Lock size={10} aria-hidden="true" className="mr-1 inline-block align-middle" />
           Locked (deployed)
         </div>
       )}
@@ -642,7 +1249,7 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
           style={{
             top: handleOffset(index, outputs.length),
             background: color,
-            border: `1px solid ${C.bg1}`,
+            border: `1px solid ${token.surface.panel}`,
             width: '0.625rem',
             height: '0.625rem',
           }}
@@ -676,12 +1283,12 @@ const PortChips = ({ ports, direction }) => {
           data-port-type={port.type}
           title={`${direction === 'in' ? 'Input' : 'Output'} port "${port.port}": ${port.type}${port.required ? ', required' : ''}${port.variadic ? ', accepts several connections' : ''}`}
           style={{
-            border: `1px solid ${C.border}`,
+            border: `1px solid ${token.line.default}`,
             borderRadius: '0.25rem',
             padding: '1px 4px',
-            color: C.t2,
+            color: token.content.secondary,
             fontFamily: 'monospace',
-            background: C.bg2,
+            background: token.surface.raised,
           }}
         >
           {label} {port.type}
@@ -697,67 +1304,88 @@ const PortChips = ({ ports, direction }) => {
  * An explicit panel, a real focusable `<button>` for the retry, and zero block entries. The
  * retry is a genuine refetch: `registryClient` drops its cached payload on any error, so it
  * cannot serve a registry the backend has since disowned.
+ *
+ * The hue is asked of `statusToken('error')` rather than named here — the registry being
+ * unreachable is a state, and this is the same entry §9.3's error surface reads, so the panel
+ * cannot drift away from the bands above it.
+ *
+ * The wash stays `${fg}12` — an 8-digit-hex 7% tint — and is deliberately NOT
+ * `token.status.error.wash`. There is no token for a 7% error wash: `status.error.wash` is 12%,
+ * so swapping it in would visibly strengthen this panel, and this is a retoken.
  */
-const PaletteErrorPanel = ({ error, onRetry, retrying }) => (
-  <div
-    role="alert"
-    data-testid="palette-error"
-    data-error-code={error ? error.code : undefined}
-    style={{ border: `1px solid ${C.red}`, background: `${C.red}12`, borderRadius: '0.375rem', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}
-  >
-    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: C.red }}>
-      <AlertTriangle size={14} />
-      <span className="text-caption" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
-        Block palette unavailable
-      </span>
-    </div>
-    <p className="text-caption-sm" style={{ color: C.t2, margin: 0 }}>
-      {error ? error.message : 'The block registry could not be loaded.'}
-    </p>
-    <p className="text-caption-sm" style={{ color: C.t3, margin: 0, fontFamily: 'monospace' }}>
-      {error ? error.code : 'REGISTRY_UNAVAILABLE'}
-      {error && error.status ? ` · HTTP ${error.status}` : ''}
-    </p>
-    {error && error.authExpired ? (
-      <p className="text-caption-sm" style={{ color: C.t2, margin: 0 }}>
-        This session is no longer signed in. Signing in again is the fix; the registry itself may
-        be healthy.
-      </p>
-    ) : null}
-    <p className="text-caption-sm" style={{ color: C.t3, margin: 0 }}>
-      No blocks are shown while the registry is unreachable. The palette never substitutes a
-      local list, because a stale catalogue is how a block the engine cannot run reaches a
-      strategy.
-    </p>
-    <button
-      type="button"
-      onClick={onRetry}
-      disabled={retrying}
-      data-testid="palette-retry"
-      style={{
-        alignSelf: 'flex-start',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '6px',
-        background: C.bg3,
-        border: `1px solid ${C.borderLight}`,
-        borderRadius: '0.375rem',
-        padding: '6px 10px',
-        color: C.t1,
-        fontFamily: 'monospace',
-        cursor: retrying ? 'wait' : 'pointer',
-      }}
+const PaletteErrorPanel = ({ error, onRetry, retrying }) => {
+  const { fg } = statusToken('error');
+  return (
+    <div
+      role="alert"
+      data-testid="palette-error"
+      data-error-code={error ? error.code : undefined}
+      style={{ border: `1px solid ${fg}`, background: `${fg}12`, borderRadius: '0.375rem', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}
     >
-      <RefreshCw size={12} />
-      {retrying ? 'Retrying…' : 'Retry'}
-    </button>
-  </div>
-);
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: fg }}>
+        <AlertTriangle size={14} />
+        <span className="text-micro" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
+          Block palette unavailable
+        </span>
+      </div>
+      <p className="text-micro" style={{ color: token.content.secondary, margin: 0 }}>
+        {error ? error.message : 'The block registry could not be loaded.'}
+      </p>
+      <p className="text-micro" style={{ color: token.content.muted, margin: 0, fontFamily: 'monospace' }}>
+        {error ? error.code : 'REGISTRY_UNAVAILABLE'}
+        {error && error.status ? ` · HTTP ${error.status}` : ''}
+      </p>
+      {error && error.authExpired ? (
+        <p className="text-micro" style={{ color: token.content.secondary, margin: 0 }}>
+          This session is no longer signed in. Signing in again is the fix; the registry itself may
+          be healthy.
+        </p>
+      ) : null}
+      <p className="text-micro" style={{ color: token.content.muted, margin: 0 }}>
+        No blocks are shown while the registry is unreachable. The palette never substitutes a
+        local list, because a stale catalogue is how a block the engine cannot run reaches a
+        strategy.
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        disabled={retrying}
+        data-testid="palette-retry"
+        style={{
+          alignSelf: 'flex-start',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          background: token.surface.inset,
+          border: `1px solid ${token.line.strong}`,
+          borderRadius: '0.375rem',
+          padding: '6px 10px',
+          color: token.content.primary,
+          fontFamily: 'monospace',
+          cursor: retrying ? 'wait' : 'pointer',
+        }}
+      >
+        <RefreshCw size={12} />
+        {retrying ? 'Retrying…' : 'Retry'}
+      </button>
+    </div>
+  );
+};
 
 /** The empty marker set. Built once, so "no report" has a stable identity. */
 const NO_MARKERS = collectMarkers(null);
 
-const SEVERITY_COLOUR = { [SEVERITY_ERROR]: C.red, [SEVERITY_WARNING]: C.gold };
+/**
+ * severity → the hue §9.3 gives that surface (task 24.4b).
+ *
+ * Asked of `surfaceTreatment` rather than spelled here, so an issue row and the band that
+ * summarises the same verdict cannot come to disagree about which hue an error is. Built once:
+ * the mapping is static, and `statusToken` resolves the same value on every call.
+ */
+const SEVERITY_COLOUR = {
+  [SEVERITY_ERROR]: statusToken(surfaceTreatment(SEVERITY_ERROR).tokenState).fg,
+  [SEVERITY_WARNING]: statusToken(surfaceTreatment(SEVERITY_WARNING).tokenState).fg,
+};
 
 /**
  * One issue row.
@@ -769,25 +1397,33 @@ const SEVERITY_COLOUR = { [SEVERITY_ERROR]: C.red, [SEVERITY_WARNING]: C.gold };
  */
 const ValidationIssueRow = ({ issue, onFocus }) => {
   const severity = issue.severity;
-  const colour = SEVERITY_COLOUR[severity] || C.t2;
+  /*
+    `token.content.secondary` for a severity word this build does not know — NOT the hue
+    `surfaceTreatment` would fall back to. That fallback is `warning` (see its
+    `FALLBACK_SURFACE`), which is right for a *surface* that must still announce itself, and
+    wrong here: this row already prints the severity as text, so painting an unrecognised word
+    amber would assert a severity the backend never sent. A neutral text tone says only what is
+    true, which is that the row is being shown and its severity is unclassified.
+  */
+  const colour = SEVERITY_COLOUR[severity] || token.content.secondary;
   const target = issue.edge_id ? `connection ${issue.edge_id}` : issue.node_id ? `block ${issue.node_id}` : 'the whole strategy';
   const body = (
     <>
       <span className="text-micro" style={{ color: colour, fontWeight: 700, textTransform: 'uppercase' }}>
         {severity}
       </span>{' '}
-      <span className="text-micro" style={{ color: C.t3, fontFamily: 'monospace' }}>{issue.code}</span>{' '}
-      <span style={{ color: C.t1 }}>{issue.fix_hint ? issue.fix_hint : issue.message}</span>
+      <span className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>{issue.code}</span>{' '}
+      <span style={{ color: token.content.primary }}>{issue.fix_hint ? issue.fix_hint : issue.message}</span>
       {issue.fix_hint && issue.message && issue.fix_hint !== issue.message ? (
-        <span style={{ display: 'block', color: C.t2 }}>{issue.message}</span>
+        <span style={{ display: 'block', color: token.content.secondary }}>{issue.message}</span>
       ) : null}
       {issue.expected !== null && issue.expected !== undefined ? (
-        <span style={{ display: 'block', color: C.t3, fontFamily: 'monospace' }}>
+        <span style={{ display: 'block', color: token.content.muted, fontFamily: 'monospace' }}>
           expected {JSON.stringify(issue.expected)} · got {JSON.stringify(issue.actual ?? null)}
         </span>
       ) : null}
       {issue.server_override ? (
-        <span style={{ display: 'block', color: C.gold }} data-testid="server-override">
+        <span style={{ display: 'block', color: statusToken('warning').fg }} data-testid="server-override">
           The server recomputed this value; the strategy will run with the server's version.
         </span>
       ) : null}
@@ -806,14 +1442,14 @@ const ValidationIssueRow = ({ issue, onFocus }) => {
   };
 
   return (
-    <li style={{ borderTop: `1px solid ${C.border}`, padding: '4px 0' }} className="text-caption">
+    <li style={{ borderTop: `1px solid ${token.line.default}`, padding: '4px 0' }} className="text-micro">
       {onFocus ? (
         <button
           type="button"
           onClick={onFocus}
           aria-label={`${severity}: ${issue.fix_hint || issue.message} — go to ${target}`}
           {...attributes}
-          style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: C.t1 }}
+          style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: token.content.primary }}
         >
           {body}
         </button>
@@ -825,14 +1461,65 @@ const ValidationIssueRow = ({ issue, onFocus }) => {
 };
 
 /**
- * The issue list (Requirements 8.9, 8.10).
+ * A refused connection, in the issue list (task 24.4a, Requirement 5.4).
  *
- * Three groups, because the report has three kinds of subject and the third one is the one a
- * naive per-node projection loses: `MISSING_REQUIRED_CATEGORY` and the other graph-level codes
- * name neither a node nor an edge, so they get their own group rather than being dropped.
+ * The persistent half of the pair. The callout at the drop point is transient by design, so
+ * without this a reason that has faded is gone — and the author who looked away for three
+ * seconds is back to drawing the same illegal edge to find out why it was illegal.
+ *
+ * The words are {@link connectionRefusalLines}', so both surfaces quote the server the same
+ * way and neither can drift from the other. Not a `<button>`, unlike its siblings: a refused
+ * edge is not in the graph, so there is nothing on the canvas to focus.
  */
-const ValidationIssuePanel = ({ markers, stale, onFocusNode, onFocusEdge }) => {
-  if (markers.issues.length === 0) return null;
+const RefusedConnectionRow = ({ issue }) => {
+  const lines = connectionRefusalLines(issue);
+  if (lines.length === 0) return null;
+  return (
+    <li
+      data-testid="refused-connection"
+      data-code={issue.code || undefined}
+      data-node-id={issue.node_id || undefined}
+      data-field={issue.field || undefined}
+      data-has-fix-hint={lines.length > 1 ? 'true' : 'false'}
+      className="text-micro"
+      style={{
+        // The same rail and rhythm as `ValidationIssueRow`, and now literally the same
+        // expression — that row read the shim for this line until task 24.4's follow-up, so
+        // the two rows sit in one list without a seam by construction rather than by
+        // coincidence.
+        borderTop: `1px solid ${token.line.default}`,
+        padding: '4px 0',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '2px',
+      }}
+    >
+      <span data-testid="refused-connection-message" style={{ color: token.status.guidance.fg }}>
+        {lines[0]}
+      </span>
+      {lines.length > 1 ? (
+        <span data-testid="refused-connection-hint" style={{ color: token.content.secondary }}>
+          {lines[1]}
+        </span>
+      ) : null}
+    </li>
+  );
+};
+
+/**
+ * The issue list (Requirements 8.9, 8.10, 5.4).
+ *
+ * Three groups from the report, because it has three kinds of subject and the third one is the
+ * one a naive per-node projection loses: `MISSING_REQUIRED_CATEGORY` and the other graph-level
+ * codes name neither a node nor an edge, so they get their own group rather than being dropped.
+ *
+ * Plus a fourth group the report cannot supply: refused connections. A refused edge was never
+ * added to the graph, so no `POST /api/strategies/validate` will ever mention it — the only
+ * record of it is the client-side refusal that stopped it, and `§9.3` asks for that record to
+ * outlive the transient callout that announced it.
+ */
+const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEdge }) => {
+  if (markers.issues.length === 0 && refusals.length === 0) return null;
   const nodeMarkers = Object.values(markers.nodes);
   const edgeMarkers = Object.values(markers.edges);
 
@@ -844,21 +1531,53 @@ const ValidationIssuePanel = ({ markers, stale, onFocusNode, onFocusEdge }) => {
       data-warning-count={markers.warningCount}
       data-graph-issue-count={markers.graph.length}
       data-override-count={markers.overrides.length}
-      style={{ borderTop: `1px solid ${C.border}`, padding: '8px 12px', overflowY: 'auto', maxHeight: 260 }}
+      data-refusal-count={refusals.length}
+      style={{ borderTop: `1px solid ${token.line.default}`, padding: '8px 12px', overflowY: 'auto', maxHeight: 260 }}
     >
-      <h3 className="text-caption" style={{ color: C.t2, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: 1 }}>
+      <h3 className="text-micro" style={{ color: token.content.secondary, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: 1 }}>
         Validation issues
       </h3>
-      {stale ? (
-        <p role="status" data-testid="validation-issues-stale" className="text-caption-sm" style={{ color: C.gold, margin: '0 0 4px' }}>
-          This report describes an earlier version of this graph. The canvas has changed since,
-          so these markers are not shown on it.
-        </p>
+      {/*
+        Only when a report exists. With refusals alone there is no report for this sentence to
+        be about, and telling an author their report is one edit old when they have never had
+        one is a worse lie than saying nothing.
+      */}
+      {stale && markers.issues.length > 0 ? (
+        <ValidationSurface
+          surface="guidance"
+          provenance="local"
+          variant="block"
+          title="This report describes an earlier version of this graph."
+          data-testid="validation-issues-stale"
+          className="mb-1"
+        >
+          The canvas has changed since, so these markers are not shown on it.
+        </ValidationSurface>
       ) : null}
+
+      {/*
+        Refused connections first: it is the thing the author did most recently, and the
+        transient callout that announced it may already be gone.
+      */}
+      {refusals.length > 0 && (
+        <section aria-label="Connections that were refused" data-testid="refused-connections">
+          {/* All four group headings in this panel read `token.content.muted`. Task 24.4a wrote
+              this one that way while its three siblings still went through the shim; the
+              follow-up moved them onto the same token, so the four are now one decision. */}
+          <h4 className="text-micro" style={{ color: token.content.muted, margin: '4px 0 0', textTransform: 'uppercase' }}>
+            Refused connections ({refusals.length})
+          </h4>
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {refusals.map((issue) => (
+              <RefusedConnectionRow key={refusalSignature(issue)} issue={issue} />
+            ))}
+          </ul>
+        </section>
+      )}
 
       {markers.graph.length > 0 && (
         <section aria-label="Issues with the whole strategy" data-testid="graph-issues">
-          <h4 className="text-micro" style={{ color: C.t3, margin: '4px 0 0', textTransform: 'uppercase' }}>
+          <h4 className="text-micro" style={{ color: token.content.muted, margin: '4px 0 0', textTransform: 'uppercase' }}>
             Whole strategy ({markers.graph.length})
           </h4>
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -877,7 +1596,7 @@ const ValidationIssuePanel = ({ markers, stale, onFocusNode, onFocusEdge }) => {
             data-node-id={marker.id}
             data-severity={marker.severity}
             data-issue-count={marker.count}
-            style={{ color: C.t3, margin: '4px 0 0', textTransform: 'uppercase' }}
+            style={{ color: token.content.muted, margin: '4px 0 0', textTransform: 'uppercase' }}
           >
             Block {marker.id} — {markerLabel(marker)}
           </h4>
@@ -901,7 +1620,7 @@ const ValidationIssuePanel = ({ markers, stale, onFocusNode, onFocusEdge }) => {
             data-edge-id={marker.id}
             data-severity={marker.severity}
             data-issue-count={marker.count}
-            style={{ color: C.t3, margin: '4px 0 0', textTransform: 'uppercase' }}
+            style={{ color: token.content.muted, margin: '4px 0 0', textTransform: 'uppercase' }}
           >
             Connection {marker.id} — {markerLabel(marker)}
           </h4>
@@ -920,6 +1639,83 @@ const ValidationIssuePanel = ({ markers, stale, onFocusNode, onFocusEdge }) => {
   );
 };
 
+/**
+ * The transient refusal callout, anchored at the refused drop point (task 24.4a, `§9.3`).
+ *
+ * WHY IT IS HERE AND NOT AT THE TOP OF THE PAGE
+ * ---------------------------------------------
+ * The reason used to be a full-width banner above the palette, canvas and inspector. A drop is
+ * made at the pointer; the explanation appeared several hundred pixels away, above the fold of
+ * attention, so reading it meant looking away from the cursor and then finding the port again.
+ * This sits where the drop was refused.
+ *
+ * HOW IT IS ANCHORED
+ * ------------------
+ * `left` / `top` are pixel offsets **inside the canvas element's own box**, measured exactly the
+ * way `handleDrop` measures a dropped block: `event.clientX - bounds.left`, with `bounds` from
+ * `reactFlowWrapper`'s `getBoundingClientRect()`. That measurement is only safe because task
+ * 24.2a made the inspector a sibling grid track rather than an overlay — nothing floats over
+ * the canvas, so a client coordinate minus the canvas's own origin is the canvas's own
+ * coordinate, with no compensation for a panel that may or may not be covering it.
+ *
+ * The callout is placed in CSS pixels, not React Flow graph coordinates, and deliberately so:
+ * it is annotating a *gesture*, which happened at a place on screen, not a *node*, which lives
+ * at a place in the graph. Panning the canvas afterwards should not drag the note along.
+ *
+ * `transform: translate(-50%, -100%)` puts it centred just above the pointer rather than under
+ * it, and `pointerEvents: 'none'` guarantees it can neither swallow the next drag nor take
+ * focus — it holds no control, so there is nothing in it to reach.
+ *
+ * The `guidance` surface is `§9.3`'s guidance row: `status.guidance`, a dashed border, the
+ * `Info` icon and `role="status"`. Dashed and polite is what makes a refused drag read as "not
+ * yet" rather than "broken" — the author is mid-action, and nothing is wrong with their saved
+ * strategy.
+ *
+ * `provenance="local"` because it is: `lib/connectionLegality.js` stamps every refusal
+ * `provisional: true / authority: 'client-provisional'` and lets `reconcileWithBackend()`
+ * override it. So the callout carries the provisional sentence as well as the dashed rail. That
+ * is not hedging — the backend has genuinely not seen this edge, because a refused edge was
+ * never added to the graph any validation request describes.
+ */
+const ConnectionRefusalCallout = ({ issue, point }) => {
+  const lines = connectionRefusalLines(issue);
+  if (lines.length === 0 || point === null) return null;
+  return (
+    <div
+      data-testid="connection-refusal-callout"
+      data-anchor-x={Math.round(point.x)}
+      data-anchor-y={Math.round(point.y)}
+      data-has-fix-hint={lines.length > 1 ? 'true' : 'false'}
+      style={{
+        position: 'absolute',
+        left: point.x,
+        top: point.y,
+        transform: 'translate(-50%, -100%)',
+        maxWidth: 320,
+        // Above the canvas and the empty-state hint, below nothing: it is the newest thing
+        // said and the only thing said about this gesture.
+        zIndex: 12,
+        pointerEvents: 'none',
+        background: token.surface.panel,
+        borderRadius: token.radius.md,
+        boxShadow: token.shadow.raised,
+      }}
+    >
+      <ValidationSurface
+        surface="guidance"
+        provenance="local"
+        variant="block"
+        title={lines[0]}
+        data-testid="connection-refusal-alert"
+      >
+        {lines.length > 1 ? (
+          <span data-testid="connection-refusal-hint">{lines[1]}</span>
+        ) : null}
+      </ValidationSurface>
+    </div>
+  );
+};
+
 /** One status-strip cell. `known={false}` renders the honest unknown, never a passing state. */
 const StatusCell = ({ testId, label, state, text, detail, known = true, tone = null }) => (
   <span
@@ -927,13 +1723,95 @@ const StatusCell = ({ testId, label, state, text, detail, known = true, tone = n
     data-state={state}
     data-known={known ? 'true' : 'false'}
     title={detail || undefined}
-    style={{ color: tone || (known ? C.t2 : C.t3), display: 'inline-flex', gap: 4 }}
+    style={{
+      color: tone || (known ? token.content.secondary : token.content.muted),
+      display: 'inline-flex',
+      gap: 4,
+    }}
   >
-    <span style={{ color: C.t3 }}>{label}</span>
+    <span style={{ color: token.content.muted }}>{label}</span>
     <span style={{ fontWeight: 700 }}>{text}</span>
-    {known ? null : <span style={{ color: C.t3 }}>(unknown)</span>}
+    {known ? null : <span style={{ color: token.content.muted }}>(unknown)</span>}
   </span>
 );
+
+/*
+  ── The status strip's five tone maps (Requirement 8.11, §4.1) ───────────────────────────
+  Five cells, five state vocabularies, one mechanism. Each cell used to decide its hue with a
+  ternary chain naming `C.red` / `C.green` / `C.gold` directly; the hue now comes from
+  `statusToken`, and the only thing spelled here is which of its groups a state belongs to.
+
+  Written as data, not as conditionals, for one reason worth the extra lines: a state this
+  build deliberately does NOT colour is visibly ABSENT from its map, rather than being the
+  tail of an `else` that nobody can tell apart from an oversight. `validating` taking no hue
+  and `COMPLETED` taking no green are decisions, and this is where they are legible.
+
+  An unmapped state gives `null`, which is `StatusCell`'s own tone — `content.secondary` when
+  the cell knows its state, `content.muted` when it does not. Neither is a passing colour,
+  which is what Requirement 8.11 asks for a state nobody has measured.
+*/
+const cellTone = (map, state) =>
+  (Object.prototype.hasOwnProperty.call(map, state) ? statusToken(map[state]).fg : null);
+
+/**
+ * `validationSummary`'s five states. `unvalidated` and `validating` take no hue: a check that
+ * has not run, or is in flight, is not a verdict and must not read as one.
+ */
+const VALIDATION_TONE = Object.freeze({
+  [VALIDATION_STATES.INVALID]: 'error',
+  [VALIDATION_STATES.VALID]: 'ok',
+  [VALIDATION_STATES.UNAVAILABLE]: 'warning',
+});
+
+/**
+ * `deriveFeedState`'s six words. `UNKNOWN` is the only one absent, and that absence is exactly
+ * the `feed.known` test it replaces: `graphValidation.js` returns `known: false` in precisely
+ * the branches that return `UNKNOWN`.
+ *
+ * The four measured-but-not-live states share the WARNING hue rather than each taking the group
+ * `statusToken` would give its own name — `statusToken('stale')` and `statusToken('disconnected')`
+ * are both the error hue. That is preserved from before this retoken, not chosen here: a delayed
+ * or dropped market feed is a condition of the DATA, and this strip keeps the error hue for a
+ * verdict about the strategy. Escalating it is a design decision, not a retoken.
+ */
+const FEED_TONE = Object.freeze({
+  [FEED_STATES.LIVE]: 'live',
+  [FEED_STATES.DELAYED]: 'warning',
+  [FEED_STATES.STALE]: 'warning',
+  [FEED_STATES.DISCONNECTED]: 'warning',
+  [FEED_STATES.INSUFFICIENT_DATA]: 'warning',
+});
+
+/**
+ * `SAVE_STATES`. `UNSAVED` and `SAVING` take no hue — neither is an outcome, and a save in
+ * flight coloured green is a save the author will believe happened.
+ */
+const SAVE_TONE = Object.freeze({
+  [SAVE_STATES.SAVED]: 'ok',
+  [SAVE_STATES.REFUSED]: 'rejected',
+  [SAVE_STATES.FAILED]: 'failed',
+});
+
+/**
+ * `TRAINING_STATES`. Only `FAILED` carries a hue, as before this retoken: `COMPLETED`
+ * deliberately takes no green, because a finished training run is not a statement that the
+ * strategy will run.
+ */
+const TRAINING_TONE = Object.freeze({
+  [TRAINING_STATES.FAILED]: 'failed',
+});
+
+/**
+ * `REALTIME_STATES`. `DISCONNECTED` takes the warning hue and not the error hue
+ * `statusToken('disconnected')` would give it, for the reason {@link FEED_TONE} states: the
+ * socket dropping is a fact about the transport, the cell says so in words, and
+ * `REALTIME_LABELS` is what a screen reader receives. `CONNECTING` and `UNAVAILABLE` take none
+ * — one is mid-flight and the other never had a connection to lose.
+ */
+const REALTIME_TONE = Object.freeze({
+  [REALTIME_STATES.CONNECTED]: 'connected',
+  [REALTIME_STATES.DISCONNECTED]: 'warning',
+});
 
 // ---------------------------------------------------------------------------
 // The builder
@@ -981,9 +1859,46 @@ function StrategyBuilderCanvas({
   const location = useLocation();
   const strategy = strategyProp ?? location.state?.strategy ?? null;
   const onBack = onBackProp ?? (() => navigate('/app/strategies'));
-  const onBacktest = onBacktestProp ?? ((payload) => navigate('/app/backtest', { state: { strategy: payload } }));
+  /*
+    Task 24.8, Requirement 5.6. The default hands off by ROUTE, which is the whole of Property
+    24's structural half — this page never imports the page it hands off to.
+
+    `payload.route` carries `?strategy_id=`, the parameter that page actually reads, so the
+    handoff survives a bookmark and a reload. Route state is still passed as well, because that
+    page names the strategy from whichever of its three entry paths answered first and a handed
+    over record spares it a read. A caller that injects `onBacktestProp` receives the same
+    `route`, so it can navigate wherever it likes without re-deriving the address.
+  */
+  const onBacktest = useMemo(
+    () => onBacktestProp
+      ?? ((payload) => navigate(payload.route ?? '/app/backtest', { state: { strategy: payload } })),
+    [onBacktestProp, navigate],
+  );
 
   const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const nodesInitialized = useNodesInitialized();
+
+  /* ── Task 24.7: the tablet review mode (§11.6, Requirements 17.4, 15.3) ─────────────────
+   *
+   * REPLACES A BLANKET GATE, NOT A LAYER ON TOP OF ONE. Below `LAPTOP` this route used to get
+   * the shell's restricted branch and nothing else: `shell/ResponsiveGate` stated the
+   * restriction in a strip and then rendered this page completely unchanged, so every editing
+   * control was live at a width the three-track shell cannot lay out — 240px of palette plus
+   * 320px of inspector out of 712–967px leaves the canvas under 400px. (Before task 8.5 the
+   * answer below 1000px was `DesktopOnlyOverlay`'s blur over the whole app, which §11.6 calls
+   * the absence of behaviour rather than a behaviour.) This is the defined behaviour both were
+   * missing: the canvas takes the full width and reading stays on, writing stops.
+   *
+   * ONE BOOLEAN, READ FROM THE GATE. Everything below branches on `reviewMode` and nothing
+   * re-derives a breakpoint. The page does not measure its own box for this decision — see the
+   * import comment on `shell/ResponsiveGate` for why a second measurement would put the mode
+   * and the strip that explains it at different widths.
+   */
+  const { access: viewportAccessState } = useViewportAccess();
+  const reviewMode = viewportAccessState === ACCESS.RESTRICTED;
+  /** `REVIEW_MODE_MIN_WIDTH_PX` in review mode, `null` outside it. Feeds every refusal. */
+  const reviewMinimumWidthPx = reviewMode ? REVIEW_MODE_MIN_WIDTH_PX : null;
+
   const { pushState, undo, redo, canUndo, canRedo } = useUndoRedo();
   // Local checks are advisory. They render only while the backend has no verdict for the
   // graph currently on the canvas; see `backendAuthoritative` below.
@@ -1003,11 +1918,29 @@ function StrategyBuilderCanvas({
   // training block means the version WAS saved and only training was refused (Requirements
   // 14.3, 14.4, 14.7, 14.8 — and no job row exists either way).
   const [observedTrainingBlock, setObservedTrainingBlock] = useState(null);
+  /** Whether task 10.5's deploy flow is open, and the target its Configure step has been given. */
+  const [deployOpen, setDeployOpen] = useState(false);
+  const [deployTarget, setDeployTarget] = useState('');
   const [collapsedCategories, setCollapsedCategories] = useState({});
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [libraryOpen, setLibraryOpen] = useState(true);
   const [canvasNotice, setCanvasNotice] = useState(null);
-  const [connectionIssue, setConnectionIssue] = useState(null);
+  /*
+    The two surfaces a refusal reaches (task 24.4a, §9.3).
+
+    `connectionRefusal` is the transient callout: `{ issue, point }`, where `point` is a pixel
+    offset inside the canvas box. `refusalHistory` is the persistent issue-list entry, newest
+    first and bounded — it is what makes a faded callout recoverable.
+
+    Both are written once per drag, on `onConnectEnd`, from `pendingRefusalRef`. There is no
+    `connectionIssue` state any more: it existed to feed the full-width banner this task
+    removed, and React Flow calls `isValidConnection` for every handle the pointer crosses, so
+    holding the mid-drag verdict in state re-rendered the whole page several times per drag to
+    move a band nobody was looking at. The ref carries it instead. The author's mid-drag signal
+    is the dimmed ports (`dragLegality`), which is the right one — it is on the ports.
+  */
+  const [connectionRefusal, setConnectionRefusal] = useState(null);
+  const [refusalHistory, setRefusalHistory] = useState([]);
   const [dragLegality, setDragLegality] = useState(null);
   const [inspectorBlocking, setInspectorBlocking] = useState({});
 
@@ -1016,6 +1949,23 @@ function StrategyBuilderCanvas({
   const loadedStrategy = initialStrategy || strategy || null;
   const [strategyIdState, setStrategyIdState] = useState(loadedStrategy?.id || null);
   const [strategyName, setStrategyName] = useState(loadedStrategy?.name || 'Untitled Strategy');
+  /*
+    Task 24.8. The version label the SERVER last stated, and the graph it stated it for.
+
+    `savedVersion` is written from {@link serverVersionLabel} and from nowhere else — seeded from
+    the record this canvas was opened with, which is a server record, and replaced by each save
+    response. So it is either a label a server sent or `null`. It is never incremented, never
+    defaulted and never written by an edit; the header chip and the save toast both read it, which
+    is what makes them agree by construction rather than by coincidence (Requirement 5.7).
+
+    `savedGraphKey` is the `semanticGraphKey` of the graph a successful save sent. It exists so
+    that "unsaved" is an observation rather than a flag somebody has to remember to set: the graph
+    on the canvas either hashes to what was last sent or it does not. It stays `null` until this
+    session saves, and a graph loaded from the server counts as saved, because it is — see
+    `unsaved` at the header.
+  */
+  const [savedVersion, setSavedVersion] = useState(() => serverVersionLabel(loadedStrategy));
+  const [savedGraphKey, setSavedGraphKey] = useState(null);
 
   // The canvas starts empty. It used to be seeded with a `ccxt_asset_feed` node carrying
   // `symbol: "BTC/USDT"` and `timeframe: "15m"` — a market nobody chose, which is SB-06 — and
@@ -1284,11 +2234,7 @@ function StrategyBuilderCanvas({
         const data = edge.data && typeof edge.data === 'object' ? edge.data : {};
         if ((data.validationSignature || '') === signature) return edge;
         changed = true;
-        const stroke = marker === null
-          ? C.cyan
-          : marker.severity === SEVERITY_ERROR
-            ? C.red
-            : C.gold;
+        const stroke = marker === null ? token.line.strong : markerStroke(marker);
         return {
           ...edge,
           animated: marker === null,
@@ -1333,17 +2279,76 @@ function StrategyBuilderCanvas({
 
   // The history push stays outside the state updater: an updater may run twice, and a
   // side effect inside one would record the same edit twice.
+  //
+  // `select` changes are dropped rather than applied (§9.2, the structural guarantee behind
+  // P8). React Flow reports a click as a node change, and applying it would write `selected`
+  // into the `nodes` state — the array `toCanonical` serialises and the array the undo stack
+  // holds — so a selection would become an edit and would land a "selected a block" entry in
+  // the undo history. Selection lives in `selectedNodeId`; `renderedNodes` draws it from
+  // there, so nothing is lost by not storing it. A change list that is nothing but selection
+  // returns without a write at all, so no re-render and no history entry follow a click.
+  //
+  // Task 24.7 refuses the remaining edits at the WRITE, not at the control. `nodesDraggable`
+  // and `nodesConnectable` are already false in review mode, so React Flow should not report a
+  // position or an `add`/`remove` change at all — and if it ever did (a programmatic change, a
+  // library regression, a future `NodeResizer`) this is the line that decides whether it lands
+  // in the array `toCanonical` serialises. Node DIMENSIONS are refused with the rest: React
+  // Flow keeps its own measured copy in the store, which is what `fitView` and `MiniMap` read,
+  // so nothing here needs them and a read-only canvas should write nothing at all.
   const onNodesChange = useCallback((changes) => {
-    const next = applyNodeChanges(changes, nodes);
+    const edits = changes.filter((change) => change.type !== 'select');
+    if (edits.length === 0) return;
+    if (reviewMode) return;
+    const next = applyNodeChanges(edits, nodes);
     setNodes(next);
     pushState({ nodes: next, edges });
-  }, [nodes, edges, pushState]);
+  }, [nodes, edges, pushState, reviewMode]);
 
   const onEdgesChange = useCallback((changes) => {
+    if (reviewMode) return;
     const next = applyEdgeChanges(changes, edges);
     setEdges(next);
     pushState({ nodes, edges: next });
-  }, [nodes, edges, pushState]);
+  }, [nodes, edges, pushState, reviewMode]);
+
+  /*
+    The refusal waiting for a drop point, and whether this drag produced an edge.
+
+    A ref, not state, because React Flow calls `isValidConnection` for **every** handle the
+    pointer passes over: the latest reason changes many times during one drag, and none of those
+    intermediate values is worth a render. The reason is read once, on `onConnectEnd`, and
+    placed at the point where the drop actually happened.
+
+    `dragProducedEdgeRef` exists because React Flow calls `onConnect` *before* `onConnectEnd` on
+    a successful drop, and by then the ref may still hold the reason a handle the pointer merely
+    crossed on the way was illegal. Explaining a refusal after an accepted connection would be a
+    plain lie about what just happened.
+  */
+  const pendingRefusalRef = useRef(null);
+  const dragProducedEdgeRef = useRef(false);
+  const refusalTimerRef = useRef(null);
+
+  /** Take the transient callout down now, and cancel its timer. */
+  const clearRefusalCallout = useCallback(() => {
+    if (refusalTimerRef.current !== null) {
+      clearTimeout(refusalTimerRef.current);
+      refusalTimerRef.current = null;
+    }
+    setConnectionRefusal(null);
+  }, []);
+
+  // A pending timer outliving the page would call `setConnectionRefusal` on an unmounted tree.
+  useEffect(
+    () => () => {
+      if (refusalTimerRef.current !== null) clearTimeout(refusalTimerRef.current);
+    },
+    [],
+  );
+
+  /** Record a refusal for `onConnectEnd` to place. No render: see `pendingRefusalRef`. */
+  const noteRefusal = useCallback((issue) => {
+    pendingRefusalRef.current = issue;
+  }, []);
 
   /**
    * React Flow's `isValidConnection`: the R1–R8 gate from `connectionLegality.js`.
@@ -1360,17 +2365,33 @@ function StrategyBuilderCanvas({
         // on every edit.
         graph: () => canonicalRef.current,
         registry: registryPayload,
-        onReject: (issue) => setConnectionIssue(issue),
+        onReject: (issue) => noteRefusal(issue),
       });
     } catch {
       return null;
     }
-  }, [registryPayload]);
+  }, [registryPayload, noteRefusal]);
 
   const isValidConnection = useCallback(
     (connection) => {
+      if (reviewMode) {
+        // Review mode refuses through the SAME surface every other refusal uses, so a drag that
+        // somehow started (a synthetic event, a pointer device React Flow's `nodesConnectable`
+        // does not cover) is told why rather than silently doing nothing.
+        noteRefusal(
+          saveIssue(
+            'REVIEW_MODE_READ_ONLY',
+            'This screen is in review mode, so connections cannot be drawn here.',
+            {
+              fixHint: `Open this strategy on a screen at least ${REVIEW_MODE_MIN_WIDTH_PX}px wide `
+                + 'to edit the graph.',
+            },
+          ),
+        );
+        return false;
+      }
       if (connectionValidator === null) {
-        setConnectionIssue(
+        noteRefusal(
           saveIssue(
             'REGISTRY_UNAVAILABLE',
             'Connections cannot be checked while the block registry is unavailable.',
@@ -1380,7 +2401,7 @@ function StrategyBuilderCanvas({
         return false;
       }
       if (canonicalRef.current === null) {
-        setConnectionIssue(
+        noteRefusal(
           saveIssue(
             canonical.error ? canonical.error.code : 'GRAPH_UNSERIALIZABLE',
             canonical.error ? canonical.error.message : 'This canvas cannot be serialized.',
@@ -1390,16 +2411,20 @@ function StrategyBuilderCanvas({
         return false;
       }
       const accepted = connectionValidator(connection);
-      if (accepted) setConnectionIssue(null);
+      if (accepted) pendingRefusalRef.current = null;
       return accepted;
     },
-    [connectionValidator, canonical.error],
+    [connectionValidator, canonical.error, noteRefusal, reviewMode],
   );
 
   /** Dim every input port that cannot accept the port being dragged, before the drop. */
   const onConnectStart = useCallback(
     (_, { nodeId, handleId, handleType }) => {
-      setConnectionIssue(null);
+      // The next drag is one of the two things that dismisses the callout (the other is its
+      // timer). A note about the last drop point is noise sitting on the new one.
+      pendingRefusalRef.current = null;
+      dragProducedEdgeRef.current = false;
+      clearRefusalCallout();
       if (handleType !== 'source' || registryPayload === null || canonicalRef.current === null) return;
       try {
         setDragLegality(
@@ -1411,12 +2436,47 @@ function StrategyBuilderCanvas({
         setDragLegality(null);
       }
     },
-    [registryPayload],
+    [registryPayload, clearRefusalCallout],
   );
 
-  const onConnectEnd = useCallback(() => setDragLegality(null), []);
+  /**
+   * The drop landed. If it was refused, this is where the reason is placed and recorded.
+   *
+   * Both surfaces are written here and only here (`§9.3`): the transient callout at the drop
+   * point, and the persistent entry in the validation issue list. The list entry is what makes
+   * the callout safe to expire — see {@link REFUSAL_CALLOUT_MS}.
+   */
+  const onConnectEnd = useCallback((event) => {
+    setDragLegality(null);
+
+    const issue = pendingRefusalRef.current;
+    const produced = dragProducedEdgeRef.current;
+    pendingRefusalRef.current = null;
+    dragProducedEdgeRef.current = false;
+    if (produced || issue === null || issue === undefined) return;
+    if (connectionRefusalLines(issue).length === 0) return;
+
+    setConnectionRefusal({ issue, point: canvasPointFromEvent(event, reactFlowWrapper.current) });
+    setRefusalHistory((current) => {
+      const signature = refusalSignature(issue);
+      return [issue, ...current.filter((entry) => refusalSignature(entry) !== signature)].slice(
+        0,
+        REFUSAL_HISTORY_LIMIT,
+      );
+    });
+
+    if (refusalTimerRef.current !== null) clearTimeout(refusalTimerRef.current);
+    refusalTimerRef.current = setTimeout(() => {
+      refusalTimerRef.current = null;
+      setConnectionRefusal(null);
+    }, REFUSAL_CALLOUT_MS);
+  }, []);
 
   const onConnect = useCallback((params) => {
+    // Task 24.7. `isValidConnection` already refuses in review mode and React Flow only calls
+    // this after that gate passes, so this is the second of two locks on the same door — the
+    // one that holds if a caller reaches `onConnect` without going through the gate.
+    if (reviewMode) return;
     const edge = {
       id: `e-${params.source}:${params.sourceHandle || ''}-${params.target}:${params.targetHandle || ''}`,
       source: params.source,
@@ -1424,23 +2484,40 @@ function StrategyBuilderCanvas({
       target: params.target,
       targetHandle: params.targetHandle ?? null,
       animated: true,
-      style: { stroke: C.cyan, strokeWidth: 2 },
+      style: { stroke: token.line.strong, strokeWidth: 2 },
     };
+    // Set before the duplicate guard: React Flow only calls this when the connection passed
+    // `isValidConnection`, so the drag succeeded either way and there is no refusal to explain.
+    dragProducedEdgeRef.current = true;
+    pendingRefusalRef.current = null;
     if (edges.some((existing) => existing.id === edge.id)) return;
     const next = [...edges, edge];
     setEdges(next);
     pushState({ nodes, edges: next });
-    setConnectionIssue(null);
-  }, [nodes, edges, pushState]);
+    clearRefusalCallout();
+  }, [nodes, edges, pushState, clearRefusalCallout, reviewMode]);
 
   const onNodeClick = useCallback((_, node) => {
     setSelectedNodeId(node.id);
   }, []);
 
+  /*
+    Task 24.7 turns the DROP TARGET off, not just the palette.
+
+    Withholding `preventDefault()` here is what does it: the HTML drag-and-drop model only fires
+    `drop` on an element whose `dragover` handler cancelled the event, so in review mode the
+    browser never delivers a drop to this canvas at all. `dropEffect = 'none'` makes the cursor
+    say so mid-drag. `handleDrop` refuses as well — a drag that originated somewhere this page
+    does not control still has to be declined — but this is the lock that holds first.
+  */
   const handleDragOver = useCallback((event) => {
+    if (reviewMode) {
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'none';
+      return;
+    }
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
-  }, []);
+  }, [reviewMode]);
 
   const mintNodeId = useCallback(() => {
     const taken = new Set(nodes.map((node) => node.id));
@@ -1461,6 +2538,7 @@ function StrategyBuilderCanvas({
    */
   const handleDrop = useCallback((event) => {
     event.preventDefault();
+    if (reviewMode) return;
     const bounds = reactFlowWrapper.current?.getBoundingClientRect();
     const blockId = event.dataTransfer.getData(DRAG_BLOCK_ID_MIME);
     if (!blockId || !bounds) return;
@@ -1487,10 +2565,10 @@ function StrategyBuilderCanvas({
     setNodes(next);
     pushState({ nodes: next, edges });
     setSelectedNodeId(newNode.id);
-  }, [nodes, edges, mintNodeId, pushState]);
+  }, [nodes, edges, mintNodeId, pushState, reviewMode]);
 
   const handleDeleteNode = useCallback(() => {
-    if (!selectedNodeId) return;
+    if (!selectedNodeId || reviewMode) return;
     setNodes((nds) => nds.filter((node) => node.id !== selectedNodeId));
     setEdges((eds) => eds.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
     setSelectedNodeId(null);
@@ -1498,27 +2576,60 @@ function StrategyBuilderCanvas({
       nodes: nodes.filter((node) => node.id !== selectedNodeId),
       edges: edges.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId),
     });
-  }, [selectedNodeId, nodes, edges, pushState]);
+  }, [selectedNodeId, nodes, edges, pushState, reviewMode]);
 
+  // Undo and redo REWRITE the graph from the history stack, so they are edits like any other
+  // and review mode refuses both (task 24.7). The toolbar's two buttons are disabled with them,
+  // but the refusal is here because `Ctrl+Z` / `Ctrl+Shift+Z` never touch a button.
   const handleUndo = useCallback(() => {
+    if (reviewMode) return;
     const previousState = undo();
     if (previousState) {
       setNodes(previousState.nodes);
       setEdges(previousState.edges);
     }
-  }, [undo]);
+  }, [undo, reviewMode]);
 
   const handleRedo = useCallback(() => {
+    if (reviewMode) return;
     const nextState = redo();
     if (nextState) {
       setNodes(nextState.nodes);
       setEdges(nextState.edges);
     }
-  }, [redo]);
+  }, [redo, reviewMode]);
 
   const handleFitView = useCallback(() => {
     fitView({ duration: 800 });
   }, [fitView]);
+
+  /*
+    §11.6's "`fitView` on mount" for the review surface.
+
+    The `fitView` PROP on `<ReactFlow>` is React Flow's initial fit and it is spent the first
+    time a node is measured, so it cannot answer this on its own: entering review mode WIDENS
+    the canvas (the palette track collapses and the inspector leaves the grid for a drawer), and
+    a graph fitted to the old 3-track width would then sit off to one side of the only thing
+    this mode exists to do — read it.
+
+    It is gated on `useNodesInitialized()` because `fitView` needs measured nodes to compute
+    bounds; a strategy loaded from the server arrives after mount, so "on mount" in practice
+    means "once there is something to fit". The ref makes it once per entry into the mode.
+
+    THIS IS NOT THE FIT TASK 24.2a FORBADE. P8 says SELECTION must not call `fitView`, and
+    `selectedNodeId` is deliberately absent from these dependencies — a click changes neither
+    `reviewMode` nor `nodesInitialized`, so no selection can reach this line.
+  */
+  const reviewFittedRef = useRef(false);
+  useEffect(() => {
+    if (!reviewMode) {
+      reviewFittedRef.current = false;
+      return;
+    }
+    if (reviewFittedRef.current || !nodesInitialized) return;
+    reviewFittedRef.current = true;
+    fitView({ duration: 0 });
+  }, [reviewMode, nodesInitialized, fitView]);
 
   const handleRetryRegistry = useCallback(async () => {
     setRetryingRegistry(true);
@@ -1529,13 +2640,18 @@ function StrategyBuilderCanvas({
     }
   }, []);
 
+  // Parameter editing is off in review mode (task 24.7). `ParameterForm` is handed
+  // `disabled={reviewMode}` as well — Requirement 9.9's read-only form, reused — but that
+  // disables CONTROLS, and this is the write those controls would reach. A form rendered
+  // read-only whose `onChange` still applied would be the "merely hidden" failure.
   const handleParamChange = useCallback((key, value) => {
+    if (reviewMode) return;
     setNodes((nds) => nds.map((node) => (
       node.id === selectedNodeId
         ? { ...node, data: { ...node.data, params: { ...node.data.params, [key]: value } } }
         : node
     )));
-  }, [selectedNodeId]);
+  }, [selectedNodeId, reviewMode]);
 
   const handleInspectorBlocking = useCallback((keys) => {
     if (!selectedNodeId) return;
@@ -1550,7 +2666,25 @@ function StrategyBuilderCanvas({
 
   // -- save ---------------------------------------------------------------
 
+  /**
+   * The product's notification mechanism, as `AppShell` installs it (Requirement 20.10).
+   *
+   * Read at call time rather than captured, and silent when absent: mounted outside the shell
+   * — an inline embed, a test — there is no host to speak to, and the outcome is on screen
+   * anyway in the status strip, so a missing toast loses nothing. This is a page announcing
+   * its OWN action, not a backend event, so it does not belong to `useNotificationStream`.
+   */
+  const notify = useCallback((type, message) => {
+    if (typeof window !== 'undefined' && typeof window.showToast === 'function') {
+      window.showToast(type, message);
+    }
+  }, []);
+
   const handleSaveStrategy = useCallback(async () => {
+    // Task 24.7. The Save button is disabled in review mode with the width as its stated reason,
+    // and `Ctrl+S` is swallowed without reaching here — but a save is a WRITE TO THE SERVER, so
+    // it gets the same refusal at the function that performs it and not only at its two callers.
+    if (reviewMode) return;
     const trimmedName = strategyName.trim() || 'Untitled Strategy';
     setIsSavingStrategy(true);
     setSaveIssues([]);
@@ -1614,6 +2748,22 @@ function StrategyBuilderCanvas({
       setObservedTrainingBlock(response?.training ?? null);
       setSaveStatus(SAVE_STATES.SAVED);
       setSaveState(`Saved · ${market.symbol} ${market.timeframe}`);
+
+      /*
+        Task 24.8, Requirement 5.7. The confirmation and the header chip are the SAME value,
+        read once from the response: `serverVersionLabel` either finds a label the server sent
+        or answers `null`, and `saveConfirmation` turns that into "Saved as version {v}" or
+        "Saved". Nothing here counts, and no versioning logic changes (Requirement 19.1) — a
+        first save through `POST /api/strategies` genuinely carries no label, and saying "Saved"
+        is the honest report of that.
+
+        `savedGraphKey` records WHICH graph this was, so `Backtest this version` and `Deploy`
+        can tell a saved canvas from one that has moved on since.
+      */
+      const versionLabel = serverVersionLabel(response);
+      setSavedVersion(versionLabel);
+      setSavedGraphKey(graphKey);
+      notify('success', saveConfirmation(versionLabel));
     } catch (err) {
       // A 422 from `POST /training/jobs` carries the same block payload on `detail`. Read
       // where the API client put it, without assuming which client shape delivered it.
@@ -1636,20 +2786,34 @@ function StrategyBuilderCanvas({
     } finally {
       setIsSavingStrategy(false);
     }
-  }, [strategyName, nodes, edges, strategyIdState, blockingParams]);
+  }, [strategyName, nodes, edges, strategyIdState, blockingParams, graphKey, notify, reviewMode]);
 
   // -- keyboard -----------------------------------------------------------
 
+  /*
+    Review mode has to reach the SHORTCUTS, not only the buttons (task 24.7).
+
+    `Ctrl+S`, `Ctrl+Z`, `Ctrl+Shift+Z`, `Delete` and `Backspace` never touch a control, so
+    disabling Save, Undo, Redo and Delete Node leaves all five live. Each one is declined here.
+
+    `Ctrl+S` and `Ctrl+Z` keep their `preventDefault()` in review mode even though nothing
+    follows: unswallowed, `Ctrl+S` opens the browser's "save page" dialog over the canvas, which
+    is a worse answer to "editing is off" than doing nothing at all.
+
+    `Escape` is untouched. Clearing the selection closes the inspector, and reading is the mode's
+    entire purpose — so is the only key here that still does what it says.
+  */
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.ctrlKey || e.metaKey) {
         switch (e.key) {
           case 's':
             e.preventDefault();
-            handleSaveStrategy();
+            if (!reviewMode) handleSaveStrategy();
             break;
           case 'z':
             e.preventDefault();
+            if (reviewMode) break;
             if (e.shiftKey) handleRedo();
             else handleUndo();
             break;
@@ -1661,7 +2825,7 @@ function StrategyBuilderCanvas({
       switch (e.key) {
         case 'Delete':
         case 'Backspace':
-          if (selectedNodeId) {
+          if (selectedNodeId && !reviewMode) {
             e.preventDefault();
             handleDeleteNode();
           }
@@ -1676,7 +2840,7 @@ function StrategyBuilderCanvas({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNodeId, handleDeleteNode, handleUndo, handleRedo, handleSaveStrategy]);
+  }, [selectedNodeId, handleDeleteNode, handleUndo, handleRedo, handleSaveStrategy, reviewMode]);
 
   // -- load and autosave --------------------------------------------------
 
@@ -1788,6 +2952,31 @@ function StrategyBuilderCanvas({
     () => nodes.find((node) => node.id === selectedNodeId) || null,
     [nodes, selectedNodeId],
   );
+
+  /*
+    Requirement 5.3: the inspector track exists for a selected node and for nothing else. With
+    no selection it is `display: none` at width `0`, so the canvas track takes the room back
+    rather than sharing the shell with an empty panel. The toolbar's toggle can still close it
+    over a selection — an author who wants the whole width says so — but it can never open it
+    onto nothing.
+  */
+  const inspectorShown = inspectorOpen && selectedNode !== null;
+
+  /*
+    Where the inspector goes, and whether the palette track exists at all (task 24.7, §11.6).
+
+    In review mode the two outer tracks are gone and the canvas takes the whole shell: the
+    palette because nothing can be dragged out of it, and the inspector because a 320px column
+    beside a canvas in 712–967px of shell leaves neither readable. The inspector becomes a bottom
+    `Drawer` over the full width instead, which is the placement §11.6 names.
+
+    `paletteShown` is composed from `libraryOpen` rather than replacing it, so the author's own
+    toggle state survives a rotation back to laptop width — a trader who had the palette closed
+    does not find it open again on the way back.
+  */
+  const paletteShown = libraryOpen && !reviewMode;
+  const inspectorTrackShown = inspectorShown && !reviewMode;
+  const inspectorDrawerOpen = reviewMode && inspectorShown;
 
   const selectedDescriptor = useMemo(() => {
     if (!selectedNode) return null;
@@ -2148,6 +3337,65 @@ function StrategyBuilderCanvas({
     if (target) focusNode(target.source);
   }, [edges, focusNode]);
 
+  /**
+   * The lanes the header strip draws (§9.1).
+   *
+   * The five declared stages always, plus the neutral sixth band only once the canvas holds a
+   * node that resolved there. The node is drawn either way — the lane is the label, not the
+   * permission.
+   */
+  const laneBands = useMemo(
+    () => (
+      nodes.some((node) => stageBandFor(node.data ? node.data.category : null).id === 'UNRESOLVED')
+        ? STAGE_BANDS
+        : DECLARED_STAGE_BANDS
+    ),
+    [nodes],
+  );
+
+  /**
+   * The edges as drawn (§9.1): `line.strong` at rest, `brand` when the edge's source or its
+   * target is the selected node.
+   *
+   * Derived for rendering, never written back. `edges` state is what `toCanonical` serializes
+   * and what the undo stack holds, so a selection must not reach it — the same reason selection
+   * does not touch the `nodes` array. An edge the backend has reported on keeps its marker
+   * stroke: that is the other place colour is spent on this canvas (Requirement 8.10).
+   */
+  const renderedEdges = useMemo(
+    () => edges.map((edge) => {
+      const stroke = edgeStrokeFor(edge, selectedNodeId);
+      const style = edge.style || {};
+      // An unchanged edge is returned by identity, so a selection re-renders no path it
+      // did not recolour.
+      if (style.stroke === stroke && style.strokeWidth === 2) return edge;
+      return { ...edge, style: { ...style, stroke, strokeWidth: 2 } };
+    }),
+    [edges, selectedNodeId],
+  );
+
+  /**
+   * The nodes as drawn (§9.2): the selected one carries React Flow's `selected` flag, which is
+   * what `PremiumNodeWrapper` reads for its ring.
+   *
+   * Derived here for the same reason `renderedEdges` is, and the reason matters more for nodes:
+   * `nodes` is the array `toCanonical` serializes and the array the undo stack holds, so a
+   * `selected` flag written into it would make clicking a block an edit to the strategy. The
+   * flag is presentation, so it lives on the rendered copy only — nothing about a node's id, its
+   * position, its params or its data changes when the selection moves, and React Flow's viewport
+   * is never touched at all.
+   *
+   * An unchanged node is returned by identity, so selecting one block re-renders that block and
+   * the one it was taken from, not the graph.
+   */
+  const renderedNodes = useMemo(
+    () => nodes.map((node) => {
+      const selected = node.id === selectedNodeId;
+      return Boolean(node.selected) === selected ? node : { ...node, selected };
+    }),
+    [nodes, selectedNodeId],
+  );
+
   // An unset required parameter deliberately does **not** disable the button. A disabled
   // control says "no" without saying why; clicking through produces the structured refusal that
   // names the node and the field, which is the whole point of the SB-06 fix.
@@ -2157,59 +3405,462 @@ function StrategyBuilderCanvas({
   // saying "no" silently — and the write it would attempt is one migration 004c's trigger
   // refuses, so offering it would be offering an edit that cannot land. Until a
   // `canvas_state` verdict arrives, `locked` is false and nothing changes.
-  const saveDisabled =
-    isSavingStrategy ||
+  //
+  // `isSavingStrategy` is NOT part of this: a save in flight is `ds/CommandButton`'s `loading`,
+  // which explains itself through `loadingLabel`. Folding it in here would demand a second
+  // explanation and push this page towards `disabledReason="Saving"`, which explains nothing.
+  //
+  // Task 24.7 adds review mode as a CAUSE in this list rather than a second disabled path
+  // beside it. `saveRefusal` states it first, so `saveRefused` and `saveDisabledReason` stay the
+  // pair `ds/CommandButton` demands — disabled implies a sentence, and there is still exactly
+  // one function that can produce that sentence.
+  const saveRefused =
     !isValid ||
     !registry.isReady ||
     canonical.graph === null ||
     nodes.length === 0 ||
-    deployedLock.locked;
+    deployedLock.locked ||
+    reviewMode;
+
+  const saveDisabledReason = saveRefusal({
+    locked: deployedLock.locked,
+    lockReason: deployedLock.reason,
+    registryReady: registry.isReady,
+    nodeCount: nodes.length,
+    serializerRefused: canonical.graph === null,
+    errorCount: errors.length,
+    reviewMinimumWidthPx,
+  });
+
+  /* ── Task 24.8: the three header actions and what refuses them ─────────────────────────
+   *
+   * `[ Save ] [ Backtest this version ] [ Deploy ]` — three DISTINCT actions, which is the
+   * reconciliation this task asks for. This header used to carry two buttons, `Save` and
+   * `Compile`, both calling `handleSaveStrategy`: the same request behind two labels, one of
+   * which named an internal step of the other. `handleSaveStrategy` compiles and then saves,
+   * so `Compile` was never a separate operation and its removal takes nothing away.
+   */
+
+  /**
+   * How many errors stand between this graph and a downstream action.
+   *
+   * Counted where this page already counts, and only once. When a backend report applies to the
+   * graph on the canvas the backend's own `errorCount` is the number — that is the page's
+   * standing rule (advisory vs authority: once a report applies, its verdict is the only verdict
+   * on screen, so the author is never shown two answers that disagree). Otherwise the local
+   * advisory count plus the unset required parameters the save gate holds, which the local
+   * validator does not report and which refuse a save on their own. The two halves are never
+   * added to a backend count: when the backend has spoken it has already judged the parameters.
+   */
+  const validationErrorCount = backendAuthoritative
+    ? markers.errorCount
+    : errors.length + blockingParams.length;
+
+  /**
+   * The canvas differs from what was last saved, or was never saved at all.
+   *
+   * An observation, not a flag: `savedGraphKey` is the `semanticGraphKey` a successful save
+   * sent, and `graphKey` is the one on screen now. A strategy opened from the server counts as
+   * saved — it is, and `savedGraphKey` is `null` only because THIS session has not saved it —
+   * so the second clause is gated on a key having been recorded. Without an id there is no
+   * saved version to backtest or deploy at all, whatever the canvas holds.
+   */
+  const unsaved =
+    strategyIdState === null
+    || strategyIdState === ''
+    || (savedGraphKey !== null && savedGraphKey !== graphKey);
+
+  const backtestRefusal = headerActionRefusal('backtesting', {
+    unsaved,
+    errorCount: validationErrorCount,
+    reviewMinimumWidthPx,
+  });
+  const deployRefusal =
+    headerActionRefusal('deploying', {
+      unsaved,
+      errorCount: validationErrorCount,
+      reviewMinimumWidthPx,
+    })
+    ?? (savedVersion === null ? NO_NAMED_VERSION_REFUSAL : null);
+
+  /**
+   * The market the graph names, or `null` when it does not name one yet.
+   *
+   * Requirement 8.1's `Market` row for the deploy review, read from the DATA node's own params
+   * through the one function that resolves them. `resolveMarketIdentity` raises when the market
+   * is unset, and that refusal belongs to the save path, not to a review grid — so an unset
+   * market becomes `null` here and `lib/deployFlow.js` renders the not-available marker with its
+   * own reason. No literal is substituted (SB-06, Requirement 12.4).
+   */
+  const graphMarket = useMemo(() => {
+    if (canonical.graph === null) return null;
+    try {
+      return resolveMarketIdentity(canonical.graph);
+    } catch {
+      return null;
+    }
+  }, [canonical.graph]);
+
+  /**
+   * The deployment task 10.5's flow is asked to confirm.
+   *
+   * Three fields decide whether the flow can be *addressed* — `strategyId`, `version` and a
+   * resolvable `environment` — and all three are read, never derived: the id the server issued,
+   * the version label the server stated, and the target the author picked on the Configure step.
+   * `null` on the version is a real state and `deployFlow` refuses on it in words ("Save a
+   * version first"), which is the correct answer for a strategy whose save response carried no
+   * label rather than a number invented to fill the field.
+   *
+   * Capital, sizing, the exchange account and the risk configuration are not on this page and
+   * are not fabricated here: the review grid renders each as the not-available marker with its
+   * own reason, and `deployPreflight` — not this page — decides whether the deployment is
+   * permitted (Requirement 19.1).
+   */
+  const deployConfig = useMemo(
+    () => ({
+      strategyId: strategyIdState ? String(strategyIdState) : null,
+      version: savedVersion,
+      environment: deployTarget,
+      strategyName: strategyName.trim() || null,
+      market: graphMarket ? graphMarket.symbol : null,
+    }),
+    [strategyIdState, savedVersion, deployTarget, strategyName, graphMarket],
+  );
+
+  /**
+   * `Backtest this version` (Requirement 5.6).
+   *
+   * ⚠️ THE QUERY PARAMETER IS `strategy_id`, NOT `strategy` ⚠️
+   * Task 23.1 rebuilt that page to read `searchParams.get("strategy_id")` and nothing else, so
+   * `?strategy=` would arrive and be ignored — a deep link that silently loses its subject. The
+   * name here is the one the code on the other side reads.
+   *
+   * And there is no version parameter, because that page takes no version from the URL: it reads
+   * the strategy's versions and runs the one the backend marks `is_current`, so the version is
+   * pre-selected BY THE SERVER. Appending `&version=` would be a parameter nothing reads, and a
+   * URL that appears to pin a version while the run binds whichever one is current is worse than
+   * no parameter at all. `route` is handed to the injected `onBacktest` so a host can replace the
+   * navigation without re-deriving the address.
+   */
+  const handleBacktestVersion = useCallback(() => {
+    const id = strategyIdState ? String(strategyIdState) : '';
+    onBacktest({
+      id: strategyIdState,
+      name: strategyName,
+      nodes,
+      edges,
+      route: `/app/backtest?strategy_id=${encodeURIComponent(id)}`,
+    });
+  }, [onBacktest, strategyIdState, strategyName, nodes, edges]);
+
+  /*
+    The inspector's body, defined ONCE and rendered in whichever container this width gets: the
+    sibling grid track at laptop width and up (§9.2, Requirement 5.3), or task 24.7's bottom
+    `ds/Drawer` in review mode (§11.6).
+
+    One definition rather than two is what makes "read-only form" true rather than approximate.
+    A second copy written for the drawer would be a second set of fields to keep in step with
+    `ParameterForm`'s specs, the backend's per-field issues, and the preview and trace regions —
+    and the copy nobody edits is the copy that drifts. The read-only surface IS the editable
+    surface with `disabled` set and the write refused behind it.
+  */
+  const inspectorFields = selectedNode === null ? null : (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <div>
+        <div className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', marginBottom: '8px' }}>
+          Block
+        </div>
+        <Tag2>{selectedNode.data.block_id}</Tag2>
+        <div className="text-micro" style={{ color: token.content.muted, marginTop: '4px' }}>
+          {selectedNode.data.category}
+        </div>
+        <PortChips ports={selectedNode.data.inputs} direction="in" />
+        <PortChips ports={selectedNode.data.outputs} direction="out" />
+
+        {/*
+          Node status: the same marker the canvas draws, in words — and now the same
+          hue, because the severity goes through `surfaceTreatment` rather than
+          through a ternary of its own. This is the last severity lookup on the page.
+
+          `surfaceTreatment`'s fallback surface is `warning`, which is exactly the
+          `: C.gold` arm this replaces: a severity word the build does not recognise
+          keeps the amber it has today instead of gaining a hue. No validation at all
+          is `content.muted`, unchanged — "nothing has been said about this block" is
+          not a verdict.
+        */}
+        <p
+          className="text-micro"
+          data-testid="inspector-node-status"
+          data-node-id={selectedNode.id}
+          data-severity={selectedNode.data.validation ? selectedNode.data.validation.severity : undefined}
+          data-issue-count={selectedNode.data.validation ? selectedNode.data.validation.count : 0}
+          style={{
+            color: selectedNode.data.validation
+              ? statusToken(surfaceTreatment(selectedNode.data.validation.severity).tokenState).fg
+              : token.content.muted,
+            margin: '6px 0 0',
+          }}
+        >
+          {selectedNode.data.validation
+            ? markerLabel(selectedNode.data.validation)
+            : backendAuthoritative
+              ? 'No issues reported for this block'
+              : 'Not validated yet'}
+        </p>
+      </div>
+
+      {selectedDescriptor ? (
+        <ParameterForm
+          params={selectedDescriptor.params}
+          values={selectedNode.data.params}
+          onChange={handleParamChange}
+          /*
+            Requirement 9.9's read-only form, reused for §11.6's read-only inspector (task
+            24.7). Every control the form renders goes `disabled`, and `handleParamChange`
+            refuses the write behind them — the control and the write, not one or the other.
+          */
+          disabled={reviewMode}
+          // Requirement 8.9: the backend's own issues, matched to fields by
+          // `issue.field` and rendered with `fix_hint` verbatim by the form.
+          issues={selectedNodeIssues}
+          nodeId={selectedNode.id}
+          blockId={selectedNode.data.block_id}
+          // Requirements 11.7 / 11.8: the symbol and timeframe controls are
+          // populated from the discovery and registry endpoints. No symbol or
+          // interval list exists in this client to fall back to.
+          controls={MARKET_PARAM_CONTROLS}
+          onBlockingChange={handleInspectorBlocking}
+        />
+      ) : (
+        <p className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>
+          The registry publishes no descriptor for “{selectedNode.data.block_id}”, so its
+          parameters cannot be shown.
+        </p>
+      )}
+
+      {/*
+        Requirements 24.7 / 24.8: the last values this block produces, computed by
+        the executors that run it, over a window the server bounds. A
+        FEATURE_ENGINEERING node's produced column names come with it.
+      */}
+      <NodePreview
+        state={preview.state}
+        preview={preview.preview}
+        error={preview.error}
+        availability={previewAvailable}
+        onRequest={requestPreview}
+      />
+
+      {/*
+        Requirement 24.6: the trace the run already recorded for this block — its
+        bound inputs, its output, its duration and every recorded failure — read
+        out of `dag_engine.ExecutionTracer` and `signal_trace_engine`, which is
+        what makes "why did nothing happen?" answerable. `runtime` is task 8.5's
+        reading, already stamped onto the node by the canvas effect: a block that
+        is warming never ran, and that is a different answer from one that failed.
+      */}
+      <NodeTrace
+        trace={selectedNodeTrace}
+        runtime={selectedNode.data.runtime || null}
+      />
+
+      {/*
+        §9.3's destructive TREATMENT, and deliberately NOT its dialog. Deleting a
+        node mutates local React state, pushes the result onto the undo stack and
+        reaches no endpoint — the saved version on the server is immutable and
+        untouched until the author presses Save. A modal on a reversible local edit
+        is friction that trains the dismiss-reflex the live-deploy dialog depends on
+        not existing. `intent` is where the hue comes from; this takes no colour prop.
+      */}
+      <CommandButton
+        intent="destructive"
+        size="sm"
+        icon={Trash2}
+        disabled={reviewMode}
+        disabledReason={reviewModeRefusal('deleting a block', reviewMinimumWidthPx) ?? undefined}
+        onClick={handleDeleteNode}
+        style={{ width: '100%' }}
+      >
+        Delete Node
+      </CommandButton>
+    </div>
+  );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: C.bg1 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: token.surface.panel }}>
       {/* Toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: C.bg2, borderBottom: `1px solid ${C.border}`, gap: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: token.surface.raised, borderBottom: `1px solid ${token.line.default}`, gap: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Button variant="ghost" size="sm" Icon={ArrowLeft} onClick={onBack}>Back</Button>
+          {/*
+            The name is part of the record a save writes, so review mode disables it with the
+            rest of the editing surface (task 24.7). Leaving it live would let a trader retype
+            the strategy's name on a tablet and lose it, with the only Save on the page refused.
+          */}
           <Inp
             id="strategy-name"
             aria-label="Strategy name"
             ph="Strategy Name"
             val={strategyName}
+            disabled={reviewMode}
             onChange={(e) => setStrategyName(e.target.value)}
           />
+          {/*
+            The version chip (task 24.8, Requirement 5.7). It reads `savedVersion` — the label a
+            save response carried — and nothing else, so it and the save toast cannot disagree.
+
+            When the server has stated no label the chip says so rather than showing a number:
+            `POST /api/strategies` genuinely answers without one, and "no version label yet"
+            is a true sentence where "version 1" would be a guess the author would then deploy.
+          */}
+          <span
+            data-testid="builder-version-chip"
+            data-version={savedVersion === null ? undefined : savedVersion}
+            className="text-micro"
+            style={{
+              padding: '2px 8px',
+              borderRadius: '4px',
+              border: `1px solid ${token.line.default}`,
+              background: token.surface.panel,
+              color: savedVersion === null ? token.content.muted : token.content.secondary,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {savedVersion === null ? 'No version label yet' : `Version ${savedVersion}`}
+          </span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Button variant="ghost" size="sm" Icon={Undo} onClick={handleUndo} disabled={!canUndo} title="Undo (Ctrl+Z)" />
-          <Button variant="ghost" size="sm" Icon={Redo} onClick={handleRedo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" />
-          <div style={{ width: 1, height: 24, background: C.border }} />
-          <Button variant="ghost" size="sm" Icon={ZoomOut} onClick={() => zoomOut()} title="Zoom Out" />
-          <Button variant="ghost" size="sm" Icon={ZoomIn} onClick={() => zoomIn()} title="Zoom In" />
-          <Button variant="ghost" size="sm" Icon={Maximize} onClick={handleFitView} title="Fit View" />
-          <div style={{ width: 1, height: 24, background: C.border }} />
-          <Button variant="ghost" size="sm" Icon={PanelLeft} onClick={() => setLibraryOpen(!libraryOpen)} title="Toggle Library" />
-          <Button variant="ghost" size="sm" Icon={PanelRight} onClick={() => setInspectorOpen(!inspectorOpen)} title="Toggle Inspector" />
-          <div style={{ width: 1, height: 24, background: C.border }} />
-          <Button variant="outline" size="sm" Icon={Save} onClick={handleSaveStrategy} disabled={saveDisabled}>
-            {isSavingStrategy ? 'Saving...' : 'Save'}
-          </Button>
-          <Button variant="primary" size="sm" Icon={Play} onClick={handleSaveStrategy} disabled={saveDisabled} title="Compile & Save">
-            Compile
-          </Button>
-          {onBacktest && (
-            <Button
-              variant="primary"
+          {/*
+            Undo and redo replay graph edits, so review mode disables both (task 24.7). The zoom
+            cluster between the dividers does NOT change: §11.6 asks for pan, pinch/scroll zoom
+            and a zoom control cluster in review mode, and these three buttons plus React Flow's
+            own `<Controls />` are it. Zooming a canvas writes nothing.
+          */}
+          <Button variant="ghost" size="sm" Icon={Undo} onClick={handleUndo} disabled={!canUndo || reviewMode} title="Undo (Ctrl+Z)" aria-label="Undo" />
+          <Button variant="ghost" size="sm" Icon={Redo} onClick={handleRedo} disabled={!canRedo || reviewMode} title="Redo (Ctrl+Shift+Z)" aria-label="Redo" />
+          <div style={{ width: 1, height: 24, background: token.line.default }} />
+          <Button variant="ghost" size="sm" Icon={ZoomOut} onClick={() => zoomOut()} title="Zoom Out" aria-label="Zoom out" />
+          <Button variant="ghost" size="sm" Icon={ZoomIn} onClick={() => zoomIn()} title="Zoom In" aria-label="Zoom in" />
+          <Button variant="ghost" size="sm" Icon={Maximize} onClick={handleFitView} title="Fit View" aria-label="Fit view" />
+          <div style={{ width: 1, height: 24, background: token.line.default }} />
+          {/*
+            §11.6's "the palette collapses into a disabled trigger". The trigger stays on screen
+            and stays named, because a control that vanished would leave a trader wondering where
+            the blocks went; disabled, with the reason in its accessible name, says which it is.
+          */}
+          <Button
+            variant="ghost"
+            size="sm"
+            Icon={PanelLeft}
+            onClick={() => setLibraryOpen(!libraryOpen)}
+            disabled={reviewMode}
+            data-testid="palette-trigger"
+            title={reviewMode ? reviewModeRefusal('adding blocks', reviewMinimumWidthPx) : 'Toggle Library'}
+            aria-label={
+              reviewMode
+                ? `Block palette unavailable. ${reviewModeRefusal('adding blocks', reviewMinimumWidthPx)}`
+                : 'Toggle Library'
+            }
+          />
+          <Button variant="ghost" size="sm" Icon={PanelRight} onClick={() => setInspectorOpen(!inspectorOpen)} title="Toggle Inspector" aria-label="Toggle Inspector" />
+          <div style={{ width: 1, height: 24, background: token.line.default }} />
+          {/*
+            §5.6's three header actions (task 24.8). Each is a `ds/CommandButton`, which refuses
+            in development to render an inoperable control without a visible reason, and each
+            disabled one carries the sentence `headerActionRefusal` / `saveRefusal` composed
+            (Requirement 15.3).
+
+            The cluster wraps rather than stretching the toolbar: `CommandButton` renders its
+            reason as visible text beside the control, because a disabled button has
+            `pointer-events-none` and is not focusable, so a tooltip on it can never be read.
+            Three refused actions therefore put three sentences here, and they belong here — a
+            greyed button with a hidden reason is the dead affordance this redesign removes.
+          */}
+          <div
+            data-testid="builder-header-actions"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              flexWrap: 'wrap',
+              gap: '8px',
+              maxWidth: '46ch',
+            }}
+          >
+            <CommandButton
+              intent="primary"
               size="sm"
-              Icon={BarChart2}
-              disabled={canonical.graph === null || nodes.length === 0}
-              onClick={() => onBacktest({ id: strategyIdState, name: strategyName, nodes, edges })}
+              icon={Save}
+              loading={isSavingStrategy}
+              loadingLabel="Saving…"
+              disabled={saveRefused}
+              disabledReason={saveDisabledReason ?? undefined}
+              onClick={handleSaveStrategy}
+              title="Save (Ctrl+S)"
             >
-              Backtest
-            </Button>
-          )}
+              Save
+            </CommandButton>
+            <CommandButton
+              intent="secondary"
+              size="sm"
+              icon={BarChart2}
+              disabled={backtestRefusal !== null}
+              disabledReason={backtestRefusal ?? undefined}
+              onClick={handleBacktestVersion}
+            >
+              Backtest this version
+            </CommandButton>
+            <CommandButton
+              intent="secondary"
+              size="sm"
+              icon={Rocket}
+              disabled={deployRefusal !== null}
+              disabledReason={deployRefusal ?? undefined}
+              onClick={() => setDeployOpen(true)}
+            >
+              Deploy
+            </CommandButton>
+          </div>
         </div>
       </div>
+
+      {/*
+        Task 10.5's deploy flow (Requirement 5.6). Mounted only while open, so no flow is
+        constructed — and in particular no real-funds acknowledgement is constructed — for a
+        deployment nobody has asked for.
+
+        Everything about the deployment is that component's and `lib/deployFlow.js`'s: the step
+        list, the review grid, the acknowledgement, the preflight gate and the single POST. This
+        page supplies §8.3 step 1's target form as `children`, which is where a page's own form
+        belongs, and the strategy the flow is about. No second deploy path exists here.
+      */}
+      {deployOpen && (
+        <DeployConfirmation
+          open
+          config={deployConfig}
+          onCancel={() => setDeployOpen(false)}
+          onDeployed={() => {
+            setDeployOpen(false);
+            notify('success', 'Deployment submitted. Its state is reported on the Strategies page.');
+          }}
+        >
+          <Field
+            id="builder-deploy-target"
+            label="Deployment target"
+            value={deployTarget}
+            onChange={(event) => setDeployTarget(event.target.value)}
+            options={DEPLOY_TARGET_OPTIONS}
+            placeholder="Choose a target…"
+            hint={
+              'Nothing is assumed. An unchosen target holds every forward step shut rather than '
+              + 'defaulting to paper, because defaulting would place real orders without the '
+              + 'real-funds step if the value were ever misread.'
+            }
+            required
+          />
+        </DeployConfirmation>
+      )}
 
       {/*
         Blocking states, each stated in words with the node and field named.
@@ -2219,43 +3870,57 @@ function StrategyBuilderCanvas({
         the author is never shown two answers that disagree (design.md → advisory vs authority).
       */}
       {!backendAuthoritative && !isValid && errors.length > 0 && (
-        <div
-          role="alert"
+        <ValidationSurface
+          surface="error"
+          provenance="local"
+          title={`${errors.length} error${errors.length !== 1 ? 's' : ''}: ${errors[0]?.message ?? ''}`}
           data-testid="local-advisory"
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', background: `${C.red}20`, borderBottom: `1px solid ${C.red}` }}
-        >
-          <AlertTriangle size={16} style={{ color: C.red }} aria-hidden="true" />
-          <span className="text-body-sm" style={{ color: C.red, fontFamily: 'monospace' }}>
-            {errors.length} error{errors.length !== 1 ? 's' : ''}: {errors[0]?.message}
-            {' '}(local check — the backend has not validated this version yet)
-          </span>
-        </div>
+        />
       )}
 
-      {/* The validation request failed. The last known report is kept, and said to be old. */}
+      {/*
+        The validation request failed. The last known report is kept, and said to be old.
+
+        Warning, not error: nothing about the graph has been found wrong — the page failed to
+        ASK. And `status`, not `alert`, for the same reason (§9.3): a read that did not land is
+        not a verdict, so it does not earn the right to interrupt a screen reader mid-sentence.
+        `local`, because the sentence is the page's own account of its failed request.
+      */}
       {validation.state === VALIDATION_STATES.UNAVAILABLE && (
-        <div
-          role="alert"
+        <ValidationSurface
+          surface="warning"
+          provenance="local"
+          title={summary.headline}
           data-testid="validation-unavailable"
           data-code={validation.error ? validation.error.code : undefined}
           data-status={validation.error && validation.error.status !== null ? validation.error.status : undefined}
-          style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }}
-          className="text-body-sm"
         >
-          {summary.headline} — {summary.detail}
-        </div>
+          {summary.detail}
+        </ValidationSurface>
       )}
 
+      {/* The frontend serializer refused the graph, so nothing was sent — the verdict is this
+          build's, which is exactly what `provenance="local"` says. */}
       {canonical.error && (
-        <div role="alert" data-testid="serializer-error" style={{ padding: '8px 16px', background: `${C.red}20`, borderBottom: `1px solid ${C.red}`, color: C.red, fontFamily: 'monospace' }} className="text-body-sm">
-          {canonical.error.code}: {canonical.error.message}
-        </div>
+        <ValidationSurface
+          surface="error"
+          provenance="local"
+          title={`${canonical.error.code}: ${canonical.error.message}`}
+          data-testid="serializer-error"
+        />
       )}
 
+      {/* Warning rather than guidance: all three messages this can carry report a canvas action
+          that FAILED — a dropped block the registry publishes no descriptor for, a draft that
+          could not be restored, a graph that could not be loaded. Guidance means "not yet, keep
+          going", and none of them is that. */}
       {canvasNotice && (
-        <div role="status" data-testid="canvas-notice" style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }} className="text-body-sm">
-          {canvasNotice}
-        </div>
+        <ValidationSurface
+          surface="warning"
+          provenance="local"
+          title={canvasNotice}
+          data-testid="canvas-notice"
+        />
       )}
 
       {/*
@@ -2264,22 +3929,19 @@ function StrategyBuilderCanvas({
         nothing and decides nothing. That is the point of the backend publishing the block: the
         canvas cannot offer an edit that migration 004c's immutability trigger would then
         reject, and it cannot lock a canvas the backend says is editable either.
+
+        `DeployedLockNotice` (§9.4) owns the treatment: the confirmed warning surface, a real
+        `Lock` glyph where the emoji was, and `data-frozen-fields` emitted from the list rather
+        than passed in — which is also how the frozen fields became readable on screen instead of
+        reachable only through dev tools.
       */}
       {deployedLock.locked && (
-        <div
-          role="status"
+        <DeployedLockNotice
+          reason={deployedLock.reason}
+          frozenFields={deployedLock.frozenFields}
           data-testid="deployed-lock"
           data-lifecycle-state={deployedLock.lifecycleState || undefined}
-          data-frozen-fields={deployedLock.frozenFields.join(' ')}
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }}
-          className="text-body-sm"
-        >
-          <span aria-hidden="true">🔒</span>
-          <span>
-            {deployedLock.reason
-              || 'This version is deployed, so the canvas is read-only.'}
-          </span>
-        </div>
+        />
       )}
 
       {/*
@@ -2291,39 +3953,54 @@ function StrategyBuilderCanvas({
         disconnect, which is not what happened. The reason is the server's sentence verbatim.
       */}
       {subscriptionRefusals.length > 0 && (
-        <div
-          role="alert"
-          data-testid="subscription-refusals"
-          style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}` }}
-        >
+        <div data-testid="subscription-refusals" data-refusal-count={subscriptionRefusals.length}>
+          {/*
+            One surface PER refusal rather than one band listing them, so `data-channel` and
+            `data-code` sit on the element that carries the `role` and the sentence. A wrapper
+            holding the whole list would announce every channel as one message and would put the
+            channel identity on a child of the announced element instead of on it.
+
+            `confirmed`: the refusal, its code and its wording are the server's own frame. And
+            `status` rather than the old `alert` — the connection is up and the strategy is
+            unaffected, so interrupting a screen reader for it is the noise §9.3 moves off the
+            assertive channel.
+          */}
           {subscriptionRefusals.map((refusal) => (
-            <div
+            <ValidationSurface
               key={refusal.channel}
-              className="text-body-sm"
-              style={{ color: C.gold, fontFamily: 'monospace' }}
+              surface="warning"
+              provenance="confirmed"
+              title={`Live updates for ${refusal.channel} are unavailable — ${refusal.reason}`}
+              data-testid="subscription-refusal"
               data-channel={refusal.channel}
               data-code={refusal.code}
-            >
-              Live updates for {refusal.channel} are unavailable — {refusal.reason}
-            </div>
+            />
           ))}
         </div>
       )}
 
-      {connectionIssue && (
-        <div role="alert" data-testid="connection-issue" style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}`, color: C.gold, fontFamily: 'monospace' }} className="text-body-sm">
-          Connection refused — {connectionIssue.message}
-          {connectionIssue.fix_hint ? ` ${connectionIssue.fix_hint}` : ''}
-        </div>
-      )}
+      {/*
+        The refused-connection banner that used to live here is gone (task 24.4a, §9.3). Its two
+        replacements are `ConnectionRefusalCallout`, anchored inside the canvas box at the drop
+        point, and the "Refused connections" group in the validation issue list. A full-width band
+        at the top of the page is the furthest point on screen from the cursor that refused the
+        drop, which is why a trader had to look away from it to find out what happened.
+      */}
 
+      {/*
+        A save that was refused. The error surface and `role="alert"` are right here and stay:
+        the author asked for something, it did not happen, and nothing on the canvas says so.
+      */}
       {saveIssues.length > 0 && (
-        <div role="alert" data-testid="save-issues" style={{ padding: '8px 16px', background: `${C.red}20`, borderBottom: `1px solid ${C.red}` }}>
+        <ValidationSurface
+          surface="error"
+          provenance="confirmed"
+          title={`This strategy was not saved — ${saveIssues.length} issue${saveIssues.length !== 1 ? 's' : ''}`}
+          data-testid="save-issues"
+        >
           {saveIssues.map((issue, index) => (
             <div
               key={`${issue.code}-${issue.node_id || 'graph'}-${issue.field || index}`}
-              className="text-body-sm"
-              style={{ color: C.red, fontFamily: 'monospace' }}
               data-code={issue.code}
               data-node-id={issue.node_id || undefined}
               data-field={issue.field || undefined}
@@ -2331,23 +4008,29 @@ function StrategyBuilderCanvas({
               {issue.message} {issue.fix_hint}
             </div>
           ))}
-        </div>
+        </ValidationSurface>
       )}
 
       {/*
         Blocking training messages (Requirement 14.9). Each one is rendered with its
         required quantity AND its available quantity, both taken from the payload the
-        admission gate produced — this panel formats, it does not measure. The gold tone
-        rather than red is deliberate and matches what happened: the strategy IS saved, and
-        the version is a real immutable version; it is training that was refused, and no
-        training job row exists (Requirements 14.3, 14.4, 14.7, 14.8).
+        admission gate produced — this panel formats, it does not measure.
+
+        The WARNING surface rather than the error one is deliberate and matches what happened:
+        the strategy IS saved, and the version is a real immutable version; it is training that
+        was refused, and no training job row exists (Requirements 14.3, 14.4, 14.7, 14.8). Gold,
+        not red — and `role="status"` rather than the old `alert` follows from that, because the
+        thing the author asked to be persisted was persisted.
+
+        `confirmed`: every quantity, sentence and fix hint here is the admission gate's.
       */}
       {trainingBlocks.length > 0 && (
-        <div
-          role="alert"
+        <ValidationSurface
+          surface="warning"
+          provenance="confirmed"
+          title="Training was refused. This version is saved; no model was trained."
           data-testid="training-blocks"
           data-block-count={trainingBlocks.length}
-          style={{ padding: '8px 16px', background: `${C.gold}20`, borderBottom: `1px solid ${C.gold}` }}
         >
           {trainingBlocks.map((block) => (
             <div
@@ -2357,8 +4040,7 @@ function StrategyBuilderCanvas({
               data-node-id={block.nodeId || undefined}
               data-block-id={block.blockId || undefined}
               data-quantity-count={block.quantities.length}
-              className="text-body-sm"
-              style={{ color: C.gold, fontFamily: 'monospace', display: 'flex', flexDirection: 'column', gap: '2px' }}
+              style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}
             >
               <span data-testid="training-block-message">
                 Training blocked — {block.reason}: {block.message}
@@ -2380,7 +4062,7 @@ function StrategyBuilderCanvas({
                   key={issue.key}
                   data-testid="training-block-issue"
                   data-code={issue.code || undefined}
-                  style={{ paddingLeft: '12px', color: C.t3 }}
+                  style={{ paddingLeft: '12px', color: token.content.muted }}
                 >
                   {issue.message}
                   {issue.quantity ? ` (${issue.quantity.text})` : ''}
@@ -2388,35 +4070,69 @@ function StrategyBuilderCanvas({
                 </span>
               ))}
               {block.fixHint ? (
-                <span data-testid="training-block-fix" style={{ paddingLeft: '12px', color: C.t3 }}>
+                <span data-testid="training-block-fix" style={{ paddingLeft: '12px', color: token.content.muted }}>
                   {block.fixHint}
                 </span>
               ) : null}
               {block.jobCreated ? null : (
-                <span data-testid="training-block-no-job" style={{ paddingLeft: '12px', color: C.t3 }}>
+                <span data-testid="training-block-no-job" style={{ paddingLeft: '12px', color: token.content.muted }}>
                   No training job was created, so nothing is queued or running for this graph.
                 </span>
               )}
             </div>
           ))}
-        </div>
+        </ValidationSurface>
       )}
 
-      {/* Main content */}
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* Palette */}
-        {libraryOpen && (
-          <div style={{ width: 280, background: C.bg2, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column' }} data-testid="palette">
-            <div style={{ padding: '12px', borderBottom: `1px solid ${C.border}` }}>
+      {/*
+        The shell (§9.2): three sibling grid tracks — palette 240px, canvas `minmax(0, 1fr)`,
+        inspector 320px. A closed outer track collapses to width `0` and `display: none`, and
+        because the middle track is `1fr` the canvas simply occupies the space; nothing is ever
+        laid over it.
+
+        Sibling rather than overlay is a functional requirement, not a stylistic one. An
+        absolutely positioned inspector would sit inside or on top of the canvas element and
+        would shift the drop coordinates off the canvas's own box — the same failure task 24.1's
+        lane strip avoids by being a sibling above the canvas rather than an overlay on it.
+
+        The three children are always rendered so the tracks and the columns cannot drift apart:
+        with auto-placement, a track that disappeared from the DOM would slide the canvas into
+        the palette's column.
+      */}
+      <div
+        data-testid="builder-shell"
+        data-review-mode={reviewMode ? 'true' : 'false'}
+        style={{
+          flex: 1,
+          display: 'grid',
+          gridTemplateColumns: shellTemplateColumns(paletteShown, inspectorTrackShown),
+          overflow: 'hidden',
+        }}
+      >
+        {/* Palette track */}
+        <div
+          data-testid="palette"
+          data-open={paletteShown ? 'true' : 'false'}
+          style={{
+            width: paletteShown ? '100%' : 0,
+            minWidth: 0,
+            background: token.surface.panel,
+            borderRight: `1px solid ${token.line.default}`,
+            display: paletteShown ? 'flex' : 'none',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+            <div style={{ padding: '12px', borderBottom: `1px solid ${token.line.default}` }}>
               <label
                 htmlFor="palette-search"
-                className="text-caption-sm"
-                style={{ color: C.t3, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', display: 'block', marginBottom: '6px' }}
+                className="text-micro"
+                style={{ color: token.content.muted, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', display: 'block', marginBottom: '6px' }}
               >
                 Search blocks
               </label>
               <div style={{ position: 'relative' }}>
-                <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.t3 }} />
+                <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: token.content.muted }} />
                 <input
                   id="palette-search"
                   type="search"
@@ -2424,14 +4140,14 @@ function StrategyBuilderCanvas({
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   aria-describedby="palette-search-result-count"
-                  className="text-body-sm"
+                  className="text-small"
                   style={{
                     width: '100%',
-                    background: C.bg3,
-                    border: `1px solid ${C.border}`,
+                    background: token.surface.inset,
+                    border: `1px solid ${token.line.default}`,
                     borderRadius: '0.375rem',
                     padding: '8px 12px 8px 32px',
-                    color: C.t1,
+                    color: token.content.primary,
                     outline: 'none',
                   }}
                 />
@@ -2439,8 +4155,8 @@ function StrategyBuilderCanvas({
               <p
                 id="palette-search-result-count"
                 role="status"
-                className="text-caption-sm"
-                style={{ color: C.t3, margin: '6px 0 0', fontFamily: 'monospace' }}
+                className="text-micro"
+                style={{ color: token.content.muted, margin: '6px 0 0', fontFamily: 'monospace' }}
               >
                 {registry.isReady
                   ? `${totalMatches} block${totalMatches === 1 ? '' : 's'} · registry ${registry.registryVersion}`
@@ -2454,9 +4170,9 @@ function StrategyBuilderCanvas({
               {registry.isError ? (
                 <PaletteErrorPanel error={registry.error} onRetry={handleRetryRegistry} retrying={retryingRegistry} />
               ) : registry.isLoading && !registry.isReady ? (
-                <p className="text-caption" style={{ color: C.t3, fontFamily: 'monospace' }}>Loading blocks…</p>
+                <p className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>Loading blocks…</p>
               ) : visibleSections.length === 0 ? (
-                <p className="text-caption" style={{ color: C.t3, fontFamily: 'monospace' }} data-testid="palette-empty">
+                <p className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }} data-testid="palette-empty">
                   {searchQuery.trim() === '' ? 'No blocks available.' : `Nothing matches “${searchQuery}”.`}
                 </p>
               ) : (
@@ -2480,16 +4196,16 @@ function StrategyBuilderCanvas({
                           background: 'transparent',
                           border: 'none',
                           cursor: 'pointer',
-                          color: C.t2,
+                          color: token.content.secondary,
                           textAlign: 'left',
                         }}
                       >
-                        {isCollapsed ? <ChevronRight size={14} aria-hidden="true" style={{ color: C.t3 }} /> : <ChevronDown size={14} aria-hidden="true" style={{ color: C.t3 }} />}
+                        {isCollapsed ? <ChevronRight size={14} aria-hidden="true" style={{ color: token.content.muted }} /> : <ChevronDown size={14} aria-hidden="true" style={{ color: token.content.muted }} />}
                         <CategoryIcon size={14} aria-hidden="true" style={{ color: getCategoryColor(section.id) }} />
-                        <span className="text-caption" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
+                        <span className="text-micro" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
                           {section.display_name}
                         </span>
-                        <span className="text-caption-sm" style={{ marginLeft: 'auto', color: C.t3 }} data-testid="palette-category-count">
+                        <span className="text-micro" style={{ marginLeft: 'auto', color: token.content.muted }} data-testid="palette-category-count">
                           {section.matches.length}
                         </span>
                       </button>
@@ -2497,32 +4213,43 @@ function StrategyBuilderCanvas({
                       {!isCollapsed && (
                         <div id={sectionId} style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
                           {section.matches.map((block) => (
+                            /*
+                              Task 24.7: the drag SOURCE is off in review mode too, not merely
+                              inside a collapsed track. `display: none` on the track above already
+                              makes these unreachable by pointer, and that is exactly the kind of
+                              "hidden, not off" guarantee that stops holding the moment a layout
+                              changes — so the attribute goes false and `dragstart` is cancelled.
+                            */
                             <div
                               key={block.block_id}
-                              draggable
+                              draggable={!reviewMode}
                               data-testid="palette-block"
                               data-block-id={block.block_id}
                               data-category={block.category}
                               onDragStart={(e) => {
+                                if (reviewMode) {
+                                  e.preventDefault();
+                                  return;
+                                }
                                 e.dataTransfer.setData(DRAG_BLOCK_ID_MIME, block.block_id);
                                 e.dataTransfer.effectAllowed = 'move';
                               }}
                               style={{
-                                background: C.bg3,
-                                border: `1px solid ${C.border}`,
+                                background: token.surface.inset,
+                                border: `1px solid ${token.line.default}`,
                                 borderRadius: '0.375rem',
                                 padding: '8px 10px',
-                                cursor: 'grab',
+                                cursor: reviewMode ? 'not-allowed' : 'grab',
                               }}
                             >
-                              <div className="text-body-sm" style={{ fontWeight: 600, color: C.t1 }}>
+                              <div className="text-small" style={{ fontWeight: 600, color: token.content.primary }}>
                                 {block.display_name || block.block_id}
                               </div>
-                              <div className="text-caption-sm" style={{ color: C.t3, fontFamily: 'monospace' }}>
+                              <div className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>
                                 {block.block_id}
                               </div>
                               {block.description ? (
-                                <div className="text-caption-sm" style={{ color: C.t3 }}>{block.description}</div>
+                                <div className="text-micro" style={{ color: token.content.muted }}>{block.description}</div>
                               ) : null}
                               <PortChips ports={block.inputs} direction="in" />
                               <PortChips ports={block.outputs} direction="out" />
@@ -2535,160 +4262,197 @@ function StrategyBuilderCanvas({
                 })
               )}
             </div>
-          </div>
-        )}
-
-        {/* Canvas */}
-        <div
-          style={{ flex: 1, position: 'relative' }}
-          ref={reactFlowWrapper}
-          data-testid="canvas"
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-        >
-          <DragLegalityContext.Provider value={dragLegality}>
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
-              onConnectStart={onConnectStart}
-              onConnectEnd={onConnectEnd}
-              isValidConnection={isValidConnection}
-              onNodeClick={onNodeClick}
-              nodeTypes={nodeTypes}
-              fitView
-              deleteKeyCode={null}
-              /*
-                `design.md` → Visual states, the Deployed row: "lock affordance, read-only
-                canvas". Selection and panning stay on — reading a locked version is exactly
-                what an author does with one, and the inspector, the previews and the issue
-                panel all still work. What stops is editing.
-              */
-              nodesDraggable={!deployedLock.locked}
-              nodesConnectable={!deployedLock.locked}
-              edgesFocusable={!deployedLock.locked}
-            >
-              <Background color={C.bg3} gap={16} />
-              <Controls />
-              {nodes.length > 15 && <MiniMap nodeColor={C.cyan} nodeStrokeWidth={3} zoomable pannable />}
-            </ReactFlow>
-          </DragLegalityContext.Provider>
-
-          {nodes.length === 0 && (
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', color: C.t3, fontFamily: 'monospace', textAlign: 'center', padding: '0 24px' }} className="text-body-sm">
-              Drag a block from the palette to start. A strategy needs a DATA block — its symbol
-              and timeframe are the market this strategy trades.
-            </div>
-          )}
         </div>
 
-        {/* Inspector */}
-        {inspectorOpen && (
-          <div style={{ width: 320, background: C.bg2, borderLeft: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ padding: '12px', borderBottom: `1px solid ${C.border}` }}>
-              <PanelTitle title="Inspector" sub={selectedNode ? selectedNode.data.label : 'Select a node'} />
-            </div>
+        {/*
+          Canvas track: the persistent stage lane header strip, then the canvas itself. The
+          strip is a sibling above the canvas rather than an overlay on it, so it cannot cover
+          a node and the drop coordinates stay measured from the canvas's own box.
+        */}
+        <div
+          data-testid="canvas-track"
+          style={{ minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        >
+          <StageLaneStrip bands={laneBands} />
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
-              {selectedNode ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div>
-                    <div className="text-caption-sm" style={{ color: C.t3, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', marginBottom: '8px' }}>
-                      Block
-                    </div>
-                    <Tag2>{selectedNode.data.block_id}</Tag2>
-                    <div className="text-caption-sm" style={{ color: C.t3, marginTop: '4px' }}>
-                      {selectedNode.data.category}
-                    </div>
-                    <PortChips ports={selectedNode.data.inputs} direction="in" />
-                    <PortChips ports={selectedNode.data.outputs} direction="out" />
+          <div
+            style={{ flex: 1, position: 'relative' }}
+            ref={reactFlowWrapper}
+            data-testid="canvas"
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+          >
+            <DragLegalityContext.Provider value={dragLegality}>
+              <ReactFlow
+                /*
+                  The drawn copies, not the state. `renderedNodes` carries the selection flag
+                  and `renderedEdges` the selection stroke, both derived; the `nodes` and
+                  `edges` arrays behind them are untouched by a click (§9.2, P8).
+                */
+                nodes={renderedNodes}
+                edges={renderedEdges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                onConnectStart={onConnectStart}
+                onConnectEnd={onConnectEnd}
+                isValidConnection={isValidConnection}
+                onNodeClick={onNodeClick}
+                nodeTypes={nodeTypes}
+                /*
+                  `fitView` here is React Flow's *initial* fit and nothing else. Selection never
+                  fits: the only two callers of `fitView()` are the toolbar's Fit View button and
+                  task 24.7's review-mode effect, which runs on the mode edge and takes no
+                  dependency on `selectedNodeId`. The inspector track appearing resizes the canvas
+                  without re-fitting it, because the initial fit is spent the first time a node is
+                  measured. So the viewport an author panned and zoomed to survives every
+                  selection (§9.2, P8).
+                */
+                fitView
+                deleteKeyCode={null}
+                /*
+                  `design.md` → Visual states, the Deployed row: "lock affordance, read-only
+                  canvas". Selection and panning stay on — reading a locked version is exactly
+                  what an author does with one, and the inspector, the previews and the issue
+                  panel all still work. What stops is editing.
 
-                    {/* Node status: the same marker the canvas draws, in words. */}
-                    <p
-                      className="text-caption-sm"
-                      data-testid="inspector-node-status"
-                      data-node-id={selectedNode.id}
-                      data-severity={selectedNode.data.validation ? selectedNode.data.validation.severity : undefined}
-                      data-issue-count={selectedNode.data.validation ? selectedNode.data.validation.count : 0}
-                      style={{ color: selectedNode.data.validation ? (selectedNode.data.validation.severity === SEVERITY_ERROR ? C.red : C.gold) : C.t3, margin: '6px 0 0' }}
-                    >
-                      {selectedNode.data.validation
-                        ? markerLabel(selectedNode.data.validation)
-                        : backendAuthoritative
-                          ? 'No issues reported for this block'
-                          : 'Not validated yet'}
-                    </p>
-                  </div>
+                  Task 24.7 adds review mode to the SAME three props rather than a parallel
+                  read-only path, because the two states want the identical canvas: a version
+                  the backend froze and a screen too narrow to author on are both "read this,
+                  do not change it". `nodesDraggable` off is what makes a drag on a node pan
+                  the canvas instead of moving the node, so pan gets better in this mode, not
+                  worse.
+                */
+                nodesDraggable={!deployedLock.locked && !reviewMode}
+                nodesConnectable={!deployedLock.locked && !reviewMode}
+                edgesFocusable={!deployedLock.locked && !reviewMode}
+                /*
+                  §11.6's "pan and pinch/scroll zoom … scrollable and zoomable, never clipped".
+                  These are React Flow's defaults, and they are stated because the mode's whole
+                  promise rests on them — a library default that changed would take the
+                  requirement with it silently.
+                */
+                panOnDrag
+                zoomOnScroll
+                zoomOnPinch
+                /*
+                  Selection and node focus stay ON in review mode, deliberately. Tapping a node
+                  to read its parameters in the bottom drawer IS the mode, and selection is
+                  already a no-write path (task 24.2a): it lives in `selectedNodeId`, and
+                  `onNodesChange` drops `select` changes before they can reach the array.
+                */
+                elementsSelectable
+                nodesFocusable
+              >
+                <Background color={token.line.default} gap={16} />
+                <Controls />
+                {nodes.length > 15 && <MiniMap nodeColor={token.brand.base} nodeStrokeWidth={3} zoomable pannable />}
+              </ReactFlow>
+            </DragLegalityContext.Provider>
 
-                  {selectedDescriptor ? (
-                    <ParameterForm
-                      params={selectedDescriptor.params}
-                      values={selectedNode.data.params}
-                      onChange={handleParamChange}
-                      // Requirement 8.9: the backend's own issues, matched to fields by
-                      // `issue.field` and rendered with `fix_hint` verbatim by the form.
-                      issues={selectedNodeIssues}
-                      nodeId={selectedNode.id}
-                      blockId={selectedNode.data.block_id}
-                      // Requirements 11.7 / 11.8: the symbol and timeframe controls are
-                      // populated from the discovery and registry endpoints. No symbol or
-                      // interval list exists in this client to fall back to.
-                      controls={MARKET_PARAM_CONTROLS}
-                      onBlockingChange={handleInspectorBlocking}
-                    />
-                  ) : (
-                    <p className="text-caption" style={{ color: C.t3, fontFamily: 'monospace' }}>
-                      The registry publishes no descriptor for “{selectedNode.data.block_id}”, so its
-                      parameters cannot be shown.
-                    </p>
-                  )}
+            {nodes.length === 0 && (
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', color: token.content.muted, fontFamily: token.font.mono, textAlign: 'center', padding: '0 24px' }} className="text-small">
+                {/*
+                  The hint names the action the author can actually take. In review mode there is
+                  no palette to drag from, so telling them to drag from one would be an
+                  instruction that cannot be followed (task 24.7).
+                */}
+                {reviewMode
+                  ? 'This strategy has no blocks to review. Open it on a screen at least '
+                    + `${REVIEW_MODE_MIN_WIDTH_PX}px wide to build one.`
+                  : 'Drag a block from the palette to start. A strategy needs a DATA block — its '
+                    + 'symbol and timeframe are the market this strategy trades.'}
+              </div>
+            )}
 
-                  {/*
-                    Requirements 24.7 / 24.8: the last values this block produces, computed by
-                    the executors that run it, over a window the server bounds. A
-                    FEATURE_ENGINEERING node's produced column names come with it.
-                  */}
-                  <NodePreview
-                    state={preview.state}
-                    preview={preview.preview}
-                    error={preview.error}
-                    availability={previewAvailable}
-                    onRequest={requestPreview}
-                  />
-
-                  {/*
-                    Requirement 24.6: the trace the run already recorded for this block — its
-                    bound inputs, its output, its duration and every recorded failure — read
-                    out of `dag_engine.ExecutionTracer` and `signal_trace_engine`, which is
-                    what makes "why did nothing happen?" answerable. `runtime` is task 8.5's
-                    reading, already stamped onto the node by the canvas effect: a block that
-                    is warming never ran, and that is a different answer from one that failed.
-                  */}
-                  <NodeTrace
-                    trace={selectedNodeTrace}
-                    runtime={selectedNode.data.runtime || null}
-                  />
-
-                  <Button variant="danger" size="sm" Icon={Trash2} onClick={handleDeleteNode} style={{ width: '100%' }}>
-                    Delete Node
-                  </Button>
-                </div>
-              ) : (
-                <div className="text-body-sm" style={{ color: C.t3, fontFamily: 'monospace', textAlign: 'center', padding: '20px' }}>
-                  Click a node to inspect
-                </div>
-              )}
-            </div>
+            {/*
+              The refused drop, explained where it happened (Requirement 5.4, §9.3). Inside this
+              element because its coordinates are measured from this element's box — see
+              `canvasPointFromEvent`.
+            */}
+            {connectionRefusal !== null && (
+              <ConnectionRefusalCallout
+                issue={connectionRefusal.issue}
+                point={connectionRefusal.point}
+              />
+            )}
           </div>
-        )}
+        </div>
+
+        {/*
+          Inspector track (Requirement 5.3). The third grid column: 320px with a selected node,
+          width `0` and `display: none` without one. It stays in the DOM as a collapsed track so
+          the grid keeps three columns for three children, and it holds nothing while it is
+          collapsed — a hidden panel has no content to offer.
+
+          In review mode the track is collapsed for a third reason and the same body goes into the
+          bottom drawer below (task 24.7, §11.6). It is the same three children either way, so the
+          grid never loses a column to a mode change.
+        */}
+        <aside
+          data-testid="inspector"
+          data-open={inspectorTrackShown ? 'true' : 'false'}
+          aria-label="Inspector"
+          aria-hidden={inspectorTrackShown ? undefined : 'true'}
+          style={{
+            width: inspectorTrackShown ? '100%' : 0,
+            minWidth: 0,
+            background: token.surface.panel,
+            borderLeft: `1px solid ${token.line.default}`,
+            display: inspectorTrackShown ? 'flex' : 'none',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          {selectedNode && inspectorTrackShown && (
+            <>
+              <div style={{ padding: '12px', borderBottom: `1px solid ${token.line.default}` }}>
+                <PanelTitle title="Inspector" sub={selectedNode.data.label} />
+              </div>
+
+              <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
+                {inspectorFields}
+              </div>
+            </>
+          )}
+        </aside>
       </div>
 
-      {/* The report, listed: node issues, connection issues and graph-level issues */}
+      {/*
+        §11.6's tablet inspector: the same body, in a bottom `ds/Drawer` instead of a side track
+        (task 24.7). The drawer is the placement `ds/Drawer` was given for this page, and its
+        clamp — `max-height: calc(100dvh - 2 * --spacing-8)` with one internal scroll region — is
+        what keeps a long parameter list from pushing the panel past the viewport (Req 17.3, P34).
+
+        `onClose` clears the SELECTION rather than a local `open` flag. Closing the inspector on a
+        tablet means "done reading this node", and if it only flipped a flag the next tap on a
+        node would select it and open nothing. It also makes the drawer's Escape and its scrim do
+        exactly what the page's own Escape handler already does, so there is one way out and not
+        three that differ.
+
+        Mounted unconditionally with `open` as a prop, because `ds/Drawer` renders `null` when it
+        is not active and claims the single-overlay slot from an effect — a conditionally mounted
+        drawer would claim and release that slot on every selection change.
+      */}
+      <Drawer
+        open={inspectorDrawerOpen}
+        onClose={() => setSelectedNodeId(null)}
+        placement="bottom"
+        title={selectedNode === null ? 'Inspector' : `Inspector · ${selectedNode.data.label}`}
+        closeLabel="Close the inspector"
+      >
+        {inspectorFields}
+      </Drawer>
+
+      {/*
+        The report, listed: node issues, connection issues and graph-level issues — plus the
+        refusals the report cannot contain, because a refused edge was never added to the graph
+        the report describes (task 24.4a).
+      */}
       <ValidationIssuePanel
         markers={heldMarkers}
         stale={!backendAuthoritative}
+        refusals={refusalHistory}
         onFocusNode={focusNode}
         onFocusEdge={focusEdge}
       />
@@ -2704,8 +4468,8 @@ function StrategyBuilderCanvas({
         aria-live="polite"
         aria-label="Builder status"
         data-testid="status-strip"
-        className="text-caption"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px', background: C.bg2, borderTop: `1px solid ${C.border}`, fontFamily: 'monospace', color: C.t3, gap: 12, flexWrap: 'wrap' }}
+        className="text-micro"
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px', background: token.surface.raised, borderTop: `1px solid ${token.line.default}`, fontFamily: 'monospace', color: token.content.muted, gap: 12, flexWrap: 'wrap' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           <StatusCell
@@ -2718,15 +4482,7 @@ function StrategyBuilderCanvas({
               summary.state === VALIDATION_STATES.VALID ||
               summary.state === VALIDATION_STATES.INVALID
             }
-            tone={
-              summary.state === VALIDATION_STATES.INVALID
-                ? C.red
-                : summary.state === VALIDATION_STATES.VALID
-                  ? C.green
-                  : summary.state === VALIDATION_STATES.UNAVAILABLE
-                    ? C.gold
-                    : null
-            }
+            tone={cellTone(VALIDATION_TONE, summary.state)}
           />
           <StatusCell
             testId="feed-state"
@@ -2735,7 +4491,7 @@ function StrategyBuilderCanvas({
             text={feed.label}
             detail={feed.detail}
             known={feed.known}
-            tone={feed.state === 'LIVE' ? C.green : feed.known ? C.gold : null}
+            tone={cellTone(FEED_TONE, feed.state)}
           />
           {/*
             Requirement 19.8's display clause: the age of the last event together with the
@@ -2755,7 +4511,7 @@ function StrategyBuilderCanvas({
               data-expected-interval-seconds={
                 feed.expectedIntervalSeconds === null ? '' : String(feed.expectedIntervalSeconds)
               }
-              style={{ color: C.t3 }}
+              style={{ color: token.content.muted }}
             >
               {feed.display}
             </span>
@@ -2767,13 +4523,7 @@ function StrategyBuilderCanvas({
             text={saveState || 'Not saved yet'}
             detail={saveIssues.length ? `${saveIssues.length} refusal(s)` : undefined}
             known={saveStatus !== SAVE_STATES.UNSAVED}
-            tone={
-              saveStatus === SAVE_STATES.REFUSED || saveStatus === SAVE_STATES.FAILED
-                ? C.red
-                : saveStatus === SAVE_STATES.SAVED
-                  ? C.green
-                  : null
-            }
+            tone={cellTone(SAVE_TONE, saveStatus)}
           />
           <StatusCell
             testId="training-state"
@@ -2782,7 +4532,7 @@ function StrategyBuilderCanvas({
             text={training.label}
             detail={training.detail}
             known={training.known}
-            tone={training.state === 'FAILED' ? C.red : null}
+            tone={cellTone(TRAINING_TONE, training.state)}
           />
           {/*
             The realtime connection, reported literally (task 8.5, Requirement 23.4).
@@ -2801,21 +4551,20 @@ function StrategyBuilderCanvas({
             text={REALTIME_LABELS[realtimeStatus] || realtimeStatus}
             detail={realtimeReason || `${realtimeChannels.length} channel(s)`}
             known={realtimeStatus === REALTIME_STATES.CONNECTED}
-            tone={
-              realtimeStatus === REALTIME_STATES.CONNECTED
-                ? C.green
-                : realtimeStatus === REALTIME_STATES.DISCONNECTED
-                  ? C.gold
-                  : null
-            }
+            tone={cellTone(REALTIME_TONE, realtimeStatus)}
           />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span>{nodes.length} nodes</span>
           <span>{edges.length} connections</span>
           <span data-testid="registry-state">registry {registry.state}</span>
+          {/*
+            `blocked` rather than `error`: an unset required parameter is a graph the engine will
+            refuse to run, which is `statusToken`'s own word for it, and it resolves to the same
+            error hue the strip already used here.
+          */}
           {blockingParams.length > 0 && (
-            <span style={{ color: C.red }} data-testid="blocking-count">
+            <span style={{ color: statusToken('blocked').fg }} data-testid="blocking-count">
               {blockingParams.length} required parameter{blockingParams.length === 1 ? '' : 's'} unset
             </span>
           )}
@@ -2823,7 +4572,7 @@ function StrategyBuilderCanvas({
             data-testid="validation-requests"
             data-requests={validation.requests}
             data-discarded={validation.discarded}
-            style={{ color: C.t4 }}
+            style={{ color: token.content.muted }}
           >
             {validation.requests} check{validation.requests === 1 ? '' : 's'}
             {validation.discarded > 0 ? `, ${validation.discarded} superseded` : ''}

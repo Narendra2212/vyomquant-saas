@@ -74,15 +74,42 @@ import { get, post, put, del } from '../../apiClient';
  */
 
 /**
+ * An equity point's value, or `null` when the wire did not carry one.
+ *
+ * **Not `0`.** vyomquant-ui-redesign task 23.2: this read was `Number(value.equity ?? 0)`,
+ * which turned an omitted equity into a genuine-looking zero — a point that reads as the
+ * account crashing to nothing, and one no downstream consumer could tell from a real zero.
+ * It is the shape `lib/drawdownSeries.js` is built to carry: an unreadable point derives
+ * `drawdown: null`, which draws as a GAP in both tier-2 curves instead of a spike to the
+ * full depth of the peak. The coercion that mattered is kept — the wire's numbers may
+ * arrive as decimal strings — and everything that is not a finite number is `null`.
+ *
+ * `0` itself still passes through as `0`: a simulated account that really did reach zero is
+ * a reading, and Requirement 14.5 is about fabricated values, not measured ones.
+ *
+ * @param {unknown} raw
+ * @returns {number|null}
+ */
+const equityPointValue = (raw) => {
+  if (raw === null || raw === undefined || raw === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+};
+
+/**
  * The equity series the UI charts, read off an execute response.
  *
  * `BacktestRuntime` publishes the curve under `results.charts.equity_curve`, whose
  * `values` are either `{timestamp, equity}` records or bare numbers paired positionally
  * with `timestamps`. Both forms are read; neither is invented. An absent curve yields an
- * empty series rather than a fabricated one (Requirement 8.4, 9.4).
+ * empty series rather than a fabricated one (Requirement 8.4, 9.4), and a point whose
+ * equity is absent yields `null` rather than `0` — see {@link equityPointValue}.
+ *
+ * The point is KEPT rather than dropped, so the series stays the same length as the curve
+ * the engine published and the two tier-2 charts stay aligned point for point.
  *
  * @param {Object} [metrics] - The `results` object of a {@link BacktestExecuteResponse}.
- * @returns {Array<{timestamp: (string|number), equity: number}>}
+ * @returns {Array<{timestamp: (string|number), equity: (number|null)}>}
  */
 export const equitySeriesFromBacktestResults = (metrics) => {
   const curve = metrics?.charts?.equity_curve;
@@ -93,10 +120,10 @@ export const equitySeriesFromBacktestResults = (metrics) => {
     if (value !== null && typeof value === 'object') {
       return {
         timestamp: value.timestamp ?? timestamps[index] ?? index,
-        equity: Number(value.equity ?? 0),
+        equity: equityPointValue(value.equity),
       };
     }
-    return { timestamp: timestamps[index] ?? index, equity: Number(value ?? 0) };
+    return { timestamp: timestamps[index] ?? index, equity: equityPointValue(value) };
   });
 };
 
@@ -131,9 +158,54 @@ export const mapBacktestExecutionToUI = (response) => {
   };
 };
 
+/**
+ * One row of `GET /api/strategies`.
+ *
+ * `routers/strategies._LIST_COLUMNS` narrowed to the columns the table actually has, plus the
+ * lifted `_dag_*` keys, the archival pair, and BC-3's / BC-4's two timestamps. Documented
+ * because `design.md §7.2` names four fields that are NOT here — `current_version` (spelled
+ * `version`), `exchange_status` (spelled `deployed_exchange`), `most_recent_deployment`, and
+ * `pnl`/`win_rate`/`max_dd`/`health` (on no strategy projection at all) — and a page pointed
+ * at one of those renders `undefined` or, as `Strategies.jsx` did with
+ * `row.health ?? "healthy"`, a cheerful default for a field nothing reports.
+ * `src/design/pageFields.js` records the verdict for each.
+ *
+ * @typedef {Object} StrategyListRow
+ * @property {string} id
+ * @property {string} name
+ * @property {string} description
+ * @property {string} symbol
+ * @property {string} timeframe
+ * @property {string} status
+ * @property {boolean} is_active
+ * @property {string} deployed_exchange
+ * @property {string} version
+ * @property {Object} buy_logic
+ * @property {Array} tags
+ * @property {string} created_at
+ * @property {string} updated_at
+ * @property {boolean} is_archived
+ * @property {string|null} archived_at
+ * @property {string|null} last_signal_at - BC-3. ISO instant of this strategy's most recent
+ *   signal, off the strategy row's own column — the same key the dashboard strategy
+ *   projection reads. ALWAYS PRESENT, and `null` in three cases a client cannot tell apart:
+ *   the strategy has never signalled, or migration
+ *   `backend_app/migrations/015_strategy_last_signal_at.sql` has not been applied by hand yet
+ *   (the column then does not exist and `backend/strategy_last_signal.py` has nothing to
+ *   write to; the backend logs a warning naming 015).
+ * @property {string|null} last_execution_at - BC-4. `MAX(created_at)` over `execution_records`
+ *   grouped by `strategy_id`, read once per page. ALWAYS PRESENT, and `null` when the strategy
+ *   has never executed and also when that one grouped read failed — the router logs a warning
+ *   and reports `null` for every row rather than a guessed timestamp.
+ */
+
 export const strategiesApi = {
   /**
    * Get all strategies
+   *
+   * `GET /api/strategies` → `{strategies: StrategyListRow[], total, include_archived,
+   * archived_total}`.
+   *
    * @returns {Promise<any[]>}
    */
   list: () => get('/api/strategies'),
@@ -209,7 +281,7 @@ export const strategiesApi = {
   /**
    * Deploy one immutable version through the Deployment_Gate (task 16.1).
    *
-   * `POST /api/strategy-operations/strategies/{id}/versions/{version}/deploy`
+   * `POST /api/strategies/{id}/versions/{version}/deploy`
    * (`strategy_operations.deploy_version`). This is the endpoint Requirement 11.5 names:
    * it runs `evaluate_binding`, the same gate the preflight below reports on, and it
    * records the Deployment_Binding — version, exchange account, risk configuration,
@@ -226,6 +298,19 @@ export const strategiesApi = {
    * `environment` is the legacy column and rides the query string, because the request
    * model has no field for it; `mode` in the body is the constrained one.
    *
+   * PATH NOTE — deliberately `/api/strategies/...`, not
+   * `/api/strategy-operations/strategies/...`. The router is mounted at `prefix="/api"`
+   * (`backend_app/main.py`) and `deploy_version` declares exactly one route,
+   * `@router.post("/strategies/{strategy_id}/versions/{version}/deploy")`, with no
+   * `strategy-operations` alias — unlike `preflight_deploy_version` below (whose
+   * `_PREFLIGHT_PATHS` registers both spellings) and `execute_backtest` (two decorators).
+   * So the prefixed spelling resolves to nothing. This is the **second** instance of that
+   * trap in this file: see the same note on {@link strategiesApi.listBacktests}, where the
+   * prefixed `/api/strategy-operations/backtests` 404'd on every load and the failure was
+   * silent. Here it was worse than silent-but-symmetric: because the preflight *does*
+   * answer on both spellings, the gate passed and the Deploy button enabled, and only the
+   * POST 404'd.
+   *
    * **No credential travels here.** An exchange account is named by id; its keys are
    * resolved inside the execution process (Requirement 12.5).
    *
@@ -238,7 +323,7 @@ export const strategiesApi = {
    */
   deployVersion: (strategyId, version, body = {}, options = {}) =>
     post(
-      `/api/strategy-operations/strategies/${encodeURIComponent(strategyId)}` +
+      `/api/strategies/${encodeURIComponent(strategyId)}` +
         `/versions/${encodeURIComponent(version)}/deploy`,
       body,
       options.environment ? { params: { environment: options.environment } } : {},
@@ -295,7 +380,7 @@ export const strategiesApi = {
   /**
    * Every deployment one strategy has (task 19.1).
    *
-   * `GET /api/strategy-operations/strategies/{id}/deployments`
+   * `GET /api/strategies/{id}/deployments`
    * (`strategy_operations.list_deployments`) answers `{strategy_id, deployments:
    * [{deployment_id, status, environment, worker, started_at, health}], total}`, scoped
    * to the caller's own deployments.
@@ -313,12 +398,31 @@ export const strategiesApi = {
    * miss one union this with the `deployment_id`s their own data already names; see
    * `lib/signalTraceRealtime.deploymentIdsFromSignals`.
    *
+   * PATH NOTE — deliberately `/api/strategies/...`, not
+   * `/api/strategy-operations/strategies/...`. The router is mounted at `prefix="/api"`
+   * (`backend_app/main.py`) and `list_deployments` declares exactly one route,
+   * `@router.get("/strategies/{strategy_id}/deployments")`, with no `strategy-operations`
+   * alias — so the prefixed spelling resolves to nothing. This is the **third** instance
+   * of that trap in this file: see the same note on {@link strategiesApi.deployVersion}
+   * and on {@link strategiesApi.listBacktests}. Here the 404 surfaced as a Signal_Trace
+   * page that subscribed to no `signal.{deployment_id}` channel at all — the deployment
+   * list came back empty-by-error and the page had nothing to compose subscriptions from.
+   * `components/DeploymentConsole.jsx` already read the unprefixed spelling directly, so
+   * the two callers of the same endpoint disagreed about its address.
+   *
+   * `tests/unit/guards/api-paths.test.js` now checks **every** `/api/…` path the client
+   * constructs — not just this prefix — against the routes the routers declare at the
+   * mount prefixes `backend_app/main.py` gives them, and checks each call's query string
+   * against the route's required `Query(...)` parameters as well. So a fourth instance of
+   * this trap, and of the missing-parameter variant beside it, fails CI rather than
+   * shipping.
+   *
    * @param {string} strategyId
    * @returns {Promise<{strategy_id: string, deployments: Array<Object>, total: number}>}
    */
   listDeployments: (strategyId) =>
     get(
-      `/api/strategy-operations/strategies/${encodeURIComponent(strategyId)}/deployments`,
+      `/api/strategies/${encodeURIComponent(strategyId)}/deployments`,
     ),
 
   /**
@@ -336,6 +440,49 @@ export const strategiesApi = {
    * @returns {Promise<{status: string}>}
    */
   stop: (id) => post(`/api/strategies/${id}/stop`),
+
+  /**
+   * Stop ONE deployment — the row {@link strategiesApi.listDeployments} lists (task 20.3).
+   *
+   * `POST /api/deployments/{deployment_id}/stop` (`stop_deployment`, 100/minute). The router is
+   * mounted at `prefix="/api"` and declares the route as `/deployments/{deployment_id}/stop`,
+   * so this is the whole address — `components/DeploymentConsole.jsx` already calls exactly
+   * this path, and the PATH NOTE on {@link strategiesApi.listDeployments} is why it is spelled
+   * without a `strategy-operations` segment.
+   *
+   * NOT `strategiesApi.stop`. That one is `POST /api/strategies/{id}/stop`, which is the
+   * STRATEGY-level legacy surface: it stops the fleet bot for the strategy's symbol and flips
+   * the `strategies` row. This one moves a single deployment's binding, which is what a row in
+   * the deployment list is.
+   *
+   * WHAT THE SERVER REPORTS DOING, AND WHAT IT DOES NOT MENTION
+   * ----------------------------------------------------------
+   * `strategy_service.transition_deployment` is explicit about its five steps: read the row
+   * scoped to the caller, gate the transition, ask the in-process runtime **best effort** (a
+   * runtime that never heard of this deployment is a warning and never blocks a stop), write
+   * `status` plus `stopped_at` with the reason preserved, then move the version and audit it.
+   *
+   * Nothing in that path closes an open position and nothing in it cancels an order already
+   * resting at a venue, and the response reports neither. Callers must not tell a trader that
+   * either happened — see `pages/LiveTrading.jsx`'s stop confirmation, which states only what
+   * this endpoint says and points at the separate cancel controls for the rest.
+   *
+   * Stopping an already-stopped deployment is idempotent: a 200 carrying `idempotent: true`
+   * and a message naming the current state, not a failure.
+   *
+   * @param {string} deploymentId
+   * @param {string} [reason] Why the stop was requested. `DeploymentTransitionRequest` is
+   *   `extra="forbid"` and carries this ONE field, capped at 500 characters; it is preserved on
+   *   the row's `error_message` and in the audit record, so "why is this stopped?" has an
+   *   answer. Omitted, the server records its own `"stop requested by …"` sentence.
+   * @returns {Promise<{status: string, deployment_id: string, binding_state: string,
+   *   action: string, previous_state: string, idempotent: boolean, audit_id: (string|null)}>}
+   */
+  stopDeployment: (deploymentId, reason) =>
+    post(
+      `/api/deployments/${encodeURIComponent(deploymentId)}/stop`,
+      reason ? { reason } : {},
+    ),
 
   /**
    * Pause a strategy

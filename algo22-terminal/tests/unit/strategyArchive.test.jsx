@@ -24,11 +24,16 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+
+// The shared native-dialog detector (Requirement 19.4, design.md §1.8). Task 10.11's
+// repo-wide `no-native-dialogs` guard reads the same function, so the per-page assertion
+// here and the CI guard cannot disagree about what a native dialog is.
+import { describeNativeDialogs } from './guards/native-dialogs';
 
 import {
   ARCHIVE_BLOCKED_CODE,
@@ -36,7 +41,6 @@ import {
   ARCHIVE_FAILED_FALLBACK_MESSAGE,
   OWN_STATUS_LABEL,
   OWN_STATUS_SOURCE,
-  archiveConfirmMessage,
   blockingDeploymentsFrom,
   describeArchiveFailure,
   describeBlockingDeployment,
@@ -226,40 +230,14 @@ describe('describeBlockingDeployment', () => {
 
 // ══════════════════════════════════════════════════════════════════════════════════════
 // The confirmation (Requirements 2.8, 2.9, 3.2)
+//
+// `archiveConfirmMessage` — the one pre-joined string `window.confirm` could hold — was
+// removed by vyomquant-ui-redesign task 10.3 along with the `window.confirm` call site
+// itself. The same three statements are now the `ds/ConfirmDialog` title, `description` and
+// review grid, so they are asserted against the rendered dialog in
+// 'Strategies page archive action' below and in
+// `src/pages/__tests__/Strategies.test.jsx` rather than against a string.
 // ══════════════════════════════════════════════════════════════════════════════════════
-
-describe('archiveConfirmMessage', () => {
-  it('names the action as archiving, and deletion only as the thing that does not happen', () => {
-    const message = archiveConfirmMessage('Momentum v2');
-
-    expect(message).toMatch(/^Archive "Momentum v2"\?/);
-    // The word survives in exactly one role: denying that anything is deleted. What must
-    // be gone is the action framed as a deletion, which is what the dialog used to say.
-    expect(message).toMatch(/Nothing is deleted/);
-    expect(message).not.toMatch(/delete this strategy/i);
-    expect(message).not.toMatch(/will be deleted/i);
-  });
-
-  it('states both halves of the consequence', () => {
-    const message = archiveConfirmMessage('Momentum v2');
-
-    // Requirement 2.9/3.3: it leaves the list.
-    expect(message).toMatch(/removed from your strategy list/i);
-    // Requirements 3.2/3.5: the records do not.
-    expect(message).toMatch(/versions/i);
-    expect(message).toMatch(/backtests/i);
-    expect(message).toMatch(/deployments/i);
-    expect(message).toMatch(/signals/i);
-    // Requirement 2.10, stated up front rather than only on refusal.
-    expect(message).toMatch(/stop those first/i);
-  });
-
-  it('still reads sensibly for a strategy with no usable name', () => {
-    for (const name of [undefined, null, '', '   ', 42]) {
-      expect(archiveConfirmMessage(name)).toMatch(/^Archive this strategy\?/);
-    }
-  });
-});
 
 // ══════════════════════════════════════════════════════════════════════════════════════
 // The page
@@ -301,13 +279,76 @@ const renderPage = async () => {
   return view;
 };
 
-const clickArchive = async (user) => {
-  await user.click(screen.getByRole('button', { name: /archive momentum v2/i }));
+/**
+ * Open the archive confirmation. Task 10.3: this issues nothing on its own.
+ *
+ * ⚠️ TWO CLICKS, BECAUSE THE CONTROL IS NOT FLAT ANY MORE ⚠️
+ *
+ * This was one `getByRole('button', { name: /archive momentum v2/i })` — the card grid's
+ * `aria-label`, on a flat inline button. vyomquant-ui-redesign task 17.2 moved it: design.md
+ * §7.2 puts a row's destructive and live-transition actions inside the row's trailing
+ * `ds/OverflowMenu`, below a `role="separator"` and inside a `role="group"` named
+ * "Destructive and live-trading actions", and the entry's label is the page action
+ * catalogue's `[ROW_ACTION.ARCHIVE]` — "Archive strategy". So the old query found nothing:
+ * the control exists, but only once the menu is open, and under a different name.
+ *
+ * Re-adding a flat button to satisfy this helper was the other way to make it green and the
+ * wrong one — the partition is §7.2's requirement and `lib/rowActions.js`'s Property 7
+ * asserts on it. What changed here is only HOW the control is reached.
+ *
+ * ═══ WHY THE ENTRY IS REACHED THROUGH THE GROUP ═══
+ *
+ * `within(group)` rather than `within(menu)`, so this helper cannot keep passing if the
+ * archive entry ever escapes the separated group back into the menu's ordinary run: the
+ * separation is the thing Requirement 4.3 asks for, and a locator indifferent to it would
+ * stop noticing the regression it is standing on. Every hop is a role plus an accessible
+ * name rather than a `data-ds` selector, because each name is the contract — `OverflowMenu`'s
+ * `label` prop names the ROW (Requirement 18.4, which is why forty rows do not share one
+ * "More actions"), the group's name is `SEPARATED_GROUP_LABEL`, and the entry's is the
+ * catalogue's own label.
+ *
+ * ═══ WHY NOTHING WAITS FOR THE MENU TO CLOSE ═══
+ *
+ * `OverflowMenu.activate` closes the menu and returns focus to the trigger BEFORE it runs
+ * the handler, precisely so the dialog claims focus from the trigger and hands it back there
+ * on cancel. By the time `onSelect` has run there is no menu left to disambiguate against.
+ */
+const openArchiveDialog = async (user) => {
+  await user.click(screen.getByRole('button', { name: 'More actions for Momentum v2' }));
+
+  const menu = await screen.findByRole('menu', { name: 'More actions for Momentum v2' });
+  const separated = within(menu).getByRole('group', {
+    name: /destructive and live-trading actions/i,
+  });
+  await user.click(within(separated).getByRole('menuitem', { name: 'Archive strategy' }));
+
+  return screen.findByRole('dialog');
 };
 
-describe('Strategies page archive action', () => {
-  let confirmSpy;
+/** Open it and take the explicit confirm action. */
+const clickArchive = async (user) => {
+  const dialog = await openArchiveDialog(user);
+  await user.click(dialog.querySelector('[data-ds="confirm-dialog-confirm"]'));
+};
 
+/**
+ * The strategy's entry in the list, as distinct from its name inside an open dialog.
+ *
+ * Under `window.confirm` a bare `screen.getByText('Momentum v2')` was unambiguous, because
+ * the native dialog put nothing in the DOM — the only copy of the name on the page was the
+ * row. Task 10.3's `ConfirmDialog` names the strategy the click was on in its review grid,
+ * which is the entire point of a review grid, so while the dialog is open the name is
+ * present twice and `getByText` throws on the ambiguity.
+ *
+ * Excluding the dialog's own copy keeps the claim the assertion was making — the strategy
+ * is still listed behind the dialog, so nothing was removed before the user confirmed
+ * (Requirement 2.8). Relaxing it to `getAllByText` would have been the smaller edit and the
+ * wrong one: the review grid alone would satisfy it even if the row had gone.
+ */
+const rowOutsideDialog = (dialog) =>
+  screen.getAllByText('Momentum v2').find((el) => !dialog.contains(el));
+
+describe('Strategies page archive action', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockStrategies.list.mockResolvedValue([strategyRow()]);
@@ -317,10 +358,6 @@ describe('Strategies page archive action', () => {
       archived_at: '2024-01-01T00:00:00+00:00',
     });
     mockExchange.list.mockResolvedValue([]);
-    // jsdom's own window.confirm is a not-implemented stub, so it is replaced rather than
-    // spied on: what matters is the text it is asked to display.
-    confirmSpy = vi.fn(() => true);
-    window.confirm = confirmSpy;
   });
 
   afterEach(() => {
@@ -331,15 +368,34 @@ describe('Strategies page archive action', () => {
     const user = userEvent.setup();
     await renderPage();
 
-    confirmSpy.mockReturnValue(false);
-    await clickArchive(user);
+    const dialog = await openArchiveDialog(user);
 
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    const prompt = confirmSpy.mock.calls[0][0];
-    expect(prompt).toBe(archiveConfirmMessage('Momentum v2'));
-    expect(prompt).toMatch(/^Archive "Momentum v2"\?/);
-    expect(prompt).not.toMatch(/delete this strategy/i);
+    // Requirement 7.6 / §8.4: a real dialog, in the destructive treatment.
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(dialog.getAttribute('data-ds-intent')).toBe('destructive');
+    // The action, and its consequence in both directions (Requirements 2.8, 2.9, 3.2, 3.5).
+    expect(dialog.textContent).toMatch(/archive strategy/i);
+    expect(dialog.textContent).toMatch(/removes this strategy from your library list/i);
+    expect(dialog.textContent).toMatch(/nothing is deleted/i);
+    expect(dialog.textContent).not.toMatch(/delete this strategy/i);
+    expect(dialog.textContent).not.toMatch(/will be deleted/i);
+    // Requirement 2.10, stated up front rather than only on refusal.
+    expect(dialog.textContent).toMatch(/deploying, running or paused/i);
+    // The review grid names the strategy the click was on.
+    expect(dialog.querySelector('[data-ds="confirm-dialog-review"]').textContent)
+      .toContain('Momentum v2');
+    // §8.4: archive is reversible, so there is no acknowledgement checkbox.
+    expect(dialog.querySelector('[data-ds="confirm-dialog-acknowledgement"]')).toBeNull();
+    expect(dialog.querySelector('input[type="checkbox"]')).toBeNull();
+
     // Requirement 2.8: no request until the user confirms.
+    expect(mockStrategies.delete).not.toHaveBeenCalled();
+    expect(rowOutsideDialog(dialog)).toBeTruthy();
+
+    // Cancelling issues nothing either, and leaves the list as it was. The dialog is gone by
+    // the assertion below, so the name is unambiguous again and `getByText` reads directly.
+    await user.click(dialog.querySelector('[data-ds="confirm-dialog-cancel"]'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(mockStrategies.delete).not.toHaveBeenCalled();
     expect(screen.getByText('Momentum v2')).toBeTruthy();
   });
@@ -433,13 +489,76 @@ describe('Strategies.jsx archive call site', () => {
     expect(source).not.toMatch(/fetch\([^)]*\/archive/);
   });
 
-  it('takes its confirmation text and its refusal reading from the shared module', () => {
+  it('takes its refusal reading from the shared module', () => {
     expect(source).toMatch(/from ["']\.\.\/lib\/strategyArchive["']/);
-    expect(source).toContain('window.confirm(archiveConfirmMessage(');
     expect(source).toContain('describeArchiveFailure(err)');
   });
 
   it('no longer asks the user to confirm a deletion', () => {
     expect(source).not.toMatch(/confirm\(\s*["'][^"']*delete/i);
+  });
+
+  it('uses no native browser dialog at all (task 10.3, Requirements 18.3, 19.4)', () => {
+    // `window.confirm` cannot be focus-trapped, styled or given a review grid, and
+    // `window.prompt` can carry neither a label nor a validation message. Both call sites
+    // are now `ds/ConfirmDialog` (design.md §1.8).
+    //
+    // This asks `findNativeDialogs` rather than grepping the file text, and the difference
+    // is not cosmetic. The three assertions this replaced were
+    // `expect(source).not.toMatch(/window\.confirm/)` and friends, over raw source — and
+    // they failed on the very commit that fixed the defect. Task 10.3 left six docblocks
+    // in `Strategies.jsx` recording which native call each dialog replaced and why it had
+    // to go; the raw-text rule matched that prose. Zero real calls, red test, and the only
+    // ways to green were to delete the documentation of a closed defect or to loosen the
+    // rule. The detector strips comments and masks string literals first, then looks for a
+    // *call* (or an alias) rather than a bare identifier, so prose is free and the rule is
+    // strictly stronger than the one it replaces: `const ask = window.confirm; ask(m)` is
+    // caught, and so is a bare `confirm(m)` with no receiver, neither of which the old
+    // pattern saw. `tests/unit/guards/native-dialogs.js` carries the full method note; the
+    // controls below show the detector still fires on a real call.
+    expect(
+      describeNativeDialogs(source),
+      'Native browser dialogs in Strategies.jsx. Requirement 19.4 and design.md §1.8 '
+        + 'forbid them on in-scope pages — route the interaction through '
+        + '`components/ds/ConfirmDialog` instead:',
+    ).toEqual([]);
+    expect(source).toMatch(/from ["']\.\.\/components\/ds\/ConfirmDialog["']/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════
+
+describe('controls: the assertions above can fail', () => {
+  it('the native-dialog detector flags a real call, an alias and a bare global', () => {
+    // Non-vacuity for the assertion above. A rule that has never been seen to fail is a
+    // rule nobody has a reason to trust — and this one is a text scan over a file that is
+    // *supposed* to be clean, so a pattern that silently stopped matching would look
+    // exactly like success.
+    const broken = [
+      'const ok = window.confirm("Archive this strategy?");',
+      'const next = window.prompt("Enter new strategy name:", current);',
+      'if (!ok) alert("cancelled");',
+      'const ask = globalThis.confirm;',
+    ].join('\n');
+
+    expect(describeNativeDialogs(broken)).toEqual([
+      'line 1: window.confirm',
+      'line 2: window.prompt',
+      'line 3: alert(',
+      'line 4: globalThis.confirm',
+    ]);
+  });
+
+  it('the detector is not simply always-true', () => {
+    // The other half of the control: it has to stay silent on the shapes this page
+    // actually contains, or the assertion above could only ever be satisfied by an empty
+    // file. A mention in a comment or a string is documentation, not a dialog — which is
+    // the whole reason the detector exists — and `onConfirm` / `promptUser` are ordinary
+    // identifiers that a looser pattern would flag.
+    expect(describeNativeDialogs('// `window.confirm` cannot be focus-trapped')).toEqual([]);
+    expect(describeNativeDialogs('/* was window.prompt, now a labelled Field */')).toEqual([]);
+    expect(describeNativeDialogs("throw new Error('window.confirm is gone');")).toEqual([]);
+    expect(describeNativeDialogs('<ConfirmDialog onConfirm={handleConfirmArchive} />')).toEqual([]);
+    expect(describeNativeDialogs('promptUser(name); row.confirm(id);')).toEqual([]);
   });
 });

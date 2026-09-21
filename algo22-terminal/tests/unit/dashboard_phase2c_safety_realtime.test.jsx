@@ -6,15 +6,13 @@ import Dashboard, { floatVal, computeLiquidationDistance } from '../../src/pages
 import * as dashboardModule from '../../src/api/modules/dashboard';
 import * as riskModule from '../../src/api/modules/risk';
 
-// Mock Recharts responsive container & area chart to avoid DOM measurement issues in JSDOM
-vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div data-testid="responsive-container">{children}</div>,
-  AreaChart: ({ children }) => <div data-testid="area-chart">{children}</div>,
-  Area: () => <div data-testid="area" />,
-  XAxis: () => <div data-testid="x-axis" />,
-  YAxis: () => <div data-testid="y-axis" />,
-  Tooltip: () => <div data-testid="tooltip" />,
-}));
+// `ds/Chart`, lazily imported since task 19.1b, is stubbed rather than recharts mocked —
+// see `dashboard_phase2a_ui.test.jsx` for why the recharts mock that stood here stopped
+// working. Nothing in this file asserts anything about the chart.
+vi.mock('../../src/components/ds/Chart', () => {
+  const Stub = (props) => <figure data-testid="chart" data-chart-kind={props.kind} />;
+  return { __esModule: true, Chart: Stub, default: Stub };
+});
 
 // Mock WebSocket client
 vi.mock('../../src/websocketClient', () => ({
@@ -250,6 +248,26 @@ describe('Phase 2C — Dashboard Safety & Real-time Unit Tests', () => {
 
       fireEvent.click(screen.getByText('EMERGENCY HALT'));
 
+      /*
+       * THE ACKNOWLEDGEMENT IS TICKED FIRST, BECAUSE IT IS THE FEATURE.
+       *
+       * Task 19.2b routed the switch through `ds/ConfirmDialog intent="destructive"` with
+       * §8.4's acknowledgement, so `riskApi.killSwitch` is unreachable until the box is
+       * ticked — the confirm action is `disabled` AND its handler refuses, which is what
+       * makes the tick a precondition rather than a hint. This test used to click confirm
+       * straight away and pass, because the old hand-rolled modal had no gate.
+       *
+       * Reaching the write path without the tick is not something to restore: a test that
+       * did would be asserting the gate away, and it would keep passing if the gate were
+       * deleted. So the tick is a step here, and whether the gate HOLDS — the disabled
+       * attribute, a raw bubbling click that ignores it, and the box not remembering a
+       * previous session's tick — is `dashboard-kill-switch.test.jsx`'s subject. What this
+       * test still owns is the end of the path: confirming does call the risk API.
+       */
+      fireEvent.click(screen.getByRole('checkbox', {
+        name: 'I understand this halts all trading on this account',
+      }));
+
       const confirmBtn = screen.getByText('Yes, HALT TRADING IMMEDIATELY');
       fireEvent.click(confirmBtn);
 
@@ -260,16 +278,34 @@ describe('Phase 2C — Dashboard Safety & Real-time Unit Tests', () => {
   });
 
   describe('P0.2: Critical Operational Alert Banner', () => {
-    it('displays operational insights from recent activity', async () => {
+    /*
+     * This asserted the opposite until task 19.2a: that `recent_activity.insights` reached
+     * the banner. It no longer does, and the inversion is the point of the change rather
+     * than a regression. `insights` has no `pageFields` entry, is not one of the three
+     * declared inputs of the Requirement 3.3 condition, and two of the three items
+     * `dashboard_aggregation_service` publishes are prose it hardcodes. A hardcoded sentence
+     * rendered in a live region states a finding nothing measured (Requirement 14.5).
+     *
+     * The condition itself is `design/alertCondition.js`'s and is asserted in
+     * `dashboard-alert-strip.test.jsx`; what is pinned here is that this field is not an
+     * input to it.
+     */
+    it('does not render `recent_activity.insights` — it is not one of the declared inputs', async () => {
       render(
         <MemoryRouter>
           <Dashboard />
         </MemoryRouter>
       );
 
+      // Wait for the ONE read to answer, then assert the absence — an assertion made before
+      // the payload arrives would pass on an empty page.
       await waitFor(() => {
-        expect(screen.getAllByText(/Bybit API rate limit usage reached 78% of capacity/i).length).toBeGreaterThan(0);
+        expect(screen.getByText('Command Center')).toBeDefined();
+        expect(document.querySelector('[data-page-tier="1"]')).not.toBeNull();
       });
+
+      expect(screen.queryByText(/Bybit API rate limit usage reached 78% of capacity/i)).toBeNull();
+      expect(screen.queryByText(/Check Rate Limits/i)).toBeNull();
     });
 
     it('renders kill switch alert when kill switch is active', async () => {
@@ -326,10 +362,22 @@ describe('Phase 2C — Dashboard Safety & Real-time Unit Tests', () => {
 
       await waitFor(() => {
         expect(screen.getByText('ETH Arbitrage Delta')).toBeDefined();
-        expect(screen.getByText('FAILED')).toBeDefined();
+        // The status is `ds/StrategyStatus`'s since task 19.1b. It normalises the server's
+        // `error` to `failed` and humanises it, so the badge reads "Failed" rather than the
+        // old inline `FAILED` span — and, unlike that span, an ABSENT status renders
+        // "Status not reported" instead of defaulting to paused.
+        expect(screen.getByText('Failed')).toBeDefined();
+        expect(document.querySelector('[data-strategy-status="failed"]')).not.toBeNull();
+        // The server's own account of the failure, still verbatim and still beside the row.
         expect(screen.getByText(/Rate limit exceeded on Bybit WebSocket/i)).toBeDefined();
-        expect(screen.getByText('Inspect')).toBeDefined();
       });
+
+      // `Inspect` was a per-row `<button onClick={navigate('/app/strategies')}>` — a
+      // navigation wearing a button, which announces as the wrong thing and cannot be
+      // opened in a new tab. It is one real `<a>` at panel level now, naming its
+      // destination because `anchor-ambiguous-text` rejects a link whose text names none.
+      const manage = screen.getByRole('link', { name: /manage strategies/i });
+      expect(manage.getAttribute('href')).toBe('/app/strategies');
     });
   });
 });

@@ -13,6 +13,23 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 active_streams = {} # (exchange_id, symbol) -> asyncio.Task
 exchange_instances = {}
 
+# The `transport` field every published payload carries, naming WHICH of this module's two
+# delivery paths produced it. Added by marketplace-subscriptions-paper-trading task 24.2.
+#
+# The watch_ohlcv -> fetch_ohlcv fallback on NotSupported below already existed and is unchanged;
+# what is new is that a subscriber can now TELL which one it is reading, which is what
+# Requirement 14.6 ("SHALL record the fallback in the session's feed state") needs and what a
+# subscriber previously had no way to know - both paths publish to the same Redis channel with an
+# otherwise identical payload.
+#
+# The values are the ones `paper_market_feed.FEED_TRANSPORTS` reads. They are spelled as literals
+# here rather than imported from the backend package because this module is a standalone
+# microservice process (`mds/main.py`, its own container and health port) and importing the
+# backend's paper package into it would couple the two deployments; the pair is asserted equal by
+# tests/test_paper_market_feed.py so a rename cannot silently split them.
+TRANSPORT_WEBSOCKET = "WEBSOCKET"
+TRANSPORT_REST = "REST"
+
 def get_exchange_instance(exchange_id: str):
     if exchange_id not in exchange_instances:
         ex_class = getattr(ccxtpro, exchange_id)
@@ -41,7 +58,8 @@ async def broadcast_ohlcv(exchange_id, symbol):
                     "high": latest[2],
                     "low": latest[3],
                     "close": latest[4],
-                    "volume": latest[5]
+                    "volume": latest[5],
+                    "transport": TRANSPORT_WEBSOCKET
                 }
                 await redis_manager.redis.publish(channel, json.dumps(payload))
         except Exception as e:
@@ -67,7 +85,8 @@ async def broadcast_ohlcv(exchange_id, symbol):
                     "high": latest[2],
                     "low": latest[3],
                     "close": latest[4],
-                    "volume": latest[5]
+                    "volume": latest[5],
+                    "transport": TRANSPORT_REST
                 }
                 await redis_manager.redis.publish(channel, json.dumps(payload))
             await asyncio.sleep(10) # Poll every 10s to avoid rate limit

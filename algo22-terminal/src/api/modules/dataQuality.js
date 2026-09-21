@@ -60,6 +60,20 @@ export const DATA_QUALITY_PATH = (strategyId) =>
  */
 export const DATA_QUALITY_LIMIT_PER_MINUTE = 60;
 
+/**
+ * The historical-window check the Backtester's Period panel reads (task 23.1).
+ *
+ * `POST /api/backtests/validate-data` — `strategy_operations.validate_historical_data`,
+ * backed by `BacktestService.validate_historical_data`. `strategy_operations.router` is
+ * mounted at `/api` in `main.py` and the handler carries the single decorator
+ * `@router.post("/backtests/validate-data")` with no `strategy-operations` alias, so this
+ * is the declared address and the prefixed spelling resolves to nothing.
+ */
+export const BACKTEST_WINDOW_PATH = '/api/backtests/validate-data';
+
+/** The server's own limit on that route (`@limiter.limit("100/minute")`). */
+export const BACKTEST_WINDOW_LIMIT_PER_MINUTE = 100;
+
 export const dataQualityApi = {
   /**
    * Feed state and the data quality report for one saved strategy's configured data source.
@@ -87,6 +101,60 @@ export const dataQualityApi = {
       status: response?.status ?? 200,
       data: response?.data ?? null,
     };
+  },
+
+  /**
+   * What historical data exists for one market, one bar interval and one window.
+   *
+   * The body is the service's own verdict and nothing is re-derived from it here:
+   *
+   *   { valid, issues: [{code, message, severity, …}], warnings: [{…}],
+   *     data_info: { total_candles, date_range, columns } }
+   *
+   * `valid` is `false` only for the conditions the service itself calls disqualifying —
+   * no data in the window, duplicate timestamps, non-positive OHLCV, out-of-order
+   * timestamps, fewer candles than the warmup needs — and each one arrives with the
+   * sentence the service wrote for it. The Backtester renders those sentences verbatim
+   * rather than summarising them, because the service is the thing that knows.
+   *
+   * EVERY ARGUMENT IS REQUIRED, AND THE THROW IS THE POINT. The handler reads the body
+   * with `body.get("symbol", "BTC/USDT")` and `body.get("timeframe", "1h")`, so a request
+   * missing either is answered *for a market and an interval the caller never named* — a
+   * report about BTC/USDT hourly candles presented as a report about whatever the trader
+   * had selected. There is no honest partial request to this route, so a partial one is
+   * refused here instead of being sent.
+   *
+   * Why the shared instance rather than `apiClient`'s `post()` helper: the helper mints an
+   * idempotency key and retries, both of which belong to a WRITE. This POST writes
+   * nothing — it is a read whose parameters are too long for a query string — and its
+   * honest answer to a failure is "the check could not be completed" now, not three
+   * attempts later against a route rate-limited at 100/minute.
+   *
+   * @param {{symbol: string, timeframe: string, startDate: string, endDate: string}} window
+   * @param {object} [options]
+   * @param {AbortSignal} [options.signal] Aborts a superseded read, so an answer about an
+   *   older window cannot land on a newer one.
+   * @returns {Promise<object|null>} The verdict body. Rejects with `apiClient`'s `ApiError`
+   *   carrying the backend's own `DATA_VALIDATION_FAILED` detail on `data`.
+   */
+  forBacktestWindow: async ({ symbol, timeframe, startDate, endDate } = {}, options = {}) => {
+    const named = { symbol, timeframe, start_date: startDate, end_date: endDate };
+    const missing = Object.entries(named)
+      .filter(([, value]) => typeof value !== 'string' || value.trim() === '')
+      .map(([key]) => key);
+    if (missing.length > 0) {
+      throw new Error(
+        `dataQualityApi.forBacktestWindow requires ${missing.join(', ')}: the route defaults `
+          + 'an absent symbol to BTC/USDT and an absent timeframe to 1h, so a partial request '
+          + 'is answered about a market nobody chose.',
+      );
+    }
+    const response = await client.post(
+      BACKTEST_WINDOW_PATH,
+      Object.fromEntries(Object.entries(named).map(([key, value]) => [key, value.trim()])),
+      { headers: { Accept: 'application/json' }, signal: options.signal },
+    );
+    return response?.data ?? null;
   },
 };
 

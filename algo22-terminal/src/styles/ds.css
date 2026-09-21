@@ -1,0 +1,81 @@
+/* ===========================================================================
+   src/styles/ds.css — the design system's own CSS. Requirement 1.5, 18.5.
+   vyomquant-ui-redesign task 6.1.
+
+   WHY THIS FILE EXISTS
+   --------------------
+   `ui-legacy/primitives.jsx` ships its animations as a `<style>` element
+   *inside the rendered output* of each component: `SkeletonLine` renders
+   `<style>@keyframes shimmer{…}</style>` as a child of every shimmer bar, and
+   `Spinner` and `EmptyState` do the same for `spin` and `float`. A table
+   skeleton with five rows and eight columns therefore injects forty-one
+   identical `@keyframes` blocks into the document, re-evaluated on every
+   render, and each one is a duplicate global declaration whose last writer
+   wins. This file is that declaration made once.
+
+   It is NOT a token file. It declares no colour, no radius and no duration of
+   its own — every value below is a `var(--…)` reference to
+   `./tokens.css`, which stays the single source (Requirement 1.1). It is
+   imported from `src/index.css` immediately after `tokens.css`, so the
+   variables it reads are already defined.
+
+   REDUCED MOTION (Requirement 18.5)
+   ---------------------------------
+   `tokens.css` already carries a global `prefers-reduced-motion` block, but it
+   works by collapsing `animation-duration` to 0.01ms and pinning
+   `animation-iteration-count` to 1. That is the right blunt instrument for
+   transitions, and the wrong one for a shimmer: a gradient frozen at frame one
+   sits at `background-position: 100%`, i.e. a bright band parked off the right
+   edge of the bar, which reads as a rendering artefact rather than as a calm
+   placeholder. So each animated class below is switched off *explicitly* and
+   given a flat resting appearance, rather than being left to the global
+   collapse. The class selectors outrank the global `*` rule, and
+   `animation: none` removes the animation name outright, which the global
+   block's `!important` durations cannot resurrect.
+   =========================================================================== */
+
+@keyframes ds-shimmer {
+  from { background-position: 100% 0; }
+  to   { background-position: -100% 0; }
+}
+
+@keyframes ds-rotate {
+  to { transform: rotate(360deg); }
+}
+
+/* The shimmer atom. `ds/Skeleton.jsx` renders exactly this class; every size is
+   passed as an inline width/height so that a skeleton can be measured from the
+   same geometry table the real content uses (see `SKELETON_GEOMETRY` in
+   `ds/LoadingState.jsx`). */
+.ds-skeleton {
+  display: block;
+  background-color: var(--color-surface-inset);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--color-line-strong) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: ds-shimmer 1600ms linear infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* The one rotating affordance, for `LoadingState`'s `inline` and `button`
+   kinds. Colour comes from `currentColor`, so it inherits whatever token class
+   the caller set — there is no colour here to get out of step. */
+.ds-spinner {
+  animation: ds-rotate 900ms linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-skeleton {
+    background-image: none;
+    animation: none;
+  }
+
+  .ds-spinner {
+    animation: none;
+  }
+}

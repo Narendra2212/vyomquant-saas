@@ -29,7 +29,7 @@
 
 import React from 'react';
 
-import { C } from '../ui-legacy/primitives';
+import { token } from '../../design/tokens';
 import { Button } from '../ui/Button';
 import {
   EMPTY_VALUE_TEXT,
@@ -40,9 +40,9 @@ import {
 
 const label = (text) => (
   <div
-    className="text-caption-sm"
+    className="text-micro"
     style={{
-      color: C.t3,
+      color: token.content.muted,
       fontFamily: 'monospace',
       letterSpacing: 1,
       textTransform: 'uppercase',
@@ -63,7 +63,7 @@ const cellStyle = {
 /** One numeric cell. An empty value is marked as such for a screen reader too, not by glyph. */
 const ValueCell = ({ cell, testId }) => (
   <td
-    style={{ ...cellStyle, color: cell.empty ? C.t3 : C.t1 }}
+    style={{ ...cellStyle, color: cell.empty ? token.content.muted : token.content.primary }}
     data-testid={testId}
     data-empty={cell.empty ? 'true' : 'false'}
     title={cell.empty ? 'No value on this bar' : undefined}
@@ -75,13 +75,13 @@ const ValueCell = ({ cell, testId }) => (
 /** The tail of a produced series: newest last, exactly the order the endpoint sent. */
 const SeriesTable = ({ output }) => (
   <table
-    className="text-caption-sm"
+    className="text-micro"
     data-testid={`preview-series-${output.name}`}
     style={{ width: '100%', borderCollapse: 'collapse' }}
   >
     <caption className="sr-only">{`Last ${output.rows.length} values of ${output.name}`}</caption>
     <thead>
-      <tr style={{ color: C.t3 }}>
+      <tr style={{ color: token.content.muted }}>
         <th scope="col" style={{ ...cellStyle, textAlign: 'left' }}>Bar</th>
         <th scope="col" style={cellStyle}>{output.name}</th>
       </tr>
@@ -89,7 +89,7 @@ const SeriesTable = ({ output }) => (
     <tbody>
       {output.rows.map((row, position) => (
         <tr key={row.index ?? position}>
-          <th scope="row" style={{ ...cellStyle, textAlign: 'left', color: C.t3, fontWeight: 400 }}>
+          <th scope="row" style={{ ...cellStyle, textAlign: 'left', color: token.content.muted, fontWeight: 400 }}>
             {row.index ?? '?'}
           </th>
           <ValueCell cell={row} testId={`preview-value-${output.name}-${position}`} />
@@ -118,13 +118,13 @@ const FeatureMatrixPanel = ({ output }) => (
           key={column}
           data-testid={`preview-column-${column}`}
           data-warmup={warmup === null ? undefined : warmup}
-          className="text-caption-sm"
+          className="text-micro"
           style={{
             fontFamily: 'monospace',
-            border: `1px solid ${C.border}`,
+            border: `1px solid ${token.line.default}`,
             borderRadius: 3,
             padding: '1px 5px',
-            color: C.t2,
+            color: token.content.secondary,
           }}
           title={warmup === null ? undefined : `${warmup} warmup bars`}
         >
@@ -135,21 +135,21 @@ const FeatureMatrixPanel = ({ output }) => (
 
     {output.sampleTruncated && (
       <p
-        className="text-caption-sm"
+        className="text-micro"
         data-testid={`preview-truncated-${output.name}`}
-        style={{ color: C.gold, margin: '0 0 6px' }}
+        style={{ color: token.status.warning.fg, margin: '0 0 6px' }}
       >
         {`Values shown for the first ${output.sampledColumns.length} of ${output.columnCount} columns. Every column name is listed above.`}
       </p>
     )}
 
     <div style={{ overflowX: 'auto' }}>
-      <table className="text-caption-sm" style={{ borderCollapse: 'collapse' }}>
+      <table className="text-micro" style={{ borderCollapse: 'collapse' }}>
         <caption className="sr-only">
           {`Sampled values for ${output.sampledColumns.length} of ${output.columnCount} produced columns`}
         </caption>
         <thead>
-          <tr style={{ color: C.t3 }}>
+          <tr style={{ color: token.content.muted }}>
             <th scope="col" style={{ ...cellStyle, textAlign: 'left' }}>Bar</th>
             {output.sampledColumns.map((column) => (
               <th scope="col" key={column} style={cellStyle}>{column}</th>
@@ -159,7 +159,7 @@ const FeatureMatrixPanel = ({ output }) => (
         <tbody>
           {output.rows.map((row, position) => (
             <tr key={row.index ?? position}>
-              <th scope="row" style={{ ...cellStyle, textAlign: 'left', color: C.t3, fontWeight: 400 }}>
+              <th scope="row" style={{ ...cellStyle, textAlign: 'left', color: token.content.muted, fontWeight: 400 }}>
                 {row.index ?? '?'}
               </th>
               {row.cells.map((cell, column) => (
@@ -182,7 +182,7 @@ const OutputPanel = ({ output }) => {
     return (
       <div data-testid={`preview-output-${output.name}`} data-produced="false">
         {label(`${output.name} · ${output.portType || 'port'}`)}
-        <p className="text-caption-sm" style={{ color: C.t3, margin: 0 }}>
+        <p className="text-micro" style={{ color: token.content.muted, margin: 0 }}>
           This port produced no value on this run.
         </p>
       </div>
@@ -196,25 +196,25 @@ const OutputPanel = ({ output }) => {
       {output.kind === OUTPUT_KINDS.FEATURE_MATRIX && <FeatureMatrixPanel output={output} />}
       {output.kind === OUTPUT_KINDS.SCALAR && (
         <p
-          className="text-caption"
+          className="text-micro"
           data-testid={`preview-scalar-${output.name}`}
           data-empty={output.value === null ? 'true' : 'false'}
-          style={{ fontFamily: 'monospace', color: output.value === null ? C.t3 : C.t1, margin: 0 }}
+          style={{ fontFamily: 'monospace', color: output.value === null ? token.content.muted : token.content.primary, margin: 0 }}
         >
           {output.text}
         </p>
       )}
       {output.kind === OUTPUT_KINDS.UNRENDERABLE && (
-        <p className="text-caption-sm" style={{ color: C.gold, margin: 0 }}>
+        <p className="text-micro" style={{ color: token.status.warning.fg, margin: 0 }}>
           {/* The endpoint's own sentence. It knows what it could not sample. */}
           {output.message}
         </p>
       )}
       {output.emptyValueCount > 0 && (
         <p
-          className="text-caption-sm"
+          className="text-micro"
           data-testid={`preview-empty-count-${output.name}`}
-          style={{ color: C.t3, margin: '4px 0 0' }}
+          style={{ color: token.content.muted, margin: '4px 0 0' }}
         >
           {`${output.emptyValueCount} of the sampled values are empty.`}
         </p>
@@ -242,7 +242,7 @@ export function NodePreview({
     <section
       data-testid="node-preview"
       data-state={state}
-      style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8, marginTop: 4 }}
+      style={{ borderTop: `1px solid ${token.line.default}`, paddingTop: 8, marginTop: 4 }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
         {label('Preview')}
@@ -260,17 +260,17 @@ export function NodePreview({
       {/* Why the button cannot be pressed, in the author's terms rather than by greying out. */}
       {!availability.available && (
         <p
-          className="text-caption-sm"
+          className="text-micro"
           data-testid="preview-unavailable"
           data-code={availability.code || undefined}
-          style={{ color: C.t3, margin: '4px 0 0' }}
+          style={{ color: token.content.muted, margin: '4px 0 0' }}
         >
           {availability.reason}
         </p>
       )}
 
       {availability.available && state === PREVIEW_STATES.IDLE && (
-        <p className="text-caption-sm" data-testid="preview-idle" style={{ color: C.t3, margin: '4px 0 0' }}>
+        <p className="text-micro" data-testid="preview-idle" style={{ color: token.content.muted, margin: '4px 0 0' }}>
           {/* The client's own state: nothing has been asked yet, which is not a verdict. */}
           No preview requested yet. The last values this block produces are computed by the
           same executors that run it.
@@ -278,7 +278,7 @@ export function NodePreview({
       )}
 
       {state === PREVIEW_STATES.LOADING && (
-        <p className="text-caption-sm" data-testid="preview-loading" style={{ color: C.t3, margin: '4px 0 0' }} aria-live="polite">
+        <p className="text-micro" data-testid="preview-loading" style={{ color: token.content.muted, margin: '4px 0 0' }} aria-live="polite">
           Computing this block over a bounded historical window…
         </p>
       )}
@@ -286,9 +286,9 @@ export function NodePreview({
       {state === PREVIEW_STATES.ERROR && error !== null && (
         <div data-testid="preview-error" data-code={error.code} data-status={error.status ?? undefined}>
           {/* The backend's own message and hint, verbatim. */}
-          <p className="text-caption-sm" style={{ color: C.red, margin: '4px 0 0' }}>{error.message}</p>
+          <p className="text-micro" style={{ color: token.status.loss.fg, margin: '4px 0 0' }}>{error.message}</p>
           {error.hint && (
-            <p className="text-caption-sm" data-testid="preview-error-hint" style={{ color: C.t3, margin: '2px 0 0' }}>
+            <p className="text-micro" data-testid="preview-error-hint" style={{ color: token.content.muted, margin: '2px 0 0' }}>
               {error.hint}
             </p>
           )}
@@ -302,12 +302,12 @@ export function NodePreview({
 
       {state === PREVIEW_STATES.READY && preview !== null && (
         <div data-testid="preview-body" data-node-id={preview.nodeId} data-category={preview.category || undefined}>
-          <p className="text-caption-sm" data-testid="preview-window" style={{ color: C.t3, margin: '4px 0 6px' }}>
+          <p className="text-micro" data-testid="preview-window" style={{ color: token.content.muted, margin: '4px 0 6px' }}>
             {describeWindow(preview.window)}
           </p>
 
           {preview.market.symbol !== null && (
-            <p className="text-caption-sm" data-testid="preview-market" style={{ color: C.t3, margin: '0 0 8px' }}>
+            <p className="text-micro" data-testid="preview-market" style={{ color: token.content.muted, margin: '0 0 8px' }}>
               {/* The DATA block's own parameters. No venue is named, because none is sent. */}
               {`${preview.market.symbol} · ${preview.market.timeframe}`}
             </p>
@@ -322,8 +322,8 @@ export function NodePreview({
                 <li
                   key={`${issue.code}-${position}`}
                   data-testid={`preview-issue-${issue.code}`}
-                  className="text-caption-sm"
-                  style={{ color: C.gold, fontFamily: 'monospace' }}
+                  className="text-micro"
+                  style={{ color: token.status.warning.fg, fontFamily: 'monospace' }}
                 >
                   {/* The engine's recorded condition, as recorded. This is why a bar is empty. */}
                   {issue.message || issue.code}

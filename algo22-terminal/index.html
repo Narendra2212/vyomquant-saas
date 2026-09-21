@@ -6,7 +6,16 @@
   <link rel="icon" type="image/svg+xml" href="/vq-favicon.svg" />
   <link rel="canonical" href="https://vyomquant.in/" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  
+
+  <!-- Web fonts: Inter (--font-sans) + JetBrains Mono (--font-mono), the two
+       families named in src/styles/tokens.css. Loaded here rather than through an
+       @import inside a rendered <style>, which blocks and re-evaluates on every
+       shell render (design.md §6.6). One request covers both families. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+
   <!-- Primary SEO Meta Tags -->
   <title>VyomQuant — Institutional Quantitative Trading Terminal & Algorithmic SaaS</title>
   <meta name="title" content="VyomQuant — Institutional Quantitative Trading Terminal & Algorithmic SaaS" />

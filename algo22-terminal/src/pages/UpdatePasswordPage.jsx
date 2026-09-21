@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Lock } from "lucide-react";
-import { C, Inp } from "../components/ui-legacy/primitives";
+import { Inp } from "../components/common/primitives";
+import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 
@@ -33,13 +34,13 @@ export default function UpdatePasswordPage() {
   };
 
   return (
-    <div style={{ background: C.bg0, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 18, padding: 36, width: 450 }}>
-        <h1 style={{ color: C.t1, fontWeight: 900, fontSize: 22, marginBottom: 20, textAlign: "center" }}>
+    <div style={{ background: token.surface.canvas, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: token.surface.raised, border: `1px solid ${token.line.default}`, borderRadius: 18, padding: 36, width: 450 }}>
+        <h1 style={{ color: token.content.primary, fontWeight: 900, fontSize: 22, marginBottom: 20, textAlign: "center" }}>
           Reset Password
         </h1>
         {success ? (
-          <div style={{ color: C.green, fontSize: 13, textAlign: "center", background: `${C.green}12`, padding: 12, borderRadius: 8 }}>
+          <div style={{ color: token.status.profit.fg, fontSize: 13, textAlign: "center", background: `${token.status.profit.fg}12`, padding: 12, borderRadius: 8 }}>
             Password updated! Redirecting...
           </div>
         ) : (
@@ -56,7 +57,7 @@ export default function UpdatePasswordPage() {
             <Button variant="primary" size="md" cls="w-full justify-center mt-2" disabled={loading}>
               {loading ? "Updating..." : "Update Password"}
             </Button>
-            {!!error && <div style={{ marginTop: 10, color: C.red, fontSize: 12, textAlign: "center" }}>{error}</div>}
+            {!!error && <div style={{ marginTop: 10, color: token.status.loss.fg, fontSize: 12, textAlign: "center" }}>{error}</div>}
           </form>
         )}
       </div>

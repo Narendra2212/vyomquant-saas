@@ -677,6 +677,51 @@ class StrategyAuditAction(Enum):
     #: ``strategy_versions.lifecycle_state`` value (``LIFECYCLE_ARCHIVED``) meaning an
     #: archived *version*, which is a different act on a different resource.
     STRATEGY_ARCHIVED = "strategy_archived"
+    #: One Eligibility_Gate evaluation of a strategy for Marketplace publication, recorded
+    #: whether the strategy was admitted or not (marketplace-subscriptions-paper-trading
+    #: Requirement 2.11, task 14.1). An additive member: nothing existing is renamed or
+    #: redefined, so no stored record changes meaning.
+    #:
+    #: ``design.md`` -> "Audit records" places this member, along with the fuller
+    #: ``MARKETPLACE_*`` set, in task 14.3, which extends this enum and adds
+    #: ``StrategyAuditLogger.record_or_raise``. That task has not run yet, so this one member
+    #: is defined here so ``marketplace/eligibility_gate.py`` can name it, import cleanly and
+    #: be property-tested standalone. Task 14.3 adds the remaining members and must be
+    #: idempotent about this one: it re-declares the same ``name = value`` pair, which is a
+    #: no-op, rather than a second definition.
+    MARKETPLACE_ELIGIBILITY_EVALUATED = "marketplace_eligibility_evaluated"
+
+    #: The remaining Marketplace and Paper_Trading audit members (task 14.3), from
+    #: ``design.md`` -> "Audit records" (Requirements 26.2, 26.3). All additive: nothing
+    #: existing is renamed or redefined, so no stored record changes meaning, and
+    #: ``MARKETPLACE_ELIGIBILITY_EVALUATED`` above is kept as its single declaration rather
+    #: than re-added here. Written through this same ``StrategyAuditLogger`` — no second
+    #: audit facility. The spellings are the authoritative ones from design.md's table and
+    #: refusal/safety list.
+    #
+    # Requirement 26.2 obligations:
+    MARKETPLACE_SUBMISSION_CREATED = "marketplace_submission_created"
+    MARKETPLACE_SUBMISSION_TRANSITIONED = "marketplace_submission_transitioned"
+    MARKETPLACE_ADMIN_ACTION = "marketplace_admin_action"
+    MARKETPLACE_PRICE_EVALUATED = "marketplace_price_evaluated"
+    MARKETPLACE_CHECKOUT_CREATED = "marketplace_checkout_created"
+    MARKETPLACE_PAYMENT_CONFIRMED = "marketplace_payment_confirmed"
+    MARKETPLACE_SETTLEMENT_CREATED = "marketplace_settlement_created"
+    MARKETPLACE_SUBSCRIPTION_TRANSITIONED = "marketplace_subscription_transitioned"
+    MARKETPLACE_PERIOD_EXTENDED = "marketplace_period_extended"
+    MARKETPLACE_ENTITLEMENT_GRANTED = "marketplace_entitlement_granted"
+    MARKETPLACE_ENTITLEMENT_REVOKED = "marketplace_entitlement_revoked"
+    # Refusal and safety records (Requirements 7.12, 21.4, 9.14, 10.10, 10.11, 13.9,
+    # 13.11, 14.8):
+    MARKETPLACE_ACCESS_REFUSED = "marketplace_access_refused"
+    MARKETPLACE_CROSS_TENANT_ATTEMPT = "marketplace_cross_tenant_attempt"
+    MARKETPLACE_SETTLEMENT_UNMATCHED = "marketplace_settlement_unmatched"
+    MARKETPLACE_SETTLEMENT_MISMATCHED = "marketplace_settlement_mismatched"
+    MARKETPLACE_SETTLEMENT_DUPLICATE_IGNORED = "marketplace_settlement_duplicate_ignored"
+    MARKETPLACE_SETTLEMENT_PERSIST_FAILED = "marketplace_settlement_persist_failed"
+    EXECUTION_ENVIRONMENT_MISMATCH = "execution_environment_mismatch"
+    PAPER_SIMULATOR_MISCONFIGURED = "paper_simulator_misconfigured"
+    PAPER_FEED_REFUSED_MOCK_INTERFACE = "paper_feed_refused_mock_interface"
 
 
 #: Resource kinds an audited act can be about. A closed vocabulary, so a reader can
@@ -779,6 +824,99 @@ class StrategyAuditLogger:
 
         The returned record is the caller's receipt: it carries the ``audit_id`` that
         travels on the API response, so a client can quote it in a support request.
+
+        This is the never-raises variant: a storage failure is logged at warning level
+        and swallowed, so an audit write never fails the action it describes. Every
+        existing caller depends on that contract. The shared write body lives in
+        ``_write`` so ``record_or_raise`` can reuse it with the opposite disposition.
+        """
+        return await self._write(
+            action,
+            raise_on_failure=False,
+            actor_id=actor_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            reason=reason,
+            before=before,
+            after=after,
+            strategy_id=strategy_id,
+            version_id=version_id,
+            deployment_id=deployment_id,
+            metadata=metadata,
+            audit_id=audit_id,
+            timestamp=timestamp,
+        )
+
+    async def record_or_raise(
+        self,
+        action: StrategyAuditAction,
+        *,
+        actor_id: str,
+        resource_type: str,
+        resource_id: str,
+        reason: str,
+        before: Optional[str] = None,
+        after: Optional[str] = None,
+        strategy_id: Optional[str] = None,
+        version_id: Optional[str] = None,
+        deployment_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        audit_id: Optional[str] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> StrategyAuditRecord:
+        """Record one act like :meth:`log`, but RE-RAISE on any storage failure.
+
+        Same keyword signature and same return type as :meth:`log`; it runs the exact
+        same write body (``_write``). The difference is disposition: where :meth:`log`
+        swallows a failed log-line or Redis write, this variant propagates it. It exists
+        for the callers that write an audit record *inside* a transaction whose commit
+        must be conditioned on the record having been durably written — e.g.
+        ``marketplace/eligibility_gate.py::_write_audit`` and the Marketplace submission
+        transaction (Requirement 26.2). This is not a second audit facility: it is the
+        same logger, the same record type and the same body, with the never-swallow flag
+        flipped on.
+        """
+        return await self._write(
+            action,
+            raise_on_failure=True,
+            actor_id=actor_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            reason=reason,
+            before=before,
+            after=after,
+            strategy_id=strategy_id,
+            version_id=version_id,
+            deployment_id=deployment_id,
+            metadata=metadata,
+            audit_id=audit_id,
+            timestamp=timestamp,
+        )
+
+    async def _write(
+        self,
+        action: StrategyAuditAction,
+        *,
+        raise_on_failure: bool,
+        actor_id: str,
+        resource_type: str,
+        resource_id: str,
+        reason: str,
+        before: Optional[str] = None,
+        after: Optional[str] = None,
+        strategy_id: Optional[str] = None,
+        version_id: Optional[str] = None,
+        deployment_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        audit_id: Optional[str] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> StrategyAuditRecord:
+        """The one shared write body for :meth:`log` and :meth:`record_or_raise`.
+
+        ``raise_on_failure`` is the only difference between the two public methods: when
+        ``False`` a failed log-line or Redis write is logged at warning level and
+        swallowed (``log``'s historic never-raises contract); when ``True`` the failure
+        is re-raised (``record_or_raise``).
         """
         record = StrategyAuditRecord(
             audit_id=audit_id or self._generate_audit_id(),
@@ -815,9 +953,19 @@ class StrategyAuditLogger:
             logger.info(record.to_log_entry())
         except Exception as exc:  # noqa: BLE001 - an audit must not fail the action
             logger.warning("Strategy audit log line could not be written: %s", exc)
+            if raise_on_failure:
+                raise
 
-        # 2. Redis history, best effort.
-        await self._append_history(record)
+        # 2. Redis history, best effort for ``log``; a hard requirement for
+        #    ``record_or_raise``. ``_append_history`` swallows internally and returns
+        #    ``False`` on failure, so re-raising here would lose the original cause; we
+        #    re-run the same push with the never-swallow disposition instead.
+        appended = await self._append_history(record)
+        if raise_on_failure and not appended:
+            await redis_manager.lpush(
+                self.history_key(record.resource_type, record.resource_id),
+                json.dumps(record.to_dict(), default=str),
+            )
         return record
 
     async def _append_history(self, record: StrategyAuditRecord) -> bool:

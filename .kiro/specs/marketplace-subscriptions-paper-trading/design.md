@@ -99,6 +99,7 @@ backend_app/backend/marketplace/
     entitlement_resolver.py   # "what may this caller execute right now"
     submission_service.py     # transactions for submit / transition / evidence copy
     settlement_service.py     # Settlement_Record writer, idempotent, reversals
+    subscription_reinstatement.py  # admin lifts a SUSPENDED hold: unpaid, period unchanged
     checkout_service.py       # PENDING row -> provider session -> reference recorded
     expiry_sweep.py           # <=60s sweep worker
 backend_app/backend/paper/
@@ -1298,6 +1299,91 @@ transition into `'active'` for which no qualifying `marketplace_settlements` row
 (period_start IS NOT NULL AND period_expiry IS NOT NULL AND period_expiry > period_start))`
 gives Requirement 11.13 and P-10.
 
+**THE ONE AUTHORISED EXCEPTION TO THE PAYMENT GATE — `SUSPENDED → ACTIVE` (Requirements 11.17
+… 11.22).** Requirement 11.2 permits `SUSPENDED → ACTIVE` and the seed carries that pair, but
+Requirement 11.6 named only `PENDING`, `EXPIRED`, `CANCELLED` and `PAYMENT_FAILED` as the
+sources that require a confirmed payment — so the edge existed with no stated payment rule, the
+guard's activation branch (keyed on `NEW.status = 'active'` alone) took the stricter reading,
+and a purchaser suspended by an administrator had no route back to access they had already paid
+for except buying a fresh month. **A suspension is a hold, not a refund**: the period the
+purchaser paid for is still theirs, so lifting the hold restores the *remaining* period without
+a charge and without moving the period. `014_subscription_admin_reinstatement.sql` is the
+additive migration that makes the database agree, and it changes the guard's activation branch
+only — no pair is seeded, because Requirement 11.2 already permits the edge:
+
+```pascal
+IF NEW.status = 'active' THEN
+    IF marketplace_subscription_reinstatement_shape(          // pure, IMMUTABLE, callable
+           OLD.status, NEW.status,                            // 'suspended' -> 'active'
+           OLD.period_start,  NEW.period_start,               // both unchanged
+           OLD.period_expiry, NEW.period_expiry) THEN
+        REQUIRE a non-reversal marketplace_settlements row for NEW.id
+                with settled_at <= OLD.period_expiry          // the period WAS bought
+        ELSE RAISE 23514                                      // Req 11.17, 11.22
+    ELSE                                                      // every other source
+        REQUIRE a non-reversal marketplace_settlements row for NEW.id
+                with (OLD.period_expiry IS NULL OR settled_at >= OLD.period_expiry)
+        ELSE RAISE 23514                                      // 008's probe, unchanged
+END IF
+```
+
+The relaxation is expressed as a call to a **pure predicate** rather than an inline condition so
+the migration's postflight can *execute* the proof that it is scoped: it calls the predicate with
+`pending`, `expired`, `cancelled` and `payment_failed` and asserts `FALSE` for each — so each of
+those still reaches 008's unchanged probe — and with a `suspended` row whose period is being
+moved, and one with no stored period, and asserts `FALSE` for those too. The period-unchanged
+conjunct is what makes the exception unable to fund an extension, and the settlement conjunct is
+what keeps Requirement 11.14 true: a Subscription that never paid has no qualifying row and
+cannot be reinstated into access it never bought. An **elapsed** period is deliberately not
+special-cased: `entitlement_resolver.resolve` compares `now` with `period_expiry` on every call
+(Requirement 11.7), so a reinstatement after the expiry restores the label and grants nothing,
+and the sweep moves the row back to `EXPIRED` on its next pass.
+
+### `marketplace/subscription_reinstatement.py`
+
+The administrative writer for Requirement 11.17, and deliberately **not** a branch of
+`settlement_service.settle`: `settle`'s auditable sentence is "every activation this function
+performs has a Settlement_Record written first, in the same call" (Requirement 9.5), and folding
+an unpaid route into it would end that. `settlement_service` therefore remains the only writer of
+a **paid** activation; this module is the only writer of an unpaid one, and the only route to it
+is `POST /api/library/admin/subscriptions/{subscription_id}/reinstate` carrying
+`admin: dict = Depends(get_admin_user)` — the same dependency the five submission actions carry,
+no inline role check and no client-supplied capability (Requirements 5.1, 11.18, 22.10).
+
+```pascal
+ASYNC FUNCTION reinstate(admin, subscription_id, reason, supabase, now)
+BEGIN
+  reason <- validate_reason(reason)              // Req 11.20, BEFORE any read
+  sub    <- SELECT id, library_id, user_id, owner_id, status, period_start, period_expiry
+              FROM library_subscriptions WHERE id = :subscription_id
+  IF sub IS NULL                        THEN RAISE NOT_FOUND                     // 404
+  IF sub.status <> 'suspended'          THEN RAISE MARKETPLACE_PAYMENT_REQUIRED   // Req 11.19
+  IF sub.period_expiry IS NULL          THEN RAISE MARKETPLACE_PAYMENT_REQUIRED   // Req 11.19
+  IF NOT EXISTS non-reversal settlement for sub.id with settled_at <= sub.period_expiry
+                                        THEN RAISE MARKETPLACE_PAYMENT_REQUIRED   // Req 11.17
+
+  UPDATE library_subscriptions SET status='active'                 // ONE column (Req 11.17)
+   WHERE id = sub.id AND status = 'suspended'                      // the optimistic lock
+  INSERT INTO library_subscription_transitions
+         (from_state='suspended', to_state='active', cause='admin_reinstatement',
+          actor_id=admin.id, prior_period_expiry=sub.period_expiry,
+          new_period_expiry=sub.period_expiry)                     // Req 11.12, 11.21
+  TRY audit(MARKETPLACE_SUBSCRIPTION_TRANSITIONED, record_or_raise, actor=admin.id,
+            before='suspended', after='active', reason)            // LAST, and required
+  CATCH revert status to 'suspended'; RAISE MARKETPLACE_ACTION_NOT_RECORDED       // Req 11.21
+END
+```
+
+`period_start`, `period_expiry` and the retained `started_at` / `expires_at` mirrors are absent
+from the payload, and the module asserts that against a named column set rather than trusting the
+statement — so "the period is untouched" is a property of the module, not of one line. The
+history row's `cause` is `'admin_reinstatement'`, never `'settlement'`, which is how a reader
+tells an administrative reinstatement from a paid activation on a row where the period did not
+move (Requirement 11.12). The compensating write on an unwritable audit is `ACTIVE → SUSPENDED`,
+an edge Requirement 11.2 permits, so the roll-back is expressible rather than a write the guard
+would refuse. No money column is read or written and no `deployment_permissions` row is granted:
+the grant the settled payment wrote already carries the period expiry.
+
 ### `marketplace/settlement_service.py`
 
 ```pascal
@@ -1415,6 +1501,7 @@ role check, no client-supplied capability (Requirements 5.1, 22.10).
 | `POST …/{id}/publish` | `APPROVED → PUBLISHED` or `SUSPENDED → PUBLISHED` | 60/60s |
 | `POST …/{id}/suspend` | `PUBLISHED → SUSPENDED` | 60/60s |
 | `POST …/{id}/unpublish` | `PUBLISHED → UNPUBLISHED` or `SUSPENDED → UNPUBLISHED` | 60/60s |
+| `POST /admin/subscriptions/{subscription_id}/reinstate` | Subscription `SUSPENDED → ACTIVE`, no payment, period unchanged, `reason` required 1–2000 chars (Requirements 11.17–11.21) — `subscription_reinstatement.reinstate`, not `submission_service` | 60/60s |
 
 The detail response is assembled by `submission_service.admin_detail`, which reads
 `marketplace_backtest_evidence` — the immutable copy — and never `strategy_backtests.blueprint`,

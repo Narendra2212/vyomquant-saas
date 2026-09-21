@@ -99,6 +99,12 @@ def mock_signal_service():
             return {
                 "id": signal_id,
                 "user_id": user_id,
+                # ``signals.strategy_id`` is NOT NULL, so a real row always carries it. It is
+                # stated here because task 29.4 resolves the viewer's role from it: a signal
+                # this double cannot attribute to a strategy is one whose owner cannot be
+                # established, and the projection withholds rather than discloses in that
+                # case. Tenant A owns str_test_789 — see mock_get_strategy above.
+                "strategy_id": "str_test_789",
                 "decision": "BUY",
                 "status": "pending"
             }
@@ -130,8 +136,11 @@ def mock_signal_service():
 
     service._get_supabase = AsyncMock(return_value=None)
 
-    async def mock_get_signal_trace(user, signal_id):
-        return await build_signal_trace_detail(service, user, signal_id)
+    # ``**kwargs`` because the route now passes task 29.3's ``environment=`` filter through
+    # on every call (``None`` when the caller named no environment). Forwarded rather than
+    # dropped, so this stand-in cannot answer a filtered read as an unfiltered one.
+    async def mock_get_signal_trace(user, signal_id, **kwargs):
+        return await build_signal_trace_detail(service, user, signal_id, **kwargs)
 
     service.get_signal_trace = AsyncMock(side_effect=mock_get_signal_trace)
 

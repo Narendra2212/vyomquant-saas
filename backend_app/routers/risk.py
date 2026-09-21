@@ -298,19 +298,65 @@ async def get_risk_status(user: dict = Depends(get_current_user)):
     max_loss = settings["max_daily_loss"]
     max_pos = settings["max_positions"]
     
-    # Query current positions and paper/live account performance
+    # Query current positions and paper/live account performance.
+    #
+    # marketplace-subscriptions-paper-trading task 23.5: these two reads reach the **persisted**
+    # Paper_Account (Requirement 25.5). The arithmetic below is untouched - only where its inputs
+    # come from changed. Both reads carry the caller's token so the row-level-security policies on
+    # the ``paper_*`` tables apply to the identity that made the request, and both are scoped to
+    # ``uid``. A refusal - 503 ``PAPER_PERSISTENCE_UNAVAILABLE`` when 009 is unapplied, 503
+    # ``PAPER_READ_FAILED`` when a statement did not complete - is deliberately **not** caught
+    # here: an unreadable account is an outage, and answering 200 with a default balance would
+    # show a trader a healthy margin they may not have (Requirements 17.2, 28.3).
     from backend_app.backend.paper_trading_service import get_paper_trading_service
     paper_svc = get_paper_trading_service()
-    paper_summary = paper_svc.get_performance_summary(uid)
+    paper_summary = paper_svc.get_performance_summary(uid, access_token=user.get("access_token"))
     acct = paper_summary.get("account", {})
     
     realized_loss = float(-min(Decimal("0"), Decimal(str(acct.get("realized_pnl", "0")))))
     loss_utilization_pct = round((realized_loss / max_loss * 100), 2) if max_loss > 0 else 0.0
-    open_pos_count = len(paper_svc.get_positions(uid))
+    # A fully closed position persists at ``size = 0`` instead of being deleted (Requirement
+    # 18.5), so "open" is a predicate on size here as well as in the read. The read already
+    # filters ``closed_at IS NULL`` in the statement and drops a zero-size row in Python, and
+    # this is the second, independent boundary: a row left at ``size = 0`` with ``closed_at``
+    # still null - what a process that stopped between the fill insert and the close marker
+    # leaves behind - must not be reported as an open position, because at ``max_positions`` it
+    # would block an order. Compared as ``Decimal``, never through binary float.
+    open_positions = paper_svc.get_positions(uid, access_token=user.get("access_token"))
+    open_pos_count = len([
+        position for position in open_positions
+        if Decimal(str(position.get("size", "0"))) > Decimal("0")
+    ])
     pos_utilization_pct = round((open_pos_count / max_pos * 100), 2) if max_pos > 0 else 0.0
     
     kill_active = is_user_kill_switched(uid)
-    
+
+    # vyomquant-ui-redesign BC-1 (design.md §1.5, §16, Requirement 19.2). ``drawdown_pct`` was a
+    # literal ``0.0`` here, which asserts "this account has no drawdown" - a claim nothing on this
+    # path measured. A trader reads drawdown to decide whether to reduce size, so a fabricated
+    # zero is worse than no answer.
+    #
+    # Current drawdown is peak-to-trough and therefore needs an equity *series*. This endpoint
+    # reads the paper performance summary and the open positions, and neither carries one: the
+    # summary reports ``total_equity``, ``initial_capital`` and ``roi_pct``, all single figures.
+    # A peak cannot be reconstructed from them - an account that peaked at 150k and now sits at
+    # 90k on 100k of capital would report 10% against ``initial_capital`` instead of its real 40%,
+    # which is the same class of error BC-1 exists to remove. No series is fetched here on
+    # purpose: BC-1 is a read projection and adds no query, and this handler's reads are the ones
+    # whose refusals are already catalogued above.
+    #
+    # So the series in hand is empty and the honest answer is ``null``. It is routed through the
+    # dashboard projection's function rather than hardcoded, so there is one definition of this
+    # figure in the codebase: the day a series does reach this handler, only the argument changes.
+    # ``GET /status`` declares no ``response_model``, so the returned dict is serialised as-is and
+    # ``None`` reaches the client as JSON ``null``.
+    from backend_app.backend.dashboard_aggregation_service import (
+        current_drawdown_pct_from_equity_curve,
+    )
+
+    equity_curve_in_hand: List[Dict[str, Any]] = []
+    drawdown_pct: Optional[float] = current_drawdown_pct_from_equity_curve(equity_curve_in_hand)
+
     # Status calculation
     if kill_active:
         risk_level = "BLOCKED"
@@ -340,7 +386,7 @@ async def get_risk_status(user: dict = Depends(get_current_user)):
             "configured_max": settings["max_leverage"],
             "current": 1.0
         },
-        "drawdown_pct": 0.0,
+        "drawdown_pct": drawdown_pct,
         "circuit_breaker_armed": settings.get("circuit_breaker_armed", True),
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
@@ -352,16 +398,26 @@ async def get_margin_health(user: dict = Depends(get_current_user)):
     Get live margin health and overall risk score.
     """
     uid = str(user.get("id") or user.get("sub"))
+    # Task 23.5: the persisted Paper_Account, scoped to ``uid`` and read under the caller's token.
+    # ``get_or_create_account`` raises rather than returning a default when the Persistence_Layer
+    # cannot answer, and that refusal travels to the client as its catalogued 503 (Requirement
+    # 28.3) - there is no ``except`` here for it to be swallowed by.
     from backend_app.backend.paper_trading_service import get_paper_trading_service
     paper_svc = get_paper_trading_service()
-    acct = paper_svc.get_or_create_account(uid)
+    acct = paper_svc.get_or_create_account(uid, access_token=user.get("access_token"))
     
-    avail = float(acct.get("available_balance", 100000.0))
-    locked = float(acct.get("locked_balance", 0.0))
-    total = float(acct.get("total_equity", 100000.0))
+    # Exact decimal, parsed from the stored text: money must not round-trip through binary float
+    # (Requirements 8.13, 16.12, 18.1). The ``.get`` defaults are retained from before the
+    # repoint and are unreachable - the account body always carries all three keys - and are
+    # spelled as strings so the parse is uniform.
+    avail = Decimal(str(acct.get("available_balance", "100000.0")))
+    locked = Decimal(str(acct.get("locked_balance", "0.0")))
+    total = Decimal(str(acct.get("total_equity", "100000.0")))
     
-    margin_ratio = round((locked / total * 100), 2) if total > 0 else 0.0
-    free_margin = round((avail / total * 100), 2) if total > 0 else 100.0
+    # The same two ratios and the same score. ``float`` at the response boundary only, so the
+    # JSON stays ``{"margin_ratio": 9.76, "free_margin": 68.33, "risk_score": 14}``.
+    margin_ratio = float(round((locked / total * 100), 2)) if total > 0 else 0.0
+    free_margin = float(round((avail / total * 100), 2)) if total > 0 else 100.0
     risk_score = min(100, int(margin_ratio * 0.8 + (100 - free_margin) * 0.2))
 
     return {

@@ -28,6 +28,13 @@ from backend_app.backend.strategy_compiler import get_compiler, CompilerError, V
 from backend_app.backend.backtest_runtime import BacktestRuntime, get_backtest_runtime
 from backend_app.backend.optimization_engine import get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
 from backend_app.backend.deployment_manager import get_deployment_manager, DeploymentConfig as DeployConfig, DeploymentEnvironment
+# The server half of Requirement 12.7 (design.md -> "Server-side artifact resolution"). Invoked
+# only where a handler has already decided to refuse, so it changes nothing an owner sees and
+# leaves a stranger's answer identical to the one a non-existent id gets (Requirement 21.4).
+from backend_app.backend.marketplace import (
+    subscriber_operation_guard as _subscriber_guard,
+)
+from backend_app.backend.marketplace.errors import MarketplaceError
 from backend_app.core.dependencies import get_current_user
 from backend_app.core.rate_limit import limiter
 # Task 6.3: the existing ML entitlement and quota controls, kept in force on the
@@ -35,6 +42,7 @@ from backend_app.core.rate_limit import limiter
 # these, never a replacement (Requirement 16.7).
 from backend_app.core.subscription_dependencies import check_ml_quota, require_ml_training
 from backend_app.core.performance_monitor import (
+    performance_monitor,
     monitor_performance,
     log_performance_summary,
     verify_database_indexes,
@@ -705,12 +713,27 @@ async def get_strategy_performance(request: Request,
     
     All calculations performed in backend.
     Returns PnL, ROI, win rate, Sharpe, Sortino, profit factor, etc.
+
+    THE CALL SITE MATCHES THE DECLARED SIGNATURE
+        ``MetricsService.get_strategy_performance`` is declared
+        ``async def get_strategy_performance(self, user_id: str, strategy_id: str,
+        time_range: str = "1d")``. This handler used to pass ``user=user`` — a keyword that
+        method does not accept — so every call raised ``TypeError`` before any read
+        happened, the ``except`` below turned it into a 500, and the endpoint answered 500
+        to EVERY caller including the owner. The service layer's own call
+        (``strategy_service._get_strategy_performance``) passes ``user["id"]``
+        positionally and always worked, which is why the HTTP defect went unnoticed.
+
+    THE 500 BODY CARRIES NO EXCEPTION TEXT
+        ``str(e)`` used to be echoed to the caller, which is how the Python signature of an
+        internal service method reached the wire. The detail is logged server-side and the
+        public body carries the stable code and a fixed sentence instead.
     """
     try:
         metrics_service = await get_metrics_service()
         
         performance = await metrics_service.get_strategy_performance(
-            user=user,
+            user_id=user["id"],
             strategy_id=strategy_id,
             time_range=time_range
         )
@@ -720,7 +743,10 @@ async def get_strategy_performance(request: Request,
         logger.error(f"Error getting performance for strategy {strategy_id} for user {user['id']}: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": "PERFORMANCE_FETCH_FAILED", "message": str(e)}
+            detail={
+                "error": "PERFORMANCE_FETCH_FAILED",
+                "message": "Strategy performance could not be retrieved.",
+            }
         )
 
 
@@ -736,12 +762,24 @@ async def get_strategy_equity_curve(request: Request,
     
     All calculations performed in backend.
     Returns historical equity points.
+
+    THE CALL SITE MATCHES THE DECLARED SIGNATURE
+        ``MetricsService.get_equity_curve`` is declared
+        ``async def get_equity_curve(self, user_id: str, strategy_id: str, days: int = 30)``.
+        This handler used to pass ``user=user`` — a keyword that method does not accept — so
+        every call raised ``TypeError`` before any read happened and the endpoint answered
+        500 to EVERY caller including the owner.
+
+    THE 500 BODY CARRIES NO EXCEPTION TEXT
+        ``str(e)`` used to be echoed to the caller, which is how the Python signature of an
+        internal service method reached the wire. The detail is logged server-side and the
+        public body carries the stable code and a fixed sentence instead.
     """
     try:
         metrics_service = await get_metrics_service()
         
         equity_curve = await metrics_service.get_equity_curve(
-            user=user,
+            user_id=user["id"],
             strategy_id=strategy_id,
             days=days
         )
@@ -755,7 +793,10 @@ async def get_strategy_equity_curve(request: Request,
         logger.error(f"Error getting equity curve for strategy {strategy_id} for user {user['id']}: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": "EQUITY_CURVE_FETCH_FAILED", "message": str(e)}
+            detail={
+                "error": "EQUITY_CURVE_FETCH_FAILED",
+                "message": "Equity curve could not be retrieved.",
+            }
         )
 
 
@@ -770,12 +811,24 @@ async def get_strategy_monthly_returns(request: Request,
     
     All calculations performed in backend.
     Returns monthly return percentages.
+
+    THE CALL SITE MATCHES THE DECLARED SIGNATURE
+        ``MetricsService.get_monthly_returns`` is declared
+        ``async def get_monthly_returns(self, user_id: str, strategy_id: str)``. This handler
+        used to pass ``user=user`` — a keyword that method does not accept — so every call
+        raised ``TypeError`` before any read happened and the endpoint answered 500 to EVERY
+        caller including the owner.
+
+    THE 500 BODY CARRIES NO EXCEPTION TEXT
+        ``str(e)`` used to be echoed to the caller, which is how the Python signature of an
+        internal service method reached the wire. The detail is logged server-side and the
+        public body carries the stable code and a fixed sentence instead.
     """
     try:
         metrics_service = await get_metrics_service()
         
         monthly_returns = await metrics_service.get_monthly_returns(
-            user=user,
+            user_id=user["id"],
             strategy_id=strategy_id
         )
         
@@ -787,7 +840,10 @@ async def get_strategy_monthly_returns(request: Request,
         logger.error(f"Error getting monthly returns for strategy {strategy_id} for user {user['id']}: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": "MONTHLY_RETURNS_FETCH_FAILED", "message": str(e)}
+            detail={
+                "error": "MONTHLY_RETURNS_FETCH_FAILED",
+                "message": "Monthly returns could not be retrieved.",
+            }
         )
 
 
@@ -803,12 +859,24 @@ async def get_strategy_daily_returns(request: Request,
     
     All calculations performed in backend.
     Returns daily return percentages.
+
+    THE CALL SITE MATCHES THE DECLARED SIGNATURE
+        ``MetricsService.get_daily_returns`` is declared
+        ``async def get_daily_returns(self, user_id: str, strategy_id: str, days: int = 30)``.
+        This handler used to pass ``user=user`` — a keyword that method does not accept — so
+        every call raised ``TypeError`` before any read happened and the endpoint answered
+        500 to EVERY caller including the owner.
+
+    THE 500 BODY CARRIES NO EXCEPTION TEXT
+        ``str(e)`` used to be echoed to the caller, which is how the Python signature of an
+        internal service method reached the wire. The detail is logged server-side and the
+        public body carries the stable code and a fixed sentence instead.
     """
     try:
         metrics_service = await get_metrics_service()
         
         daily_returns = await metrics_service.get_daily_returns(
-            user=user,
+            user_id=user["id"],
             strategy_id=strategy_id,
             days=days
         )
@@ -822,7 +890,10 @@ async def get_strategy_daily_returns(request: Request,
         logger.error(f"Error getting daily returns for strategy {strategy_id} for user {user['id']}: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": "DAILY_RETURNS_FETCH_FAILED", "message": str(e)}
+            detail={
+                "error": "DAILY_RETURNS_FETCH_FAILED",
+                "message": "Daily returns could not be retrieved.",
+            }
         )
 
 
@@ -838,12 +909,24 @@ async def get_strategy_execution_metrics(request: Request,
     
     All calculations performed in backend.
     Returns order count, signal count, latency, slippage, fees.
+
+    THE CALL SITE MATCHES THE DECLARED SIGNATURE
+        ``MetricsService.get_execution_metrics`` is declared
+        ``async def get_execution_metrics(self, user_id: str, strategy_id: str,
+        time_range: str = "1d")``. This handler used to pass ``user=user`` — a keyword that
+        method does not accept — so every call raised ``TypeError`` before any read happened
+        and the endpoint answered 500 to EVERY caller including the owner.
+
+    THE 500 BODY CARRIES NO EXCEPTION TEXT
+        ``str(e)`` used to be echoed to the caller, which is how the Python signature of an
+        internal service method reached the wire. The detail is logged server-side and the
+        public body carries the stable code and a fixed sentence instead.
     """
     try:
         metrics_service = await get_metrics_service()
         
         execution_metrics = await metrics_service.get_execution_metrics(
-            user=user,
+            user_id=user["id"],
             strategy_id=strategy_id,
             time_range=time_range
         )
@@ -857,7 +940,10 @@ async def get_strategy_execution_metrics(request: Request,
         logger.error(f"Error getting execution metrics for strategy {strategy_id} for user {user['id']}: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": "EXECUTION_METRICS_FETCH_FAILED", "message": str(e)}
+            detail={
+                "error": "EXECUTION_METRICS_FETCH_FAILED",
+                "message": "Execution metrics could not be retrieved.",
+            }
         )
 
 
@@ -872,12 +958,25 @@ async def get_strategy_risk_metrics(request: Request,
     
     All calculations performed in backend.
     Returns drawdown, exposure, position limits, kill switch status.
+
+    THE CALL SITE MATCHES THE DECLARED SIGNATURE
+        ``MetricsService.get_risk_metrics`` is declared
+        ``async def get_risk_metrics(self, user_id: str, strategy_id: str)``. This handler
+        used to pass ``user=user`` — a keyword that method does not accept — so every call
+        raised ``TypeError`` before any read happened, the ``except`` below turned it into a
+        500, and the endpoint answered 500 to EVERY caller including the owner. The caller's
+        identifier is what the method asks for, so ``user_id=user["id"]`` is what it gets.
+
+    THE 500 BODY CARRIES NO EXCEPTION TEXT
+        ``str(e)`` used to be echoed to the caller, which is how the Python signature of an
+        internal service method reached the wire. The detail is logged server-side and the
+        public body carries the stable code and a fixed sentence instead.
     """
     try:
         metrics_service = await get_metrics_service()
         
         risk_metrics = await metrics_service.get_risk_metrics(
-            user=user,
+            user_id=user["id"],
             strategy_id=strategy_id
         )
         
@@ -889,7 +988,10 @@ async def get_strategy_risk_metrics(request: Request,
         logger.error(f"Error getting risk metrics for strategy {strategy_id} for user {user['id']}: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": "RISK_METRICS_FETCH_FAILED", "message": str(e)}
+            detail={
+                "error": "RISK_METRICS_FETCH_FAILED",
+                "message": "Risk metrics could not be retrieved.",
+            }
         )
 
 
@@ -2554,13 +2656,31 @@ async def get_version_history(request: Request,
             else version
             for version in (versions or [])
         ]
-        
+
+        if not annotated:
+            # ``get_version_history`` returns ``[]`` for a strategy that is not the caller's,
+            # deliberately, so a stranger cannot confirm existence (Requirement 21.4). For a
+            # caller holding an entitling Subscription that empty collection is neither a
+            # refusal nor the truth — the versions exist, and viewing the owner's graph is
+            # forbidden to them (Requirement 12.4), so they are told so: 403 with a stable code
+            # and an audited refusal (Requirements 7.8, 7.12, 12.7). An OWNER whose strategy
+            # genuinely has no versions still receives this same empty 200, unchanged.
+            await _subscriber_guard.refuse_if_entitled_subscriber(
+                user,
+                strategy_id=strategy_id,
+                operation=_subscriber_guard.VERSION_HISTORY,
+            )
+
         return {
             "strategy_id": strategy_id,
             "versions": annotated,
             "total": len(annotated),
             "read_only_states": list(lifecycle.READ_ONLY_LIFECYCLE_STATES),
         }
+    except MarketplaceError:
+        # The structured 403 above is the answer, not an internal failure. Re-raised explicitly
+        # so the broad ``except`` below cannot relabel a deliberate refusal as a 500.
+        raise
     except Exception as e:
         logger.error(f"Error getting version history for strategy {strategy_id} for user {user['id']}: {e}")
         raise HTTPException(
@@ -2589,6 +2709,16 @@ async def compare_versions(request: Request,
         
         return comparison
     except ValueError as e:
+        # ``compare_versions`` raises for a strategy that is not the caller's, and this route
+        # has always mapped that to 404. A caller holding an entitling Subscription is told
+        # instead that exporting the owner's definition is not permitted — 403, stable code,
+        # audited (Requirements 7.8, 7.12, 12.7). Every other caller keeps the 404, which is
+        # what makes it indistinguishable from a version that does not exist (Requirement 21.4).
+        await _subscriber_guard.refuse_if_entitled_subscriber(
+            user,
+            strategy_id=strategy_id,
+            operation=_subscriber_guard.VERSION_COMPARE,
+        )
         raise HTTPException(
             status_code=404,
             detail={"error": "VERSION_NOT_FOUND", "message": str(e)}
@@ -2624,6 +2754,15 @@ async def restore_version(request: Request,
             "new_version": new_version
         }
     except ValueError as e:
+        # Re-versioning the owner's strategy is forbidden to a subscriber (Requirement 12.4),
+        # not impossible. 403 with a stable code and an audited refusal for an entitled
+        # subscriber; the unchanged 404 for everyone else (Requirements 12.7, 21.4). Nothing was
+        # minted: ``restore_version`` raised before any write.
+        await _subscriber_guard.refuse_if_entitled_subscriber(
+            user,
+            strategy_id=strategy_id,
+            operation=_subscriber_guard.VERSION_RESTORE,
+        )
         raise HTTPException(
             status_code=404,
             detail={"error": "VERSION_NOT_FOUND", "message": str(e)}
@@ -4819,6 +4958,17 @@ async def preview_node(request: Request,
             detail={"error": "STRATEGY_GET_FAILED", "message": str(e)},
         )
     if not owned:
+        # The owner-scoped resolution above matched nothing. Previewing one of the owner's nodes
+        # returns its indicator values and parameters, which Requirement 12.4 forbids a
+        # subscriber outright — so an entitled subscriber is refused 403 with a stable code and
+        # an audited entry (Requirements 7.8, 7.12, 12.7) rather than told the strategy does not
+        # exist. Any other caller keeps this 404 (Requirement 21.4). No graph is loaded, nothing
+        # is compiled and nothing is executed on either path.
+        await _subscriber_guard.refuse_if_entitled_subscriber(
+            user,
+            strategy_id=strategy_id,
+            operation=_subscriber_guard.NODE_PREVIEW,
+        )
         raise HTTPException(
             status_code=404,
             detail={
@@ -5724,6 +5874,15 @@ async def create_model_artifact_link(request: Request,
     try:
         descriptor = await MV.artifact_download_descriptor(user, model_version_id)
     except MV.ModelVersionNotFound as e:
+        # ``model_versioning`` enforces ``user_id = caller`` and reports a foreign model version
+        # as absent. For a stranger that is the right answer and stays (Requirement 21.4); for a
+        # caller holding an entitling Subscription to the Listing whose strategy this model
+        # version belongs to, viewing the owner's model parameters is forbidden (Requirement
+        # 12.4), so they are told so: 403 with a stable code and an audited refusal (Requirements
+        # 7.8, 7.12, 12.7). No artifact link is minted on either path.
+        await _subscriber_guard.refuse_if_entitled_subscriber_for_model_version(
+            user, model_version_id=model_version_id
+        )
         raise HTTPException(
             status_code=404,
             detail={"error": "MODEL_VERSION_NOT_FOUND", "message": str(e)},

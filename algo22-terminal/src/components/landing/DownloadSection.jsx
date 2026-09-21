@@ -1,6 +1,23 @@
-import React, { useState, useEffect } from 'react'
+/**
+ * The landing page's "Choose Your Platform" section — production-launch-hardening task 4.3.
+ *
+ * WHAT CHANGED
+ * ------------
+ * Four `<a download href="/releases/…">` links and two hardcoded sizes (84.2 MB, 78.5 MB).
+ * All four URLs return 403 and always have: CI's `dist/` carries no `releases/` directory and
+ * `aws s3 sync dist/ --delete` deletes that prefix from the bucket on every deploy. The three
+ * platform cards now render `ds/Panel`'s `unavailable` state, carrying the reason declared in
+ * `design/pageFields` for that platform, reached by `usePanelState` without a request.
+ *
+ * The Web Platform card is untouched: `/app` exists, works, and is the only thing this section
+ * could honestly offer.
+ */
+
+import React from 'react'
 import { Link } from 'react-router-dom'
-import { Globe, ArrowDown, Sparkles } from 'lucide-react'
+import { Globe, Sparkles } from 'lucide-react'
+
+import { PlatformArtifact } from '../download/PlatformArtifact'
 
 function WindowsIcon({ className }) {
   return (
@@ -27,28 +44,27 @@ function LinuxIcon({ className }) {
 }
 
 export default function DownloadSection() {
-  const [userOS, setUserOS] = useState('windows')
-
-  useEffect(() => {
-    const ua = navigator.userAgent.toLowerCase()
-    if (ua.includes('win')) setUserOS('windows')
-    else if (ua.includes('mac')) setUserOS('macos')
-    else if (ua.includes('linux')) setUserOS('linux')
-  }, [])
+  // The user-agent sniff is gone with the links it served. It existed to put a "Recommended
+  // for You" badge on one of the three installer cards; recommending an artifact that is not
+  // published would be the advertisement this task withdrew, one layer down. `/download`
+  // still detects the OS, because there it selects which platform's reason you read.
 
   return (
     <section id="download" className="py-24 lg:py-32 border-t border-border-default relative bg-bg-surface/20">
       <div className="section-container">
         <div className="text-center mb-16">
+          {/* Both of these read as an advertisement for four installers that are not served.
+              The eyebrow said "Production Desktop Release" and the paragraph offered native
+              terminals for three platforms. They now say what is actually available. */}
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-accent-cyan-dim border border-accent-cyan/30 text-xs font-mono text-accent-cyan mb-4">
             <Sparkles className="w-3.5 h-3.5" />
-            v0.1.0 Production Desktop Release
+            v0.1.0 Web Platform
           </div>
           <h2 className="text-3xl sm:text-4xl font-black text-text-primary mb-4">
             Choose Your Platform
           </h2>
           <p className="text-text-secondary max-w-xl mx-auto text-base">
-            Trade anywhere with our high-performance web platform or install native desktop terminals for Windows, macOS, and Linux.
+            Trade in your browser on our high-performance web platform. The native desktop terminals for Windows, macOS and Linux are not published yet.
           </p>
         </div>
 
@@ -71,77 +87,33 @@ export default function DownloadSection() {
             </Link>
           </div>
 
-          {/* Windows */}
-          <div className={`card-surface p-8 flex flex-col items-center text-center border transition-all duration-300 ${userOS === 'windows' ? 'border-accent-cyan/60 bg-accent-cyan/5 shadow-[0_0_15px_rgba(0,212,255,0.15)]' : 'border-border-default hover:border-border-active'}`}>
-            {userOS === 'windows' && <span className="mb-3 text-[10px] bg-accent-cyan text-text-inverse px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">Recommended for You</span>}
-            <div className="w-14 h-14 rounded-2xl bg-bg-elevated border border-border-default flex items-center justify-center mb-5">
-              <WindowsIcon className="w-7 h-7 text-text-primary" />
-            </div>
-            <h3 className="text-lg font-bold text-text-primary mb-1">Windows</h3>
-            <p className="text-xs text-text-secondary mb-4">
-              Native .exe installer for 64-bit Windows 10/11.
-            </p>
-            <div className="text-[11px] font-mono text-text-muted mb-6">v0.1.0 · 84.2 MB</div>
-            <a
-              href="/releases/windows/VyomQuant-Setup-0.1.0.exe"
-              download
-              className="mt-auto w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl border border-border-default bg-bg-elevated text-text-primary font-semibold hover:border-accent-cyan/40 transition-colors text-sm"
-            >
-              <ArrowDown className="w-4 h-4" />
-              Download for Windows
-            </a>
-          </div>
+          {/* Windows, macOS and the two Linux artifacts. One panel per artifact the section
+              used to link, so the mapping from withdrawn link to stated reason is one to one:
+              the Linux column carried two links and carries two panels. The platform glyph
+              travels in the panel header rather than becoming a second card around it. */}
+          <PlatformArtifact
+            platform="windows"
+            level={3}
+            actions={<WindowsIcon className="w-5 h-5 text-text-primary" />}
+          />
 
-          {/* macOS */}
-          <div className={`card-surface p-8 flex flex-col items-center text-center border transition-all duration-300 ${userOS === 'macos' ? 'border-accent-cyan/60 bg-accent-cyan/5 shadow-[0_0_15px_rgba(0,212,255,0.15)]' : 'border-border-default hover:border-border-active'}`}>
-            {userOS === 'macos' && <span className="mb-3 text-[10px] bg-accent-cyan text-text-inverse px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">Recommended for You</span>}
-            <div className="w-14 h-14 rounded-2xl bg-bg-elevated border border-border-default flex items-center justify-center mb-5">
-              <AppleIcon className="w-7 h-7 text-text-primary" />
-            </div>
-            <h3 className="text-lg font-bold text-text-primary mb-1">macOS</h3>
-            <p className="text-xs text-text-secondary mb-4">
-              Universal DMG for Apple Silicon & Intel Macs.
-            </p>
-            <div className="text-[11px] font-mono text-text-muted mb-6">v0.1.0 · 78.5 MB</div>
-            <a
-              href="/releases/mac/VyomQuant-0.1.0-universal.dmg"
-              download
-              className="mt-auto w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl border border-border-default bg-bg-elevated text-text-primary font-semibold hover:border-accent-cyan/40 transition-colors text-sm"
-            >
-              <ArrowDown className="w-4 h-4" />
-              Download for macOS
-            </a>
-          </div>
+          <PlatformArtifact
+            platform="macos"
+            level={3}
+            actions={<AppleIcon className="w-5 h-5 text-text-primary" />}
+          />
 
-          {/* Linux */}
-          <div className={`card-surface p-8 flex flex-col items-center text-center border transition-all duration-300 ${userOS === 'linux' ? 'border-accent-cyan/60 bg-accent-cyan/5 shadow-[0_0_15px_rgba(0,212,255,0.15)]' : 'border-border-default hover:border-border-active'}`}>
-            {userOS === 'linux' && <span className="mb-3 text-[10px] bg-accent-cyan text-text-inverse px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">Recommended for You</span>}
-            <div className="w-14 h-14 rounded-2xl bg-bg-elevated border border-border-default flex items-center justify-center mb-5">
-              <LinuxIcon className="w-7 h-7 text-text-primary" />
-            </div>
-            <h3 className="text-lg font-bold text-text-primary mb-1">Linux</h3>
-            <p className="text-xs text-text-secondary mb-4">
-              Standalone AppImage and Debian DEB packages.
-            </p>
-            <div className="text-[11px] font-mono text-text-muted mb-4">v0.1.0 · AppImage & DEB</div>
-            <div className="mt-auto w-full flex flex-col gap-2">
-              <a
-                href="/releases/linux/VyomQuant-0.1.0.AppImage"
-                download
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-border-default bg-bg-elevated text-text-primary font-medium hover:border-accent-cyan/40 transition-colors text-xs"
-              >
-                <ArrowDown className="w-3.5 h-3.5" />
-                Download AppImage
-              </a>
-              <a
-                href="/releases/linux/vyomquant_0.1.0_amd64.deb"
-                download
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-border-default bg-bg-elevated text-text-primary font-medium hover:border-accent-cyan/40 transition-colors text-xs"
-              >
-                <ArrowDown className="w-3.5 h-3.5" />
-                Download DEB
-              </a>
-            </div>
+          <div className="flex flex-col gap-6">
+            <PlatformArtifact
+              platform="linuxAppImage"
+              level={3}
+              actions={<LinuxIcon className="w-5 h-5 text-text-primary" />}
+            />
+            <PlatformArtifact
+              platform="linuxDeb"
+              level={3}
+              actions={<LinuxIcon className="w-5 h-5 text-text-primary" />}
+            />
           </div>
         </div>
       </div>

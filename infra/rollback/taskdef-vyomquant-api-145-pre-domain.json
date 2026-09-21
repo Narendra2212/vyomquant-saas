@@ -1,0 +1,293 @@
+{
+  "taskDefinition": {
+    "taskDefinitionArn": "arn:aws:ecs:ap-southeast-1:273709947018:task-definition/vyomquant-api:145",
+    "containerDefinitions": [
+      {
+        "name": "vyomquant-api",
+        "image": "273709947018.dkr.ecr.ap-southeast-1.amazonaws.com/vyomquant-api:84c287e869b7784f595ffca6d7a8d4862b5f6255",
+        "cpu": 0,
+        "portMappings": [
+          {
+            "containerPort": 8000,
+            "hostPort": 8000,
+            "protocol": "tcp"
+          }
+        ],
+        "essential": true,
+        "environment": [
+          {
+            "name": "FEATURE_WEBSOCKET_ENABLED",
+            "value": "true"
+          },
+          {
+            "name": "FEATURE_TRADING_ENABLED",
+            "value": "true"
+          },
+          {
+            "name": "VYOMQUANT_MODE",
+            "value": "paper"
+          },
+          {
+            "name": "_DEPRECATED_AERORA_MODE_REMOVED",
+            "value": "true"
+          },
+          {
+            "name": "FEATURE_DEBUG_ENDPOINTS_ENABLED",
+            "value": "false"
+          },
+          {
+            "name": "QUESTDB_PORT",
+            "value": "9000"
+          },
+          {
+            "name": "ENV",
+            "value": "production"
+          },
+          {
+            "name": "PRODUCTION_ROUTER_ENABLED",
+            "value": "False"
+          },
+          {
+            "name": "RATE_LIMIT_ENABLED",
+            "value": "true"
+          },
+          {
+            "name": "FEATURE_ML_PREDICTIONS_ENABLED",
+            "value": "true"
+          },
+          {
+            "name": "SUPABASE_URL",
+            "value": "https://wrkexcjqnidkdrayhlsi.supabase.co"
+          },
+          {
+            "name": "RATE_LIMIT_PER_MINUTE",
+            "value": "60"
+          },
+          {
+            "name": "EXCHANGE_ID",
+            "value": "binance"
+          },
+          {
+            "name": "FEATURE_EMERGENCY_LIQUIDATION_ENABLED",
+            "value": "true"
+          },
+          {
+            "name": "LOG_LEVEL",
+            "value": "INFO"
+          },
+          {
+            "name": "QUESTDB_HOST",
+            "value": "127.0.0.1"
+          },
+          {
+            "name": "PYTHONPATH",
+            "value": "/app"
+          },
+          {
+            "name": "PORT",
+            "value": "8000"
+          },
+          {
+            "name": "FEATURE_MOCK_EXCHANGE_ENABLED",
+            "value": "false"
+          },
+          {
+            "name": "WORKERS",
+            "value": "2"
+          },
+          {
+            "name": "REDIS_REPLICA_URL",
+            "value": "rediss://replica.vyomquant-redis-production-cmd.4lf97k.apse1.cache.amazonaws.com:6379"
+          },
+          {
+            "name": "DEFAULT_EXCHANGE",
+            "value": "binance"
+          },
+          {
+            "name": "CORS_ORIGINS",
+            "value": "https://app.vyomquant.com,https://vyomquant.com"
+          },
+          {
+            "name": "FEATURE_RISK_MANAGEMENT_ENABLED",
+            "value": "true"
+          },
+          {
+            "name": "FEATURE_BACKTESTING_ENABLED",
+            "value": "true"
+          },
+          {
+            "name": "LOG_FORMAT",
+            "value": "json"
+          },
+          {
+            "name": "PYTHONUNBUFFERED",
+            "value": "1"
+          },
+          {
+            "name": "REDIS_URL",
+            "value": "rediss://master.vyomquant-redis-production-cmd.4lf97k.apse1.cache.amazonaws.com:6379"
+          }
+        ],
+        "mountPoints": [],
+        "volumesFrom": [],
+        "linuxParameters": {
+          "initProcessEnabled": true
+        },
+        "secrets": [
+          {
+            "name": "SUPABASE_SERVICE_ROLE_KEY",
+            "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/supabase_service_role_key"
+          },
+          {
+            "name": "SUPABASE_ANON_KEY",
+            "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/supabase_anon_key"
+          },
+          {
+            "name": "SUPABASE_JWT_SECRET",
+            "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/supabase_jwt_secret"
+          },
+          {
+            "name": "DATABASE_URL",
+            "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/database_url"
+          },
+          {
+            "name": "MASTER_ENCRYPTION_KEYS",
+            "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/master_encryption_keys"
+          },
+          {
+            "name": "CREDENTIAL_VAULT_SALT",
+            "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/credential_vault_salt"
+          },
+          {
+            "name": "JWT_SECRET",
+            "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/jwt_secret"
+          }
+        ],
+        "dependsOn": [
+          {
+            "containerName": "questdb",
+            "condition": "START"
+          }
+        ],
+        "stopTimeout": 30,
+        "logConfiguration": {
+          "logDriver": "awslogs",
+          "options": {
+            "awslogs-group": "/ecs/vyomquant-api",
+            "awslogs-create-group": "true",
+            "awslogs-region": "ap-southeast-1",
+            "awslogs-stream-prefix": "ecs"
+          }
+        },
+        "healthCheck": {
+          "command": [
+            "CMD-SHELL",
+            "curl -f http://localhost:8000/health/live || exit 1"
+          ],
+          "interval": 30,
+          "timeout": 10,
+          "retries": 3,
+          "startPeriod": 60
+        },
+        "systemControls": []
+      },
+      {
+        "name": "questdb",
+        "image": "questdb/questdb:latest",
+        "cpu": 0,
+        "portMappings": [
+          {
+            "containerPort": 9000,
+            "hostPort": 9000,
+            "protocol": "tcp"
+          }
+        ],
+        "essential": false,
+        "environment": [
+          {
+            "name": "QDB_TELEMETRY_ENABLED",
+            "value": "false"
+          }
+        ],
+        "mountPoints": [],
+        "volumesFrom": [],
+        "logConfiguration": {
+          "logDriver": "awslogs",
+          "options": {
+            "awslogs-group": "/ecs/vyomquant-api",
+            "awslogs-create-group": "true",
+            "awslogs-region": "ap-southeast-1",
+            "awslogs-stream-prefix": "questdb"
+          }
+        },
+        "systemControls": []
+      }
+    ],
+    "family": "vyomquant-api",
+    "taskRoleArn": "arn:aws:iam::273709947018:role/ecsTaskExecutionRole",
+    "executionRoleArn": "arn:aws:iam::273709947018:role/ecsTaskExecutionRole",
+    "networkMode": "awsvpc",
+    "revision": 145,
+    "volumes": [],
+    "status": "ACTIVE",
+    "requiresAttributes": [
+      {
+        "name": "ecs.capability.execution-role-awslogs"
+      },
+      {
+        "name": "com.amazonaws.ecs.capability.ecr-auth"
+      },
+      {
+        "name": "com.amazonaws.ecs.capability.task-iam-role"
+      },
+      {
+        "name": "ecs.capability.container-health-check"
+      },
+      {
+        "name": "ecs.capability.execution-role-ecr-pull"
+      },
+      {
+        "name": "com.amazonaws.ecs.capability.docker-remote-api.1.18"
+      },
+      {
+        "name": "ecs.capability.task-eni"
+      },
+      {
+        "name": "com.amazonaws.ecs.capability.docker-remote-api.1.29"
+      },
+      {
+        "name": "com.amazonaws.ecs.capability.logging-driver.awslogs"
+      },
+      {
+        "name": "com.amazonaws.ecs.capability.docker-remote-api.1.19"
+      },
+      {
+        "name": "ecs.capability.secrets.asm.environment-variables"
+      },
+      {
+        "name": "com.amazonaws.ecs.capability.docker-remote-api.1.25"
+      },
+      {
+        "name": "ecs.capability.container-ordering"
+      }
+    ],
+    "placementConstraints": [],
+    "compatibilities": [
+      "EC2",
+      "MANAGED_INSTANCES",
+      "FARGATE"
+    ],
+    "runtimePlatform": {
+      "cpuArchitecture": "X86_64",
+      "operatingSystemFamily": "LINUX"
+    },
+    "requiresCompatibilities": [
+      "FARGATE"
+    ],
+    "cpu": "1024",
+    "memory": "2048",
+    "registeredAt": "2026-09-09T09:02:08.632000+05:30",
+    "registeredBy": "arn:aws:iam::273709947018:user/github-actions"
+  },
+  "tags": []
+}

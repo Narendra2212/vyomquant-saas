@@ -1,14 +1,41 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Check, Loader2 } from 'lucide-react'
-import { api } from '../../api'
+import { Check } from 'lucide-react'
 
-const FALLBACK_PLANS = [
+/*
+ * ═══════════════════════════════════════════════════════════════════════════
+ * INR-ONLY PRICING — four published tiers
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * WHAT THIS SECTION SHOWS
+ * -----------------------
+ * Four tiers, priced in Indian Rupees only: ₹0, ₹499, ₹999, ₹2,499 per month.
+ * There is no currency selector and no `$` anywhere on this surface — the
+ * rupee is the one currency the landing page quotes.
+ *
+ * WHY THE FIGURES ARE DECLARED HERE RATHER THAN FETCHED
+ * ----------------------------------------------------
+ * These four numbers are the INR column of the canonical plan catalogue in
+ * `backend_app/core/subscription_engine.py` (`pricing={"USD": …, "INR": 49900}`
+ * and friends, in paise). `GET /api/billing/plans`, which this component used
+ * to call, does NOT serve that column: `PricingService.get_localized_plans`
+ * takes the USD cents figure and runs it through `FXService.localize_price`,
+ * so an INR request comes back as an FX conversion of the dollar price
+ * (~₹432 / ₹865 / ₹2,162 at the baseline rate) rather than the published
+ * ₹499 / ₹999 / ₹2,499. Rendering that response would put a number on the
+ * marketing page that contradicts the catalogue, and it would drift every time
+ * the FX rate moved. A public price list is a published commitment, so it is
+ * stated here as a constant and matches the catalogue exactly.
+ *
+ * The authenticated billing page (`src/pages/Billing.jsx`) still reads the
+ * endpoint, because that surface has to show whatever the checkout will
+ * actually charge.
+ */
+const PLANS = [
   {
     id: 'free',
     name: 'Free / Sandbox',
     description: 'Essential sandbox for systematic strategy design and forward paper testing.',
-    usd: 0,
     inr: 0,
     recommended: false,
     features: [
@@ -23,8 +50,7 @@ const FALLBACK_PLANS = [
     id: 'starter',
     name: 'Trader',
     description: 'For active systematic traders executing strategies on connected exchanges.',
-    usd: 29,
-    inr: 2400,
+    inr: 499,
     recommended: false,
     features: [
       'Everything in Free',
@@ -38,8 +64,7 @@ const FALLBACK_PLANS = [
     id: 'pro',
     name: 'Pro Quant',
     description: 'High-capacity execution engine with machine learning models and priority routing.',
-    usd: 79,
-    inr: 6500,
+    inr: 999,
     recommended: true,
     features: [
       'Everything in Trader',
@@ -54,8 +79,7 @@ const FALLBACK_PLANS = [
     id: 'enterprise',
     name: 'Institutional',
     description: 'Dedicated infrastructure, custom connectors, and multi-account risk management.',
-    usd: 199,
-    inr: 16500,
+    inr: 2499,
     recommended: false,
     features: [
       'Unlimited Strategy Bots',
@@ -68,87 +92,44 @@ const FALLBACK_PLANS = [
   }
 ]
 
+/** The one currency this section quotes. */
+const RUPEE = '₹'
+
+/**
+ * Indian digit grouping (`2,499`, `1,23,456`), and a non-finite input renders
+ * as `0` rather than throwing inside `toLocaleString` — the crash this
+ * component's regression suite exists to pin down.
+ */
 const formatNumber = (value) => {
-  if (value === null || value === undefined) return '0'
   const numericValue = Number(value)
   if (!Number.isFinite(numericValue)) return '0'
-  return numericValue.toLocaleString()
+  return numericValue.toLocaleString('en-IN')
+}
+
+/** Monthly rupee figure for a tier, defensive against a malformed `inr`. */
+const getBasePrice = (plan) => {
+  const numericValue = Number(plan?.inr)
+  return Number.isFinite(numericValue) ? numericValue : 0
 }
 
 export default function Pricing() {
   const [isAnnual, setIsAnnual] = useState(false)
-  const [currency, setCurrency] = useState('USD')
-  const [plans, setPlans] = useState(FALLBACK_PLANS)
-  const [isLoading, setIsLoading] = useState(false)
 
-  useEffect(() => {
-    let isMounted = true
-    const loadPlans = async () => {
-      try {
-        const data = await api.billing.getPlans(currency)
-        const fetched = data?.plans || (Array.isArray(data) ? data : [])
-        if (isMounted && Array.isArray(fetched) && fetched.length > 0) {
-          setPlans(fetched)
-        }
-      } catch (err) {
-        console.warn('Billing API notice (using fallback plans):', err?.message || err)
-      }
-    }
-    loadPlans()
-    return () => {
-      isMounted = false
-    }
-  }, [currency])
-
-  const getBasePrice = (plan) => {
-    if (!plan) return 0
-    if (currency === 'INR') {
-      if (typeof plan.inr === 'number') return plan.inr
-      if (plan.currency === 'INR' && typeof plan.localized_price === 'number') return plan.localized_price
-      if (typeof plan.base_price === 'number') return plan.base_price * 83
-      if (typeof plan.usd === 'number') return plan.usd * 83
-      if (typeof plan.localized_price === 'number') return plan.localized_price
-    } else {
-      if (typeof plan.usd === 'number') return plan.usd
-      if (typeof plan.base_price === 'number') return plan.base_price
-      if (typeof plan.localized_price === 'number') return plan.localized_price
-    }
-    const num = Number(plan.price ?? 0)
-    return Number.isFinite(num) ? num : 0
-  }
-
+  // Annual billing is the monthly rate less 20%, shown as a per-month figure so
+  // the two toggle states stay comparable at a glance.
   const getDisplayPrice = (plan) => {
     const basePrice = getBasePrice(plan)
     if (isAnnual && basePrice > 0) {
-      return Math.round((basePrice * 12 * 0.8) / 12) // 20% discount on annual
+      return Math.round((basePrice * 12 * 0.8) / 12)
     }
     return basePrice
   }
 
   const getAnnualPrice = (plan) => {
     const basePrice = getBasePrice(plan)
-    if (basePrice > 0) {
-      return Math.round(basePrice * 12 * 0.8)
-    }
-    return 0
+    return basePrice > 0 ? Math.round(basePrice * 12 * 0.8) : 0
   }
 
-  const currencySymbol = currency === 'INR' ? '₹' : '$'
-
-  if (isLoading) {
-    return (
-      <section id="pricing" className="py-24 lg:py-32 border-t border-border-default/80">
-        <div className="section-container">
-          <div className="section-inner">
-            <div className="flex justify-center items-center py-20">
-              <Loader2 className="animate-spin text-accent-cyan" size={32} />
-            </div>
-          </div>
-        </div>
-      </section>
-    )
-  }
-  
   return (
     <section id="pricing" className="py-24 lg:py-32 border-t border-border-default/80" aria-label="Pricing Tiers">
       <div className="section-container">
@@ -156,8 +137,10 @@ export default function Pricing() {
           <div className="text-center mb-16">
             <div className="text-xs font-mono text-accent-cyan uppercase tracking-widest mb-3 font-semibold">Pricing</div>
             <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black text-text-primary mb-4 tracking-tight">Infrastructure Tiers</h2>
-            <p className="text-text-secondary max-w-xl mx-auto mb-8 text-base sm:text-lg">Billed monthly. Annual plans available with 20% reduction.</p>
-            
+            <p className="text-text-secondary max-w-xl mx-auto mb-8 text-base sm:text-lg">
+              All prices in Indian Rupees ({RUPEE}). Billed monthly. Annual plans available with 20% reduction.
+            </p>
+
             {/* Monthly / Annual Toggle */}
             <div className="inline-flex items-center gap-3 p-1.5 rounded-2xl bg-bg-surface border border-border-default/80 shadow-md">
               <button 
@@ -174,33 +157,18 @@ export default function Pricing() {
                 <span className="ml-2 text-xs bg-accent-profit-dim text-accent-profit font-semibold px-2 py-0.5 rounded-md border border-accent-profit/20">Save 20%</span>
               </button>
             </div>
-            {/* Currency Toggle */}
-            <div className="inline-flex items-center gap-3 p-1.5 rounded-2xl bg-bg-surface border border-border-default/80 shadow-md mt-4">
-              <button 
-                onClick={() => setCurrency('USD')} 
-                className={`px-5 py-2.5 rounded-xl text-sm font-bold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan ${currency === 'USD' ? 'bg-accent-cyan text-text-inverse shadow-md' : 'text-text-secondary hover:text-text-primary'}`}
-              >
-                USD ($)
-              </button>
-              <button 
-                onClick={() => setCurrency('INR')} 
-                className={`px-5 py-2.5 rounded-xl text-sm font-bold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan ${currency === 'INR' ? 'bg-accent-cyan text-text-inverse shadow-md' : 'text-text-secondary hover:text-text-primary'}`}
-              >
-                INR (₹)
-              </button>
-            </div>
           </div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8 max-w-6xl mx-auto items-stretch">
-            {(Array.isArray(plans) ? plans : []).map((plan) => {
+            {PLANS.map((plan) => {
               const displayPrice = getDisplayPrice(plan)
               const annualPrice = getAnnualPrice(plan)
-              const isRecommended = plan?.recommended
-              const isFree = plan?.id === 'free'
+              const isRecommended = plan.recommended
+              const isFree = plan.id === 'free'
               
               return (
                 <div 
-                  key={plan?.id || Math.random()} 
+                  key={plan.id} 
                   className={`relative card-surface p-8 flex flex-col h-full rounded-2xl transition-all duration-300 ${
                     isRecommended 
                       ? 'border-2 border-accent-cyan bg-bg-surface shadow-[0_0_50px_rgba(0,212,255,0.15)] lg:-translate-y-2 z-10' 
@@ -214,24 +182,24 @@ export default function Pricing() {
                   )}
                   
                   <div className="mb-6">
-                    <h3 className="text-xl font-bold text-text-primary mb-1.5">{plan?.name || 'Plan'}</h3>
-                    <p className="text-sm text-text-secondary">{plan?.description || ''}</p>
+                    <h3 className="text-xl font-bold text-text-primary mb-1.5">{plan.name}</h3>
+                    <p className="text-sm text-text-secondary">{plan.description}</p>
                   </div>
 
                   <div className="mb-6 pb-6 border-b border-border-default/60">
                     <div className="flex items-baseline gap-1.5">
                       <span className="text-4xl sm:text-5xl font-black text-text-primary tracking-tight">
-                        {currencySymbol}{formatNumber(displayPrice)}
+                        {RUPEE}{formatNumber(displayPrice)}
                       </span>
                       <span className="text-text-muted text-sm font-medium">/month</span>
                     </div>
                     {isAnnual && !isFree && annualPrice > 0 && (
-                      <p className="text-xs text-accent-profit mt-1.5 font-mono font-medium">Billed at {currencySymbol}{formatNumber(annualPrice)}/yr — save 20%</p>
+                      <p className="text-xs text-accent-profit mt-1.5 font-mono font-medium">Billed at {RUPEE}{formatNumber(annualPrice)}/yr — save 20%</p>
                     )}
                   </div>
 
                   <ul className="space-y-3.5 mb-8 flex-1">
-                    {(Array.isArray(plan?.features) ? plan.features : []).map((feature, fi) => (
+                    {(Array.isArray(plan.features) ? plan.features : []).map((feature, fi) => (
                       <li key={fi} className="flex items-start gap-3 text-sm text-text-secondary font-medium">
                         <Check className="w-4.5 h-4.5 text-accent-profit flex-shrink-0 mt-0.5" />
                         {feature}

@@ -62,11 +62,25 @@
  *
  * WIRING
  * ======
- * This task ships the library only. **The canvas wiring is not done here**: nothing in
- * `StrategyBuilder.jsx` calls this yet. The API the canvas will need is exposed and
- * documented — `legalTargetsForDrag()` for dimming during `onConnectStart`→`onConnectEnd`,
- * `reactFlowIsValidConnection()` for React Flow 11's `isValidConnection` prop, and
- * `checkConnection()` for the rejection reason to show on the refused drop.
+ * `pages/StrategyBuilder.jsx` calls this module. It is not an unwired library, and an
+ * earlier version of this header said it was — the claim was already false when task 24.4
+ * read it, which is the drift it corrects:
+ *
+ *   • `legalTargetsForDrag()`         → `onConnectStart`, which dims every input port that
+ *                                       cannot accept the port being dragged, before the
+ *                                       drop; cleared again on `onConnectEnd`.
+ *   • `reactFlowConnectionValidator()` → React Flow 11's `isValidConnection` prop. Its
+ *                                       `onReject` callback is the page's
+ *                                       `setConnectionIssue`, which is where the refusal
+ *                                       reason on screen comes from (design.md §1.13, §9.3).
+ *                                       There is no `reactFlowIsValidConnection` export and
+ *                                       never was; this is the name.
+ *   • `checkConnection()`              → the verdict-with-reason shape, for a caller that
+ *                                       wants the issue rather than a boolean.
+ *
+ * What the page renders from an `onReject` issue is `message` and `fix_hint` **verbatim**
+ * (`connectionRefusalLines` in `StrategyBuilder.jsx`). No rule text is authored there, which
+ * is the whole point of these issues carrying the backend's own two fields.
  */
 
 /** Canonical severity vocabulary (`schema.SEVERITY_ERROR` / `SEVERITY_WARNING`). */

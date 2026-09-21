@@ -121,7 +121,7 @@ decision is outstanding.
     - Verification: the test fails now (58 properties, 0 functions) and is the running scoreboard
       for every property sub-task below; it must pass at Task 35
 
-- [-] 3. Checkpoint — baseline captured
+- [x] 3. Checkpoint — baseline captured
   - Ensure `pytest tests/ -k "not chaos and not load"` still passes and
     `tests/regression/baseline/*.json` is committed. Ask the user if questions arise.
 
@@ -165,7 +165,7 @@ decision is outstanding.
       `owner_share(a1) <= owner_share(a2)` and `platform_fee(a1) <= platform_fee(a2)`
     - **Validates: Requirements 10.1**
 
-  - [ ]* 4.6 Write unit tests for the presentation and ingestion boundaries
+  - [x]* 4.6 Write unit tests for the presentation and ingestion boundaries
     - `tests/test_marketplace_money_boundaries.py` — `to_major` / `from_major_string` round trips
       for USD and INR, rejection of a `float` argument, rejection of a value with more decimal
       places than the currency exponent
@@ -251,7 +251,7 @@ decision is outstanding.
     - _Requirements: 1.5, 1.7, 22.9, 26.1_
     - Verification: `pytest tests/test_execution_environment_guard.py`
 
-- [ ] 6. Implement `evidence_validator.py` and its properties
+- [x] 6. Implement `evidence_validator.py` and its properties
 
   - [x] 6.1 Create `backend_app/backend/marketplace/evidence_validator.py`
     - `THRESHOLDS` = `MIN_CONDITIONS 3`, `MAX_CONDITIONS 10`, `MIN_WINDOW_DAYS 90`,
@@ -295,27 +295,27 @@ decision is outstanding.
       make a pair distinct regardless of window overlap
     - **Validates: Requirements 3.5**
 
-  - [-] 6.6 Write property test for set admission
+  - [x] 6.6 Write property test for set admission
     - `tests/property/test_evidence_distinctness.py::test_p37_evidence_set_admission_iff_every_criterion`
     - **Property P-37 (invariant, set admission)** — admitted iff at least 3 pairwise-distinct
       conditions sharing one `version_id` with pairwise-different `dataset_checksum` values, each
       satisfying the completeness, duration, trade-count and bar-count criteria
     - **Validates: Requirements 3.1, 3.3, 3.4, 3.6, 3.7, 3.8**
 
-  - [~] 6.7 Write property test for revalidation idempotence
+  - [x] 6.7 Write property test for revalidation idempotence
     - `tests/property/test_evidence_distinctness.py::test_p38_revalidation_is_idempotent`
     - **Property P-38 (idempotence, revalidation)** — revalidating `n >= 1` times yields the same
       outcome and the same per-criterion outcomes
     - **Validates: Requirements 3.12**
 
-  - [~] 6.8 Write property test for no metric substitution
+  - [x] 6.8 Write property test for no metric substitution
     - `tests/property/test_evidence_distinctness.py::test_p39_missing_metric_rejects_and_nothing_is_substituted`
     - **Property P-39 (metamorphic, no substitution)** — a set with a missing metric on any
       condition is rejected and no displayed or stored Listing metric takes a value absent from
       the evidence
     - **Validates: Requirements 3.11, 2.6**
 
-  - [~] 6.9 Write property test for ownership indistinguishability
+  - [x] 6.9 Write property test for ownership indistinguishability
     - `tests/property/test_evidence_distinctness.py::test_p40_foreign_owned_reference_is_indistinguishable_from_absent`
     - **Property P-40 (error-condition, ownership)** — a reference owned by another user is
       rejected with the same `EV_OWNERSHIP` code and the same response as a non-existent row
@@ -387,7 +387,7 @@ decision is outstanding.
     - Verification: `pytest tests/test_listing_projection.py` — the first two assertions fail
       against the current `library.py` and pass after Task 16
 
-- [ ] 9. Implement `paper_accounting.py` and the reference ledger
+- [x] 9. Implement `paper_accounting.py` and the reference ledger
 
   - [x] 9.1 Create `backend_app/backend/paper/paper_accounting.py`
     - `Decimal` only, explicit `localcontext(prec=34)`, rounding mode read from the session
@@ -440,7 +440,7 @@ decision is outstanding.
       to costs equals the exact sum of recorded fees, with no residual
     - **Validates: Requirements 18.7**
 
-  - [-] 9.7 Write property test for drawdown bounds
+  - [x] 9.7 Write property test for drawdown bounds
     - `tests/property/test_paper_accounting.py::test_p29_drawdown_bounds_and_peak_append_invariance`
     - **Property P-29 (metamorphic, drawdown bounds)** — reported max drawdown is `>= 0`, at most
       series max minus series min, and unchanged by appending an equity value at or above the
@@ -448,13 +448,13 @@ decision is outstanding.
     - Oracle: an independent running-peak scan
     - **Validates: Requirements 18.9**
 
-  - [~] 9.8 Write property test for the win-rate range
+  - [x] 9.8 Write property test for the win-rate range
     - `tests/property/test_paper_accounting.py::test_p30_win_rate_range_and_absent_when_no_closed_trades`
     - **Property P-30 (invariant, win rate range)** — win rate in `[0,1]` and equal to
       winning/closed; **absent**, not zero, for an empty closed-trade set
     - **Validates: Requirements 18.10**
 
-  - [ ]* 9.9 Write unit tests for cost-basis and short-position edge cases
+  - [x]* 9.9 Write unit tests for cost-basis and short-position edge cases
     - `tests/test_paper_accounting_cost_basis.py` — weighted-average basis across a partial
       close, a reversal through zero, and a short position revalued above and below entry
     - Optional: P-25…P-31 already cover the generated input space; these pin the specific
@@ -462,13 +462,13 @@ decision is outstanding.
     - _Requirements: 18.8_
     - Verification: `pytest tests/property/test_paper_accounting.py`
 
-- [~] 10. Checkpoint — pure modules complete
+- [x] 10. Checkpoint — pure modules complete
   - Ensure all tests pass, `black --check backend_app`, `isort --check-only backend_app` and
     `flake8 backend_app --select=E9,F63,F7,F82` are clean, and no module under
     `backend_app/backend/marketplace/` or `backend_app/backend/paper/` imports FastAPI or
     performs I/O. Ask the user if questions arise.
 
-- [ ] 11. Land the migration set in dependency order
+- [x] 11. Land the migration set in dependency order
 
   - [x] 11.1 Create `backend_app/migrations/006_backtest_evidence_columns.sql`
     - The nine additive `strategy_backtests` columns (`version_id` **nullable**, `final_capital`,
@@ -543,7 +543,7 @@ decision is outstanding.
       `tests/test_schema_as_code_completeness.py`
     - _Requirements: 1.2, 9.7, 10.5, 10.8, 11.2, 11.3, 11.11, 11.12, 11.13, 11.14, 21.2, 24.1, 24.2, 24.3, 24.4, 24.5, 24.7_
 
-  - [-] 11.4 Create `backend_app/migrations/009_paper_trading.sql`
+  - [x] 11.4 Create `backend_app/migrations/009_paper_trading.sql`
     - The eleven `paper_*` tables: `paper_sessions`, `paper_accounts`, `paper_orders`,
       `paper_fills`, `paper_positions`, `paper_balance_events`, `paper_trades`,
       `paper_equity_snapshots`, `paper_metrics`, `paper_events`, `paper_market_events`, with
@@ -571,7 +571,7 @@ decision is outstanding.
       `app_tables` and `migration_tables` in `tests/test_schema_as_code_completeness.py`
     - _Requirements: 1.2, 16.1, 16.4, 16.11, 17.1, 17.11, 18.4, 18.5, 18.10, 19.3, 21.2, 21.3, 24.1, 24.2, 24.3, 24.4, 24.5, 24.7_
 
-  - [~] 11.5 Create `backend_app/migrations/010_signal_environment.sql`
+  - [x] 11.5 Create `backend_app/migrations/010_signal_environment.sql`
     - `signals.environment TEXT` and `paper_session_id UUID` added additively; the column-shape
       assertion `DO` block; `UPDATE … SET environment = 'LIVE' WHERE environment IS NULL`; then
       `SET DEFAULT 'LIVE'` and `SET NOT NULL`, in one transaction, so the three-value vocabulary
@@ -586,7 +586,7 @@ decision is outstanding.
       table, so this file belongs in a maintenance window; re-running it is a no-op
     - _Requirements: 23.1, 23.7, 24.1, 24.2, 24.4, 24.7, 24.8_
 
-  - [~] 11.6 Declare the column manifests and create `tests/test_marketplace_paper_schema_contract.py`
+  - [x] 11.6 Declare the column manifests and create `tests/test_marketplace_paper_schema_contract.py`
     - `marketplace/__init__.py::COLUMN_CONTRACT` and `paper/__init__.py::COLUMN_CONTRACT` — a
       per-handler data structure naming every column each new or modified handler reads or writes
     - The test parses `CREATE TABLE`, `ALTER TABLE … ADD COLUMN`, `CREATE INDEX`,
@@ -601,7 +601,7 @@ decision is outstanding.
       the header of `migrations/007_add_marketplace_pricing_columns.sql`
     - _Requirements: 1.3, 1.9, 21.2, 24.2, 24.3, 24.4, 24.7, 24.9, 24.10_
 
-  - [~] 11.7 Create `tests/test_marketplace_paper_migrations.py`
+  - [x] 11.7 Create `tests/test_marketplace_paper_migrations.py`
     - Apply from empty; apply from a simulated current production revision built by applying
       `migrations/00[1-7]*` and `backend_app/migrations/00[1-5]*` first; assert the
       destructive-statement deny-list; apply `010` alone and expect the named
@@ -609,7 +609,7 @@ decision is outstanding.
       to `'LIVE'` and changes no other column
     - _Requirements: 23.7, 24.7, 24.8, 24.10_
 
-  - [~] 11.8 Write property test for migration idempotency
+  - [x] 11.8 Write property test for migration idempotency
     - `tests/test_marketplace_paper_schema_contract.py::test_p58_migration_set_is_idempotent`
     - **Property P-58** — for all application orders consistent with the declared dependency order
       and all repetition counts `n >= 1`, applying the set `n` times to an empty database yields
@@ -663,9 +663,9 @@ decision is outstanding.
     - _Requirements: 1.3, 22.1_
     - Verification: `pytest tests/test_library_route_resolution.py tests/test_router_registration_completeness.py`
 
-- [ ] 14. Build the Submission lifecycle, the Eligibility_Gate and the admin review surface
+- [x] 14. Build the Submission lifecycle, the Eligibility_Gate and the admin review surface
 
-  - [~] 14.1 Create `backend_app/backend/marketplace/eligibility_gate.py`
+  - [x] 14.1 Create `backend_app/backend/marketplace/eligibility_gate.py`
     - `evaluate(caller, strategy_id, backtest_ids, supabase) -> EligibilityVerdict` performing
       exactly four owner-scoped round trips (`strategies`, `strategy_versions`,
       `strategy_backtests` filtered `.in_("id", backtest_ids)` **and** `.eq("user_id", owner_id)`,
@@ -684,7 +684,7 @@ decision is outstanding.
       any read
     - _Requirements: 1.6, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.9, 2.10, 2.11, 2.13_
 
-  - [~] 14.2 Create `backend_app/backend/marketplace/submission_service.py`
+  - [x] 14.2 Create `backend_app/backend/marketplace/submission_service.py`
     - `create_submission` in one transaction: the `marketplace_submissions` insert, one
       `marketplace_backtest_evidence` row per condition carrying `source_backtest_id` and the
       immutable copy of the ten parameters and eight metrics, then the `DRAFT → SUBMITTED` update
@@ -702,7 +702,7 @@ decision is outstanding.
     - A mutation attempt on persisted evidence returns `MARKETPLACE_EVIDENCE_IMMUTABLE` (409)
     - _Requirements: 2.12, 3.9, 3.10, 3.14, 3.15, 4.3, 4.4, 4.6, 4.8, 4.9, 4.10, 4.11, 4.13, 5.3, 5.4, 5.5, 5.6, 5.8, 5.9, 5.10, 5.11, 24.6_
 
-  - [~] 14.3 Extend `backend_app/core/audit_trail.py`
+  - [x] 14.3 Extend `backend_app/core/audit_trail.py`
     - Add every new member of `StrategyAuditAction` listed in `design.md § Audit records`
       (`MARKETPLACE_SUBMISSION_CREATED`, `_TRANSITIONED`, `MARKETPLACE_ADMIN_ACTION`,
       `MARKETPLACE_PRICE_EVALUATED`, `MARKETPLACE_CHECKOUT_CREATED`,
@@ -719,7 +719,7 @@ decision is outstanding.
     - No second audit facility is introduced
     - _Requirements: 2.11, 5.6, 5.11, 7.12, 10.9, 11.12, 13.9, 13.11, 14.8, 21.4, 26.2_
 
-  - [~] 14.4 Add the submission and admin routes to `library.py`
+  - [x] 14.4 Add the submission and admin routes to `library.py`
     - `POST /api/library/submissions` (`Depends(require_marketplace_publish)`, 10/60s),
       `GET /api/library/submissions/{id}` (own Submission only, another owner's answered
       identically to unknown)
@@ -732,7 +732,7 @@ decision is outstanding.
     - All declared **inside the literal-segment router of Task 13.1**
     - _Requirements: 2.12, 4.8, 4.9, 4.10, 5.1, 5.2, 5.3, 5.4, 5.5, 5.7, 5.9, 5.10, 22.1, 22.2, 22.4, 22.10_
 
-  - [~] 14.5 Narrow the existing `admin_moderate_strategy` (line 1687)
+  - [x] 14.5 Narrow the existing `admin_moderate_strategy` (line 1687)
     - Retained, because it is the only route that sets `is_featured` and because
       `tests/test_marketplace_pipeline.py` tests 04, 05, 17 and 18 assert on it
     - It may set `is_featured` and `moderation_notes`; its `moderation_status` parameter is
@@ -742,7 +742,7 @@ decision is outstanding.
       behind the state machine's back
     - _Requirements: 4.2, 4.12_
 
-  - [~] 14.6 Create the state-agreement tests
+  - [x] 14.6 Create the state-agreement tests
     - `tests/test_submission_state_agreement.py` reads the seed statements of
       `marketplace_submission_allowed_transitions` from `007_marketplace_submissions.sql` and the
       `SUBMISSION_TRANSITIONS` Python constant and asserts they are the same set — the technique
@@ -755,7 +755,7 @@ decision is outstanding.
       writes `moderation_status` directly
     - _Requirements: 4.1, 4.2, 4.12, 11.1, 11.2, 16.1, 16.2, 17.7_
 
-  - [~] 14.7 Create `tests/test_admin_review_surface.py`
+  - [x] 14.7 Create `tests/test_admin_review_surface.py`
     - Applies `listing_projection.assert_contains_no_protected_logic` to both admin responses
     - Asserts the list ordering, the page-size clamp and the returned `total`; asserts a
       non-Admin_Reviewer gets 403 from `get_admin_user` before any read, with a body that does
@@ -763,7 +763,7 @@ decision is outstanding.
       transition carry distinct codes; asserts a failed audit write rolls the state change back
     - _Requirements: 5.1, 5.2, 5.3, 5.7, 5.8, 5.9, 5.11_
 
-  - [~] 14.8 Write property test for database-enforced transition refusal
+  - [x] 14.8 Write property test for database-enforced transition refusal
     - `tests/property/test_db_transition_guards.py::test_p49_database_refuses_illegal_transitions`
     - **Property P-49** — for all four state machines and all ordered pairs absent from the
       permitted set, an `UPDATE` issued **directly to the Persistence_Layer**, bypassing every
@@ -773,7 +773,7 @@ decision is outstanding.
     - Oracle: the four Python transition tables
     - **Validates: Requirements 4.4, 11.3, 16.4, 17.14, 24.2**
 
-  - [~] 14.9 Write property test for Listing visibility
+  - [x] 14.9 Write property test for Listing visibility
     - `tests/property/test_listing_visibility.py::test_p50_listing_visible_iff_published`
     - **Property P-50** — a Listing appears in every public catalogue and detail response iff its
       Submission_State is `PUBLISHED`; in any other state a non-owner's response is identical in
@@ -781,7 +781,7 @@ decision is outstanding.
     - Oracle: `submission_state.PUBLIC_STATES`
     - **Validates: Requirements 4.6, 4.7, 6.10**
 
-  - [~] 14.10 Update `tests/test_marketplace_pipeline.py` tests 01, 14, 15, 16
+  - [x] 14.10 Update `tests/test_marketplace_pipeline.py` tests 01, 14, 15, 16
     - `publish_strategy` no longer admits a strategy on the strength of one
       `strategies.backtest_result` blob, no longer computes `eval_score`, and no longer returns
       `suggested_price`; the publish path becomes `POST /api/library/submissions` carrying three
@@ -789,12 +789,12 @@ decision is outstanding.
     - No assertion is weakened, skipped, xfailed or excluded by selector
     - _Requirements: 1.6, 2.5, 3.1, 8.11, 25.8, 29.9_
 
-  - [~] 14.11 Update `tests/test_marketplace_pipeline.py` tests 04, 05, 17, 18
+  - [x] 14.11 Update `tests/test_marketplace_pipeline.py` tests 04, 05, 17, 18
     - `admin_moderate_strategy` is narrowed to `is_featured` and `moderation_notes`; lifecycle
       changes move to the submission actions of Task 14.4
     - _Requirements: 4.2, 4.12, 25.8_
 
-  - [~] 14.12 Extend `tests/test_marketplace_concurrency.py` with the submission battery
+  - [x] 14.12 Extend `tests/test_marketplace_concurrency.py` with the submission battery
     - N concurrent `POST /api/library/submissions` for one strategy: exactly one
       `marketplace_submissions` row, N−1 `MARKETPLACE_SUBMISSION_ALREADY_OPEN`, and the winner's
       state unchanged by the losers
@@ -803,9 +803,9 @@ decision is outstanding.
       tests/test_admin_review_surface.py tests/test_submission_state_agreement.py
       tests/property/test_db_transition_guards.py tests/property/test_listing_visibility.py`
 
-- [ ] 15. Implement server-side pricing enforcement
+- [x] 15. Implement server-side pricing enforcement
 
-  - [~] 15.1 Add the Price_Range and price endpoints and delete the hardcoded price points
+  - [x] 15.1 Add the Price_Range and price endpoints and delete the hardcoded price points
     - `POST /api/library/submissions/{id}/price-range` (30/60s per authenticated caller) computing
       the range, persisting a `marketplace_price_evaluations` row with `inputs_digest`,
       `evaluator_version` and a timestamp, and returning the triple; a rate-limited request
@@ -821,7 +821,7 @@ decision is outstanding.
       column, is written `NULL` by the new path, and stays in `DENIED_LISTING_COLUMNS`
     - _Requirements: 8.8, 8.9, 8.10, 8.11, 8.12, 8.14, 8.15, 22.2, 22.4_
 
-  - [~] 15.2 Write property test for Price_Range determinism and enforcement
+  - [x] 15.2 Write property test for Price_Range determinism and enforcement
     - `tests/property/test_pricing_evaluator.py::test_p52_price_range_is_deterministic_and_enforced`
     - **Property P-52** — evaluating `n >= 1` times under one evaluator version yields an
       identical Price_Range and an identical inputs digest; and the server accepts `p` iff
@@ -830,9 +830,9 @@ decision is outstanding.
     - **Validates: Requirements 8.3, 8.8, 8.9**
     - Verification: `pytest tests/property/test_pricing_evaluator.py`
 
-- [ ] 16. Root-cause fix 4 — the public Listing projection
+- [x] 16. Root-cause fix 4 — the public Listing projection
 
-  - [~] 16.1 Rewrite `get_library_detail` (`library.py` lines 929–1010)
+  - [x] 16.1 Rewrite `get_library_detail` (`library.py` lines 929–1010)
     - Replace `.select("*") … .single()` + `dict(resp.data)` + `pop("author_id")` with
       `.select(listing_projection.LISTING_SELECT)` and
       `return listing_projection.project_listing(row, evidence_summaries, creator_alias)`
@@ -843,7 +843,7 @@ decision is outstanding.
       non-existent Listing does, disclosing neither existence, owner nor Submission_State
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.9, 6.10, 28.5_
 
-  - [~] 16.2 Repoint every remaining public read at `project_listing` and the batched alias read
+  - [x] 16.2 Repoint every remaining public read at `project_listing` and the batched alias read
     - `browse_library`, `get_featured_strategies`, `get_trending_strategies`,
       `get_creator_profile`, `compare_strategies`, `get_recommendations`, `get_user_favorites` and
       `my_library`'s non-owner view all call `project_listing` with a pre-resolved
@@ -853,7 +853,7 @@ decision is outstanding.
       responses
     - _Requirements: 6.1, 6.2, 6.7, 27.1_
 
-  - [~] 16.3 Create `tests/test_library_detail_projection_regression.py`
+  - [x] 16.3 Create `tests/test_library_detail_projection_regression.py`
     - Asserts, against the **current** code, that `GET /api/library/{id}` returns
       `source_strategy_id`, `moderation_notes`, `moderated_by`, `moderated_at`,
       `evaluation_score`, `deployment_requirements`, `version_history`,
@@ -864,7 +864,7 @@ decision is outstanding.
       represented by a display alias only
     - _Requirements: 6.4, 6.5_
 
-  - [~] 16.4 Write property test for Protected_Logic containment
+  - [x] 16.4 Write property test for Protected_Logic containment
     - `tests/property/test_protected_logic_containment.py::test_p47_no_response_or_event_contains_protected_logic`
     - **Property P-47** — for generated Listings backed by strategies containing DAG nodes,
       indicator parameters, risk configuration and bound ML models, no field of any
@@ -876,7 +876,7 @@ decision is outstanding.
       `listing_projection.protected_logic_tokens` + `assert_contains_no_protected_logic`
     - **Validates: Requirements 6.3, 6.8, 7.1, 19.7**
 
-  - [~] 16.5 Create `tests/test_marketplace_error_surface.py`
+  - [x] 16.5 Create `tests/test_marketplace_error_surface.py`
     - For each of connection failure, query timeout, undefined column and permission denial,
       assert every Marketplace read endpoint answers 500 or 503 with a stable code and **no**
       numeric payload — never a zero-filled 200
@@ -885,7 +885,7 @@ decision is outstanding.
       appearing in `evidence_validator.THRESHOLDS` or `pricing_evaluator.WEIGHTS`
     - _Requirements: 1.5, 1.7, 2.10, 4.8, 22.9_
 
-  - [~] 16.6 Create `tests/test_no_dormant_schema_references.py`
+  - [x] 16.6 Create `tests/test_no_dormant_schema_references.py`
     - AST-walk every module reachable from `backend_app/routers/library.py`,
       `backend_app/backend/marketplace/` and `backend_app/backend/paper/`; collect every string
       literal passed to `.table(...)`, `.from_(...)` or `.rpc(...)`; fail if it contains
@@ -897,9 +897,9 @@ decision is outstanding.
       tests/test_no_dormant_schema_references.py
       tests/property/test_protected_logic_containment.py -k p47`
 
-- [ ] 17. Implement the Entitlement_Resolver, clone gating and subscriber-safe deployment
+- [x] 17. Implement the Entitlement_Resolver, clone gating and subscriber-safe deployment
 
-  - [~] 17.1 Create `backend_app/backend/marketplace/entitlement_resolver.py`
+  - [x] 17.1 Create `backend_app/backend/marketplace/entitlement_resolver.py`
     - `resolve(caller, listing_id, supabase, now) -> Entitlement` in **one** round trip joining
       `library_strategies`, `marketplace_submissions` and the caller's own
       `library_subscriptions` row; identity from the authenticated server-side session only
@@ -912,7 +912,7 @@ decision is outstanding.
     - This is the single admission decision for both deployment and Paper_Session start
     - _Requirements: 4.11, 7.5, 7.7, 7.10, 7.11, 11.7, 11.10, 21.1_
 
-  - [~] 17.2 Gate `clone_strategy` on owner consent and add the settings endpoint
+  - [x] 17.2 Gate `clone_strategy` on owner consent and add the settings endpoint
     - In order: `source_cloning_enabled` false → 403 `MARKETPLACE_CLONING_DISABLED` with no
       `strategies` row created, `clone_count` unchanged and an Audit_Log entry; else
       `entitlement_resolver.resolve` must return entitling with reason `SUBSCRIBED`; self-clone
@@ -924,7 +924,7 @@ decision is outstanding.
       audited
     - _Requirements: 7.2, 7.3, 7.4, 7.12, 22.4, 30.5_
 
-  - [~] 17.3 Repoint `deploy_marketplace_strategy` (line 2057) at the subscriber-safe path
+  - [x] 17.3 Repoint `deploy_marketplace_strategy` (line 2057) at the subscriber-safe path
     - Replace the `check_deployment_permission`-only gate with `entitlement_resolver.resolve`
     - Stop inserting a `strategies` row carrying the owner's `buy_logic`, `sell_logic`, `risk`,
       `indicators` or `ml_model_path` for a subscriber; instead create a `strategy_deployments`
@@ -935,7 +935,7 @@ decision is outstanding.
       field is a 422 that echoes no supplied value
     - _Requirements: 7.1, 7.5, 7.6, 7.8, 11.10_
 
-  - [~] 17.4 Return server-derived `ownership` and `allowed_actions` from `GET /api/library/my-strategies`
+  - [x] 17.4 Return server-derived `ownership` and `allowed_actions` from `GET /api/library/my-strategies`
     - Each entry carries `ownership: "OWNED" | "SUBSCRIBED"`,
       `subscription: {state, period_expiry, renewal_state}` and a server-computed
       `allowed_actions: string[]`
@@ -950,7 +950,7 @@ decision is outstanding.
       `paper_sessions` running count grouped by strategy
     - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.6, 27.2_
 
-  - [~] 17.5 Create `tests/test_subscriber_restricted_operations.py`
+  - [x] 17.5 Create `tests/test_subscriber_restricted_operations.py`
     - Call all thirteen restricted operations with a subscriber token holding an `ACTIVE`
       Subscription and assert each returns 403 with a stable code — not 404 — even when the client
       offers no such affordance
@@ -959,20 +959,20 @@ decision is outstanding.
       carrying no Protected_Logic
     - _Requirements: 7.1, 7.8, 7.9, 7.12, 12.7, 23.3_
 
-  - [~] 17.6 Write property test for clone gating
+  - [x] 17.6 Write property test for clone gating
     - `tests/property/test_protected_logic_containment.py::test_p48_clone_is_refused_when_source_cloning_is_disabled`
     - **Property P-48 (invariant, clone gating)** — for all Listings with source cloning disabled
       and all non-owner callers, the clone operation is refused and creates no `strategies` row
     - **Validates: Requirements 7.3, 7.4**
 
-  - [~] 17.7 Write property test for access agreement
+  - [x] 17.7 Write property test for access agreement
     - `tests/property/test_access_agreement.py::test_p16_admission_agrees_with_the_resolver`
     - **Property P-16 (invariant, access agreement)** — the deployment admission decision and the
       Paper_Session admission decision each equal `entitlement_resolver.resolve`'s decision for
       the same Subscription at the same instant
     - **Validates: Requirements 11.10, 11.16, 7.10**
 
-  - [~] 17.8 Update `tests/test_marketplace_pipeline.py` test 07
+  - [x] 17.8 Update `tests/test_marketplace_pipeline.py` test 07
     - Cloning now additionally requires `source_cloning_enabled` **and** an entitling
       Subscription; the fixture sets both, and a companion case asserts the default-disabled 403
     - _Requirements: 7.2, 7.3, 7.4, 25.8_
@@ -980,9 +980,70 @@ decision is outstanding.
       tests/test_marketplace_pipeline.py tests/property/test_access_agreement.py
       tests/property/test_protected_logic_containment.py`
 
-- [ ] 18. Root-cause fix 1 — `create_marketplace_checkout`
+  - [x] 17.9 Create `backend_app/backend/marketplace/subscriber_operation_guard.py` and refuse the
+    fourteen restricted operations server-side
+    - Carries the Requirement 12.7 paragraph of `design.md` → "Server-side artifact resolution",
+      which task 17.5 asserts but which no implementation task owned. Fourteen entries of
+      `tests/test_subscriber_restricted_operations.py::PENDING` recorded the gap: each was a read
+      or an `UPDATE` filtered `.eq("id", …).eq("user_id", caller)` whose empty result was reported
+      as non-existence — a 404, or (`view_graph.version_history`) a 200 carrying an empty
+      collection
+    - **A THREE-WAY decision, resolved before the operation runs.** *owner* → unchanged, exactly
+      as before. *entitled subscriber* → 403 `MARKETPLACE_OPERATION_NOT_PERMITTED` plus one
+      `MARKETPLACE_ACCESS_REFUSED` Audit_Log entry within 5 seconds carrying no Protected_Logic.
+      *unrelated stranger* → **still 404**, indistinguishable from a non-existent artifact
+      (Requirement 21.4); turning that into a 403 would make each endpoint an existence oracle
+    - The guard runs at the point each handler was **already about to refuse**, never in place of
+      the ownership predicate: every `.eq("user_id", …)` filter stays, no RLS policy or tenant
+      scope is relaxed, an owner's request never enters the guard and pays none of its round trips
+    - The entitlement decision is `entitlement_resolver.resolve` (task 17.1) and nothing else — no
+      second reading of `library_subscriptions.status`, no second expiry comparison. `resolve`
+      takes a Listing id while these routes hold a strategy id, so
+      `library_strategies.source_strategy_id` is followed in ONE round trip selecting three
+      columns and no Protected_Logic; the model-artifact route adds one two-column
+      `model_versions` read. No N+1
+    - The guarded routes' action set is asserted EQUAL to
+      `library_entries.SUBSCRIBER_FORBIDDEN_ACTIONS` at import, so the refusals and task 17.4's
+      `my-strategies` `allowed_actions` agree by construction rather than by review
+    - The Requirement 12.4 action *names* are deliberately absent from both the refusal body and
+      the audit entry: `view_indicator_params` and `edit_indicator_params` contain the substring
+      `indicator`, which is a genuine Protected_Logic token, and P-47's oracle matches by
+      substring (Requirement 7.1, "including error and diagnostic responses")
+    - A read that did not complete leaves the handler's pre-existing refusal in place, logged at
+      `error`. It becomes neither a 403 (a broken read cannot establish entitlement) nor a 503
+      (which would convert every 404 on fourteen live endpoints into a dependency error)
+    - Nine call sites: `routers/strategies.py` (`get_strategy_route`, `update_strategy`,
+      `rename_strategy`, `delete_strategy`) and `routers/strategy_operations.py`
+      (`get_version_history`, `compare_versions`, `restore_version`, `preview_node`,
+      `create_model_artifact_link`). Every one is `await`ed inside the request's own coroutine; no
+      `asyncio.run`. No migration, no schema change, no reference to the dormant
+      `marketplace_listings` or `strategy_subscriptions`
+    - Those fourteen `PENDING` entries are DELETED — `xfail(strict=True)` turned each into an
+      XPASS failure the moment it started answering 403, and deletion is the registry's own
+      mechanism for "fixed". Per endpoint, `tests/test_subscriber_restricted_operations.py` gains
+      an owner-unchanged assertion (asserted twice: the guard is never invoked on an owner's
+      request, and the owner's answer is identical with the guard removed) and a
+      stranger-still-404 assertion (compared identifier-blind against an id that exists in no
+      tenant)
+    - **NOT in scope, and still registered:** `view_risk_config.risk_metrics`, the fifteenth
+      entry. `strategy_operations.get_strategy_risk_metrics` reads a telemetry table keyed on
+      `strategy_id` with no ownership predicate and no RLS behind it, so there is no owner-scoped
+      refusal for this guard to refine and it needs a different fix. Also still open: the three
+      Signal Trace read-path expectations of Requirements 23.2/23.3, which task 29.4 owns — none
+      of the fourteen touches that path
+    - _Requirements: 7.1, 7.8, 7.9, 7.12, 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 21.4, 23.2,
+      23.3_
+    - Verification: `pytest tests/test_subscriber_restricted_operations.py
+      tests/test_marketplace_pipeline.py tests/property/test_access_agreement.py
+      tests/property/test_protected_logic_containment.py
+      tests/regression/test_baseline_unchanged.py tests/test_model_versioning.py
+      tests/test_node_preview_endpoint.py tests/test_task_5_1_strategy_archive.py
+      tests/test_task_5_3_rename_strategy.py tests/test_my_strategies_ownership_and_actions.py
+      tests/sandbox_lifecycle/test_cross_tenant_ownership_matrix.py`
 
-  - [~] 18.1 Create `backend_app/backend/marketplace/checkout_service.py`
+- [x] 18. Root-cause fix 1 — `create_marketplace_checkout`
+
+  - [x] 18.1 Create `backend_app/backend/marketplace/checkout_service.py`
     - Reads `price_minor`, `currency`, `author_id` and the Submission state; refuses with 409
       `MARKETPLACE_LISTING_NOT_PURCHASABLE` (not `PUBLISHED`, or already `ACTIVE`) and 400
       `MARKETPLACE_OWN_LISTING`
@@ -1000,7 +1061,7 @@ decision is outstanding.
       `MARKETPLACE_CHECKOUT_UNAVAILABLE`
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.10, 9.12, 9.13, 10.1, 10.3, 24.6_
 
-  - [~] 18.2 Rewrite `create_marketplace_checkout` (`library.py` lines 1806–1968)
+  - [x] 18.2 Rewrite `create_marketplace_checkout` (`library.py` lines 1806–1968)
     - `strat = resp.data` (a dict), keeping the `if not resp.data` guard ahead of it and retaining
       `.single()` because the `id` predicate is unique — this is the `resp.data[0]` →
       `KeyError: 0` line that has meant the endpoint never completed for any Listing
@@ -1015,7 +1076,7 @@ decision is outstanding.
       non-`ACTIVE` row is not entitling
     - _Requirements: 9.2, 9.4, 9.11, 9.13, 11.7, 30.5_
 
-  - [~] 18.3 Create `tests/test_marketplace_checkout_regression.py`
+  - [x] 18.3 Create `tests/test_marketplace_checkout_regression.py`
     - Four assertions that each fail against the current code: the `.single()`-indexed-as-a-list
       path completes rather than raising; the charged amount for a `19.99` Listing is exactly 1999
       Minor_Units; the `PENDING` insert records `owner_share_minor` and `platform_fee_minor` and
@@ -1026,9 +1087,9 @@ decision is outstanding.
     - _Requirements: 9.2, 9.3, 9.4, 9.11, 9.13, 10.1_
     - Verification: `pytest tests/test_marketplace_checkout_regression.py`
 
-- [ ] 19. Root-cause fix 2 — settlement, and renewal that requires payment
+- [x] 19. Root-cause fix 2 — settlement, and renewal that requires payment
 
-  - [~] 19.1 Create `backend_app/backend/marketplace/settlement_service.py`
+  - [x] 19.1 Create `backend_app/backend/marketplace/settlement_service.py`
     - `settle(provider_reference, provider, amount_minor, currency, subscription_id,
       confirmation_instant, is_reversal=False)` in one transaction with
       `SELECT … FOR UPDATE` on the subscription
@@ -1049,7 +1110,7 @@ decision is outstanding.
       write `MARKETPLACE_SETTLEMENT_PERSIST_FAILED` with the provider reference
     - _Requirements: 9.5, 9.6, 9.14, 10.1, 10.2, 10.3, 10.4, 10.8, 10.9, 10.10, 10.11, 11.4, 11.5, 11.6, 11.12, 24.6_
 
-  - [~] 19.2 Wire settlement into `billing.py` without adding a second webhook path
+  - [x] 19.2 Wire settlement into `billing.py` without adding a second webhook path
     - Extend `_apply_marketplace_entitlement` only — the branch both providers already funnel into
       via `_apply_billing_entitlement`'s `item_key.startswith("marketplace_")` — with one
       `settlement_service.settle(...)` call
@@ -1060,7 +1121,7 @@ decision is outstanding.
       `_validate_webhook_timestamp` and the two-phase Redis idempotency lock are **untouched**
     - _Requirements: 9.1, 9.5, 9.6, 9.9, 10.4, 10.8, 22.5, 22.6, 25.2_
 
-  - [~] 19.3 Rewrite `renew_subscription` (`library.py` lines 2258–2337) as checkout-only
+  - [x] 19.3 Rewrite `renew_subscription` (`library.py` lines 2258–2337) as checkout-only
     - Delete the `update({"status": "active", "cancelled_at": None, "expires_at": None})`
       statement, the `grant_deployment_permission` call and the `subscriber_count` increment —
       today they convert a cancelled subscription into unlimited free access with no payment
@@ -1072,7 +1133,7 @@ decision is outstanding.
       immediately
     - _Requirements: 11.6, 11.9, 11.14, 11.16_
 
-  - [~] 19.4 Create `tests/test_subscription_renewal_regression.py`
+  - [x] 19.4 Create `tests/test_subscription_renewal_regression.py`
     - Asserts, against the current code, that `renew_subscription` sets `status='active'` and
       `expires_at=NULL` with no payment and grants deployment permission — the test fails before
       Task 19.3 and passes after
@@ -1081,7 +1142,7 @@ decision is outstanding.
       `marketplace_settlements` row is refused by `trg_subscription_transition_guard`
     - _Requirements: 11.6, 11.14, 11.16_
 
-  - [~] 19.5 Write property test for ledger sums
+  - [x] 19.5 Write property test for ledger sums
     - `tests/property/test_settlement_ledger.py::test_p5_reported_totals_equal_ledger_sums`
     - **Property P-5 (invariant, ledger sum)** — reported owner earnings equal the exact integer
       sum of `owner_share` over persisted Settlement_Records and the platform total the sum of
@@ -1089,51 +1150,51 @@ decision is outstanding.
     - Oracle: independent per-currency accumulation over the generated sequence
     - **Validates: Requirements 10.5, 10.6, 10.7**
 
-  - [~] 19.6 Write property test for duplicate-confirmation idempotence
+  - [x] 19.6 Write property test for duplicate-confirmation idempotence
     - `tests/property/test_settlement_idempotence.py::test_p6_duplicate_confirmation_is_idempotent`
     - **Property P-6 (idempotence, duplicate webhook)** — applying the same provider transaction
       reference `n >= 1` times yields exactly one Settlement_Record and the same period expiry as
       applying it once
     - **Validates: Requirements 9.6, 9.7, 10.10**
 
-  - [~] 19.7 Write property test for invalid amount refusal
+  - [x] 19.7 Write property test for invalid amount refusal
     - `tests/property/test_settlement_ledger.py::test_p7_invalid_amounts_are_refused`
     - **Property P-7 (error-condition)** — negative, non-integer and over-maximum amounts are
       refused and write no Settlement_Record
     - **Validates: Requirements 10.1, 10.5**
 
-  - [~] 19.8 Write property test for Subscription_State reachability
+  - [x] 19.8 Write property test for Subscription_State reachability
     - `tests/property/test_subscription_state_machine.py::test_p8_every_subscription_state_is_reachable_from_pending`
     - **Property P-8 (invariant, reachability)** — every persisted Subscription_State is reachable
       from `PENDING` by the Requirement 11.2 transitions, and no persisted transition lies outside
       that set
     - **Validates: Requirements 11.1, 11.2**
 
-  - [~] 19.9 Write property test for illegal Subscription transition rejection
+  - [x] 19.9 Write property test for illegal Subscription transition rejection
     - `tests/property/test_subscription_state_machine.py::test_p9_illegal_subscription_transition_leaves_state`
     - **Property P-9 (invariant)** — for all pairs absent from the permitted set, the attempt
       leaves the stored state at `s1` and returns an error
     - **Validates: Requirements 11.3**
 
-  - [~] 19.10 Write property test for `ACTIVE` period well-formedness
+  - [x] 19.10 Write property test for `ACTIVE` period well-formedness
     - `tests/property/test_subscription_state_machine.py::test_p10_active_subscription_period_is_well_formed`
     - **Property P-10 (invariant)** — an `ACTIVE` Subscription has a non-null period start, a
       non-null expiry, and `expiry > start`
     - **Validates: Requirements 11.13**
 
-  - [~] 19.11 Write property test for history preservation
+  - [x] 19.11 Write property test for history preservation
     - `tests/property/test_subscription_state_machine.py::test_p15_subscription_and_settlement_history_never_shrinks`
     - **Property P-15 (invariant)** — across generated cancel/expire/refund/renew sequences the
       count of persisted Subscription rows never decreases and no Settlement_Record is removed
     - **Validates: Requirements 10.8, 11.11**
 
-  - [~] 19.12 Write property test for the expiry boundary
+  - [x] 19.12 Write property test for the expiry boundary
     - `tests/property/test_entitlement_expiry_boundary.py::test_p11_entitlement_is_decided_by_the_expiry_instant`
     - **Property P-11 (metamorphic, expiry boundary)** — entitling for `t < e`, non-entitling for
       `t >= e`, including `t == e` exactly, independent of whether the sweep has run
     - **Validates: Requirements 11.7**
 
-  - [~] 19.13 Update `tests/test_marketplace_concurrency.py::TestConcurrentRenewal`
+  - [x] 19.13 Update `tests/test_marketplace_concurrency.py::TestConcurrentRenewal`
     - It asserts today that two concurrent renewals are idempotent **and grant access**. Renewal
       no longer grants access without a payment, so it now asserts that two concurrent renewal
       requests create at most one provider session and produce no state change
@@ -1141,7 +1202,7 @@ decision is outstanding.
       `marketplace_settlements` row, one period extension and N−1 duplicate audit entries
     - _Requirements: 9.6, 10.10, 11.16, 25.8_
 
-  - [~] 19.14 Update `tests/test_billing_e2e.py`
+  - [x] 19.14 Update `tests/test_billing_e2e.py`
     - `_apply_marketplace_entitlement` now also writes a Settlement_Record and a period; extend
       the marketplace assertions accordingly and leave every plan-checkout, entitlement, invoice,
       payment-method, currency, portal, cancel and resume assertion untouched
@@ -1152,9 +1213,94 @@ decision is outstanding.
       tests/property/test_subscription_state_machine.py
       tests/property/test_entitlement_expiry_boundary.py`
 
-- [ ] 20. Implement the expiry sweep and its worker
+  - [x] 19.15 Close the `payment_failed → active` application/database divergence task 19.2 opened
+    - **The defect**: task 19.2 resolved the Requirement 11.6 vs 11.2 contradiction in favour of
+      11.6 and put `payment_failed` in `settlement_service.ELIGIBLE_FOR_ACTIVATION` (five
+      statuses), but `marketplace_subscription_allowed_transitions` is seeded by
+      `008_marketplace_settlement.sql` from Requirement 11.2's twelve pairs and held no
+      `('payment_failed','active')` row — so `trg_subscription_transition_guard` refused the edge
+      (23514, the missing-edge branch, not the settlement branch). Because the Settlement_Record is
+      written first (Requirement 9.5), a retried payment recorded its `marketplace_settlements`
+      row and credited the owner and *then* had its activation refused: the subscriber paid and
+      got nothing, and the ledger and the Subscription_State disagreed permanently
+    - Add the additive `backend_app/migrations/012_subscription_payment_failed_activation.sql`
+      (006–011 unedited): one `INSERT ... ('payment_failed','active') ON CONFLICT (from_state,
+      to_state) DO NOTHING`, a preflight that refuses to run unless 008's table, its composite
+      primary key and its twelve-pair seed are present, and a postflight that asserts the pair
+      landed, the pair count rose by at most one, and `marketplace_subscription_guard()` still
+      probes `marketplace_settlements` with `is_reversal = FALSE` — the payment gate is not
+      negotiable
+    - `tests/test_submission_state_agreement.py`: 008's seed stays pinned to the twelve pairs (no
+      wildcard); the addendum is the named constant `MIGRATION_012_SUBSCRIPTION_ADDENDUM`; the
+      effective DB set is `SUBSCRIPTION_TRANSITIONS ∪ MIGRATION_012_SUBSCRIPTION_ADDENDUM`
+      (13 pairs) read through the one helper `subscription_permitted_pairs_in_db()`; and
+      `ELIGIBLE_FOR_ACTIVATION` is asserted equal to the DB's sources of `→ active`
+    - `TestTheAddendumDoesNotOpenTheGate`: the guard's settlement branch (scoped to `NEW.id`,
+      `is_reversal = FALSE`, `settled_at >= OLD.period_expiry`, 23514) is intact; all 49 ordered
+      pairs are quantified — 13 permitted, 36 still refused; and 012 issues exactly one INSERT
+      and no function, trigger, policy, RLS, GRANT, REVOKE or destructive statement
+    - `tests/test_settlement_service.py`: the edge end to end — a `payment_failed` Subscription
+      plus a confirmed settlement reaches `active` with a well-formed period, its mirrors, its
+      history row and its entitlement; the ledger insert precedes the status UPDATE so the guard's
+      settlement probe finds a qualifying payment; and the pair is in the permitted set
+    - `tests/property/test_db_transition_guards.py`: P-49's Subscription permitted set is now the
+      union of 008's seed and 012's addendum, so the property never claims the database refuses an
+      edge 012 permits
+    - `tests/test_schema_as_code_completeness.py` needs no new entry (012 registers no table);
+      recorded as a comment there. No other test enumerates the migration files in a way 012
+      changes
+    - _Requirements: 11.2, 11.3, 11.6, 11.14, 24.7, 24.8, 24.9_
+    - Verification: `pytest tests/test_settlement_service.py
+      tests/test_submission_state_agreement.py tests/test_marketplace_subscription_state.py
+      tests/test_schema_as_code_completeness.py tests/property/test_db_transition_guards.py`
 
-  - [~] 20.1 Create `backend_app/backend/marketplace/expiry_sweep.py` and `backend_app/workers/marketplace_expiry_worker.py`
+  - [x] 19.16 Correlate a refund to its Subscription from the ledger, not from provider metadata
+    - **The defect 19.2 left:** `_settle_marketplace_reversal` read `subscription_id` off the
+      refund event, and neither provider sends it there. Stripe copies Checkout Session metadata
+      onto the PaymentIntent/Charge only when the session set `payment_intent_data.metadata` (the
+      marketplace session did not), and a Razorpay refund entity does not reliably carry the
+      payment's `notes`. So in production most marketplace refunds hit the "cannot be correlated"
+      log and wrote **no** reversal Settlement_Record: the owner kept an earning for money that
+      went back and the refunded subscriber kept the entitlement
+    - **Primary mechanism (authoritative):** `settlement_service.find_settled_payment` reads the
+      payment's own non-reversal `marketplace_settlements` row back by the reference the refund
+      event does carry (Stripe `payment_intent`, Razorpay `payment_id` — the value `settle`
+      recorded as `provider_reference`), and `subscription_id`, `currency` and the original
+      `amount_minor` come from that row. A ledger read of a row this system wrote, so nothing is
+      inferred; the projection is `SETTLEMENT_PAYMENT_SELECT`, inside the `settlement` manifest
+    - **Belt and braces:** `checkout_service._settlement_metadata` builds the provider metadata
+      once and both the Stripe session `metadata` and the new
+      `payment_intent_data={"metadata": …}` receive it, with the Razorpay order `notes` carrying
+      the same object plus that provider's `item` spelling — so the two paths cannot disagree
+    - **No correlation, no write:** a reference with no Settlement_Record writes nothing, audits
+      `MARKETPLACE_SETTLEMENT_UNMATCHED` and logs at error for operator reconciliation; a ledger
+      read that did not complete raises 500 so the provider redelivers rather than being read as
+      "no such payment"; a non-integer refund amount is refused, never truncated or rounded
+    - **The 19.2 gate is upheld:** `refund.failed` (Razorpay) and `charge.refund.updated` (Stripe)
+      are still NOT settled — a failed refund means the money did not come back, so a reversal for
+      one would subtract an owner earning for nothing and end a live entitlement. The spec text
+      asking `refund.failed` to settle is wrong; the rationale comments stay in the code and the
+      decision is pinned by
+      `test_the_refund_gate_still_admits_only_the_events_where_money_moved`
+    - **Redelivery:** `uq_settlement_reference_reversal` is on `(provider_reference, is_reversal)`,
+      so the payment row and its reversal coexist and a second refund delivery collides with the
+      reversal row — `DUPLICATE_IGNORED`, no second row, no second transition
+    - **OPEN REQUIREMENTS DECISION:** a partial refund is still `MISMATCHED` and records no
+      reversal. Requirement 10.8 contemplates magnitudes "equal to the refunded portion", which
+      would also have to decide what happens to the entitlement for a partial refund; that is not
+      invented here. Asserted explicitly by
+      `test_a_partial_refund_writes_no_reversal_and_is_reported_as_mismatched`
+    - `_validate_webhook_signature`, `_validate_webhook_ip`, `STRIPE_WEBHOOK_IPS`,
+      `_validate_webhook_timestamp` and the two-phase Redis idempotency lock are **untouched**, and
+      no webhook route was added
+    - _Requirements: 9.6, 9.14, 10.3, 10.4, 10.8, 10.9, 10.10_
+    - Verification: `pytest tests/test_billing_e2e.py tests/test_settlement_service.py
+      tests/test_checkout_service.py tests/test_marketplace_checkout_regression.py` — 166 passed;
+      `flake8 backend_app --select=E9,F63,F7,F82` clean apart from the three pre-existing F821s
+
+- [x] 20. Implement the expiry sweep and its worker
+
+  - [x] 20.1 Create `backend_app/backend/marketplace/expiry_sweep.py` and `backend_app/workers/marketplace_expiry_worker.py`
     - One `UPDATE … WHERE period_expiry IS NOT NULL AND period_expiry <= now AND status IN
       ('active','suspended')` returning the affected rows, then one
       `library_subscription_transitions` insert and one `SUBSCRIPTION_EXPIRED` audit entry per row
@@ -1166,16 +1312,16 @@ decision is outstanding.
       `period_expiry` on every call
     - _Requirements: 11.8, 11.10, 11.12, 11.15, 24.4, 26.2_
 
-  - [~] 20.2 Write property test for sweep idempotence
+  - [x] 20.2 Write property test for sweep idempotence
     - `tests/property/test_expiry_sweep_idempotence.py::test_p13_expiry_sweep_is_idempotent`
     - **Property P-13 (idempotence, sweep)** — running the sweep `n >= 1` times produces the same
       set of Subscription_States as running it once
     - **Validates: Requirements 11.8**
     - Verification: `pytest tests/property/test_expiry_sweep_idempotence.py`
 
-- [ ] 21. Root-cause fix 3 — creator and subscriber analytics from the ledger
+- [x] 21. Root-cause fix 3 — creator and subscriber analytics from the ledger
 
-  - [~] 21.1 Rewrite `creator_analytics` (`library.py` lines 2338–2380)
+  - [x] 21.1 Rewrite `creator_analytics` (`library.py` lines 2338–2380)
     - Delete `.select("id, name, clone_count, monthly_price, rating_average")` — `monthly_price`
       and `rating_average` do not exist on `library_strategies` and the query fails with
       PostgreSQL `42703`, the identical condition migration 007's header records for `/trending`
@@ -1193,7 +1339,7 @@ decision is outstanding.
     - Apply the same treatment to `subscriber_analytics`
     - _Requirements: 1.4, 1.5, 1.7, 6.9, 10.3, 10.6, 10.7, 27.1, 28.2, 30.5_
 
-  - [~] 21.2 Create `tests/test_creator_analytics_regression.py`
+  - [x] 21.2 Create `tests/test_creator_analytics_regression.py`
     - Asserts, against the current code, that `GET /api/library/creator/analytics` returns HTTP
       200 with all-zero figures when the underlying query fails — the test fails before Task 21.1
       and passes after (and, with Task 13.1 in place, that it is reachable at all rather than
@@ -1204,14 +1350,69 @@ decision is outstanding.
     - _Requirements: 1.4, 1.5, 1.7, 10.6, 10.7_
     - Verification: `pytest tests/test_creator_analytics_regression.py`
 
-- [~] 22. Checkpoint — marketplace backend complete
+  - [x] 21.3 Close the nine remaining `PENDING` entries in `tests/test_marketplace_error_surface.py`
+    - Task 21.1 struck `creator_analytics` and `subscriber_analytics` from that registry and task
+      17.9 closed the fourteen in `tests/test_subscriber_restricted_operations.py`. These nine are
+      what remained of the twenty-three registered strict xfails, and they are the last of them
+    - Apply `creator_analytics`' treatment — including its distinction between "the read RAISED"
+      and "the response carried no readable `data`", both of which must refuse — to:
+      - `get_strategy_reviews` — delete `except Exception: return {"reviews": [], "total": 0}`; a
+        `total` of `0` is a count of reviews nobody counted, rendered as "no reviews yet"
+      - `get_categories` — delete `except Exception: return {"categories": []}`; each entry carries
+        a `count`, so the empty list is a claim that every count is zero, and it was cached for ten
+        minutes
+      - `check_deployment_permission` (the HELPER, `library.py` line 421) — both reads sat in
+        `except Exception:` blocks falling through to `{"has_permission": False, …}`, a **fabricated
+        denial** a caller cannot tell from a real one; a fabricated denial is as much an invented
+        figure as a fabricated balance (Requirement 28.3). Replace `.single()` with `.limit(1)` so
+        "no such Listing" and "the read failed" stop arriving at the same `except` — that
+        conflation is *why* the swallow was there. The endpoint
+        `check_deployment_permission_endpoint` is the helper's only remaining caller: task 17.3
+        moved `POST /{library_id}/deploy` onto `entitlement_resolver.resolve`, and
+        `tests/test_marketplace_deployment_subscriber_safe.py::
+        test_the_handler_no_longer_consults_check_deployment_permission` and
+        `tests/property/test_access_agreement.py` assert the POST path does not consult it, so no
+        deployment gate changes
+      - `my_library`, `admin_pending_strategies`, `get_subscription_status` — replace
+        `HTTPException(500, …)` with `MarketplaceError(MARKETPLACE_READ_FAILED)`; the old shape was
+        a 5xx, so no figure was fabricated, but it carried no stable machine-readable code and the
+        legacy envelope's internal `path` member
+      - `admin_submission_detail` — the fix is in `submission_service.admin_detail`, not the
+        router: three bare `.execute()` calls let the driver error escape the service, past a route
+        that catches only `SubmissionServiceError`, into `main.py`'s catch-all and out as a generic
+        500. Drive all three through a `_read_rows` helper
+      - `admin_list_submissions`, `get_own_submission` — delete
+        `except Exception: raise MarketplaceError(MARKETPLACE_SUBMISSION_NOT_FOUND)`; a read
+        failure answered **404** tells an Admin_Reviewer the queue is empty and an owner their
+        Submission does not exist, on the evidence of a query that never returned
+    - A read that COMPLETED is untouched: Requirement 21.4's single `NOT_FOUND` shape for "absent
+      OR another owner's" still comes from the completed-read branch, and no genuine cross-tenant
+      404 becomes a 503. `check_deployment_permission` refusing must never become
+      `has_permission: true`
+    - Delete each entry from `PENDING` as its endpoint starts satisfying its clauses —
+      `xfail(strict=True)` makes a passing entry an XPASS failure, and deletion is the registry's
+      own mechanism for "fixed"; loosening an assertion is not. Update the file's header counts,
+      which `test_this_files_own_docstring_states_the_counts_it_actually_has` asserts
+    - Add, per endpoint, a pinned success-path case (`SUCCESS_CASES`, guarantee 5) so a fix that
+      moved the SUCCESS path fails; three are pinned twice, for a read that COMPLETED and matched
+      nothing
+    - Re-record ONLY the two baseline entries the change legitimately moves —
+      `auth_admin_role.admin_routes[3]` (`admin_pending_strategies`) and
+      `surface_strategies.api_calls[3]` (`my_library`), whose recorded
+      `HTTPException(500, detail=str)` is what Requirement 1.5 forbids — through the
+      `_baseline_note_raises` mechanism, citing the authorising requirements
+    - _Requirements: 1.5, 1.7, 2.10, 4.8, 21.4, 22.9, 28.2, 28.3, 28.5, 30.5_
+    - Verification: `pytest tests/test_marketplace_error_surface.py` (0 xfail, 0 XPASS),
+      `pytest tests/regression/test_baseline_unchanged.py`
+
+- [x] 22. Checkpoint — marketplace backend complete
   - Ensure all tests pass, including `tests/regression/test_baseline_unchanged.py`, and that the
     six root-cause regression tests each fail on a revert of their fix. Ask the user if questions
     arise.
 
-- [ ] 23. Move paper trading onto durable storage without changing what users already see
+- [x] 23. Move paper trading onto durable storage without changing what users already see
 
-  - [~] 23.1 Create `backend_app/backend/paper/paper_repository.py`
+  - [x] 23.1 Create `backend_app/backend/paper/paper_repository.py`
     - The single module that reads and writes every `paper_*` table; no other module issues a
       `.table("paper_…")` call, so the storage decision has one place to live
     - The **default account** is the row where `session_id IS NULL` — that is the account the six
@@ -1233,7 +1434,7 @@ decision is outstanding.
       survive-a-restart guarantee would be silently false while still reading as true
     - _Requirements: 17.1, 17.2, 17.11, 21.2, 21.5, 24.10, 28.3_
 
-  - [~] 23.2 Repoint `backend_app/backend/paper_trading_service.py` at the repository
+  - [x] 23.2 Repoint `backend_app/backend/paper_trading_service.py` at the repository
     - Delete `self._accounts` (line 52), `self._positions` (53), `self._orders` (54),
       `self._trades` (55), `self._idempotency_cache` (56) and `self._user_locks` (59), and the
       `_get_user_lock` helper that reads them; the module-level `_paper_service_instance`
@@ -1261,7 +1462,7 @@ decision is outstanding.
       `GET /api/paper/orders?status=OPEN` keeps its exact meaning
     - _Requirements: 17.1, 17.2, 17.12, 16.8, 16.10, 16.11, 18.3, 18.5_
 
-  - [~] 23.3 Add the additive response fields, and only the additive ones
+  - [x] 23.3 Add the additive response fields, and only the additive ones
     - `execution_environment: "PAPER"` and `is_simulated: true` on every `/api/paper/*` response
       body; `session_id: null` on default-account responses
     - `stale: false|true` and `last_price_at` on every figure derived from a market price —
@@ -1270,7 +1471,7 @@ decision is outstanding.
       and `TradeHistory.jsx` lines 44–48 read these bodies today and are not touched by this task
     - _Requirements: 13.6, 17.12, 18.15, 28.1_
 
-  - [~] 23.4 Create `tests/test_paper_api_shape_compatibility.py`
+  - [x] 23.4 Create `tests/test_paper_api_shape_compatibility.py`
     - Asserts each of `GET /api/paper/account`, `/positions`, `/orders`, `/trades`, `/summary` and
       `POST /api/paper/account/reset` against the frozen
       `tests/regression/baseline/paper_api_shape.json` captured in Task 1.1: every frozen key
@@ -1282,7 +1483,7 @@ decision is outstanding.
       answers 200 with a memory-derived figure
     - _Requirements: 17.2, 17.12, 25.7, 28.3_
 
-  - [~] 23.5 Repoint `backend_app/routers/risk.py` at the persisted account
+  - [x] 23.5 Repoint `backend_app/routers/risk.py` at the persisted account
     - `get_risk_status` (lines 300–311) keeps `realized_loss = -min(0, realized_pnl)`,
       `loss_utilization_pct = realized_loss / max_daily_loss * 100` rounded to 2, and
       `open_pos_count = len(get_positions(uid))`; `get_margin_health` (lines 355–360) keeps
@@ -1296,7 +1497,7 @@ decision is outstanding.
       thresholds (100 / 85 / 60, `BLOCKED` / `CRITICAL` / `WARNING` / `SAFE`) are untouched
     - _Requirements: 17.12, 25.1, 25.5, 25.7_
 
-  - [~] 23.6 Write property test for persistence round-tripping
+  - [x] 23.6 Write property test for persistence round-tripping
     - `tests/property/test_paper_persistence_roundtrip.py::test_p32_session_state_round_trips_without_precision_loss`
     - **Property P-32 (round-trip, persistence)** — for all generated Paper_Session states,
       persisting the state and reading it back yields balances, positions, orders, fills, trades
@@ -1309,9 +1510,9 @@ decision is outstanding.
       tests/test_paper_trading_lifecycle.py tests/regression/test_baseline_unchanged.py
       tests/property/test_paper_persistence_roundtrip.py`
 
-- [ ] 24. Implement `paper_market_feed.py` — real market data, or none
+- [x] 24. Implement `paper_market_feed.py` — real market data, or none
 
-  - [~] 24.1 Implement source selection and its two refusals
+  - [x] 24.1 Implement source selection and its two refusals
     - `open_feed(session_config)` calls the **existing**
       `market_data_latency.choose_market_data_source(measurement_for(primary),
       measurement_for(fallback))`; no second selection rule is written. The correctness floor is
@@ -1328,7 +1529,7 @@ decision is outstanding.
     - `session.market_data_source` records `decision.selected.source`
     - _Requirements: 14.1, 14.3, 14.4, 14.8, 28.3_
 
-  - [~] 24.2 Subscribe through the existing MDS pipeline — no new poller
+  - [x] 24.2 Subscribe through the existing MDS pipeline — no new poller
     - `PUBLISH {'action':'subscribe','exchange':ex,'symbol':sym}` to `mds:commands`, which
       `mds/main.py::handle_commands` already listens on, and subscribe to
       `mds:data:{exchange_id}:{symbol}` — the channel `broadcast_ohlcv` (line 22) already
@@ -1340,7 +1541,7 @@ decision is outstanding.
     - `paper.feed.latency_ms` measured as processing time minus the event's own timestamp
     - _Requirements: 14.2, 14.6, 14.10, 26.6_
 
-  - [~] 24.3 Implement `next_validated_event` — identity, validation, dedupe, ordering
+  - [x] 24.3 Implement `next_validated_event` — identity, validation, dedupe, ordering
     - `source_event_id = sha256(f"{exchange}|{symbol}|{timeframe}|{timestamp}|{close}|{volume}")`,
       because the OHLCV payload carries no id of its own; stable for a republished candle and
       different for a revised one, which is the dedupe semantics Requirement 14.7 needs
@@ -1356,7 +1557,7 @@ decision is outstanding.
       `source_event_id` and payload, which is what makes `paper_replay.replay` possible
     - _Requirements: 14.7, 15.5, 26.6_
 
-  - [~] 24.4 Implement disconnection, backoff and the no-fill-while-degraded rule
+  - [x] 24.4 Implement disconnection, backoff and the no-fill-while-degraded rule
     - Bounded exponential backoff 1s, 2s, 4s, 8s, 16s then 30s capped, **jitter-free** so a replay
       of the session reproduces the same reconnection points; `asyncio.sleep`, never
       `time.sleep`
@@ -1369,7 +1570,7 @@ decision is outstanding.
       interpolated across the gap
     - _Requirements: 14.5, 14.9, 18.15_
 
-  - [~] 24.5 Write property test for dedupe and monotonicity
+  - [x] 24.5 Write property test for dedupe and monotonicity
     - `tests/property/test_market_event_dedupe.py::test_p54_market_events_are_deduplicated_and_monotonic`
     - **Property P-54 (invariant, dedupe and ordering)** — for all generated streams containing
       duplicated `source_event_id` values and out-of-order timestamps, each `source_event_id` is
@@ -1378,7 +1579,7 @@ decision is outstanding.
     - Generator `market_event_streams()`; oracle: the distinct-and-sorted projection of the stream
     - **Validates: Requirements 14.7, 15.5**
 
-  - [~] 24.6 Write property test for the no-stale-fill rule
+  - [x] 24.6 Write property test for the no-stale-fill rule
     - `tests/property/test_no_stale_fill.py::test_p56_no_fill_at_a_pre_disconnection_price`
     - **Property P-56 (invariant, stale price)** — for all generated streams and all disconnection
       points within them, no fill is applied while `feed_state != 'HEALTHY'`, and every fill after
@@ -1387,7 +1588,7 @@ decision is outstanding.
       validated-event set
     - **Validates: Requirements 14.5, 18.15**
 
-  - [~] 24.7 Write property test for price provenance
+  - [x] 24.7 Write property test for price provenance
     - `tests/property/test_no_synthesised_price.py::test_p55_no_price_is_synthesised`
     - **Property P-55 (invariant, provenance)** — for all generated Paper_Sessions, every
       `paper_fills.price`, every `paper_positions.current_price`, every price used in a
@@ -1401,9 +1602,9 @@ decision is outstanding.
     - Verification: `pytest tests/property/test_market_event_dedupe.py
       tests/property/test_no_stale_fill.py tests/property/test_no_synthesised_price.py`
 
-- [ ] 25. Implement `paper_simulator.py` and the order lifecycle
+- [x] 25. Implement `paper_simulator.py` and the order lifecycle
 
-  - [~] 25.1 Install the two simulator guards before anything calls a simulator
+  - [x] 25.1 Install the two simulator guards before anything calls a simulator
     - `paper_simulator.assert_paper_simulator(candidate)` compares
       `(candidate.__module__, candidate.__qualname__)` against
       `FORBIDDEN_SIMULATORS = {('backend_app.backend.exchange_simulator',
@@ -1418,7 +1619,7 @@ decision is outstanding.
       self-tests; it is kept out of the request path, not deleted
     - _Requirements: 13.11, 15.6, 16.12, 18.1_
 
-  - [~] 25.2 Freeze the session configuration at start
+  - [x] 25.2 Freeze the session configuration at start
     - `paper_sessions.config JSONB` written once and never updated, carrying `fee_rate`,
       `slippage_rate`, `participation_rate`, `rounding_mode`, `cost_basis`, `price_precision`,
       `quantity_precision`, `minor_unit_exponent`, `max_order_quantity`, `supported_order_types`
@@ -1431,7 +1632,7 @@ decision is outstanding.
       mid-session fee change is unrepresentable rather than merely discouraged
     - _Requirements: 16.5, 16.12, 17.5, 18.2_
 
-  - [~] 25.3 Implement `submit_intent`
+  - [x] 25.3 Implement `submit_intent`
     - One transaction per attempt, `SELECT … FROM paper_accounts WHERE session_id = :id FOR
       UPDATE` first, then in this order:
       (1) the idempotency probe **inside** the transaction — an existing row whose
@@ -1453,7 +1654,7 @@ decision is outstanding.
       before it is filled
     - _Requirements: 16.5, 16.6, 16.8, 16.15, 14.9_
 
-  - [~] 25.4 Implement `apply_fill` as the single write path for every fill
+  - [x] 25.4 Implement `apply_fill` as the single write path for every fill
     - `FOR UPDATE` on the account **and** the order, then the four guards in order: a terminal
       order commits and returns unchanged; an existing `(order_id, fill_event_id)` commits and
       returns unchanged; an over-fill rolls back with `PAPER_OVER_FILL`; and the closing
@@ -1468,7 +1669,7 @@ decision is outstanding.
     - No fill is applied while `session.feed_state != 'HEALTHY'` (Task 24.4)
     - _Requirements: 16.3, 16.7, 16.9, 16.11, 16.13, 16.14, 18.6, 18.7, 18.11, 18.14_
 
-  - [~] 25.5 Implement the deterministic fill model
+  - [x] 25.5 Implement the deterministic fill model
     - Market: fills immediately on acceptance at `reference × (1 ± slippage_rate)`, adverse
       direction only — the convention `paper_trading_service._execute_fill` already applies —
       where `reference` is the latest validated event's `ask`/`bid` when the source supplies them
@@ -1484,13 +1685,13 @@ decision is outstanding.
       `apply_fill`; it does not write a fill itself
     - _Requirements: 16.12, 16.13, 16.14, 18.1_
 
-  - [~] 25.6 Implement the retry and conflict path
+  - [x] 25.6 Implement the retry and conflict path
     - Three attempts on `SerializationFailure` or a stale `version`, with bounded backoff, then
       `PAPER_CONCURRENCY_CONFLICT` (409). Applies to both `submit_intent` and `apply_fill`, which
       is why the retry loop is written once and shared
     - _Requirements: 16.10_
 
-  - [~] 25.7 Write property test for order-state reachability
+  - [x] 25.7 Write property test for order-state reachability
     - `tests/property/test_paper_order_lifecycle.py::test_p17_every_paper_order_state_is_reachable_from_created`
     - **Property P-17 (invariant, reachability)** — for all generated sequences of intents, market
       events and cancellations, every persisted Paper_Order_State is reachable from `CREATED` by
@@ -1498,14 +1699,14 @@ decision is outstanding.
     - Oracle: the `PAPER_ORDER_TRANSITIONS` reachability closure
     - **Validates: Requirements 16.1, 16.2**
 
-  - [~] 25.8 Write property test for terminality
+  - [x] 25.8 Write property test for terminality
     - `tests/property/test_paper_order_lifecycle.py::test_p18_terminal_paper_order_states_are_final`
     - **Property P-18 (invariant, terminality)** — for all orders reaching `FILLED`, `CANCELLED` or
       `REJECTED`, no subsequent event changes the order's state, its filled quantity or its
       recorded fees
     - **Validates: Requirements 16.3**
 
-  - [~] 25.9 Write property test for illegal transition rejection
+  - [x] 25.9 Write property test for illegal transition rejection
     - `tests/property/test_paper_order_lifecycle.py::test_p19_illegal_paper_order_transition_leaves_state`
     - **Property P-19 (invariant, illegal transition)** — for all ordered pairs absent from the
       permitted set, the attempt is rejected and the stored state is unchanged
@@ -1513,7 +1714,7 @@ decision is outstanding.
       goes through `paper_simulator`
     - **Validates: Requirements 16.2, 16.4**
 
-  - [~] 25.10 Write property test for fill accumulation
+  - [x] 25.10 Write property test for fill accumulation
     - `tests/property/test_paper_order_lifecycle.py::test_p20_fill_sum_is_bounded_and_filled_iff_equal`
     - **Property P-20 (invariant, fill accumulation)** — the sum of fill quantities is at most the
       order quantity, and the state is `FILLED` if and only if that sum equals it
@@ -1521,21 +1722,21 @@ decision is outstanding.
       `paper_orders.filled_quantity`, so a drift between the two is a failure
     - **Validates: Requirements 16.7, 16.13, 16.14**
 
-  - [~] 25.11 Write property test for duplicate fills
+  - [x] 25.11 Write property test for duplicate fills
     - `tests/property/test_paper_idempotence.py::test_p21_duplicate_fill_event_changes_nothing`
     - **Property P-21 (idempotence, duplicate fill)** — for all fill events `f` and repetition
       counts `n >= 1`, applying `f` with the same `fill_event_id` `n` times produces the same order
       state, filled quantity, position and balance as applying it once
     - **Validates: Requirements 16.9, 16.11**
 
-  - [~] 25.12 Write property test for duplicate intents
+  - [x] 25.12 Write property test for duplicate intents
     - `tests/property/test_paper_idempotence.py::test_p22_duplicate_order_intent_yields_one_order`
     - **Property P-22 (idempotence, duplicate intent)** — for all intents carrying the same
       idempotency key within one Paper_Session, exactly one order exists and every response
       returns that order
     - **Validates: Requirements 16.8, 16.11, 16.15**
 
-  - [~] 25.13 Write property test for concurrent confluence
+  - [x] 25.13 Write property test for concurrent confluence
     - `tests/property/test_paper_confluence.py::test_p23_concurrent_intents_match_a_sequential_order`
     - **Property P-23 (confluence, concurrent submission)** — for all sets of concurrently
       submitted **distinct** intents against one Paper_Account, the resulting balances, positions
@@ -1544,7 +1745,7 @@ decision is outstanding.
     - Oracle: every sequential permutation, asserting one common result
     - **Validates: Requirements 16.10, 18.3**
 
-  - [~] 25.14 Write property test for the rejection conditions
+  - [x] 25.14 Write property test for the rejection conditions
     - `tests/property/test_paper_order_lifecycle.py::test_p24_invalid_intents_are_rejected_without_side_effects`
     - **Property P-24 (error-condition)** — for all intents with quantity at or below zero, a symbol
       outside the session's validated set, a limit price at or below zero, an unsupported order
@@ -1552,7 +1753,7 @@ decision is outstanding.
       persisted `REJECTED` with a recorded reason and no balance, position or equity value changes
     - **Validates: Requirements 16.5, 16.6**
 
-  - [~] 25.15 Write property test for model-based agreement
+  - [x] 25.15 Write property test for model-based agreement
     - `tests/property/test_paper_replay_model.py::test_p31_simulator_agrees_with_the_reference_ledger`
     - **Property P-31 (model-based, replay agreement)** — for all generated market-event and
       order-intent sequences, the simulator's final balances, positions, realized PnL, equity
@@ -1567,9 +1768,9 @@ decision is outstanding.
       tests/property/test_paper_order_lifecycle.py tests/property/test_paper_idempotence.py
       tests/property/test_paper_confluence.py tests/property/test_paper_replay_model.py`
 
-- [ ] 26. Implement `paper_events.py` and register the Paper_Channel
+- [x] 26. Implement `paper_events.py` and register the Paper_Channel
 
-  - [~] 26.1 Declare the sixteen event types and their payload schemas
+  - [x] 26.1 Declare the sixteen event types and their payload schemas
     - `PaperEvent` with exactly sixteen values: `paper_session_started`, `_paused`, `_resumed`,
       `_stopped`, `market_tick`, `signal_generated`, `paper_order_created`, `_accepted`,
       `_partially_filled`, `_filled`, `_rejected`, `paper_position_updated`,
@@ -1585,7 +1786,7 @@ decision is outstanding.
       every model rejects an unlisted field
     - _Requirements: 19.2, 19.7_
 
-  - [~] 26.2 Implement the envelope and the sequence allocator
+  - [x] 26.2 Implement the envelope and the sequence allocator
     - Every frame carries `schema_version`, `channel`, `session_id`, `type`, `sequence`,
       `event_id`, a microsecond-resolution UTC `emitted_at` and `payload`
     - `next_sequence(session_id)` is `UPDATE paper_sessions SET event_sequence = event_sequence + 1
@@ -1596,7 +1797,7 @@ decision is outstanding.
       duplicated sequence unrepresentable
     - _Requirements: 19.3, 26.3_
 
-  - [~] 26.3 Register `PAPER_FAMILY` and its owner relation
+  - [x] 26.3 Register `PAPER_FAMILY` and its owner relation
     - `backend_app/backend/ws_channels.py` gains `PAPER_FAMILY = OwnedChannelFamily(namespace=
       "paper", resource="session_id", events=frozenset(PAPER_CHANNEL_EVENTS))` and one entry in
       the `OWNED_CHANNEL_FAMILIES` tuple, following `SIGNAL_FAMILY` exactly
@@ -1610,7 +1811,7 @@ decision is outstanding.
       already indistinguishable. No new authorisation code is written here
     - _Requirements: 19.4, 19.5, 21.4, 21.6_
 
-  - [~] 26.4 Implement replay, heartbeat, slow-consumer and cleanup behaviour
+  - [x] 26.4 Implement replay, heartbeat, slow-consumer and cleanup behaviour
     - Replay from `paper_events` for `sequence > last_received ORDER BY sequence ASC`, capped at
       5000 rows per request. `paper_events` is the durable buffer, so the 1000-events-for-5-minutes
       floor is met with margin and survives a restart, which an in-memory ring would not
@@ -1629,7 +1830,7 @@ decision is outstanding.
     - Session stop and delete release every subscription for that session
     - _Requirements: 19.8, 19.9, 19.10, 19.11, 19.12, 19.13, 27.5_
 
-  - [~] 26.5 Re-verify ownership before each emit
+  - [x] 26.5 Re-verify ownership before each emit
     - `broadcast(session_id, frame)` re-reads `paper_sessions.user_id` from a 5-second per-session
       cache keyed on the session id, invalidated on any `paper_sessions` write, and compares it with
       the authenticated identity recorded on each subscribed connection. A mismatch emits nothing
@@ -1638,7 +1839,7 @@ decision is outstanding.
       never one read from the subscribe message
     - _Requirements: 21.1, 21.7_
 
-  - [~] 26.6 Write property test for sequence contiguity
+  - [x] 26.6 Write property test for sequence contiguity
     - `tests/property/test_paper_channel_sequence.py::test_p53_channel_sequence_is_contiguous_from_one`
     - **Property P-53 (invariant, contiguity)** — for all sessions and all generated emission
       sequences, including emissions interleaved from two concurrent producers, the set of
@@ -1648,7 +1849,7 @@ decision is outstanding.
     - Oracle: `{1..k}` set equality
     - **Validates: Requirements 19.3, 19.8**
 
-  - [~] 26.7 Write property test for WebSocket tenant isolation
+  - [x] 26.7 Write property test for WebSocket tenant isolation
     - `tests/property/test_tenant_isolation_matrix.py::test_p44_paper_channel_refuses_foreign_sessions`
     - **Property P-44 (invariant, WebSocket isolation)** — for all Paper_Sessions owned by `u2` and
       all subscription attempts authenticated as `u1`, the subscription is refused and no event for
@@ -1661,9 +1862,9 @@ decision is outstanding.
       tests/property/test_paper_channel_sequence.py
       tests/property/test_tenant_isolation_matrix.py -k p44 tests/test_websocket_auth*.py`
 
-- [ ] 27. Implement `paper_session_service.py` and `paper_replay.replay`
+- [x] 27. Implement `paper_session_service.py` and `paper_replay.replay`
 
-  - [~] 27.1 Implement `start_session` as the Requirement 17.9 pipeline, in order
+  - [x] 27.1 Implement `start_session` as the Requirement 17.9 pipeline, in order
     - Validate first, create nothing: `entitlement_resolver.resolve` (the same single admission
       decision deployment uses), `assert_paper_simulator(PaperSimulator)`, the version resolve and
       its deployable-lifecycle check, `validate_capital`, the exchange market metadata lookup, the
@@ -1681,7 +1882,7 @@ decision is outstanding.
       `PAPER_SESSION_LIMIT_REACHED` (429) with a reason
     - _Requirements: 17.3, 17.4, 17.5, 17.6, 17.9, 17.13, 27.4_
 
-  - [~] 27.2 Implement the session loop
+  - [x] 27.2 Implement the session loop
     - An `asyncio` task, not a thread and not a process. Every I/O step is `await`ed; the one
       CPU-bound step — the DAG evaluation and indicator computation for a bar — is offloaded with
       `starlette.concurrency.run_in_threadpool`, so a slow indicator cannot stall the HTTP event
@@ -1694,7 +1895,7 @@ decision is outstanding.
       revalue and snapshot equity with the PnL and drawdown emissions
     - _Requirements: 17.10, 23.1, 23.5, 27.3_
 
-  - [~] 27.3 Implement the session state machine and its four operations
+  - [x] 27.3 Implement the session state machine and its four operations
     - `CREATED`, `RUNNING`, `PAUSED`, `STOPPED`; `start` from `CREATED`, `pause` from `RUNNING`,
       `resume` from `PAUSED`, `stop` from `RUNNING` or `PAUSED`, `reset` from `STOPPED`
     - Enforced three ways, as the order machine is: `chk_paper_session_state`,
@@ -1706,7 +1907,7 @@ decision is outstanding.
       and changes nothing
     - _Requirements: 17.7, 17.14_
 
-  - [~] 27.4 Implement stop and reset
+  - [x] 27.4 Implement stop and reset
     - Stop: final orders, positions, balances, trades, metrics and the closing equity snapshot are
       committed in one transaction; **then** the market-data subscription is released
       (`PUBLISH {'action':'unsubscribe',…}` to `mds:commands` plus the local unsubscribe); then the
@@ -1719,7 +1920,7 @@ decision is outstanding.
       orders, fills, trades, metrics and snapshots stay readable, distinguished by `series_index`
     - _Requirements: 17.2, 17.8, 17.15, 19.12_
 
-  - [~] 27.5 Implement `paper_replay.replay(session_id)`
+  - [x] 27.5 Implement `paper_replay.replay(session_id)`
     - Reconstructs the session from `(paper_sessions.config, paper_market_events, the recorded
       order intents in paper_orders)` against a fresh in-memory store and returns the final order
       states, fills, balances, positions, realized PnL and equity series
@@ -1741,9 +1942,9 @@ decision is outstanding.
     - _Requirements: 17.9, 17.13, 17.8_
     - Verification: `pytest tests/test_paper_session_pipeline.py`
 
-- [ ] 28. Add the Paper_Trading_API session endpoints
+- [x] 28. Add the Paper_Trading_API session endpoints
 
-  - [~] 28.1 Add the session lifecycle routes to `backend_app/routers/paper_trading.py`
+  - [x] 28.1 Add the session lifecycle routes to `backend_app/routers/paper_trading.py`
     - `POST /api/paper/sessions` (10/60s) with an `extra="forbid"` Pydantic body accepting **only**
       strategy or listing reference, `initial_capital_minor`, `currency`, `symbol` and `timeframe`
       (plus the optional idempotency key). Any other field — a definition, a graph, a plan, a
@@ -1757,7 +1958,7 @@ decision is outstanding.
       another user's session answers exactly as an unknown one does
     - _Requirements: 17.3, 17.7, 17.8, 17.14, 17.15, 21.1, 21.4, 21.5, 22.2, 22.3_
 
-  - [~] 28.2 Add the seven sub-resource reads
+  - [x] 28.2 Add the seven sub-resource reads
     - `GET /api/paper/sessions/{id}/orders` | `/fills` | `/positions` | `/trades` | `/equity` |
       `/metrics` | `/events` (120/60s each), one select per sub-resource scoped by `session_id`,
       no per-row round trip
@@ -1767,7 +1968,7 @@ decision is outstanding.
     - No response carries a plan, node, indicator or version field
     - _Requirements: 17.2, 19.8, 19.9, 21.5, 27.2_
 
-  - [~] 28.3 Leave the six existing endpoints alone
+  - [x] 28.3 Leave the six existing endpoints alone
     - `GET /api/paper/account`, `/positions`, `/orders`, `/trades`, `/summary`,
       `POST /account/reset`, `POST /orders` and `DELETE /orders/{id}` keep their paths, methods,
       bodies, rate limits (120/60s reads, 60/60s writes, 30/60s reset) and their default-account
@@ -1779,9 +1980,9 @@ decision is outstanding.
     - Verification: `pytest tests/test_paper_session_api.py
       tests/test_paper_api_shape_compatibility.py tests/test_router_registration_completeness.py`
 
-- [ ] 29. Extend Signal Trace for the three environments
+- [x] 29. Extend Signal Trace for the three environments
 
-  - [~] 29.1 Extend `signal_service.py`'s projections behind the existing probe
+  - [x] 29.1 Extend `signal_service.py`'s projections behind the existing probe
     - `SIGNAL_SUMMARY_COLUMNS` and `SIGNAL_TRACE_COLUMNS` gain `environment` and
       `paper_session_id`, appended — the other thirty-four columns are not re-spelled
     - Conditional on the same migration probe `signal_service` already performs for 005b's
@@ -1792,7 +1993,7 @@ decision is outstanding.
     - No second probe mechanism and no second projection constant is introduced
     - _Requirements: 23.1, 23.7, 24.10_
 
-  - [~] 29.2 Record PAPER signals through the existing write path
+  - [x] 29.2 Record PAPER signals through the existing write path
     - `SignalTraceEngine` and the `signals` / `signal_events` tables stay the only signal store. A
       paper signal travels the same `signal_service` write path as a live one, with
       `environment='PAPER'` and `paper_session_id` set, and `deployment_id` left **null** — a
@@ -1802,7 +2003,7 @@ decision is outstanding.
       PARTIALLY_EXECUTED / EXECUTED`, or `REJECTED`. No paper-specific state vocabulary is added
     - _Requirements: 23.1, 23.5_
 
-  - [~] 29.3 Add the environment filter to `routers/signal_trace.py`
+  - [x] 29.3 Add the environment filter to `routers/signal_trace.py`
     - `GET /signals`, `/signals/export` and `/signals/{id}` gain an `environment` filter declared
       as a list like the other Requirement 17.2 filter categories, so `?environment=PAPER&
       environment=LIVE` collects into both
@@ -1813,7 +2014,7 @@ decision is outstanding.
       one series per environment
     - _Requirements: 23.2, 23.4, 23.6_
 
-  - [~] 29.4 Add the subscriber-safe projection
+  - [x] 29.4 Add the subscriber-safe projection
     - `signal_service.SUBSCRIBER_SIGNAL_FIELDS` is the allow-list, and
       `build_signal_trace_detail` gains a viewer-role parameter. When the viewer is not the
       strategy owner — decided server-side by comparing the authenticated identity with
@@ -1828,15 +2029,15 @@ decision is outstanding.
     - Verification: `pytest tests/test_signal_trace_subscriber_projection.py
       tests/test_signal_trace*.py tests/regression/test_baseline_unchanged.py -k signal_trace`
 
-- [~] 30. Checkpoint — paper trading backend complete
+- [x] 30. Checkpoint — paper trading backend complete
   - Ensure all tests pass, including `tests/regression/test_baseline_unchanged.py` and
     `tests/test_paper_api_shape_compatibility.py`, that `tests/test_paper_no_random.py` is clean,
     and that `tests/property/test_property_coverage.py` now reports P-17 through P-32 and P-44,
     P-53 through P-56 present. Ask the user if questions arise.
 
-- [ ] 31. Frontend API modules — one client, no scattered calls
+- [x] 31. Frontend API modules — one client, no scattered calls
 
-  - [~] 31.1 Create `algo22-terminal/src/api/modules/library.js`
+  - [x] 31.1 Create `algo22-terminal/src/api/modules/library.js`
     - Imports `{ get, post, put, del, publicGet }` from `../../apiClient` — the shared client every
       other module uses; it constructs no client, no base URL and no host
     - Every method the design lists: `browse`, `browsePublic`, `featured`, `featuredPublic`,
@@ -1848,12 +2049,12 @@ decision is outstanding.
     - JSDoc `@param`/`@returns` on each, matching the convention `modules/paper.js` already uses
     - _Requirements: 20.2, 20.10, 30.1_
 
-  - [~] 31.2 Register it as `api.library` in `src/api/index.js`
+  - [x] 31.2 Register it as `api.library` in `src/api/index.js`
     - One `import { libraryApi } from './modules/library';` beside the existing seventeen imports
       and one `library: libraryApi,` entry in the consolidated export, next to `paper: paperApi`
     - _Requirements: 20.2, 30.2_
 
-  - [~] 31.3 Widen `algo22-terminal/src/api/modules/paper.js` with the `sessions` object
+  - [x] 31.3 Widen `algo22-terminal/src/api/modules/paper.js` with the `sessions` object
     - The existing eight methods (`getAccount`, `resetAccount`, `getPositions`, `getOrders`,
       `placeOrder`, `cancelOrder`, `getTrades`, `getSummary`) are **untouched** — `Portfolio.jsx`
       and `TradeHistory.jsx` call three of them today
@@ -1861,7 +2062,7 @@ decision is outstanding.
       trades, equity, metrics, events }`, with `events(id, since)` carrying `?since_sequence=`
     - _Requirements: 20.2, 30.2_
 
-  - [~] 31.4 Create `libraryApi.test.js` and `paperApi.test.js`
+  - [x] 31.4 Create `libraryApi.test.js` and `paperApi.test.js`
     - Under `algo22-terminal/src/api/modules/__tests__/`, run with `vitest --run` (single
       execution, never watch mode)
     - Each mocks `../../apiClient` and asserts, for **every** method on both modules, that it calls
@@ -1871,9 +2072,9 @@ decision is outstanding.
     - _Requirements: 20.2, 29.2_
     - Verification: `cd algo22-terminal && npx vitest --run src/api`
 
-- [ ] 32. Frontend pages
+- [x] 32. Frontend pages
 
-  - [~] 32.1 Create `algo22-terminal/src/pages/PaperTrading.jsx` and route it
+  - [x] 32.1 Create `algo22-terminal/src/pages/PaperTrading.jsx` and route it
     - `const PaperTrading = lazy(() => import('./pages/PaperTrading'));` beside the other
       authenticated page imports in `src/App.jsx`, and one
       `<Route path="/app/paper-trading" element={<Suspense fallback={PAGE_FALLBACK}>
@@ -1888,7 +2089,7 @@ decision is outstanding.
       symbol, timeframe, and start / pause / resume / stop / reset
     - _Requirements: 20.1, 20.2, 20.3_
 
-  - [~] 32.2 Implement all sixteen displays
+  - [x] 32.2 Implement all sixteen displays
     - Market-data status (`feed_state`, `feed_transport`), session status, current price, equity,
       cash, unrealized PnL, realized PnL, total return, max drawdown, win rate, trade count, open
       positions, open orders, completed trades, the equity curve, the PnL chart, the drawdown
@@ -1901,7 +2102,7 @@ decision is outstanding.
       its `last_price_at` rather than presenting itself as current
     - _Requirements: 18.11, 18.15, 20.4, 20.6_
 
-  - [~] 32.3 Implement the eight states and the reconnecting indicator
+  - [x] 32.3 Implement the eight states and the reconnecting indicator
     - Each panel renders one of `loading`, `empty`, `error-with-retry`, `disabled`, `unauthorised`,
       `expired-subscription`, `unavailable-strategy`, `feed-disconnected`, and shows a reconnecting
       indicator while `websocketClient.onStatusChange` reports `'connecting'` or `'reconnecting'`
@@ -1910,7 +2111,7 @@ decision is outstanding.
       what the panel shows, not a zero
     - _Requirements: 20.5, 20.6, 28.1_
 
-  - [~] 32.4 Implement the realtime wiring, its cleanup and its bounds
+  - [x] 32.4 Implement the realtime wiring, its cleanup and its bounds
     - One `useEffect` keyed on `sessionId` holding
       `const release = websocketClient.subscribeChannel(\`paper.${sessionId}\`, onFrame)` and
       returning `() => { release(); clearInterval(poll); }`. `release()` is `subscribeChannel`'s
@@ -1923,13 +2124,13 @@ decision is outstanding.
       unmount
     - _Requirements: 19.8, 20.8, 27.5_
 
-  - [~] 32.5 Implement the responsive layout
+  - [x] 32.5 Implement the responsive layout
     - CSS grid with a single-column breakpoint below 768 px, tables switching to stacked cards
       below 640 px, and charts using a `ResizeObserver`-driven width, so primary content does not
       overflow horizontally at any width from 360 px to 1920 px
     - _Requirements: 20.7_
 
-  - [~] 32.6 Move `StrategyMarketplace.jsx` onto `api.library`
+  - [x] 32.6 Move `StrategyMarketplace.jsx` onto `api.library`
     - Delete `import client, { publicGet } from '../apiClient'` and replace all eleven direct calls
       — lines 41, 44, 58, 61, 75, 78, 98, 101, 131, 134 (the `client.get`/`publicGet` pairs behind
       the token check), 150 (`clone`) and 164 (`checkout`) — with `api.library.*`, keeping the
@@ -1943,7 +2144,7 @@ decision is outstanding.
       the historical-results statement
     - _Requirements: 6.6, 20.9, 20.10, 22.8, 28.1_
 
-  - [~] 32.7 Render server-derived ownership in `Strategies.jsx`
+  - [x] 32.7 Render server-derived ownership in `Strategies.jsx`
     - Adds the `api.library.myStrategies()` read beside the existing `endpoints.strategies.list()`
       call, and renders `ownership: "OWNED" | "SUBSCRIBED"` and the affordances in
       `allowed_actions` **as returned** — no client-side inference of either, so the page cannot
@@ -1956,7 +2157,7 @@ decision is outstanding.
       than a stale list
     - _Requirements: 12.2, 12.3, 12.4, 12.5, 12.6, 12.8_
 
-  - [~] 32.8 Add the simulated indicator to `Portfolio.jsx` and `TradeHistory.jsx`
+  - [x] 32.8 Add the simulated indicator to `Portfolio.jsx` and `TradeHistory.jsx`
     - Both keep `api.paper.getSummary()`, `api.paper.getPositions()` and `api.paper.getTrades(100)`
       and their existing `environment === "paper"` toggle. The only change is that the PAPER branch
       renders the additive `is_simulated` / `execution_environment` fields as a visible simulated
@@ -1966,7 +2167,7 @@ decision is outstanding.
       structurally since the two branches never run together
     - _Requirements: 13.6, 20.6, 28.1_
 
-  - [~] 32.9 Create the three page test suites
+  - [x] 32.9 Create the three page test suites
     - `PaperTrading.test.jsx` — renders each of the eight states of Task 32.3; asserts the equity
       curve is drawn from `sessions.equity()` and not from event state; asserts that on unmount the
       `subscribeChannel` releaser and every `clearInterval` are called; asserts retained events,
@@ -1986,9 +2187,9 @@ decision is outstanding.
     - _Requirements: 12.2, 12.3, 12.4, 12.5, 12.8, 20.5, 20.6, 20.8, 20.9, 20.10, 22.8, 27.5, 29.2_
     - Verification: `cd algo22-terminal && npx vitest --run && npm run build`
 
-- [ ] 33. Cross-cutting security, observability and performance
+- [x] 33. Cross-cutting security, observability and performance
 
-  - [~] 33.1 Build the tenant-isolation matrix from a registry, not a list
+  - [x] 33.1 Build the tenant-isolation matrix from a registry, not a list
     - `tests/property/test_tenant_isolation_matrix.py` collects its **rows** from
       `app.router.routes` filtered by the `/api/library` and `/api/paper` prefixes plus every member
       of `ws_channels.OWNED_CHANNEL_FAMILIES`, so an endpoint or channel added later without a
@@ -2009,7 +2210,7 @@ decision is outstanding.
       in the production sequence of Task 35, not here. Stated rather than implied
     - _Requirements: 21.2, 21.8_
 
-  - [~] 33.2 Add the rate-limit key helper and apply the per-route limits
+  - [x] 33.2 Add the rate-limit key helper and apply the per-route limits
     - `backend_app/core/rate_limit_keys.py::caller_or_address(request)` returning `'u:' + sub` from
       a locally decoded token or `'ip:' + get_remote_address(request)`, with no database read and no
       exception escape — the global limiter's `key_func=get_remote_address` cannot express a
@@ -2021,7 +2222,7 @@ decision is outstanding.
       nothing and persists nothing, and answers `MARKETPLACE_RATE_LIMITED` (429)
     - _Requirements: 6.7, 22.4_
 
-  - [~] 33.3 Create `backend_app/backend/marketplace/media.py` for the SSRF surface
+  - [x] 33.3 Create `backend_app/backend/marketplace/media.py` for the SSRF surface
     - `validate_cover_reference(reference)` accepting only a reference whose host or storage prefix
       is in `ALLOWED_COVER_PREFIXES` — the project's Supabase storage bucket prefix and the CDN
       origin — and rejecting everything else with 422
@@ -2032,7 +2233,7 @@ decision is outstanding.
       prefix of an allowed one but a different host
     - _Requirements: 22.7_
 
-  - [~] 33.4 Create `backend_app/core/observability.py`
+  - [x] 33.4 Create `backend_app/core/observability.py`
     - The `contextvars` `request_id` fallback (`uuid4()` per request) used when
       `asgi_correlation_id.CorrelationIdMiddleware` is absent, so Requirement 26.1's "every log
       record and every error response" holds without adding a dependency; `main.py` already imports
@@ -2052,7 +2253,7 @@ decision is outstanding.
       deny-listed key and asserts the emitted text contains none of the values
     - _Requirements: 26.1, 26.3, 26.4_
 
-  - [~] 33.5 Emit the metrics through the existing collector
+  - [x] 33.5 Emit the metrics through the existing collector
     - Through `routers/metrics.py`; no second collector. Latency and error rate per introduced or
       modified endpoint (`marketplace.http.{route}.*`, `paper.http.{route}.*`), per WebSocket event
       type plus `paper.ws.queue_depth` and `paper.ws.slow_consumer_disconnects`, the feed metrics
@@ -2065,7 +2266,7 @@ decision is outstanding.
     - Requirement 27.6 is satisfied by these being measured and recorded, not by an assertion
     - _Requirements: 26.6, 27.6_
 
-  - [~] 33.6 Create the two code-quality guard tests
+  - [x] 33.6 Create the two code-quality guard tests
     - `tests/test_no_broad_except_on_new_modules.py` — AST check failing on a bare `except` or a
       bare `except Exception` without a `raise` anywhere under
       `backend_app/backend/marketplace/` or `backend_app/backend/paper/`
@@ -2075,7 +2276,7 @@ decision is outstanding.
       `src/api/modules/*`
     - _Requirements: 30.2, 30.5_
 
-  - [~] 33.7 Write property test for cross-tenant reads
+  - [x] 33.7 Write property test for cross-tenant reads
     - `tests/property/test_tenant_isolation_matrix.py::test_p41_cross_tenant_read_returns_no_field`
     - **Property P-41 (invariant, cross-tenant read)** — for all distinct `(u1, u2)`, all endpoints
       introduced or modified by this spec, and all identifiers owned by `u2`, a request
@@ -2084,20 +2285,20 @@ decision is outstanding.
       random UUID
     - **Validates: Requirements 21.4, 21.8**
 
-  - [~] 33.8 Write property test for cross-tenant writes
+  - [x] 33.8 Write property test for cross-tenant writes
     - `tests/property/test_tenant_isolation_matrix.py::test_p42_cross_tenant_write_leaves_rows_byte_identical`
     - **Property P-42 (invariant, cross-tenant write)** — under the same quantification, a request
       authenticated as `u1` leaves every row owned by `u2` byte-identical
     - **Validates: Requirements 21.4, 21.8**
 
-  - [~] 33.9 Write property test for indistinguishability
+  - [x] 33.9 Write property test for indistinguishability
     - `tests/property/test_tenant_isolation_matrix.py::test_p43_foreign_and_absent_responses_are_indistinguishable`
     - **Property P-43 (invariant, indistinguishability)** — for all resource identifiers, the
       response to a request for another user's existing resource is indistinguishable, in status
       code and body, from the response for a non-existent resource of the same kind
     - **Validates: Requirements 21.4, 5.7, 6.10**
 
-  - [~] 33.10 Write property test for identity-source invariance
+  - [x] 33.10 Write property test for identity-source invariance
     - `tests/property/test_tenant_isolation_matrix.py::test_p45_supplied_identity_does_not_change_the_decision`
     - **Property P-45 (invariant, identity source)** — for all requests carrying a user, tenant,
       owner, subscriber or session identity in the body, query, path or WebSocket message, the
@@ -2105,7 +2306,7 @@ decision is outstanding.
       absent
     - **Validates: Requirements 21.1**
 
-  - [~] 33.11 Write property test for list scoping
+  - [x] 33.11 Write property test for list scoping
     - `tests/property/test_tenant_isolation_matrix.py::test_p46_every_listed_row_is_owned_by_the_caller`
     - **Property P-46 (invariant, list scoping)** — for all generated multi-tenant datasets and all
       list endpoints, every returned row's owner equals the authenticated identity
@@ -2113,7 +2314,7 @@ decision is outstanding.
       list endpoint retrieved a row it then filtered out
     - **Validates: Requirements 21.5**
 
-  - [~] 33.12 Write property test for fixed round trips
+  - [x] 33.12 Write property test for fixed round trips
     - `tests/property/test_fixed_round_trips.py::test_p57_round_trips_are_independent_of_row_count`
     - **Property P-57 (invariant, fixed round trips)** — for all Listing counts 0…50 and all
       combined owned-and-subscribed entry counts 0…200, the number of Persistence_Layer round trips
@@ -2128,9 +2329,9 @@ decision is outstanding.
       tests/test_cover_reference_ssrf.py tests/test_no_broad_except_on_new_modules.py
       tests/test_no_duplicate_services.py`
 
-- [ ] 34. CI, end-to-end journey and the full concurrency battery
+- [x] 34. CI, end-to-end journey and the full concurrency battery
 
-  - [~] 34.1 Add the `frontend-tests` job to `.github/workflows/01-pr-check.yml`
+  - [x] 34.1 Add the `frontend-tests` job to `.github/workflows/01-pr-check.yml`
     - One new job running `npm ci`, `npm run build` and `npx vitest --run` with
       `working-directory: ./algo22-terminal`, `actions/setup-node@v4` with
       `cache-dependency-path: 'algo22-terminal/package-lock.json'`, triggered for changes under
@@ -2140,7 +2341,7 @@ decision is outstanding.
     - `--run`, never watch mode, so the job terminates
     - _Requirements: 29.8, 29.9_
 
-  - [~] 34.2 Create `tests/e2e/test_marketplace_paper_journey.py`
+  - [x] 34.2 Create `tests/e2e/test_marketplace_paper_journey.py`
     - One test executing the twenty-four steps **in order**: register and sign in; create and save a
       strategy; run three backtests satisfying Requirement 3; verify three distinct
       Backtest_Conditions; submit a Listing; administrative review; approval and publication; public
@@ -2157,7 +2358,7 @@ decision is outstanding.
       restores access
     - _Requirements: 29.4_
 
-  - [~] 34.3 Extend `tests/test_marketplace_concurrency.py` with the remaining batteries
+  - [x] 34.3 Extend `tests/test_marketplace_concurrency.py` with the remaining batteries
     - N concurrent order intents against one Paper_Account: P-23's confluence, no intent applied
       twice or lost, and the equity identity holding after every one
     - N concurrent fills carrying the same `fill_event_id`: exactly one `paper_fills` row, one
@@ -2172,7 +2373,7 @@ decision is outstanding.
       replaces none of them
     - _Requirements: 16.10, 16.9, 17.6, 19.3, 11.7, 11.8_
 
-  - [~] 34.4 Extend the existing isolation and lifecycle suites additively
+  - [x] 34.4 Extend the existing isolation and lifecycle suites additively
     - `tests/test_tenant_isolation_*` gains the new `/api/library/*` and `/api/paper/sessions/*`
       endpoints and the `paper.{session_id}` channel; `tests/sandbox_lifecycle/` gains the
       Paper_Session lifecycle
@@ -2184,7 +2385,7 @@ decision is outstanding.
 
 - [ ] 35. Final verification
 
-  - [~] 35.1 Close the property-coverage scoreboard
+  - [x] 35.1 Close the property-coverage scoreboard
     - `tests/property/test_property_coverage.py` (Task 2.3) passes: every one of P-1…P-58 has
       exactly one `test_p{n}_` function, none missing and none duplicated
     - Cross-checked against the design's per-property test-function table so every name matches
@@ -2192,7 +2393,7 @@ decision is outstanding.
       report as satisfied
     - _Requirements: 29.3_
 
-  - [~] 35.2 Run the full local gate
+  - [x] 35.2 Run the full local gate
     - `pytest tests/ -k "not chaos and not load"`, `black --check backend_app`,
       `isort --check-only backend_app`, `flake8 backend_app --select=E9,F63,F7,F82`,
       `python scripts/import_audit.py backend_app`, `python scripts/dependency_audit.py`,
@@ -2210,6 +2411,19 @@ decision is outstanding.
       `tests/test_backtest_evidence_columns_regression.py`. A regression test that passes against
       the unfixed code is not evidence of anything
     - Remove every temporary artifact created during verification
+    - Outcome: every gate item above passes, with three exceptions accepted as out of scope by
+      explicit user decision. `flake8 backend_app --select=E9,F63,F7,F82` exits 1 on 3 pre-existing
+      F821 (`core/credential_vault.py:281,284`, `routers/strategy_operations.py:3456`);
+      `black --check backend_app` exits 1 on 345 of 374 files; `isort --check-only backend_app`
+      exits 1 on 138 files. All three are repo-wide and pre-existing, independent of this spec, and
+      not fixable by configuration: the most permissive expressible black config
+      (`--line-length 200 --skip-string-normalization --skip-magic-trailing-comma`) raises the count
+      from 345 to 352, because much of the tree is already hand-wrapped, and black exposes no switch
+      for the blank-line normalisation and `except (Exception):` rewriting its diffs also contain.
+      isort fights black on backslash continuations unless `[tool.isort] profile = "black"` is set
+      first. All three steps block `01-pr-check.yml::validate-code`, which `unit-tests` declares
+      `needs:` on, so CI never reaches the test job — also pre-existing. No reformatting was applied
+      and no `pyproject.toml` was added
     - _Requirements: 25.7, 25.8, 29.1, 29.9, 29.10, 30.4_
 
   - [~] 35.3 Execute the Requirement 29.6 production sequence, in order
@@ -2225,6 +2439,10 @@ decision is outstanding.
       takes an `ACCESS EXCLUSIVE` lock and scans `signals`
     - This is where genuine PostgreSQL row-level-security behaviour is verified, since no
       PostgreSQL runs in CI and Task 33.1 asserts the application layer only
+    - Deliberately unrun. It requires a live deployment against the production surface and the
+      migration set applied by hand, and no deployment window was authorised. It remains the only
+      place genuine PostgreSQL row-level-security behaviour gets verified, so nothing else in the
+      spec substitutes for it. Left open rather than closed on inference
     - _Requirements: 24.8, 29.6, 21.2_
 
   - [~] 35.4 Record the clean-console evidence and diagnose any deployment failure at its root
@@ -2239,6 +2457,8 @@ decision is outstanding.
       target group and health checks, the startup command, the migration status, the database
       connectivity, the secret resolution, the image reference, the architecture compatibility, the
       resource limits and the dependency startup order — including for a rollback
+    - Deliberately unrun. It depends on 35.3: the six surfaces can only be measured on a live
+      deployment, and no deployment window was authorised. Left open
     - _Requirements: 29.5, 29.7_
     - Verification: the recorded evidence for Requirements 29.5 and 29.6, and a passing
       `pytest tests/property/test_property_coverage.py`
@@ -2248,6 +2468,19 @@ decision is outstanding.
     regression baseline and `tests/property/test_property_coverage.py` all pass, that no CI check
     was removed or weakened, and that the Requirement 29.5 and 29.6 evidence is recorded. Ask the
     user if questions arise.
+  - Cannot be closed. Everything within reach is verified: the suites and guards of 35.2, and the
+    CI audit — `git diff HEAD -- .github/workflows/` touches only `01-pr-check.yml`, 71 insertions
+    and 0 deletions, being the additive `frontend-tests` job of Task 34.1 plus a workflow-level
+    `env: NODE_VERSION: '20'` that no pre-existing job reads. `validate-code`, `unit-tests` and
+    `docker-check` are byte-identical to HEAD, keep `needs: validate-code` and keep the
+    `-k "not chaos and not load"` selector; no `continue-on-error` exists anywhere in the file; the
+    frontend path filter lives inside the job as a `Detect frontend changes` git-diff step, not on
+    the trigger, so no pre-existing job's scope is narrowed (Requirement 29.9). The other five
+    workflow files are unchanged. `pytest.ini` changes only the `property_scoreboard` marker
+    description from Task 35.1, with `addopts`, `testpaths` and `norecursedirs` untouched;
+    `algo22-terminal/vitest.config.js` only widens `include`. What remains is the Requirement 29.5
+    clean-console evidence (35.4) and the Requirement 29.6 production sequence (35.3), both pending
+    a deployment window.
 
 ## Notes
 

@@ -332,7 +332,13 @@ def supported_exchange_ids() -> List[str]:
 # ══════════════════════════════════════════════════════════════════════════
 
 
-def _markets_are_mocked(exchange: Any) -> bool:
+#: The name ``connection_engine._apply_mock_interface`` binds its market loader under. Named
+#: here so the two callers of :func:`markets_are_mocked` and the test that asserts the real
+#: installer against it all read one literal.
+MOCK_MARKET_LOADER_NAME = "mock_load_markets"
+
+
+def markets_are_mocked(exchange: Any) -> bool:
     """True when ``ConnectionEngine`` injected its DEV_MODE mock interface.
 
     ``connection_engine._apply_mock_interface`` binds a closure named
@@ -344,9 +350,26 @@ def _markets_are_mocked(exchange: Any) -> bool:
     Detection is by the closure's ``__name__``, which is asserted against the real
     ``_apply_mock_interface`` in the tests: if that function is ever renamed, the test
     fails rather than this guard silently going quiet.
+
+    **Not by reading ``DEV_MODE``**, deliberately, and this is the reason the check is a
+    property of the resolved object rather than of the configuration: ``connect()`` installs
+    the mock interface only on the failure branch, so a ``DEV_MODE`` deployment that reached
+    its exchange carries a real interface, and a deployment whose flag was turned off after
+    an interface was installed carries a mock one. The flag and the installed interface can
+    therefore disagree, and it is the interface that decides what the prices are.
+
+    Public since marketplace-subscriptions-paper-trading task 24.1, which needs the same
+    detection to refuse a Paper_Session against a mock feed (Requirement 14.8). The private
+    spelling :func:`_markets_are_mocked` is retained below as an alias so existing callers and
+    ``tests/test_asset_discovery.py`` are unaffected; there is one implementation.
     """
     loader = getattr(exchange, "load_markets", None)
-    return getattr(loader, "__name__", "") == "mock_load_markets"
+    return getattr(loader, "__name__", "") == MOCK_MARKET_LOADER_NAME
+
+
+#: The pre-task-24.1 spelling. The same function object, not a wrapper, so no call site can
+#: reach a second implementation.
+_markets_are_mocked = markets_are_mocked
 
 
 def _coerce_number(value: Any) -> Optional[float]:

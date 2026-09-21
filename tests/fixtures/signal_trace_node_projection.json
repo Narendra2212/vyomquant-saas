@@ -1,0 +1,134 @@
+{
+  "contract": "signal-trace-node-projection",
+  "requirements": ["1.29", "2.29"],
+  "declared_by": "production-launch-hardening task 9.4",
+  "summary": "The one DAGNodeTrace -> dict projection carried by every nodes-bearing stage of a Signal Trace response. Producing side: project_node_trace in backend_app/backend/signal_trace_engine.py. Consuming side: the Signal Trace stage rendering in algo22-terminal.",
+  "one_file_note": "This file is the single copy. pytest reads it directly at tests/fixtures/signal_trace_node_projection.json; vitest reads the same path through node:fs, repo-relative. A second copy per side could drift, which is the failure mode this fixture exists to remove.",
+  "producer": {
+    "module": "backend_app/backend/signal_trace_engine.py",
+    "function": "project_node_trace",
+    "source_dataclass": "DAGNodeTrace"
+  },
+  "key_order": [
+    "node_id",
+    "type",
+    "label",
+    "inputs",
+    "outputs",
+    "execution_ms",
+    "status",
+    "error"
+  ],
+  "keys": {
+    "node_id": {
+      "json_type": "string",
+      "nullable": false,
+      "from": "DAGNodeTrace.node_id"
+    },
+    "type": {
+      "json_type": "string",
+      "nullable": false,
+      "from": "DAGNodeTrace.node_type.value",
+      "enum": [
+        "market_data",
+        "indicator",
+        "operator",
+        "logic",
+        "ml_model",
+        "risk",
+        "execution",
+        "orderbook",
+        "ticker"
+      ]
+    },
+    "label": {
+      "json_type": "string",
+      "nullable": false,
+      "from": "DAGNodeTrace.node_label"
+    },
+    "inputs": {
+      "json_type": "array",
+      "nullable": false,
+      "items": "port",
+      "from": "DAGNodeTrace.inputs"
+    },
+    "outputs": {
+      "json_type": "array",
+      "nullable": false,
+      "items": "port",
+      "from": "DAGNodeTrace.outputs"
+    },
+    "execution_ms": {
+      "json_type": "number",
+      "nullable": false,
+      "from": "DAGNodeTrace.execution_ms"
+    },
+    "status": {
+      "json_type": "string",
+      "nullable": false,
+      "from": "DAGNodeTrace.status.value",
+      "enum": ["pass", "fail", "skip", "block"]
+    },
+    "error": {
+      "json_type": "string",
+      "nullable": true,
+      "from": "DAGNodeTrace.error_message",
+      "note": "null on a node that did not fail. The consuming side must treat null as absence of error, not as text."
+    }
+  },
+  "port": {
+    "source_dataclass": "NodeIO",
+    "key_order": ["key", "value", "dtype"],
+    "keys": {
+      "key": {
+        "json_type": "string",
+        "nullable": false,
+        "from": "NodeIO.key"
+      },
+      "value": {
+        "json_type": "string",
+        "nullable": false,
+        "from": "str(NodeIO.value)",
+        "note": "Always a string, never the raw value. NodeIO.value is typed Any, so a Decimal port would otherwise fail json.dumps and a bool would arrive untyped. The consuming side parses if it needs a number."
+      },
+      "dtype": {
+        "json_type": "string",
+        "nullable": false,
+        "from": "NodeIO.dtype",
+        "note": "Declares what the string in `value` represents: float, int, bool, string, array."
+      }
+    },
+    "dropped_fields": ["NodeIO.shape", "NodeIO.metadata"]
+  },
+  "example": {
+    "note": "One worked node. `node_trace` is the dataclass that produced `output`, so either side can see what maps to what. The two port values are deliberately not strings in Python - a Decimal input and a bool output - because str() is the step that makes them safe.",
+    "node_trace": {
+      "node_id": "n_op_1",
+      "node_type": "operator",
+      "node_label": "Crossover",
+      "execution_ms": 125.0,
+      "status": "pass",
+      "error_message": null,
+      "inputs": [
+        {"key": "close", "python_value": "Decimal('101.5')", "dtype": "float"}
+      ],
+      "outputs": [
+        {"key": "passed", "python_value": "True", "dtype": "bool"}
+      ]
+    },
+    "output": {
+      "node_id": "n_op_1",
+      "type": "operator",
+      "label": "Crossover",
+      "inputs": [
+        {"key": "close", "value": "101.5", "dtype": "float"}
+      ],
+      "outputs": [
+        {"key": "passed", "value": "True", "dtype": "bool"}
+      ],
+      "execution_ms": 125.0,
+      "status": "pass",
+      "error": null
+    }
+  }
+}

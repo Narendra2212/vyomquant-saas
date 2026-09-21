@@ -1,5 +1,7 @@
 {
-  "api_call_count": 12,
+  "_baseline_note_api_call_count": "AUTHORISED RE-RECORD of `api_call_count` \u2014 12 to 15 (task 32.7; Requirements 12.2, 12.3, 12.4, 12.5, 12.6, 12.8). This figure is `len(api_calls)` and nothing else, so it moves by exactly the number of entries that were added and by no other cause. The three are `api.library.myStrategies` (GET /api/library/my-strategies), `api.library.cancelSubscription` (POST /api/library/subscriptions/{expr}/cancel) and `api.library.renewSubscription` (POST /api/library/subscriptions/{expr}/renew); each carries its own `_baseline_note_entry` beside itself naming the requirement that puts it on this surface. NO CALL WAS REMOVED: all twelve the pre-change baseline recorded are still recorded here, and 12 + 3 = 15. This note covers the count only. It authorises no fourth call: a sixteenth entry appearing here is a failure whether or not this figure is updated with it, because the added entry would be reported in its own right.",
+  "_baseline_note_environment_filter": "Re-recorded for tasks 29.3 and 29.4 (Requirements 23.2, 23.3, 23.4, 23.6). ONE ADDITION in this file: the `environment` query parameter on GET /api/signal-trace/signals (`list_signals`, api_calls[5]) \u2014 Requirement 23.4's Execution_Environment filter, declared as a repeatable list like every other Requirement 17.2 filter category, with no default so Requirement 23.6's default (the caller's own signals across all environments) is unchanged. Nothing on that entry was removed, renamed or retyped: no path, method, rate limit or existing filter changed, no response key was removed, and its `raises` \u2014 which already recorded {detail_type: computed, status_code: e.http_status} before this change \u2014 is untouched. The detail handler GET /api/signal-trace/signals/{signal_id} is NOT recorded in this file; the 400/404 that task 29.3 added to it is annotated in `surface_signal_trace.json`, where that handler lives.\nCORRECTION (2026-06, task 30 checkpoint). An earlier version of this note said of the whole file \"Two ADDITIONS, nothing removed, renamed or retyped\". That was FALSE. This file also records four changes that ARE removals, renames and re-recorded shapes, none of them belonging to task 29.3/29.4 and none of them annotated at the time: api_calls[2] `creator_analytics` (decorator renamed, `returns` collapsed), api_calls[3] `my_library` (decorator renamed, `raises` emptied) and api_calls[7] `publish_strategy` (decorator renamed, two `returns` keys removed). Each is authorised by a task in this spec and each now carries its own `_baseline_note_*` member beside the entry it changed \u2014 read them there. The general point, which is why the wording mattered: under Requirements 25.7 and 25.8 the scope of an authorisation is the ENTRY it names, never the file it happens to sit in, so a file-level \"nothing was removed\" claim can only ever be read as covering changes it was never written about.",
+  "api_call_count": 15,
   "api_calls": [
     {
       "handler_count": 2,
@@ -160,12 +162,19 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_decorators": "AUTHORISED RE-RECORD of `decorators` (task 13.1; Requirements 1.3, 22.1). The baseline recorded `router.get('/creator/analytics')`; it now reads `literal_router.get('/creator/analytics')` (`library.py` line 3353). What changed is the ROUTER OBJECT the route is declared on, nothing about the route: the path string, the method, the handler, its dependencies and its (absent) rate limit are identical, and `route_path` \u2014 `/api/library/creator/analytics` \u2014 is unchanged, which is the recorded value that says where a caller reaches it. FastAPI matches in registration order, so while this route sat on `router` BELOW `@router.get('/creator/{creator_id}')` the parameterised route swallowed it permanently and the endpoint answered 422 from `_safe_uuid('analytics', 'creator_id')`: the decorator this baseline recorded named a route that could not be served. Every path-parameter-free library route is now declared on the module-level `literal_router`, and `router.routes[:0] = literal_router.routes` (`library.py` line 4883) splices those routes in front of the parameterised ones at include time. Asserted by tests/test_library_route_resolution.py::TestUnshadowedEndpoints::test_creator_analytics_is_not_shadowed_by_creator_profile and ::TestLiteralRouteResolution::test_literal_routes_precede_parameterised_routes_in_the_table.",
+          "_baseline_note_rate_limit": "AUTHORISED RE-RECORD of `decorators` and `parameters` on THIS handler only (`backend_app.routers.library.creator_analytics`, GET /api/library/creator/analytics) \u2014 task 33.2; Requirements 6.7, 22.4. Exactly two differences are covered and no others: (a) `decorators` GAINS one entry, `limiter.limit('60/60second', key_func=caller_or_address)`, in second position after `literal_router.get('/creator/analytics')` (`library.py` line 3424); (b) `parameters` GAINS the key `request`, as `{annotation: Request}` (`library.py` line 3425). The parameter is not a new input: `slowapi` reads the rate-limit key off the `Request`, so `@limiter.limit` requires the handler to declare one, and (b) exists only to make (a) work. Nothing was removed, renamed or retyped \u2014 `user` is still `{annotation: dict, depends_on: get_current_user}`, `route_path` is still `/api/library/creator/analytics`, `raises` is still `[]`, `returns` is still `['computed']`, and the pre-existing `literal_router.get(...)` decorator is unchanged and still first. `request` is NOT one of the five additive fields `design.md` declares, and ADDITIVE_FIELDS is deliberately NOT widened for it: this note permits an added `request` parameter and an added `limiter.limit` decorator HERE, on THIS handler, and nowhere else. An added `request` or an added rate limit on any other handler in any other baseline entry is still a failure, and a rate limit REMOVED from this handler is still a failure. AUTHORISING REQUIREMENTS. 22.4 \u2014 the Marketplace_API and the Paper_Trading_API SHALL apply rate limiting to EVERY endpoint, with a stricter limit on writes than on reads; before this change the endpoint carried no limit at all, so an authenticated caller could drive the per-currency settlement aggregation `settlement_service.creator_earnings` performs without bound. 6.7 \u2014 the reason the key function exists: 6.7 requires 120 requests per 60-second window PER AUTHENTICATED CALLER, which the global limiter's `key_func=get_remote_address` cannot express, so task 33.2 adds `backend_app/core/rate_limit_keys.py::caller_or_address` and every limit that has to count per caller passes it explicitly. WHAT THIS ENTRY IS NOT. This is an owner-scoped analytics read, not one of Requirement 6.7's catalogue, search or detail endpoints, so it does NOT carry 6.7's stacked pair: it has ONE limit, 60/60s keyed by caller, which is the stricter figure task 33.2's per-endpoint table gives it. The routes that do carry the 120-per-caller / 60-per-address pair \u2014 `browse_library`, `get_featured_strategies`, `get_trending_strategies`, `get_categories`, `get_creator_profile` \u2014 are not recorded in this file. REQUIREMENTS THIS IS AN EXCEPTION TO: 25.7 and 25.8, for these two differences and no others. Requirement 25.4's \"SHALL remain functional\" still holds for the strategies surface: the call it makes to this endpoint still resolves and still answers the same body to a caller inside the window; a caller outside it is refused 429 `MARKETPLACE_RATE_LIMITED` having computed and persisted nothing. Asserted by tests/test_task_33_2_rate_limit_keys.py.",
+          "_baseline_note_returns": "AUTHORISED RE-RECORD of `returns` (task 21.1; Requirements 1.4, 1.5, 1.7, 6.9, 10.3, 10.6, 10.7, 27.1, 28.2, 30.5). The baseline recorded TWO dict shapes over the keys {creator_id, published_strategies_count, total_earnings_usd, monthly_recurring_revenue, platform_fee_paid, payout_schedule, active_subscribers, rating_average} \u2014 the success body and the `except Exception:` body that answered the same keys zero-filled. Every one of those figures was a claim the reads did not support: the listing read selected `monthly_price` and `rating_average`, columns that do not exist on `library_strategies`, so the query failed with PostgreSQL 42703 and the zero-filled `except` branch was what a creator actually got \u2014 HTTP 200 reporting $0.00 earned, indistinguishable from a creator who earned nothing (Requirements 1.5, 1.7, 28.2); `monthly_recurring_revenue` was `sum(clone_count * float(monthly_price))`, a counter multiplied by a current price (Requirement 10.6) in binary floating point on a money path (Requirement 10.3); `platform_fee_paid` was `round(mrr * 0.90, 2)` on top of it; `payout_schedule` was a hardcoded sentence about a payout mechanism; `active_subscribers` renamed a column that counts Subscriptions ever taken (Requirement 28.2); and `rating_average: 0.0` reads as \"rated, and badly\" where nobody has rated (Requirements 6.9, 28.5). The handler now answers {creator_id, listings_count, published_strategies_count, subscriber_count, earnings[]}, plus `avg_rating` and `rating_count` ONLY when `rating_count > 0`, where `earnings[]` is the exact integer per-currency sum of `owner_share_minor` with reversals subtracted, in Minor_Units, from `settlement_service.creator_earnings`; a read that did not complete \u2014 or completed with no readable `data` \u2014 raises `MarketplaceError(MARKETPLACE_READ_FAILED)` at 503 instead of returning a figure.\nWHY THIS RECORDS `computed` AND WHAT IS BLIND BECAUSE OF IT. The capture derives `returns` from the AST (`capture_baseline._inferred_type`): a returned dict LITERAL becomes a type map, and anything else \u2014 including a returned local NAME \u2014 becomes `computed`. The new handler builds `response` as a local because `avg_rating`/`rating_count` are added conditionally, and `return response` is therefore unreadable to the capture. So this entry no longer sees the response shape at all, and a later key removal on this endpoint would not show up in THIS file. That is a real loss of coverage, recorded here rather than left implicit. It is covered instead behaviourally: tests/test_creator_analytics_regression.py drives the endpoint against `_FakeSupabase` and asserts the body key by key \u2014 the per-currency `earnings` list and its integer `owner_earnings_minor` (`TestEarningsAreLedgerSums`), the absence of every fabricated key in `FABRICATED_FIGURE_KEYS`, and the 503-with-no-numeric-payload on a failed read.",
           "decorators": [
-            "router.get('/creator/analytics')"
+            "literal_router.get('/creator/analytics')",
+            "limiter.limit('60/60second', key_func=caller_or_address)"
           ],
           "handler": "creator_analytics",
           "module": "backend_app.routers.library",
           "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
             "user": {
               "annotation": "dict",
               "depends_on": "get_current_user"
@@ -173,26 +182,7 @@
           },
           "raises": [],
           "returns": [
-            {
-              "active_subscribers": "computed",
-              "creator_id": "computed",
-              "monthly_recurring_revenue": "computed",
-              "payout_schedule": "str",
-              "platform_fee_paid": "computed",
-              "published_strategies_count": "int",
-              "rating_average": "computed",
-              "total_earnings_usd": "computed"
-            },
-            {
-              "active_subscribers": "int",
-              "creator_id": "computed",
-              "monthly_recurring_revenue": "float",
-              "payout_schedule": "str",
-              "platform_fee_paid": "float",
-              "published_strategies_count": "int",
-              "rating_average": "float",
-              "total_earnings_usd": "float"
-            }
+            "computed"
           ],
           "route_path": "/api/library/creator/analytics"
         }
@@ -207,23 +197,25 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_decorators": "AUTHORISED RE-RECORD of `decorators` (task 13.1; Requirements 1.3, 22.1). `router.get('/me')` now reads `literal_router.get('/me')` (`library.py` line 1154) \u2014 the same literal-route splice as `creator_analytics` above, for the same reason and with the same scope: the router object the route is declared on changed, the path string, method, handler, dependencies and rate limit did not, and `route_path` `/api/library/me` is unchanged. `GET /me` was matched by the parameterised `@router.get('/{library_id}')` while it was declared below it, so it answered 422 from `_safe_uuid('me', 'library_id')` rather than the owner's library. `router.routes[:0] = literal_router.routes` (`library.py` line 4883) puts every literal route in front of every parameterised one at include time. Asserted by tests/test_library_route_resolution.py::TestLiteralRouteResolution, whose `LITERAL_ROUTE_EXPECTATIONS` pins ('GET', '/me', 'my_library').",
+          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` (task 21.3). The baseline recorded one entry: `HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=\"Failed to fetch your library entries.\")`, raised by the `except Exception:` around the `library_strategies` read. It is gone because Requirement 1.5 requires a Marketplace read that did not complete to answer a structured error carrying a STABLE MACHINE-READABLE code at 500 or 503, and an `HTTPException` carries none: it answers the legacy `{error, message, status_code, path, timestamp}` envelope, whose `error` member is an ad-hoc sentence a client can only branch on by string-matching, and whose `path` member is an internal route Requirement 22.9 excludes from a response body. The handler now raises `MarketplaceError(MARKETPLACE_READ_FAILED)` (503), which the AST capture does not record under `raises` because `_raised_status_codes` records `HTTPException` raises only \u2014 so this is a re-record of the CAPTURE SHAPE, not the removal of a refusal: the failure is still refused, at a status the catalogue permits for that code (`errors.ALLOWED_HTTP_STATUS_FOR_CODE[MARKETPLACE_READ_FAILED] == {500, 503}`), in the declared `{error: {code, message, details}, request_id}` envelope, with the driver's message logged for an operator and never put in the body. The handler now also refuses a response object carrying no readable `data`, which previously fell through as an empty library \u2014 telling an owner their strategies are gone (Requirements 1.5, 1.7, 28.5). Nothing else about this handler moved: the success body is still `{items, total}` over `_MY_LIBRARY_FIELDS`, and a read that COMPLETED and matched nothing still answers 200 with an empty `items` and `total: 0`. Authorising requirements: 1.5, 1.7, 22.9, 28.2, 28.5, 30.5. Task 21.3's own text names this entry \u2014 \"Re-record ONLY the two baseline entries the change legitimately moves \u2014 `auth_admin_role.admin_routes[3]` (`admin_pending_strategies`) and `surface_strategies.api_calls[3]` (`my_library`) \u2026 through the `_baseline_note_raises` mechanism, citing the authorising requirements\" \u2014 and only the first of the two was written at the time; this is the missing half. Asserted by tests/test_marketplace_error_surface.py (the `my_library` cases).",
+          "_baseline_note_rate_limit": "AUTHORISED RE-RECORD of `decorators` and `parameters` on THIS handler only (`backend_app.routers.library.my_library`, GET /api/library/me) \u2014 task 33.2; Requirements 6.7, 22.4. Exactly two differences are covered and no others: (a) `decorators` GAINS one entry, `limiter.limit('120/60second', key_func=caller_or_address)`, in second position after `literal_router.get('/me')` (`library.py` line 1194); (b) `parameters` GAINS the key `request`, as `{annotation: Request}` (`library.py` line 1195). As on `creator_analytics` above, (b) exists only so that (a) can work \u2014 `slowapi` reads the rate-limit key off the `Request` \u2014 and it is not a new caller-supplied input. Nothing was removed, renamed or retyped: `user` is still `{annotation: dict, depends_on: get_current_user}`, `route_path` is still `/api/library/me`, `returns` is still the single `{items, total}` shape, `raises` is still `[]` for the reason `_baseline_note_raises` above records, and the pre-existing `literal_router.get('/me')` decorator is unchanged and still first. `request` is NOT one of the five additive fields `design.md` declares, and ADDITIVE_FIELDS is deliberately NOT widened for it: this note permits an added `request` parameter and an added `limiter.limit` decorator HERE, on THIS handler, and nowhere else, and a rate limit LATER REMOVED from this handler is still a failure. AUTHORISING REQUIREMENTS. 22.4 \u2014 rate limiting on every endpoint; this owner-scoped read of `library_strategies` carried none before. 6.7 \u2014 the requirement whose \"per authenticated caller\" window the global `key_func=get_remote_address` cannot express, which is why task 33.2 introduces `caller_or_address` and passes it explicitly here. 120/60s is the read-endpoint figure; it is ONE limit, not 6.7's stacked catalogue pair, because `GET /api/library/me` is an owner-scoped read rather than a catalogue, search or detail endpoint. REQUIREMENTS THIS IS AN EXCEPTION TO: 25.7 and 25.8, for these two differences and no others. Requirement 25.4 still holds for the strategies surface: the call still resolves and still answers `{items, total}` to a caller inside the window, and a caller outside it is refused 429 `MARKETPLACE_RATE_LIMITED` having read nothing. Asserted by tests/test_task_33_2_rate_limit_keys.py.",
           "decorators": [
-            "router.get('/me')"
+            "literal_router.get('/me')",
+            "limiter.limit('120/60second', key_func=caller_or_address)"
           ],
           "handler": "my_library",
           "module": "backend_app.routers.library",
           "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
             "user": {
               "annotation": "dict",
               "depends_on": "get_current_user"
             }
           },
-          "raises": [
-            {
-              "detail_type": "str",
-              "status_code": "status.HTTP_500_INTERNAL_SERVER_ERROR"
-            }
-          ],
+          "raises": [],
           "returns": [
             {
               "items": "computed",
@@ -238,6 +230,47 @@
       "path_template": "/api/library/me?strategy_id={strat.id}",
       "resolved": true,
       "via": "apiClient direct"
+    },
+    {
+      "_baseline_note_entry": "AUTHORISED RE-RECORD \u2014 this WHOLE ENTRY IS NEW (task 32.7; Requirements 12.2, 12.3, 12.4, 12.5, 12.6, 12.8). The strategies surface now calls one endpoint it did not call before: `api.library.myStrategies()` \u2192 GET /api/library/my-strategies (`Strategies.jsx` line 309). Task 32.7 requires it \u2014 the page must render `ownership: \"OWNED\" | \"SUBSCRIBED\"` and the affordances in `allowed_actions` AS RETURNED BY THE SERVER, with no client-side inference of either, so that the page cannot offer an action the server would refuse (12.2, 12.3, 12.4); a SUBSCRIBED entry can be started without the subscriber ever holding the strategy definition (12.5); and an entry whose Subscription does not entitle renders an explicit expired state with renewal offered rather than a stale list (12.6, 12.8). There is no way to satisfy that from the existing `endpoints.strategies.list()` call, which knows nothing about Subscriptions, which is why a call was ADDED rather than an existing one repointed. WHAT IS AND IS NOT AUTHORISED HERE. This note authorises the PRESENCE of this one entry \u2014 `(via api.library.myStrategies, GET, /api/library/my-strategies)` \u2014 and nothing else. It authorises no other added call on this surface, and it does not weaken anything: every call the pre-change baseline recorded is still recorded in this file, unchanged, and a later REMOVAL of any of them (including this one) is still a failure. WHY THE OTHER TWELVE ENTRIES DID NOT MOVE. Because this entry was INSERTED into a list the capture sorts by `(method, path_template, via)`, it displaced everything after it by one position. Diffed by index, that reported ~120 differences that had not happened \u2014 `api_calls[4].handlers[0].handler: baseline get_history, now my_strategies` and so on, none of which was true: `orders.get_history` was never removed and `library.my_strategies` never replaced it. That was a DEFECT IN THE DIFFER, fixed rather than re-recorded around (`test_baseline_unchanged.IDENTITY_KEYS`, which matches an `api_calls` entry on `(via, method, path_template)` and then compares the matched pair field by field). No entry in this file was re-recorded on account of that cascade.",
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "literal_router.get('/my-strategies')",
+            "limiter.limit('120/60second', key_func=caller_or_address)",
+            "limiter.limit('120/60second')"
+          ],
+          "handler": "my_strategies",
+          "module": "backend_app.routers.library",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "as_of": "str",
+              "items": "computed",
+              "owned_total": "computed",
+              "running_paper_sessions_available": "bool",
+              "subscribed_total": "computed",
+              "total": "int"
+            }
+          ],
+          "route_path": "/api/library/my-strategies"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/library/my-strategies",
+      "path_template": "/api/library/my-strategies",
+      "resolved": true,
+      "via": "api.library.myStrategies"
     },
     {
       "handler_count": 1,
@@ -320,6 +353,10 @@
               "has_default": true
             },
             "deployment_id": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "environment": {
               "annotation": "Optional",
               "has_default": true
             },
@@ -539,8 +576,10 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_decorators": "AUTHORISED RE-RECORD of `decorators` (task 13.1; Requirements 1.3, 22.1). `router.post('', status_code=status.HTTP_201_CREATED)` now reads `literal_router.post('', status_code=status.HTTP_201_CREATED)` (`library.py` line 1620) \u2014 the literal-route splice again, and again a change of the router object only. The recorded `limiter.limit('20/minute')` is still there and still second, the `status_code=status.HTTP_201_CREATED` is unchanged and still recorded as 201, `route_path` is still `/api/library`, and every parameter and dependency \u2014 including `require_marketplace_publish` and `check_marketplace_publish_quota` \u2014 is untouched. `router.routes[:0] = literal_router.routes` (`library.py` line 4883) performs the splice; tests/test_library_route_resolution.py::TestSpliceIntegrity::test_no_method_path_pair_is_registered_twice asserts the splice did not duplicate a route.",
+          "_baseline_note_returns": "AUTHORISED RE-RECORD of `returns` \u2014 a REAL REMOVAL of two response keys (task 15.1; Requirements 8.8, 8.9, 8.10, 8.11, 8.12, 8.14, 8.15, 22.2, 22.4). The baseline recorded `{library_id, message, moderation_status, evaluation_score, suggested_price}`; the handler now returns `{library_id, message, moderation_status}` (`library.py` lines 1831\u20131836). `evaluation_score` and `suggested_price` are GONE from the body, not renamed and not moved inside another key, and a client that read either will find it absent. That is authorised, not accidental: Requirement 8.11 removes pricing from the publication path altogether, and Requirements 8.8\u20138.10 make the Price_Range computed by `pricing_evaluator` and enforced by `POST /api/library/submissions/{submission_id}/price` the SINGLE enforcement point for what a Listing may cost. The deleted values were the reason it could not be single: `publish_strategy` computed a heuristic `eval_score`, gated free/paid on `min_score_for_free = 50` / `min_score_for_paid = 70`, and suggested one of four hardcoded points (199.99 / 99.99 / 49.99 / 29.99) \u2014 a price decided at publish time by a formula the submissions flow neither sees nor honours. `evaluation_score` remains a COLUMN on `library_strategies` and is written `NULL` by this path (`insert_payload` carries `\"evaluation_score\": None`) rather than as a number that no longer decides anything, and it stays in `listing_projection.DENIED_LISTING_COLUMNS` so it never reaches a non-owner. `suggested_price` was never a column; it existed only in this response. Nothing else about this entry moved: the status is still 201, `raises` still records all five refusals, and `library_id`, `message` and `moderation_status` (\"pending\") are unchanged \u2014 a publication still enters moderation exactly as it did.",
           "decorators": [
-            "router.post('', status_code=status.HTTP_201_CREATED)",
+            "literal_router.post('', status_code=status.HTTP_201_CREATED)",
             "limiter.limit('20/minute')"
           ],
           "handler": "publish_strategy",
@@ -589,11 +628,9 @@
           ],
           "returns": [
             {
-              "evaluation_score": "computed",
               "library_id": "computed",
               "message": "str",
-              "moderation_status": "str",
-              "suggested_price": "computed"
+              "moderation_status": "str"
             }
           ],
           "route_path": "/api/library",
@@ -605,6 +642,160 @@
       "path_template": "/api/library",
       "resolved": true,
       "via": "apiClient direct"
+    },
+    {
+      "_baseline_note_entry": "AUTHORISED RE-RECORD \u2014 this WHOLE ENTRY IS NEW (task 32.7; Requirements 12.6, 12.8). `Strategies.jsx` line 428 calls `api.library.cancelSubscription(entry.subscription_id)` \u2192 POST /api/library/subscriptions/{sub_id}/cancel. Task 32.7 lists `cancel_renewal` among the affordances a SUBSCRIBED entry may offer, and Requirements 12.6 and 12.8 require the page to render the affordances the server returned and to offer renewal or cancellation from the entry itself rather than leaving the subscriber to find them elsewhere. The action is taken ONLY when `allowed_actions` carries it \u2014 the page infers no entitlement of its own \u2014 so this call exists on the surface because the server may offer it, not because the client decided it could. SCOPE: this note authorises the presence of this one entry, `(via api.library.cancelSubscription, POST, /api/library/subscriptions/{expr}/cancel)`, and nothing else. Its recorded handler contract is the pre-existing `cancel_subscription` route as it stands, rate limit included; nothing about the handler was changed for this surface, and a later removal of this call or of any other recorded call is still a failure.",
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/subscriptions/{sub_id}/cancel')",
+            "limiter.limit('10/60second', key_func=caller_or_address)"
+          ],
+          "handler": "cancel_subscription",
+          "module": "backend_app.routers.library",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "sub_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "message": "str",
+              "status": "str",
+              "subscription_id": "computed"
+            },
+            {
+              "cancelled_at": "computed",
+              "status": "str",
+              "subscription_id": "computed"
+            }
+          ],
+          "route_path": "/api/library/subscriptions/{sub_id}/cancel"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/library/subscriptions/{expr}/cancel",
+      "path_template": "/api/library/subscriptions/{expr}/cancel",
+      "resolved": true,
+      "via": "api.library.cancelSubscription"
+    },
+    {
+      "_baseline_note_entry": "AUTHORISED RE-RECORD \u2014 this WHOLE ENTRY IS NEW (task 32.7; Requirements 12.6, 12.8). `Strategies.jsx` line 383 calls `api.library.renewSubscription(entry.subscription_id)` \u2192 POST /api/library/subscriptions/{sub_id}/renew. Task 32.7 requires that an entry whose Subscription does not entitle renders in an explicit expired state with every execution action disabled AND RENEWAL OFFERED (Requirements 12.6, 12.8); offering it means calling it, which is why this call is on the surface. Like `cancelSubscription`, it is offered only when the server's `allowed_actions` carries `renew`. SCOPE: this note authorises the presence of this one entry, `(via api.library.renewSubscription, POST, /api/library/subscriptions/{expr}/renew)`, and nothing else. Its recorded handler contract is the pre-existing `renew_subscription` route as it stands, rate limit included; nothing about the handler was changed for this surface, and a later removal of this call or of any other recorded call is still a failure.",
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/subscriptions/{sub_id}/renew')",
+            "limiter.limit('5/60second', key_func=caller_or_address)"
+          ],
+          "handler": "renew_subscription",
+          "module": "backend_app.routers.library",
+          "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
+            "sub_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/library/subscriptions/{sub_id}/renew"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/library/subscriptions/{expr}/renew",
+      "path_template": "/api/library/subscriptions/{expr}/renew",
+      "resolved": true,
+      "via": "api.library.renewSubscription"
+    },
+    {
+      "_baseline_note_entry": "AUTHORISED RE-RECORD of this entry \u2014 `api.strategies.deployVersion`'s POST path, `/api/strategy-operations/strategies/{expr}/versions/{expr}/deploy` \u2192 `/api/strategies/{expr}/versions/{expr}/deploy`, and with it `resolved` FALSE \u2192 TRUE (commit b3771c3, \"fix(api): deploy and deployments paths resolve to routes the backend registers\"). ONE CHANGE, REPORTED AS TWO: the differ matches `api_calls` on (`via`, `method`, `path_template`), so correcting a path reads as a removal plus an addition of the same `via`. THE OLD PATH RESOLVED TO NOTHING, and this file is the evidence: the pre-change capture froze `\"resolved\": false` for this call, i.e. the capture tool had already recorded that the path matched no backend route. `strategy_operations.py:2835` declares only `@router.post(\"/strategies/{strategy_id}/versions/{version}/deploy\")` and `main.py:644` mounts that router at `prefix=\"/api\"`, so `/api/strategy-operations/\u2026/deploy` was never registered. What made the prefixed spelling look correct is that the siblings either side of it register both: `preflight_deploy_version` registers both spellings of the preflight GET (`_PREFLIGHT_PATHS`, strategy_operations.py:2954\u20132961) and `execute_backtest` carries two `@router.post` decorators (strategy_operations.py:1332\u20131333). CONSEQUENCE OF THE DEFECT: the preflight GET answered, the deploy gate passed, the Deploy button enabled, and the POST the user then pressed 404'd. The correction the user reviewed and approved is frontend-only (`api/modules/strategies.js`, `lib/deployFlow.js`); no backend route, handler or gate was touched. It is strictly an improvement in the captured contract: where an unresolved entry recorded nothing beyond a path, this entry now resolves to `backend_app.routers.strategy_operations.deploy_version` and records its decorators, parameters, `raises` and `returns`, which is why re-recording it is safe rather than a regression papered over. SCOPE: this note covers this one entry. `api_call_count` is unchanged at 15 \u2014 one entry out, one in \u2014 and no other call on this surface moved; an unresolved-to-resolved re-record anywhere else in this file is a failure in its own right, whether or not this note sits nearby.",
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.post('/strategies/{strategy_id}/versions/{version}/deploy')",
+            "limiter.limit('50/minute')"
+          ],
+          "handler": "deploy_version",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "body": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "environment": {
+              "annotation": "str",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "strategy_id": {
+              "annotation": "str"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            },
+            "version": {
+              "annotation": "str"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str",
+                "missing_prerequisite": "computed"
+              },
+              "error_code": "DEPLOY_PREREQUISITE_NOT_MET",
+              "status_code": 409
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "VERSION_DEPLOY_FAILED",
+              "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "VERSION_NOT_FOUND",
+              "status_code": 404
+            }
+          ],
+          "returns": [
+            "computed"
+          ],
+          "route_path": "/api/strategies/{strategy_id}/versions/{version}/deploy"
+        }
+      ],
+      "method": "POST",
+      "path": "/api/strategies/{expr}/versions/{expr}/deploy",
+      "path_template": "/api/strategies/{expr}/versions/{expr}/deploy",
+      "resolved": true,
+      "via": "api.strategies.deployVersion"
     },
     {
       "handler_count": 2,
@@ -834,13 +1025,6 @@
       "path_template": "/api/strategies/{id}/pause",
       "resolved": true,
       "via": "api.strategies.pause"
-    },
-    {
-      "method": "POST",
-      "path": "/api/strategy-operations/strategies/{expr}/versions/{expr}/deploy",
-      "path_template": "/api/strategy-operations/strategies/{expr}/versions/{expr}/deploy",
-      "resolved": false,
-      "via": "api.strategies.deployVersion"
     },
     {
       "handler_count": 1,

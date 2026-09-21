@@ -230,18 +230,31 @@ async def test_rate_limiter_throttling():
 @pytest.mark.asyncio
 async def test_position_and_balance_reconciliation_detection():
     from backend_app.backend.paper_trading_service import get_paper_trading_service
+    from tests.paper_seed import bind_paper_persistence, release_paper_persistence
+
     paper_svc = get_paper_trading_service()
-    user_id = str(uuid4())
-    
-    # Create baseline local account
-    acct = paper_svc.get_or_create_account(user_id)
-    initial_avail = acct["available_balance"]
-    
-    # Open position
-    await paper_svc.place_order(user_id=user_id, symbol="BTC-USDT", side="buy", quantity=0.1, price=60000.0)
-    positions = paper_svc.get_positions(user_id)
-    
-    assert any(p.get("symbol") == "BTC-USDT" for p in positions)
-    pos_btc = next(p for p in positions if p.get("symbol") == "BTC-USDT")
-    assert Decimal(str(pos_btc["size"])) == Decimal("0.1")
-    assert Decimal(str(acct["available_balance"])) < Decimal(str(initial_avail))
+    # Paper balances and positions are rows in the ``paper_*`` tables as of
+    # marketplace-subscriptions-paper-trading task 23.2, and the service refuses rather than
+    # serving a remembered figure when there is no Persistence_Layer (Requirements 17.2, 28.3).
+    bind_paper_persistence(paper_svc)
+    try:
+        user_id = str(uuid4())
+
+        # Create baseline local account
+        acct = paper_svc.get_or_create_account(user_id)
+        initial_avail = acct["available_balance"]
+
+        # Open position
+        await paper_svc.place_order(user_id=user_id, symbol="BTC-USDT", side="buy", quantity=0.1, price=60000.0)
+        positions = paper_svc.get_positions(user_id)
+
+        assert any(p.get("symbol") == "BTC-USDT" for p in positions)
+        pos_btc = next(p for p in positions if p.get("symbol") == "BTC-USDT")
+        assert Decimal(str(pos_btc["size"])) == Decimal("0.1")
+        # Re-read the account. The dict a read returns is a projection of the persisted row, not
+        # the store itself, so it does not change under the caller when the row does - which is
+        # the point of the repoint, and is what makes the balance survive a restart.
+        acct_after = paper_svc.get_or_create_account(user_id)
+        assert Decimal(str(acct_after["available_balance"])) < Decimal(str(initial_avail))
+    finally:
+        release_paper_persistence(paper_svc)

@@ -1,0 +1,198 @@
+/* src/styles/tokens.css — THE token source of truth. Requirement 1.1.
+   No other file in this repository may declare a colour, radius, shadow,
+   transition, breakpoint, z-index or type-scale value.
+   src/design/tokens.js is GENERATED from this file: run `npm run tokens`.
+
+   `static` is required, not decorative. Tailwind v4 tree-shakes theme
+   variables it cannot see used, and it only sees them in utility class names.
+   Measured on tailwindcss 4.2.4: plain `@theme` emitted 33 of the 89 tokens
+   below and dropped the rest. The dropped set included every --z-*,
+   --transition-* and --breakpoint-* token, none of which has a Tailwind
+   utility namespace and so can only ever be read through var(). Since tokens
+   here are also consumed from inline styles via cssVar() during the migration,
+   every token must be emitted unconditionally. */
+@theme static {
+  /* ── Surface ─────────────────────────────────────────────── */
+  --color-surface-canvas:   #080A0E;   /* app background            (was C.bg0)   */
+  --color-surface-panel:    #0F1117;   /* cards, panels             (was C.bg1)   */
+  --color-surface-raised:   #151821;   /* elevated, hover           (was C.bg2)   */
+  --color-surface-inset:    #1A202C;   /* inputs, wells             (was C.bg3)   */
+  --color-surface-overlay:  rgba(8, 10, 14, 0.88);
+
+  /* ── Line ────────────────────────────────────────────────── */
+  --color-line-subtle:      #141922;
+  --color-line-default:     #1E2530;
+  --color-line-strong:      #2A3441;
+
+  /* ── Content ─────────────────────────────────────────────── */
+  --color-content-primary:   #F0F2F5;  /* 16.8:1 on panel          (was C.t1) */
+  --color-content-secondary: #8B95A5;  /*  6.2:1 on panel          (was C.t2) */
+  --color-content-muted:     #5A6578;  /*  3.2:1 — NON-TEXT ONLY   (was C.t3) */
+  --color-content-inverse:   #080A0E;
+  /* --color-content-muted is NON-TEXT ONLY. At 3.2:1 it fails AA for body
+     text. Valid for icons, rules, disabled glyphs and the not-available
+     em-dash, which always sits beside a labelled element. Body text that
+     used C.t3/C.t4 moves to --color-content-secondary (6.2:1). */
+
+  /* ── Brand ───────────────────────────────────────────────── */
+  --color-brand:             #00D4FF;  /* 10.7:1 on panel */
+  --color-brand-hover:       #33E0FF;
+  --color-brand-wash:        rgba(0, 212, 255, 0.10);
+
+  /* ── SEMANTIC STATUS — Requirement 1.4. Exactly one per state. ── */
+  --color-status-live:        #26A69A;  --color-status-live-wash:        rgba(38, 166, 154, 0.12);
+  --color-status-connected:   #26A69A;  --color-status-connected-wash:   rgba(38, 166, 154, 0.12);
+  --color-status-profit:      #26A69A;  --color-status-profit-wash:      rgba(38, 166, 154, 0.12);
+  --color-status-loss:        #EF5350;  --color-status-loss-wash:        rgba(239, 83, 80, 0.12);
+  --color-status-error:       #EF5350;  --color-status-error-wash:       rgba(239, 83, 80, 0.12);
+  --color-status-warning:     #F59E0B;  --color-status-warning-wash:     rgba(245, 158, 11, 0.12);
+  --color-status-guidance:    #F59E0B;  --color-status-guidance-wash:    rgba(245, 158, 11, 0.12);
+  --color-status-neutral:     #8B95A5;  --color-status-neutral-wash:     rgba(139, 149, 165, 0.10);
+  /* One amber: C.gold #F59E0B and C.warning #FFB74D collapse to #F59E0B for
+     both warning and guidance. They carried no semantic distinction and were
+     used interchangeably; #FFB74D is retired. */
+
+  /* ── ENVIRONMENT — Requirements 7.4, 8.5, 12.2, 12.3 ────── */
+  /* --color-env-live is red, not cyan. Live is the state a trader must never
+     mistake, so it takes the most alarming hue in the palette. This
+     deliberately reuses the loss hue, which is safe because the environment
+     badge always carries text and an icon — never colour alone — and it never
+     sits inside a P&L figure. */
+  --color-env-live:      #EF5350;  --color-env-live-wash:      rgba(239, 83, 80, 0.12);
+  --color-env-paper:     #818CF8;  --color-env-paper-wash:     rgba(99, 102, 241, 0.12);
+  --color-env-backtest:  #8B95A5;  --color-env-backtest-wash:  rgba(139, 149, 165, 0.10);
+
+  /* ── Typography ──────────────────────────────────────────── */
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', 'SF Mono', Menlo, Consolas, monospace;
+
+  --text-micro:   0.625rem;  --text-micro--line-height:   1rem;      /* 10px labels, chips */
+  --text-small:   0.6875rem; --text-small--line-height:   1.125rem;  /* 11px table body    */
+  --text-body:    0.8125rem; --text-body--line-height:    1.25rem;   /* 13px default       */
+  --text-title:   0.875rem;  --text-title--line-height:   1.25rem;   /* 14px panel title   */
+  --text-section: 1.125rem;  --text-section--line-height: 1.5rem;    /* 18px section head  */
+  --text-page:    1.5rem;    --text-page--line-height:    2rem;      /* 24px page title    */
+  --text-figure:  1.75rem;   --text-figure--line-height:  2rem;      /* 28px tier-1 metric */
+
+  /* ── Space (4px grid) ────────────────────────────────────── */
+  --spacing-1: 0.25rem; --spacing-2: 0.5rem;  --spacing-3: 0.75rem;
+  --spacing-4: 1rem;    --spacing-5: 1.25rem; --spacing-6: 1.5rem;
+  --spacing-8: 2rem;    --spacing-10: 2.5rem; --spacing-12: 3rem;
+
+  /* ── Radius ──────────────────────────────────────────────── */
+  --radius-xs: 2px; --radius-sm: 4px; --radius-md: 6px;
+  --radius-lg: 8px; --radius-xl: 12px; --radius-full: 9999px;
+
+  /* ── Elevation — no coloured glows. Calm by default (Req 1.5). ── */
+  --shadow-panel:   0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-raised:  0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-overlay: 0 16px 48px rgba(0, 0, 0, 0.60);
+
+  /* ── Motion ──────────────────────────────────────────────── */
+  --transition-fast: 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ── Breakpoints ─────────────────────────────────────────── */
+  --breakpoint-tablet:  768px;
+  --breakpoint-laptop:  1024px;
+  --breakpoint-desktop: 1440px;
+  --breakpoint-wide:    1920px;
+
+  /* ── Z-index ─────────────────────────────────────────────── */
+  --z-base: 0; --z-sticky: 10; --z-dropdown: 100; --z-drawer: 200;
+  --z-modal: 300; --z-toast: 400; --z-devtool: 500;
+
+  /* ── Focus ring — Requirement 18.2 ───────────────────────── */
+  --focus-ring-width:  2px;
+  --focus-ring-offset: 2px;
+  --focus-ring-color:  #00D4FF;
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     COMPATIBILITY ALIASES — DEPRECATED. Scheduled for removal.
+     ═══════════════════════════════════════════════════════════════════════
+
+     Every name below is an OLD name kept alive so that the pages this
+     initiative does NOT redesign keep compiling. Not one of them declares a
+     value: each is a pure `var()` reference to a canonical token above, so
+     Requirement 1.1's "exactly one source location" still holds and no two
+     names can drift apart. `scripts/gen-tokens.mjs` enforces that purity —
+     giving an alias a literal is a hard error — and quarantines them in the
+     JS mirror under `token.compat.*`, so a reader can see at a glance that a
+     name is on its way out.
+
+     WHY these exist. `src/index.css` declared a second, divergent palette
+     ("existing app palette" + "landing page design system") and 1,225
+     Tailwind utility call sites across `src/` were built on those names —
+     `text-text-primary`, `bg-bg-elevated`, `border-border-default`,
+     `text-accent-cyan` and so on. Deleting that palette without carrying the
+     names forward would make every one of those utilities compile to nothing,
+     silently, with no build error: exactly the failure this initiative exists
+     to fix (design.md §1.2 — 143 typography classes have already died that
+     way and have been rendering at the inherited size).
+
+     Nine of these names change VALUE as they converge, which is intended
+     (design.md §3.2): profit #10B981 → #26A69A, loss #EF4444 → #EF5350, their
+     two washes with them, and the cyan wash 0.15 → 0.10 alpha. The other
+     eleven resolve to the identical literal they had before.
+
+     WHEN they go. Each name is removed once the pages consuming it are
+     redesigned. The consumers are all out of scope for v1: the landing page
+     (`components/landing/**`), `components/waitlist/WaitlistForm.jsx`,
+     `components/admin/**`, `components/download/**`, `components/legal/**`,
+     `components/ui/**` and three `components/builder/*` files. So the whole
+     block survives v1 and is retired by the later spec that redesigns them.
+
+     DO NOT add a name here to make new code compile, and do not read one from
+     JavaScript. New code uses the canonical tokens above.
+
+     old name                   →  canonical token          (className sites)
+     ─────────────────────────────────────────────────────────────────────── */
+  --color-accent-cyan:       var(--color-brand);                 /* 293 */
+  --color-text-primary:      var(--color-content-primary);       /* 177 */
+  --color-text-muted:        var(--color-content-muted);         /* 141 — see the NON-TEXT ONLY note above */
+  --color-border-default:    var(--color-line-default);          /* 135 */
+  --color-text-secondary:    var(--color-content-secondary);     /* 127 */
+  --color-bg-elevated:       var(--color-surface-raised);        /*  91 */
+  --color-accent-profit:     var(--color-status-profit);         /*  63 — was #10B981, now the one profit hue */
+  --color-accent-loss:       var(--color-status-loss);           /*  55 — was #EF4444, now the one loss hue   */
+  --color-accent-gold:       var(--color-status-warning);        /*  32 */
+  --color-bg-surface:        var(--color-surface-panel);         /*  29 */
+  --color-text-inverse:      var(--color-content-inverse);       /*  23 */
+  --color-bg-primary:        var(--color-surface-canvas);        /*  17 */
+  --color-accent-cyan-dim:   var(--color-brand-wash);            /*  13 */
+  --color-border-active:     var(--color-line-strong);           /*  12 */
+  --color-accent-profit-dim: var(--color-status-profit-wash);    /*   6 */
+  --color-accent-loss-dim:   var(--color-status-loss-wash);      /*   4 */
+  --color-accent-gold-dim:   var(--color-status-warning-wash);   /*   3 */
+  --color-border-subtle:     var(--color-line-subtle);           /*   2 */
+  --color-bg-3:              var(--color-surface-inset);         /*   1 — components/ui/Button.jsx `secondary` */
+  --color-border:            var(--color-line-default);          /*   1 — components/ui/Button.jsx `secondary` */
+
+  /* NOT aliased, deliberately. The other 22 names index.css declares have zero
+     className call sites — `--color-bg-0/1/2`, `--color-bg-overlay`,
+     `--color-void`, `--color-cyan/green/red/purple/orange/gold`,
+     `--color-text-1/2/3`, `--spacing-22`, `--spacing-88`,
+     `--animate-gradient-sweep`, `--animate-shimmer` — so carrying them forward
+     would be inventing consumers. `--font-sans` and `--font-mono` need no alias:
+     they are declared canonically above under the same names, so `font-mono`'s
+     284 call sites keep resolving. Two names have a call site but no canonical
+     counterpart and are therefore NOT aliased here: `--spacing-18` (`h-18`,
+     components/landing/Navbar.jsx — Tailwind v4's `--spacing` multiplier still
+     generates it) and `--animate-pulse-glow` (components/landing/FinalCTA.jsx —
+     a coloured glow, which Requirement 1.5 retires rather than preserves). */
+}
+
+/* Requirement 18.2, applied once, so no control can omit it. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

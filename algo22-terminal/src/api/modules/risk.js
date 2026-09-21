@@ -58,16 +58,22 @@ export const riskApi = {
     put(`/api/risk/strategy-limits/${strategyId}`, payload),
 
   /**
-   * Get margin health metrics
+   * Get margin health metrics.
+   *
+   * ⚠️ PATH CORRECTION ⚠️
+   * ---------------------
+   * This read used to address `/api/risk/account-health`, which no router declares — a 404
+   * on every call. `routers/risk.py` declares `GET /margin-health` (and `GET /status`), so
+   * the correct address is the one below. `pages/RiskSettings.jsx` is the caller and renders
+   * `margin_ratio`, `free_margin` and `risk_score`, which is exactly the body
+   * `get_margin_health` returns; the read is real and was simply not being reached.
+   *
+   * Its sibling `getAccountHealth` addressed the same dead path and was deleted rather than
+   * repointed: it had no caller, and there is no `/account-health` endpoint for it to mean.
+   *
    * @returns {Promise<MarginHealth>}
    */
-  getMarginHealth: () => get('/api/risk/account-health'),
-
-  /**
-   * Get account health
-   * @returns {Promise<MarginHealth>}
-   */
-  getAccountHealth: () => get('/api/risk/account-health'),
+  getMarginHealth: () => get('/api/risk/margin-health'),
 
   /**
    * Activate kill switch

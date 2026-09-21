@@ -43,7 +43,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 #  Global exception handler 
 from fastapi.responses import JSONResponse
-from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -82,6 +81,8 @@ from backend_app.core.consistency_checker import (PositionConsistencyChecker,
 from backend_app.core.database import Base, SessionLocal, engine
 # Safety feature flags
 from backend_app.core.feature_flags import ExecutionContext
+from backend_app.core.http_metrics import \
+    MarketplacePaperHttpMetricsMiddleware
 from backend_app.core.metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS_TOTAL
 from backend_app.core.models.execution_record import \
     ExecutionRecordModel  # noqa: F401
@@ -142,7 +143,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "'self' "
             "ws: wss: "
             "https://*.vyomquant.com wss://*.vyomquant.com "
-            "https://*.vyomquant.in "
+            "https://vyomquant.in https://*.vyomquant.in "
+            "wss://vyomquant.in wss://*.vyomquant.in "
             "https://*.supabase.co wss://*.supabase.co "
             "https://*.sentry.io "
             "https://*.clarity.ms "
@@ -161,7 +163,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "'self' data: blob: "
             "https://cdn.jsdelivr.net "
             "https://fastapi.tiangolo.com "
-            "https://vyomquant.in "
+            "https://vyomquant.in https://*.vyomquant.in "
             "https://*.clarity.ms "
             "https://www.googletagmanager.com"
         )
@@ -573,7 +575,13 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# A refused request answers the catalogue's MARKETPLACE_RATE_LIMITED (429) through the one
+# structured envelope, instead of slowapi's ``{"error": "Rate limit exceeded: 120 per 1
+# minute"}`` — a sentence with no machine-readable code that prints the limit back at the
+# caller (Requirements 6.11, 22.4, 22.9). slowapi's own ``_rate_limit_exceeded_handler`` is
+# superseded and its import removed, so there is one 429 shape in the process rather than two.
+from backend_app.core.rate_limit_keys import marketplace_rate_limit_handler
+app.add_exception_handler(RateLimitExceeded, marketplace_rate_limit_handler)
 
 # Marketplace and paper-trading structured errors (marketplace-subscriptions-paper-trading
 # task 5.5). One handler serves MarketplaceError and PaperError alike — it is registered
@@ -588,6 +596,12 @@ app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(PrometheusMiddleware)
+# marketplace-subscriptions-paper-trading task 33.5 (Requirements 26.6, 27.6): the per-route
+# latency and error-rate metrics for the endpoints that spec introduced or modified, recorded onto
+# the one `backend/metrics.py` collector that `routers/metrics.py` exposes. Additive - it records
+# `marketplace.http.*` and `paper.http.*` for `/api/library/*` and `/api/paper/*` and leaves every
+# other request, and every figure `PrometheusMiddleware` above already records, untouched.
+app.add_middleware(MarketplacePaperHttpMetricsMiddleware)
 if CorrelationIdMiddleware:
     app.add_middleware(CorrelationIdMiddleware)
 

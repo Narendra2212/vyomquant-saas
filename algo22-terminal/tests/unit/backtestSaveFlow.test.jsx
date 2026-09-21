@@ -19,22 +19,61 @@
  * re-asserted here.
  */
 
-import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
-// Charts are not the subject, and jsdom gives `ResponsiveContainer` no box to measure.
-vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div data-testid="responsive-container">{children}</div>,
-  AreaChart: ({ children }) => <div data-testid="area-chart">{children}</div>,
-  Area: () => <div data-testid="area" />,
-  CartesianGrid: () => <div data-testid="grid" />,
-  XAxis: () => <div data-testid="x-axis" />,
-  YAxis: () => <div data-testid="y-axis" />,
-  Tooltip: () => <div data-testid="tooltip" />,
-}));
+/*
+ * Charts are not the subject, and recharts needs layout APIs jsdom does not implement.
+ *
+ * The stub is `ds/Chart` and no longer `recharts`, because task 23.2 put both tier-2 curves
+ * behind `lazy(() => import('../components/ds/Chart'))`: the page imports recharts nowhere,
+ * and a `vi.mock('recharts', …)` can no longer satisfy the lazy chunk — it resolves
+ * `ds/Chart`, which imports more of recharts than a hand-written factory declares, and the
+ * rejected import takes the region down. Stubbing the module the page actually asks for is
+ * the boundary that exists; it is what `dashboard_phase2a_ui.test.jsx` did at task 19.1b and
+ * `portfolio-rendering.test.jsx` at 16.2. Nothing asserted below concerns a chart.
+ */
+vi.mock('../../src/components/ds/Chart', () => {
+  const Stub = (props) => <figure data-testid="chart" data-chart-kind={props.kind} />;
+  return { __esModule: true, Chart: Stub, default: Stub };
+});
+
+/*
+ * The two market controls the configuration flow reuses from task 23.1 —
+ * `builder/AssetSelector` and `builder/TimeframeSelector` — read the venue's asset universe
+ * and the pipeline's published timeframe set on mount, both through the shared axios instance
+ * rather than through `src/api`. Unmocked, mounting this page attempts two real requests that
+ * jsdom sends at localhost and reports as unhandled `AggregateError`s.
+ *
+ * They are refused here rather than stubbed with a market list, for the same reason the charts
+ * above are replaced rather than measured: market selection is not this suite's subject, and a
+ * fabricated universe would be a list neither the page nor a trader could have got from the
+ * platform. Both controls answer a refusal with their own error state and a retry, so what
+ * renders during these tests is exactly what a trader sees when those reads fail — and the
+ * save flow, which is the subject, is unaffected either way because the execute endpoint
+ * accepts no market at all (SB-06).
+ */
+vi.mock('../../src/apiClient', () => {
+  const refuse = () => Promise.reject(new Error('this suite makes no network requests'));
+  return {
+    default: { get: refuse, post: refuse, put: refuse, patch: refuse, delete: refuse },
+    get: refuse,
+    post: refuse,
+    put: refuse,
+    del: refuse,
+    patch: refuse,
+    publicGet: refuse,
+    ApiError: Error,
+    clearApiCache: () => {},
+    getMetrics: () => ({}),
+    getToken: () => null,
+    isAuthenticated: () => false,
+    logout: refuse,
+    testConnection: refuse,
+  };
+});
 
 const { mockStrategies, mockExchange } = vi.hoisted(() => ({
   mockStrategies: {

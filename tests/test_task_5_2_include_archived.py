@@ -94,6 +94,14 @@ LIFTED_DAG_KEYS = {
 
 ARCHIVAL_KEYS = {"is_archived", ARCHIVED_AT}
 
+#: The two activity timestamps vyomquant-ui-redesign BC-3 and BC-4 add to this projection
+#: (that spec's tasks 12.3 and 12.4, design.md §7.2). Named here so the exact-equality guard
+#: in :class:`TestResponseShape` stays exact: task 5.2's claim is that ``select("*")`` did not
+#: widen the response *as a side effect*, and these two are a deliberate, spec-registered
+#: addition rather than a leaked column. ``tests/test_strategies_list_projection.py`` is what
+#: holds their own semantics. Neither carries any value task 5.2 asserts.
+ACTIVITY_KEYS = {"last_signal_at", "last_execution_at"}
+
 
 # ---------------------------------------------------------------------------
 # Doubles (the pattern task 5.1's suite established)
@@ -498,7 +506,7 @@ class TestResponseShape:
         body = _list(_Supabase(_rows()), {"include_archived": "true"})
 
         keys = set(_entry(body, ACTIVE_ID))
-        assert keys == PUBLISHED_COLUMNS | LIFTED_DAG_KEYS | ARCHIVAL_KEYS
+        assert keys == PUBLISHED_COLUMNS | LIFTED_DAG_KEYS | ARCHIVAL_KEYS | ACTIVITY_KEYS
 
     @pytest.mark.parametrize(
         "column", ["sell_logic", "risk", "indicators", "ml_model_path", "user_id"]

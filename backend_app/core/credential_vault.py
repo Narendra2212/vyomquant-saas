@@ -70,6 +70,67 @@ def _validate_encryption_key_strength(key: str) -> None:
             logger.warning(f"Encryption key contains weak pattern: {pattern}")
 
 
+# Per-type floors below which a credential value cannot be a real exchange-issued
+# secret. Deliberately far below the shortest length any supported venue actually
+# issues (Bybit's 18-character key is the shortest observed), because this check has
+# never executed in production and a floor set too high locks existing traders out of
+# adding a working credential. See _validate_credential_strength.
+_MIN_CREDENTIAL_LENGTH: Dict["CredentialType", int] = {}
+
+
+def _minimum_credential_length(credential_type: "CredentialType") -> int:
+    """Floor for ``credential_type``, or the conservative default for unknown types."""
+    return _MIN_CREDENTIAL_LENGTH.get(credential_type, 4)
+
+
+def _validate_credential_strength(value: str, credential_type: "CredentialType") -> None:
+    """
+    Reject a credential value that cannot possibly be a real exchange-issued secret.
+
+    Args:
+        value: Credential value (plaintext) - NEVER logged, echoed, or included in any
+            raised message
+        credential_type: Type of credential, which selects the length floor
+
+    Raises:
+        ValueError: if the value is empty, whitespace-only, or shorter than the floor
+            for its type.
+
+    SCOPE - read this before adding a rule.
+
+    This check guards the live-trading onboarding path: it runs on every exchange API
+    credential a trader stores. It is deliberately, permanently limited to
+    *unambiguous* invalidity - absent, blank, or absurdly short. It does NOT and MUST
+    NOT enforce:
+
+    - character-class or entropy rules. Exchange keys are issued by the venue, not
+      chosen by the user. Binance issues 64-character alphanumerics, Bybit 18, OKX a
+      36-character UUID; an entropy heuristic tuned on one venue rejects another.
+    - format or charset rules. Coinbase Advanced Trade issues EC private keys in PEM,
+      complete with newlines and ``-----BEGIN``; Kraken issues base64 with ``+/=``.
+    - a maximum length, for the same PEM reason.
+    - dictionary or "weak pattern" rules. A venue-issued key may legitimately contain
+      any substring.
+
+    Any of those would reject a legitimate key and lock a trader out of connecting a
+    working exchange account - a strictly worse outcome than the weak-secret case this
+    function exists to catch, since the trader cannot work around it. Rejecting only
+    what no venue could have issued keeps that impossible.
+    """
+    if value is None or not str(value).strip():
+        raise ValueError(
+            f"Credential value for {credential_type.value} is empty or whitespace-only"
+        )
+
+    minimum = _minimum_credential_length(credential_type)
+    length = len(str(value).strip())
+    if length < minimum:
+        raise ValueError(
+            f"Credential value for {credential_type.value} is too short: "
+            f"{length} characters, minimum {minimum}"
+        )
+
+
 def _validate_key_rotation_policy(credential_id: str, exchange_id: str) -> None:
     """
     Validate key rotation policy compliance.
@@ -104,6 +165,20 @@ class CredentialType(Enum):
     PASSWORD = "password"
     API_SECRET = "api_secret"
     PASSPHRASE = "passphrase"
+
+
+# Populated here because the floors are keyed by CredentialType, which is declared
+# after the validator that reads them.
+_MIN_CREDENTIAL_LENGTH.update({
+    # Venue-issued material. Shortest observed across supported venues is Bybit's
+    # 18-character key; 8 leaves a wide margin.
+    CredentialType.API_KEY: 8,
+    CredentialType.SECRET_KEY: 8,
+    CredentialType.API_SECRET: 8,
+    # User-chosen at the venue, so the venue's own minimum governs and may be low.
+    CredentialType.PASSPHRASE: 4,
+    CredentialType.PASSWORD: 4,
+})
 
 
 @dataclass
@@ -280,10 +355,13 @@ class CredentialVault:
         # SECURITY: Validate credential strength before storage
         _validate_credential_strength(value, credential_type)
         
-        # SECURITY: Additional key management verification
+        credential_id = self._generate_credential_id(user_id, exchange_id, credential_type)
+        
+        # SECURITY: Additional key management verification. Ordered after the id is
+        # derived because the policy check takes it as an argument - reading it two
+        # lines earlier was an unbound local that raised on every single store.
         _validate_key_rotation_policy(credential_id, exchange_id)
         
-        credential_id = self._generate_credential_id(user_id, exchange_id, credential_type)
         salt = self._generate_salt()
         encrypted_value = self._encrypt(value, salt)
         

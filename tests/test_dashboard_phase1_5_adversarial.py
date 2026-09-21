@@ -21,6 +21,31 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend_app.backend.dashboard_aggregation_service import DashboardAggregationService
 from backend_app.backend.paper_trading_service import get_paper_trading_service
+from tests.paper_seed import (
+    bind_paper_persistence,
+    release_paper_persistence,
+    seed_account,
+    seed_fill,
+    seed_position,
+)
+
+
+@pytest.fixture(autouse=True)
+def _paper_persistence():
+    """Give the paper service the storage it now requires.
+
+    Task 23.2 moved every paper figure into the ``paper_*`` tables, so the adversarial state
+    below is written through the repository rather than assigned to ``_trades`` / ``_positions``
+    - see ``tests/paper_seed.py``. The tenant-isolation claim is if anything stronger for it:
+    ``user_id`` is now a predicate on every statement, so User B's rows are never fetched while
+    answering User A rather than merely never returned.
+    """
+    service = get_paper_trading_service()
+    bind_paper_persistence(service)
+    try:
+        yield service
+    finally:
+        release_paper_persistence(service)
 
 
 @pytest.fixture
@@ -70,58 +95,43 @@ async def test_realized_pnl_forensic_utc_boundary(user_a, dashboard_service):
     today_0001 = (today_start_utc + timedelta(seconds=1)).isoformat()
     today_0430 = (today_start_utc + timedelta(hours=4, minutes=30)).isoformat()
     
-    paper_svc._trades[user_a["id"]] = [
-        {
-            "execution_id": "exec_yest_win",
-            "order_id": "ord_1",
-            "symbol": "BTC/USDT",
-            "side": "sell",
-            "quantity": "1.0",
-            "price": "65000.0",
-            "fee": "5.0",
-            "realized_pnl": "1000.00",
-            "executed_at": yesterday_2359
-        },
-        {
-            "execution_id": "exec_today_win",
-            "order_id": "ord_2",
-            "symbol": "ETH/USDT",
-            "side": "sell",
-            "quantity": "2.0",
-            "price": "3600.0",
-            "fee": "2.0",
-            "realized_pnl": "450.00",
-            "executed_at": today_0001
-        },
-        {
-            "execution_id": "exec_today_loss",
-            "order_id": "ord_3",
-            "symbol": "SOL/USDT",
-            "side": "sell",
-            "quantity": "10.0",
-            "price": "140.0",
-            "fee": "1.0",
-            "realized_pnl": "-200.00",
-            "executed_at": today_0430
-        }
-    ]
+    for execution_id, symbol, quantity, price, fee, realized, instant in (
+        ("exec_yest_win", "BTC/USDT", "1.0", "65000.0", "5.0", "1000.00", yesterday_2359),
+        ("exec_today_win", "ETH/USDT", "2.0", "3600.0", "2.0", "450.00", today_0001),
+        ("exec_today_loss", "SOL/USDT", "10.0", "140.0", "1.0", "-200.00", today_0430),
+    ):
+        seed_fill(
+            paper_svc,
+            user_a["id"],
+            symbol=symbol,
+            side="sell",
+            quantity=quantity,
+            price=price,
+            fee=fee,
+            realized_pnl=realized,
+            executed_at=instant,
+            execution_id=execution_id,
+        )
     
     # Open position with +$300 unrealized profit
-    paper_svc._positions[user_a["id"]] = {
-        "BTC/USDT": {
-            "symbol": "BTC/USDT",
-            "side": "long",
-            "size": "0.1",
-            "entry_price": "60000.0",
-            "current_price": "63000.0",
-            "unrealized_pnl": "300.00",
-            "updated_at": now_utc.isoformat()
-        }
-    }
+    seed_position(
+        paper_svc,
+        user_a["id"],
+        symbol="BTC/USDT",
+        side="long",
+        size="0.1",
+        entry_price="60000.0",
+        current_price="63000.0",
+        unrealized_pnl="300.00",
+        price_at=now_utc.isoformat(),
+    )
     
-    acct = paper_svc.get_or_create_account(user_a["id"])
-    acct["available_balance"] = "101250.00"  # 100000 + 1000 + 450 - 200
-    acct["realized_pnl"] = "1250.00"
+    seed_account(
+        paper_svc,
+        user_a["id"],
+        available_balance="101250.00",  # 100000 + 1000 + 450 - 200
+        realized_pnl="1250.00",
+    )
     
     overview = await dashboard_service.get_portfolio_overview(user_a, environment="paper")
     
@@ -237,12 +247,26 @@ async def test_strict_tenant_isolation(user_a, user_b, dashboard_service):
     paper_svc.reset_account(user_a["id"], capital=11111.0)
     paper_svc.reset_account(user_b["id"], capital=22222.0)
     
-    paper_svc._positions[user_a["id"]] = {
-        "BTC/USDT": {"symbol": "BTC/USDT", "side": "long", "size": "1.0", "entry_price": "60000.0", "current_price": "60000.0", "unrealized_pnl": "0.0"}
-    }
-    paper_svc._positions[user_b["id"]] = {
-        "ETH/USDT": {"symbol": "ETH/USDT", "side": "long", "size": "5.0", "entry_price": "3000.0", "current_price": "3000.0", "unrealized_pnl": "0.0"}
-    }
+    seed_position(
+        paper_svc,
+        user_a["id"],
+        symbol="BTC/USDT",
+        side="long",
+        size="1.0",
+        entry_price="60000.0",
+        current_price="60000.0",
+        unrealized_pnl="0.0",
+    )
+    seed_position(
+        paper_svc,
+        user_b["id"],
+        symbol="ETH/USDT",
+        side="long",
+        size="5.0",
+        entry_price="3000.0",
+        current_price="3000.0",
+        unrealized_pnl="0.0",
+    )
     
     data_a = await dashboard_service.get_dashboard_data(user_a, environment="paper")
     data_b = await dashboard_service.get_dashboard_data(user_b, environment="paper")

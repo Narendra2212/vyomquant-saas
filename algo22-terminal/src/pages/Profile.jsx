@@ -7,7 +7,8 @@ import {
   ChevronRight, Send, Globe
 } from "lucide-react";
 import { api } from "../api";
-import { C, SectionH, Inp } from "../components/ui-legacy/primitives";
+import { SectionH, Inp } from "../components/common/primitives";
+import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 
@@ -252,28 +253,42 @@ export default function Profile() {
   function NotificationSwitch({ label, description, icon: Icon, checked, onChange }) {
     return (
       <div 
+        // A pointer-only toggle cannot be reached without a mouse. It is a switch, so it
+        // gets the switch role, its checked state, a tab stop and Enter/Space activation.
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        tabIndex={0}
         onClick={() => onChange(!checked)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+            // Space scrolls the page by default, which would move the row out from
+            // under the setting just toggled.
+            event.preventDefault();
+            onChange(!checked);
+          }
+        }}
         style={{
           display: "flex",
           alignItems: "center",
           gap: 12,
           padding: "10px 14px",
-          background: C.bg2,
-          border: `1px solid ${checked ? `${C.accent}33` : C.border}`,
+          background: token.surface.raised,
+          border: `1px solid ${checked ? `${token.brand.base}33` : token.line.default}`,
           borderRadius: 8,
           cursor: "pointer",
           transition: "all 0.15s"
         }}
       >
         <div style={{ 
-          color: checked ? C.accent : C.t3,
+          color: checked ? token.brand.base : token.content.muted,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           width: 32,
           height: 32,
           borderRadius: 6,
-          background: checked ? `${C.accent}15` : C.bg3,
+          background: checked ? `${token.brand.base}15` : token.surface.inset,
           transition: "all 0.15s"
         }}>
           {Icon ? <Icon size={16} /> : <Bell size={16} />}
@@ -283,7 +298,7 @@ export default function Profile() {
           <div style={{ 
             fontSize: 12, 
             fontWeight: 600, 
-            color: C.t1,
+            color: token.content.primary,
             marginBottom: 2,
             display: "flex",
             alignItems: "center",
@@ -291,7 +306,7 @@ export default function Profile() {
           }}>
             {label}
           </div>
-          <div style={{ fontSize: 10, color: C.t3, lineHeight: 1.3 }}>
+          <div style={{ fontSize: 10, color: token.content.muted, lineHeight: 1.3 }}>
             {description}
           </div>
         </div>
@@ -299,7 +314,7 @@ export default function Profile() {
         <div style={{
           width: 38,
           height: 20,
-          background: checked ? C.accent : C.border,
+          background: checked ? token.brand.base : token.line.default,
           borderRadius: 10,
           position: "relative",
           transition: "background 0.2s",
@@ -324,10 +339,10 @@ export default function Profile() {
   if (loading) {
     return (
       <div style={{ padding: 24, overflowY: "auto", flex: 1 }}>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "50vh", color: C.t2, fontFamily: "monospace" }}>
-          <Loader2 className="animate-spin" size={32} style={{ color: C.accent, marginBottom: 12 }} />
-          <div style={{ fontSize: 13, color: C.t1, fontWeight: 600 }}>Loading Trading Account Controls...</div>
-          <div style={{ fontSize: 11, color: C.t3, marginTop: 4 }}>Synchronizing authoritative user contracts</div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "50vh", color: token.content.secondary, fontFamily: "monospace" }}>
+          <Loader2 className="animate-spin" size={32} style={{ color: token.brand.base, marginBottom: 12 }} />
+          <div style={{ fontSize: 13, color: token.content.primary, fontWeight: 600 }}>Loading Trading Account Controls...</div>
+          <div style={{ fontSize: 11, color: token.content.muted, marginTop: 4 }}>Synchronizing authoritative user contracts</div>
         </div>
       </div>
     );
@@ -337,11 +352,11 @@ export default function Profile() {
     return (
       <div style={{ padding: 24, overflowY: "auto", flex: 1 }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "50vh", textAlign: "center" }}>
-          <AlertCircle size={48} style={{ color: C.red, marginBottom: 16 }} />
-          <div style={{ color: C.red, fontSize: 16, fontWeight: 700, marginBottom: 8, letterSpacing: -0.3 }}>
+          <AlertCircle size={48} style={{ color: token.status.loss.fg, marginBottom: 16 }} />
+          <div style={{ color: token.status.loss.fg, fontSize: 16, fontWeight: 700, marginBottom: 8, letterSpacing: -0.3 }}>
             Trading Account Synchronization Error
           </div>
-          <div style={{ color: C.t2, fontSize: 13, marginBottom: 24, maxWidth: 460, lineHeight: 1.5 }}>
+          <div style={{ color: token.content.secondary, fontSize: 13, marginBottom: 24, maxWidth: 460, lineHeight: 1.5 }}>
             {error}
           </div>
           
@@ -375,7 +390,7 @@ export default function Profile() {
           )}
           
           {retryCount > 0 && (
-            <div style={{ color: C.t3, fontSize: 11, fontFamily: "monospace", marginTop: 16 }}>
+            <div style={{ color: token.content.muted, fontSize: 11, fontFamily: "monospace", marginTop: 16 }}>
               Sync attempts: {retryCount}
             </div>
           )}
@@ -399,12 +414,12 @@ export default function Profile() {
     <div style={{ padding: "20px 24px", overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: 20 }}>
       
       {/* ── Top Header & Status Bar ─────────────────────────────────────────────── */}
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 16, borderBottom: `1px solid ${C.border}`, paddingBottom: 16 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 16, borderBottom: `1px solid ${token.line.default}`, paddingBottom: 16 }}>
         <div>
-          <h1 style={{ color: C.t1, fontSize: 20, fontWeight: 800, letterSpacing: "-0.5px", margin: 0 }}>
+          <h1 style={{ color: token.content.primary, fontSize: 20, fontWeight: 800, letterSpacing: "-0.5px", margin: 0 }}>
             PROFILE & ACCOUNT
           </h1>
-          <p style={{ color: C.t3, fontSize: 11, fontFamily: "monospace", marginTop: 4 }}>
+          <p style={{ color: token.content.muted, fontSize: 11, fontFamily: "monospace", marginTop: 4 }}>
             Trading terminal identity, automation context, security posture, and account preferences
           </p>
         </div>
@@ -422,9 +437,9 @@ export default function Profile() {
             fontSize: 10,
             fontWeight: 700,
             fontFamily: "monospace",
-            color: C.green
+            color: token.status.profit.fg
           }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.green, display: "inline-block" }} />
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: token.status.profit.fg, display: "inline-block" }} />
             ACCOUNT ACTIVE
           </div>
 
@@ -432,14 +447,14 @@ export default function Profile() {
             display: "flex", 
             alignItems: "center", 
             gap: 6, 
-            background: `${C.accent}15`, 
-            border: `1px solid ${C.accent}40`, 
+            background: `${token.brand.base}15`, 
+            border: `1px solid ${token.brand.base}40`, 
             padding: "4px 10px", 
             borderRadius: 6,
             fontSize: 10,
             fontWeight: 700,
             fontFamily: "monospace",
-            color: C.accent
+            color: token.brand.base
           }}>
             TIER: {planDisplay}
           </div>
@@ -449,13 +464,13 @@ export default function Profile() {
               display: "flex", 
               alignItems: "center", 
               gap: 6, 
-              background: C.bg3, 
-              border: `1px solid ${C.border}`, 
+              background: token.surface.inset, 
+              border: `1px solid ${token.line.default}`, 
               padding: "4px 10px", 
               borderRadius: 6,
               fontSize: 10,
               fontFamily: "monospace",
-              color: C.t2
+              color: token.content.secondary
             }}>
               Member since {memberSince}
             </div>
@@ -477,13 +492,13 @@ export default function Profile() {
                   width: 56,
                   height: 56,
                   borderRadius: "50%",
-                  background: C.bg3,
-                  border: `2px solid ${C.border}`,
+                  background: token.surface.inset,
+                  border: `2px solid ${token.line.default}`,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   fontSize: 24,
-                  color: C.accent,
+                  color: token.brand.base,
                   overflow: "hidden",
                   flexShrink: 0
                 }}>
@@ -494,13 +509,13 @@ export default function Profile() {
                   )}
                 </div>
                 <div>
-                  <h2 style={{ fontSize: 16, fontWeight: 700, color: C.t1, margin: 0 }}>
+                  <h2 style={{ fontSize: 16, fontWeight: 700, color: token.content.primary, margin: 0 }}>
                     {profile?.display_name || profile?.username || "Trader"}
                   </h2>
-                  <div style={{ color: C.t3, fontSize: 11, fontFamily: "monospace", marginTop: 2 }}>
+                  <div style={{ color: token.content.muted, fontSize: 11, fontFamily: "monospace", marginTop: 2 }}>
                     @{profile?.username || "unconfigured"}
                   </div>
-                  <div style={{ display: "inline-block", background: C.bg3, border: `1px solid ${C.border}`, padding: "2px 6px", borderRadius: 4, fontSize: 9, fontFamily: "monospace", color: C.cyan, marginTop: 4 }}>
+                  <div style={{ display: "inline-block", background: token.surface.inset, border: `1px solid ${token.line.default}`, padding: "2px 6px", borderRadius: 4, fontSize: 9, fontFamily: "monospace", color: token.brand.base, marginTop: 4 }}>
                     ROLE: {(profile?.role || "USER").toUpperCase()}
                   </div>
                 </div>
@@ -513,42 +528,46 @@ export default function Profile() {
 
             {/* Inline Profile Editor Form */}
             {editingProfile ? (
-              <div style={{ marginTop: 14, padding: 14, background: C.bg3, borderRadius: 8, border: `1px solid ${C.border}` }}>
+              <div style={{ marginTop: 14, padding: 14, background: token.surface.inset, borderRadius: 8, border: `1px solid ${token.line.default}` }}>
                 <div style={{ display: "grid", gap: 10 }}>
                   <div>
-                    <label style={{ color: C.t2, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Username</label>
+                    <label htmlFor="profile-edit-username" style={{ color: token.content.secondary, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Username</label>
                     <Inp
+                      id="profile-edit-username"
                       value={editData.username}
                       onChange={(e) => setEditData({ ...editData, username: e.target.value })}
                     />
                   </div>
                   <div>
-                    <label style={{ color: C.t2, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Display Name</label>
+                    <label htmlFor="profile-edit-display-name" style={{ color: token.content.secondary, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Display Name</label>
                     <Inp
+                      id="profile-edit-display-name"
                       value={editData.display_name}
                       onChange={(e) => setEditData({ ...editData, display_name: e.target.value })}
                     />
                   </div>
                   <div>
-                    <label style={{ color: C.t2, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Telegram Handle (@)</label>
+                    <label htmlFor="profile-edit-telegram-id" style={{ color: token.content.secondary, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Telegram Handle (@)</label>
                     <Inp
+                      id="profile-edit-telegram-id"
                       value={editData.telegram_id}
                       onChange={(e) => setEditData({ ...editData, telegram_id: e.target.value })}
                       placeholder="@yourtelegram"
                     />
                   </div>
                   <div>
-                    <label style={{ color: C.t2, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Trader Bio / Strategy Notes</label>
+                    <label htmlFor="profile-edit-bio" style={{ color: token.content.secondary, fontSize: 10, fontWeight: 600, marginBottom: 4, display: "block", fontFamily: "monospace" }}>Trader Bio / Strategy Notes</label>
                     <textarea
+                      id="profile-edit-bio"
                       value={editData.bio}
                       onChange={(e) => setEditData({ ...editData, bio: e.target.value })}
                       style={{
                         width: "100%",
                         padding: 8,
-                        background: C.bg2,
-                        border: `1px solid ${C.border}`,
+                        background: token.surface.raised,
+                        border: `1px solid ${token.line.default}`,
                         borderRadius: 6,
-                        color: C.t1,
+                        color: token.content.primary,
                         fontSize: 11,
                         minHeight: 60,
                         resize: "vertical",
@@ -568,46 +587,46 @@ export default function Profile() {
               </div>
             ) : (
               /* Account Metadata Details Table */
-              <div style={{ display: "flex", flexDirection: "column", gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, borderTop: `1px solid ${token.line.default}`, paddingTop: 14 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12 }}>
-                  <span style={{ color: C.t3, fontFamily: "monospace" }}>Email Address</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, color: C.t1 }}>
-                    <Mail size={13} style={{ color: C.t2 }} />
+                  <span style={{ color: token.content.muted, fontFamily: "monospace" }}>Email Address</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, color: token.content.primary }}>
+                    <Mail size={13} style={{ color: token.content.secondary }} />
                     <span>{profile?.email || "No email"}</span>
                     {profile?.email_confirmed_at ? (
-                      <span style={{ display: "flex", alignItems: "center", gap: 3, color: C.green, fontSize: 10, background: "rgba(38,166,154,0.1)", padding: "1px 6px", borderRadius: 4 }}>
+                      <span style={{ display: "flex", alignItems: "center", gap: 3, color: token.status.profit.fg, fontSize: 10, background: "rgba(38,166,154,0.1)", padding: "1px 6px", borderRadius: 4 }}>
                         <CheckCircle2 size={11} /> Verified
                       </span>
                     ) : (
-                      <span style={{ color: C.t3, fontSize: 10 }}>Unverified</span>
+                      <span style={{ color: token.content.muted, fontSize: 10 }}>Unverified</span>
                     )}
                   </div>
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12 }}>
-                  <span style={{ color: C.t3, fontFamily: "monospace" }}>Telegram Dispatch</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, color: C.t1 }}>
-                    <Send size={13} style={{ color: profile?.telegram_id ? C.cyan : C.t3 }} />
+                  <span style={{ color: token.content.muted, fontFamily: "monospace" }}>Telegram Dispatch</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, color: token.content.primary }}>
+                    <Send size={13} style={{ color: profile?.telegram_id ? token.brand.base : token.content.muted }} />
                     <span>{profile?.telegram_id ? `@${profile.telegram_id.replace(/^@/, '')}` : "Not configured"}</span>
                   </div>
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12 }}>
-                  <span style={{ color: C.t3, fontFamily: "monospace" }}>Account Identifier</span>
+                  <span style={{ color: token.content.muted, fontFamily: "monospace" }}>Account Identifier</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <code style={{ background: C.bg3, padding: "2px 8px", borderRadius: 4, color: C.t1, fontSize: 11, fontFamily: "monospace" }}>
+                    <code style={{ background: token.surface.inset, padding: "2px 8px", borderRadius: 4, color: token.content.primary, fontSize: 11, fontFamily: "monospace" }}>
                       {showAccountId ? profile?.id : (profile?.id ? `${profile.id.substring(0, 8)}••••••••` : "Loading...")}
                     </code>
                     <button 
                       onClick={() => setShowAccountId(!showAccountId)}
-                      style={{ background: "transparent", border: "none", color: C.t2, cursor: "pointer", display: "flex", alignItems: "center", padding: 2 }}
+                      style={{ background: "transparent", border: "none", color: token.content.secondary, cursor: "pointer", display: "flex", alignItems: "center", padding: 2 }}
                       title={showAccountId ? "Hide Account ID" : "Reveal Account ID"}
                     >
                       {showAccountId ? <EyeOff size={13} /> : <Eye size={13} />}
                     </button>
                     <button 
                       onClick={() => copyToClipboard(profile?.id, 'account_id')}
-                      style={{ background: "transparent", border: "none", color: copiedKey === 'account_id' ? C.green : C.t2, cursor: "pointer", display: "flex", alignItems: "center", padding: 2 }}
+                      style={{ background: "transparent", border: "none", color: copiedKey === 'account_id' ? token.status.profit.fg : token.content.secondary, cursor: "pointer", display: "flex", alignItems: "center", padding: 2 }}
                       title="Copy Account ID"
                     >
                       {copiedKey === 'account_id' ? <Check size={13} /> : <Copy size={13} />}
@@ -616,7 +635,7 @@ export default function Profile() {
                 </div>
 
                 {profile?.bio && (
-                  <div style={{ fontSize: 11, color: C.t2, background: C.bg2, padding: "8px 12px", borderRadius: 6, border: `1px solid ${C.border}`, marginTop: 4 }}>
+                  <div style={{ fontSize: 11, color: token.content.secondary, background: token.surface.raised, padding: "8px 12px", borderRadius: 6, border: `1px solid ${token.line.default}`, marginTop: 4 }}>
                     {profile.bio}
                   </div>
                 )}
@@ -628,22 +647,22 @@ export default function Profile() {
           <Card cls="p-5">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Shield size={18} style={{ color: C.accent }} />
-                <h3 style={{ fontSize: 14, fontWeight: 700, color: C.t1, margin: 0 }}>
+                <Shield size={18} style={{ color: token.brand.base }} />
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: token.content.primary, margin: 0 }}>
                   Security & Access
                 </h3>
               </div>
-              <span style={{ display: "flex", alignItems: "center", gap: 4, background: "rgba(38,166,154,0.12)", color: C.green, fontSize: 9, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 4, background: "rgba(38,166,154,0.12)", color: token.status.profit.fg, fontSize: 9, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>
                 <CheckCircle2 size={10} /> PROTECTED
               </span>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-              <div style={{ background: C.bg2, padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}` }}>
-                <div style={{ fontSize: 10, color: C.t3, fontFamily: "monospace", marginBottom: 4 }}>MFA AUTHENTICATION</div>
+              <div style={{ background: token.surface.raised, padding: "10px 12px", borderRadius: 8, border: `1px solid ${token.line.default}` }}>
+                <div style={{ fontSize: 10, color: token.content.muted, fontFamily: "monospace", marginBottom: 4 }}>MFA AUTHENTICATION</div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: C.green, display: "flex", alignItems: "center", gap: 4 }}>
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.green }} /> Configured
+                  <span style={{ fontSize: 12, fontWeight: 600, color: token.status.profit.fg, display: "flex", alignItems: "center", gap: 4 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: token.status.profit.fg }} /> Configured
                   </span>
                   <Button onClick={() => navigate("/app/2fa")} variant="outline" size="xs">
                     Manage MFA
@@ -651,24 +670,24 @@ export default function Profile() {
                 </div>
               </div>
 
-              <div style={{ background: C.bg2, padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}` }}>
-                <div style={{ fontSize: 10, color: C.t3, fontFamily: "monospace", marginBottom: 4 }}>LAST ACCESS TIME</div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: C.t1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <div style={{ background: token.surface.raised, padding: "10px 12px", borderRadius: 8, border: `1px solid ${token.line.default}` }}>
+                <div style={{ fontSize: 10, color: token.content.muted, fontFamily: "monospace", marginBottom: 4 }}>LAST ACCESS TIME</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: token.content.primary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {securityLogs?.[0]?.created_at ? new Date(securityLogs[0].created_at).toLocaleString() : "Active Session"}
                 </div>
-                <div style={{ fontSize: 9, color: C.t3, fontFamily: "monospace", marginTop: 2 }}>
+                <div style={{ fontSize: 9, color: token.content.muted, fontFamily: "monospace", marginTop: 2 }}>
                   IP: {securityLogs?.[0]?.ip_address || securityLogs?.[0]?.ip || "127.0.0.1"}
                 </div>
               </div>
             </div>
 
             {/* Recent Security Activity Stream */}
-            <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+            <div style={{ borderTop: `1px solid ${token.line.default}`, paddingTop: 12 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: C.t2, fontFamily: "monospace" }}>RECENT SECURITY AUDIT TRAIL</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: token.content.secondary, fontFamily: "monospace" }}>RECENT SECURITY AUDIT TRAIL</span>
                 <button 
                   onClick={() => navigate("/app/security-logs")} 
-                  style={{ background: "transparent", border: "none", color: C.accent, fontSize: 10, fontFamily: "monospace", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
+                  style={{ background: "transparent", border: "none", color: token.brand.base, fontSize: 10, fontFamily: "monospace", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
                 >
                   Review All Logs <ChevronRight size={12} />
                 </button>
@@ -677,19 +696,19 @@ export default function Profile() {
               {securityLogs && securityLogs.length > 0 ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {securityLogs.slice(0, 3).map((log, idx) => (
-                    <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.bg3, padding: "6px 10px", borderRadius: 6, fontSize: 11 }}>
+                    <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: token.surface.inset, padding: "6px 10px", borderRadius: 6, fontSize: 11 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <Lock size={12} style={{ color: C.t3 }} />
-                        <span style={{ color: C.t1, fontWeight: 500 }}>{log.event_type || log.event || log.action || "Security Event"}</span>
+                        <Lock size={12} style={{ color: token.content.muted }} />
+                        <span style={{ color: token.content.primary, fontWeight: 500 }}>{log.event_type || log.event || log.action || "Security Event"}</span>
                       </div>
-                      <span style={{ color: C.t3, fontSize: 10, fontFamily: "monospace" }}>
+                      <span style={{ color: token.content.muted, fontSize: 10, fontFamily: "monospace" }}>
                         {log.created_at ? new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Recent"}
                       </span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div style={{ color: C.t3, fontSize: 11, fontStyle: "italic", padding: "6px 0" }}>
+                <div style={{ color: token.content.muted, fontSize: 11, fontStyle: "italic", padding: "6px 0" }}>
                   No security logs available
                 </div>
               )}
@@ -700,36 +719,36 @@ export default function Profile() {
           <Card cls="p-5">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Cpu size={18} style={{ color: C.cyan }} />
-                <h3 style={{ fontSize: 14, fontWeight: 700, color: C.t1, margin: 0 }}>
+                <Cpu size={18} style={{ color: token.brand.base }} />
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: token.content.primary, margin: 0 }}>
                   Automation Account Context
                 </h3>
               </div>
-              <span style={{ background: C.bg3, border: `1px solid ${C.border}`, padding: "2px 8px", borderRadius: 4, fontSize: 9, fontFamily: "monospace", color: C.t2 }}>
+              <span style={{ background: token.surface.inset, border: `1px solid ${token.line.default}`, padding: "2px 8px", borderRadius: 4, fontSize: 9, fontFamily: "monospace", color: token.content.secondary }}>
                 TRADING ENGINE
               </span>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
-              <div style={{ background: C.bg2, padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}` }}>
-                <div style={{ fontSize: 10, color: C.t3, fontFamily: "monospace", marginBottom: 2 }}>ACTIVE BOTS</div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: C.cyan, fontFamily: "monospace" }}>{stats?.active_bots || 0}</div>
-                <div style={{ fontSize: 9, color: C.t3, marginTop: 2 }}>Total Strategies: {stats?.total_strategies || 0}</div>
+              <div style={{ background: token.surface.raised, padding: "10px 12px", borderRadius: 8, border: `1px solid ${token.line.default}` }}>
+                <div style={{ fontSize: 10, color: token.content.muted, fontFamily: "monospace", marginBottom: 2 }}>ACTIVE BOTS</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: token.brand.base, fontFamily: "monospace" }}>{stats?.active_bots || 0}</div>
+                <div style={{ fontSize: 9, color: token.content.muted, marginTop: 2 }}>Total Strategies: {stats?.total_strategies || 0}</div>
               </div>
 
-              <div style={{ background: C.bg2, padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}` }}>
-                <div style={{ fontSize: 10, color: C.t3, fontFamily: "monospace", marginBottom: 2 }}>TOTAL PNL</div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: (stats?.total_pnl || 0) >= 0 ? C.green : C.red, fontFamily: "monospace" }}>
+              <div style={{ background: token.surface.raised, padding: "10px 12px", borderRadius: 8, border: `1px solid ${token.line.default}` }}>
+                <div style={{ fontSize: 10, color: token.content.muted, fontFamily: "monospace", marginBottom: 2 }}>TOTAL PNL</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: (stats?.total_pnl || 0) >= 0 ? token.status.profit.fg : token.status.loss.fg, fontFamily: "monospace" }}>
                   ${(stats?.total_pnl || 0).toFixed(2)}
                 </div>
-                <div style={{ fontSize: 9, color: C.t3, marginTop: 2 }}>Trades: {stats?.total_trades || 0}</div>
+                <div style={{ fontSize: 9, color: token.content.muted, marginTop: 2 }}>Trades: {stats?.total_trades || 0}</div>
               </div>
 
-              <div style={{ background: C.bg2, padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}` }}>
-                <div style={{ fontSize: 10, color: C.t3, fontFamily: "monospace", marginBottom: 2 }}>ENVIRONMENT</div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.t1, marginTop: 4 }}>Live + Paper</div>
-                <div style={{ fontSize: 9, color: C.green, marginTop: 4, display: "flex", alignItems: "center", gap: 3 }}>
-                  <span style={{ width: 5, height: 5, borderRadius: "50%", background: C.green }} /> Isolated
+              <div style={{ background: token.surface.raised, padding: "10px 12px", borderRadius: 8, border: `1px solid ${token.line.default}` }}>
+                <div style={{ fontSize: 10, color: token.content.muted, fontFamily: "monospace", marginBottom: 2 }}>ENVIRONMENT</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: token.content.primary, marginTop: 4 }}>Live + Paper</div>
+                <div style={{ fontSize: 9, color: token.status.profit.fg, marginTop: 4, display: "flex", alignItems: "center", gap: 3 }}>
+                  <span style={{ width: 5, height: 5, borderRadius: "50%", background: token.status.profit.fg }} /> Isolated
                 </div>
               </div>
             </div>
@@ -754,8 +773,8 @@ export default function Profile() {
           <Card cls="p-5">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <CreditCard size={18} style={{ color: C.accent }} />
-                <h3 style={{ fontSize: 14, fontWeight: 700, color: C.t1, margin: 0 }}>
+                <CreditCard size={18} style={{ color: token.brand.base }} />
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: token.content.primary, margin: 0 }}>
                   Subscription & Plan
                 </h3>
               </div>
@@ -764,36 +783,36 @@ export default function Profile() {
               </Button>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.bg2, padding: "12px 16px", borderRadius: 8, border: `1px solid ${C.border}`, marginBottom: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: token.surface.raised, padding: "12px 16px", borderRadius: 8, border: `1px solid ${token.line.default}`, marginBottom: 14 }}>
               <div>
-                <div style={{ fontSize: 10, color: C.t3, fontFamily: "monospace", marginBottom: 2 }}>CURRENT TIER</div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: C.t1, letterSpacing: -0.3 }}>{planDisplay}</div>
+                <div style={{ fontSize: 10, color: token.content.muted, fontFamily: "monospace", marginBottom: 2 }}>CURRENT TIER</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: token.content.primary, letterSpacing: -0.3 }}>{planDisplay}</div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 10, color: C.t3, fontFamily: "monospace", marginBottom: 2 }}>STATUS</div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: isSubscriptionActive ? C.green : C.t2, display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
-                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: isSubscriptionActive ? C.green : C.t3 }} />
+                <div style={{ fontSize: 10, color: token.content.muted, fontFamily: "monospace", marginBottom: 2 }}>STATUS</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: isSubscriptionActive ? token.status.profit.fg : token.content.secondary, display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: isSubscriptionActive ? token.status.profit.fg : token.content.muted }} />
                   {isSubscriptionActive ? "Active" : "Inactive"}
                 </div>
               </div>
             </div>
 
-            <div style={{ fontSize: 11, color: C.t3, fontFamily: "monospace", marginBottom: 10 }}>
-              Renewal Cycle: <span style={{ color: C.t1 }}>{billing?.renewal_date ? new Date(billing.renewal_date).toLocaleDateString() : "Standard 30-day Cycle"}</span>
+            <div style={{ fontSize: 11, color: token.content.muted, fontFamily: "monospace", marginBottom: 10 }}>
+              Renewal Cycle: <span style={{ color: token.content.primary }}>{billing?.renewal_date ? new Date(billing.renewal_date).toLocaleDateString() : "Standard 30-day Cycle"}</span>
             </div>
 
             {billing?.features && Array.isArray(billing.features) && (
-              <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
-                <div style={{ fontSize: 10, color: C.t3, fontFamily: "monospace", marginBottom: 8 }}>INCLUDED CAPABILITIES</div>
+              <div style={{ borderTop: `1px solid ${token.line.default}`, paddingTop: 10 }}>
+                <div style={{ fontSize: 10, color: token.content.muted, fontFamily: "monospace", marginBottom: 8 }}>INCLUDED CAPABILITIES</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {billing.features.map((feature, idx) => (
                     <span key={idx} style={{
                       padding: "3px 8px",
-                      background: C.bg3,
-                      border: `1px solid ${C.border}`,
+                      background: token.surface.inset,
+                      border: `1px solid ${token.line.default}`,
                       borderRadius: 4,
                       fontSize: 10,
-                      color: C.t2
+                      color: token.content.secondary
                     }}>
                       ✓ {feature}
                     </span>
@@ -807,20 +826,20 @@ export default function Profile() {
           <Card cls="p-5">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Bell size={18} style={{ color: C.accent }} />
-                <h3 style={{ fontSize: 14, fontWeight: 700, color: C.t1, margin: 0 }}>
+                <Bell size={18} style={{ color: token.brand.base }} />
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: token.content.primary, margin: 0 }}>
                   Notification Preferences
                 </h3>
               </div>
             </div>
-            <p style={{ color: C.t3, fontSize: 10, fontFamily: "monospace", marginBottom: 14 }}>
+            <p style={{ color: token.content.muted, fontSize: 10, fontFamily: "monospace", marginBottom: 14 }}>
               Notification Dispatch Preferences: trade execution, risk trigger, and account security alert dispatches
             </p>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               {/* Category 1: Trading */}
               <div>
-                <div style={{ fontSize: 10, fontWeight: 700, color: C.cyan, fontFamily: "monospace", marginBottom: 6, letterSpacing: 0.5 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: token.brand.base, fontFamily: "monospace", marginBottom: 6, letterSpacing: 0.5 }}>
                   ── TRADING EXECUTIONS
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -843,7 +862,7 @@ export default function Profile() {
 
               {/* Category 2: Risk & Safety */}
               <div>
-                <div style={{ fontSize: 10, fontWeight: 700, color: C.red, fontFamily: "monospace", marginBottom: 6, letterSpacing: 0.5 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: token.status.loss.fg, fontFamily: "monospace", marginBottom: 6, letterSpacing: 0.5 }}>
                   ── RISK & CIRCUIT BREAKERS
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -866,7 +885,7 @@ export default function Profile() {
 
               {/* Category 3: Automation & Security */}
               <div>
-                <div style={{ fontSize: 10, fontWeight: 700, color: C.t2, fontFamily: "monospace", marginBottom: 6, letterSpacing: 0.5 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: token.content.secondary, fontFamily: "monospace", marginBottom: 6, letterSpacing: 0.5 }}>
                   ── AUTOMATION & SECURITY
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -895,7 +914,7 @@ export default function Profile() {
               </div>
             </div>
 
-            <div style={{ marginTop: 12, fontSize: 10, color: C.t3, display: "flex", alignItems: "center", gap: 4 }}>
+            <div style={{ marginTop: 12, fontSize: 10, color: token.content.muted, display: "flex", alignItems: "center", gap: 4 }}>
               <Lock size={11} style={{ flexShrink: 0 }} />
               <span>Mandatory risk alerts (global kill switch triggers) cannot be disabled.</span>
             </div>
@@ -906,42 +925,42 @@ export default function Profile() {
             <Card cls="p-5">
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <ExternalLink size={16} style={{ color: C.t2 }} />
-                  <h3 style={{ fontSize: 13, fontWeight: 700, color: C.t1, margin: 0 }}>
+                  <ExternalLink size={16} style={{ color: token.content.secondary }} />
+                  <h3 style={{ fontSize: 13, fontWeight: 700, color: token.content.primary, margin: 0 }}>
                     Affiliate & Referral Program
                   </h3>
                 </div>
-                <span style={{ background: "rgba(38,166,154,0.1)", color: C.green, fontSize: 9, fontFamily: "monospace", fontWeight: 700, padding: "2px 6px", borderRadius: 4 }}>
+                <span style={{ background: "rgba(38,166,154,0.1)", color: token.status.profit.fg, fontSize: 9, fontFamily: "monospace", fontWeight: 700, padding: "2px 6px", borderRadius: 4 }}>
                   20% RECURRING
                 </span>
               </div>
 
               {/* Compact Code & Link Grid */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-                <div style={{ background: C.bg2, padding: "8px 10px", borderRadius: 6, border: `1px solid ${C.border}` }}>
-                  <div style={{ fontSize: 9, color: C.t3, fontFamily: "monospace", marginBottom: 2 }}>REFERRAL CODE</div>
+                <div style={{ background: token.surface.raised, padding: "8px 10px", borderRadius: 6, border: `1px solid ${token.line.default}` }}>
+                  <div style={{ fontSize: 9, color: token.content.muted, fontFamily: "monospace", marginBottom: 2 }}>REFERRAL CODE</div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <code style={{ color: C.cyan, fontSize: 12, fontWeight: 700, fontFamily: "monospace" }}>
+                    <code style={{ color: token.brand.base, fontSize: 12, fontWeight: 700, fontFamily: "monospace" }}>
                       {referral.referral_code || profile?.id?.substring(0, 8).toUpperCase() || "..."}
                     </code>
                     <button 
                       onClick={() => copyToClipboard(referral.referral_code || profile?.id?.substring(0, 8).toUpperCase(), 'ref_code')}
-                      style={{ background: "transparent", border: "none", color: copiedKey === 'ref_code' ? C.green : C.t2, cursor: "pointer", padding: 2 }}
+                      style={{ background: "transparent", border: "none", color: copiedKey === 'ref_code' ? token.status.profit.fg : token.content.secondary, cursor: "pointer", padding: 2 }}
                     >
                       {copiedKey === 'ref_code' ? <Check size={13} /> : <Copy size={13} />}
                     </button>
                   </div>
                 </div>
 
-                <div style={{ background: C.bg2, padding: "8px 10px", borderRadius: 6, border: `1px solid ${C.border}` }}>
-                  <div style={{ fontSize: 9, color: C.t3, fontFamily: "monospace", marginBottom: 2 }}>SIGNUP LINK</div>
+                <div style={{ background: token.surface.raised, padding: "8px 10px", borderRadius: 6, border: `1px solid ${token.line.default}` }}>
+                  <div style={{ fontSize: 9, color: token.content.muted, fontFamily: "monospace", marginBottom: 2 }}>SIGNUP LINK</div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <span style={{ color: C.t1, fontSize: 10, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }}>
+                    <span style={{ color: token.content.primary, fontSize: 10, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }}>
                       {referral.referral_link || "https://..."}
                     </span>
                     <button 
                       onClick={() => copyToClipboard(referral.referral_link, 'ref_link')}
-                      style={{ background: "transparent", border: "none", color: copiedKey === 'ref_link' ? C.green : C.t2, cursor: "pointer", padding: 2 }}
+                      style={{ background: "transparent", border: "none", color: copiedKey === 'ref_link' ? token.status.profit.fg : token.content.secondary, cursor: "pointer", padding: 2 }}
                     >
                       {copiedKey === 'ref_link' ? <Check size={13} /> : <Copy size={13} />}
                     </button>
@@ -950,22 +969,22 @@ export default function Profile() {
               </div>
 
               {/* Compact Metrics Grid */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, background: C.bg2, padding: 8, borderRadius: 6, border: `1px solid ${C.border}` }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, background: token.surface.raised, padding: 8, borderRadius: 6, border: `1px solid ${token.line.default}` }}>
                 <div>
-                  <div style={{ color: C.t3, fontSize: 8, fontFamily: "monospace" }}>TOTAL</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.cyan, fontFamily: "monospace" }}>{referral.total_referrals || 0}</div>
+                  <div style={{ color: token.content.muted, fontSize: 8, fontFamily: "monospace" }}>TOTAL</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: token.brand.base, fontFamily: "monospace" }}>{referral.total_referrals || 0}</div>
                 </div>
                 <div>
-                  <div style={{ color: C.t3, fontSize: 8, fontFamily: "monospace" }}>ACTIVE</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.green, fontFamily: "monospace" }}>{referral.active_referrals || 0}</div>
+                  <div style={{ color: token.content.muted, fontSize: 8, fontFamily: "monospace" }}>ACTIVE</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: token.status.profit.fg, fontFamily: "monospace" }}>{referral.active_referrals || 0}</div>
                 </div>
                 <div>
-                  <div style={{ color: C.t3, fontSize: 8, fontFamily: "monospace" }}>PENDING</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.t1, fontFamily: "monospace" }}>${(referral.pending_earnings || 0).toFixed(2)}</div>
+                  <div style={{ color: token.content.muted, fontSize: 8, fontFamily: "monospace" }}>PENDING</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: token.content.primary, fontFamily: "monospace" }}>${(referral.pending_earnings || 0).toFixed(2)}</div>
                 </div>
                 <div>
-                  <div style={{ color: C.t3, fontSize: 8, fontFamily: "monospace" }}>LIFETIME</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.gold || C.accent, fontFamily: "monospace" }}>${(referral.lifetime_earnings || 0).toFixed(2)}</div>
+                  <div style={{ color: token.content.muted, fontSize: 8, fontFamily: "monospace" }}>LIFETIME</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: token.status.warning.fg || token.brand.base, fontFamily: "monospace" }}>${(referral.lifetime_earnings || 0).toFixed(2)}</div>
                 </div>
               </div>
             </Card>
