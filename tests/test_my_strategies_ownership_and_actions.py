@@ -180,10 +180,17 @@ def _subscription_row(
 
 
 def _owned_row(strategy_id: str = OWNED_STRATEGY_ID) -> Dict[str, Any]:
+    """One ``strategies`` row as round trip 1 receives it.
+
+    No ``description`` key, because ``public.strategies`` has no such column and
+    :data:`library_entries.OWNED_STRATEGY_SELECT` no longer asks for one - see
+    ``TestTheOwnedProjectionNamesNoPhantomColumn`` for the production ``42703`` that proved it.
+    A fixture carrying a key the real row cannot carry would make every assertion below a
+    statement about a row that does not exist.
+    """
     return {
         "id": strategy_id,
         "name": "My own strategy",
-        "description": "mine",
         "symbol": "ETHUSDT",
         "timeframe": "15m",
         "status": "stopped",
@@ -756,3 +763,456 @@ class TestTheThreeProjectionsAreExplicit:
             requested = {token.strip() for token in projection.replace("(", ",").replace(")", ",").split(",")}
             leaked = requested & set(protected)
             assert not leaked, f"{projection!r} requests Protected_Logic column(s) {sorted(leaked)}"
+
+# ══════════════════════════════════════════════════════════════════════════
+# EVERY REQUESTED COLUMN IS ONE SOMETHING ACTUALLY CREATES
+#
+# production-launch-hardening. The defect this section exists for:
+#
+#   ERROR:backend_app.routers.library:my_strategies owned-read failed for user <uuid>:
+#     {'code': '42703', 'message': 'column strategies.description does not exist'}
+#
+# (``/ecs/vyomquant-api``, production CloudWatch.) PostgreSQL ``42703`` is
+# ``undefined_column``. ``OWNED_STRATEGY_SELECT`` named ``description``, PostgREST put it in the
+# statement's target list, Postgres refused the whole statement, round trip 1's ``except``
+# raised ``MARKETPLACE_READ_FAILED``, and the Strategies page rendered "Ownership list
+# unavailable - Server error occurred." for EVERY user on EVERY call. The projection had never
+# worked: no migration in this repository creates ``strategies.description``.
+#
+# The assertions below are deliberately two: one naming ``description`` specifically, so the
+# regression is pinned to the log line that found it, and one general - every column any of the
+# three projections requests must be created by a migration, or be named in
+# ``OUT_OF_REPO_COLUMNS`` with a reason. The general one is what stops the NEXT phantom column,
+# because a name typed into a projection constant is otherwise unchecked until production.
+#
+# WHAT THIS CANNOT VERIFY, STATED RATHER THAN GUESSED
+# --------------------------------------------------
+# ``public.strategies`` has no ``CREATE TABLE`` in either migration directory - the table
+# pre-dates this migration set and is defined outside the repo (Supabase-side). So the migration
+# files CANNOT settle whether one of its base columns exists; only the columns a migration
+# ``ALTER TABLE ... ADD COLUMN``s are provable from this tree. ``OUT_OF_REPO_COLUMNS`` is the
+# place that fact is written down per column, with what the evidence for it actually is. It is
+# an admission of an unverifiable claim, not a waiver - which is why ``description`` may never
+# be listed in it, and why a separate assertion enforces that.
+# ══════════════════════════════════════════════════════════════════════════
+
+import re
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+#: Both migration directories, the same pair
+#: ``tests/test_marketplace_paper_schema_contract.py`` scans. ``backend_app/migrations/`` holds
+#: the marketplace and paper-trading set; the root ``migrations/`` holds the older reconciliation
+#: set, and ``strategies.is_active`` comes from there - so scanning only one of the two would
+#: report a real column as phantom.
+_MIGRATION_DIRS = (_REPO_ROOT / "backend_app" / "migrations", _REPO_ROOT / "migrations")
+
+#: Columns PROVEN ABSENT from the live schema, each by a production failure. A name here may
+#: never appear in any projection, and may never be moved into ``OUT_OF_REPO_COLUMNS`` to make a
+#: failure go away: the whole point is that this particular absence is not a gap in the
+#: repository's knowledge but a fact the database told us.
+PHANTOM_COLUMNS = {
+    ("strategies", "description"): (
+        "production 42703 undefined_column - 'column strategies.description does not exist' - "
+        "logged by routers/library.py::my_strategies on the owned-read, /ecs/vyomquant-api. "
+        "No migration in either directory creates it; the `description TEXT` in "
+        "001_strategy_architecture.sql belongs to the marketplace_listings CREATE TABLE. "
+        "Adding the column is a schema decision, not a fix for a query that asks for it."
+    ),
+}
+
+#: Requested columns that no migration in this repository creates, each with the reason its
+#: existence is nonetheless believed. Every entry is a claim the migration files cannot check.
+OUT_OF_REPO_COLUMNS = {
+    ("strategies", "id"): (
+        "base column of public.strategies, which has no CREATE TABLE in either migration "
+        "directory. Evidenced by the production failure itself: the failing target list named "
+        "`id` and `name` BEFORE `description`, and Postgres reported 42703 for `description`, "
+        "so the two ahead of it resolved."
+    ),
+    ("strategies", "name"): (
+        "base column of public.strategies; same evidence as `id` - it resolved ahead of the "
+        "column that raised 42703."
+    ),
+    ("strategies", "symbol"): (
+        "base column of public.strategies. NOT provable from the migration files. Documented as "
+        "part of the table in docs/history/PROJECT_ARCHITECTURE.md ('name, symbol, timeframe, "
+        "buy_logic, ... status') - a list that notably does NOT include `description` - and read "
+        "on the live GET /api/strategies path."
+    ),
+    ("strategies", "timeframe"): (
+        "base column of public.strategies; same evidence as `symbol`."
+    ),
+    ("strategies", "created_at"): (
+        "base column of public.strategies; NOT provable from the migration files. Read on the "
+        "live GET /api/strategies path, which ORDERs BY it."
+    ),
+    ("strategies", "updated_at"): (
+        "base column of public.strategies; NOT provable from the migration files. Round trip 1 "
+        "ORDERs BY it, and the ordering is how Requirement 12.1's list is sequenced."
+    ),
+}
+# Deliberately NOT in the map, and worth recording:
+#   * library_subscriptions.{id,library_id,status} - migrations/006_reconcile_production_database.sql
+#   * library_subscriptions.{period_expiry,renewal_enabled} - backend_app/migrations/008
+#   * paper_sessions.{id,listing_id,source_strategy_id,session_state} - backend_app/migrations/009
+# All five of round trip 2's own columns and all four of round trip 3's are created in-repo, so
+# neither sibling projection needs an unverifiable claim. Only ``strategies`` does, because only
+# ``strategies`` has no CREATE TABLE here.
+
+
+def _blank_sql_comments(sql: str) -> str:
+    """``--`` and ``/* */`` comments replaced by spaces, offsets and line breaks preserved.
+
+    Needed because several migrations discuss ``ALTER TABLE strategies ADD COLUMN ...`` in
+    commented-out prose (005a's rollback note is one), and a scanner that counted those would
+    report a column as created that nothing creates - the exact failure mode this guard exists
+    to catch, inverted.
+    """
+    out: List[str] = []
+    i = 0
+    n = len(sql)
+    in_string = False
+    while i < n:
+        ch = sql[i]
+        if in_string:
+            out.append(ch)
+            if ch == "'":
+                in_string = False
+            i += 1
+            continue
+        if ch == "'":
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "-" and sql.startswith("--", i):
+            end = sql.find("\n", i)
+            end = n if end == -1 else end
+            out.append(" " * (end - i))
+            i = end
+            continue
+        if ch == "/" and sql.startswith("/*", i):
+            end = sql.find("*/", i)
+            end = n if end == -1 else end + 2
+            out.append("".join(c if c == "\n" else " " for c in sql[i:end]))
+            i = end
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+_NOT_A_COLUMN = frozenset(
+    {
+        "constraint",
+        "primary",
+        "foreign",
+        "unique",
+        "check",
+        "exclude",
+        "like",
+        "period",
+    }
+)
+
+
+def _create_table_columns(sql: str, table: str) -> List[str]:
+    """The column names one ``CREATE TABLE <table> (...)`` declares, or ``[]`` when absent."""
+    match = re.search(
+        r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?" + table + r"\s*\(",
+        sql,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return []
+    depth = 1
+    i = match.end()
+    start = i
+    while i < len(sql) and depth:
+        if sql[i] == "(":
+            depth += 1
+        elif sql[i] == ")":
+            depth -= 1
+        i += 1
+    body = sql[start : i - 1]
+
+    items: List[str] = []
+    depth = 0
+    current: List[str] = []
+    for ch in body:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            items.append("".join(current))
+            current = []
+            continue
+        current.append(ch)
+    items.append("".join(current))
+
+    columns = []
+    for item in items:
+        tokens = item.strip().split()
+        if not tokens:
+            continue
+        name = tokens[0].strip('"')
+        if name.lower() in _NOT_A_COLUMN:
+            continue
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            columns.append(name)
+    return columns
+
+
+def _added_columns(sql: str, table: str) -> List[str]:
+    """Every column an ``ALTER TABLE <table> ... ADD COLUMN ...`` statement adds.
+
+    One statement may add several (008 adds fourteen to ``library_subscriptions`` in one), so
+    each ``ALTER`` is taken up to its terminating ``;`` and every ``ADD COLUMN`` inside it read.
+    """
+    added: List[str] = []
+    for match in re.finditer(
+        r"ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:public\.)?" + table + r"\b",
+        sql,
+        re.IGNORECASE,
+    ):
+        end = sql.find(";", match.end())
+        end = len(sql) if end == -1 else end
+        statement = sql[match.end() : end]
+        added.extend(
+            name
+            for name in re.findall(
+                r"ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)",
+                statement,
+                re.IGNORECASE,
+            )
+        )
+    return added
+
+
+def _columns_the_migrations_create(table: str) -> Dict[str, str]:
+    """``{column: "file:line"}`` for every column a migration creates on ``table``."""
+    found: Dict[str, str] = {}
+    for directory in _MIGRATION_DIRS:
+        for path in sorted(directory.glob("*.sql")):
+            sql = _blank_sql_comments(path.read_text(encoding="utf-8", errors="replace"))
+            for column in _create_table_columns(sql, table) + _added_columns(sql, table):
+                found.setdefault(column, path.name)
+    return found
+
+
+def _requested_columns(projection: str) -> List[str]:
+    """The columns a PostgREST ``select`` string requests FROM THE OUTER TABLE.
+
+    Only depth-0 tokens. Everything inside ``(...)`` belongs to an embedded resource - a
+    different table, whose columns this guard must not attribute to the outer one. The relation
+    names themselves (``library_strategies!inner``, and any bare ``name(...)``) are dropped too:
+    they are relations, not columns.
+    """
+    columns: List[str] = []
+    token: List[str] = []
+    depth = 0
+    embedded = False
+    for ch in projection:
+        if ch == "(":
+            depth += 1
+            if depth == 1:
+                embedded = True
+            continue
+        if ch == ")":
+            depth -= 1
+            continue
+        if depth:
+            continue
+        if ch == ",":
+            name = "".join(token).strip()
+            if name and not embedded and "!" not in name and ":" not in name:
+                columns.append(name)
+            token = []
+            embedded = False
+            continue
+        token.append(ch)
+    name = "".join(token).strip()
+    if name and not embedded and "!" not in name and ":" not in name:
+        columns.append(name)
+    return columns
+
+
+class TestTheOwnedProjectionNamesNoPhantomColumn:
+    """The 42703 regression, pinned to the column and the log line that found it."""
+
+    def test_description_is_not_requested_from_the_strategies_table(self) -> None:
+        """``column strategies.description does not exist`` - production 42703.
+
+        ``OWNED_STRATEGY_SELECT`` asked for it, so round trip 1 failed on every call and
+        ``GET /api/library/my-strategies`` answered ``MARKETPLACE_READ_FAILED`` every time.
+        """
+        assert "description" not in _requested_columns(le.OWNED_STRATEGY_SELECT), (
+            "OWNED_STRATEGY_SELECT requests `strategies.description`, which does not exist in "
+            "the live schema. Production logged "
+            "ERROR:backend_app.routers.library:my_strategies owned-read failed ... "
+            "{'code': '42703', 'message': 'column strategies.description does not exist'}, "
+            "and the Strategies page showed 'Ownership list unavailable - Server error "
+            "occurred.' for every user."
+        )
+
+    def test_an_owned_entry_omits_description_rather_than_nulling_it(self) -> None:
+        """A fact the system does not have is reported as absent, never invented.
+
+        ``""`` or ``null`` here would say "we read the description and it was empty", which is a
+        different claim from "this build does not carry one".
+        """
+        entries = le.build_my_strategies_entries(
+            caller_id=CALLER_ID,
+            owned_rows=[_owned_row()],
+            subscription_rows=[],
+            session_rows=[],
+            now=NOW,
+        )
+        assert len(entries) == 1
+        assert entries[0]["ownership"] == le.OWNERSHIP_OWNED
+        assert "description" not in entries[0]
+
+    def test_a_row_that_somehow_carries_one_still_yields_no_description_key(self) -> None:
+        """Non-vacuity: the key is absent because nothing projects it, not because the fixture
+        happens to lack it."""
+        row = dict(_owned_row())
+        row["description"] = "a value the live column cannot supply"
+        entries = le.build_my_strategies_entries(
+            caller_id=CALLER_ID,
+            owned_rows=[row],
+            subscription_rows=[],
+            session_rows=[],
+            now=NOW,
+        )
+        assert "description" not in entries[0]
+
+    def test_the_subscribed_half_still_carries_the_listings_own_description(self) -> None:
+        """Scope guard. ``library_strategies.description`` is a real column on a different table
+        and is what the product actually shows; this fix removed the ``strategies`` one only."""
+        entries = le.build_my_strategies_entries(
+            caller_id=CALLER_ID,
+            owned_rows=[],
+            subscription_rows=[_subscription_row()],
+            session_rows=[],
+            now=NOW,
+        )
+        assert entries[0]["listing"]["description"] == "A subscribed strategy card."
+
+
+class TestEveryOwnedColumnIsOneSomethingCreates:
+    """The general guard: no projection may name a column nothing creates.
+
+    Applied to the two projections whose table the repository actually declares
+    (``strategies`` through its ``ALTER``s, ``paper_sessions`` through 009's ``CREATE TABLE``)
+    and to ``library_subscriptions``' own columns. The Listing embed's column list is
+    ``listing_projection.LISTING_SELECT``, which is the marketplace browse path's canonical
+    projection and is already bound to ``marketplace.COLUMN_CONTRACT`` by
+    ``tests/test_marketplace_paper_schema_contract.py``; it is not re-checked here, so there is
+    one owner of that assertion rather than two that can disagree.
+    """
+
+    PROJECTIONS = (
+        ("strategies", "OWNED_STRATEGY_SELECT"),
+        ("library_subscriptions", "SUBSCRIPTION_SELECT"),
+        ("paper_sessions", "RUNNING_PAPER_SESSION_SELECT"),
+    )
+
+    @pytest.mark.parametrize("table,constant", PROJECTIONS)
+    def test_every_requested_column_is_created_or_declared_out_of_repo(
+        self, table: str, constant: str
+    ) -> None:
+        created = _columns_the_migrations_create(table)
+        unexplained = []
+        for column in _requested_columns(getattr(le, constant)):
+            if column in created:
+                continue
+            if (table, column) in OUT_OF_REPO_COLUMNS:
+                continue
+            unexplained.append(column)
+        assert not unexplained, (
+            f"{constant} requests {table} column(s) {sorted(unexplained)} that no migration in "
+            f"{[d.name for d in _MIGRATION_DIRS]} creates and that OUT_OF_REPO_COLUMNS does not "
+            "explain. Either a migration creates it, or add it to OUT_OF_REPO_COLUMNS with the "
+            "evidence for its existence. This is the 42703 that killed "
+            "GET /api/library/my-strategies; a projection is the one place a column name is "
+            "never checked until production."
+        )
+
+    def test_the_scanner_actually_finds_the_columns_the_migrations_add(self) -> None:
+        """Non-vacuity. A scanner that found nothing would make the guard above pass for any
+        projection at all, which is worse than no guard."""
+        strategies = _columns_the_migrations_create("strategies")
+        assert strategies.get("status") == "001_strategy_architecture.sql"
+        assert strategies.get("archived_at") == "005a_strategy_archive.sql"
+        # From the ROOT migrations/ directory, not backend_app/migrations/ - the reason both are
+        # scanned.
+        assert strategies.get("is_active") == "006_reconcile_production_database.sql"
+
+        sessions = _columns_the_migrations_create("paper_sessions")
+        for column in ("id", "listing_id", "source_strategy_id", "session_state"):
+            assert sessions.get(column) == "009_paper_trading.sql", column
+
+        subscriptions = _columns_the_migrations_create("library_subscriptions")
+        assert subscriptions.get("period_expiry") == "008_marketplace_settlement.sql"
+        assert subscriptions.get("renewal_enabled") == "008_marketplace_settlement.sql"
+
+    def test_the_embeds_columns_are_not_attributed_to_the_outer_table(self) -> None:
+        """``library_strategies``' and ``marketplace_submissions``' columns belong to those
+        tables. Crediting them to ``library_subscriptions`` would make the guard above report
+        every one of them as phantom, and the noise would get the guard deleted."""
+        outer = _requested_columns(le.SUBSCRIPTION_SELECT)
+        assert outer == ["id", "library_id", "status", "period_expiry", "renewal_enabled"]
+        assert "submission_state" not in outer
+        assert not any("library_strategies" in column for column in outer)
+
+    def test_the_scanner_does_not_credit_a_commented_out_migration(self) -> None:
+        """005a and rls_rollback.sql both discuss ``strategies`` DDL inside ``--`` comments."""
+        sql = _blank_sql_comments(
+            "-- ALTER TABLE strategies ADD COLUMN IF NOT EXISTS invented_by_a_comment TEXT;\n"
+            "ALTER TABLE strategies ADD COLUMN IF NOT EXISTS really_added TEXT;\n"
+        )
+        added = _added_columns(sql, "strategies")
+        assert "invented_by_a_comment" not in added
+        assert "really_added" in added
+
+    @pytest.mark.parametrize("table,constant", PROJECTIONS)
+    def test_no_projection_requests_a_column_proven_absent(
+        self, table: str, constant: str
+    ) -> None:
+        """The phantom list is a floor, not a suggestion."""
+        requested = set(_requested_columns(getattr(le, constant)))
+        for (phantom_table, column), reason in PHANTOM_COLUMNS.items():
+            if phantom_table != table:
+                continue
+            assert column not in requested, (
+                f"{constant} requests {table}.{column}, proven absent: {reason}"
+            )
+
+    def test_a_phantom_column_cannot_be_excused_as_out_of_repo(self) -> None:
+        """The escape hatch is for columns whose existence the repo cannot prove, not for
+        columns the database has already refused."""
+        overlap = set(PHANTOM_COLUMNS) & set(OUT_OF_REPO_COLUMNS)
+        assert not overlap, (
+            f"{sorted(overlap)} is both proven absent and excused as out-of-repo. A 42703 is "
+            "evidence, not an unknown."
+        )
+
+    def test_every_out_of_repo_entry_carries_a_real_reason(self) -> None:
+        """An empty reason turns the map into a silent allow-list."""
+        for key, reason in OUT_OF_REPO_COLUMNS.items():
+            assert isinstance(reason, str) and len(reason.strip()) > 40, key
+
+    def test_no_out_of_repo_entry_is_stale(self) -> None:
+        """A column a migration DOES create must not sit in the unverifiable map, or the map
+        stops meaning "the repo cannot check this"."""
+        stale = [
+            (table, column)
+            for (table, column) in OUT_OF_REPO_COLUMNS
+            if column in _columns_the_migrations_create(table)
+        ]
+        assert not stale, (
+            f"{sorted(stale)} are created by a migration and need no out-of-repo excuse."
+        )

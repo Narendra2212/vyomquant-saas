@@ -315,8 +315,40 @@ BACKTEST_CONSENT_COLUMN: str = "source_cloning_enabled"
 #: page (the same reasoning ``routers/strategies.py::_LIST_COLUMNS`` records).
 #: ``archived_at`` is 005a's soft-delete marker: ``NULL`` means active, and Requirement 12.1's
 #: list is the active one.
+#:
+#: WHY ``description`` IS NOT IN THIS LIST
+#: --------------------------------------
+#: ``public.strategies`` HAS NO ``description`` COLUMN in the live schema. Asking for one made
+#: every single call to ``GET /api/library/my-strategies`` fail, because PostgREST turned the
+#: undefined column into an error on the whole statement rather than a null field:
+#:
+#:   ERROR:backend_app.routers.library:my_strategies owned-read failed for user <uuid>:
+#:     {'code': '42703', 'message': 'column strategies.description does not exist'}
+#:
+#: (``/ecs/vyomquant-api``, production.) PostgreSQL ``42703`` is ``undefined_column``;
+#: ``routers/library.py::my_strategies`` catches it on round trip 1 and raises
+#: ``MARKETPLACE_READ_FAILED``, which the Strategies page renders as "Ownership list unavailable".
+#: So the ownership list was dead for every user, on every call, from the day this constant was
+#: written - the column was never there to read.
+#:
+#: NO migration in this repository creates it. ``backend_app/migrations/`` contains no
+#: ``CREATE TABLE strategies`` at all (the table pre-dates this migration set and is defined
+#: outside it) and no ``ALTER TABLE strategies ADD COLUMN ... description``; the
+#: ``description TEXT`` in ``001_strategy_architecture.sql`` belongs to the
+#: ``marketplace_listings`` CREATE TABLE, not to this one. ``tests/…_ownership_and_actions.py``'s
+#: ``TestEveryOwnedColumnIsOneSomethingCreates`` now holds the whole list to that rule, so a
+#: phantom column cannot be added back silently.
+#:
+#: The fix is to stop asking, not to add the column. Creating
+#: ``strategies.description`` would be a schema decision - a write path, a backfill, a
+#: nullability choice and a rollback - and this defect is a query asking for something that does
+#: not exist. Every ``description`` the product actually shows comes from
+#: ``library_strategies.description`` (the Listing's own, still projected on the SUBSCRIBED
+#: half of this very response), so nothing user-visible is lost by not requesting this one. The
+#: OWNED entry therefore OMITS the key entirely rather than carrying ``""`` or ``null``: a fact
+#: the system does not have is reported as absent, never invented.
 OWNED_STRATEGY_SELECT: str = (
-    "id,name,description,symbol,timeframe,status,is_active,"
+    "id,name,symbol,timeframe,status,is_active,"
     "created_at,updated_at,archived_at"
 )
 
@@ -759,7 +791,10 @@ def build_my_strategies_entries(
             "ownership": OWNERSHIP_OWNED,
             "strategy_id": strategy_id,
             "name": _read(row, "name"),
-            "description": _read(row, "description"),
+            # No ``description`` key. ``public.strategies`` has no such column - see
+            # :data:`OWNED_STRATEGY_SELECT` for the 42703 this caused - so the row carries no
+            # description and this entry claims none. Emitting ``None`` or ``""`` here would
+            # report "read, and empty" for a field that was never read at all.
             "symbol": _read(row, "symbol"),
             "timeframe": _read(row, "timeframe"),
             "status": _read(row, "status"),
