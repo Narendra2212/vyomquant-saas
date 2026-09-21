@@ -81,6 +81,17 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
 import fc from 'fast-check';
+// §5b reads `src/websocketClient.js` as text to pin the removal marker for task 8.2c's
+// compatibility shim. Same approach as `tests/unit/guards/no-local-tokens.test.js`: a
+// temporary exception is pinned in the source, not just in behaviour, so it cannot be
+// forgotten. Goes when the shim goes.
+//
+// `__dirname`, not `new URL(…, import.meta.url)` — `tests/unit/guards/source-scan.js`
+// documents why at length: Vite's `asset-import-meta-url` plugin rewrites that literal
+// expression into an asset lookup, the read then raises, and the file reports "0 tests"
+// instead of failing. This file did exactly that before switching to `__dirname`.
+import { readFileSync } from 'node:fs';
+import nodePath from 'node:path';
 
 // ---------------------------------------------------------------------------
 // The api stub. Hoisted, because Billing imports `api` at module scope.
@@ -119,7 +130,7 @@ vi.mock('../../../src/api', async () => {
 });
 
 import Billing from '../../../src/pages/Billing';
-import wsClient from '../../../src/websocketClient';
+import wsClient, { WS_TICKET_FALLBACK } from '../../../src/websocketClient';
 import { useWsTicketStub } from '../helpers/wsTicketStub';
 
 /**
@@ -241,6 +252,25 @@ class RecordingWebSocket {
     this.readyState = RecordingWebSocket.OPEN;
     if (this.onopen) this.onopen();
   }
+
+  /**
+   * The server refuses the handshake: closed with a code, never opened.
+   *
+   * Added for §5 (task 8.2c). `close()` above fires `onclose()` with no argument, which is
+   * what a *local* teardown looks like and is deliberately left alone — the fallback the
+   * shim performs is keyed on an explicit close code, so the two must be distinguishable
+   * doubles. `4001` is what every route in `api_ws/ws_routes.py` closes with; `1006` is
+   * what a browser reports for the same refusal, because those routes close before
+   * `accept()`.
+   *
+   * @param {number} code
+   * @param {string} [reason]
+   */
+  refuse(code, reason = '') {
+    this.closes += 1;
+    this.readyState = RecordingWebSocket.CLOSED;
+    if (this.onclose) this.onclose({ code, reason, wasClean: false });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +348,14 @@ const resetSocketClient = () => {
   wsClient.reconnectAttempts = 0;
   wsClient.connectionStatus = 'disconnected';
   wsClient.expectedSequence = 1;
+  // task 8.2c. The degraded credential mode is sticky **for the session**, which is exactly
+  // what §5 asserts — and a singleton's session is the whole test file, so it is reset here
+  // with everything else. Without this line one §5 case would leave every later test,
+  // including §4's property, presenting the legacy credential. Goes with the shim.
+  wsClient.credentialMode = 'ticket';
+  wsClient.presentedCredential = null;
+  wsClient.socketOpened = false;
+  wsClient.credentialFallbackLogged = false;
 };
 
 /**
@@ -870,3 +908,367 @@ describe('Property: no constructed socket URL contains the credential in any pos
 // machinery wave 3's fix is built on, and they are pinned in
 // `tests/unit/lib/singleSocket.test.jsx` beside the single-socket assertion they serve, rather
 // than duplicated here.
+
+// ══════════════════════════════════════════════════════════════════════════
+// 5. THE DEPLOY-ORDERING COMPATIBILITY SHIM  (task 8.2c)
+//    ┏━━━ TEMPORARY. DELETE THIS WHOLE SECTION WITH THE SHIM. ━━━━━━━━━━━━━┓
+// ══════════════════════════════════════════════════════════════════════════
+//
+// WHAT THIS SECTION IS, AND WHY IT IS NOT A WEAKENING OF §1-§4
+// -----------------------------------------------------------
+// Sections 1-4 assert that no socket URL carries the session JWT. This section asserts one
+// URL that *does*, deliberately, under one condition that is named and bounded. It is an
+// explicitly asserted exception, not a relaxation: every assertion above still runs, the
+// property in §4 still holds over 300 generated tokens on the default path, and nothing in
+// this section touches the default path at all.
+//
+// THE CONDITION, WHICH IS A DEPLOYMENT FACT AND NOT A HYPOTHETICAL
+// ---------------------------------------------------------------
+// Two workflows ship the two halves of task 8.2 at different speeds.
+// `06-frontend-deploy.yml` fires on a push to `main` touching `algo22-terminal/**` and is an
+// S3 sync — seconds. `03-deploy.yml` waits for `02 Build`, then rolls ECS — minutes. So on
+// merge the new bundle is live against the old task definition.
+//
+// What breaks in that window is *not* the mint. `issue_ws_ticket` is already on `main`, so
+// `POST /api/auth/ws-ticket` answers 200 with a real ticket. `verify_ws_ticket` is not there:
+// nothing can redeem it, the routes read only `token`, and the handshake finds no credential
+// and closes 4001. Every socket for every user, until the rollout lands. §2's reconnect case
+// deliberately has no `?token=` fallback, so without this shim there is nothing to recover
+// with.
+//
+// So the signal has to be read at the SOCKET, which is the only place the mismatch is
+// observable, and the fallback mirrors what task 8.2a already did on the backend by keeping
+// `token` accepting for one release.
+//
+// CREDENTIALS HERE
+// ----------------
+// Same rule as the rest of the file: `SYNTHETIC_JWT` is three base64url segments that decode
+// to nothing, and failure messages go through `redact`. The one place a raw credential is
+// compared is the assertion that the fallback URL carries it — asserted by `includes`, and
+// reported as `<JWT>`.
+
+describe('the deploy-ordering compatibility shim (task 8.2c)', () => {
+  /** The socket the client most recently constructed. */
+  const live = () => constructed[constructed.length - 1];
+
+  /** Every `console.warn` line naming the shim. It must be logged once, not per attempt. */
+  const degradationWarnings = () =>
+    console.warn.mock.calls
+      .map((call) => call.join(' '))
+      .filter((line) => line.includes(WS_TICKET_FALLBACK.marker));
+
+  it('leaves the default path alone: a ticket, and no token parameter', async () => {
+    /*
+      The guard on everything else in this section. The shim is reactive — it changes nothing
+      until a handshake is actually refused — so the first attempt of a session is the fix as
+      §2 asserts it, byte for byte.
+    */
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+
+    await wsClient.connect('/ws/telemetry');
+
+    expect(constructed.length).toBe(1);
+    expect(queryParams(constructed[0].url)).toEqual(['ticket']);
+    expectNoCredentialInUrl(constructed[0].url, SYNTHETIC_JWT, 'the first attempt of a session');
+    expect(wsClient.credentialMode).toBe('ticket');
+    expect(degradationWarnings()).toHaveLength(0);
+  });
+
+  it('falls back to the legacy token credential after a ticket handshake is refused 4001', async () => {
+    /*
+      THE SHIM'S DOCUMENTED BEHAVIOUR, AND THE ONE ASSERTION IN THIS FILE THAT EXPECTS A JWT
+      IN A URL.
+
+      This is asserted rather than tolerated because a fallback nobody asserts is a fallback
+      nobody notices, and because the thing it costs — the JWT in the query string — is
+      precisely the exposure Requirements 1.21 / 2.21 remove. Writing it down is what makes
+      the trade reviewable: one release of the old exposure, against every socket in the
+      product being dead for the length of an ECS rollout.
+
+      The refusal is delivered as a close code on a socket that never opened, which is what a
+      refused handshake is. `refuse()` rather than `close()`: the bare `close()` the rest of
+      this file uses is a local teardown and must not degrade anything.
+    */
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+
+    await wsClient.connect('/ws/telemetry');
+    expect(queryParams(constructed[0].url)).toEqual(['ticket']);
+
+    live().refuse(4001, 'Unauthorized: Missing credential');
+
+    // The next *scheduled* attempt carries the fallback — no immediate retry, so the shim
+    // cannot turn a refusing backend into a request loop. Base delay 1000 ms + ≤ 250 ms jitter.
+    await vi.advanceTimersByTimeAsync(1500);
+
+    expect(constructed.length, 'the backoff must have made a second attempt').toBe(2);
+    expect(queryParams(constructed[1].url)).toEqual(['token']);
+    expect(
+      String(constructed[1].url).includes(SYNTHETIC_JWT),
+      `the fallback URL must carry the session JWT — that is the shim: ${redact(constructed[1].url)}`,
+    ).toBe(true);
+    expect(String(constructed[1].url)).toContain('/ws/telemetry');
+
+    // No second ticket was minted: the mint succeeds against this backend and is useless,
+    // so paying for it again would be a round trip per reconnect for the whole window.
+    expect(wsTickets.requests, 'the first attempt minted one ticket and nothing minted again')
+      .toHaveLength(1);
+
+    expect(wsClient.credentialMode).toBe('token');
+  });
+
+  it('uses `&` when the path already carries a query string', async () => {
+    /*
+      `/ws/dashboard` takes `user_id` as a query parameter, so the fallback's separator has to
+      switch exactly as the ticket path's does. Asserted because a `?` here would produce
+      `/ws/dashboard?user_id=…?token=…`, where the route's own parameter is swallowed into the
+      previous value and the connection fails for a second, unrelated reason.
+    */
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+
+    await wsClient.connect(`/ws/dashboard?user_id=${USER_ID}`);
+    live().refuse(4001);
+    await vi.advanceTimersByTimeAsync(1500);
+
+    expect(constructed.length).toBe(2);
+    expect(queryParams(constructed[1].url)).toEqual(['user_id', 'token']);
+    expect(new URL(String(constructed[1].url)).searchParams.get('user_id')).toBe(USER_ID);
+  });
+
+  it('is sticky: a later reconnect goes straight to token and mints no further ticket', async () => {
+    /*
+      The clause that makes the shim cheap instead of merely working. Once a backend has
+      refused a ticket, every reconnect for the rest of the session would otherwise pay a
+      doomed mint first — a POST against a 30-a-minute rate limit, per reconnect, for the
+      length of the rollout — and then present a credential that cannot be redeemed.
+
+      The second drop here is a *normal* one: the fallback socket opens (the old backend
+      accepts `token`) and then drops the way a socket drops. That is the realistic shape, and
+      it is also the case that proves the stickiness is state and not a one-shot retry: a
+      client that remembered nothing would go back to a ticket on this attempt.
+    */
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+
+    await wsClient.connect('/ws/telemetry');
+    live().refuse(4001);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(queryParams(constructed[1].url)).toEqual(['token']);
+
+    // The legacy credential works against the old backend: this connection opens.
+    live().open();
+    expect(wsClient.getStatus()).toBe('connected');
+    live().close();
+
+    await vi.advanceTimersByTimeAsync(1500);
+
+    expect(constructed.length, 'the drop must have been reconnected').toBe(3);
+    expect(queryParams(constructed[2].url), 'no ticket round trip on a degraded session')
+      .toEqual(['token']);
+    expect(wsTickets.requests, 'exactly one mint in the whole session').toHaveLength(1);
+    expect(wsClient.credentialMode).toBe('token');
+
+    // Logged once, not once per attempt. Three attempts have happened.
+    expect(degradationWarnings(), 'the degradation is announced once per session')
+      .toHaveLength(1);
+  });
+
+  it('never switches credentials twice: a refused token attempt is a real auth failure', async () => {
+    /*
+      `ticket → token → ticket` is the failure mode this asserts against. A client that
+      re-derived its credential from each refusal would alternate forever, present a spent or
+      unredeemable credential every time, and never surface a failure — and the loop would be
+      invisible because each individual attempt looks like a reasonable retry.
+
+      A refused `token` attempt is not a deploy-window symptom. It is what an expired session
+      or a genuinely unauthorised user looks like, and the correct response is the reconnect
+      policy the client already has: capped, jittered, bounded, and then `failed`.
+
+      Asserted as a terminating sequence rather than as an absence of a switch, because
+      "does not loop" is a claim about where the attempts stop. Default policy is five
+      attempts, so: one ticket attempt plus five token attempts, then `failed`.
+    */
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+
+    await wsClient.connect('/ws/telemetry');
+    live().refuse(4001);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(queryParams(constructed[1].url)).toEqual(['token']);
+
+    // Refuse everything, for longer than the capped delay can ever be (30 s), until the
+    // client stops of its own accord. The bound on the loop is the loop's own guard.
+    for (let i = 0; i < 10; i += 1) {
+      const socket = live();
+      if (socket.closes > 0) break;
+      socket.refuse(4001);
+      await vi.advanceTimersByTimeAsync(31000);
+    }
+
+    expect(constructed.length, (
+      'one ticket attempt, then maxReconnectAttempts token attempts, then it stops'
+    )).toBe(1 + wsClient.maxReconnectAttempts);
+    expect(wsClient.getStatus()).toBe('failed');
+
+    // Every attempt after the first presented `token`. None went back to a ticket.
+    expect(constructed.slice(1).map((socket) => queryParams(socket.url)))
+      .toEqual(constructed.slice(1).map(() => ['token']));
+    expect(wsTickets.requests, 'the ticket endpoint is asked once and never again')
+      .toHaveLength(1);
+    expect(degradationWarnings(), 'one degradation, not one per refusal').toHaveLength(1);
+  });
+
+  it('does not degrade on a drop that is not a handshake refusal', async () => {
+    /*
+      The condition that keeps the JWT out of the URL on an ordinary network blip. A
+      connection that reached `open` and then dropped says nothing about whether this backend
+      redeems tickets, and a shim that treated every drop as a credential problem would put
+      the session JWT in a URL on the first flaky minute of any session — permanently, since
+      the mode is sticky.
+
+      Two drops, the shape §2 already uses, and the session is still on tickets afterwards.
+    */
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+
+    await wsClient.connect('/ws/telemetry');
+
+    for (const attempt of [1, 2]) {
+      const socket = live();
+      socket.open();
+      socket.close();
+      await vi.advanceTimersByTimeAsync(1000 * 2 ** (attempt - 1) + 500);
+      expect(constructed.length).toBe(attempt + 1);
+    }
+
+    expect(wsClient.credentialMode).toBe('ticket');
+    expect(degradationWarnings()).toHaveLength(0);
+    for (const socket of constructed) {
+      expect(queryParams(socket.url)).toEqual(['ticket']);
+      expectNoCredentialInUrl(socket.url, SYNTHETIC_JWT, 'a socket that dropped after opening');
+    }
+  });
+
+  it('does not degrade on a close that carries no code at all', async () => {
+    /*
+      `disconnect()`, `release()`, a `handleError` teardown and every test double in this
+      repository fire `onclose` with no event. A browser always supplies a code, so "no code"
+      is only ever a local teardown — and reading one as a server refusal would degrade a
+      session that was simply being torn down, then keep it degraded.
+    */
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+
+    await wsClient.connect('/ws/telemetry');
+    live().close();
+    await vi.advanceTimersByTimeAsync(1500);
+
+    expect(wsClient.credentialMode).toBe('ticket');
+    expect(queryParams(constructed[1].url)).toEqual(['ticket']);
+    expect(degradationWarnings()).toHaveLength(0);
+  });
+
+  it('logs the degradation without logging the ticket or the JWT', async () => {
+    /*
+      §2.20 of `bugfix.md`: a secret is referenced by name and by position, never by value.
+      The shim's whole justification is written into a console line, and a console line is
+      read by support staff and pasted into tickets, so it is asserted to name the close code
+      and the path and nothing else.
+    */
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+
+    await wsClient.connect('/ws/telemetry');
+    const issuedTicket = wsTickets.issued[0];
+    live().refuse(4001);
+    await vi.advanceTimersByTimeAsync(1500);
+
+    const [warning] = degradationWarnings();
+    expect(warning, 'the degradation must be announced').toBeTruthy();
+
+    // Names what it is, why, and when it dies.
+    expect(warning).toContain('COMPATIBILITY FALLBACK');
+    expect(warning).toContain('verify_ws_ticket');
+    expect(warning).toContain('4001');
+    expect(warning).toContain(WS_TICKET_FALLBACK.removeWhen);
+
+    // And carries neither credential.
+    expect(warning.includes(SYNTHETIC_JWT), 'the JWT is in the log line').toBe(false);
+    expect(warning.includes(issuedTicket), 'the ticket is in the log line').toBe(false);
+    expect(jwtShapedSubstring(warning), 'a JWT-shaped substring is in the log line').toBeNull();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// 5b. THE REMOVAL MARKER
+// ══════════════════════════════════════════════════════════════════════════
+//
+// This suite exists to FAIL when the shim outlives its purpose, in the style
+// `tests/unit/guards/no-local-tokens.test.js` uses for its scheduled exceptions: the thing
+// that is allowed to be temporary is pinned by value, so widening it or forgetting it both
+// show up in a diff.
+//
+// The pin cuts both ways on purpose. While the shim is here, these assertions hold and the
+// marker is greppable. When ECS is confirmed on the task definition that contains
+// `verify_ws_ticket`, deleting the shim breaks this suite — which is the point: the shim
+// cannot be removed silently, and it cannot be left behind silently either, because the
+// marker names the condition that ends its life and nothing else in `src/` looks like it.
+
+describe('the shim is marked for removal', () => {
+  /** `<terminal>/src/websocketClient.js`. This file lives at `tests/unit/lib/`. */
+  const SHIM_SOURCE = readFileSync(
+    nodePath.resolve(__dirname, '..', '..', '..', 'src', 'websocketClient.js'),
+    'utf8',
+  );
+
+  it('pins the marker, the kill switch and the removal condition by value', () => {
+    // Pinned by value rather than by shape. Changing any of it means changing this
+    // assertion, which means saying so in the diff.
+    expect(WS_TICKET_FALLBACK).toEqual({
+      marker: 'production-launch-hardening-8.2c-deploy-ordering-shim',
+      enabled: true,
+      removeWhen:
+        'ECS is confirmed running the task definition that contains verify_ws_ticket',
+      refusalCloseCodes: [4001, 1006],
+    });
+    // Frozen, so nothing can quietly flip `enabled` at runtime and change which credential
+    // a session presents.
+    expect(Object.isFrozen(WS_TICKET_FALLBACK)).toBe(true);
+    expect(Object.isFrozen(WS_TICKET_FALLBACK.refusalCloseCodes)).toBe(true);
+  });
+
+  it('delimits every part of the shim, so all of it can be found and deleted together', () => {
+    // Three regions: the constant and its rationale, the `_open` branch that presents the
+    // legacy credential, and `_maybeFallBackToLegacyToken`. Pinned as a count so a fourth
+    // site cannot be added without this failing, and so deleting one of the three cannot
+    // leave the other two behind.
+    const opened = SHIM_SOURCE.match(/┏━+ WS_TICKET_FALLBACK/g) || [];
+    const closed = SHIM_SOURCE.match(/┗━+ end WS_TICKET_FALLBACK/g) || [];
+
+    expect(opened, (
+      'the shim must be delimited at exactly three sites: the WS_TICKET_FALLBACK constant, '
+      + 'the WS_CREDENTIAL_MODE_TOKEN branch in `_open`, and `_maybeFallBackToLegacyToken`'
+    )).toHaveLength(3);
+    expect(closed).toHaveLength(3);
+  });
+
+  it('states in the source that it is temporary, and what ends it', () => {
+    // A marker with no stated expiry is a marker nobody can act on.
+    expect(SHIM_SOURCE).toContain('TEMPORARY. DELETE THIS BLOCK.');
+    expect(SHIM_SOURCE).toContain('It exists for exactly one release');
+    expect(SHIM_SOURCE).toContain('verify_ws_ticket');
+    expect(SHIM_SOURCE).toContain(WS_TICKET_FALLBACK.removeWhen);
+    expect(SHIM_SOURCE).toContain(WS_TICKET_FALLBACK.marker);
+    // And names the deployment asymmetry that caused it, so the next reader does not have to
+    // re-derive it from two workflow files.
+    expect(SHIM_SOURCE).toContain('06-frontend-deploy.yml');
+    expect(SHIM_SOURCE).toContain('03-deploy.yml');
+  });
+
+  it('keeps the fallback in one method, so removing it is one deletion', () => {
+    // If the fallback decision spreads out of `_maybeFallBackToLegacyToken`, "delete the
+    // block" stops being a true instruction.
+    expect(typeof wsClient._maybeFallBackToLegacyToken).toBe('function');
+
+    const assignments = SHIM_SOURCE.match(/this\.credentialMode\s*=(?!=)/g) || [];
+    expect(assignments, (
+      'credentialMode is assigned in exactly two places: its initialisation in the '
+      + 'constructor and the single degradation in `_maybeFallBackToLegacyToken`'
+    )).toHaveLength(2);
+  });
+});
+// ┗━━━ end of the task 8.2c section ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛

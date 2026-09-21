@@ -60,6 +60,72 @@ const readSessionToken = () => {
   }
 };
 
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ┏━━━ WS_TICKET_FALLBACK ━━━ TEMPORARY. DELETE THIS BLOCK. ━━━━━━━━━━━━━━━┓
+ * production-launch-hardening task 8.2c — DEPLOY-ORDERING COMPATIBILITY SHIM
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * WHY THIS EXISTS. It exists for exactly one release: the release in which this frontend
+ * can reach a backend that predates `verify_ws_ticket`. Two workflows ship the two halves
+ * of task 8.2 at different speeds:
+ *
+ *   `.github/workflows/06-frontend-deploy.yml`  push to `main`, `algo22-terminal/**`
+ *                                               → an S3 sync. Seconds.
+ *   `.github/workflows/03-deploy.yml`           after `02 Build` completes
+ *                                               → an ECS rollout. Minutes.
+ *
+ * So on merge there is a window in which the new bundle is live and the old task definition
+ * is still serving sockets. `POST /api/auth/ws-ticket` is NOT the thing that breaks in that
+ * window — `issue_ws_ticket` is already on `main`, so the mint succeeds and the client gets
+ * a real ticket. What is missing is the redemption half: `verify_ws_ticket` is not there,
+ * the routes read only `token`, and a handshake presenting `?ticket=` finds no credential.
+ * Every socket for every user closes 4001 until the rollout lands.
+ *
+ * WHAT IT DOES. On the first socket that presents a ticket and is refused, it switches this
+ * session's credential to the legacy `?token=` — the same one-release grace that task 8.2a
+ * gave the backend by keeping the `token` query parameter accepting. The switch happens
+ * once, sticks for the session, and is never switched back: `ticket → token → ticket` would
+ * pay a doomed ticket round-trip on every reconnect for the whole window.
+ *
+ * WHAT IT COSTS, STATED PLAINLY. The fallback URL carries the session JWT, which is the
+ * exposure Requirements 1.21 / 2.21 exist to remove — a JWT in a CloudFront or ALB access
+ * log is replayable while it is valid. That is the trade: one release of the old exposure
+ * for one session, against every socket in the product being dead for the length of an ECS
+ * rollout. It is bounded by being at most one switch per session, by never firing on a
+ * connection that reached `open`, and by this block being deleted.
+ *
+ * WHEN IT IS DELETED. Once ECS is confirmed running the task definition that contains
+ * `verify_ws_ticket`, this block, the `credentialMode` state in the constructor, the
+ * `WS_CREDENTIAL_MODE_TOKEN` branch in `_open`, `_maybeFallBackToLegacyToken`, and the
+ * `§5` tests in `tests/unit/lib/socketCredential.test.js` all go together. The marker below
+ * is pinned by a test, so the shim cannot be forgotten and cannot be removed by accident.
+ */
+export const WS_TICKET_FALLBACK = Object.freeze({
+  /** Grep this to find every part of the shim. Pinned by `socketCredential.test.js` §5. */
+  marker: 'production-launch-hardening-8.2c-deploy-ordering-shim',
+  /** The one-line kill switch, for the release after this one. */
+  enabled: true,
+  /** The condition that ends its life. Not a date: a deployment fact. */
+  removeWhen: 'ECS is confirmed running the task definition that contains verify_ws_ticket',
+  /**
+   * The close codes that mean "this backend does not redeem tickets".
+   *
+   * `4001` is what every route in `api_ws/ws_routes.py` closes with on a missing or
+   * unresolvable credential. `1006` is what the *browser* reports for the same refusal,
+   * because those routes call `websocket.close(code=4001)` **before** `websocket.accept()`
+   * — an ASGI server turns that into an HTTP 403 on the handshake, so no close frame is
+   * ever sent and the 4001 never reaches JavaScript. Without `1006` the shim would pass
+   * its own unit test and do nothing in production.
+   */
+  refusalCloseCodes: Object.freeze([4001, 1006]),
+});
+
+/** Credential this session presents. `ticket` is the fix; `token` is the shim's fallback. */
+const WS_CREDENTIAL_MODE_TICKET = 'ticket';
+const WS_CREDENTIAL_MODE_TOKEN = 'token';
+/* ┗━━━ end WS_TICKET_FALLBACK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ */
+
 class WebSocketClient {
   constructor() {
     this.ws = null;
@@ -107,6 +173,17 @@ class WebSocketClient {
     // Bumped by every `_open` and by `disconnect`, so a ticket that arrives after the
     // attempt that asked for it was superseded or torn down opens nothing.
     this.connectGeneration = 0;
+
+    // ── WS_TICKET_FALLBACK (task 8.2c) — delete with the block above ──────
+    // `ticket` unless a refused ticket handshake proves this backend predates
+    // `verify_ws_ticket`. Sticky for the session once it moves: see
+    // `_maybeFallBackToLegacyToken`.
+    this.credentialMode = WS_CREDENTIAL_MODE_TICKET;
+    // Which credential the live socket presented, and whether it ever reached `open`.
+    // Both are the evidence `_maybeFallBackToLegacyToken` reads; neither is a policy.
+    this.presentedCredential = null;
+    this.socketOpened = false;
+    this.credentialFallbackLogged = false;
   }
 
   /**
@@ -159,9 +236,24 @@ class WebSocketClient {
         server-side decision into a client-side one, and this branch is also what keeps
         `connect()` synchronous for a session that has nothing to present.
       */
-      this._openSocket(path, '');
+      this._openSocket(path, '', null);
       return Promise.resolve();
     }
+
+    /* ┏━━━ WS_TICKET_FALLBACK (task 8.2c) — delete this branch with the block above ━━━┓
+       This session has already seen a backend that refused a ticket, so there is nothing
+       to be gained by minting another one: the ticket endpoint answers, the handshake
+       does not. Straight to the legacy credential, synchronously, no round trip.        */
+    if (WS_TICKET_FALLBACK.enabled && this.credentialMode === WS_CREDENTIAL_MODE_TOKEN) {
+      const legacySeparator = path.includes('?') ? '&' : '?';
+      this._openSocket(
+        path,
+        `${legacySeparator}token=${encodeURIComponent(token)}`,
+        WS_CREDENTIAL_MODE_TOKEN,
+      );
+      return Promise.resolve();
+    }
+    /* ┗━━━ end WS_TICKET_FALLBACK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ */
 
     this._setStatus('connecting');
 
@@ -170,7 +262,11 @@ class WebSocketClient {
         // Superseded by a later attempt, or torn down while the request was in flight.
         if (generation !== this.connectGeneration) return;
         const hasQuery = path.includes('?');
-        this._openSocket(path, `${hasQuery ? '&' : '?'}ticket=${encodeURIComponent(ticket)}`);
+        this._openSocket(
+          path,
+          `${hasQuery ? '&' : '?'}ticket=${encodeURIComponent(ticket)}`,
+          WS_CREDENTIAL_MODE_TICKET,
+        );
       },
       (error) => {
         if (generation !== this.connectGeneration) return;
@@ -227,8 +323,13 @@ class WebSocketClient {
    *
    * @param {string} path
    * @param {string} credentialParam `?ticket=…`, `&ticket=…`, or `''`
+   * @param {string|null} presented which credential `credentialParam` carries, or `null`
+   *   for none. Recorded, not acted on: `_maybeFallBackToLegacyToken` (task 8.2c) needs to
+   *   know what a refused handshake had presented, and goes with that shim.
    */
-  _openSocket(path, credentialParam) {
+  _openSocket(path, credentialParam, presented = WS_CREDENTIAL_MODE_TICKET) {
+    this.presentedCredential = presented;
+    this.socketOpened = false;
     this.url = `${WS_BASE}${path}${credentialParam}`;
     /*
       Logged without the query string. There is no `token=[REDACTED]` rewrite here any
@@ -245,7 +346,9 @@ class WebSocketClient {
       this.ws.onopen = () => this.handleOpen();
       this.ws.onmessage = (event) => this.handleMessage(event);
       this.ws.onerror = (error) => this.handleError(error);
-      this.ws.onclose = () => this.handleClose();
+      // The `CloseEvent` is threaded through rather than dropped: `handleClose` already
+      // logs `event.code`, and task 8.2c's fallback is decided by that code.
+      this.ws.onclose = (event) => this.handleClose(event);
     } catch (error) {
       console.error('WebSocket connection error:', error);
       this._setStatus('error');
@@ -269,6 +372,9 @@ class WebSocketClient {
     console.log('🟢 WebSocket connected');
     this._setStatus('connected');
     this.reconnectAttempts = 0;
+    // task 8.2c: a handshake that completed is not a credential refusal, whatever code it
+    // closes with later. Goes with the WS_TICKET_FALLBACK block.
+    this.socketOpened = true;
     this.lastPongTime = Date.now();
 
     // Clear any pending reconnect timeout
@@ -556,11 +662,78 @@ class WebSocketClient {
     this.stopHeartbeat();
     this.ws = null;
 
+    // task 8.2c. Read before the reconnect is scheduled, so the attempt the backoff makes
+    // is the one that presents the fallback credential. Goes with the shim.
+    this._maybeFallBackToLegacyToken(event);
+
     // Attempt reconnection if enabled
     if (this.reconnectEnabled) {
       this.scheduleReconnect();
     }
   }
+
+  /* ┏━━━ WS_TICKET_FALLBACK (task 8.2c) ━━━ TEMPORARY. DELETE THIS METHOD. ━━━━━━━━━━━┓ */
+  /**
+   * Degrade this session's credential to the legacy `?token=` — once, and only on the one
+   * signal that means "this backend cannot redeem a ticket".
+   *
+   * WHY THE SIGNAL IS READ AT THE SOCKET AND NOT AT THE TICKET FETCH. `issue_ws_ticket` is
+   * already on `main`, so during the deploy window `POST /api/auth/ws-ticket` returns 200
+   * with a perfectly good ticket. The mint tells you nothing. The only place the mismatch
+   * is observable is the handshake that presents the ticket and is refused.
+   *
+   * THE FOUR CONDITIONS, AND WHY EACH ONE IS THERE:
+   *
+   * - `presentedCredential === 'ticket'` — a refused `token` attempt is condition 4 below,
+   *   a real auth failure, and must not switch anything.
+   * - `!socketOpened` — a credential refusal happens *at* the handshake. A connection that
+   *   opened and later dropped is a network event, and treating it as a credential problem
+   *   would put the JWT in a URL on every blip.
+   * - the close code is in `refusalCloseCodes` — an explicit numeric code, so a close with
+   *   no code at all (which is what a test double or a torn-down socket produces) is never
+   *   read as a refusal.
+   * - `!credentialFallbackLogged` — once per session. This is what forbids
+   *   `ticket → token → ticket`.
+   *
+   * @param {CloseEvent|undefined} event
+   * @returns {boolean} whether this session was degraded by this close
+   */
+  _maybeFallBackToLegacyToken(event) {
+    if (!WS_TICKET_FALLBACK.enabled) return false;
+    if (this.credentialMode !== WS_CREDENTIAL_MODE_TICKET) return false;
+    if (this.presentedCredential !== WS_CREDENTIAL_MODE_TICKET) return false;
+    if (this.socketOpened) return false;
+
+    const code = typeof event?.code === 'number' ? event.code : null;
+    if (code === null || !WS_TICKET_FALLBACK.refusalCloseCodes.includes(code)) return false;
+
+    // Nothing to fall back *to* without a session credential, and the no-credential path
+    // already attempts the socket and lets the server refuse it.
+    if (!readSessionToken()) return false;
+
+    this.credentialMode = WS_CREDENTIAL_MODE_TOKEN;
+
+    if (!this.credentialFallbackLogged) {
+      this.credentialFallbackLogged = true;
+      /*
+        Loud, once, and named for what it is. No ticket value and no JWT value: the close
+        code and the path are the whole diagnostic, and both are already non-secret.
+      */
+      console.warn(
+        '⚠️ WebSocket COMPATIBILITY FALLBACK ' +
+          `(${WS_TICKET_FALLBACK.marker}): the handshake for ${this.connectPath || 'the socket'} ` +
+          `presented a single-use ticket and was refused with close code ${code}. ` +
+          'This backend has no ticket redemption — it predates `verify_ws_ticket`, which ' +
+          'means an ECS rollout is still in flight. Falling back to the legacy `token` ' +
+          'query credential for the rest of this session so live data keeps flowing. ' +
+          'The session JWT is in the socket URL while this fallback is active, which is ' +
+          `the exposure Requirements 1.21 / 2.21 remove. Remove this shim when: ${WS_TICKET_FALLBACK.removeWhen}.`,
+      );
+    }
+
+    return true;
+  }
+  /* ┗━━━ end WS_TICKET_FALLBACK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ */
 
   /**
    * Schedule reconnection attempt
