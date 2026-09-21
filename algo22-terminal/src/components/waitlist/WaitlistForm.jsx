@@ -18,11 +18,20 @@ const EXPERIENCE_OPTIONS = [
   { value: 'professional', label: 'Professional — Institutional or prop desk' },
 ]
 
+/*
+ * Labels are rupee bands; the `value` keys are NOT. Those four strings are the
+ * persisted enum — `chk_waitlist_volume` in
+ * `alembic/versions/e88f9911b5a2_consolidate_full_schema.py` constrains
+ * `waitlist.monthly_volume` to exactly `'<100k'`, `'100k-1M'`, `'1M-10M'`,
+ * `'>10M'`, so renaming one would make every submission carrying it fail the
+ * insert. Only the label a visitor reads moved to rupees, one round Indian
+ * figure per decade, which keeps the ten-fold band structure the keys encode.
+ */
 const VOLUME_OPTIONS = [
-  { value: '<100k', label: 'Less than $100k' },
-  { value: '100k-1M', label: '$100k — $1M' },
-  { value: '1M-10M', label: '$1M — $10M' },
-  { value: '>10M', label: 'Over $10M' },
+  { value: '<100k', label: 'Less than ₹1 crore' },
+  { value: '100k-1M', label: '₹1 crore — ₹10 crore' },
+  { value: '1M-10M', label: '₹10 crore — ₹100 crore' },
+  { value: '>10M', label: 'Over ₹100 crore' },
 ]
 
 export default function WaitlistForm() {

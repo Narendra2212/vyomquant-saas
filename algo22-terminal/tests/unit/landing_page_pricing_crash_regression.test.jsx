@@ -6,255 +6,129 @@ import LandingPage from '../../src/components/landing/LandingPage';
 import Pricing from '../../src/components/landing/Pricing';
 import { api } from '../../src/api';
 
-describe('Landing Page & Pricing — Production toLocaleString Crash Regression Suite', () => {
+/**
+ * Landing pricing is INR-only and states four published tiers.
+ *
+ * This file began as a `toLocaleString` crash regression suite, when the section
+ * rendered whatever `GET /api/billing/plans` returned and a null price threw on
+ * format. The prices are now declared in the component (see the header comment
+ * in `Pricing.jsx`: the endpoint FX-converts the USD base and therefore does not
+ * serve the catalogue's INR column), so the crash surface is gone along with the
+ * fetch. What is asserted instead is the contract that replaced it — four tiers,
+ * rupees only, and arithmetic that still cannot throw.
+ */
+describe('Landing Page & Pricing — INR-only tier contract', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  describe('Pricing Component Regression Tests', () => {
-    it('handles backend API response shape (base_price & localized_price, missing usd/inr) without crashing', async () => {
-      // Backend API contract returns base_price and localized_price, but NOT usd / inr
-      const mockBackendResponse = {
-        currency: 'USD',
-        plans: [
-          {
-            id: 'free',
-            name: 'Free / Sandbox',
-            description: 'Essential sandbox',
-            base_price: 0,
-            localized_price: 0,
-            currency: 'USD',
-            features: ['Visual DAG Strategy Builder'],
-            recommended: false,
-          },
-          {
-            id: 'starter',
-            name: 'Trader',
-            description: 'For active systematic traders',
-            base_price: 29,
-            localized_price: 29,
-            currency: 'USD',
-            features: ['5 Active Strategy Bots'],
-            recommended: false,
-          },
-          {
-            id: 'pro',
-            name: 'Pro Quant',
-            description: 'High-capacity execution engine',
-            base_price: 79,
-            localized_price: 79,
-            currency: 'USD',
-            features: ['15 Active Strategy Bots'],
-            recommended: true,
-          },
-          {
-            id: 'enterprise',
-            name: 'Institutional',
-            description: 'Dedicated infrastructure',
-            base_price: 199,
-            localized_price: 199,
-            currency: 'USD',
-            features: ['Unlimited Strategy Bots'],
-            recommended: false,
-          },
-        ],
-      };
+  const renderPricing = () =>
+    render(
+      <MemoryRouter>
+        <Pricing />
+      </MemoryRouter>
+    );
 
-      vi.spyOn(api.billing, 'getPlans').mockResolvedValue(mockBackendResponse);
+  describe('The four published tiers', () => {
+    it('quotes ₹0, ₹499, ₹999 and ₹2,499 per month', () => {
+      renderPricing();
 
-      render(
-        <MemoryRouter>
-          <Pricing />
-        </MemoryRouter>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText('Infrastructure Tiers')).toBeDefined();
-        // Starter ($29)
-        expect(screen.getByText('$29')).toBeDefined();
-        // Pro ($79)
-        expect(screen.getByText('$79')).toBeDefined();
-        // Enterprise ($199)
-        expect(screen.getByText('$199')).toBeDefined();
-      });
+      expect(screen.getByText('Infrastructure Tiers')).toBeDefined();
+      expect(screen.getByText('₹0')).toBeDefined();
+      expect(screen.getByText('₹499')).toBeDefined();
+      expect(screen.getByText('₹999')).toBeDefined();
+      expect(screen.getByText('₹2,499')).toBeDefined();
     });
 
-    it('handles zero values explicitly and formats as $0', async () => {
-      vi.spyOn(api.billing, 'getPlans').mockResolvedValue({
-        plans: [
-          {
-            id: 'free',
-            name: 'Free / Sandbox',
-            description: 'Free tier',
-            base_price: 0,
-            localized_price: 0,
-            features: [],
-          },
-        ],
-      });
+    it('renders exactly four tier cards, one per published plan', () => {
+      const { container } = renderPricing();
 
-      render(
-        <MemoryRouter>
-          <Pricing />
-        </MemoryRouter>
-      );
+      const names = ['Free / Sandbox', 'Trader', 'Pro Quant', 'Institutional'];
+      names.forEach((name) => expect(screen.getByText(name)).toBeDefined());
 
-      await waitFor(() => {
-        expect(screen.getByText('$0')).toBeDefined();
-      });
+      // One `/month` label per card is the card count, independent of copy.
+      expect(container.querySelectorAll('#pricing .card-surface')).toHaveLength(4);
+      expect(screen.getAllByText('/month')).toHaveLength(4);
     });
 
-    it('handles null / undefined / malformed price fields without throwing TypeError', async () => {
-      vi.spyOn(api.billing, 'getPlans').mockResolvedValue({
-        plans: [
-          {
-            id: 'corrupt-1',
-            name: 'Corrupt Plan 1',
-            base_price: null,
-            localized_price: undefined,
-            usd: null,
-            inr: undefined,
-            features: null,
-          },
-          {
-            id: 'corrupt-2',
-            name: 'Corrupt Plan 2',
-            base_price: 'non-numeric',
-            features: undefined,
-          },
-        ],
-      });
+    it('marks Pro Quant as the recommended tier', () => {
+      renderPricing();
+      expect(screen.getByText('Recommended')).toBeDefined();
+    });
+  });
 
-      expect(() => {
-        render(
-          <MemoryRouter>
-            <Pricing />
-          </MemoryRouter>
-        );
-      }).not.toThrow();
+  describe('Rupee is the only currency on the surface', () => {
+    it('prints no dollar sign anywhere in the section', () => {
+      const { container } = renderPricing();
 
-      await waitFor(() => {
-        expect(screen.getByText('Corrupt Plan 1')).toBeDefined();
-        expect(screen.getByText('Corrupt Plan 2')).toBeDefined();
-      });
+      expect(container.querySelector('#pricing').textContent).not.toContain('$');
     });
 
-    it('handles empty API plans array by using fallback plans', async () => {
-      vi.spyOn(api.billing, 'getPlans').mockResolvedValue({ plans: [] });
+    it('offers no currency selector — there is nothing to switch to', () => {
+      renderPricing();
 
-      render(
-        <MemoryRouter>
-          <Pricing />
-        </MemoryRouter>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText('Pro Quant')).toBeDefined();
-        expect(screen.getByText('$79')).toBeDefined();
-      });
+      expect(screen.queryByRole('button', { name: /USD/i })).toBeNull();
+      expect(screen.queryByRole('button', { name: /INR/i })).toBeNull();
     });
 
-    it('toggles currency between USD and INR safely', async () => {
-      vi.spyOn(api.billing, 'getPlans').mockImplementation((currency) => {
-        if (currency === 'INR') {
-          return Promise.resolve({
-            plans: [
-              {
-                id: 'starter',
-                name: 'Trader',
-                base_price: 29,
-                localized_price: 2400,
-                currency: 'INR',
-                features: [],
-              },
-            ],
-          });
-        }
-        return Promise.resolve({
-          plans: [
-            {
-              id: 'starter',
-              name: 'Trader',
-              base_price: 29,
-              localized_price: 29,
-              currency: 'USD',
-              features: [],
-            },
-          ],
-        });
-      });
+    it('does not call the FX-localised billing endpoint for its figures', async () => {
+      const getPlans = vi.spyOn(api.billing, 'getPlans').mockResolvedValue({ plans: [] });
 
-      render(
-        <MemoryRouter>
-          <Pricing />
-        </MemoryRouter>
-      );
+      renderPricing();
+      // A fetch would land in a microtask after mount, so let the queue drain.
+      await Promise.resolve();
+
+      expect(getPlans).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Annual billing arithmetic', () => {
+    it('applies the 20% reduction to every paid tier without throwing', async () => {
+      renderPricing();
+
+      fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
 
       await waitFor(() => {
-        expect(screen.getByText('$29')).toBeDefined();
+        // Monthly-equivalent: 499 / 999 / 2499 less 20%, rounded.
+        expect(screen.getByText('₹399')).toBeDefined();
+        expect(screen.getByText('₹799')).toBeDefined();
+        expect(screen.getByText('₹1,999')).toBeDefined();
       });
 
-      // Switch to INR
-      const inrBtn = screen.getByRole('button', { name: /INR \(₹\)/i });
-      fireEvent.click(inrBtn);
-
-      await waitFor(() => {
-        expect(screen.getByText('₹2,400')).toBeDefined();
-      });
+      // Billed-at lines carry the full year at the same 20% reduction.
+      expect(screen.getByText(/Billed at ₹4,790\/yr — save 20%/)).toBeDefined();
+      expect(screen.getByText(/Billed at ₹9,590\/yr — save 20%/)).toBeDefined();
+      expect(screen.getByText(/Billed at ₹23,990\/yr — save 20%/)).toBeDefined();
     });
 
-    it('toggles annual billing and calculates 20% discount without TypeError', async () => {
-      vi.spyOn(api.billing, 'getPlans').mockResolvedValue({
-        plans: [
-          {
-            id: 'starter',
-            name: 'Trader',
-            base_price: 100,
-            localized_price: 100,
-            currency: 'USD',
-            features: [],
-          },
-        ],
-      });
+    it('leaves the free tier at ₹0 with no annual billing line', async () => {
+      renderPricing();
 
-      render(
-        <MemoryRouter>
-          <Pricing />
-        </MemoryRouter>
-      );
+      fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
 
       await waitFor(() => {
-        expect(screen.getByText('$100')).toBeDefined();
+        expect(screen.getByText('₹0')).toBeDefined();
       });
+      // Three paid tiers carry the line; the free tier does not.
+      expect(screen.getAllByText(/Billed at ₹/)).toHaveLength(3);
+    });
 
-      // Switch to Annual
-      const annualBtn = screen.getByRole('button', { name: /Annual/i });
-      fireEvent.click(annualBtn);
+    it('returns to the monthly figures when Monthly is reselected', async () => {
+      renderPricing();
 
+      fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
+      await waitFor(() => expect(screen.getByText('₹399')).toBeDefined());
+
+      fireEvent.click(screen.getByRole('button', { name: /Monthly/i }));
       await waitFor(() => {
-        // Annual monthly price: 100 * 0.8 = $80
-        expect(screen.getByText('$80')).toBeDefined();
-        // Annual billed text: 100 * 12 * 0.8 = $960
-        expect(screen.getByText(/Billed at \$960\/yr — save 20%/i)).toBeDefined();
+        expect(screen.getByText('₹499')).toBeDefined();
+        expect(screen.queryByText(/Billed at ₹/)).toBeNull();
       });
     });
   });
 
   describe('Full Landing Page Integration', () => {
     it('renders entire LandingPage end-to-end without crashing', async () => {
-      vi.spyOn(api.billing, 'getPlans').mockResolvedValue({
-        plans: [
-          {
-            id: 'starter',
-            name: 'Trader',
-            base_price: 29,
-            localized_price: 29,
-            currency: 'USD',
-            features: ['5 Active Strategy Bots'],
-          },
-        ],
-      });
-
       const { container } = render(
         <MemoryRouter>
           <LandingPage />
@@ -267,6 +141,18 @@ describe('Landing Page & Pricing — Production toLocaleString Crash Regression 
         expect(container.querySelector('#waitlist')).toBeDefined();
         expect(screen.getByText('Infrastructure Tiers')).toBeDefined();
       });
+    });
+
+    it('shows no dollar sign anywhere on the landing page', async () => {
+      const { container } = render(
+        <MemoryRouter>
+          <LandingPage />
+        </MemoryRouter>
+      );
+
+      await waitFor(() => expect(screen.getByText('Infrastructure Tiers')).toBeDefined());
+
+      expect(container.textContent).not.toContain('$');
     });
   });
 });

@@ -218,7 +218,7 @@ export default function ScreenshotsSection() {
                         <span className="w-2 h-2 rounded-full bg-accent-profit animate-pulse" />
                         <span className="font-bold text-text-primary">PAPER EXECUTION ENGINE — ACTIVE</span>
                       </div>
-                      <span className="text-text-muted">Balance: $10,000.00 USDT</span>
+                      <span className="text-text-muted">Balance: 10,000.00 USDT</span>
                     </div>
                     {/* Telemetry rows */}
                     <div className="space-y-2.5">
@@ -234,7 +234,7 @@ export default function ScreenshotsSection() {
                       </div>
                       <div className="flex items-center justify-between p-2.5 rounded bg-bg-elevated/70 border border-border-default">
                         <span className="text-accent-profit">[ORDER ROUTED]</span>
-                        <span className="text-text-primary">Simulated Exchange Match @ $89,420.50</span>
+                        <span className="text-text-primary">Simulated Exchange Match @ 89,420.50 USDT</span>
                         <span className="text-accent-cyan font-semibold">STATUS: FILLED</span>
                       </div>
                     </div>
