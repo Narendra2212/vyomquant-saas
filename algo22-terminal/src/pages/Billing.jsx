@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import {
   CreditCard, CheckCircle, Star, Zap, Globe, Award, ArrowUpRight, Plus, AlertTriangle, XCircle, Loader2, TrendingUp, Bot, Cpu, Database, BarChart3, Shield, Crown, ChevronRight, RefreshCw, ExternalLink, AlertCircle, X, ChevronDown, MapPin
 } from "lucide-react";
-import { api } from "../api";
+import { api, isAuthenticated } from "../api";
 import wsClient from "../websocketClient";
 import { SectionH, PanelTitle, Tag2 } from "../components/common/primitives";
 import { token } from "../design/tokens";
@@ -167,16 +167,51 @@ export default function Billing() {
       kept a second reconnect implementation alive.
 
     Unchanged on purpose: the route is still `/ws/user/{user_id}` (`ws_routes.py:641`), which
-    is where the backend publishes what a Stripe webhook produces, and the credential is still
-    read from `localStorage` and still travels as `?token=`. It is now built in one place
-    instead of two. Task 8.2 replaces it with a single-use ticket and 8.3 unifies the store;
-    this step deliberately changes no authentication.
+    is where the backend publishes what a Stripe webhook produces.
+
+    ── THE CREDENTIAL AND THE STORE (tasks 8.2, 8.3 — Requirements 1.21 / 2.21, 3.9) ────────
+
+    Neither half of what this comment used to say is true any more, so neither is repeated:
+    the credential is no longer read here at all, and it does not travel as `?token=`.
+    `wsClient.acquire` mints a single-use ≤ 30 s ticket over HTTPS for every connection
+    attempt (`websocketClient.js` §THE SOCKET CREDENTIAL), so this page has no credential to
+    hold. What it needs is narrower: *whether a session exists*, and *whose it is*.
+
+    **Whether** comes from `isAuthenticated()` — `apiClient`'s own helper, re-exported by
+    `src/api`. That is the point of task 8.3. This effect used to read
+    `localStorage.getItem('token')` while the axios request interceptor read
+    `sessionStorage.getItem("token")`, which is two stores for one session: every writer in
+    the app (`apiClient`'s `onAuthStateChange`, `AuthPage`, sign-out) writes `sessionStorage`,
+    so the `localStorage` read was never once satisfied and this effect has never run in a
+    real session. Calling the HTTP client's own helper rather than re-reading a store makes
+    "one store" structural — there is no second read here to drift.
+
+    **Whose** comes from `GET /api/auth/me` (`api.auth.getMe`, `routers/auth.py:123`), not
+    from storage. `localStorage.getItem('userId')` was the second dead guard: nothing in
+    `src/` writes `userId`, anywhere, so it was always null. `/api/auth/me` is the right
+    replacement rather than `supabase.auth.getUser()` for two reasons — it is authenticated
+    by the very token the socket ticket will be minted from, so a resolvable id and a usable
+    session are one fact rather than two; and supabase-js persists its own session in
+    `localStorage` (`sb-<ref>-auth-token`, which `AccountMenu.jsx:535` clears by hand), so
+    asking it would reintroduce exactly the second store this task removes. The `id` it
+    returns is the JWT `sub`, which is what `_resolve_ws_subject` compares the path segment
+    against (`ws_routes.py:729-743`) — so the id and the route agree by construction.
+
+    The resolve is a request, so it is asynchronous, and the effect may be torn down while it
+    is in flight. `cancelled` is checked after the await and `held` records whether a hold was
+    ever taken: an unmount mid-resolve therefore acquires nothing and releases nothing. A
+    resolve that fails, or that answers without an id, is a *reported* no-subscription — the
+    reason is logged and no socket is opened. It is never a placeholder path.
   */
   useEffect(() => {
-    const sessionToken = localStorage.getItem('token');
-    if (!sessionToken) return undefined;
-    const userId = localStorage.getItem('userId');
-    if (!userId) return undefined;
+    // No session, no socket — and no ticket request either. Every route in `ws_routes.py`
+    // fails closed, so this is not the client deciding authorisation; it is the client not
+    // asking a signed-out user's question.
+    if (!isAuthenticated()) return undefined;
+
+    let cancelled = false;
+    let held = false;
+    let releases = [];
 
     /*
       The five frame kinds that mean "your entitlements changed, re-read them". Two are keyed
@@ -205,19 +240,56 @@ export default function Billing() {
       loadPlans(currencyRef.current);
     };
 
-    wsClient.acquire(`/ws/user/${userId}`);
-    const releases = [
-      // The server-side hold, refcounted per channel by the shared client.
-      wsClient.subscribeChannel('billing', handleBillingFrame),
-      // And the client-side routing for the frames that name a type rather than a channel,
-      // which is how the two `type` kinds above arrive.
-      wsClient.subscribe('subscription_update', handleBillingFrame),
-      wsClient.subscribe('plan_changed', handleBillingFrame),
-    ];
+    const subscribe = async () => {
+      let userId;
+      try {
+        const response = await api.auth.getMe();
+        // `apiClient`'s `get` returns the body; the `.data` unwrap is the same defensive
+        // read `loadBilling` above makes, for the same reason.
+        const profile = (response && response.data) || response;
+        userId = (profile && profile.id) || null;
+      } catch (err) {
+        console.error(
+          'Billing: no real-time subscription — GET /api/auth/me failed, so the session has ' +
+          `no resolvable user id: ${err?.message || 'unknown error'}`,
+        );
+        return;
+      }
+
+      // Unmounted, or the effect re-ran, while the profile request was in flight. Taking a
+      // hold now would be a hold nothing releases.
+      if (cancelled) return;
+
+      if (!userId) {
+        console.error(
+          'Billing: no real-time subscription — GET /api/auth/me answered without an `id`, ' +
+          'and /ws/user/{user_id} has no correct value to stand in for it.',
+        );
+        return;
+      }
+
+      wsClient.acquire(`/ws/user/${userId}`);
+      held = true;
+      releases = [
+        // The server-side hold, refcounted per channel by the shared client.
+        wsClient.subscribeChannel('billing', handleBillingFrame),
+        // And the client-side routing for the frames that name a type rather than a channel,
+        // which is how the two `type` kinds above arrive.
+        wsClient.subscribe('subscription_update', handleBillingFrame),
+        wsClient.subscribe('plan_changed', handleBillingFrame),
+      ];
+    };
+
+    subscribe();
 
     return () => {
+      cancelled = true;
       releases.forEach((release) => release());
-      wsClient.release();
+      releases = [];
+      if (held) {
+        held = false;
+        wsClient.release();
+      }
     };
   }, [loadBilling, loadPlans]);
 

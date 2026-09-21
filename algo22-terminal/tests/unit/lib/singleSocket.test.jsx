@@ -100,6 +100,8 @@ const { mockBilling, mockApi, mockGet, mockPost, mockAxios } = vi.hoisted(() => 
     mockBilling,
     mockApi: {
       billing: mockBilling,
+      // task 8.3: `GET /api/auth/me` is where Billing gets the id for `/ws/user/{user_id}`.
+      auth: { getMe: vi.fn() },
       exchange: { getAccounts: vi.fn() },
       user: { getConnectedExchanges: vi.fn() },
       market: { getSymbols: vi.fn() },
@@ -116,6 +118,17 @@ vi.mock('../../../src/api', () => ({
   default: mockApi,
   get: (...args) => mockGet(...args),
   post: (...args) => mockPost(...args),
+  /*
+    `isAuthenticated`, as `apiClient` implements it (`apiClient.js:616-620`): the session
+    credential in `sessionStorage`, the one store a session has since task 8.3.
+
+    Restated rather than imported because this file stubs `src/apiClient` wholesale - it
+    counts sockets and makes no HTTP request - so the real module is not in its graph. The
+    behavioural claim that Billing and the HTTP client read the *same* store is asserted
+    against the shipped helper in `tests/unit/lib/socketCredential.test.js` §3; here the
+    helper is only the gate that lets Billing take its hold.
+  */
+  isAuthenticated: () => !!sessionStorage.getItem('token'),
 }));
 
 vi.mock('../../../src/apiClient', () => ({
@@ -317,7 +330,15 @@ const mountTheWholeSession = async () => {
       </DataPipelineProvider>,
     );
   });
-  await act(async () => {});
+  /*
+    Billing's subscription is two awaited hops deep since task 8.3 - `GET /api/auth/me` for
+    the id, then the ticket exchange - so a macrotask boundary is what drains it. Without
+    this, section 1 would count sockets before the page had finished asking for its hold and
+    would report "exactly one" on a Billing that had not participated.
+  */
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 
   await act(async () => {
     pipelineHandle.connectLiveData('BTC/USDT', '5m');
@@ -331,9 +352,18 @@ beforeEach(() => {
   global.WebSocket = RecordingWebSocket;
   window.WebSocket = RecordingWebSocket;
 
-  window.localStorage.setItem('token', SYNTHETIC_JWT);
-  window.localStorage.setItem('userId', USER_ID);
+  /*
+    One store, one session (task 8.3). The two `localStorage` keys this used to set are gone:
+    `token` because every writer in the app writes `sessionStorage`, and `userId` because
+    nothing in `src/` has ever written that key at all - Billing resolves the id from
+    `GET /api/auth/me` instead.
+  */
   window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+  mockApi.auth.getMe.mockResolvedValue({
+    id: USER_ID,
+    email: 'billing@example.test',
+    role: 'user',
+  });
 
   mockBilling.getPlans.mockResolvedValue({ plans: [], currency: 'USD', currency_symbol: '$' });
   mockBilling.getEntitlements.mockResolvedValue({ plan: 'pro', features: [] });
@@ -394,6 +424,14 @@ describe('across a mount of Billing plus the data pipeline', () => {
       machinery that makes one socket serve three callers, and they already work.
     */
     await mountTheWholeSession();
+
+    // Not vacuous: Billing really did try to subscribe. Its effect resolved an id, which is
+    // the step that precedes its hold - a count of one on a page that never subscribed would
+    // satisfy 2.23 by omission (defect 67).
+    expect(mockApi.auth.getMe, 'Billing must have participated in this session')
+      .toHaveBeenCalled();
+    expect(wsClient.holdCount(), 'more than one caller must be holding the one connection')
+      .toBeGreaterThan(1);
 
     expect(constructed.length, (
       `${constructed.length} sockets were constructed across one session: ` +

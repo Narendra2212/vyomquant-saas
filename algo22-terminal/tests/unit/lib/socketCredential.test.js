@@ -86,7 +86,7 @@ import fc from 'fast-check';
 // The api stub. Hoisted, because Billing imports `api` at module scope.
 // ---------------------------------------------------------------------------
 
-const { mockBilling } = vi.hoisted(() => ({
+const { mockBilling, mockAuth } = vi.hoisted(() => ({
   mockBilling: {
     getPlans: vi.fn(),
     getEntitlements: vi.fn(),
@@ -98,11 +98,24 @@ const { mockBilling } = vi.hoisted(() => ({
     resumeSubscription: vi.fn(),
     openPortal: vi.fn(),
   },
+  // `GET /api/auth/me` (`routers/auth.py:123`), which is where Billing gets the user id for
+  // `/ws/user/{user_id}` since task 8.3. A network boundary, so it is doubled.
+  mockAuth: { getMe: vi.fn() },
 }));
 
-vi.mock('../../../src/api', () => {
-  const api = { billing: mockBilling };
-  return { api, endpoints: api, default: api };
+/**
+ * `isAuthenticated` and `getToken` are NOT doubled, and that is the point of section 3.
+ *
+ * They are the shipped helpers, imported from `src/apiClient` — the module that owns the
+ * store and whose axios request interceptor reads it on every HTTP call. Section 3 asks
+ * which store *serves a reader*; a stub would answer with this file's opinion instead of
+ * with the application's, and would keep passing on a Billing that had quietly gone back to
+ * reading a store of its own.
+ */
+vi.mock('../../../src/api', async () => {
+  const { isAuthenticated, getToken } = await import('../../../src/apiClient');
+  const api = { billing: mockBilling, auth: mockAuth };
+  return { api, endpoints: api, default: api, isAuthenticated, getToken };
 });
 
 import Billing from '../../../src/pages/Billing';
@@ -128,6 +141,27 @@ import { useWsTicketStub } from '../helpers/wsTicketStub';
  * `useWsTicketStub` is the double for the ticket endpoint. It issues opaque, dot-free,
  * distinct-per-request values, so a URL that carries one cannot satisfy the JWT-shape
  * check by accident and a test can tell one attempt's ticket from the next's.
+ *
+ * WHAT TASK 8.3 CHANGED, AND WHAT IT DID NOT
+ * -----------------------------------------
+ * The store table at the top of this file recorded `F` as it was: Billing read
+ * `localStorage`, the shared client read `sessionStorage`. Task 8.3 removed the first of
+ * those. Billing no longer reads a store at all — it asks `isAuthenticated()`, the HTTP
+ * client's own helper, whether a session exists, and asks `GET /api/auth/me` whose it is.
+ * `sessionStorage` won because that is what `apiClient`'s request interceptor reads
+ * (`apiClient.js:645`) and what every writer in the app writes.
+ *
+ * Two consequences reach this file. The fixtures now put the credential in
+ * `sessionStorage`, because that is the one store a session has. And Billing's mount is
+ * asynchronous: the user id is a request and the ticket is another, so the socket is
+ * constructed several microtask turns after the render rather than during it. Every
+ * assertion about the constructed URL is unchanged.
+ *
+ * `localStorage.getItem('userId')` is gone too, and it was the other half of defect 67:
+ * nothing in `src/` ever wrote `userId`, so that guard was unsatisfiable and this effect had
+ * never run once outside a test that populated the key by hand. The positive case — the
+ * subscription actually opening for an authenticated user with a resolvable id — is asserted
+ * in `tests/unit/pages/billingSocketLifecycle.test.jsx` §0, where the whole lifecycle lives.
  */
 const wsTickets = useWsTicketStub();
 
@@ -286,12 +320,24 @@ const resetSocketClient = () => {
   wsClient.expectedSequence = 1;
 };
 
+/**
+ * Mount Billing and let the two requests its subscription depends on settle.
+ *
+ * Since task 8.3 the socket is not constructed during the render: the effect resolves the
+ * user id over HTTP first, and the shared client then mints a ticket, so the construction is
+ * several microtask turns downstream of the mount. `advanceTimersByTimeAsync(0)` crosses a
+ * real macrotask boundary, which drains the whole chain; it is called twice so a suite that
+ * later adds another awaited hop does not start silently asserting on an unmounted socket.
+ */
 const mountBilling = async () => {
   let view;
   await act(async () => {
     view = render(React.createElement(Billing));
   });
-  await act(async () => {});
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+  });
   return view;
 };
 
@@ -299,6 +345,10 @@ beforeEach(() => {
   constructed = [];
   global.WebSocket = RecordingWebSocket;
   window.WebSocket = RecordingWebSocket;
+
+  // The shape `routers/auth.py:123` returns. `id` is the JWT `sub`, which is what
+  // `/ws/user/{user_id}` authorises the path segment against.
+  mockAuth.getMe.mockResolvedValue({ id: USER_ID, email: 'billing@example.test', role: 'user' });
 
   mockBilling.getPlans.mockResolvedValue({ plans: [], currency: 'USD', currency_symbol: '$' });
   mockBilling.getEntitlements.mockResolvedValue({ plan: 'pro', features: [] });
@@ -348,9 +398,11 @@ describe("Billing's socket URL", () => {
 
       `:138` is where the value comes from - `localStorage.getItem('token')`, the raw session
       JWT, interpolated at `:142` with no encoding and no ticket exchange.
+
+      The credential is in `sessionStorage` here since task 8.3, because that is now the one
+      store a session has. What is asserted about the URL did not change.
     */
-    window.localStorage.setItem('token', SYNTHETIC_JWT);
-    window.localStorage.setItem('userId', USER_ID);
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
 
     await mountBilling();
 
@@ -366,12 +418,16 @@ describe("Billing's socket URL", () => {
       (`ws_routes.py:641`) and the page's subscription updates arrive on it. Pinned because
       the obvious fix - routing Billing through `wsClient` - changes the path as well as the
       credential, and the path change has to be deliberate rather than incidental.
+
+      Since task 8.3 the id in that path comes from `GET /api/auth/me` rather than from
+      `localStorage.getItem('userId')`, a key nothing in `src/` ever wrote. Same route, a
+      source of truth that exists.
     */
-    window.localStorage.setItem('token', SYNTHETIC_JWT);
-    window.localStorage.setItem('userId', USER_ID);
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
 
     await mountBilling();
 
+    expect(constructed.length, 'the effect must have opened a socket').toBe(1);
     expect(String(constructed[0].url)).toContain(`/ws/user/${USER_ID}`);
   });
 });
@@ -568,14 +624,32 @@ describe('the store the session credential is read from', () => {
       token refresh that writes one store leaves the other holding a stale JWT. Wave 3's fix
       consolidates the sockets; if it does not also consolidate the store, the surviving
       socket inherits whichever lifetime its author happened to pick.
+
+      HOW TASK 8.3 CLOSES IT, AND WHY THIS TEST STILL ASKS THE SAME QUESTION
+      ---------------------------------------------------------------------
+      Billing no longer reads a store. It calls `isAuthenticated()` — `apiClient`'s own
+      helper, the same `sessionStorage.getItem("token")` its axios request interceptor makes
+      on every HTTP call (`apiClient.js:616-620`, `:645`) — and gets the user id from
+      `GET /api/auth/me`. `isAuthenticated` is deliberately **not** stubbed in this file, so
+      the probe below still observes the application's answer to "which store serves a
+      reader" rather than this file's.
+
+      `getMe` *is* stubbed: it is a network boundary, not a store. It answers the same id in
+      both branches, so it cannot be what makes the two branches differ — which is what
+      keeps this a test about the store.
     */
     const serving = new Set();
 
     // -- localStorage only -------------------------------------------------
+    // Call history only: the resolved value the suite's `beforeEach` installed stays in
+    // place, because the second branch below needs it to answer.
+    mockAuth.getMe.mockClear();
     window.localStorage.setItem('token', SYNTHETIC_JWT);
-    window.localStorage.setItem('userId', USER_ID);
     const billingView = await mountBilling();
     const billingServedByLocal = constructed.length > 0;
+    // Evidence that the refusal happened at the session check rather than downstream: a
+    // reader that had found a credential would have gone on to ask whose it is.
+    const billingAskedWhoseSessionOnLocal = mockAuth.getMe.mock.calls.length > 0;
 
     constructed = [];
     resetSocketClient();
@@ -593,7 +667,6 @@ describe('the store the session credential is read from', () => {
     // -- sessionStorage only ----------------------------------------------
     window.localStorage.clear();
     window.sessionStorage.setItem('token', SYNTHETIC_JWT);
-    window.localStorage.setItem('userId', USER_ID); // the id is not the credential
     constructed = [];
     resetSocketClient();
     await mountBilling();
@@ -620,12 +693,24 @@ describe('the store the session credential is read from', () => {
       clientServedBySession,
     });
 
+    expect(billingAskedWhoseSessionOnLocal, (
+      'a credential in localStorage must not look like a session to Billing at all: it did ' +
+      'not stop at the session check, it went on to resolve a user id.'
+    )).toBe(false);
+
     expect(Array.from(serving), (
       `the session credential is read from ${serving.size} stores ` +
-      `(${Array.from(serving).join(', ')}). Billing.jsx:138 reads localStorage; ` +
-      'websocketClient.js:73 and :118 read sessionStorage. One session has one credential, ' +
-      'so it has one store.'
+      `(${Array.from(serving).join(', ')}). On \`F\`, Billing.jsx:138 read localStorage and ` +
+      'websocketClient.js:73 read sessionStorage. One session has one credential, so it has ' +
+      'one store.'
     )).toHaveLength(1);
+
+    // And it is the store the HTTP client uses, which is what task 8.3 asks for: a session
+    // cannot be authenticated for HTTP and anonymous for the socket.
+    expect(Array.from(serving), (
+      'the one store must be the one `apiClient`\'s request interceptor reads, or the socket ' +
+      'and the HTTP client can still disagree about whether a session exists'
+    )).toEqual(['sessionStorage']);
   });
 });
 
@@ -716,7 +801,7 @@ describe('Property: no constructed socket URL contains the credential in any pos
     );
   });
 
-  it("holds for Billing's mount over generated tokens and user ids", () => {
+  it("holds for Billing's mount over generated tokens and user ids", async () => {
     /**
      * **Validates: Requirements 1.21, 2.21**
      *
@@ -735,27 +820,32 @@ describe('Property: no constructed socket URL contains the credential in any pos
      * `ws://localhost:3000` here rather than the configured `wss://` host, because
      * `Billing.jsx:142` builds its origin from `window.location` and never reads
      * `VITE_WS_URL` - the asymmetry recorded in the module docblock.
+     *
+     * `asyncProperty` since task 8.3, for the same reason section 1 awaits its mount: the id
+     * is a request and the ticket is another, so the socket is constructed after the render
+     * rather than during it. The generated `userId` is now what `GET /api/auth/me` answers
+     * rather than what a store holds — which is the one place the id can come from — and the
+     * property is unchanged: whatever the id, the credential is in no position of the URL.
      */
-    fc.assert(
-      fc.property(jwtArb, userIdArb, (token, userId) => {
+    await fc.assert(
+      fc.asyncProperty(jwtArb, userIdArb, async (token, userId) => {
         constructed = [];
-        window.localStorage.setItem('token', token);
-        window.localStorage.setItem('userId', userId);
+        resetSocketClient();
+        window.sessionStorage.setItem('token', token);
+        mockAuth.getMe.mockResolvedValue({ id: userId, email: 'billing@example.test', role: 'user' });
 
-        let view;
-        act(() => {
-          view = render(React.createElement(Billing));
-        });
+        const view = await mountBilling();
 
         const urls = constructed.map((socket) => String(socket.url));
 
-        act(() => {
+        await act(async () => {
           view.unmount();
         });
         vi.clearAllTimers();
-        window.localStorage.clear();
+        window.sessionStorage.clear();
 
         expect(urls.length).toBe(1);
+        expect(urls[0]).toContain(`/ws/user/${userId}`);
         for (const url of urls) {
           expect(
             url.includes(token),
@@ -769,6 +859,12 @@ describe('Property: no constructed socket URL contains the credential in any pos
     );
   });
 });
+
+// The shared client reads `sessionStorage` and so, through `isAuthenticated()`, does Billing.
+// Nothing in `src/` reads a session credential or an identity out of `localStorage` any more;
+// the remaining `localStorage` users are the workspace layout, the builder autosave draft, the
+// first-trade wizard's progress and supabase's own `sb-<ref>-auth-token`, none of which this
+// application reads as a session.
 
 // The shared client's `acquire` / `release` refcounting and its per-channel refcounts are the
 // machinery wave 3's fix is built on, and they are pinned in

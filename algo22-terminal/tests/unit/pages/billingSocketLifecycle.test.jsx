@@ -70,7 +70,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 // The api stub. Hoisted, because Billing imports `api` at module scope.
 // ---------------------------------------------------------------------------
 
-const { mockBilling } = vi.hoisted(() => ({
+const { mockBilling, mockAuth } = vi.hoisted(() => ({
   mockBilling: {
     getPlans: vi.fn(),
     getEntitlements: vi.fn(),
@@ -82,14 +82,36 @@ const { mockBilling } = vi.hoisted(() => ({
     resumeSubscription: vi.fn(),
     openPortal: vi.fn(),
   },
+  /**
+   * `GET /api/auth/me` (`routers/auth.py:123`) — where the user id for `/ws/user/{user_id}`
+   * comes from since task 8.3. Doubled because it is a network boundary.
+   */
+  mockAuth: { getMe: vi.fn() },
 }));
 
-vi.mock('../../../src/api', () => {
-  const api = { billing: mockBilling };
-  return { api, endpoints: api, default: api };
+/**
+ * `isAuthenticated` is not doubled: it is `apiClient`'s shipped helper, and it is the whole
+ * of task 8.3's point that Billing asks the HTTP client whether a session exists rather than
+ * reading a store of its own. Section 3's "no socket without a credential" case is only
+ * meaningful against the real one.
+ */
+vi.mock('../../../src/api', async () => {
+  const { isAuthenticated, getToken } = await import('../../../src/apiClient');
+  const api = { billing: mockBilling, auth: mockAuth };
+  return { api, endpoints: api, default: api, isAuthenticated, getToken };
 });
 
 import Billing from '../../../src/pages/Billing';
+import wsClient from '../../../src/websocketClient';
+import { useWsTicketStub } from '../helpers/wsTicketStub';
+
+/**
+ * production-launch-hardening task 8.2: the shared client exchanges the session JWT for a
+ * single-use ticket over HTTPS before it opens anything, so every suite whose session has a
+ * JWT needs that endpoint doubled. This file's session does, since task 8.3 — the credential
+ * lives in `sessionStorage`, which is the store the client reads.
+ */
+const wsTickets = useWsTicketStub();
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -186,8 +208,50 @@ const mountBilling = async () => {
   await act(async () => {
     view = render(<Billing />);
   });
-  await act(async () => {});
+  /*
+    Since task 8.3 the socket is not constructed during the render. The subscription effect
+    resolves the user id over HTTP first, and the shared client then mints a ticket, so the
+    construction is several microtask turns downstream. `advanceTimersByTimeAsync(0)` crosses
+    a real macrotask boundary, which drains that whole chain while the fake clock stands
+    still - so nothing here advances toward a reconnect delay that a test has not asked for.
+  */
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+  });
   return view;
+};
+
+/** Let an already-mounted page's in-flight subscription requests settle. */
+const settle = async () => {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+  });
+};
+
+/** Reset the shared singleton between tests - it is a module-level object. */
+const resetSocketClient = () => {
+  wsClient.reconnectEnabled = false;
+  if (wsClient.reconnectTimeoutId) {
+    clearTimeout(wsClient.reconnectTimeoutId);
+    wsClient.reconnectTimeoutId = null;
+  }
+  wsClient.stopHeartbeat();
+  wsClient.ws = null;
+  wsClient.url = null;
+  wsClient.refcount = 0;
+  wsClient.acquiredPath = null;
+  wsClient.savedReconnectPolicy = null;
+  wsClient.channelSubscriptions.clear();
+  wsClient.channelRefusals.clear();
+  wsClient.subscriptions.clear();
+  wsClient.statusListeners.clear();
+  wsClient.openListeners.clear();
+  wsClient.messageQueue = [];
+  wsClient.reconnectAttempts = 0;
+  wsClient.connectionStatus = 'disconnected';
+  wsClient.expectedSequence = 1;
 };
 
 /** The currency trigger at `:407`, found by its exact rendered text (`{symbol} {code}`). */
@@ -223,10 +287,27 @@ beforeEach(() => {
   global.WebSocket = RecordingWebSocket;
   window.WebSocket = RecordingWebSocket;
 
-  // Both keys are required: `:139` and `:141` return early without them, and an effect that
-  // returned early would make every assertion below vacuously true.
-  window.localStorage.setItem('token', SYNTHETIC_JWT);
-  window.localStorage.setItem('userId', USER_ID);
+  /*
+    An authenticated session, as this application actually stores one.
+
+    Both of these used to be `localStorage` keys, and both guards they fed were therefore
+    unsatisfiable outside a test: every writer in the app writes `sessionStorage` (defect 67,
+    P1 - `apiClient.js:595` on `TOKEN_REFRESHED`/`SIGNED_IN`, `:580` and `:606` on sign-out,
+    `AuthPage`), and **nothing anywhere in `src/` ever wrote `userId` at all**. So this
+    effect had never run once in a real session and the Stripe-webhook-driven updates the
+    backend publishes on `/ws/user/{id}` had never reached the page. Section 0 below asserts
+    the positive case for exactly that reason: an unmount-safety test alone passes on an
+    effect that never runs.
+
+    The credential is `sessionStorage.token`, which is what `isAuthenticated()` reads. The
+    identity is the answer to `GET /api/auth/me`, which is a request, not a key.
+  */
+  window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+  // Reset, not just re-stub: `vi.restoreAllMocks()` restores spies, so a `vi.fn()`'s call
+  // history would otherwise accumulate across this file and the call-count assertions in
+  // section 0 would be reading earlier tests' mounts.
+  mockAuth.getMe.mockReset();
+  mockAuth.getMe.mockResolvedValue({ id: USER_ID, email: 'billing@example.test', role: 'user' });
 
   // `GET /api/billing/plans?currency=X` echoes the currency it was asked for
   // (`src/api/modules/billing.js:61` -> `routers/billing.py`), and `loadPlans` feeds that
@@ -245,17 +326,21 @@ beforeEach(() => {
   mockBilling.getPaymentMethods.mockResolvedValue([]);
   mockBilling.setCurrency.mockResolvedValue({ ok: true });
 
+  resetSocketClient();
   vi.useFakeTimers();
   vi.spyOn(console, 'log').mockImplementation(() => {});
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 afterEach(() => {
   cleanup();
+  resetSocketClient();
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
   window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -270,6 +355,84 @@ describe('the premise of every assertion below', () => {
     // `/ws/user/{user_id}` is a real route - `backend_app/api_ws/ws_routes.py:641`. The route
     // is not the defect here; the lifecycle is.
     expect(constructed[0].url).toContain(`/ws/user/${USER_ID}`);
+  });
+
+  it('subscribes for real: an authenticated session with a resolvable id takes a hold', async () => {
+    /*
+      DEFECT 67, P1 - production-launch-hardening task 8.3.
+
+      This is the assertion the rest of this file cannot make. Every other test here is
+      satisfied by an effect that opens *no* socket: "unmounting opens nothing more",
+      "nothing is left unclosed", "a currency change leaves one" all pass trivially on a
+      subscription that never happens. And on `F` it never happened. Both guards were
+      unsatisfiable in a real session:
+
+          localStorage.getItem('token')   always null - every writer writes sessionStorage
+          localStorage.getItem('userId')  always null - `setItem('userId'` appears NOWHERE
+                                          in src/, so nothing has ever written the key
+
+      So the page has never once subscribed to `/ws/user/{id}`, and the billing updates the
+      backend publishes there when a Stripe webhook lands - the entire reason this socket
+      exists - have never reached the UI without a manual refresh. Unifying the store alone
+      would not have fixed it: the second guard still returned early.
+
+      Asserted as four separate facts, because each fails on its own:
+        - the subscription reached the shared client at all (a hold exists);
+        - it named the id `GET /api/auth/me` answered, not one from any store;
+        - it is a hold on the ONE session socket, not a socket of its own;
+        - the page is subscribed to the frames it exists to receive.
+    */
+    await mountBilling();
+
+    expect(mockAuth.getMe, 'the id must be resolved from the API, not from a store')
+      .toHaveBeenCalledTimes(1);
+    expect(wsClient.holdCount(), 'the page must hold the session connection').toBe(1);
+    expect(wsClient.acquiredPath).toBe(`/ws/user/${USER_ID}`);
+    expect(constructionCount()).toBe(1);
+    expect(constructed[0], 'the hold must be on the shared client\'s socket, not a new one')
+      .toBe(wsClient.ws);
+    expect(wsClient.subscribedChannels()).toContain('billing');
+
+    // And a ticket was minted for it over HTTPS, so the subscription is authenticated by the
+    // same session the HTTP client is: one store, one session.
+    expect(wsTickets.issued).toHaveLength(1);
+    expect(wsTickets.requests.every((request) => request.method === 'POST' && request.authorized))
+      .toBe(true);
+  });
+
+  it('refuses explicitly, with a reason, when the id cannot be resolved', async () => {
+    /*
+      The other half of defect 67: a session that is authenticated but whose id cannot be
+      resolved is a *reported* no-subscription, not a silent one and not a guessed path.
+      `/ws/user/{user_id}` authorises the path segment against the token's subject
+      (`ws_routes.py:743`), so there is no placeholder that could be correct - a fabricated id
+      would be refused by the server and retried by the backoff for the life of the session.
+    */
+    mockAuth.getMe.mockResolvedValue({ email: 'billing@example.test', role: 'user' });
+
+    await mountBilling();
+
+    expect(constructionCount(), 'no socket without an id the route can authorise').toBe(0);
+    expect(wsClient.holdCount()).toBe(0);
+    expect(console.error, 'the refusal must say why').toHaveBeenCalledWith(
+      expect.stringContaining('no real-time subscription'),
+    );
+  });
+
+  it('opens nothing at all for a signed-out session', async () => {
+    /*
+      No credential, no ticket request, no socket, and no `/api/auth/me` call either - the
+      page does not ask a signed-out user's question. `isAuthenticated()` here is the real
+      helper, so this is the application's own answer about its own store.
+    */
+    window.sessionStorage.removeItem('token');
+
+    await mountBilling();
+
+    expect(constructionCount()).toBe(0);
+    expect(mockAuth.getMe).not.toHaveBeenCalled();
+    expect(wsTickets.requests).toHaveLength(0);
+    expect(wsClient.holdCount()).toBe(0);
   });
 });
 
@@ -445,24 +608,28 @@ describe('a currency change, which re-runs the same effect without unmounting', 
 describe('preservation', () => {
   it('test_preserved_no_socket_without_a_credential', async () => {
     /*
-      Passes on `F` and must keep passing. `:138-141` return before constructing anything
-      when either `token` or `userId` is missing, which is the correct refusal: an
-      unauthenticated socket to `/ws/user/{id}` would be closed by
-      `ws_routes.py:641`'s fail-closed auth anyway, and retrying it every 5 s is a loop
-      against the ALB.
+      Passes on `F` and must keep passing. `:138-141` returned before constructing anything
+      when either `token` or `userId` was missing, which is the correct refusal: an
+      unauthenticated socket to `/ws/user/{id}` would be closed by `ws_routes.py:641`'s
+      fail-closed auth anyway, and retrying it every 5 s is a loop against the ALB.
 
       It is pinned here because the reconnect fix touches exactly these lines - a rewrite
       that moved the credential read out of `connectWebSocket` could easily start
       constructing first and checking after.
+
+      Same two absences since task 8.3, at the sources that actually hold them: no session
+      credential in `sessionStorage`, and an `/api/auth/me` that cannot be reached. Neither
+      may produce a socket.
     */
-    window.localStorage.removeItem('token');
+    window.sessionStorage.removeItem('token');
     await mountBilling();
     expect(constructionCount()).toBe(0);
 
     cleanup();
+    resetSocketClient();
     constructed = [];
-    window.localStorage.setItem('token', SYNTHETIC_JWT);
-    window.localStorage.removeItem('userId');
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+    mockAuth.getMe.mockRejectedValue(new Error('/api/auth/me unreachable'));
     await mountBilling();
     expect(constructionCount()).toBe(0);
   });
