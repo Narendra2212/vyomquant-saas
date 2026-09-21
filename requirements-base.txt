@@ -16,7 +16,10 @@ rq==1.16.2
 supabase==2.7.4
 postgrest==0.16.8
 cryptography==43.0.0
-python-jose[cryptography]==3.3.0
+# CVE-2024-33663 (CRITICAL, algorithm confusion with OpenSSH ECDSA and other key
+# formats) is fixed in 3.4.0. Patch-level bump; see
+# .kiro/specs/production-launch-hardening/dependency-triage.md.
+python-jose[cryptography]==3.4.0
 passlib[bcrypt]==1.7.4
 PyJWT==2.13.0
 sqlalchemy==2.0.35
