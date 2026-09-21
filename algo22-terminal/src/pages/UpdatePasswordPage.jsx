@@ -5,6 +5,8 @@ import { Inp } from "../components/common/primitives";
 import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
+// The one auth-redirect origin derivation (see `config.js`).
+import { getAuthRedirectUrl } from "../config";
 
 export default function UpdatePasswordPage() {
   const navigate = useNavigate();
@@ -20,7 +22,12 @@ export default function UpdatePasswordPage() {
 
     try {
       const { supabase } = await import('../supabase');
-      const { error } = await supabase.auth.updateUser({ password });
+      // Second argument, same reason as `App.jsx`'s copy of this screen: it is where
+      // `emailRedirectTo` lives, so an email change cannot fall back to the Site URL.
+      const { error } = await supabase.auth.updateUser(
+        { password },
+        { emailRedirectTo: getAuthRedirectUrl() },
+      );
       
       if (error) throw error;
       

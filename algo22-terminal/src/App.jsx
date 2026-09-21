@@ -36,6 +36,9 @@ import {
 } from './components/common/primitives';
 import { token } from './design/tokens';
 import { Button } from './components/ui/Button';
+// The one auth-redirect origin derivation (see `config.js`). Used by the local
+// `UpdatePasswordPage` below, which is the component `/reset-password` actually renders.
+import { getAuthRedirectUrl } from './config';
 
 // Public routes (lazy)
 const LandingPage    = lazy(() => import('./components/landing/LandingPage'));
@@ -202,7 +205,14 @@ function UpdatePasswordPage() {
     setLoading(true); setError(""); setSuccess(false);
     try {
       const { supabase } = await import('./supabase');
-      const { error: supaError } = await supabase.auth.updateUser({ password });
+      // `{ password }` alone sends no link, but `updateUser`'s SECOND argument is where
+      // `emailRedirectTo` lives, and it is the option an email change (`{ email }`) would
+      // need. Declaring it here means the confirmation link cannot silently fall back to
+      // the project's Site URL -- `http://localhost:3000` -- the way the OTP link did.
+      const { error: supaError } = await supabase.auth.updateUser(
+        { password },
+        { emailRedirectTo: getAuthRedirectUrl() },
+      );
       if (supaError) throw supaError;
       setSuccess(true);
       setTimeout(() => navigate("/app/dashboard"), 2000);

@@ -5,6 +5,11 @@ import { Inp } from "../components/common/primitives";
 import { token } from "../design/tokens";
 import { Button } from "../components/ui/Button";
 import { supabase } from "../supabase";
+// ONE origin derivation for every auth link this page can cause Supabase to email.
+// Omitting the redirect made Supabase fall back to the dashboard Site URL
+// (`http://localhost:3000`), so production users clicking a verification link got
+// ERR_CONNECTION_REFUSED with a perfectly valid token in the hash. See `config.js`.
+import { getAuthRedirectUrl } from "../config";
 
 const RESEND_COOLDOWN_SECONDS = 60;
 
@@ -243,6 +248,10 @@ export default function AuthPage({ mode = "signin" }) {
         const { data, error: signUpError } = await supabase.auth.signUp({
           email: targetEmail,
           password: password,
+          options: {
+            // The confirmation email carries a link as well as the 6-digit code.
+            emailRedirectTo: getAuthRedirectUrl(),
+          },
         });
 
         if (signUpError) throw signUpError;
@@ -272,6 +281,9 @@ export default function AuthPage({ mode = "signin" }) {
             email: targetEmail,
             options: {
               shouldCreateUser: false,
+              // The OTP email carries a magic link beside the 6-digit code. Without this
+              // the link pointed at the project's Site URL, i.e. the developer's laptop.
+              emailRedirectTo: getAuthRedirectUrl(),
             },
           });
         } catch {
@@ -369,6 +381,8 @@ export default function AuthPage({ mode = "signin" }) {
         email: email.trim(),
         options: {
           shouldCreateUser: false,
+          // Same email, same link, same requirement as the first dispatch above.
+          emailRedirectTo: getAuthRedirectUrl(),
         },
       });
 
@@ -443,7 +457,10 @@ export default function AuthPage({ mode = "signin" }) {
       const { error: oAuthError } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${window.location.origin}/app/dashboard`,
+          // Was `${window.location.origin}/app/dashboard` inline. Correct, but a second
+          // copy of the derivation: the helper is what stops a fifth call site getting it
+          // wrong, so the one call site that was already right reads from it too.
+          redirectTo: getAuthRedirectUrl(),
           queryParams: {
             access_type: "offline",
             prompt: "consent",
