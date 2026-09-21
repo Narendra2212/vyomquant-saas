@@ -130,6 +130,19 @@ vi.mock('../../../src/apiClient', () => ({
 import Billing from '../../../src/pages/Billing';
 import wsClient from '../../../src/websocketClient';
 import { DataPipelineProvider, useDataPipeline } from '../../../src/contexts/DataPipelineContext';
+import { useWsTicketStub } from '../helpers/wsTicketStub';
+
+/**
+ * production-launch-hardening task 8.2. This session has a JWT in `sessionStorage`, so the
+ * shared client exchanges it for a single-use socket ticket over HTTPS before it opens
+ * anything — which makes `connect()` asynchronous and makes this endpoint a boundary every
+ * assertion below depends on. `useWsTicketStub` is the double for it.
+ *
+ * Nothing about what this file asserts changes: the subject is still how many sockets are
+ * constructed and who owns them. The `connect` / `acquire` calls are awaited because the
+ * construction now happens a microtask later than the call.
+ */
+useWsTicketStub();
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -291,6 +304,9 @@ const PipelineProbe = () => {
  */
 const mountTheWholeSession = async () => {
   wsClient.acquire('/ws/telemetry');
+  // The ticket exchange, before the first render: `acquire` returns its hold count
+  // synchronously and leaves the socket to a microtask.
+  await act(async () => {});
 
   let view;
   await act(async () => {
@@ -534,7 +550,7 @@ describe('backend_app/api_ws/ws_routes.py', () => {
 // ══════════════════════════════════════════════════════════════════════════
 
 describe('preservation: one connection per session already works when it is used', () => {
-  it('test_preserved_acquire_and_release_refcount_under_two_holds', () => {
+  it('test_preserved_acquire_and_release_refcount_under_two_holds', async () => {
     /*
       Passes on `F` and must keep passing. This is why wave 3's fix is "route Billing and the
       pipeline through `wsClient`" rather than "write a socket manager": `acquire` / `release`
@@ -547,12 +563,17 @@ describe('preservation: one connection per session already works when it is used
     */
     expect(wsClient.holdCount()).toBe(0);
 
+    // The hold count is returned synchronously; the socket arrives after the ticket does.
     expect(wsClient.acquire('/ws/telemetry')).toBe(1);
+    await act(async () => {});
     expect(constructed.length).toBe(1);
 
     // `connectionStatus` is 'connecting' here, so this does not take the
-    // `failed`/`disconnected` re-`connect()` branch at `:783`.
+    // `failed`/`disconnected` re-`connect()` branch at `:783`. Since task 8.2 it is set to
+    // 'connecting' before the ticket request rather than after it, so a second hold taken
+    // *during* the exchange does not start a second one either.
     expect(wsClient.acquire('/ws/telemetry')).toBe(2);
+    await act(async () => {});
     expect(constructed.length, 'a second hold must reuse the one socket').toBe(1);
 
     expect(wsClient.release()).toBe(1);
@@ -566,7 +587,7 @@ describe('preservation: one connection per session already works when it is used
     expect(wsClient.release()).toBe(0);
   });
 
-  it('test_preserved_subscribeChannel_refcounts_per_channel', () => {
+  it('test_preserved_subscribeChannel_refcounts_per_channel', async () => {
     /*
       Passes on `F` and must keep passing. Per-channel refcounting
       (`websocketClient.js:665-722`) is the other half of the multiplexing wave 3 needs: two
@@ -578,7 +599,7 @@ describe('preservation: one connection per session already works when it is used
       silently stops delivering to a holder that is still listening, which is the harder of the
       two to notice and the one that would make a multiplexed Billing quietly stop refreshing.
     */
-    wsClient.connect('/ws/telemetry');
+    await wsClient.connect('/ws/telemetry');
     const socket = constructed[0];
     socket.readyState = RecordingWebSocket.OPEN;
 
@@ -625,13 +646,14 @@ describe('preservation: one connection per session already works when it is used
     expect(wsClient.subscribedChannels()).toEqual([]);
   });
 
-  it('test_preserved_the_shared_client_opens_one_socket_on_its_own', () => {
+  it('test_preserved_the_shared_client_opens_one_socket_on_its_own', async () => {
     /*
       Passes on `F`. The control for section 1: the shared client, used alone, already
       satisfies Requirement 2.23. Section 1's three constructions are not a defect in
       `websocketClient` - they are two callers bypassing it.
     */
     wsClient.acquire('/ws/telemetry');
+    await act(async () => {});
     expect(constructed.length).toBe(1);
     expect(String(constructed[0].url)).toContain('/ws/telemetry');
     expect(constructed[0]).toBe(wsClient.ws);

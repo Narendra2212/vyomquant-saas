@@ -55,6 +55,16 @@ vi.mock('../../src/api', () => ({
 }));
 
 import wsClient from '../../src/websocketClient';
+import { useWsTicketStub } from './helpers/wsTicketStub';
+
+/*
+  production-launch-hardening task 8.2. The shared client exchanges this session's JWT for a
+  single-use socket ticket over HTTPS before it constructs anything; `useWsTicketStub` is the
+  double for that one request. Nothing this file asserts changes — the socket arrives a
+  microtask after the `acquire` that asked for it.
+*/
+useWsTicketStub();
+
 import SignalTrace, {
   SIGNAL_CONNECTION_PRESENTATION,
   SignalConnectionIndicator,

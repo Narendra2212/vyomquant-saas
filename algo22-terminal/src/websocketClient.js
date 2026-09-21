@@ -16,6 +16,50 @@
 import { CONFIG } from './config';
 const WS_BASE = CONFIG.wsBaseUrl;
 
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * THE SOCKET CREDENTIAL — production-launch-hardening task 8.2
+ * Requirements 1.21, 2.21, 3.9.
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * The session JWT is no longer put in the socket URL. It is exchanged, over HTTPS where
+ * request headers exist, for a **single-use opaque ticket** with a ≤ 30 s lifetime
+ * (`POST /api/auth/ws-ticket`, `backend_app/routers/auth.py`), and that ticket is what
+ * travels in the query string as `?ticket=`.
+ *
+ * WHY THE URL AT ALL. The browser `WebSocket` constructor cannot set request headers —
+ * there is no `Authorization` on a handshake it builds — so a credential in the query
+ * string is the only credential a socket can present. The question is therefore not
+ * *whether* something is logged but *what*: a JWT in a CloudFront or ALB access log is
+ * replayable for as long as it is valid, a redeemed ticket is replayable for nothing.
+ * `verify_ws_ticket` reads it with `getdel`, so the first connection to present a ticket
+ * is the only connection that can.
+ *
+ * WHICH MEANS EVERY RECONNECT NEEDS ITS OWN TICKET. Single-use is not a detail that can
+ * be worked around by caching: a reconnect that re-presented the ticket of the connection
+ * it is replacing would be refused, and the socket would never come back. `_open` below
+ * mints a new one on every attempt, including every attempt the backoff schedules, and
+ * `this.connectPath` — not `this.url` — is what the backoff reads back, so a spent ticket
+ * cannot be resurrected out of the previous URL.
+ *
+ * WHAT IS *NOT* CHANGED HERE. The in-band `{ action: 'auth', token }` frame in
+ * `handleOpen` still carries the JWT. A WebSocket message body is not access-logged, not
+ * in browser history and not in a `Referer`, so it is not the exposure 1.21 names, and the
+ * server still reauthenticates a live connection from it (Requirement 23.3). The store the
+ * JWT is read from is not changed either — that is task 8.3.
+ */
+const WS_TICKET_URL = `${CONFIG.apiBaseUrl}/api/auth/ws-ticket`;
+
+/** The session JWT, or `''`. Storage access is guarded: a blocked store is not a crash. */
+const readSessionToken = () => {
+  try {
+    return sessionStorage.getItem('token') || '';
+  } catch (error) {
+    console.error('WebSocket: session token unreadable:', error);
+    return '';
+  }
+};
+
 class WebSocketClient {
   constructor() {
     this.ws = null;
@@ -54,27 +98,145 @@ class WebSocketClient {
     this.expectedSequence = 1; // Expected next sequence number
     this.messageBuffer = new Map(); // Buffer out-of-order messages
     this.MAX_BUFFER_SIZE = 100; // Max messages to buffer
+
+    // ── production-launch-hardening task 8.2 ─────────────────────────────
+    // The path last asked for, kept apart from `this.url`. The backoff reads this rather
+    // than parsing `this.url` back: `this.url` carries a ticket that has already been
+    // redeemed, and a reconnect presenting it would be refused.
+    this.connectPath = null;
+    // Bumped by every `_open` and by `disconnect`, so a ticket that arrives after the
+    // attempt that asked for it was superseded or torn down opens nothing.
+    this.connectGeneration = 0;
   }
 
   /**
-   * Connect to WebSocket server
+   * Connect to the WebSocket server.
+   *
+   * Asynchronous since task 8.2: the credential is a ticket minted over HTTPS, so the
+   * socket cannot be constructed until it arrives. Callers that do not care — `acquire`,
+   * the top bar's retry — may ignore the promise; it **never rejects**, because a ticket
+   * that cannot be obtained is a connection failure the backoff already knows how to
+   * handle, not an exception for a caller to catch.
+   *
    * @param {string} path - WebSocket endpoint path (default: /ws/telemetry)
+   * @returns {Promise<void>} resolves once the socket has been constructed, or once a
+   *   failed attempt has been handed to `scheduleReconnect`
    */
   connect(path = '/ws/telemetry') {
     // Re-enable reconnection whenever connect is explicitly called
     this.reconnectEnabled = true;
     this.reconnectAttempts = 0;
+    return this._open(path);
+  }
 
+  /**
+   * One connection attempt: mint a ticket if this session has a credential, then open.
+   *
+   * Separate from `connect` so the backoff can re-attempt **without** resetting
+   * `reconnectAttempts`. `connect` resets it because an explicit connect is a fresh
+   * intent; a reconnect must not, or the delay never grows past the first step and a
+   * ticket endpoint that is refusing would be asked once a second against a 30/minute
+   * rate limit.
+   *
+   * @param {string} path
+   * @returns {Promise<void>} never rejects
+   */
+  _open(path) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       console.log('WebSocket already connected');
-      return;
+      return Promise.resolve();
     }
 
-    const token = sessionStorage.getItem('token');
-    const hasQuery = path.includes('?');
-    const tokenParam = token ? `${hasQuery ? '&' : '?'}token=${encodeURIComponent(token)}` : '';
-    this.url = `${WS_BASE}${path}${tokenParam}`;
-    console.log(`Connecting to WebSocket: ${this.url.replace(/token=[^&]+/, 'token=[REDACTED]')}`);
+    this.connectPath = path;
+    const generation = (this.connectGeneration += 1);
+    const token = readSessionToken();
+
+    if (!token) {
+      /*
+        No credential, no ticket to ask for — and the socket is still attempted. The
+        client does not decide authorisation: every route in `ws_routes.py` fails closed,
+        so the server refuses this connection. Refusing it here instead would turn a
+        server-side decision into a client-side one, and this branch is also what keeps
+        `connect()` synchronous for a session that has nothing to present.
+      */
+      this._openSocket(path, '');
+      return Promise.resolve();
+    }
+
+    this._setStatus('connecting');
+
+    return this.requestTicket(token).then(
+      (ticket) => {
+        // Superseded by a later attempt, or torn down while the request was in flight.
+        if (generation !== this.connectGeneration) return;
+        const hasQuery = path.includes('?');
+        this._openSocket(path, `${hasQuery ? '&' : '?'}ticket=${encodeURIComponent(ticket)}`);
+      },
+      (error) => {
+        if (generation !== this.connectGeneration) return;
+        /*
+          A handled failure. 503 `WS_TICKET_STORE_UNAVAILABLE`, a 401 on an expired
+          session, or no network at all are the same thing from here: this attempt did
+          not produce a socket. It goes to the same capped, jittered backoff a dropped
+          connection goes to, which is what bounds the request rate — five attempts over
+          ~31 s on the default policy, against an endpoint that allows 30 a minute.
+
+          The ticket value is never logged, and there is none to log on this path.
+        */
+        console.error(`WebSocket ticket request failed: ${error?.message || 'unknown error'}`);
+        this._setStatus('error');
+        this.scheduleReconnect();
+      },
+    );
+  }
+
+  /**
+   * Exchange the session JWT for a single-use socket ticket.
+   *
+   * Over `fetch` rather than the app's axios client on purpose: this is the one request
+   * whose *headers* are the point. The JWT travels in `Authorization`, which is not
+   * written to an access log, and what comes back is the only thing that goes in a URL.
+   *
+   * @param {string} token the session JWT, by reference — never logged, never returned
+   * @returns {Promise<string>} the ticket
+   */
+  async requestTicket(token) {
+    const response = await fetch(WS_TICKET_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: '{}',
+    });
+
+    if (!response || !response.ok) {
+      // The status, not the body: a 503 body names `WS_TICKET_STORE_UNAVAILABLE` and a
+      // 401's names nothing useful, and neither changes what this client does next.
+      throw new Error(`ticket endpoint returned ${response ? response.status : 'no response'}`);
+    }
+
+    const payload = await response.json();
+    const ticket = payload && typeof payload.ticket === 'string' ? payload.ticket : '';
+    if (!ticket) throw new Error('ticket endpoint returned no ticket');
+    return ticket;
+  }
+
+  /**
+   * Construct the socket and wire its handlers.
+   *
+   * @param {string} path
+   * @param {string} credentialParam `?ticket=…`, `&ticket=…`, or `''`
+   */
+  _openSocket(path, credentialParam) {
+    this.url = `${WS_BASE}${path}${credentialParam}`;
+    /*
+      Logged without the query string. There is no `token=[REDACTED]` rewrite here any
+      more, and deliberately not: a redaction would imply a credential is still in the URL
+      when what is there is a ticket that is single-use and about to be spent. The ticket
+      value is not logged either — it is a credential until it is redeemed.
+    */
+    console.log(`Connecting to WebSocket: ${WS_BASE}${path}`);
 
     try {
       this.ws = new WebSocket(this.url);
@@ -440,9 +602,18 @@ class WebSocketClient {
 
     this.reconnectTimeoutId = setTimeout(() => {
       this.reconnectTimeoutId = null;
-      // Extract path from stored URL
-      const path = this.url ? new URL(this.url).pathname : '/ws/telemetry';
-      this.connect(path);
+      /*
+        production-launch-hardening task 8.2. The path is read from `connectPath`, not
+        parsed out of `this.url`, for two reasons. The ticket in `this.url` has been
+        redeemed — `verify_ws_ticket` reads it with `getdel` — so reusing that URL would
+        present a spent credential and the socket would never recover. And
+        `new URL(this.url).pathname` dropped the query string outright, so a reconnect on
+        `/ws/dashboard?user_id=…` lost the parameter the route requires.
+
+        `_open` rather than `connect`: a reconnect must not reset `reconnectAttempts`, or
+        the delay never grows.
+      */
+      this._open(this.connectPath || '/ws/telemetry');
     }, delay);
   }
 
@@ -745,6 +916,12 @@ class WebSocketClient {
   disconnect() {
     // Disable reconnection first to prevent auto-reconnect
     this.reconnectEnabled = false;
+
+    // task 8.2: invalidate any ticket request still in flight, so a ticket that arrives
+    // after the teardown opens nothing. Without this, a `release()` during the exchange
+    // would be followed by a socket a moment later that nobody holds.
+    this.connectGeneration += 1;
+    this.connectPath = null;
     
     // Clear any pending reconnect
     if (this.reconnectTimeoutId) {

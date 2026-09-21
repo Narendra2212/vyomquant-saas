@@ -107,6 +107,29 @@ vi.mock('../../../src/api', () => {
 
 import Billing from '../../../src/pages/Billing';
 import wsClient from '../../../src/websocketClient';
+import { useWsTicketStub } from '../helpers/wsTicketStub';
+
+/**
+ * WHAT TASK 8.2 CHANGED, AND WHAT IT DID NOT
+ * -----------------------------------------
+ * The fix exchanges the JWT for a **single-use, ≤ 30 s opaque ticket** over HTTPS
+ * (`POST /api/auth/ws-ticket`) and puts *that* in the query string. Two consequences
+ * reach this file, and neither weakens an assertion above.
+ *
+ * 1. `connect()` is asynchronous now. It cannot be otherwise: the credential has to be
+ *    fetched before the socket can be constructed. The calls below are awaited. The
+ *    assertions they make about the constructed URL are unchanged, character for
+ *    character — `expectNoCredentialInUrl` is the same function it was on `F`.
+ *
+ * 2. `?token=` became `?ticket=`, so section 3's "which store serves a reader" probe reads
+ *    the `ticket` parameter instead. That test still fails, and still for 8.3's reason:
+ *    Billing reads `localStorage`, the client reads `sessionStorage`.
+ *
+ * `useWsTicketStub` is the double for the ticket endpoint. It issues opaque, dot-free,
+ * distinct-per-request values, so a URL that carries one cannot satisfy the JWT-shape
+ * check by accident and a test can tell one attempt's ticket from the next's.
+ */
+const wsTickets = useWsTicketStub();
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -358,7 +381,7 @@ describe("Billing's socket URL", () => {
 // ══════════════════════════════════════════════════════════════════════════
 
 describe("websocketClient.connect()'s URL", () => {
-  it('carries no credential', () => {
+  it('carries no credential', async () => {
     /*
       COUNTEREXAMPLE OBSERVED ON `F` (src/websocketClient.js:76), credential redacted by
       position:
@@ -379,7 +402,7 @@ describe("websocketClient.connect()'s URL", () => {
     */
     window.sessionStorage.setItem('token', SYNTHETIC_JWT);
 
-    wsClient.connect('/ws/telemetry');
+    await wsClient.connect('/ws/telemetry');
 
     expect(constructed.length, 'connect() must have built a URL for this to mean anything')
       .toBe(1);
@@ -389,7 +412,7 @@ describe("websocketClient.connect()'s URL", () => {
     expectNoCredentialInUrl(wsClient.url, SYNTHETIC_JWT, 'wsClient.url');
   });
 
-  it('carries no credential on a path that already has a query string', () => {
+  it('carries no credential on a path that already has a query string', async () => {
     /*
       `:74-75` switches the separator to `&` when the path already carries a query, so the
       credential lands mid-query rather than first. Asserted separately because it is the
@@ -404,7 +427,7 @@ describe("websocketClient.connect()'s URL", () => {
     */
     window.sessionStorage.setItem('token', SYNTHETIC_JWT);
 
-    wsClient.connect(`/ws/dashboard?user_id=${USER_ID}`);
+    await wsClient.connect(`/ws/dashboard?user_id=${USER_ID}`);
 
     expect(constructed.length).toBe(1);
     expect(queryParams(constructed[0].url)).toContain('user_id');
@@ -424,6 +447,97 @@ describe("websocketClient.connect()'s URL", () => {
     expect(constructed.length).toBe(1);
     expect(queryParams(constructed[0].url)).toEqual([]);
     expect(String(constructed[0].url)).toContain('/ws/telemetry');
+  });
+
+  it('presents a fresh ticket on every reconnect', async () => {
+    /*
+      The clause that makes the fix work or not work at all.
+
+      `verify_ws_ticket` redeems with `redis_manager.getdel` (`core/websocket_auth.py:152`),
+      so a ticket is consumed by the first connection that presents it. A reconnect that
+      reused the previous attempt's ticket — or that rebuilt its URL from `this.url`, which
+      still carries it — would be refused by the server, and the refusal would look exactly
+      like a network fault: the socket would drop, back off, present the same spent ticket,
+      and never recover. A session would lose live data permanently on its first blip.
+
+      So: two drops, and the assertion is three *distinct* tickets requested and three
+      distinct `?ticket=` values on the wire. Two drops rather than one because a single
+      reconnect cannot distinguish "mints a new ticket each time" from "mints a second
+      ticket once and then caches it".
+
+      The route survives the round trip too. `scheduleReconnect` used to rebuild the path
+      with `new URL(this.url).pathname`, which silently dropped the query string; the path
+      is now carried in `connectPath`.
+    */
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+
+    await wsClient.connect('/ws/telemetry');
+    expect(constructed.length).toBe(1);
+
+    // Two drops, each answered by the shared client's own backoff.
+    for (const attempt of [1, 2]) {
+      const live = constructed[constructed.length - 1];
+      live.open();
+      live.close();
+      // Base delay 1000 ms x 2^(attempt-1), plus up to 250 ms of jitter.
+      await vi.advanceTimersByTimeAsync(1000 * 2 ** (attempt - 1) + 500);
+      expect(constructed.length, `reconnect ${attempt} must have opened a socket`)
+        .toBe(attempt + 1);
+    }
+
+    expect(wsTickets.issued, 'one ticket request per connection attempt').toHaveLength(3);
+    expect(new Set(wsTickets.issued).size, 'a single-use ticket is never reused').toBe(3);
+    expect(
+      wsTickets.requests.every((request) => request.method === 'POST' && request.authorized),
+      'the JWT travels in the Authorization header of a POST, where it is not access-logged',
+    ).toBe(true);
+
+    const presented = constructed.map((socket) => new URL(String(socket.url)).searchParams.get('ticket'));
+    expect(presented).toEqual(wsTickets.issued);
+    for (const socket of constructed) {
+      expect(String(socket.url)).toContain('/ws/telemetry');
+      expectNoCredentialInUrl(socket.url, SYNTHETIC_JWT, 'a reconnected socket');
+    }
+  });
+
+  it('treats a ticket it cannot obtain as a handled failure, not a retry loop', async () => {
+    /*
+      `POST /api/auth/ws-ticket` answers 503 `WS_TICKET_STORE_UNAVAILABLE` when the ticket
+      store does not acknowledge the write (`routers/auth.py:309-326`), and it is rate
+      limited to 30 a minute. Those two facts together are why this is asserted: a client
+      that retried the ticket request on its own schedule, or that reset its backoff on each
+      attempt, would spend the whole allowance in two seconds and then be rate-limited on
+      top of an outage.
+
+      Asserted as *counted requests over advanced time*, not as an absence of a crash. The
+      failure also must not surface as an unhandled rejection — `connect()` resolves here
+      rather than rejecting, which is what lets `acquire()` and the top bar's retry ignore
+      its return value.
+
+      And it recovers: the moment the endpoint answers, the next scheduled attempt connects.
+    */
+    window.sessionStorage.setItem('token', SYNTHETIC_JWT);
+    wsTickets.fail(503);
+
+    await wsClient.connect('/ws/telemetry');
+
+    expect(constructed.length, 'no socket is opened without a credential to present').toBe(0);
+    expect(wsClient.getStatus()).not.toBe('connected');
+    expect(wsTickets.requests, 'one attempt, not a tight loop').toHaveLength(1);
+
+    // The first scheduled retry: one more request, still no socket.
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(wsTickets.requests).toHaveLength(2);
+    expect(constructed.length).toBe(0);
+
+    // The store comes back. The next scheduled attempt — delayed 2000 ms, because the
+    // backoff grew rather than resetting — connects.
+    wsTickets.serve();
+    await vi.advanceTimersByTimeAsync(2500);
+
+    expect(constructed.length).toBe(1);
+    expect(queryParams(constructed[0].url)).toEqual(['ticket']);
+    expectNoCredentialInUrl(constructed[0].url, SYNTHETIC_JWT, 'the recovered socket');
   });
 });
 
@@ -465,8 +579,11 @@ describe('the store the session credential is read from', () => {
 
     constructed = [];
     resetSocketClient();
-    wsClient.connect('/ws/telemetry');
-    const clientServedByLocal = queryParams(constructed[0].url).includes('token');
+    await wsClient.connect('/ws/telemetry');
+    // `ticket` since task 8.2: the parameter name changed, the question did not. A client
+    // that presented a credential is one that found a session token in the store under
+    // test; one that presented nothing did not.
+    const clientServedByLocal = queryParams(constructed[0].url).includes('ticket');
 
     await act(async () => {
       billingView.unmount();
@@ -484,8 +601,8 @@ describe('the store the session credential is read from', () => {
 
     constructed = [];
     resetSocketClient();
-    wsClient.connect('/ws/telemetry');
-    const clientServedBySession = queryParams(constructed[0].url).includes('token');
+    await wsClient.connect('/ws/telemetry');
+    const clientServedBySession = queryParams(constructed[0].url).includes('ticket');
 
     if (billingServedByLocal || clientServedByLocal) serving.add('localStorage');
     if (billingServedBySession || clientServedBySession) serving.add('sessionStorage');
@@ -546,7 +663,7 @@ const userIdArb = fc
   .map((chars) => `usr_${chars.join('')}`);
 
 describe('Property: no constructed socket URL contains the credential in any position', () => {
-  it('holds for websocketClient.connect() over generated tokens and every real route', () => {
+  it('holds for websocketClient.connect() over generated tokens and every real route', async () => {
     /**
      * **Validates: Requirements 1.21, 2.21**
      *
@@ -573,13 +690,16 @@ describe('Property: no constructed socket URL contains the credential in any pos
      * the value into a path segment, into a fragment, into a subprotocol-shaped suffix - are
      * all still failures, and a substring search is what catches every one of them.
      */
-    fc.assert(
-      fc.property(jwtArb, pathArb, (token, path) => {
+    await fc.assert(
+      fc.asyncProperty(jwtArb, pathArb, async (token, path) => {
         constructed = [];
         resetSocketClient();
         window.sessionStorage.setItem('token', token);
 
-        wsClient.connect(path);
+        // `asyncProperty` since task 8.2: the ticket is fetched before the socket is
+        // constructed, so the predicate has to await the attempt. What it then asserts is
+        // unchanged — a substring search over the whole URL, in raw and encoded form.
+        await wsClient.connect(path);
 
         expect(constructed.length).toBe(1);
         for (const socket of constructed) {
