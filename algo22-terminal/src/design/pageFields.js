@@ -144,6 +144,7 @@ export const PAGES = Object.freeze({
   SIGNAL_TRACE: 'signal-trace',
   DOWNLOAD: 'download',
   RISK_SETTINGS: 'risk-settings',
+  SECURITY_LOGS: 'security-logs',
 });
 
 /** Migration 015, named so a warning and this declaration spell it the same way. */
@@ -2097,6 +2098,222 @@ const RISK_SETTINGS_FIELDS = [
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════
+ * Security Logs (retail-ui-simplification Requirement 4.2) — /app/security-logs
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * THE TABLE IS SIX COLUMNS AND THE BACKEND HAS FIVE, WHICH IS WHY THIS SECTION EXISTS
+ * ----------------------------------------------------------------------------------
+ * `GET /api/security/logs` is `supabase.table('security_logs').select('*')`, so the fields
+ * available are exactly the table's, declared by `migrations/006_reconcile_production_
+ * database.sql:327`:
+ *
+ *     id UUID PK · user_id TEXT NOT NULL · event_type VARCHAR(100) NOT NULL
+ *     ip_address VARCHAR(45) · user_agent TEXT · details JSONB · created_at TIMESTAMPTZ
+ *
+ * **There is no `location` column and no `status` column.** The page rendered both, and it
+ * filled them with constants:
+ *
+ *     loc:    l.location || l.loc   || "Secure Session"
+ *     status: (l.status            || "success").toLowerCase()
+ *
+ * The second is the most consequential substitution found anywhere in this pass. `status` is
+ * unreported for every row, so the fallback fires for every row, so **every entry in a
+ * security audit log was badged green and read `SUCCESS`** — including a failed login, if one
+ * were logged. And because `failed_attempts` counted `status === 'failed'`, the page also
+ * published *Failed Attempts: 0* as a measurement of a field that cannot carry a failure.
+ * That is §6's hazard at its worst: not a wrong number but a REASSURING one, on the one screen
+ * a trader opens to find out whether someone else has been in their account.
+ *
+ * Three more of the same shape, on the same rows:
+ *
+ *     ip_address  || "127.0.0.1"                 a localhost address, for an audit record
+ *     user_agent  || "Browser / Desktop Client"
+ *     created_at  ? new Date(created_at) : NEW DATE()   the time the page was OPENED
+ *
+ * The last one is the timestamp hazard exactly: a record whose `created_at` did not arrive was
+ * stamped with the moment the trader loaded the page, which is indistinguishable from a real
+ * reading and is the field the whole log is ordered by.
+ *
+ * AND THREE OF THE FOUR SUMMARY FIGURES WERE NOT MEASUREMENTS AT ALL
+ * -----------------------------------------------------------------
+ *     api_calls_24h:   normalized.length * 12    invented; no endpoint reports API call counts
+ *     failed_attempts: see `status` above        structurally always 0
+ *     active_sessions: 1                         a literal
+ *
+ * Each is declared `UNAVAILABLE` here with the reason a trader reads instead. The fourth,
+ * *Logins (30d)*, IS computable — but not as labelled: the read is `limit=100` most recent
+ * records with no date window at all, so "30d" was a claim the request does not support. It is
+ * declared `DERIVED` with its real derivation and its real scope, and its label says so.
+ *
+ * WHAT IS NOT FIXED HERE, RECORDED RATHER THAN SMUGGLED
+ * ---------------------------------------------------
+ * `routers/user.py:174` answers `[]` when the request has no Supabase client, which collapses
+ * "you have no security events" into "we could not read them" before the response leaves the
+ * server. Requirement 16.7 puts `backend_app/` out of this spec's reach, so the page cannot
+ * tell the two apart and this note is where that limit is written down.
+ */
+const SECURITY_LOGS_READ = 'userApi.getSecurityLogs';
+const SECURITY_LOGS_ENDPOINT = 'GET /api/security/logs?limit=100';
+const SECURITY_LOGS_TABLE = 'migrations/006_reconcile_production_database.sql:327 declares the '
+  + '`security_logs` table: id, user_id, event_type NOT NULL, ip_address, user_agent, details, '
+  + 'created_at. The route is `select("*")`, so these seven are the whole field set.';
+
+const SECURITY_LOGS_FIELDS = [
+  entry({
+    page: PAGES.SECURITY_LOGS,
+    field: 'eventType',
+    label: 'Event',
+    requirement: '4.2',
+    read: SECURITY_LOGS_READ,
+    endpoint: SECURITY_LOGS_ENDPOINT,
+    path: '[].event_type',
+    note: `NOT NULL in the table, so no marker is reachable. ${SECURITY_LOGS_TABLE} The page `
+      + 'also read `l.event` and `l.action` before it; neither column exists.',
+  }),
+  entry({
+    page: PAGES.SECURITY_LOGS,
+    field: 'ipAddress',
+    label: 'IP address',
+    requirement: '4.2',
+    read: SECURITY_LOGS_READ,
+    endpoint: SECURITY_LOGS_ENDPOINT,
+    path: '[].ip_address',
+    absence: ABSENCE.UNMEASURABLE,
+    reason: 'No IP address was recorded for this event, so there is no address to show. It is '
+      + 'not 127.0.0.1 and it is not your own address — it was simply not captured.',
+    note: 'Nullable. The page substituted `127.0.0.1`, which on an audit record reads as "this '
+      + 'happened on your own machine" — a claim about the origin of an event nobody recorded '
+      + 'the origin of.',
+  }),
+  entry({
+    page: PAGES.SECURITY_LOGS,
+    field: 'userAgent',
+    label: 'Device / client',
+    requirement: '4.2',
+    read: SECURITY_LOGS_READ,
+    endpoint: SECURITY_LOGS_ENDPOINT,
+    path: '[].user_agent',
+    absence: ABSENCE.UNMEASURABLE,
+    reason: 'No device or client was recorded for this event, so there is nothing to identify '
+      + 'what made the request.',
+    note: 'Nullable. The page substituted `Browser / Desktop Client`, which names a device '
+      + 'class on the strength of nothing.',
+  }),
+  entry({
+    page: PAGES.SECURITY_LOGS,
+    field: 'recordedAt',
+    label: 'Timestamp',
+    requirement: '4.2',
+    read: SECURITY_LOGS_READ,
+    endpoint: SECURITY_LOGS_ENDPOINT,
+    path: '[].created_at',
+    absence: ABSENCE.UNMEASURABLE,
+    reason: 'No time was recorded for this event, so there is no timestamp to show. The list is '
+      + 'ordered by this field, so an event without one may not be in the position you expect.',
+    note: 'Defaults to NOW() on insert but is nullable, and the whole list is ordered by it. '
+      + '**It must never render as the current time**: the page substituted `new Date()` — the '
+      + 'moment the page was opened — which is a plausible timestamp on an audit record and is '
+      + 'therefore the same class of defect as `exchange_api_latency_ms` rendering "0 ms".',
+  }),
+  entry({
+    page: PAGES.SECURITY_LOGS,
+    field: 'location',
+    label: 'Location',
+    requirement: '4.2',
+    read: SECURITY_LOGS_READ,
+    endpoint: SECURITY_LOGS_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'Sign-in locations are not recorded, so this column cannot be filled for any event. '
+      + 'The IP address beside it is the nearest thing the log holds.',
+    note: `The \`security_logs\` table has no location column at all. ${SECURITY_LOGS_TABLE} `
+      + 'The page filled the column with the constant "Secure Session" for every row — which '
+      + 'is not a location, and reads as a reassurance.',
+  }),
+  entry({
+    page: PAGES.SECURITY_LOGS,
+    field: 'outcome',
+    label: 'Status',
+    requirement: '4.2',
+    read: SECURITY_LOGS_READ,
+    endpoint: SECURITY_LOGS_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'This log records that an event happened, not whether it succeeded, so a failed '
+      + 'sign-in cannot be told apart from a successful one here.',
+    note: 'The table has no status column. **This is the worst substitution in the tree**: the '
+      + 'page defaulted it to "success" and rendered a green chip reading SUCCESS on every row '
+      + 'of a security audit log. A failed attempt would have been badged as a success, and the '
+      + 'figure below counted the same absent field to publish "Failed Attempts: 0".',
+  }),
+  entry({
+    page: PAGES.SECURITY_LOGS,
+    field: 'loginEventCount',
+    label: 'Login events (last 100 records)',
+    requirement: '4.2',
+    read: SECURITY_LOGS_READ,
+    endpoint: SECURITY_LOGS_ENDPOINT,
+    inputs: ['[].event_type'],
+    verdict: VERDICT.DERIVED,
+    derivation: 'The number of returned records whose `event_type` contains "login" or "auth", '
+      + 'case-insensitively, over the records this read returned — which is the 100 most recent, '
+      + 'not a date window.',
+    tooltip: 'Counted over the 100 most recent records this page reads, not over 30 days: the '
+      + 'request carries a record limit and no date range.',
+    note: 'The page labelled this "Logins (30d)" and there is no 30-day window anywhere in the '
+      + 'request — `getSecurityLogs(100)` is `?limit=100`. It also substituted the TOTAL record '
+      + 'count (floored at 1) whenever the match count was zero, so an account with no login '
+      + 'events showed a login figure. A genuine 0 now renders 0.',
+  }),
+  entry({
+    page: PAGES.SECURITY_LOGS,
+    field: 'apiCallCount24h',
+    label: 'API calls (24h)',
+    requirement: '4.2',
+    read: SECURITY_LOGS_READ,
+    endpoint: SECURITY_LOGS_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'API call volume is not recorded anywhere, so there is no 24-hour figure to show. '
+      + 'The events below are what the account does have a record of.',
+    note: 'The page computed `normalized.length * 12` — the number of returned log records '
+      + 'multiplied by twelve. No endpoint reports an API call count and no constant relates one '
+      + 'to the other; the figure was manufactured, and it grew with the record limit.',
+  }),
+  entry({
+    page: PAGES.SECURITY_LOGS,
+    field: 'failedAttemptCount',
+    label: 'Failed attempts',
+    requirement: '4.2',
+    read: SECURITY_LOGS_READ,
+    endpoint: SECURITY_LOGS_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'This log does not record whether an event succeeded or failed, so failed attempts '
+      + 'cannot be counted from it. A zero here would mean "not recorded", not "none".',
+    note: 'Counted rows where `status === "failed" || status === "error"` on a field the table '
+      + 'does not have and the page defaulted to "success", so the count was structurally always '
+      + '0 — the single most reassuring figure a security page can publish without evidence.',
+  }),
+  entry({
+    page: PAGES.SECURITY_LOGS,
+    field: 'activeSessionCount',
+    label: 'Active sessions',
+    requirement: '4.2',
+    read: SECURITY_LOGS_READ,
+    endpoint: SECURITY_LOGS_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'Concurrent sessions are not tracked, so this count is not available. A sign-in '
+      + 'event below is the record of a session starting.',
+    note: 'The page rendered the literal `1`. Whatever the account\'s real session count is, `1` '
+      + 'is the answer that says "only you are signed in", which is the claim a trader opens '
+      + 'this page to check.',
+  }),
+];
+
+/*
+ * ═══════════════════════════════════════════════════════════════════════════
  * The declaration, and the two indexes over it
  * ═══════════════════════════════════════════════════════════════════════════
  */
@@ -2119,6 +2336,7 @@ export const PAGE_FIELDS = Object.freeze([
   ...SIGNAL_TRACE_FIELDS,
   ...DOWNLOAD_FIELDS,
   ...RISK_SETTINGS_FIELDS,
+  ...SECURITY_LOGS_FIELDS,
 ]);
 
 /**

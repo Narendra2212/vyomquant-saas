@@ -149,6 +149,15 @@
  *                             step had to be read as a floor to stop a 6-digit
  *                             one-time code shrinking 41%. Both arguments are in
  *                             the page's header.
+ *   24 entries / 563 sizes  — `pages/SecurityLogs.jsx` (7) cleared by task 7.4. Six
+ *                             of the seven left by moving onto `ds/Metric`,
+ *                             `ds/DataTable` or `ds/Panel`'s error arm; one resolved
+ *                             in place. It carried the **8px `<th>`** — the smallest
+ *                             text in the tree outside `PaperTrading.jsx`, two pixels
+ *                             below the floor, naming the columns of a security audit
+ *                             log — which is the call site §2.4 orders Q4 ahead of Q6
+ *                             for: a `<th>` is a label, and `ds/DataTable` already
+ *                             renders one at `--text-micro`.
  *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
@@ -377,8 +386,18 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // inside a 56px box. This page's 10 inline `monospace` declarations also went to 2
   // (the secret and the six inputs keep it; eight prose and label sites lose it),
   // and its colour entry went 12 -> 0 in the same commit.
-  // 9×2, 11×2, 8×1, 10×1, 18×1. Task 7.4 (commit 10).
-  'pages/SecurityLogs.jsx': 7,
+  // `pages/SecurityLogs.jsx` was here at 7 — 9×2, 11×2, 8×1, 10×1, 18×1. **Task 7.4
+  // (commit 10) took it to 0 and the entry is DELETED rather than set to 0**
+  // (Requirement 1.5). Six of the seven left with their call site: the summary label
+  // (9) and figure (18) onto `ds/Metric`, the error banner (11) onto `ds/Panel`'s
+  // error arm, and the `<table>` (10), the `<th>`s (8) and the device cell (9) onto
+  // `ds/DataTable`. The seventh, the search input (11), resolved in place to
+  // `--text-body` by Q3. The 8px `<th>` is the one worth naming: two pixels below the
+  // floor, on the headers of a security audit log, and it is exactly why §2.4 asks Q4
+  // before Q6 — a `<th>` is a label, not a cell. This page's colour entry went 3 -> 0
+  // in the same commit, and two off-palette constructs the colour guard cannot see
+  // went with them: `${token.line.default}15`, a token with two hex digits
+  // concatenated on, and `placeholder:text-slate-600`.
   // 12×1, 13×1, 22×1. The smallest file in the tree at 79 lines and the cheapest
   // test of the convention's fit. Task 7.5 (commit 11).
   'pages/UpdatePasswordPage.jsx': 3,

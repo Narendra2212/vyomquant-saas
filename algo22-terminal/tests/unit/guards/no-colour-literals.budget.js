@@ -604,6 +604,29 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // and is untouched: a secret on the clipboard is a completed action, which is
   // `statusToken('ok')`'s group, so the name was right as well as the value.
   'pages/TwoFA.jsx': 0,
+  // 3 -> 0 at retail-ui-simplification task 7.4, in the same commit that deleted this page's
+  // font-size entry (7 -> 0).
+  //
+  // All three were the error banner's — `rgba(239,68,68,0.1)` wash, `rgba(239,68,68,0.3)`
+  // border, `#fca5a5` text — and all three left WITH the banner, which is now `ds/Panel`'s
+  // `error` state driven by `usePanelState`. None was in the palette: Tailwind's red ramp, not
+  // this app's `#EF5350`, so a one-for-one mapping would have re-decided the error hue by hand
+  // inside a typography commit.
+  //
+  // TWO OFF-PALETTE CONSTRUCTS THIS GUARD CANNOT SEE WENT WITH THEM, recorded because a scan
+  // will not find them for the next reader and because both are worth recognising elsewhere:
+  //
+  //   `border: 1px solid ${token.line.default}15` on every table row — a token with two hex
+  //   digits concatenated onto it, i.e. a hand-mixed 8% alpha wearing a token's name. There is
+  //   no `#` in the source, so HEX_LITERAL never matched it. `ds/DataTable` owns row separation
+  //   now. This is the same class of blind spot the Marketplace entry records for a colour
+  //   inside an arbitrary-value utility.
+  //
+  //   `placeholder:text-slate-600` on the search input — Tailwind's own slate ramp, which is
+  //   not this palette at all and which no budget here governs (O1 put the built-in classes out
+  //   of the font-size ratchet's scope; the colour guard never saw this one because it carries
+  //   no literal). It becomes `placeholder:text-content-muted`.
+  'pages/SecurityLogs.jsx': 0,
 
   // -- Shared surfaces an in-scope task cleared or created ------------------
   // These are not pages and so are not on design.md's M6-M9 page list, but each one is
@@ -750,7 +773,9 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // `pages/StrategyDetail.jsx: 4` stood here until task 27.1 took it to 0 and moved the
   // entry into the in-scope block above. It is not a deferred page any more.
   'pages/LegalPage.jsx': 3,
-  'pages/SecurityLogs.jsx': 3,
+  // `pages/SecurityLogs.jsx: 3` stood here until retail-ui-simplification task 7.4 took it to 0
+  // and moved the entry into the in-scope block above. All three were the error banner's and
+  // left with it; the full note is on the entry.
   'components/SupportCenter.jsx': 37,
   'components/NotificationCenter.jsx': 1,
 
