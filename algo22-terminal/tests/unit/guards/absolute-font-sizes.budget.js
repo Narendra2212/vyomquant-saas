@@ -158,6 +158,14 @@
  *                             log — which is the call site §2.4 orders Q4 ahead of Q6
  *                             for: a `<th>` is a label, and `ds/DataTable` already
  *                             renders one at `--text-micro`.
+ *   23 entries / 560 sizes  — `pages/UpdatePasswordPage.jsx` (3) cleared by task
+ *                             7.5. The smallest file in the tree and the first
+ *                             clearance in this spec with NO colour entry beside it:
+ *                             the page was already at zero literals, so task 7's step
+ *                             5 was satisfied by the *absence* of a new entry rather
+ *                             than by a number coming down. Two of the three sizes
+ *                             were the same construct twice — a sentence in a
+ *                             hand-built coloured strip — and both became `ds/Alert`.
  *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
@@ -398,9 +406,23 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // in the same commit, and two off-palette constructs the colour guard cannot see
   // went with them: `${token.line.default}15`, a token with two hex digits
   // concatenated on, and `placeholder:text-slate-600`.
-  // 12×1, 13×1, 22×1. The smallest file in the tree at 79 lines and the cheapest
-  // test of the convention's fit. Task 7.5 (commit 11).
-  'pages/UpdatePasswordPage.jsx': 3,
+  // `pages/UpdatePasswordPage.jsx` was here at 3 — 12×1, 13×1, 22×1 — the smallest
+  // file in the tree at 79 lines and the cheapest test of the convention's fit.
+  // **Task 7.5 (commit 11) took it to 0 and the entry is DELETED rather than set to
+  // 0** (Requirement 1.5). The `<h1>` (22) went to `--text-page` by Q8; the success
+  // (13) and failure (12) messages were the same construct twice — a sentence in a
+  // hand-built coloured strip — and both went to `ds/Alert`, so two of the three
+  // declarations are gone rather than mapped.
+  //
+  // THIS IS THE ONE CLEARANCE IN THIS SPEC WITH NO COLOUR ENTRY BESIDE IT. The file
+  // was already at zero literals, so task 7's step 5 is satisfied by the *absence* of
+  // a new entry in `no-colour-literals.budget.js` rather than by a number coming down
+  // — which is worth recording, because "the colour half did nothing" and "the colour
+  // half was skipped" look identical in a diff. Two off-palette constructs neither
+  // guard can see did go: `${token.status.profit.fg}12`, a token with two hex digits
+  // concatenated on (a hand-mixed 7% alpha carrying no `#`, so HEX_LITERAL never
+  // matched it), and `borderRadius: 18`, which is off the declared radius scale
+  // entirely — `--radius-xl` stops at 12.
 
   // -- src/components/landing/ — 4 files, 16 sizes. Requirement 1.4's seed,
   //    unchanged. All 16 are `text-[Npx]`. Task 11.1 takes them one commit per
