@@ -139,6 +139,16 @@
  *                             primitive that already reads a declared step
  *                             (`ds/PageHeader`, `ds/CommandButton`, `ds/Alert`,
  *                             `ds/Panel`'s `empty` arm); seven resolved in place.
+ *   25 entries / 570 sizes  — `pages/TwoFA.jsx` (12) cleared by task 7.3. Five of
+ *                             the twelve left with the block that became `ds/Alert`
+ *                             or `ds/LoadingState` or `ds/CommandButton`; seven
+ *                             resolved in place, and TWO of those seven are
+ *                             recorded findings about §2.3's role set rather than
+ *                             clean matches — a TOTP secret is an IDENTIFIER and
+ *                             there is no identifier role, and `control text`'s
+ *                             step had to be read as a floor to stop a 6-digit
+ *                             one-time code shrinking 41%. Both arguments are in
+ *                             the page's header.
  *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
@@ -350,8 +360,23 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // quoted `fontSize: 'Npx'` syntax, so it is the one page that exercises
   // `FONT_SIZE_QUOTED` end to end. Task 7.7 (commit 13).
   'pages/LegalPage.jsx': 15,
-  // 10×5, 11×4, 12×1, 20×1, 22×1. Task 7.3 (commit 9).
-  'pages/TwoFA.jsx': 12,
+  // `pages/TwoFA.jsx` was here at 12 — 10×5, 11×4, 12×1, 20×1, 22×1. **Task 7.3
+  // (commit 9) took it to 0 and the entry is DELETED rather than set to 0**
+  // (Requirement 1.5). Where the 12 went: the `<h1>` (20) to `--text-page` by Q8;
+  // four sentences (11, 10×2 and the step instruction) to `--text-body` by Q1, one
+  // of which — *QR code unavailable. Please use the secret key below.* — was the
+  // smallest text on the screen at the moment it mattered most; *Manual Setup Key:*
+  // (10) to `--text-micro` by Q4; the error line, the success line, the loading line
+  // and both footer commands (11×2, 11, 10×2) onto `ds/Alert`, `ds/LoadingState` and
+  // `ds/CommandButton`, so five declarations are gone rather than mapped. The last
+  // two are the ones worth reading the page's header for: the TOTP secret (12) went
+  // to `--text-title` as a `value` because §2.3 HAS NO IDENTIFIER ROLE and Q9 says
+  // to record the gap rather than guess, and the six code inputs (22) went to
+  // `--text-page` because `control text`'s `body` is the floor the role was added to
+  // establish, not a cap — read as a cap it would have shrunk a one-time code 41%
+  // inside a 56px box. This page's 10 inline `monospace` declarations also went to 2
+  // (the secret and the six inputs keep it; eight prose and label sites lose it),
+  // and its colour entry went 12 -> 0 in the same commit.
   // 9×2, 11×2, 8×1, 10×1, 18×1. Task 7.4 (commit 10).
   'pages/SecurityLogs.jsx': 7,
   // 12×1, 13×1, 22×1. The smallest file in the tree at 79 lines and the cheapest

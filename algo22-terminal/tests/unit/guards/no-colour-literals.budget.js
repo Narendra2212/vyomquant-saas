@@ -570,6 +570,40 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // here paints a profit or a loss, so `pnlToken` is not reached at all; the only semantic
   // question was armed-versus-unarmed and it is answered above.
   'pages/RiskSettings.jsx': 0,
+  // 12 -> 0 at retail-ui-simplification task 7.3, in the same commit that deleted this page's
+  // font-size entry (12 -> 0) and took its inline `monospace` declarations from 10 to 2.
+  //
+  // EIGHT OF THE TWELVE WENT WITH TWO BLOCKS, NOT ONE AT A TIME. The error banner's
+  // `rgba(239,68,68,0.1)` wash, `rgba(239,68,68,0.3)` border, `#fca5a5` text and `#ef4444`
+  // glyph, and the success banner's `rgba(16,185,129,0.1)`, `rgba(16,185,129,0.3)`, `#6ee7b7`
+  // and `#10b981`, all became `ds/Alert`, which derives hue, icon and live-region role from
+  // `severity` and accepts no colour. None of those eight was in the palette at all — they are
+  // Tailwind's red and emerald ramps rather than this app's `#EF5350` / `#26A69A` — so mapping
+  // them one for one would have meant re-deciding two states' hues by hand inside a
+  // typography commit. `ds/Alert` has no `success` severity and one was NOT added to a shared
+  // primitive from a page commit: a completed verification reports at `info` with its sentence
+  // unchanged.
+  //
+  // THE OTHER FOUR EACH NEEDED A DECISION:
+  //
+  //   rgba(0,212,255,0.08)  the header medallion's wash -> `token.brand.wash`, the declared
+  //                         10% brand and the nearest thing that exists.
+  //   rgba(0,212,255,0.2)   its ring -> `line.strong`. **There is no 20% brand border token**,
+  //                         and this is the construct task 5.2 already decided on Marketplace's
+  //                         featured card. Same resolution, so the two pages do not diverge.
+  //   rgba(0,0,0,0.4)       the QR panel's shadow -> `token.shadow.raised`
+  //                         (`0 4px 12px rgba(0,0,0,0.35)`), two units from a declared one.
+  //   #ffffff               **FUNCTIONAL, and the one literal here that took thought.** A QR
+  //                         reader needs a light quiet zone or it cannot find the finder
+  //                         patterns, so this is not a surface that can take `surface-panel`.
+  //                         It takes `content.primary` (#F0F2F5), the lightest value the
+  //                         palette declares, which holds ~18:1 against the black modules
+  //                         against the ~3:1 a camera needs. Pure white is not reintroduced.
+  //
+  // `token.status.profit.fg` on the copy button's confirmed state already read the token layer
+  // and is untouched: a secret on the clipboard is a completed action, which is
+  // `statusToken('ok')`'s group, so the name was right as well as the value.
+  'pages/TwoFA.jsx': 0,
 
   // -- Shared surfaces an in-scope task cleared or created ------------------
   // These are not pages and so are not on design.md's M6-M9 page list, but each one is
@@ -707,7 +741,9 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // `pages/StrategyDetail.jsx`. It is not a deferred page any more: Requirement 4.5 gave it
   // a task, and the task landed. The full hue map is on the entry.
   'pages/AuthPage.jsx': 30,
-  'pages/TwoFA.jsx': 12,
+  // `pages/TwoFA.jsx: 12` stood here until retail-ui-simplification task 7.3 took it to 0 and
+  // moved the entry into the in-scope block above. The full map is on the entry; eight of the
+  // twelve left with the two banners that became `ds/Alert`.
   'pages/Billing.jsx': 9,
   'pages/Profile.jsx': 7,
   'pages/Wizard.jsx': 5,
