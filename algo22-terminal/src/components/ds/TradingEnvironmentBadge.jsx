@@ -227,7 +227,28 @@ export function TradingEnvironmentBadge({
       data-environment-variant={resolvedVariant}
       role={announce === true ? 'status' : undefined}
       title={badge.long}
-      className={`${VARIANT_CLASSES[resolvedVariant]} font-mono font-bold uppercase tracking-wide whitespace-nowrap ${className}`.trim()}
+      // ═══ ONE TREATMENT AXIS, NOT FOUR (retail-ui-simplification Requirement 9.1) ═══
+      //
+      // This line used to read `font-mono font-bold uppercase tracking-wide`, stacked on
+      // top of the `text-micro` every variant in `VARIANT_CLASSES` already sets. That put
+      // `ENVIRONMENT UNCONFIRMED` in front of a retail trader as 23 characters of 10px
+      // monospace bold caps with added letter spacing — four treatments competing for the
+      // weight of one short string, on the badge that qualifies a figure rather than
+      // being the figure.
+      //
+      // `font-mono` is kept because it is the only one of the four that carries meaning:
+      // every label here is a server-supplied literal (`LIVE`, `PAPER TRADING`,
+      // `BACKTEST`, and the two unconfirmed strings), and mono is how this app already
+      // says "this is verbatim what the server sent" — the same mono/sans split
+      // `ds/Chart.jsx` applies to tick values against axis names.
+      //
+      // The other three only added weight, and dropping `uppercase` cannot change a
+      // single rendered glyph: all six labels are declared uppercase in source
+      // (`:106`–`:113`, `semantic.js:202`), so the class was transforming nothing.
+      // Nothing about the label, the long form, the icon, the border, the colour or the
+      // `data-*` axes moves with this — `dashboard-kill-switch.test.jsx:176` and
+      // `liveTrading.test.jsx:287` read all of those and pass unchanged.
+      className={`${VARIANT_CLASSES[resolvedVariant]} font-mono whitespace-nowrap ${className}`.trim()}
       style={{
         color: badge.fg,
         // `inline` sits beside a figure, where a filled chip would out-weight the
@@ -250,7 +271,11 @@ export function TradingEnvironmentBadge({
           for it. Elsewhere it is the tooltip, and `ds/Tooltip` (§5.2) replaces the
           native one without changing this copy. */}
       {resolvedVariant === 'strip' ? (
-        <span className="font-sans font-normal normal-case tracking-normal text-content-secondary">
+        // `font-normal normal-case tracking-normal` used to sit here too, undoing three of
+        // the root's four axes. With the root down to `font-mono`, `font-sans` is the only
+        // override still doing work: keeping the other three would tell the next reader
+        // this badge still bolds and uppercases, which it no longer does.
+        <span className="font-sans text-content-secondary">
           {badge.long}
         </span>
       ) : null}

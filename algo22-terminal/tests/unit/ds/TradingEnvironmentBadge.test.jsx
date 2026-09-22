@@ -285,15 +285,15 @@ describe('TradingEnvironmentBadge: prefix, long form and data axes, in every var
 });
 
 /* ══════════════════════════════════════════════════════════════════════════════════════
- * BLOCK 4 — THE TREATMENT AXES, SEEDED AT TODAY'S FOUR
+ * BLOCK 4 — THE TREATMENT AXES: SEEDED AT FOUR BY 2.1, REDUCED TO ONE BY 2.2
  *
  * ┌──────────────────────────────────────────────────────────────────────────────────┐
- * │ THIS IS THE ONE ASSERTION IN THIS SUITE INTENDED TO BE EDITED BY TASK 2.2.        │
- * │ Everything above it must pass unchanged before and after that edit. Seeded here   │
- * │ at the treatment as it is — `font-mono font-bold uppercase tracking-wide` at      │
- * │ `TradingEnvironmentBadge.jsx:230` — so that 2.2's reduction is observed rather    │
- * │ than assumed, and so that a reduction that also drops an axis 2.2 was supposed to │
- * │ keep fails here.                                                                  │
+ * │ THIS IS THE ONE ASSERTION IN THIS SUITE INTENDED TO BE EDITED BY TASK 2.2, AND    │
+ * │ TASK 2.2 HAS NOW EDITED IT. Task 2.1 seeded it at the treatment as it was —       │
+ * │ `font-mono font-bold uppercase tracking-wide` — and observed all 12 tests green   │
+ * │ against the unedited primitive. Task 2.2 reduced that to `font-mono` and lowered  │
+ * │ this seed with it, in the same commit, so the reduction is observed rather than   │
+ * │ assumed. Everything above this block passed unchanged in both states.            │
  * └──────────────────────────────────────────────────────────────────────────────────┘
  *
  * Read off the badge ROOT. [CORRECTION TO §5.4] §5.4 says "classes on the label
@@ -304,10 +304,19 @@ describe('TradingEnvironmentBadge: prefix, long form and data axes, in every var
  * ══════════════════════════════════════════════════════════════════════════════════════ */
 
 /**
- * Today's four axes, in `:230`'s order. `whitespace-nowrap` is layout rather than
+ * The treatment, after task 2.2: ONE axis. `whitespace-nowrap` is layout rather than
  * treatment and is not part of this list.
+ *
+ * `font-mono` is the one that stays, because it is the only one of the four that carries
+ * meaning: every label this badge renders is a server-supplied literal, and mono is how
+ * this app says "verbatim, from the server". `font-bold` and `tracking-wide` added weight
+ * to a string that qualifies a figure rather than being one, and `uppercase` was
+ * transforming nothing at all — all six labels are already uppercase in source.
+ *
+ * Asserted as an exact set rather than as three absences, so putting any of the three
+ * back fails here rather than passing quietly.
  */
-const TREATMENT_TODAY = Object.freeze(['font-mono', 'font-bold', 'uppercase', 'tracking-wide']);
+const TREATMENT_TODAY = Object.freeze(['font-mono']);
 
 /**
  * Every class Tailwind offers on those four axes. The rendered class list is intersected
