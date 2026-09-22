@@ -6,8 +6,17 @@
  * Requirements 18.1, 18.4. design.md §11.7, §19.
  *
  * `eslint.config.js` raises every `jsx-a11y-x` rule to `error` for
- * `src/components/ds/**` and `src/pages/**`, and downgrades a named, counted list of
- * un-migrated in-scope pages to `warn` (`eslint-rules/a11y-ratchet.js`).
+ * `src/components/ds/**`, `src/components/landing/**` and `src/pages/**`, and downgrades a
+ * named, counted list of un-migrated in-scope pages to `warn`
+ * (`eslint-rules/a11y-ratchet.js`).
+ *
+ * `src/components/landing/**` and every page outside the original eleven joined at
+ * retail-ui-simplification task 4.1 (Requirement 6.1) — see {@link IN_SCOPE_PAGES} for what
+ * grew, what it corrects in that requirement, and why the landing surface was the only real
+ * gap in the lint rather than eleven pages' worth. The same task replaced this file's one
+ * hardcoded total with a derived one (Decision D7, design.md §7.4): a checked-in figure goes
+ * red on the commit that finally clears the debt, and Requirement 12.3 calls that a defect in
+ * the guard rather than something to work around with a `0` entry.
  *
  * A config alone cannot make that a ratchet. It can say "these five pages are exempt";
  * it cannot notice when one of them stops needing to be. A page task could rebuild
@@ -62,14 +71,63 @@ import { TERMINAL_ROOT, list, toPosix } from './source-scan.js';
 const WAIVER_FILE = 'eslint-rules/a11y-ratchet.js';
 
 /**
- * Requirement 1.3's in-scope page list, as filenames.
+ * Every page a trader can open — retail-ui-simplification task 4.1, Requirement 6.1.
  *
- * `LiveTrading.jsx` (task 20.1) does not exist yet and `Dashboard.jsx` / `StrategyBuilder.jsx`
- * / `TradeHistory.jsx` / `PaperTrading.jsx` report zero today. All are listed anyway: the
- * point of the set is that a page joining it is enforced, and a file that is absent is
- * simply not linted.
+ * ═══ WHAT THIS LIST WAS, AND WHY IT GREW ═══
+ *
+ * It held the eleven `In_Scope_Pages` of `vyomquant-ui-redesign` (Requirement 1.3):
+ * `Dashboard`, `LiveTrading`, `Strategies`, `StrategyDetail`, `StrategyBuilder`,
+ * `Backtester`, `SignalTrace`, `Portfolio`, `TradeHistory`, `PaperTrading`,
+ * `StrategyMarketplace` — the pages that spec was rebuilding. The other eleven under
+ * `src/pages/` (`Unmigrated_Pages`) and the whole landing surface were outside it, and
+ * an unlisted file is a file this guard does not hold: `holds every unwaived in-scope
+ * page at zero findings` never reads it, so nothing noticed if one gained a finding.
+ * A keyboard-only trader can reach Risk Settings, so a kill switch they cannot operate
+ * there is the same defect as one on Dashboard.
+ *
+ * It is now **every file under `src/pages/` plus the fifteen `Landing_Surface` files**
+ * — `LandingPage.jsx` and the fourteen sections it renders — which is Requirement 6.1's
+ * scope, measured.
+ *
+ * ═══ A CORRECTION TO REQUIREMENT 6.1, AND ONE TO §1.4 ═══
+ *
+ * **Requirement 6.1 says "the 14 rendered `Landing_Surface` sections"; with
+ * `LandingPage.jsx` itself that is fifteen files, and the definition's "13 sections"
+ * undercounts its own list.** `LandingPage.jsx:2`–`:15` imports fourteen: `Navbar`,
+ * `Hero`, `TrustSection`, `ScreenshotsSection`, `HowItWorks`, `ModernTradingSection`,
+ * `SecuritySection`, `FounderSection`, `DownloadSection`, `Pricing`, `FAQ`, `Waitlist`,
+ * `FinalCTA`, `Footer`. 23 files sit in `src/components/landing/`; the eight requirements
+ * §1.6 records as imported by nothing are deliberately absent here, because a guard that
+ * held dead files to a standard would spend its teeth on markup no visitor reaches
+ * (Requirement 14.2's argument, applied to this list instead of to a budget).
+ *
+ * **§1.4's table says the eleven `Unmigrated_Pages` are "not linted at all". They are.**
+ * `A11Y_ENFORCED_GLOBS` has carried `src/pages/**` at `error` since task 6.27, so every
+ * page in this list was already linted at `error` — what was missing was this list, and
+ * so the ratchet. They were **linted but not held**: incidentally clean, with nothing
+ * asserting they stay that way. The landing surface was the real gap in the lint, and it
+ * is the narrower one than §1.4 implies — `jsxA11y.configs.recommended` applies to every
+ * linted file with no `files` key, so its 31 `error` rules already reached the sections;
+ * the four that did not are the two the preset ships `off`
+ * ({@link A11Y_RULES_RAISED_FROM_OFF}) and the two it never configures
+ * ({@link A11Y_RULES_ADDED}), one of which is Requirement 18.4 verbatim. Task 4.1 adds
+ * `src/components/landing/**` to the enforced globs for exactly those four.
+ *
+ * ═══ WHAT IS NOT LISTED, AND WHY ═══
+ *
+ * `src/pages/paperTradingFormat.js`, `src/pages/tradeHistoryFilters.js` and
+ * `src/pages/__tests__/**` are under `src/pages/` and are not here. They hold no JSX, so
+ * no `jsx-a11y` rule can fire in them and an entry would assert nothing. They are linted
+ * at `error` regardless, through the glob — the glob is what lints, this list is what
+ * *holds*, and the distinction is the one §1.4 blurred.
+ *
+ * `pages/Landing.jsx` IS listed, though it carries a `DEPRECATED / UNMOUNTED` header and
+ * `App.jsx:590` routes `components/landing/LandingPage` at `/` instead. It is in the tree
+ * and the guard reports what is there; task 9.2 deletes the file, and `every file in this
+ * list is actually linted` is what fails if that lands and this line stays.
  */
 const IN_SCOPE_PAGES = Object.freeze([
+  // The eleven `In_Scope_Pages` this list started as.
   'src/pages/Dashboard.jsx',
   'src/pages/LiveTrading.jsx',
   'src/pages/Strategies.jsx',
@@ -81,6 +139,36 @@ const IN_SCOPE_PAGES = Object.freeze([
   'src/pages/TradeHistory.jsx',
   'src/pages/PaperTrading.jsx',
   'src/pages/StrategyMarketplace.jsx',
+  // The eleven `Unmigrated_Pages`, in Requirement 4.5's migration order so the list
+  // reads as the work does: RiskSettings first, AuthPage last, Landing per Req 14.
+  'src/pages/RiskSettings.jsx',
+  'src/pages/TwoFA.jsx',
+  'src/pages/SecurityLogs.jsx',
+  'src/pages/UpdatePasswordPage.jsx',
+  'src/pages/Wizard.jsx',
+  'src/pages/LegalPage.jsx',
+  'src/pages/Profile.jsx',
+  'src/pages/Billing.jsx',
+  'src/pages/ExchangeManager.jsx',
+  'src/pages/AuthPage.jsx',
+  'src/pages/Landing.jsx',
+  // `Landing_Surface` — what `App.jsx:590` actually serves at `/`, in the order
+  // `LandingPage.jsx` renders them.
+  'src/components/landing/LandingPage.jsx',
+  'src/components/landing/Navbar.jsx',
+  'src/components/landing/Hero.jsx',
+  'src/components/landing/TrustSection.jsx',
+  'src/components/landing/ScreenshotsSection.jsx',
+  'src/components/landing/HowItWorks.jsx',
+  'src/components/landing/ModernTradingSection.jsx',
+  'src/components/landing/SecuritySection.jsx',
+  'src/components/landing/FounderSection.jsx',
+  'src/components/landing/DownloadSection.jsx',
+  'src/components/landing/Pricing.jsx',
+  'src/components/landing/FAQ.jsx',
+  'src/components/landing/Waitlist.jsx',
+  'src/components/landing/FinalCTA.jsx',
+  'src/components/landing/Footer.jsx',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -114,7 +202,20 @@ async function measure(patterns) {
 }
 
 const DS = await measure(['src/components/ds/**/*.{js,jsx}']);
-const PAGES = await measure(['src/pages/**/*.{js,jsx}']);
+
+/**
+ * Every enforced page surface, in one map.
+ *
+ * `src/components/landing/**` joined it at task 4.1 with {@link IN_SCOPE_PAGES}: a list
+ * entry whose file is not measured is an entry this guard silently skips, so the scan has
+ * to widen with the list or the extension would be decorative. Still called `PAGES`
+ * because that is what these files are to a trader — the landing surface is the first page
+ * they see.
+ */
+const PAGES = await measure([
+  'src/pages/**/*.{js,jsx}',
+  'src/components/landing/**/*.{js,jsx}',
+]);
 
 // ---------------------------------------------------------------------------
 // 1. `ds/` is clean, and at error
@@ -185,8 +286,12 @@ describe('a11y ratchet: the ds/ primitives are clean', () => {
 describe('a11y ratchet: the waiver list', () => {
   it('is well formed', () => {
     for (const [file, entry] of Object.entries(A11Y_PAGE_WAIVERS)) {
+      // `src/components/landing/` became waivable at task 4.1, when the landing surface
+      // joined IN_SCOPE_PAGES. No section needs a waiver today — all fifteen measure zero
+      // — and the pattern is widened so that a future finding there can be recorded
+      // honestly rather than absorbed by lowering a severity.
       expect(file, `${file} must be relative to the terminal root with forward slashes`).toMatch(
-        /^src\/pages\/[\w.-]+$/,
+        /^src\/(?:pages|components\/landing)\/[\w.-]+$/,
       );
       expect(Number.isInteger(entry.count), `${file}: ${entry.count} is not an integer`).toBe(true);
       expect(entry.count, `${file}: a waiver of 0 must be deleted, not recorded`).toBeGreaterThan(0);
@@ -250,6 +355,24 @@ describe('a11y ratchet: the recorded counts are the real ones', () => {
 // ---------------------------------------------------------------------------
 
 describe('a11y ratchet: no page can be quietly skipped', () => {
+  it('lints every file in the list, so a typo cannot exempt a page', () => {
+    // `holds every unwaived in-scope page at zero findings` filters on `f in PAGES`, so a
+    // misspelled entry is skipped in silence. That was tolerable at eleven hand-written
+    // entries and is not at 37. Every file named above exists and is linted today; when
+    // task 9.2 deletes `pages/Landing.jsx`, this is what requires its line to go too.
+    const unlinted = IN_SCOPE_PAGES.filter((f) => !(f in PAGES));
+    expect(
+      unlinted,
+      `These entries name files the lint does not reach — a misspelling, or a file that has\n`
+        + `been deleted or moved. Either way the page is NOT being held, which is what this\n`
+        + `list exists to prevent. Fix the path or delete the line:\n${list(unlinted)}`,
+    ).toEqual([]);
+
+    // Non-vacuity, and Requirement 6.1's scope as a number: 22 pages + 15 landing files.
+    expect(IN_SCOPE_PAGES).toHaveLength(37);
+    expect(new Set(IN_SCOPE_PAGES).size).toBe(IN_SCOPE_PAGES.length);
+  });
+
   it('holds every unwaived in-scope page at zero findings', () => {
     const offenders = IN_SCOPE_PAGES.filter((f) => f in PAGES)
       .filter((f) => !(f in A11Y_PAGE_WAIVERS))
@@ -265,10 +388,28 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
     ).toEqual([]);
   });
 
-  it('records what M7-M9 is walking into', () => {
-    // Not an assertion about quality — a checked-in figure so the milestone that inherits
-    // this debt cannot be surprised by its size. Waived in-scope pages only; the
-    // out-of-scope pages' findings are pre-existing and belong to no task here.
+  it('accounts for all the accessibility debt there is, and derives the total', () => {
+    // Was `records what M7-M9 is walking into`, and ended `expect(waived).toBe(4)` — a
+    // checked-in total whose stated purpose was that the milestone inheriting this debt
+    // could not be surprised by its size. **Decision D7 (design.md §7.4) replaces it with
+    // a derived total, and Requirement 12.3 is why:** a hardcoded figure goes red on every
+    // change that moves the number, including the one that moves it to zero, so the guard
+    // would fail at the exact moment the debt was finally cleared. A guard that breaks when
+    // it succeeds gets deleted rather than fixed.
+    //
+    // Task 4.1 is the change that hits it first — Requirement 6.1's extension was expected
+    // to move `waived` off 4 by seeding the newly-linted pages' findings — and it turns out
+    // the extension added no entry at all, because every one of the 26 newly-held files
+    // measures zero. So the stale total did NOT fail here, which is the weaker of the two
+    // reasons to make this edit and not a reason to defer it: task 5.3 deletes the last
+    // entry, and on that commit `toBe(4)` fails with nothing wrong.
+    //
+    // What replaces it is the assertion the number was standing in for. The debt recorded
+    // in the waiver list equals ALL the a11y debt in the enforced scope — every finding on
+    // every page and primitive is on a waived page, at `warn`, with a task against it. That
+    // holds in both directions, on any list, at any total, the empty list included: at zero
+    // entries it says the enforced scope has no findings anywhere, which is precisely the
+    // end state. No number to update, and nothing left unaccounted for.
     //
     // 25 -> 23 at task 16.2, which deleted `src/pages/Portfolio.jsx`'s entry rather than
     // lowering it. Its two findings were both `no-redundant-roles`, on the allocation legend's
@@ -303,10 +444,50 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
     // contributed on any page. The configuration flow is four `ds/Panel`s of `ds/Field`s now,
     // and `ds/Field` renders a visible `<label htmlFor>` with no hidden-label option. The page
     // lints at `error` from here, results region included.
+    //
+    // 4 -> 4 at task 4.1, the widening itself: 26 files joined the held set — the eleven
+    // `Unmigrated_Pages` and the fifteen `Landing_Surface` files — and every one of them
+    // measures ZERO, so no entry was seeded and the total did not move. Worth recording
+    // precisely because it is the outcome nobody predicted: §1.4 called those eleven pages
+    // "not linted at all", and what they actually were is linted at `error` and clean.
+    //
+    // 4 -> 0 is task 5.3's, which deletes `StrategyMarketplace.jsx`'s entry after task 5.2
+    // rebuilds both interactive cards. It is the last line in the list, so that commit also
+    // takes the waiver block out of `eslint.config.js` and this section with it. The total
+    // is no longer asserted by value, so the sequence above is a record rather than a
+    // number this test is checked against — which is the whole of Decision D7.
     const waived = Object.values(A11Y_PAGE_WAIVERS).reduce((sum, e) => sum + e.count, 0);
     const measured = Object.keys(A11Y_PAGE_WAIVERS).reduce((sum, f) => sum + PAGES[f].count, 0);
     expect(measured).toBe(waived);
-    expect(waived).toBe(4);
+
+    // D7's derived total. Every a11y finding anywhere in the enforced scope is accounted
+    // for by a waiver entry — so the recorded debt IS the debt, and `waived` needs no
+    // checked-in value to be meaningful. `DS` is summed in as well as `PAGES`: it is
+    // asserted at zero above, and summing it here means a primitive that grew a finding
+    // would have to fail this too, with no waiver able to absorb it (the waiver pattern
+    // admits `src/pages/` and `src/components/landing/` only).
+    const findingsEverywhere =
+      Object.values(PAGES).reduce((sum, m) => sum + m.count, 0)
+      + Object.values(DS).reduce((sum, m) => sum + m.count, 0);
+    expect(
+      findingsEverywhere,
+      `The enforced scope holds ${findingsEverywhere} accessibility finding(s) and the waiver\n`
+        + `list records ${waived}. Every finding must be on a waived page with a task against it:\n`
+        + `either fix the unaccounted one, or — if it is on an in-scope page that has not been\n`
+        + `migrated yet — record it in ${WAIVER_FILE} with the task number that clears it.\n`
+        + `Do NOT lower a severity to close the gap.`,
+    ).toBe(waived);
+
+    // Waived means `warn`; nothing in the enforced scope reports at `error`, which is what
+    // keeps `npm run lint` honest about this rule set. Asserted over the whole scope rather
+    // than per waiver, so a finding on an UNWAIVED page cannot hide here either.
+    expect(Object.values(PAGES).reduce((sum, m) => sum + m.errors, 0)).toBe(0);
+    expect(Object.values(DS).reduce((sum, m) => sum + m.errors, 0)).toBe(0);
+
+    // Non-vacuity: `findingsEverywhere === waived` is satisfied by measuring nothing at
+    // all, which is the one way this could pass while enforcing nothing.
+    expect(Object.keys(PAGES).length).toBeGreaterThanOrEqual(IN_SCOPE_PAGES.length);
+
     // And the cleared pages are really clean, at `error`, with no line left behind.
     for (const page of [
       'src/pages/Portfolio.jsx',

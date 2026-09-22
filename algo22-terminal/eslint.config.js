@@ -64,11 +64,13 @@ export default [
   {
     // ── The accessibility ratchet, half two: the shrinking waiver ──
     //
-    // These five in-scope pages carry 25 findings between them and are rebuilt
-    // in M7-M9. `warn` keeps every one of them in the report — they are not
-    // ignored, and the count is recorded per file in `A11Y_PAGE_WAIVERS` — while
-    // keeping the debt of a page that has not been migrated yet out of the
-    // build's error count. The page tasks own these; task 6.27 does not.
+    // Five in-scope pages carried 25 findings between them when this block
+    // landed at task 6.27; four have been cleared since and deleted their lines,
+    // so what is left is `StrategyMarketplace.jsx`'s 4, which
+    // retail-ui-simplification task 5.3 clears. `warn` keeps every one of them in
+    // the report — they are not ignored, and the count is recorded per file in
+    // `A11Y_PAGE_WAIVERS` — while keeping the debt of a page that has not been
+    // migrated yet out of the build's error count. The page tasks own these.
     //
     // A page NOT listed here is at `error`, which is the whole point: a page
     // rebuilt by its migration task is held to the rule the moment its waiver

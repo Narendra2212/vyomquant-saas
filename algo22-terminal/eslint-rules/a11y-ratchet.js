@@ -65,6 +65,24 @@
  * reasoning `no-colour-literals.test.js`'s header already applies to `index.css`. They
  * stay at the severity the preset already gave them. This task neither fixes them nor
  * pretends to; their 14 findings are pre-existing and unchanged.
+ *
+ * ═══ RETAIL-UI-SIMPLIFICATION TASK 4.1 — THE SCOPE IS NOW EVERY PAGE ═══
+ *
+ * The paragraph above described the position at task 6.27 and is left as written. It no
+ * longer holds: Requirement 6.1 puts **every file under `src/pages/` plus the fifteen
+ * `Landing_Surface` files** in the held set, on the ground that a keyboard-only trader
+ * can reach Risk Settings, so an inoperable control there is the same defect as one on
+ * Dashboard. `IN_SCOPE_PAGES` in the guard is the list; this module gained
+ * `src/components/landing/**` in {@link A11Y_ENFORCED_GLOBS}.
+ *
+ * **Those 14 findings are gone, and not by this spec's hand.** Measured at task 4.1:
+ * every page under `src/pages/` reports ZERO except `StrategyMarketplace.jsx`'s four, and
+ * all 23 files in `src/components/landing/` report zero — including under the four rules
+ * the landing glob newly enforces. So the extension seeded no waiver entry at all. The
+ * eleven `Unmigrated_Pages` were never unlinted, either: `src/pages/**` has been in the
+ * enforced globs since task 6.27, so they were linted at `error` and clean, with nothing
+ * asserting they stayed that way. What task 4.1 adds for them is the ratchet, not the
+ * lint.
  */
 
 import jsxA11y from 'eslint-plugin-jsx-a11y-x';
@@ -163,9 +181,27 @@ export function a11yRules(severity) {
   return Object.freeze(Object.fromEntries([...fromPreset, ...added]));
 }
 
-/** The globs held to `error`. `src/pages/**` minus {@link A11Y_PAGE_WAIVERS}. */
+/**
+ * The globs held to `error`, minus {@link A11Y_PAGE_WAIVERS}.
+ *
+ * `src/components/landing/**` was added by retail-ui-simplification task 4.1
+ * (Requirement 6.1), which extends enforcement to every page a trader can open.
+ * The landing surface is the one a visitor meets first and it was outside this
+ * block entirely: `src/App.jsx:44` lazy-imports `components/landing/LandingPage`
+ * and `:590` routes it at `/`, so `pages/Landing.jsx` — which carries a
+ * `DEPRECATED / UNMOUNTED` header and is routed nowhere — was the only "landing"
+ * this list reached, through `src/pages/**`.
+ *
+ * What the addition buys is precisely the four rules `jsxA11y.configs.recommended`
+ * does not enforce: it already applies to every linted file at `error`, so the
+ * landing sections were held to its 31 rules all along. The two it ships OFF
+ * ({@link A11Y_RULES_RAISED_FROM_OFF}) and the two it does not configure
+ * ({@link A11Y_RULES_ADDED}) were not reaching them — and one of those,
+ * `control-has-associated-label`, is Requirement 18.4 verbatim.
+ */
 export const A11Y_ENFORCED_GLOBS = Object.freeze([
   'src/components/ds/**/*.{js,jsx,ts,tsx}',
+  'src/components/landing/**/*.{js,jsx,ts,tsx}',
   'src/pages/**/*.{js,jsx,ts,tsx}',
 ]);
 
