@@ -258,17 +258,29 @@ export const A11Y_PAGE_WAIVERS = Object.freeze({
   // with every other page nobody has waived, which is what deleting the line does. The
   // page lints at `error` from here — including the results region task 23.2 rebuilds,
   // which holds no a11y finding of its own.
-  // M9, then retail-ui-simplification task 5.2 → 5.3. **4 → 2 at task 5.2**, and the two
-  // that went were not fixed: they were DEDUPLICATED. The page carried two card
-  // renderers — a featured card and a catalogue card — and each was a `div` with an
-  // `onClick`, `cursor-pointer`, no `role`, no `tabIndex` and no key handler, so the same
-  // mistake was reported twice by the same two rules. Task 5.2 replaced both with one
-  // `renderListingCard` on `ds/Panel`, which serves all three sections, so there is now
-  // one interactive wrapper and one pair of findings. The count is lowered rather than
-  // left at 4 because this guard asserts equality in BOTH directions: a stale 4 would
-  // pass nothing and hide the next regression. **Task 5.3 deletes this line** — it moves
-  // the activation onto the panel with `role`, `tabIndex` and an Enter/Space handler
-  // (`ds/DataTable`'s row activation is the precedent Requirement 12.4 names), and a
-  // cleared page belongs at `error` with every other unwaived page.
-  'src/pages/StrategyMarketplace.jsx': Object.freeze({ count: 2, task: '5.3' }),
+  // `src/pages/StrategyMarketplace.jsx` was here, and it was the LAST ENTRY IN THIS LIST.
+  // M9 recorded 4 findings: two rules — `click-events-have-key-events` and
+  // `no-static-element-interactions` — on each of two `div`s with an `onClick`,
+  // `cursor-pointer`, no `role`, no `tabIndex` and no key handler. The two `div`s were the
+  // featured card and the catalogue card, which is to say the same mistake twice.
+  //
+  // 4 → 2 at retail-ui-simplification task 5.2, by DEDUPLICATION rather than by fixing:
+  // the two card renderers became one `renderListingCard` on `ds/Panel`, serving all three
+  // sections, so one interactive element reported one pair of findings.
+  //
+  // 2 → 0 at task 5.3, which is this deletion. The activation moved onto the panel itself
+  // with `role="button"`, `tabIndex={0}` and an Enter/Space `onKeyDown` that calls
+  // `preventDefault()` on Space — `ds/DataTable`'s row activation, which Requirement 12.4
+  // names as the precedent — and the accessible name comes from `ds/Panel`'s own
+  // `aria-labelledby`, so it is the listing's name rather than the whole card read out.
+  // The entry is REMOVED rather than lowered to 0, because a `0` entry is what this guard
+  // forbids: a cleared page belongs at `error` with every other page nobody has waived,
+  // which is what deleting the line does. The page lints at `error` from here.
+  //
+  // **This map is now empty, and that is the end state, not a defect** (Requirement 12.3).
+  // Every file in `A11Y_ENFORCED_GLOBS` reports zero findings at `error`. The guard's
+  // `expect(measured).toBe(waived)` holds on an empty list — `0 === 0` — and its derived
+  // total says the enforced scope holds no accessibility debt anywhere. The waiver block
+  // in `eslint.config.js` went with this line, because flat config refuses an empty
+  // `files` array: a block waiving nothing is a block that cannot be written down.
 });

@@ -816,14 +816,33 @@ const StrategyMarketplace = () => {
    *     same basis in full; this is the marker that survives being reached from search or
    *     from the full catalogue, where there is no heading above the card.
    *
-   * THE INTERACTION IS DELIBERATELY STILL A BARE `onClick` ON A WRAPPER
-   * ------------------------------------------------------------------
-   * Task 5.3 is what makes this card keyboard-operable, and it lands on its own because
-   * the waiver in `eslint-rules/a11y-ratchet.js` records this file at exactly 4 findings —
-   * two rules on each of two elements — and that guard asserts equality in BOTH
-   * directions. Moving the handler onto `ds/Panel` here would take the count to zero in a
-   * commit whose waiver still says four, so the wrapper stays for exactly one commit and
-   * 5.3 deletes it along with the waiver line.
+   * THE CARD IS A CONTROL (task 5.3, Requirements 12.1, 12.4, 20.1)
+   * ---------------------------------------------------------------
+   * It used to be a `div` with an `onClick`, `cursor-pointer` and nothing else: no `role`,
+   * no `tabIndex`, no key handler. A trader navigating by keyboard could not open a listing
+   * at all — not a degraded path, no path — and the two rules that say so,
+   * `click-events-have-key-events` and `no-static-element-interactions`, were the last
+   * entry in `eslint-rules/a11y-ratchet.js`. That entry is DELETED by this commit rather
+   * than lowered, because a cleared page belongs at `error` with every other page nobody
+   * has waived, and the whole waiver block goes from `eslint.config.js` with it: this was
+   * the last waived file in the app.
+   *
+   * The activation lives on `ds/Panel` itself, spread onto its `<section>`:
+   *
+   *   * `role="button"` — so the element announces what it does, and so the accessible name
+   *     is computed from `ds/Panel`'s own `aria-labelledby`, which points at the card's
+   *     heading. The name is therefore the LISTING'S NAME rather than the whole card read
+   *     aloud, and it stays correct when the card's contents change.
+   *   * `tabIndex={0}` — in the tab order, in document order, with the focus ring
+   *     `tokens.css` declares.
+   *   * `onKeyDown` — Enter and Space, `ds/DataTable`'s row activation copied in behaviour
+   *     including the `preventDefault()` on Space, which Requirement 12.4 names as the
+   *     precedent. Without it Space scrolls the catalogue out from under the card the
+   *     trader just activated.
+   *
+   * The pointer path is unchanged and lands on exactly the same read with exactly the same
+   * listing id: `loadDetail` is one function and both paths call it (Requirements 16.2,
+   * 16.3 — no route, request or parameter moved).
    */
   const renderListingCard = (strat, kind) => {
     const price = priceOf(strat);
@@ -833,93 +852,100 @@ const StrategyMarketplace = () => {
     const rating = toFiniteNumber(strat?.avg_rating);
     const featured = kind === 'featured';
     const priceText = price.state === 'paid' ? `${price.text}/mo` : price.text;
+    const open = () => loadDetail(strat.listing_id);
 
     return (
-      <div
+      <Panel
         key={strat.listing_id}
-        onClick={() => loadDetail(strat.listing_id)}
-        className="cursor-pointer"
+        title={strat.name}
+        level={3}
+        data-listing-card={kind}
+        data-listing-id={strat.listing_id}
+        role="button"
+        tabIndex={0}
+        onClick={open}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+            // Space scrolls by default, which would move the catalogue out from under the
+            // card that was just activated.
+            event.preventDefault();
+            open();
+          }
+        }}
+        className={`h-full cursor-pointer transition-colors hover:border-brand ${
+          featured ? 'border-line-strong shadow-raised' : ''
+        }`.trim()}
+        actions={featured ? (
+          <StatusBadge state="selected" label="Selected" title={FEATURED_BASIS} />
+        ) : null}
       >
-        <Panel
-          title={strat.name}
-          level={3}
-          data-listing-card={kind}
-          data-listing-id={strat.listing_id}
-          className={`h-full transition-colors hover:border-brand ${
-            featured ? 'border-line-strong shadow-raised' : ''
-          }`.trim()}
-          actions={featured ? (
-            <StatusBadge state="selected" label="Selected" title={FEATURED_BASIS} />
-          ) : null}
-        >
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-center gap-2 text-body text-content-secondary">
-              {/* The icon tile is the card's anchor and the one decoration that stayed:
-                  it carries the listing's identity at a glance and the token layer
-                  declares every value in it. */}
-              <span className="w-10 h-10 rounded-lg bg-surface-canvas border border-line-default flex items-center justify-center shrink-0">
-                <Cpu className="text-brand" size={20} />
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center gap-2 text-body text-content-secondary">
+            {/* The icon tile is the card's anchor and the one decoration that stayed:
+                it carries the listing's identity at a glance and the token layer
+                declares every value in it. */}
+            <span className="w-10 h-10 rounded-lg bg-surface-canvas border border-line-default flex items-center justify-center shrink-0">
+              <Cpu className="text-brand" size={20} />
+            </span>
+            {strat.creator_alias && (
+              <span>
+                by{' '}
+                <span className="font-semibold text-content-primary">{strat.creator_alias}</span>
               </span>
-              {strat.creator_alias && (
-                <span>
-                  by{' '}
-                  <span className="font-semibold text-content-primary">{strat.creator_alias}</span>
-                </span>
-              )}
-              {strat.category && (
-                // A server-supplied literal, so monospace and the transform both stay.
-                <span className="bg-surface-inset border border-line-default px-2 py-0.5 rounded-sm text-micro font-mono uppercase text-content-secondary">
-                  {strat.category}
-                </span>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              <Metric
-                label="Subs"
-                value={subscribers}
-                format="integer"
-                tier={3}
-                unavailableReason="No subscriber count was reported for this listing."
-              />
-              <Metric
-                label="Return · BACKTEST"
-                value={totalReturn}
-                format="percent"
-                precision={2}
-                state={signedState(totalReturn)}
-                tier={3}
-                unavailableReason="No backtest return was recorded for this listing."
-              />
-              <Metric
-                label="Sharpe · BACKTEST"
-                value={sharpe}
-                format="number"
-                precision={2}
-                tier={3}
-                unavailableReason="No backtest Sharpe ratio was recorded for this listing."
-              />
-              <Metric
-                label="Rating"
-                value={rating}
-                format="number"
-                precision={1}
-                tier={3}
-                unavailableReason="No rating has been recorded for this listing yet."
-              />
-              <Metric
-                label="Price"
-                // `unknown` is the price the server sent something unreadable for, and it
-                // renders the marker WITH its reason rather than a figure nobody read.
-                value={price.state === 'unknown' ? null : priceText}
-                format="raw"
-                tier={3}
-                unavailableReason="This listing did not report a price we can read."
-              />
-            </div>
+            )}
+            {strat.category && (
+              // A server-supplied literal, so monospace and the transform both stay.
+              <span className="bg-surface-inset border border-line-default px-2 py-0.5 rounded-sm text-micro font-mono uppercase text-content-secondary">
+                {strat.category}
+              </span>
+            )}
           </div>
-        </Panel>
-      </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <Metric
+              label="Subs"
+              value={subscribers}
+              format="integer"
+              tier={3}
+              unavailableReason="No subscriber count was reported for this listing."
+            />
+            <Metric
+              label="Return · BACKTEST"
+              value={totalReturn}
+              format="percent"
+              precision={2}
+              state={signedState(totalReturn)}
+              tier={3}
+              unavailableReason="No backtest return was recorded for this listing."
+            />
+            <Metric
+              label="Sharpe · BACKTEST"
+              value={sharpe}
+              format="number"
+              precision={2}
+              tier={3}
+              unavailableReason="No backtest Sharpe ratio was recorded for this listing."
+            />
+            <Metric
+              label="Rating"
+              value={rating}
+              format="number"
+              precision={1}
+              tier={3}
+              unavailableReason="No rating has been recorded for this listing yet."
+            />
+            <Metric
+              label="Price"
+              // `unknown` is the price the server sent something unreadable for, and it
+              // renders the marker WITH its reason rather than a figure nobody read.
+              value={price.state === 'unknown' ? null : priceText}
+              format="raw"
+              tier={3}
+              unavailableReason="This listing did not report a price we can read."
+            />
+          </div>
+        </div>
+      </Panel>
     );
   };
 

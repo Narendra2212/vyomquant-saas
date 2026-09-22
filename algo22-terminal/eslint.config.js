@@ -61,26 +61,28 @@ export default [
     files: A11Y_ENFORCED_GLOBS,
     rules: a11yRules("error"),
   },
-  {
-    // ── The accessibility ratchet, half two: the shrinking waiver ──
-    //
-    // Five in-scope pages carried 25 findings between them when this block
-    // landed at task 6.27; four have been cleared since and deleted their lines,
-    // so what is left is `StrategyMarketplace.jsx`'s 4, which
-    // retail-ui-simplification task 5.3 clears. `warn` keeps every one of them in
-    // the report — they are not ignored, and the count is recorded per file in
-    // `A11Y_PAGE_WAIVERS` — while keeping the debt of a page that has not been
-    // migrated yet out of the build's error count. The page tasks own these.
-    //
-    // A page NOT listed here is at `error`, which is the whole point: a page
-    // rebuilt by its migration task is held to the rule the moment its waiver
-    // line goes, and a page added tomorrow is held to it with no action at all.
-    // The guard requires each recorded count to be exact and forbids a `0`
-    // entry, so a cleared page must have its line deleted in the same commit.
-    // When the last line goes, delete this block.
-    files: Object.keys(A11Y_PAGE_WAIVERS),
-    rules: a11yRules("warn"),
-  },
+  // ── The accessibility ratchet, half two: the shrinking waiver — GONE ──
+  //
+  // A second block sat here holding `Object.keys(A11Y_PAGE_WAIVERS)` at `warn`.
+  // Five in-scope pages carried 25 findings between them when it landed at task
+  // 6.27; `Portfolio`, `Strategies`, `SignalTrace` and `Backtester` cleared theirs
+  // and deleted their lines (25 → 23 → 21 → 18 → 8 → 4), and
+  // retail-ui-simplification task 5.3 cleared the last four on
+  // `StrategyMarketplace.jsx` — two rules on each of two card `div`s that had an
+  // `onClick` and no keyboard path at all.
+  //
+  // `A11Y_PAGE_WAIVERS` is empty now, so this block had to go rather than stay:
+  // flat config rejects an empty `files` array, and a block that waives nothing
+  // would only be a place for the next waiver to appear without argument. Every
+  // file under `A11Y_ENFORCED_GLOBS` is now held at `error` with no exception,
+  // which is what the block above always said it was for. Adding a waiver again
+  // means writing the block back and saying why, and
+  // `tests/unit/guards/a11y-ratchet.test.js` is what measures whether it was
+  // needed — it asserts zero findings on every unwaived in-scope file, so a page
+  // that regresses fails the suite rather than quietly landing at `warn`.
+  //
+  // The `A11Y_PAGE_WAIVERS` import stays: the guard reads it from here to check
+  // that this config and the recorded debt describe the same tree.
   // A block registering the local `vyom` plugin for
   // `src/components/ui-legacy/primitives.jsx` was here. It turned on one rule,
   // `vyom/no-new-legacy-token`, which kept the `C` compatibility shim closed and

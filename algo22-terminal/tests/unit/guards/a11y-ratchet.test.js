@@ -327,7 +327,37 @@ describe('a11y ratchet: the waiver list', () => {
 // ---------------------------------------------------------------------------
 
 describe('a11y ratchet: the recorded counts are the real ones', () => {
-  for (const [file, entry] of Object.entries(A11Y_PAGE_WAIVERS)) {
+  /*
+   * THE EMPTY CASE, WHICH IS NOW THE REAL CASE (Requirement 12.3)
+   * ------------------------------------------------------------
+   * This block generates one `it` per waiver entry, and retail-ui-simplification task 5.3
+   * deleted the last entry. A `describe` that generates no test is not a vacuous pass in
+   * Vitest — it is an ERROR: *"No test found in suite a11y ratchet: the recorded counts are
+   * the real ones"*. So the guard would have gone red on the commit that finished the work
+   * it exists to drive, and the cheap way out would have been to leave a `count: 0` entry
+   * behind, which is exactly what Requirement 12.3 forbids and what
+   * `is well formed` fails on anyway.
+   *
+   * The empty list has something true to assert, and it is the assertion the per-entry
+   * tests were standing in for all along: there is no waived debt. It is not a placeholder
+   * — it fails if an entry comes back without a task, and it names the block's own
+   * invariant rather than restating `expect(measured).toBe(waived)` from section 4.
+   */
+  const waivers = Object.entries(A11Y_PAGE_WAIVERS);
+
+  if (waivers.length === 0) {
+    it('has no waived page left to check, and that is the end state', () => {
+      expect(A11Y_PAGE_WAIVERS).toEqual({});
+      // Non-vacuity: the scope is still being measured. An empty waiver list next to an
+      // empty measurement would mean the linter stopped running, not that the debt is
+      // gone — `holds every unwaived in-scope page at zero findings` below is what then
+      // carries the whole line.
+      expect(Object.keys(PAGES).length).toBeGreaterThan(0);
+      expect(Object.keys(DS).length).toBeGreaterThan(0);
+    });
+  }
+
+  for (const [file, entry] of waivers) {
     it(`${file} holds exactly ${entry.count} (cleared by task ${entry.task})`, () => {
       const measured = PAGES[file];
       expect(measured, `${file} was not linted`).toBeDefined();
@@ -451,11 +481,27 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
     // precisely because it is the outcome nobody predicted: §1.4 called those eleven pages
     // "not linted at all", and what they actually were is linted at `error` and clean.
     //
-    // 4 -> 0 is task 5.3's, which deletes `StrategyMarketplace.jsx`'s entry after task 5.2
-    // rebuilds both interactive cards. It is the last line in the list, so that commit also
-    // takes the waiver block out of `eslint.config.js` and this section with it. The total
-    // is no longer asserted by value, so the sequence above is a record rather than a
-    // number this test is checked against — which is the whole of Decision D7.
+    // 4 -> 2 at task 5.2, by DEDUPLICATION rather than by fixing: `StrategyMarketplace`'s
+    // four were two rules on each of two `div`s with an `onClick` and no keyboard path, and
+    // those two `div`s were a featured-card renderer and a catalogue-card renderer carrying
+    // the same mistake. Task 5.2 made them one card on `ds/Panel`, so one element reported
+    // one pair. Lowered rather than left at 4, because this ratchet asserts equality in both
+    // directions and a stale ceiling checks nothing.
+    //
+    // 2 -> 0 at task 5.3, which DELETED the entry — the last line in the list. The
+    // activation is on the panel now: `role="button"`, `tabIndex={0}` and an Enter/Space
+    // `onKeyDown` that calls `preventDefault()` on Space, which is `ds/DataTable`'s row
+    // activation and the precedent Requirement 12.4 names. The accessible name comes from
+    // `ds/Panel`'s own `aria-labelledby`, so it is the listing's name. That commit also took
+    // the waiver block out of `eslint.config.js` — flat config refuses an empty `files`
+    // array — and added section 3's empty-list case, because a `describe` that generates no
+    // `it` is a Vitest ERROR rather than a vacuous pass, and leaving a `count: 0` entry to
+    // avoid it is what Requirement 12.3 forbids.
+    //
+    // **The list is empty and every file in the enforced scope is at `error`.** The total is
+    // no longer asserted by value, so the sequence above is a record rather than a number
+    // this test is checked against — which is the whole of Decision D7, and what lets this
+    // assertion survive the end of the debt it was written to track.
     const waived = Object.values(A11Y_PAGE_WAIVERS).reduce((sum, e) => sum + e.count, 0);
     const measured = Object.keys(A11Y_PAGE_WAIVERS).reduce((sum, f) => sum + PAGES[f].count, 0);
     expect(measured).toBe(waived);
@@ -494,6 +540,10 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
       'src/pages/Strategies.jsx',
       'src/pages/SignalTrace.jsx',
       'src/pages/Backtester.jsx',
+      // The last one, cleared by task 5.3. Listed here for the same reason as the other
+      // four: this is what makes "the waiver list is empty" mean "the page is clean"
+      // rather than "the page stopped being measured".
+      'src/pages/StrategyMarketplace.jsx',
     ]) {
       expect(A11Y_PAGE_WAIVERS[page]).toBeUndefined();
       expect(PAGES[page].count).toBe(0);
