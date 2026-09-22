@@ -302,20 +302,45 @@ const PAGE_FIXED_POINT = Object.freeze({
   'pages/UpdatePasswordPage.jsx': 3,
 });
 
+/**
+ * The pages this spec has since CLEARED, and what each one measures now.
+ *
+ * `PAGE_FIXED_POINT` above is requirements §1.1's table and is left exactly as
+ * written: it is the tree the spec was read from, and the failure message below
+ * says not to edit it to match a measurement. This map is the other half of that
+ * instruction — "the change that moved them owes an explanation" — so a page the
+ * pass deliberately cleared is recorded here, with the task that cleared it and
+ * the number it came down from, rather than by quietly rewriting history.
+ *
+ * `was` is asserted against `PAGE_FIXED_POINT` below, so the two cannot drift
+ * apart: an entry claiming to have cleared a number the spec never recorded, or
+ * recording the wrong starting count, fails.
+ */
+const CLEARED_BY_THIS_SPEC = Object.freeze({
+  'pages/StrategyMarketplace.jsx': Object.freeze({ was: 30, now: 0, task: '5.2' }),
+});
+
 describe('absolute-font-sizes: the patterns measure the tree they were written for', () => {
   it('reproduces requirements §1.1 per-page counts exactly', () => {
+    const expected = {};
     const measured = {};
     for (const relative of Object.keys(PAGE_FIXED_POINT)) {
+      const cleared = CLEARED_BY_THIS_SPEC[relative];
+      expected[relative] = cleared ? cleared.now : PAGE_FIXED_POINT[relative];
       const file = SCANNED.find((f) => f.relative === relative);
       measured[relative] = file ? file.count : 'NOT SCANNED';
     }
 
-    const drifted = Object.keys(PAGE_FIXED_POINT)
-      .filter((relative) => measured[relative] !== PAGE_FIXED_POINT[relative])
+    const drifted = Object.keys(expected)
+      .filter((relative) => measured[relative] !== expected[relative])
       .map((relative) => {
         const file = SCANNED.find((f) => f.relative === relative);
-        return `${relative} — requirements §1.1 says ${PAGE_FIXED_POINT[relative]}, `
-          + `measured ${measured[relative]}`
+        const cleared = CLEARED_BY_THIS_SPEC[relative];
+        return `${relative} — ${
+          cleared
+            ? `task ${cleared.task} took it to ${cleared.now}`
+            : `requirements §1.1 says ${PAGE_FIXED_POINT[relative]}`
+        }, measured ${measured[relative]}`
           + (file && file.count ? ` (${distribution(file.sizes)})` : '');
       });
 
@@ -325,13 +350,29 @@ describe('absolute-font-sizes: the patterns measure the tree they were written f
         + `Do NOT edit PAGE_FIXED_POINT to match. Either a pattern broke — in which case\n`
         + `the self-tests above should have caught it and one of them needs strengthening —\n`
         + `or the tree moved, in which case the budget seeded from these numbers is stale\n`
-        + `and the change that moved them owes an explanation:\n${list(drifted)}`,
+        + `and the change that moved them owes an explanation. A page this spec cleared on\n`
+        + `purpose goes in CLEARED_BY_THIS_SPEC with its task number, which IS that\n`
+        + `explanation; §1.1's own figure stays where it is:\n${list(drifted)}`,
     ).toEqual([]);
 
     // Non-vacuity for the non-vacuity check: if PAGE_FIXED_POINT were ever
     // emptied, the loop above would pass over nothing.
     expect(Object.keys(PAGE_FIXED_POINT)).toHaveLength(14);
-    expect(measured).toEqual(PAGE_FIXED_POINT);
+    expect(measured).toEqual(expected);
+
+    // A cleared page's recorded starting count is §1.1's own, and a cleared page
+    // has no budget entry left (Requirement 1.5).
+    for (const [relative, record] of Object.entries(CLEARED_BY_THIS_SPEC)) {
+      expect(record.was, `${relative}: CLEARED_BY_THIS_SPEC disagrees with §1.1`).toBe(
+        PAGE_FIXED_POINT[relative],
+      );
+      if (record.now === 0) {
+        expect(
+          ABSOLUTE_FONT_SIZE_BUDGET[relative],
+          `${relative} measures zero, so its budget entry must be DELETED, not left behind`,
+        ).toBeUndefined();
+      }
+    }
   });
 });
 

@@ -420,14 +420,13 @@ describe('Marketplace: featured and trending state their basis', () => {
   it('distinguishes a featured card from a trending one by elevation and border', async () => {
     mount();
 
-    await screen.findByRole('button', { name: /Aurora Momentum/i });
-
-    const featured = document.querySelector('[data-listing-card="featured"]');
-    const trending = document.querySelector('[data-listing-card="trending"]');
-    const catalogue = document.querySelector('[data-listing-card="catalogue"]');
-    expect(featured).not.toBeNull();
-    expect(trending).not.toBeNull();
-    expect(catalogue).not.toBeNull();
+    const [featured, trending, catalogue] = await waitFor(() => {
+      const cards = ['featured', 'trending', 'catalogue'].map((kind) =>
+        document.querySelector(`[data-listing-card="${kind}"]`),
+      );
+      cards.forEach((card) => expect(card).not.toBeNull());
+      return cards;
+    });
 
     // Declared tokens only: `--shadow-raised` against `--shadow-panel`,
     // `--color-line-strong` against `--color-line-default`. Both are in `tokens.css`,
@@ -472,11 +471,26 @@ describe('Marketplace: featured and trending state their basis', () => {
     });
     mount();
 
-    const card = await screen.findByRole('button', { name: /Helios Reversion/i });
+    // Activated by pointer, so this holds before task 5.3 adds the keyboard path as well
+    // as after it: Requirement 10.6 is about the module the badge reads, not about how the
+    // card was reached.
+    const card = await waitFor(() => {
+      const found = document.querySelector('[data-listing-card="catalogue"]');
+      expect(found).not.toBeNull();
+      return found;
+    });
     await user.click(card);
 
-    // `resolveSubscriptionView`'s declared word for an ACTIVE row, not the raw column.
-    await screen.findByText(/subscribed/i);
+    // `resolveSubscriptionView`'s declared word for an ACTIVE row, carried by the one
+    // primitive allowed to turn a state into a colour — never the raw column value.
+    const badge = await waitFor(() => {
+      const found = [...document.querySelectorAll('[data-status-group]')].find((el) =>
+        /subscribed/i.test(el.textContent || ''),
+      );
+      expect(found).toBeTruthy();
+      return found;
+    });
+    expect(badge.getAttribute('data-status-group')).not.toBe('');
     expect(pageText()).not.toContain('ACTIVE');
   });
 });

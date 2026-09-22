@@ -124,6 +124,13 @@
  *                             read `token.text.micro`. The first entry to leave
  *                             this map, and the first to leave by clearing rather
  *                             than by file deletion.
+ *   27 entries / 598 sizes  — `pages/StrategyMarketplace.jsx` (30) cleared by task
+ *                             5.2. The largest single clearance so far and the
+ *                             first whole PAGE to leave the map. All 30 were
+ *                             `text-[Npx]`; see the deleted entry's note below for
+ *                             where each cohort went, and for the 41 built-in
+ *                             `text-*` classes that left with them without being
+ *                             in scope.
  *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
@@ -287,13 +294,22 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // 11×15, 12×10, 10×5, 9×2, 13×2, 18×1, 20×1, 22×1, 24×1, 36×1. Task 7.9
   // (commit 15). Money figures, so every one also gets a `pageFields.js` entry.
   'pages/Billing.jsx': 39,
-  // 10×16, 9×9, 11×5 — all 30 are `text-[Npx]` Tailwind arbitrary values, which
-  // is the whole of Requirement 10.4. Task 5.2 axis 1 (commit 5) clears them.
-  // Note that 30 is not this page's whole size debt: blind spot 2 counts a
-  // further 41 built-in `text-*` classes here, so 30 of 71 off-scale size
-  // declarations move under Requirement 10.4 and the rest are out of scope
-  // per O1.
-  'pages/StrategyMarketplace.jsx': 30,
+  // `pages/StrategyMarketplace.jsx` was here at 30 — 10×16, 9×9, 11×5, all of
+  // them `text-[Npx]` Tailwind arbitrary values, which was the whole of
+  // Requirement 10.4. **Task 5.2 (commit 5) took it to 0 and the entry is DELETED
+  // rather than set to 0** (Requirement 1.5): the page is held at zero from here
+  // by `accounts for every file that still carries an absolute size`, which fires
+  // on it as unbudgeted if a size comes back. Where the 30 went, by role: chips
+  // and figure labels to `--text-micro`, and the four SENTENCES up to
+  // `--text-body` — the environment description, the per-condition rows, the
+  // empty-condition account and the historical-results statement, which was set
+  // 2px BELOW the page default while saying that past figures do not predict
+  // future ones. Blind spot 2's further 41 built-in `text-*` classes on this page
+  // — the 41 of 71 O1 left out of scope — went with them, because the figures now
+  // render through `ds/Metric` and the hero through `ds/PageHeader`, and both
+  // read declared steps. This page is the first evidence that O1's option C
+  // leaves less behind than it looks: migrating a page to the primitives clears
+  // the built-ins as a side effect of clearing the arbitrary values.
   // 9×9, 11×8, 10×7, 12×3, 20×1, 22×1. Task 7.11 (commit 17) — the largest page
   // in Requirement 4.5's group at 1,181 lines, which is why it goes last.
   'pages/AuthPage.jsx': 29,

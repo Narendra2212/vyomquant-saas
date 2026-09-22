@@ -258,7 +258,17 @@ export const A11Y_PAGE_WAIVERS = Object.freeze({
   // with every other page nobody has waived, which is what deleting the line does. The
   // page lints at `error` from here — including the results region task 23.2 rebuilds,
   // which holds no a11y finding of its own.
-  // M9. Task 26.1 rewrites the subscription-state elements — the in-scope part of this
-  // page (Requirement 1.3 scopes Marketplace to those elements only).
-  'src/pages/StrategyMarketplace.jsx': Object.freeze({ count: 4, task: '26.1' }),
+  // M9, then retail-ui-simplification task 5.2 → 5.3. **4 → 2 at task 5.2**, and the two
+  // that went were not fixed: they were DEDUPLICATED. The page carried two card
+  // renderers — a featured card and a catalogue card — and each was a `div` with an
+  // `onClick`, `cursor-pointer`, no `role`, no `tabIndex` and no key handler, so the same
+  // mistake was reported twice by the same two rules. Task 5.2 replaced both with one
+  // `renderListingCard` on `ds/Panel`, which serves all three sections, so there is now
+  // one interactive wrapper and one pair of findings. The count is lowered rather than
+  // left at 4 because this guard asserts equality in BOTH directions: a stale 4 would
+  // pass nothing and hide the next regression. **Task 5.3 deletes this line** — it moves
+  // the activation onto the panel with `role`, `tabIndex` and an Enter/Space handler
+  // (`ds/DataTable`'s row activation is the precedent Requirement 12.4 names), and a
+  // cleared page belongs at `error` with every other unwaived page.
+  'src/pages/StrategyMarketplace.jsx': Object.freeze({ count: 2, task: '5.3' }),
 });
