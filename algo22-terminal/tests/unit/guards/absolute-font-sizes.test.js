@@ -19,28 +19,35 @@
  * ===========================================================================
  * WHAT IS IN THIS FILE, AND WHAT IS NOT YET
  * ===========================================================================
- * Task 1.1 is the detection and its self-tests. It is deliberately separate
- * from the seed, because a silently broken pattern makes the whole guard pass
- * vacuously and the seeded numbers drift into fiction — so the patterns are
- * pinned by example before any number is written down.
+ * Task 1.1 was the detection and its self-tests, landed on its own because a
+ * silently broken pattern makes the whole guard pass vacuously and the seeded
+ * numbers drift into fiction — so the patterns were pinned by example before any
+ * number was written down. Task 1.2 then seeded the budget and switched on the
+ * ratchet, and open decision O1 resolved to **option B, px-only**; the budget
+ * file's header carries that decision, its rationale and its reversibility.
  *
- * Present here:
+ * So the whole guard is here now:
  *
  *   * the four patterns (§3.2) and `countAbsoluteFontSizes`;
  *   * §3.3's five self-tests, which pin comment blanking, the apostrophe case,
  *     the relative/tokenised exclusions and the neighbouring-property
  *     exclusions;
  *   * §10.3's non-vacuity fixed point: running the four patterns over the three
- *     roots reproduces requirements §1.1's fourteen per-page numbers exactly.
+ *     roots reproduces requirements §1.1's fourteen per-page numbers exactly;
+ *   * §3.4's six ratchet assertions over `absolute-font-sizes.budget.js` —
+ *     `is well formed`, `names only files that still exist`, `accounts for every
+ *     file that still carries an absolute size`, `holds every file at or below
+ *     its budget`, `requires progress to be recorded, not banked`, `has an entry
+ *     for every file it claims to track, and no strays`.
  *
- * Not here, and deliberately: `absolute-font-sizes.budget.js` and the six
- * ratchet assertions of §3.4 (`is well formed`, `names only files that still
- * exist`, `accounts for every file that still carries an absolute size`, `holds
- * every file at or below its budget`, `requires progress to be recorded, not
- * banked`, `has an entry for every file it claims to track, and no strays`).
- * Those are task 1.2, which must land alone and is blocked on open decision O1
- * — the seed's *shape* depends on the answer (§7.6), so seeding it now would
- * mean writing a number down twice.
+ * The last two of those, taken together, assert **equality** between every
+ * committed number and the tree. That is worth naming, because it extends the
+ * fixed point below to all 29 entries rather than only the fourteen pages:
+ * requirements §1.4's four landing numbers (`ScreenshotsSection` 12, `Hero` 2,
+ * `DownloadSection` 1, `HowItWorks` 1) and §3.5's eleven `components/` numbers
+ * are pinned exactly by the budget, in both directions, without needing a second
+ * table to compare against. `PAGE_FIXED_POINT` stays at the fourteen numbers
+ * requirements §1.1 committed to, which is what it is checkable against.
  *
  * ===========================================================================
  * WHY STRINGS ARE NOT MASKED
@@ -93,16 +100,20 @@
  * there: a file whose job is to declare font sizes cannot be policed by a rule
  * that forbids them. `isTestFile` keeps the guard from arguing with tests
  * (`expect(style.fontSize).toBe(11)` is a test doing its job) and incidentally
- * keeps it from counting task 1.2's budget file header.
+ * keeps it from counting the budget file's own header, which quotes dozens of
+ * sizes in prose.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { describe, it, expect } from 'vitest';
 
+import { ABSOLUTE_FONT_SIZE_BUDGET } from './absolute-font-sizes.budget.js';
 import { TOKEN_LAYER_FILES } from './no-colour-literals.budget.js';
 import { SRC, collect, isTestFile, list, relToSrc, stripComments } from './source-scan.js';
+
+const BUDGET_FILE = 'tests/unit/guards/absolute-font-sizes.budget.js';
 
 /**
  * Requirement 1.3: the colour guard's roots, unchanged. Narrowing to `pages`
@@ -321,5 +332,151 @@ describe('absolute-font-sizes: the patterns measure the tree they were written f
     // emptied, the loop above would pass over nothing.
     expect(Object.keys(PAGE_FIXED_POINT)).toHaveLength(14);
     expect(measured).toEqual(PAGE_FIXED_POINT);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. The budget is a ratchet — design.md §3.4
+// ---------------------------------------------------------------------------
+
+/**
+ * The colour guard's section 3, one for one, and each of the six catches
+ * something the other five do not:
+ *
+ *   is well formed          a non-integer, a negative, a Windows-slashed key —
+ *                           and, unique to this budget, an entry left at `0`
+ *   names only files…       an entry left behind by a deleted file
+ *   accounts for every…     a new violation, and a reintroduction
+ *   holds every file…       a size added to a file that is supposed to shrink
+ *   requires progress…      the under-budget direction: sizes removed, budget
+ *                           left high, headroom open for them to creep back
+ *   has an entry for every… a budget entry naming a file outside SCAN_ROOTS
+ *
+ * The assertions are **exact, in both directions**, and `no-colour-literals.test.js`'s
+ * header states why: under a `<=` assertion a contributor could clear forty
+ * sizes, leave the budget high, and the next contributor could put forty back
+ * without CI noticing. Progress has to be *recorded* to count, not banked.
+ *
+ * Requirement 1.5 inverts one rule of the colour budget and it moves which
+ * assertion holds a cleared file, so it is worth having in view while reading
+ * these six: **an entry that reaches zero is deleted, not left at `0`.** The
+ * colour guard keeps `pages/Dashboard.jsx: 0` and `holds every file at or below
+ * its budget` fails a reintroduction. Here the entry is gone, and `accounts for
+ * every file that still carries an absolute size` fails a reintroduction — as an
+ * *unbudgeted* file. Both hold the line; only one of them needs the unbudgeted
+ * message to cover two different situations, which is why that message below is
+ * longer than the colour guard's.
+ */
+describe('absolute-font-sizes: the decreasing budget', () => {
+  it('is well formed', () => {
+    for (const [relative, budget] of Object.entries(ABSOLUTE_FONT_SIZE_BUDGET)) {
+      expect(Number.isInteger(budget), `${relative}: ${budget} is not an integer`).toBe(true);
+      expect(relative, `${relative} must be relative to src/ with forward slashes`).toMatch(
+        /^[\w.-]+(?:\/[\w.-]+)*$/,
+      );
+      // Requirement 1.5's inversion, enforced rather than described. `> 0`, not
+      // `>= 0` — this is the one clause where this budget deliberately differs
+      // from the colour guard's, and without it the inversion would be advisory:
+      // an entry left at `0` is invisible to the other five. `accounts for every
+      // file…` only fires on files measuring more than zero; `requires progress
+      // to be recorded, not banked` compares `0 < 0` and passes. So a cleared
+      // file whose entry was left behind would sit there holding headroom that
+      // nothing reports, which is the exact failure the inversion exists to
+      // remove.
+      expect(
+        budget,
+        `${relative}: ${budget}. An entry that reaches zero is DELETED, not set to 0 `
+          + `(Requirement 1.5) — a file with no entry is held at zero by default, and\n`
+          + `\`accounts for every file that still carries an absolute size\` is what fails if a\n`
+          + `size comes back into it. Remove this line from ${BUDGET_FILE}.`,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it('names only files that still exist', () => {
+    const gone = Object.keys(ABSOLUTE_FONT_SIZE_BUDGET).filter(
+      (relative) => !existsSync(path.join(SRC, relative)),
+    );
+    expect(
+      gone,
+      `These budget entries name files that are no longer in src/. A deleted file takes its\n`
+        + `entry with it — remove them from ${BUDGET_FILE}. Task 9.2 deletes\n`
+        + `pages/Landing.jsx and its 41, and task 9.1 deletes seven landing components:\n${list(gone)}`,
+    ).toEqual([]);
+  });
+
+  it('accounts for every file that still carries an absolute size', () => {
+    const unbudgeted = SCANNED.filter(
+      (f) => f.count > 0 && !(f.relative in ABSOLUTE_FONT_SIZE_BUDGET),
+    ).map((f) => `${f.relative} — ${f.count} absolute size(s) (${distribution(f.sizes)})`);
+
+    expect(
+      unbudgeted,
+      `Absolute font sizes in files with no budget entry.\n\n`
+        + `A file with no entry is held at zero — see Requirement 1.5. If this file was\n`
+        + `previously cleared, a size has come back: express it as a Type_Scale step from\n`
+        + `src/styles/tokens.css. Re-adding a budget entry is not the remedy.\n\n`
+        + `If this file is new to the tree and genuinely carries debt, seed an entry with the\n`
+        + `change that clears it.\n${list(unbudgeted)}`,
+    ).toEqual([]);
+  });
+
+  it('holds every file at or below its budget', () => {
+    const over = SCANNED.filter(
+      (f) =>
+        f.relative in ABSOLUTE_FONT_SIZE_BUDGET
+        && f.count > ABSOLUTE_FONT_SIZE_BUDGET[f.relative],
+    ).map(
+      (f) =>
+        `${f.relative} — budget ${ABSOLUTE_FONT_SIZE_BUDGET[f.relative]}, actual ${f.count} `
+        + `(+${f.count - ABSOLUTE_FONT_SIZE_BUDGET[f.relative]}) (${distribution(f.sizes)})`,
+    );
+
+    expect(
+      over,
+      `Absolute font sizes were added to files that are supposed to be shrinking.\n\n`
+        + `Use a Type_Scale step from src/styles/tokens.css — one of the seven --text-*\n`
+        + `values, which are declared in rem and therefore scale with the reader's browser\n`
+        + `font-size preference (Requirement 2.1). A device-pixel value does not.\n`
+        + `Raising a budget in ${BUDGET_FILE} reverses Requirement 1.1 and needs a reason in\n`
+        + `the PR.\n${list(over)}`,
+    ).toEqual([]);
+  });
+
+  it('requires progress to be recorded, not banked', () => {
+    const under = SCANNED.filter(
+      (f) =>
+        f.relative in ABSOLUTE_FONT_SIZE_BUDGET
+        && f.count < ABSOLUTE_FONT_SIZE_BUDGET[f.relative],
+    ).map((f) =>
+      f.count === 0
+        ? `${f.relative} — cleared. DELETE the entry (currently `
+          + `${ABSOLUTE_FONT_SIZE_BUDGET[f.relative]}); do not set it to 0`
+        : `${f.relative} — lower the committed budget from `
+          + `${ABSOLUTE_FONT_SIZE_BUDGET[f.relative]} to ${f.count} (${distribution(f.sizes)})`,
+    );
+
+    expect(
+      under,
+      `These files now declare fewer absolute font sizes than their committed budget.\n`
+        + `Good — but the budget has to come down with them, in this commit, or the headroom\n`
+        + `stays open for the sizes to creep back in unnoticed. Edit ${BUDGET_FILE}.\n\n`
+        + `A file that reached ZERO has its entry deleted rather than lowered to 0\n`
+        + `(Requirement 1.5) — the lines above say which case each file is:\n${list(under)}`,
+    ).toEqual([]);
+  });
+
+  it('has an entry for every file it claims to track, and no strays', () => {
+    const scannedNames = new Set(SCANNED.map((f) => f.relative));
+    const strays = Object.keys(ABSOLUTE_FONT_SIZE_BUDGET).filter(
+      (relative) => !scannedNames.has(relative),
+    );
+    expect(
+      strays,
+      `These budget entries name files that exist but are outside this guard's scan\n`
+        + `(${SCAN_ROOTS.map((root) => `src/${root}`).join(', ')}, excluding tests and the token\n`
+        + `layer). Remove them from ${BUDGET_FILE} or widen SCAN_ROOTS deliberately:\n`
+        + `${list(strays)}`,
+    ).toEqual([]);
   });
 });
