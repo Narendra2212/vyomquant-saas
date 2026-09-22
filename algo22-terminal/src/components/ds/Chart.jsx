@@ -716,17 +716,28 @@ function ChartLegend({ series }) {
 
 const CHART_BY_KIND = Object.freeze({ area: AreaChart, line: LineChart, bar: BarChart });
 
-/** Shared tick presentation. `content.secondary` is 6.2:1 — axis ticks are text. */
-const TICK = Object.freeze({
+/**
+ * Shared tick presentation. `content.secondary` is 6.2:1 — axis ticks are text.
+ *
+ * Exported for `Chart.test.jsx` only. recharts is stubbed in every page test that
+ * touches a chart, so an axis tick's size never reaches rendered SVG there: the
+ * value's correctness is a property of this declaration and has to be asserted
+ * over it (retail-ui-simplification task 3.1).
+ */
+export const TICK = Object.freeze({
   fill: token.content.secondary,
-  fontSize: 10,
+  // fontSize: 10 → --text-micro (axis tick: a label, per tokens.css:69's own
+  // `labels, chips` annotation). retail-ui-simplification task 3.2.
+  fontSize: token.text.micro,
   fontFamily: token.font.mono,
 });
 
-/** An axis label, in the same treatment as a tick but not monospaced. */
-const AXIS_LABEL_STYLE = Object.freeze({
+/** An axis label, in the same treatment as a tick but not monospaced. Exported per {@link TICK}. */
+export const AXIS_LABEL_STYLE = Object.freeze({
   fill: token.content.secondary,
-  fontSize: 10,
+  // fontSize: 10 → --text-micro (axis label, same treatment as the tick).
+  // retail-ui-simplification task 3.2.
+  fontSize: token.text.micro,
   fontFamily: token.font.sans,
 });
 

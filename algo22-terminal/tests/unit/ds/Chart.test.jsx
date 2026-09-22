@@ -17,6 +17,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 import {
   AXIS_FORMATS,
+  AXIS_LABEL_STYLE,
   Chart,
   CHART_KINDS,
   describePoint,
@@ -27,6 +28,7 @@ import {
   SERIES_PALETTE,
   SERIES_TOKENS,
   showsLegend,
+  TICK,
 } from '../../../src/components/ds/Chart';
 import { statusToken } from '../../../src/design/semantic';
 import { token } from '../../../src/design/tokens';
@@ -92,6 +94,39 @@ describe('Chart: the declared vocabulary', () => {
     expect(AXIS_FORMATS).toEqual([
       'text', 'number', 'currency', 'percent', 'date', 'datetime', 'time',
     ]);
+  });
+
+  /*
+   * retail-ui-simplification task 3.1. Requirements 1.1, 1.2, 2.2, 18.2.
+   *
+   * Asserted over the exported constants rather than over rendered SVG, because
+   * recharts is stubbed in every page test that touches a chart — an axis tick's
+   * size never reaches the DOM there, so the value's correctness is a property of
+   * the declaration.
+   *
+   * `TICK` and `AXIS_LABEL_STYLE` are two declarations sitting behind the axes of
+   * every chart on all eleven migrated pages, and `token.text.micro` is what
+   * `tokens.css:69`'s own annotation (`labels, chips`) says that treatment should
+   * read. The literal is what this pins: `0.625rem` moves with a raised browser
+   * default, `10` does not (Requirement 2.1).
+   *
+   * The two axes this edit must NOT touch are asserted alongside, so that clearing
+   * the size cannot quietly cost the 6.2:1 tick contrast or Requirement 3.1's
+   * mono-for-figures / sans-for-labels split.
+   */
+  it('reads both axis text sizes from the token layer, never a device-pixel literal', () => {
+    expect(TICK.fontSize).toBe(token.text.micro);
+    expect(AXIS_LABEL_STYLE.fontSize).toBe(token.text.micro);
+    // Named rather than implied: the failure of this `it` before task 3.2 is
+    // `10` on both, and a rem string is the whole point of the change.
+    expect(typeof TICK.fontSize).toBe('string');
+    expect(TICK.fontSize).toMatch(/rem$/);
+
+    // Not part of the size edit, and must survive it.
+    expect(TICK.fill).toBe(token.content.secondary);
+    expect(AXIS_LABEL_STYLE.fill).toBe(token.content.secondary);
+    expect(TICK.fontFamily).toBe(token.font.mono);
+    expect(AXIS_LABEL_STYLE.fontFamily).toBe(token.font.sans);
   });
 });
 

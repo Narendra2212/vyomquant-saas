@@ -109,6 +109,22 @@
  * 459 + 171 = 630, and 14 + 15 = 29 entries. Every file that carries a size has
  * an entry; no file without one does.
  *
+ * ===========================================================================
+ * WHAT HAS BEEN CLEARED SINCE — the running account Requirement 1.5 asks for
+ * ===========================================================================
+ * The seed above is the tree on the day task 1.2 landed and is left as written,
+ * so it stays checkable by re-running the scan against that commit. Each entry
+ * that has since reached zero is DELETED from the map and recorded here instead —
+ * which is where a deleted line's history has to live, because the map no longer
+ * has a line to carry it.
+ *
+ *   29 entries / 630 sizes  — seeded, task 1.2
+ *   28 entries / 628 sizes  — `components/ds/Chart.jsx` (2) cleared by task 3.2:
+ *                             `:722`'s `TICK` and `:729`'s `AXIS_LABEL_STYLE` now
+ *                             read `token.text.micro`. The first entry to leave
+ *                             this map, and the first to leave by clearing rather
+ *                             than by file deletion.
+ *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
  * silently drops the four `components/landing/` files Requirement 1.4 already
@@ -156,7 +172,10 @@
  * blanking a file that documented its own migration exactly as required would
  * measure the count it started with, and the only way to pass would be to delete
  * the record. `ds/Chart.jsx`'s prose docblocks (`:291`, `:294`, `:719`, `:726`)
- * are the same case — its entry of `2` is the two live declarations only.
+ * were the same case — its entry of `2` was the two live declarations only, and
+ * task 3.2 has since moved both onto `token.text.micro` and added exactly the
+ * Requirement 2.4 notes this section is about, so that file now measures 4 before
+ * stripping and 0 after and its entry is gone.
  *
  * ===========================================================================
  * WHAT THIS RATCHET CANNOT SEE — design.md §3.6, quoted so it is not trusted
@@ -312,11 +331,12 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // 11×1.
   'components/landing/HowItWorks.jsx': 1,
 
-  // -- src/components/ — 11 files, 155 sizes. §3.5's second correction: these
-  //    carry debt today and Requirement 1.4 seeds none of them. Only
-  //    `ds/Chart.jsx` has a task. The other ten are a ratchet's resting position
-  //    — budgeted so they cannot grow, with no promise in this spec that they
-  //    shrink. ---------------------------------------------------------------
+  // -- src/components/ — seeded at 11 files / 155 sizes, now **10 files / 153**:
+  //    `ds/Chart.jsx` was the only one of the eleven a task owned and task 3.2
+  //    cleared it, so its entry is deleted per THE INVERSION. §3.5's second
+  //    correction: these carry debt today and Requirement 1.4 seeds none of them.
+  //    The ten that remain are a ratchet's resting position — budgeted so they
+  //    cannot grow, with no promise in this spec that they shrink. ------------
 
   // 11×31, 10×17, 12×7, 9×6, 13×3, 16×2, 8×1, 14×1, 18×1. The largest count
   // under `components/` and the fourth largest in the tree. Trader-reachable,
@@ -340,13 +360,15 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   'components/DeployPreflightPanel.jsx': 5,
   // 10×5, all `text-[Npx]`. RESTING.
   'components/waitlist/WaitlistForm.jsx': 5,
-  // 10×2 — `:722`'s `TICK` and `:729`'s `AXIS_LABEL_STYLE` (§3.5 calls the second
-  // one `AXIS_LABEL`; the file does not). **Two declarations behind the axis
-  // labels of every chart on all eleven migrated pages**, which is why this file
-  // is in scope at all and why the roots were not narrowed. Task 3.2 (commit 3)
-  // moves both to `token.text.micro` (`'0.625rem'` — what `tokens.css:69`'s own
-  // annotation says the axis tick should read) and **deletes this entry**.
-  'components/ds/Chart.jsx': 2,
+  // `components/ds/Chart.jsx` was here at 2 — `:722`'s `TICK` and `:729`'s
+  // `AXIS_LABEL_STYLE` (§3.5 calls the second one `AXIS_LABEL`; the file does
+  // not), two declarations behind the axis labels of every chart on all eleven
+  // migrated pages, which is why this file was in scope at all and why the roots
+  // were not narrowed. Task 3.2 moved both to `token.text.micro` and **deleted
+  // the entry** rather than setting it to 0 (Requirement 1.5). The file is now
+  // held at zero by `accounts for every file that still carries an absolute
+  // size`: if a px size returns here, it fails as UNBUDGETED, and re-adding this
+  // line is not the remedy.
   // 10×1, `text-[Npx]`. RESTING.
   'components/download/DownloadPage.jsx': 1,
   // 10×1, `text-[Npx]`. Blind spot 2 also counts 52 built-in `text-*` classes
