@@ -205,8 +205,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Search, Users, ArrowRight, Activity, Cpu,
-  AlertTriangle, ArrowLeft, Flame, Trophy, Info, Clock,
+  Search, Users, ArrowRight, Cpu, ArrowLeft, Flame, Trophy, Info, Clock,
 } from 'lucide-react';
 import api from '../api';
 import { CommandButton } from '../components/ds/CommandButton';
@@ -216,7 +215,13 @@ import { Panel } from '../components/ds/Panel';
 import { SectionHeader } from '../components/ds/SectionHeader';
 import { StatusBadge } from '../components/ds/StatusBadge';
 import { TradingEnvironmentBadge } from '../components/ds/TradingEnvironmentBadge';
+import { translateError } from '../design/errorCopy';
 import { BADGE_SUBSCRIBED, resolveSubscriptionView } from '../design/subscriptionState';
+import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
+// The classifier `usePanelState` itself reads, used here for ONE field: the server's own
+// error code. Reading it from the module that already parses both envelope shapes is what
+// stops this page from growing a second envelope parser (see `catalogueState`).
+import { classifyReadFailure } from './paperTradingFormat';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Measurement honesty helpers (Requirements 28.1, 28.5)
@@ -281,11 +286,19 @@ const formatDate = (value) => {
 };
 
 /**
- * A safe, client-facing sentence for a failed call.
+ * A safe, client-facing sentence for a failed MUTATION — clone, and checkout.
  *
  * Prefers the structured envelope the Marketplace_API returns
  * (`{error: {code, message}}`, Requirement 22.9), then `ApiError.getUserMessage()`, then the
  * error's own message, then the caller's fallback. No stack trace is ever surfaced.
+ *
+ * NOT used for a READ any more. The two reads on this page — the catalogue and the listing
+ * detail — resolve through `usePanelState` and `translateError`, which never reads a
+ * message off the error at all (Requirement 11.3). This helper stays for the two mutations
+ * because the server's own sentence about a refused clone or a refused checkout is the most
+ * useful thing there is to say about it, and `errorCopy.js` carries no entry for some of
+ * those codes; that asymmetry is the same one `pages/Dashboard.jsx` and
+ * `pages/Strategies.jsx` record at their own mutation sites.
  */
 const errorMessage = (err, fallback) => {
   const structured = err?.data?.error?.message;
@@ -354,6 +367,54 @@ const TRENDING_BASIS = 'Ordered by how many traders cloned each strategy, then b
 
 /** What the catalogue is: everything published, in the order the sort control asks for. */
 const CATALOGUE_BASIS = 'Every published strategy, in the order you choose.';
+
+/**
+ * The code the backend raises when the catalogue projection itself could not be read.
+ *
+ * `backend_app/routers/library.py:720` and `:785` raise it rather than answering a failed
+ * read with a zero-filled 200, and the comment beside each says so. It is on the wire in
+ * production **right now**: `library_strategies.price_minor` is added by migration `007`,
+ * `007` is unapplied, and the projection raises PostgreSQL `42703`.
+ */
+const MARKETPLACE_READ_FAILED = 'MARKETPLACE_READ_FAILED';
+
+/**
+ * §11.1's state for a read, with ONE page-level refinement (Requirement 11.4).
+ *
+ * `usePanelState` classifies a `MARKETPLACE_READ_FAILED` as `error`, which is correct in
+ * general — something went wrong on our side — and wrong for what this page then renders.
+ * `error` on a catalogue offers "Try again", and a schema fault does not get better on the
+ * second try; worse, the alternative the old page fell into was worse still, because a
+ * discarded error code left `strategies` empty and the page said *no strategies found
+ * matching your criteria*. "No strategies exist" and "we cannot read the catalogue" are
+ * different facts and only the first is the trader's to act on.
+ *
+ * So a failed READ of the catalogue itself resolves to `unavailable`, which is the state
+ * that names what cannot be shown and carries the reason with it. Nothing about the
+ * classification is re-derived here: the state comes from the hook and the code comes from
+ * `classifyReadFailure`, the same function the hook used.
+ */
+const readState = (panel) =>
+  panel.state === PANEL_STATES.ERROR
+  && classifyReadFailure(panel.error).code === MARKETPLACE_READ_FAILED
+    ? PANEL_STATES.UNAVAILABLE
+    : panel.state;
+
+/** True while a read has produced something the page can render. */
+const hasRead = (state) => state === PANEL_STATES.READY || state === PANEL_STATES.REFRESHING;
+
+/**
+ * `ds/Panel`'s `unavailable` reason, from the authored copy and nothing else.
+ *
+ * Both halves are rendered: the headline names what cannot be shown and the detail says
+ * what that means for the trader. Neither is derived from the error — `translateError`
+ * reads an authored table and never `err.message`, a status code or an exception class
+ * (Requirement 11.3).
+ */
+const unavailableReasonFor = (error) => {
+  const copy = translateError(error, 'marketplace');
+  return copy.detail ? `${copy.headline}. ${copy.detail}` : copy.headline;
+};
 
 /**
  * The figures a section can carry, in display order.
@@ -429,23 +490,23 @@ const StrategyMarketplace = () => {
   // Data states
   const [featuredStrategies, setFeaturedStrategies] = useState([]);
   const [trendingStrategies, setTrendingStrategies] = useState([]);
-  const [strategies, setStrategies] = useState([]);
   const [categories, setCategories] = useState([]);
-  const [selectedStrategy, setSelectedStrategy] = useState(null);
+  // Which listing the trader opened, which is the QUESTION the detail read asks. The
+  // payload is not state any more: it is `listing.data`, held by the hook beside the state
+  // that says whether it is safe to render (Requirement 14.5 — a payload that failed to
+  // refresh is discarded rather than left on screen under an error indicator).
+  const [selectedListingId, setSelectedListingId] = useState(null);
   // §7.9's resolved badge for the open Listing, or `null` when nothing has been read.
   // The resolution happens once, beside the read; nothing downstream re-derives it.
   const [subscriptionView, setSubscriptionView] = useState(null);
 
   // Pagination & Filter state
   const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [sort, setSort] = useState('clones');
 
   // UI states
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [cloneLoading, setCloneLoading] = useState(false);
   const [subscribeLoading, setSubscribeLoading] = useState(false);
@@ -499,38 +560,82 @@ const StrategyMarketplace = () => {
     }
   }, []);
 
-  // Fetch Catalogue
-  const fetchStrategies = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = { page, limit: 20, sort };
-      if (searchQuery) params.q = searchQuery;
-      if (selectedCategory) params.category = selectedCategory;
-
-      const data = hasAuthToken()
-        ? await api.library.browse(params)
-        : await api.library.browsePublic(params);
-      setStrategies(Array.isArray(data?.items) ? data.items : []);
-      const pages = toFiniteNumber(data?.pages);
-      setTotalPages(pages !== null && pages >= 1 ? Math.trunc(pages) : 1);
-    } catch (err) {
-      console.error(err);
-      setError('Failed to load marketplace data. Please try again.');
-    } finally {
-      setLoading(false);
-    }
+  /**
+   * THE CATALOGUE READ (task 6.1, Requirement 11)
+   * ============================================
+   * What was here:
+   *
+   *   } catch (err) {
+   *     console.error(err);
+   *     setError('Failed to load marketplace data. Please try again.');
+   *
+   * One `catch`, one `console.error`, one string — for every failure mode there is. Four
+   * distinct facts collapsed into it and the trader's next action differs in every one:
+   *
+   *   the network did not answer   → try again
+   *   the server faulted           → wait, it is not something you did
+   *   you are not signed in        → sign in
+   *   you are not entitled         → a subscription is needed
+   *
+   * And a fifth, which is the one in production today: the catalogue projection could not
+   * be read at all. That failure arrived as a structured `MARKETPLACE_READ_FAILED`, the
+   * page discarded the code, and because `strategies` stayed empty the trader was told *no
+   * strategies found matching your criteria* — a schema fault rendered as an empty
+   * catalogue, which is the one substitution Requirement 11.4 rules out by name.
+   *
+   * What replaces it adds nothing: the `loading`/`error` pair becomes `usePanelState`, one
+   * of §11.1's eight states; the string becomes `translateError(err, 'marketplace')`, which
+   * resolves the server's own code against an authored table and never reads
+   * `err.message`; and `console.error` goes, because Requirement 11.3 forbids logging in
+   * place of handling — the reference a trader can quote to support travels on the
+   * rendered state as `supportRef`.
+   *
+   * `deps` IS THE QUESTION, AND THAT IS THE POINT
+   * --------------------------------------------
+   * Page, sort, search text and category are the question being asked. A change to any of
+   * them is a NEW question, so the hook discards the previous answer and returns to
+   * `loading` rather than leaving the last page of results on screen under a new filter.
+   * `enabled` is deliberately NOT tied to `view`: the catalogue stays read while a listing
+   * is open, so the hero's count still describes the page the trader came from and coming
+   * back issues no second request for an answer already held.
+   */
+  const readCatalogue = useCallback(() => {
+    const params = { page, limit: 20, sort };
+    if (searchQuery) params.q = searchQuery;
+    if (selectedCategory) params.category = selectedCategory;
+    // The same two methods, the same paths, the same parameters as before: the
+    // authenticated/anonymous split is still the token check's decision and nothing about
+    // the request shape moved (Requirements 10.7, 16.2 — `api-paths.budget.js` unchanged).
+    return hasAuthToken() ? api.library.browse(params) : api.library.browsePublic(params);
   }, [page, sort, searchQuery, selectedCategory]);
 
-  // Initial load
+  const catalogue = usePanelState(readCatalogue, {
+    deps: [page, sort, searchQuery, selectedCategory],
+  });
+
+  const catalogueState = readState(catalogue);
+  const strategies = Array.isArray(catalogue.data?.items) ? catalogue.data.items : [];
+  const reportedPages = toFiniteNumber(catalogue.data?.pages);
+  const totalPages = reportedPages !== null && reportedPages >= 1 ? Math.trunc(reportedPages) : 1;
+  const filtered = Boolean(searchQuery) || selectedCategory !== null;
+
+  /*
+   * The three curated reads. They keep their own state and their own catch blocks, and
+   * that is deliberate: each one's handling is "this section is absent", which is a
+   * different decision from the catalogue's and belongs to whichever task rebuilds it.
+   * They no longer re-fire on every keystroke, which is the one behavioural difference
+   * this commit makes to them — the old effect listed the catalogue fetcher in its
+   * dependency array, and that identity changed with the search text, so typing one
+   * character re-issued all four GETs. Same paths, same parameters, fewer identical
+   * requests.
+   */
   useEffect(() => {
     if (view === 'browse') {
       fetchFeatured();
       fetchTrending();
       fetchCategories();
-      fetchStrategies();
     }
-  }, [view, fetchFeatured, fetchTrending, fetchCategories, fetchStrategies]);
+  }, [view, fetchFeatured, fetchTrending, fetchCategories]);
 
   /**
    * The caller's Subscription state for one Listing (Requirement 20.9's
@@ -587,26 +692,47 @@ const StrategyMarketplace = () => {
     }
   }, []);
 
-  // Fetch Detail
-  const loadDetail = useCallback(async (listingId) => {
+  /**
+   * THE LISTING DETAIL READ — the same migration, for the same reason.
+   *
+   * It shared the `loading`/`error` pair with the catalogue and had a string of its own
+   * (*Failed to load strategy details.*) for all the same failure modes, so removing the
+   * pair means moving this read too. Opening a card now records WHICH listing was opened
+   * and the hook asks for it; a failed read renders the translated copy in place of the
+   * detail rather than an empty panel below an error banner.
+   *
+   * `loadSubscription` still runs AFTER a successful detail read, from the effect below —
+   * not beside it. The order is the one the old code had and it is worth keeping: there is
+   * nothing to report a subscription state about until the listing itself resolved.
+   */
+  const readListing = useCallback(
+    () => (hasAuthToken()
+      ? api.library.detail(selectedListingId)
+      : api.library.detailPublic(selectedListingId)),
+    [selectedListingId],
+  );
+
+  const listing = usePanelState(readListing, {
+    deps: [selectedListingId],
+    enabled: selectedListingId !== null,
+  });
+
+  const listingState = readState(listing);
+  const selectedStrategy = listing.data;
+
+  const loadDetail = useCallback((listingId) => {
     if (!listingId) return;
-    setLoading(true);
-    setError(null);
+    // Cleared before the read, not after it: a badge resolved for the PREVIOUS listing must
+    // never be on screen beside this one's figures.
     setSubscriptionView(null);
-    try {
-      const data = hasAuthToken()
-        ? await api.library.detail(listingId)
-        : await api.library.detailPublic(listingId);
-      setSelectedStrategy(data);
-      setView('detail');
-      loadSubscription(listingId);
-    } catch (err) {
-      console.error(err);
-      setError('Failed to load strategy details.');
-    } finally {
-      setLoading(false);
-    }
-  }, [loadSubscription]);
+    setSelectedListingId(listingId);
+    setView('detail');
+  }, []);
+
+  useEffect(() => {
+    if (listingState !== PANEL_STATES.READY || selectedListingId === null) return;
+    loadSubscription(selectedListingId);
+  }, [listingState, selectedListingId, loadSubscription]);
 
   // Clone Flow
   const handleClone = async (strat) => {
@@ -994,6 +1120,20 @@ const StrategyMarketplace = () => {
     );
   };
 
+  /** Leave the detail: the read is stood down and nothing of it stays on screen. */
+  const closeDetail = useCallback(() => {
+    setView('browse');
+    setSelectedListingId(null);
+    setSubscriptionView(null);
+  }, []);
+
+  /** Clear the filters, which is the way out of `no-match` (Requirement 11.5). */
+  const clearFilters = useCallback(() => {
+    setSearchQuery('');
+    setSelectedCategory(null);
+    setPage(1);
+  }, []);
+
   const renderDetail = () => {
     if (!selectedStrategy) return null;
     const strat = selectedStrategy;
@@ -1019,11 +1159,6 @@ const StrategyMarketplace = () => {
     const reviews = Array.isArray(strat.recent_ratings) ? strat.recent_ratings : [];
 
     return (
-      <div className="flex flex-col gap-6">
-        <CommandButton intent="ghost" icon={ArrowLeft} onClick={() => setView('browse')}>
-          Back to Marketplace
-        </CommandButton>
-
         <Panel className="w-full">
           <div className="flex flex-col gap-8">
             {/* Header */}
@@ -1196,7 +1331,6 @@ const StrategyMarketplace = () => {
             )}
           </div>
         </Panel>
-      </div>
     );
   };
 
@@ -1232,11 +1366,14 @@ const StrategyMarketplace = () => {
           subscribe to run them without ever holding their logic.
         </p>
 
-        {error && (
-          <div className="bg-status-error/20 border border-status-error text-status-error p-4 rounded-lg flex items-center gap-3 text-body">
-            <AlertTriangle size={18} /> {error}
-          </div>
-        )}
+        {/* The page-level error banner that used to sit here is gone. It rendered ONE
+            hand-styled box for every failure of either read — a monospace line in a
+            translucent error wash, carrying the same sentence whether the network was down,
+            the server had faulted, the session had expired or the catalogue could not be
+            read at all. Each read now reports its own outcome where that read's content
+            would have been, in the state `usePanelState` resolved and the copy
+            `errorCopy.js` authored, so a failure is attached to the thing that failed
+            rather than floating above the page. */}
 
         {/* Fallback outcome banner — used only when no toast host is mounted */}
         {notice && (
@@ -1266,7 +1403,7 @@ const StrategyMarketplace = () => {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && fetchStrategies()}
+              onKeyDown={(e) => e.key === 'Enter' && catalogue.refetch()}
               placeholder="Search strategies..."
               aria-label="Search strategies"
               className="bg-transparent border-none outline-none text-body p-2 w-full text-content-primary placeholder-content-secondary"
@@ -1326,7 +1463,32 @@ const StrategyMarketplace = () => {
         </div>
 
         {/* View Router */}
-        {view === 'detail' && renderDetail()}
+        {view === 'detail' && (
+          <div className="flex flex-col gap-6">
+            <CommandButton intent="ghost" icon={ArrowLeft} onClick={closeDetail}>
+              Back to Marketplace
+            </CommandButton>
+
+            {/* Requirement 14.5: the detail body is not in the DOM at all unless the read
+                succeeded, so there is no markup here that could render a previous
+                listing's figures under an error indicator. */}
+            {hasRead(listingState) && selectedStrategy ? renderDetail() : (
+              <Panel
+                title="Listing"
+                state={listingState}
+                loading={{ kind: 'skeleton-cards', rows: 1, label: 'Loading this listing' }}
+                empty={{
+                  headline: 'This listing has nothing to show',
+                  body: 'The marketplace answered for it, but the response carried no listing.',
+                  action: { label: 'Back to Marketplace', onClick: closeDetail },
+                }}
+                error={{ error: listing.error, context: 'marketplace', onRetry: listing.refetch }}
+                unavailable={{ reason: unavailableReasonFor(listing.error) }}
+                unauthorised={{ error: listing.error, context: 'marketplace' }}
+              />
+            )}
+          </div>
+        )}
 
         {view === 'browse' && (
           <>
@@ -1362,16 +1524,13 @@ const StrategyMarketplace = () => {
             <section className="flex flex-col gap-4">
               <SectionHeader title="All strategies" subtitle={CATALOGUE_BASIS} />
 
-              {loading ? (
-                <div className="flex justify-center items-center py-20 text-body text-content-secondary">
-                  <Activity className="animate-spin mr-2" size={20} /> Loading Marketplace...
-                </div>
-              ) : strategies.length === 0 ? (
-                <div className="flex flex-col justify-center items-center py-20 text-body text-content-secondary gap-4 border border-dashed border-line-default rounded-xl">
-                  <Search size={48} className="opacity-20" />
-                  No strategies found matching your criteria.
-                </div>
-              ) : (
+              {/* ONE of §11.1's eight states, every time. What was here was a three-way
+                  branch on a boolean and an array length: a spinner, or *No strategies
+                  found matching your criteria*, or the grid — so `empty`, `unavailable`,
+                  `unauthorised` and `error` all arrived as that one middle sentence, which
+                  is the substitution Requirement 11.4 forbids and the one production is
+                  making today. */}
+              {hasRead(catalogueState) ? (
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                     {strategies.map((strat) => renderListingCard(strat, 'catalogue'))}
@@ -1404,6 +1563,45 @@ const StrategyMarketplace = () => {
                     </div>
                   )}
                 </>
+              ) : (
+                <Panel
+                  state={catalogueState}
+                  loading={{
+                    kind: 'skeleton-cards',
+                    rows: 2,
+                    columns: 4,
+                    label: 'Loading the marketplace catalogue',
+                  }}
+                  // `empty` and `unavailable` are two different facts and this is where they
+                  // stop being one sentence (Requirement 19.4). A filtered empty says the
+                  // filter is in the way and offers the way out; an unfiltered empty says
+                  // nothing is published and points at the builder, which is where a trader
+                  // makes something to publish.
+                  empty={filtered ? {
+                    headline: 'No strategy matches these filters',
+                    body: 'The catalogue is not empty — the current search text and category '
+                      + 'are hiding everything in it.',
+                    variant: 'no-match',
+                    clearFiltersAction: { label: 'Clear filters', onClick: clearFilters },
+                    action: { label: 'Read again', onClick: catalogue.refetch },
+                  } : {
+                    headline: 'No strategies are published yet',
+                    body: 'Nothing has been published to the marketplace. Your own strategies '
+                      + 'live in the builder, and you can publish one from there.',
+                    action: { label: 'Open the builder', to: '/app/builder' },
+                  }}
+                  error={{
+                    error: catalogue.error,
+                    context: 'marketplace',
+                    onRetry: catalogue.refetch,
+                  }}
+                  // Requirement 11.4's state, reached whenever the catalogue itself could
+                  // not be read — the `42703` condition included. The reason NAMES what
+                  // cannot be shown, and no retry is offered for a fault that will answer
+                  // the same way a second time.
+                  unavailable={{ reason: unavailableReasonFor(catalogue.error) }}
+                  unauthorised={{ error: catalogue.error, context: 'marketplace' }}
+                />
               )}
             </section>
           </>

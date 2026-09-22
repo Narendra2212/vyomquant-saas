@@ -307,7 +307,10 @@ describe('Marketplace: a failed catalogue read says which failure it was', () =>
       library.browse.mockRejectedValue(failure.error());
       mount();
 
-      await screen.findByText(failure.expected());
+      // `exact: false`, because a state that reports through `ds/Panel`'s `unavailable`
+      // arm carries the authored headline AND its detail in one reason string. The
+      // sentence has to be on screen; it does not have to be the whole of its element.
+      await screen.findByText(failure.expected(), { exact: false });
 
       const text = pageText();
       // Requirement 11.3: no exception text, no column name, no internal path.
@@ -325,10 +328,26 @@ describe('Marketplace: a failed catalogue read says which failure it was', () =>
     for (const failure of FAILURE_CLASSES) {
       library.browse.mockRejectedValue(failure.error());
       mount();
-      await screen.findByText(failure.expected());
       // The failure region only — a page-level diff would pass on the hero copy alone.
-      const region = document.querySelector('[role="alert"], [data-panel-state="unavailable"]');
-      expect(region).not.toBeNull();
+      //
+      // Queried one selector at a time and NOT as a comma-separated list. jsdom's selector
+      // engine returns `null` for `'[role="alert"], [data-panel-state="unavailable"]'` on a
+      // document where the second half matches on its own, which is a bug in the matcher
+      // and not a fact about the page: it made this assertion fail on the one failure class
+      // that renders `unavailable` while the three that render `error` passed.
+      const region = await waitFor(() => {
+        const found = document.querySelector('[data-panel-state="unavailable"]')
+          || document.querySelector('[data-panel-state="unauthorised"]')
+          || document.querySelector('[role="alert"]');
+        expect(
+          found,
+          `${failure.name}: nothing on screen reports the failure`,
+        ).not.toBeNull();
+        expect(found.textContent, `${failure.name}: the region says nothing`).toContain(
+          failure.expected(),
+        );
+        return found;
+      });
       rendered.push((region.textContent || '').replace(/\s+/g, ' ').trim());
       cleanup();
       vi.clearAllMocks();
@@ -379,6 +398,10 @@ describe('Marketplace: a schema fault is not an empty catalogue', () => {
 
     const unavailable = document.querySelector('[data-panel-state="unavailable"]');
     expect(unavailable).not.toBeNull();
+    // And NOT the empty state: `ds/EmptyState` publishes its variant, so "presented as an
+    // empty catalogue" is a thing that can be asserted against rather than read off a
+    // screenshot.
+    expect(document.querySelector('[data-empty-variant]')).toBeNull();
 
     const text = pageText();
     // "no strategies exist" and "we cannot read the catalogue" are different facts, and
