@@ -145,6 +145,7 @@ export const PAGES = Object.freeze({
   DOWNLOAD: 'download',
   RISK_SETTINGS: 'risk-settings',
   SECURITY_LOGS: 'security-logs',
+  WIZARD: 'wizard',
 });
 
 /** Migration 015, named so a warning and this declaration spell it the same way. */
@@ -2314,6 +2315,213 @@ const SECURITY_LOGS_FIELDS = [
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════
+ * Wizard (retail-ui-simplification Requirement 4.2) — /wizard
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Not one of §7's pages. It is here for the reason `RISK_SETTINGS` is: the page renders
+ * figures, the figures were being invented, and an invention is only reviewable once the
+ * real source path is written down beside it. This is the FIRST-RUN surface — one of the
+ * first screens a new retail account sees — which makes it the worst place in the tree for
+ * a plausible number, and it carried three separate kinds.
+ *
+ * WHAT WAS BEING INVENTED, MEASURED BEFORE THE MIGRATION
+ * -----------------------------------------------------
+ * **1. Two figures that were literals.** Step 2 runs a real demo backtest — the
+ * `ReferenceError` that used to swallow it is long fixed and `api.strategies.backtest`
+ * answers a `BacktestResult` — and the page then DISCARDED the response and rendered:
+ *
+ *     Total Return  +12.4%          Win Rate  68.2%
+ *
+ * Hardcoded, to one decimal place, under a green tick reading *Backtest Complete!*. The
+ * `catch` also set the status to `complete`, so a backtest that failed outright published
+ * the same two numbers. `total_return_pct` and `win_rate_pct` are real keys on the real
+ * response — `src/api/modules/strategies.js`'s `BacktestResult` typedef declares both —
+ * so the figures a new trader reads are now the run's own, and a run that reported neither
+ * renders the marker with its reason instead of a result nobody computed.
+ *
+ * **2. A price read off two fields that do not exist.** The plan cards computed
+ * `const priceINR = p.inr || 0` and `const priceUSD = p.usd || 0`. `GET /api/billing/plans`
+ * answers `PricingService.get_localized_plans`, whose per-plan object carries
+ * `localized_price`, `currency`, `currency_symbol`, `base_price`, `base_currency`,
+ * `checkout_price` and `checkout_currency` — **and no `inr` key and no `usd` key at all.**
+ * Both reads were therefore `undefined || 0`, i.e. structurally always `0`, which made
+ * `priceINR === 0` structurally always true: **every plan on the page rendered the price
+ * as "Free" with a "Start Free" button, Pro and Enterprise included**, while the button's
+ * handler went on to open a real paid checkout for them. `pages/Billing.jsx:404` reads
+ * `plan.localized_price` and `:406` reads `plan.currency_symbol`, so the right paths were
+ * already in the tree one page away. This is the entry that exists for them.
+ *
+ * **3. A green tick with no read behind it.** The *Security Alerts* row of step 1 was
+ * declared `ok: true` — a literal — so a new account was told *Notify on new device logins*
+ * was on, with a tick, whatever the truth. Nothing in the backend reports a notification
+ * preference of any kind, so this entry is ❌ and the row states that rather than claiming
+ * it. Requirement 16.2 keeps the row and its *Manage* control; Requirement 19.5 forbids
+ * filling it with a plausible value, and those two are only compatible if the row explains
+ * itself.
+ *
+ * WHY THE TWO SECURITY STATES ARE ⚠️ DERIVED AND NOT ✅ AVAILABLE
+ * -------------------------------------------------------------
+ * Because `null` means something different on each of their source fields, and collapsing
+ * that is how a genuine "not verified" becomes "not available" — the inverse of the
+ * substitution this module exists to prevent, and just as wrong.
+ *
+ * Supabase answers `user.email_confirmed_at: null` for an account whose email is genuinely
+ * UNCONFIRMED. That null is a reading, not an absence (Requirement 19.1), so the figure is
+ * the PRESENCE of the timestamp rather than the timestamp: `Boolean(user.email_confirmed_at)`
+ * is `false` and renders as *Not verified*. The marker is reachable only when there is no
+ * session to read at all — the page is routed at `/wizard`, outside the shell, so a signed-out
+ * visitor can open it — and that is what the reason says.
+ *
+ * `getAuthenticatorAssuranceLevel` is the same shape one level along: `currentLevel` is
+ * `'aal1'` for an account with no second factor, which is a reading. The derivation below is
+ * the page's own existing expression, carried across unchanged.
+ *
+ * WHAT IS DELIBERATELY NOT DECLARED HERE
+ * -------------------------------------
+ * `plans[].features` is a LIST, and `design/reported.js`'s `isReadableValue` refuses arrays
+ * by design — a `Reported<T>` is a scalar. The page guards it with `Array.isArray` instead,
+ * the way `pages/SecurityLogs.jsx` guards its rows, and the absence of four feature lines is
+ * visible as the absence of four feature lines. Same for `plans[].recommended`, which selects
+ * a treatment rather than reporting a figure.
+ */
+const WIZARD_SECURITY_READ = 'supabase.auth.getUser';
+const WIZARD_SECURITY_ENDPOINT = 'GET /auth/v1/user (Supabase)';
+const WIZARD_MFA_READ = 'supabase.auth.mfa.getAuthenticatorAssuranceLevel';
+const WIZARD_MFA_ENDPOINT = 'GET /auth/v1/factors (Supabase AAL)';
+const WIZARD_BACKTEST_READ = 'strategiesApi.backtest';
+const WIZARD_BACKTEST_ENDPOINT = 'POST /api/strategies/backtest';
+const WIZARD_PLANS_READ = 'billingApi.getPlans';
+const WIZARD_PLANS_ENDPOINT = 'GET /api/billing/plans';
+const STRATEGIES_API_MODULE = 'src/api/modules/strategies.js';
+const BILLING_API_MODULE = 'src/api/modules/billing.js';
+
+const WIZARD_FIELDS = [
+  entry({
+    page: PAGES.WIZARD,
+    field: 'emailVerified',
+    label: 'Email verified',
+    requirement: '4.2',
+    read: WIZARD_SECURITY_READ,
+    endpoint: WIZARD_SECURITY_ENDPOINT,
+    inputs: ['user.email_confirmed_at'],
+    verdict: VERDICT.DERIVED,
+    absence: ABSENCE.UNMEASURABLE,
+    derivation: 'Boolean(user.email_confirmed_at) — the PRESENCE of the confirmation '
+      + 'timestamp, not the timestamp. A null timestamp is a genuine "not verified" and '
+      + 'renders as one; only a read that produced no session at all is an absence.',
+    reason: 'Your sign-in could not be read, so whether this account\'s email has been '
+      + 'confirmed is unknown here. Verify opens your profile, which shows the current state '
+      + 'and can send a new confirmation.',
+  }),
+  entry({
+    page: PAGES.WIZARD,
+    field: 'mfaEnabled',
+    label: 'Two-factor authentication',
+    requirement: '4.2',
+    read: WIZARD_MFA_READ,
+    endpoint: WIZARD_MFA_ENDPOINT,
+    inputs: ['currentLevel', 'nextLevel'],
+    verdict: VERDICT.DERIVED,
+    absence: ABSENCE.UNMEASURABLE,
+    derivation: "currentLevel === 'aal2' || nextLevel === 'aal2' — the page's own existing "
+      + "expression, unchanged. `'aal1'` is a reading and means no second factor is enrolled.",
+    reason: 'Your assurance level could not be read, so whether a second factor is enrolled '
+      + 'is unknown here. Enable opens the authenticator setup, which reports the current '
+      + 'state before it changes anything.',
+  }),
+  entry({
+    page: PAGES.WIZARD,
+    field: 'securityAlertsEnabled',
+    label: 'Security alerts',
+    requirement: '4.2',
+    read: WIZARD_SECURITY_READ,
+    endpoint: WIZARD_SECURITY_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'Nothing records whether new-device login alerts are switched on for this '
+      + 'account, so this cannot be confirmed here. Manage opens your security log, which is '
+      + 'where a sign-in from a new device is recorded either way.',
+    note: 'The row was declared `ok: true` — a literal, with no read behind it — so a new '
+      + 'account was shown a green tick against a notification setting nobody had checked. '
+      + 'There is no notification-preference store and no endpoint that reports one.',
+  }),
+  entry({
+    page: PAGES.WIZARD,
+    field: 'backtestTotalReturnPct',
+    label: 'Total return',
+    requirement: '4.2',
+    read: WIZARD_BACKTEST_READ,
+    endpoint: WIZARD_BACKTEST_ENDPOINT,
+    path: 'total_return_pct',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: STRATEGIES_API_MODULE,
+    reason: 'This demo run did not report a total return, so there is no figure to show for '
+      + 'it. Nothing in your account is affected either way: the demo runs on historical '
+      + 'BTC/USDT data and places no orders.',
+    tooltip: 'What a MACD crossover would have returned on BTC/USDT over the period this '
+      + 'demo run covered. A historical result, not a forecast.',
+    note: 'The page rendered the literal `+12.4%` and discarded the response that carries '
+      + 'this key. A genuine `0` is a reading — a strategy that returned nothing returned '
+      + 'nothing — and renders as `0.0%`.',
+  }),
+  entry({
+    page: PAGES.WIZARD,
+    field: 'backtestWinRatePct',
+    label: 'Win rate',
+    requirement: '4.2',
+    read: WIZARD_BACKTEST_READ,
+    endpoint: WIZARD_BACKTEST_ENDPOINT,
+    path: 'win_rate_pct',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: STRATEGIES_API_MODULE,
+    reason: 'This demo run did not report a win rate, so there is no figure to show for it. '
+      + 'A run that placed no trades has no win rate to report.',
+    tooltip: 'The share of this demo run\'s trades that closed in profit. A historical '
+      + 'result, not a forecast.',
+    note: 'The page rendered the literal `68.2%`. A genuine `0` is a reading and renders as '
+      + '`0.0%`; the substitution made a losing run and a run nobody measured identical.',
+  }),
+  entry({
+    page: PAGES.WIZARD,
+    field: 'planName',
+    label: 'Plan',
+    requirement: '4.2',
+    read: WIZARD_PLANS_READ,
+    endpoint: WIZARD_PLANS_ENDPOINT,
+    path: 'plans[].name',
+    documentedIn: BILLING_API_MODULE,
+    note: '`SubscriptionEngine`\'s plan record always carries a name, so no marker is '
+      + 'expected. The page still reads it through `design/reported.fromNullable`, so a '
+      + 'response that somehow arrives without one renders the marker rather than a blank '
+      + 'card heading — the declaration says the marker is not expected, the render path '
+      + 'makes it reachable anyway.',
+  }),
+  entry({
+    page: PAGES.WIZARD,
+    field: 'planPrice',
+    label: 'Monthly price',
+    requirement: '4.2',
+    read: WIZARD_PLANS_READ,
+    endpoint: WIZARD_PLANS_ENDPOINT,
+    path: 'plans[].localized_price',
+    inputs: ['plans[].currency_symbol', 'plans[].currency'],
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'This plan\'s price could not be read, so it is not shown here rather than '
+      + 'guessed. Selecting the plan opens checkout, which prices it server-side before '
+      + 'anything is charged.',
+    note: 'The page read `p.inr` and `p.usd`, and the plans response carries NEITHER — so '
+      + 'both were `undefined || 0`, every plan advertised itself as "Free" with a "Start '
+      + 'Free" button, and the paid ones then opened a paid checkout. A genuine `0` IS the '
+      + 'free tier and still renders as "Free"; that is the reading the substitution was '
+      + 'impersonating. The currency comes from the same object: `currency_symbol` for the '
+      + 'display glyph and `currency` as the code when no glyph was sent. A figure with '
+      + 'neither is not a price and renders the marker.',
+  }),
+];
+
+/*
+ * ═══════════════════════════════════════════════════════════════════════════
  * The declaration, and the two indexes over it
  * ═══════════════════════════════════════════════════════════════════════════
  */
@@ -2337,6 +2545,7 @@ export const PAGE_FIELDS = Object.freeze([
   ...DOWNLOAD_FIELDS,
   ...RISK_SETTINGS_FIELDS,
   ...SECURITY_LOGS_FIELDS,
+  ...WIZARD_FIELDS,
 ]);
 
 /**

@@ -627,6 +627,34 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   //   of the font-size ratchet's scope; the colour guard never saw this one because it carries
   //   no literal). It becomes `placeholder:text-content-muted`.
   'pages/SecurityLogs.jsx': 0,
+  // 5 -> 0 at retail-ui-simplification task 7.6, in the same commit that deleted this page's
+  // font-size entry (24 -> 0). The first-run surface, so this is the page where an off-palette
+  // hue is seen first by a new retail account.
+  //
+  // Four of the five were two values spelled twice, and both are already declared:
+  //
+  //   `rgba(0,212,255,0.12)` on the CURRENT progress step's circle and
+  //   `rgba(0,212,255,0.05)` on the RECOMMENDED plan card — two hand-mixed alphas of the brand
+  //   hue at two strengths, where `--color-brand-wash` (`rgba(0,212,255,0.10)`) is the declared
+  //   one. Both read `bg-brand-wash` now, so the page has one brand wash rather than two.
+  //
+  //   `#000` twice — the glyph on a completed step's brand-filled circle, and the RECOMMENDED
+  //   ribbon's text on the same fill. Pure black is not in the palette; `content.inverse` is
+  //   `#080A0E` and is what `components/ui/Button.jsx`'s own `text-[#080A0E]` was reaching for.
+  //
+  // The fifth needed `design/semantic.js` rather than a hue match, which is Requirement 5.3's
+  // clause: `rgba(0,255,136,0.15)` bordered a security row whose setting was satisfied.
+  // `#00FF88` is the retired green this palette replaced with `#26A69A`, and
+  // `statusToken('active')` returns the `live` group — the name that describes a protection
+  // that is ON, exactly as task 7.2 argued for an armed kill switch. It becomes
+  // `border-status-live`. Nothing on this page paints a profit or a loss, so `pnlToken` is not
+  // reached here at all.
+  //
+  // TWO OFF-PALETTE CONSTRUCTS NEITHER GUARD CAN SEE WENT WITH THEM: `borderRadius: 18` on the
+  // card and `borderRadius: 20` on the ribbon, both off the declared radius scale entirely —
+  // `--radius-xl` stops at 12. That is the same construct `pages/UpdatePasswordPage.jsx`
+  // recorded at task 7.5, and the reason it is written down is that a scan will not find it.
+  'pages/Wizard.jsx': 0,
 
   // -- Shared surfaces an in-scope task cleared or created ------------------
   // These are not pages and so are not on design.md's M6-M9 page list, but each one is
@@ -769,7 +797,9 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // twelve left with the two banners that became `ds/Alert`.
   'pages/Billing.jsx': 9,
   'pages/Profile.jsx': 7,
-  'pages/Wizard.jsx': 5,
+  // `pages/Wizard.jsx: 5` stood here until retail-ui-simplification task 7.6 took it to 0 and
+  // moved the entry into the in-scope block above. The full map is on the entry; four of the
+  // five were the brand wash and pure black, each spelled twice.
   // `pages/StrategyDetail.jsx: 4` stood here until task 27.1 took it to 0 and moved the
   // entry into the in-scope block above. It is not a deferred page any more.
   'pages/LegalPage.jsx': 3,

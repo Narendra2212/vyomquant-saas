@@ -166,6 +166,27 @@
  *                             than by a number coming down. Two of the three sizes
  *                             were the same construct twice — a sentence in a
  *                             hand-built coloured strip — and both became `ds/Alert`.
+ *   22 entries / 536 sizes  — `pages/Wizard.jsx` (24) cleared by task 7.6. The
+ *                             first-run surface, and the page where §2.4's Q1 did
+ *                             the most work: SEVEN of the twenty-four were
+ *                             sentences at or below the 11px floor and all seven
+ *                             went UP to `--text-body`. Six more left with their
+ *                             call site onto `ds/Metric`, `ds/LoadingState` and
+ *                             `ds/CommandButton`, and one — the `/mo ($$…)` suffix
+ *                             — was dead code hanging off a condition that was
+ *                             structurally never true. It is also the clearance
+ *                             that found the most INVENTED FIGURES of any page in
+ *                             this spec: two hardcoded percentages (`+12.4%` and
+ *                             `68.2%`) rendered over a response the page fetched
+ *                             and threw away, a price read off `p.inr` and `p.usd`
+ *                             — two keys `GET /api/billing/plans` does not carry,
+ *                             so every plan advertised itself as "Free" with a
+ *                             "Start Free" button while the paid ones went on to
+ *                             open a paid checkout — and a green tick declared
+ *                             `ok: true` against a notification setting nothing
+ *                             reports. All three are now declared in
+ *                             `design/pageFields.js` under a `wizard` page and
+ *                             render through `design/reported.js`.
  *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
@@ -348,10 +369,48 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // 9×9, 11×8, 10×7, 12×3, 20×1, 22×1. Task 7.11 (commit 17) — the largest page
   // in Requirement 4.5's group at 1,181 lines, which is why it goes last.
   'pages/AuthPage.jsx': 29,
-  // 11×7, 10×4, 18×4, 9×3, 16×2, 8×1, 12×1, 14×1, 24×1. Task 7.6 (commit 12).
-  // A first-run surface, so §2.4's Q1 carries more here than anywhere: a wizard
-  // is mostly sentences and sentences go to `--text-body` or larger.
-  'pages/Wizard.jsx': 24,
+  // `pages/Wizard.jsx` was here at 24 — 11×7, 10×4, 18×4, 9×3, 16×2, 8×1, 12×1,
+  // 14×1, 24×1 — the first-run surface, so §2.4's Q1 carried more here than
+  // anywhere: a wizard is mostly sentences and this one had every one of them at
+  // or below the 11px floor. **Task 7.6 (commit 12) took it to 0 and the entry is
+  // DELETED rather than set to 0** (Requirement 1.5): the page is held at zero
+  // from here by `accounts for every file that still carries an absolute size`,
+  // which fires on it as unbudgeted if a size comes back, and re-adding this line
+  // is not the remedy.
+  //
+  // Where the 24 went, by §2.4's questions. Seven answered Q1 and went UP to
+  // `--text-body`: the four step subtitles (11×4), *Backtest Complete!* (11), the
+  // security row explanation (10, +30%) and the plan feature lines (10, +30%).
+  // Six answered Q8: the four step headings (18×4) to `--text-section`, which is
+  // 18px exactly, the plan name (14) to `--text-title`, also exact, and the
+  // security row name (12) to `--text-title`. Three answered Q4 or Q5 at the
+  // floor: the progress ordinal (11) and the RECOMMENDED ribbon (8, +25%) are
+  // chips by Q5, the progress step label (9) is a label by Q4. Six left with
+  // their call site rather than being mapped, because the step belongs to the
+  // primitive: the two backtest figures (16×2) and their two labels (9×2) onto
+  // `ds/Metric`, the plan price (24) onto `ds/Metric` at tier 1, *Processing
+  // historical ticks…* (11) onto `ds/LoadingState`, and the six exchange buttons
+  // (10) onto `ds/CommandButton`. The last one, the `/mo ($$…)` suffix (10), was
+  // DEAD CODE — it hung off `priceINR > 0`, which was structurally never true —
+  // so it is removed as dead code rather than as copy.
+  //
+  // Three resolutions carry an argument rather than a lookup. The progress ordinal
+  // is a CHIP and not a label: it holds `1` or `✓` and does not name the step, so
+  // Q4 misses it and Q5 catches it, and 11 → 10 is Q5 answered literally inside a
+  // 32px circle rather than a layout yield. The step labels lose
+  // `whiteSpace: nowrap`, which is §2.5's first and cheapest yield, so the +1px
+  // has somewhere to go. And the plan price goes UP — 24 → `--text-figure` (28) —
+  // with the four-up `repeat(4,1fr)` grid becoming 1 / 2 / 4 by breakpoint, which
+  // is §2.5's third mechanism; reading it as tier 2 instead would have shrunk a
+  // price 42% to avoid the reflow, which is §2.5's named tell for an illegal
+  // shrink.
+  //
+  // The same commit took this page's colour entry from 5 to 0 and moved it out of
+  // the deferred block; see `no-colour-literals.budget.js`. Two off-palette
+  // constructs neither guard can see went with them: `borderRadius: 18` and
+  // `borderRadius: 20`, both off the declared radius scale entirely
+  // (`--radius-xl` stops at 12) — the same construct
+  // `pages/UpdatePasswordPage.jsx` recorded at task 7.5.
   // `pages/RiskSettings.jsx` was here at 16 — 12×10, 13×4, 10×1, 24×1 —
   // Requirement 4.5's first page, smallest first, so the convention's fit was
   // tested on 438 lines before it was tested on 1,181. **Task 7.2 (commit 8) took
