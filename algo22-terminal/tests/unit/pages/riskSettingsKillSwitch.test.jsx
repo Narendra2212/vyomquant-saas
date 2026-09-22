@@ -152,13 +152,29 @@ const mountPage = () =>
 const checkedState = (name) =>
   screen.getByRole('switch', { name }).getAttribute('aria-checked');
 
-/** The page mounted and its three reads settled, so nothing below races the load. */
+/**
+ * The page mounted and its three reads settled, so nothing below races the load.
+ *
+ * The two switches waited on are `blackswan` and `streak`, and they are chosen rather than
+ * convenient: the fixture puts each of them on the OPPOSITE side of the page's own default
+ * (`blackswan` defaults on and the fixture turns it off; `streak` defaults off and the fixture
+ * turns it on). So this cannot report ready on a page that rendered its constructor defaults
+ * and never applied the server's answer — which is the exact failure the four switches looked
+ * like before the migration, when `Promise.allSettled` swallowed a failed read.
+ *
+ * The explicit timeout is for the first mount in the file only. The page now renders five
+ * `ds/*` primitive trees and the first render evaluates all of them, which can exceed
+ * `waitFor`'s 1s default on a cold worker; every later mount lands in well under it.
+ */
 const mountLoaded = async () => {
   const utils = mountPage();
-  await waitFor(() => {
-    expect(checkedState(KILL_SWITCHES[0][1])).toBe('true');
-    expect(checkedState(KILL_SWITCHES[1][1])).toBe('false');
-  });
+  await waitFor(
+    () => {
+      expect(checkedState(KILL_SWITCHES[1][1])).toBe('false');
+      expect(checkedState(KILL_SWITCHES[2][1])).toBe('true');
+    },
+    { timeout: 5000 },
+  );
   return utils;
 };
 

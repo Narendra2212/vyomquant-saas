@@ -143,6 +143,7 @@ export const PAGES = Object.freeze({
   TRADE_HISTORY: 'trade-history',
   SIGNAL_TRACE: 'signal-trace',
   DOWNLOAD: 'download',
+  RISK_SETTINGS: 'risk-settings',
 });
 
 /** Migration 015, named so a warning and this declaration spell it the same way. */
@@ -1923,6 +1924,179 @@ const DOWNLOAD_FIELDS = [
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════
+ * Risk Settings (retail-ui-simplification Requirement 4.2) — /app/risk
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Not one of §7's pages. It is here for the reason `DOWNLOAD` is: the page renders figures,
+ * the figures were being substituted, and a substitution is only reviewable once the real
+ * source path is written down beside it.
+ *
+ * WHAT WAS BEING SUBSTITUTED, MEASURED BEFORE THE MIGRATION
+ * --------------------------------------------------------
+ * Three `?? 0` fallbacks and two `??` defaults, all on a risk surface:
+ *
+ *     Number(m.margin_ratio ?? 0)      Number(m.free_margin ?? 0)   Number(m.risk_score ?? 0)
+ *     Number(s.max_position_size ?? 20)             s.strategy_name ?? `Strategy #${i + 1}`
+ *
+ * `risk_score ?? 0` is §6.3's hazard in a different field and it is the worst of the five: a
+ * risk score of zero is the safest-looking figure a broken margin read can publish, exactly
+ * as `exchange_api_latency_ms` rendering `0 ms` reads as a working connection at the moment
+ * nothing was measured. `free_margin ?? 0` inverts the same way in the other direction — 0%
+ * free margin reads as a fully committed account.
+ *
+ * WHY THE THREE LIMITS AND THE THREE MARGIN FIGURES ARE `absence: NEVER`
+ * ---------------------------------------------------------------------
+ * Because the routes say so, and the claim is checkable rather than hopeful.
+ * `routers/risk.py:48`'s `get_user_risk_settings_store` seeds every key it returns —
+ * `max_daily_loss` 500.0, `max_positions` 10, `max_leverage` 3, `circuit_breaker_armed`,
+ * `kill_switches` — so `GET /api/risk/settings` cannot answer 200 without all three limits.
+ * `GET /api/risk/margin-health` (`:395`) returns all four keys unconditionally and *raises*
+ * when the Paper_Account cannot be read: its own comment records that the refusal travels to
+ * the client as a catalogued 503, "there is no `except` here for it to be swallowed by". So
+ * a failed margin read is the PANEL's error state, not a per-figure marker, and declaring a
+ * per-figure reason for it would be dead copy — which the third assertion in
+ * `describe('pageFields: Requirement 19.3 …')` exists to refuse.
+ *
+ * `absence: NEVER` is not the same as "the page may substitute". The page reads each of the
+ * six through `design/reported.fromNullable`, so a response that somehow arrives without one
+ * renders `reported.js`'s own `UNREPORTED_REASON` on the marker rather than a zero. The
+ * declaration says the marker is not expected; the render path makes it reachable anyway.
+ *
+ * WHY THE TWO PER-STRATEGY FIELDS ARE NOT
+ * --------------------------------------
+ * `GET /api/risk/strategy-limits` returns `list(_user_strategy_limits[uid].values())`, and
+ * every entry in that store was written by `item.dict(exclude_none=True)` (`:592`). A field
+ * the trader never set is therefore ABSENT FROM THE OBJECT rather than null — which is why
+ * `max_position_size ?? 20` could publish a 20% allocation nobody configured, and
+ * `strategy_name ?? 'Strategy #1'` could name a strategy after its position in a list.
+ * Both carry a reason, and both reasons are rendered.
+ *
+ * The store is also in-memory and per-process, so the list can omit a limit that is really
+ * configured — the `REGISTRY_CAVEAT` shape. That is a fact about the collection rather than
+ * about a field, so it belongs on the panel's own copy and not in an entry here.
+ */
+const RISK_CONFIG_READ = 'riskApi.getConfig';
+const RISK_CONFIG_ENDPOINT = 'GET /api/risk/settings';
+const MARGIN_READ = 'riskApi.getMarginHealth';
+const MARGIN_ENDPOINT = 'GET /api/risk/margin-health';
+const LIMITS_READ = 'riskApi.getStrategyLimits';
+const LIMITS_ENDPOINT = 'GET /api/risk/strategy-limits';
+const RISK_MODULE = 'src/api/modules/risk.js';
+
+const RISK_SETTINGS_FIELDS = [
+  entry({
+    page: PAGES.RISK_SETTINGS,
+    field: 'maxDailyLoss',
+    label: 'Max daily loss',
+    requirement: '4.2',
+    read: RISK_CONFIG_READ,
+    endpoint: RISK_CONFIG_ENDPOINT,
+    path: 'max_daily_loss',
+    documentedIn: RISK_MODULE,
+    note: 'The `RiskConfig` typedef documents it. The page also holds it as the position of a '
+      + 'range control, and that control has to have a position even before the read lands — '
+      + 'so the slider keeps the page\'s own starting value while the READOUT beside it renders '
+      + 'this path. The two cannot be collapsed: a range input cannot render a marker.',
+  }),
+  entry({
+    page: PAGES.RISK_SETTINGS,
+    field: 'maxPositions',
+    label: 'Max concurrent positions',
+    requirement: '4.2',
+    read: RISK_CONFIG_READ,
+    endpoint: RISK_CONFIG_ENDPOINT,
+    path: 'max_positions',
+    documentedIn: RISK_MODULE,
+  }),
+  entry({
+    page: PAGES.RISK_SETTINGS,
+    field: 'maxLeverage',
+    label: 'Max account leverage',
+    requirement: '4.2',
+    read: RISK_CONFIG_READ,
+    endpoint: RISK_CONFIG_ENDPOINT,
+    path: 'max_leverage',
+    documentedIn: RISK_MODULE,
+  }),
+  entry({
+    page: PAGES.RISK_SETTINGS,
+    field: 'marginRatio',
+    label: 'Margin ratio',
+    requirement: '4.2',
+    read: MARGIN_READ,
+    endpoint: MARGIN_ENDPOINT,
+    path: 'margin_ratio',
+    documentedIn: RISK_MODULE,
+    note: 'Locked balance as a percentage of total equity, rounded server-side to 2dp. A '
+      + 'genuine `0.0` means nothing is committed and renders as `0.00%`; it is a reading. The '
+      + '`Number(… ?? 0)` this page used to apply made the two indistinguishable.',
+  }),
+  entry({
+    page: PAGES.RISK_SETTINGS,
+    field: 'freeMargin',
+    label: 'Free margin',
+    requirement: '4.2',
+    read: MARGIN_READ,
+    endpoint: MARGIN_ENDPOINT,
+    path: 'free_margin',
+    documentedIn: RISK_MODULE,
+    note: 'Available balance as a percentage of total equity. The route answers `100.0` for a '
+      + 'zero-equity account rather than dividing by zero, so a 100% reading is real. `0` is '
+      + 'the dangerous substitution here — it reads as an account with nothing left to trade.',
+  }),
+  entry({
+    page: PAGES.RISK_SETTINGS,
+    field: 'riskScore',
+    label: 'Risk score',
+    requirement: '4.2',
+    read: MARGIN_READ,
+    endpoint: MARGIN_ENDPOINT,
+    path: 'risk_score',
+    documentedIn: RISK_MODULE,
+    note: '`min(100, int(margin_ratio * 0.8 + (100 - free_margin) * 0.2))`, computed server-'
+      + 'side. Not a percentage and not derived here — recomputing it in the page would be a '
+      + 'second definition of one figure. **It must never render as `0` on the strength of an '
+      + 'absent read**: a zero risk score is the safest-looking figure a broken margin read can '
+      + 'publish, which is `exchange_api_latency_ms`\'s hazard (§6.3) in another field.',
+  }),
+  entry({
+    page: PAGES.RISK_SETTINGS,
+    field: 'strategyAllocationPct',
+    label: 'Capital allocation',
+    requirement: '4.2',
+    read: LIMITS_READ,
+    endpoint: LIMITS_ENDPOINT,
+    path: 'limits[].max_position_size',
+    verdict: VERDICT.AVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'No capital limit is recorded for this strategy, so there is no allocation to show. '
+      + 'The account-wide limits above are what apply to it until one is set.',
+    note: 'Optional on `StrategyLimitItem` and stored through `dict(exclude_none=True)`, so an '
+      + 'unset limit is absent from the object rather than null. The page substituted 20 for '
+      + 'it, which published an allocation percentage nobody configured — and then offered a '
+      + 'slider positioned at that invented figure.',
+  }),
+  entry({
+    page: PAGES.RISK_SETTINGS,
+    field: 'strategyName',
+    label: 'Strategy',
+    requirement: '4.2',
+    read: LIMITS_READ,
+    endpoint: LIMITS_ENDPOINT,
+    path: 'limits[].strategy_name',
+    verdict: VERDICT.AVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'This limit was stored without a strategy name, so the strategy id it was stored '
+      + 'against is shown instead of a name.',
+    note: 'The page substituted `Strategy #${i + 1}` — a name derived from a position in a '
+      + 'list, which changes when another limit is added and identifies nothing. The id IS a '
+      + 'real server field, so falling back to it is a different fact rather than a fabricated '
+      + 'one, and the reason says which of the two is on screen.',
+  }),
+];
+
+/*
+ * ═══════════════════════════════════════════════════════════════════════════
  * The declaration, and the two indexes over it
  * ═══════════════════════════════════════════════════════════════════════════
  */
@@ -1944,6 +2118,7 @@ export const PAGE_FIELDS = Object.freeze([
   ...TRADE_HISTORY_FIELDS,
   ...SIGNAL_TRACE_FIELDS,
   ...DOWNLOAD_FIELDS,
+  ...RISK_SETTINGS_FIELDS,
 ]);
 
 /**

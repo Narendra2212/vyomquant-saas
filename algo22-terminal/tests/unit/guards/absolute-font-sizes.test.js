@@ -318,6 +318,7 @@ const PAGE_FIXED_POINT = Object.freeze({
  */
 const CLEARED_BY_THIS_SPEC = Object.freeze({
   'pages/StrategyMarketplace.jsx': Object.freeze({ was: 30, now: 0, task: '5.2' }),
+  'pages/RiskSettings.jsx': Object.freeze({ was: 16, now: 0, task: '7.2' }),
 });
 
 describe('absolute-font-sizes: the patterns measure the tree they were written for', () => {

@@ -131,6 +131,14 @@
  *                             where each cohort went, and for the 41 built-in
  *                             `text-*` classes that left with them without being
  *                             in scope.
+ *   26 entries / 582 sizes  — `pages/RiskSettings.jsx` (16) cleared by task 7.2,
+ *                             the first of Requirement 4.5's ten page migrations
+ *                             and the first entry to leave this map in the same
+ *                             commit as a colour entry reaching zero. Nine of the
+ *                             sixteen left by moving their call site onto a
+ *                             primitive that already reads a declared step
+ *                             (`ds/PageHeader`, `ds/CommandButton`, `ds/Alert`,
+ *                             `ds/Panel`'s `empty` arm); seven resolved in place.
  *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
@@ -317,9 +325,27 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // A first-run surface, so §2.4's Q1 carries more here than anywhere: a wizard
   // is mostly sentences and sentences go to `--text-body` or larger.
   'pages/Wizard.jsx': 24,
-  // 12×10, 13×4, 10×1, 24×1. Task 7.2 (commit 8) — Requirement 4.5's first page,
-  // smallest first, so the convention's fit is tested on 438 lines.
-  'pages/RiskSettings.jsx': 16,
+  // `pages/RiskSettings.jsx` was here at 16 — 12×10, 13×4, 10×1, 24×1 —
+  // Requirement 4.5's first page, smallest first, so the convention's fit was
+  // tested on 438 lines before it was tested on 1,181. **Task 7.2 (commit 8) took
+  // it to 0 and the entry is DELETED rather than set to 0** (Requirement 1.5): the
+  // page is held at zero from here by `accounts for every file that still carries
+  // an absolute size`, which fires on it as unbudgeted if a size comes back, and
+  // re-adding this line is not the remedy. Where the 16 went, by §2.4's questions:
+  // the page `<h1>` (24) to `--text-page` and the subtitle (13) to `--text-body`
+  // through `ds/PageHeader`; the two command labels (12×2) and the toast (12) and
+  // the empty-allocations sentence (12) to the primitives that own their step
+  // (`ds/CommandButton`, `ds/Alert`, `ds/Panel`'s `empty` arm), so those four
+  // declarations are gone rather than mapped; the three limit NAMES (12×3) to
+  // `--text-micro` by Q4 and their three FIGURES (13×3) to `--text-title` by Q7,
+  // which is `ds/Metric`'s own label/figure pair; the kill-switch name (12) to
+  // `--text-title` by Q8 and its explanation (10) to `--text-body` by Q1, +30% on
+  // the one sentence that says what a guard does before a trader arms it; the
+  // strategy card's name (12) to `--text-title` and its allocation (12) to
+  // `--text-body`. Two of the sixteen are shrinks and both are Q4 answered
+  // literally rather than a layout yield — §2.5's tell is a shrink standing beside
+  // the overflow it avoids, and there is none. The same commit took this page's
+  // colour entry from 53 to 0; see `no-colour-literals.budget.js`.
   // 14×12, 10×2, 16×1. The only file in the tree whose sizes are **all** the
   // quoted `fontSize: 'Npx'` syntax, so it is the one page that exercises
   // `FONT_SIZE_QUOTED` end to end. Task 7.7 (commit 13).

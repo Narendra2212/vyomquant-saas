@@ -534,6 +534,43 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // 0` gives.
   'pages/StrategyDetail.jsx': 0,
 
+  // -- Pages retail-ui-simplification cleared, joining from the deferred block --
+  //
+  // These were `OUT_OF_SCOPE` entries because vyomquant-ui-redesign scheduled no task for
+  // them — §14.4's "retokened by M1, layouts stay older". retail-ui-simplification
+  // Requirement 4.5 schedules them, so each one moves up here as its page task takes it to
+  // `0`, which is exactly the move task 27.1 made for `pages/StrategyDetail.jsx` above and
+  // for the same reason: a page with a task is no longer a deferred page, and the out-of-
+  // scope group is the one where a `1` would be legal. Moving up recruits
+  // `holds no colour literal in any in-scope file`, which reads the MEASURED count and so
+  // catches a literal that is really in the tree even if this number is left at `0`.
+  //
+  // 53 -> 0 at retail-ui-simplification task 7.2, in the same commit that deleted this
+  // page's font-size entry (16 -> 0). Fourteen distinct values; eight were a second
+  // spelling of a token that already existed (#080a0e, #0c1017, #1e293b, #334155, #f8fafc
+  // and #e2e8f0, #94a3b8, #64748b, #00d4ff) and six needed a decision Requirement 5.3 puts
+  // on `design/semantic.js` rather than on the nearest hue:
+  //
+  //   #10b981 / #059669  the switch's ON state, its border, the armed-guard glyph and the
+  //                      dirty Save button -> `token.status.live.fg`, the group
+  //                      `statusToken('active')` returns. `live`/`connected`/`profit` are
+  //                      one green in `tokens.css`; `live` is the name that describes an
+  //                      ARMED guard rather than a profitable position. Same retirement
+  //                      `pages/StrategyMarketplace.jsx` recorded for the same hue.
+  //   #374151 / #4b5563  the switch's OFF track and border -> `line.strong` / `line.default`.
+  //                      An unarmed guard is an inactive control, not a warning state, and
+  //                      must not borrow one.
+  //   #ffffff            the switch knob -> `content.primary`. Pure white is not in the
+  //                      palette.
+  //   #ef4444 / #38bdf8  the toast's error and info arms — GONE rather than mapped, with the
+  //   + 2 hand-mixed     two `rgba(0,0,0,…)` shadows: `ds/Alert` derives its hue from
+  //     shadows          `severity` and `token.shadow.panel` is the declared elevation.
+  //
+  // NO HUE DIVERGENCE IS CARRIED FORWARD from this page, unlike Marketplace's three. Nothing
+  // here paints a profit or a loss, so `pnlToken` is not reached at all; the only semantic
+  // question was armed-versus-unarmed and it is answered above.
+  'pages/RiskSettings.jsx': 0,
+
   // -- Shared surfaces an in-scope task cleared or created ------------------
   // These are not pages and so are not on design.md's M6-M9 page list, but each one is
   // here because an IN-SCOPE task is what put it at `0`, and each is rendered by an
@@ -665,7 +702,10 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
 
   // -- Deferred pages: retokened by M1, layouts stay older (§14.4) ----------
   'pages/ExchangeManager.jsx': 128,
-  'pages/RiskSettings.jsx': 53,
+  // `pages/RiskSettings.jsx: 53` stood here until retail-ui-simplification task 7.2 took it
+  // to 0 and moved the entry into the in-scope block above, the way task 27.1 moved
+  // `pages/StrategyDetail.jsx`. It is not a deferred page any more: Requirement 4.5 gave it
+  // a task, and the task landed. The full hue map is on the entry.
   'pages/AuthPage.jsx': 30,
   'pages/TwoFA.jsx': 12,
   'pages/Billing.jsx': 9,
