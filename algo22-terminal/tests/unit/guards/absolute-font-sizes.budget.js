@@ -417,10 +417,60 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // The page is already at zero colour literals, so task 8.3 (commit 21) is
   // almost entirely §2.4's size procedure.
   'pages/StrategyDetail.jsx': 61,
-  // 12×14, 13×14, 11×10, 24×5, 14×3, 16×3, 10×2, 18×1. Task 7.10 (commit 16),
-  // which also carries this page's 128 colour literals — 48% of that budget's
-  // remaining total and the entry its header names as a resting position.
-  'pages/ExchangeManager.jsx': 52,
+  // `pages/ExchangeManager.jsx` was here at 52 — 12×14, 13×14, 11×10, 24×5, 14×3,
+  // 16×3, 10×2, 18×1, with 50 of the 52 at or below 16px. **Task 7.10 (commit 16)
+  // took it to 0 and the entry is DELETED rather than set to 0** (Requirement 1.5):
+  // the page is held at zero from here by `accounts for every file that still
+  // carries an absolute size`, which fires on it as unbudgeted if a size comes back.
+  //
+  // The same commit took this page's colour entry from **128 to 0** — the largest
+  // single entry in `no-colour-literals.budget.js`, 48% of its remaining 268, and
+  // the one its own header named as a ratchet's resting position. The full hue map
+  // is on that entry.
+  //
+  // FORTY of the 52 left with their call site, because the step belongs to the
+  // primitive: the `<h1>` and its subtitle (24, 14) onto `ds/PageHeader`; four
+  // command labels (13, 12, 13, 13) onto `ds/CommandButton`; the four summary tiles
+  // and the four per-card tiles, labels and figures alike (12×4, 24×4, 11×4, 12×4),
+  // onto `ds/Metric`; four region headings (18, 16, 12, 12) onto `ds/Panel`'s `<h2>`;
+  // six loading, empty and placeholder blocks (14, 16, 13×4) onto `ds/Panel`'s own
+  // arms; the card's venue name and its status word (16, 12) onto
+  // `ds/ExchangeStatus`; the credential label, four control texts and the field
+  // description (11, 13×4, 10) onto `ds/Field`; and the toast (13) onto `ds/Alert`.
+  // Of the 12 that resolved in place, six went to `--text-micro` as a label or a
+  // decorative initial, four to `--text-body` as a Q1 sentence or a Q7 secondary
+  // value, one to `--text-title`, and ONE DECLARATION WAS REMOVED rather than
+  // resolved — the 200px centred spinner row that was the whole of the connections
+  // loading state, now `ds/Panel`'s `skeleton-cards` arm.
+  //
+  // **The five 24px figures resolve UP to `--text-figure` (28), not down.** 24 is not
+  // one of the seven steps, `tokens.css:74` reserves `--text-page` for the page
+  // `<h1>` and `:75` reserves `--text-figure` for a tier-1 metric; on a page whose
+  // subject is exchange connections the count of connections IS the headline figure,
+  // so all four summary tiles are tier 1 and share the step. §2.2 forbids inventing
+  // an eighth step to keep 24. **The three 16px values split by role**, which is why
+  // the 14-versus-18 tie is not resolved once: two go to `ds/Panel`'s heading and
+  // empty arm, and the card's venue name goes to `ds/ExchangeStatus`, which sets
+  // `--text-body` on it — a shrink, legal under §2.5 because it is hierarchy, a card
+  // heading inside a panel not outranking the panel's own `--text-title`.
+  //
+  // This is also the page that carried the MOST substituted figures in this spec —
+  // THIRTEEN kinds, past `pages/Profile.jsx`'s eleven and `pages/Billing.jsx`'s ten —
+  // and the worst of them is the one this spec keeps finding: a *Health* tile reading
+  // "Healthy" in green whenever a row existed, i.e. an account-wide health grade
+  // derived from WHETHER A ROW EXISTS, which is `can_trade`'s defect verbatim on the
+  // client. FOUR of the columns `GET /api/exchanges/` returns are constants in the
+  // router — `status` always "CONNECTED", `health` always "healthy", `account_type`
+  // always "Spot", `subscription_tier` always "free" — and the page put a `||`
+  // fallback on three of them, so an absent field and a hardcoded word rendered
+  // identically. A **balance** was defaulted to `0` on both probe paths and a
+  // clock-synchronisation result was invented for a field one of the two endpoints
+  // does not send at all. All thirteen are declared in `design/pageFields.js` under a
+  // new `exchange-manager` page (16 entries) and render through `design/reported.js`.
+  // Thirty-nine off-scale constructs neither guard can see went with them, listed on
+  // the colour entry; the fifteen hand-mixed alphas, unusually, WERE counted, because
+  // this page spells them as eight-digit hex rather than as a token with two digits
+  // concatenated on.
   // 9×31, 11×10, 10×8, 8×1, 16×1. **51, not Requirement 1.4's 43** — §3.5's
   // first correction. The eight extra are `fontSize={9}` recharts axis props and
   // this is the only file in `src/` carrying that syntax. 49 of the 51 are at or

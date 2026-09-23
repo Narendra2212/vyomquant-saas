@@ -785,6 +785,81 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // the construct (7.4, 7.5, 7.7, 7.8 and now 7.9) and by far the heaviest, which is the
   // strongest evidence yet that the ratchet's blindness to it is worth a guard of its own.
   'pages/Billing.jsx': 0,
+  // 128 -> 0 at retail-ui-simplification task 7.10, in the same commit that deleted this
+  // page's font-size entry (52 -> 0). **THE LARGEST SINGLE ENTRY THIS BUDGET EVER HELD** — 48%
+  // of its remaining 268, and the one this file's header named as the case for a ratchet
+  // having a resting position, which it stopped being the moment Requirement 4.5 scheduled the
+  // page. Twenty-four distinct values over 905 lines, one every seven, and the whole visual
+  // layer was hand-built: no `token` import, no utility class and no `ds/` primitive in the
+  // file. Mapped by the group the colour MARKS rather than by nearest hue (Requirement 5.3):
+  //
+  //   #64748b ×19  labels and secondary text -> `content-secondary` (#8B95A5, 6.2:1 on panel).
+  //                NOT `content-muted`: `tokens.css:30` marks that one NON-TEXT ONLY at 3.2:1
+  //                and every one of these 19 was body or label text. The largest single-value
+  //                cohort on any page in this spec.
+  //   #334155 ×17  card, input and divider borders -> `line-default`
+  //   #f1f5f9 ×15  primary text -> `content-primary`
+  //   #1e293b ×13  card and input surfaces -> `surface-panel` / `surface-inset`, mostly
+  //                through `ds/Panel` and `ds/Field`, which own both
+  //   #94a3b8 ×12  secondary text -> `content-secondary`
+  //   #3b82f6 ×9   the selection and link hue -> `brand` (#00D4FF). Fourteen of the sixteen
+  //   #3b82f620 ×5 leave with the elements they painted; the two that stay are the selected
+  //   #3b82f650 ×1 venue row's wash and text, which are `brand-wash` and `text-brand`.
+  //   #3b82f610 ×1
+  //   #10b981 ×9   **THE FABRICATED GREEN, and the reason this entry is not a retoken.** Seven
+  //   #10b98120 ×3 of the twelve painted a *Connected* dot, a *Connected* word, a *Healthy*
+  //                grade or a per-card *healthy* value — NONE of which was a measurement, all
+  //                four being constants in `routers/exchange.py` — so they are REMOVED WITH
+  //                THE CLAIM rather than pointed at `--color-status-connected`. Retokening
+  //                them would have kept the false assertion and changed its shade, which is
+  //                the one outcome a colour pass on a venue page must not produce. The rest
+  //                are the *Save keys* button and the success toast, now
+  //                `ds/CommandButton`'s primary intent and `ds/Alert`'s `info` severity.
+  //   #0f172a ×7   the page canvas and the inset wells -> the page background declaration is
+  //                REMOVED (the shell owns the canvas, which is why no migrated page sets one)
+  //                and the wells are `surface-inset`
+  //   #ef4444 ×4   the destructive control, the required-field asterisk and the error toast ->
+  //   #ef444450 ×1 `ds/CommandButton`'s `destructive` intent, `ds/Field`'s `required` (which
+  //   #ef444410 ×1 renders the WORD "Required" instead of an asterisk, so the hue has nothing
+  //   #ef444420 ×1 left to carry) and `ds/Alert`'s `error` severity. The token is #EF5350.
+  //   #475569 ×3   secondary control borders -> `line-strong`
+  //   #8b5cf6 ×1   **violet, and there is no violet in the palette.** It tinted the *Health*
+  //   #8b5cf620 ×1 tile's shield glyph — the tile that was the fabrication — so both leave
+  //                with it and NOTHING is substituted: `design/semantic.js` has no group that
+  //                means "health", which is the Requirement 5.3 question, and the honest
+  //                answer on this page is that health is not reported at all.
+  //   #f59e0b ×1   the *Supported* tile's glyph. **It is `--color-status-warning` exactly** —
+  //   #f59e0b20 ×1 the same six digits the token layer declares, the same coincidence
+  //                `pages/Billing.jsx`'s quota bar carried — but a count of AVAILABLE VENUES
+  //                is not a warning, so it is NOT retokened to the group whose value it
+  //                happens to share. The glyph is `content-secondary`, which is what a
+  //                decorative icon beside a labelled figure is (Requirement 1.5).
+  //   #374151 ×1   the disabled *Save keys* background -> `ds/CommandButton`'s disabled
+  //                treatment, which also renders the `disabledReason` the control never had
+  //   #ffffff ×1   the *Save keys* label -> `content-primary` (#F0F2F5). Pure white is not in
+  //                the palette; the fourth page in this group to carry that substitution
+  //                (7.3, 7.6/7.7, 7.9 and now 7.10).
+  //   rgba() ×1    the toast's `0 10px 40px rgba(0,0,0,0.4)` -> `ds/Alert`, which carries no
+  //                shadow at all: it is an inline strip rather than a floating layer, so the
+  //                declared elevation it needs is none.
+  //
+  // UNUSUALLY, ALL FIFTEEN HAND-MIXED ALPHAS WERE COUNTED. The eight-digit form this page uses
+  // (`#3b82f620`) is a hex literal and `HEX_LITERAL` matches it, unlike the
+  // `${token.brand.base}20` form `pages/Billing.jsx` carried fourteen of, which has no `#` and
+  // was invisible to this guard. Five pages in this spec have now hidden alphas behind a token
+  // name; this is the first where the ratchet could see them, and the difference is that the
+  // page predates the token layer rather than misusing it.
+  //
+  // THIRTY-NINE OFF-SCALE CONSTRUCTS THIS GUARD CANNOT SEE went with them, and the shape is new
+  // for this spec: twenty-eight of them are RADII SPELLED AS NUMBERS — `borderRadius: 8` ×18 is
+  // `--radius-lg`, `borderRadius: 12` ×9 is `--radius-xl`, `borderRadius: 6` is `--radius-md` —
+  // with one genuinely off the declared scale (`borderRadius: 10`), plus
+  // `transition: "all 0.2s"` ×5 against `--transition-base`'s `180ms cubic-bezier(…)`, one
+  // `backdropFilter: "blur(10px)"` the token layer does not declare at all, `opacity: 0.3` ×2
+  // dimming a glyph to a contrast the palette has no name for, and `letterSpacing: 1` ×2. Every
+  // one leaves with its element; the radii onto `ds/Panel`, `ds/Field` and `ds/CommandButton`,
+  // which own them.
+  'pages/ExchangeManager.jsx': 0,
 
   // -- Shared surfaces an in-scope task cleared or created ------------------
   // These are not pages and so are not on design.md's M6-M9 page list, but each one is
@@ -916,7 +991,14 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   'components/FirstTradeWizard.jsx': 3,
 
   // -- Deferred pages: retokened by M1, layouts stay older (§14.4) ----------
-  'pages/ExchangeManager.jsx': 128,
+  // `pages/ExchangeManager.jsx: 128` stood here — the largest single entry in this budget,
+  // 48% of its remaining 268, and the one this file's own header named as the case for a
+  // ratchet having a resting position ("can sit at 128 forever without failing anything,
+  // which is correct, because no task in this spec is scheduled to lower it"). That stopped
+  // being true when Requirement 4.5 gave the page a task: retail-ui-simplification task 7.10
+  // took it to 0 and moved the entry into the in-scope block above, the way task 7.2 moved
+  // `pages/RiskSettings.jsx` and task 27.1 moved `pages/StrategyDetail.jsx`. The full hue map
+  // is on the entry.
   // `pages/RiskSettings.jsx: 53` stood here until retail-ui-simplification task 7.2 took it
   // to 0 and moved the entry into the in-scope block above, the way task 27.1 moved
   // `pages/StrategyDetail.jsx`. It is not a deferred page any more: Requirement 4.5 gave it

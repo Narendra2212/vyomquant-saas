@@ -148,6 +148,7 @@ export const PAGES = Object.freeze({
   WIZARD: 'wizard',
   PROFILE: 'profile',
   BILLING: 'billing',
+  EXCHANGE_MANAGER: 'exchange-manager',
 });
 
 /** Migration 015, named so a warning and this declaration spell it the same way. */
@@ -3710,6 +3711,367 @@ const BILLING_FIELDS = [
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════
+ * Exchange Manager (retail-ui-simplification Requirement 4.2) — /app/exchanges
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Not one of §7's pages. Added by retail-ui-simplification task 7.10, which migrated
+ * `pages/ExchangeManager.jsx` onto the convention and found THIRTEEN substituted figures on
+ * the one screen that answers "is my exchange reachable and does my key work".
+ *
+ * THE CENTRAL FACT ABOUT THIS RESPONSE: FOUR OF ITS COLUMNS ARE CONSTANTS
+ * ---------------------------------------------------------------------
+ * `routers/exchange.py`'s `list_exchanges` composes each row from the caller's
+ * `exchange_keys` table and fills the rest in literally:
+ *
+ *     "status": "CONNECTED"           (:238)   the same word for every stored key
+ *     "account_type": "Spot"          (:241)   likewise
+ *     "health": "healthy"             (:247)   likewise
+ *     "subscription_tier": "free"     (:249)   likewise, whatever the account holds
+ *     "credential_configured": true   (:235)   true because a row exists
+ *     "permissions": ["Spot Trading", "Read"]  (:239) likewise
+ *
+ * That is the same defect `production-launch-hardening` fixed in
+ * `dashboard_aggregation_service` — where `get_exchange_health` hardcoded
+ * `"status": "connected"` and `"latency_ms": 35`, and `can_trade` came off "does a row
+ * exist" — and this endpoint was not part of that fix. So the rule the `dashboard`
+ * `exchangeHealth` entry states ("TWO of those four are constants in the aggregation service
+ * … so neither is a measurement") applies here to FOUR columns, and the entries below declare
+ * `status`, `health` and `subscription_tier` UNAVAILABLE rather than pointing a page at a
+ * literal. A constant rendered as a reading is worse on this page than on the dashboard,
+ * because this is the page a trader opens to decide whether a venue can be trusted with an
+ * order. `bot_count`, `strategy_count`, `connected_at` and `last_sync` are real.
+ *
+ * `masked_key` CARRIES A TOOLTIP RATHER THAN A REASON
+ * -------------------------------------------------
+ * `:236` composes it as `exchange_id[:3].upper() + '•'×24 + exchange_id[-2:].upper()` — a
+ * function of the VENUE NAME. No key material reaches the client, which is correct, but the
+ * value is identical for every account on the same venue and is no part of the stored key, so
+ * a label reading "API Key" misstates what the figure is. That is precisely what `tooltip` is
+ * for in this declaration: copy that must accompany the figure because the label alone would
+ * misstate it. The figure is still rendered — it is the server's answer, and it is how one
+ * stored connection is told from another on screen.
+ *
+ * THE TWO PROBE RESPONSES ARE DECLARED, AND THEY ARE NOT THE SAME SHAPE
+ * -------------------------------------------------------------------
+ * `POST /api/exchanges/test` answers `usdt_balance` AND `clock_sync`;
+ * `POST /api/exchanges/test-stored` answers `usdt_balance` only (`:565`). The page read
+ * `result?.usdt_balance || 0` on both and `result?.clock_sync || 'Synchronized'` on the first
+ * — a **balance** defaulted to zero on the screen a trader uses to decide a credential works,
+ * and a clock-synchronisation claim invented for a field one of the two endpoints never
+ * sends. Both are declared, per endpoint, so the absent field contributes the reason instead
+ * of a number. The `$` in front of the USDT figure went with them: `pages/Billing.jsx`
+ * carried the identical defect as `$2499 INR` and task 7.9 removed it.
+ *
+ * WHAT IS DELIBERATELY NOT DECLARED HERE
+ * -------------------------------------
+ * The venue directory's per-row metadata — `display_name`, `spot_support`, `futures_support`,
+ * `sandbox_support` — and every key of the auth schema (`label`, `placeholder`, `type`,
+ * `required`, `options`, `default`) are a CONTROL'S metadata: what a row offers and what a
+ * form asks for. `Billing.jsx`'s 21-entry currency option set is the precedent, and a
+ * control's options and a reported figure are different things. `permissions` and
+ * `strategy_count` are real keys this page renders nowhere, and an entry for a figure no
+ * call site reads would make the declaration look complete where it is unused.
+ */
+const EXCHANGE_LIST_READ = 'exchangeApi.list';
+const EXCHANGE_LIST_ENDPOINT = 'GET /api/exchanges/';
+const EXCHANGE_SUPPORTED_READ = 'exchangeApi.getSupported';
+const EXCHANGE_SUPPORTED_ENDPOINT = 'GET /api/exchanges/supported';
+const EXCHANGE_API_MODULE = 'src/api/modules/exchange.js';
+
+/** Every figure off the connections read fails for the same cause, so it says so once. */
+const CONNECTIONS_UNREAD = 'Your exchange connections could not be read, so this is not '
+  + 'shown rather than guessed. Refresh reads them again.';
+
+const EXCHANGE_MANAGER_FIELDS = [
+  // ── GET /api/exchanges/ — the account-wide summary ────────────────────────
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'connectedExchangeCount',
+    label: 'Connected',
+    requirement: '4.2',
+    read: EXCHANGE_LIST_READ,
+    endpoint: EXCHANGE_LIST_ENDPOINT,
+    inputs: ['[].exchange_id'],
+    verdict: VERDICT.DERIVED,
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    derivation: 'The number of rows in the `GET /api/exchanges/` array, which is one row per '
+      + 'stored credential.',
+    reason: CONNECTIONS_UNREAD,
+    note: 'A genuine zero is a reading and renders as 0, with the panel below it in its '
+      + '`empty` arm saying the same thing in words. What may never happen is a failed read '
+      + 'rendering 0: that is a claim about the account, and it is the shape item 13 of the '
+      + 'page\'s own record describes.',
+  }),
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'activeBotCount',
+    label: 'Active bots',
+    requirement: '4.2',
+    read: EXCHANGE_LIST_READ,
+    endpoint: EXCHANGE_LIST_ENDPOINT,
+    inputs: ['[].bot_count'],
+    verdict: VERDICT.DERIVED,
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    derivation: 'The sum of `bot_count` across every row. ALL-OR-NOTHING: a row whose count '
+      + 'is missing makes the total unknown rather than smaller, because a sum that silently '
+      + 'treats an absent count as zero reads as complete.',
+    reason: CONNECTIONS_UNREAD,
+    note: '`bot_count` is real — `list_exchanges` counts the caller\'s strategies in '
+      + '`running`, `deployed` or `active` per venue. It is one of the four columns of that '
+      + 'response that is not a constant.',
+  }),
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'accountExchangeHealth',
+    label: 'Venue health',
+    requirement: '4.2',
+    read: EXCHANGE_LIST_READ,
+    endpoint: EXCHANGE_LIST_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    reason: 'Nothing measures the health of your exchange connections, so no grade is shown. '
+      + 'Test connection probes one venue now and reports what the exchange answered.',
+    note: 'The page rendered `connectedExchanges.length > 0 ? "Healthy" : "-"` in '
+      + '`--color-status-profit`\'s predecessor green — an account-wide health grade derived '
+      + 'from WHETHER A ROW EXISTS. That is `can_trade`\'s defect verbatim, on the client: '
+      + 'production-launch-hardening removed exactly that derivation server-side, with the '
+      + 'consequence that `can_trade` is now false for every account until credential '
+      + 'validity is recorded. No response on this page carries a health grade.',
+  }),
+
+  // ── GET /api/exchanges/supported — the venue directory ────────────────────
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'supportedExchangeCount',
+    label: 'Supported',
+    requirement: '4.2',
+    read: EXCHANGE_SUPPORTED_READ,
+    endpoint: EXCHANGE_SUPPORTED_ENDPOINT,
+    path: 'total',
+    inputs: ['exchanges'],
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    reason: 'The supported exchange directory could not be read, so no count is shown rather '
+      + 'than one being guessed. Refresh reads it again.',
+    note: '`len(exchanges)` computed server-side over the same array it sits beside, so it is '
+      + 'the response\'s own count rather than a second definition of one. The page read '
+      + '`supportedExchanges.length` and concatenated a literal `+` onto it, which claims '
+      + 'more venues than were counted, and a second hardcoded copy of the same figure stood '
+      + 'in the prose beside it as "Select from 100+ supported CCXT integrations".',
+  }),
+
+  // ── GET /api/exchanges/ — one stored connection ───────────────────────────
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'connectionName',
+    label: 'Exchange',
+    requirement: '4.2',
+    read: EXCHANGE_LIST_READ,
+    endpoint: EXCHANGE_LIST_ENDPOINT,
+    path: '[].name',
+    inputs: ['[].exchange_id'],
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    reason: 'This connection did not report which exchange it is for, so the venue is not '
+      + 'named rather than a name being inferred.',
+    note: '`exchange_id.upper()`, where `exchange_id` itself falls back to "unknown" '
+      + 'server-side. It is the only thing on the card that says which venue the row is '
+      + 'about, so `ds/ExchangeStatus` refuses to render without it.',
+  }),
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'maskedApiKey',
+    label: 'API key',
+    requirement: '4.2',
+    read: EXCHANGE_LIST_READ,
+    endpoint: EXCHANGE_LIST_ENDPOINT,
+    path: '[].masked_key',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    tooltip: 'The exchange service builds this reference from the venue\u2019s own id rather '
+      + 'than from your stored key, so it identifies the connection and shows no part of the '
+      + 'key itself.',
+    reason: 'This connection did not report a key reference, so none is shown.',
+    note: 'NOT KEY MATERIAL AND NOT DERIVED FROM THE KEY: `:236` composes it as '
+      + '`exchange_id[:3].upper() + "•"×24 + exchange_id[-2:].upper()`, so "binance" yields '
+      + 'BIN••••••••••••••••••••••••CE for every account on that venue. No secret reaches '
+      + 'the client, which is correct; the label is what would mislead, which is why this '
+      + 'entry carries a tooltip. Fixing the server-side derivation is out of scope '
+      + '(Requirement 16.7).',
+  }),
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'accountType',
+    label: 'Account type',
+    requirement: '4.2',
+    read: EXCHANGE_LIST_READ,
+    endpoint: EXCHANGE_LIST_ENDPOINT,
+    path: '[].account_type',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    reason: 'This connection did not report an account type, so none is shown rather than '
+      + 'Spot being assumed.',
+    note: '`:241` writes the constant "Spot" for every row, and the page\'s own '
+      + '`|| "Spot"` therefore duplicated a constant AND hid a genuine absence behind it. '
+      + 'Declared available rather than unavailable because the key is a real key whose value '
+      + 'a backend change can make honest without a frontend one — unlike `status` and '
+      + '`health`, which would state something a trader acts on.',
+  }),
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'connectionBotCount',
+    label: 'Active bots',
+    requirement: '4.2',
+    read: EXCHANGE_LIST_READ,
+    endpoint: EXCHANGE_LIST_ENDPOINT,
+    path: '[].bot_count',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    reason: 'The number of bots running against this connection could not be read, so it is '
+      + 'not shown. A connection with no bots running reads 0.',
+    note: 'Real, and the one figure on this page a trader ACTS on: the delete handler refuses '
+      + 'while it is above zero, and `DELETE /api/exchanges/{id}` refuses again server-side. '
+      + '`|| 0` made an unread count and a genuine zero the same glyph on the control that '
+      + 'decides whether a running bot can have its venue removed.',
+  }),
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'connectionHealth',
+    label: 'Health',
+    requirement: '4.2',
+    read: EXCHANGE_LIST_READ,
+    endpoint: EXCHANGE_LIST_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    reason: 'Per-venue health is not measured. The exchange service writes the same word '
+      + 'against every stored connection, so it would read healthy whatever state the venue '
+      + 'is in.',
+    note: '`:247` writes the constant "healthy"; the page then read `ex.health || "healthy"`, '
+      + 'so the fallback and the value were the same word and a row with the field missing '
+      + 'rendered identically to one that had it. Same class as the `dashboard` '
+      + '`exchangeHealth` entry\'s `status` and `latency_ms`.',
+  }),
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'connectionStatus',
+    label: 'Connection state',
+    requirement: '4.2',
+    read: EXCHANGE_LIST_READ,
+    endpoint: EXCHANGE_LIST_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    reason: 'Whether this venue is reachable right now is not reported. The exchange service '
+      + 'marks every stored connection connected, so the word would be there whether the '
+      + 'credential works or not. Test connection probes it and reports what the exchange '
+      + 'answered.',
+    note: '`:238` writes the constant "CONNECTED". The page rendered it beside a hardcoded '
+      + 'green dot AND in the same green, so it asserted a working connection in two channels '
+      + 'at once. `ds/ExchangeStatus` is passed no `connectionState` at all as a result, '
+      + 'which is what makes it render "Connection not reported" in the neutral group — the '
+      + 'primitive\'s own docblock: claiming disconnected is alarmist and claiming connected '
+      + 'is dangerous. It is also why no `latencyMs` is passed: THIS response carries no '
+      + 'latency field at all, so there is nothing to render and `0 ms` is unreachable.',
+  }),
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'connectedAt',
+    label: 'Connected',
+    requirement: '4.2',
+    read: EXCHANGE_LIST_READ,
+    endpoint: EXCHANGE_LIST_ENDPOINT,
+    path: '[].connected_at',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    reason: 'No timestamp is recorded for when this connection was stored, so none is shown.',
+    note: '`exchange_keys.updated_at`, genuinely null for a row that has none. The page '
+      + 'rendered the literal word "Recently" instead — a claim about when the credential was '
+      + 'stored, from a field that was not there. `pages/SecurityLogs.jsx` carried the same '
+      + 'substitution stamped with the moment the page was opened; a word is harder to spot.',
+  }),
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'subscriptionTier',
+    label: 'Plan',
+    requirement: '4.2',
+    read: EXCHANGE_LIST_READ,
+    endpoint: EXCHANGE_LIST_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    reason: 'Your plan is not reported with your exchange connections. Billing is the '
+      + 'authority on what you hold.',
+    note: '`:249` writes the constant "free" against every row, so a Pro account\'s card read '
+      + '"Tier: free" — and the page\'s `|| "free"` made an absence render the same way. '
+      + '`pages/Profile.jsx` carried the identical claim as "Free Tier" and task 7.8 removed '
+      + 'it against `GET /api/billing/entitlements`, which `pages/Billing.jsx` renders as '
+      + '`billing/planName`. Two pages stating a plan from two sources is how they disagree.',
+  }),
+
+  // ── POST /api/exchanges/test — the pre-save probe ─────────────────────────
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'probeUsdtBalance',
+    label: 'Balance',
+    requirement: '4.2',
+    read: 'exchangeApi.testConnection',
+    endpoint: 'POST /api/exchanges/test',
+    path: 'usdt_balance',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    reason: 'The exchange accepted the credential but reported no USDT balance, so none is '
+      + 'quoted. A wallet holding no USDT reads 0.',
+    note: 'A BALANCE, read as `result?.usdt_balance || 0` and rendered as `$0 USDT` — a '
+      + 'figure nobody read, on the screen a trader uses to decide the credential works, in '
+      + 'two currencies at once. The server sends `round(total_usdt, 2)` off '
+      + '`fetch_wallet_balance_snapshot()["USDT"]["total"]`, which is absent when the wallet '
+      + 'carries no USDT entry — exactly when the fallback fired.',
+  }),
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'probeClockSync',
+    label: 'Clock sync',
+    requirement: '4.2',
+    read: 'exchangeApi.testConnection',
+    endpoint: 'POST /api/exchanges/test',
+    path: 'clock_sync',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    reason: 'The exchange accepted the credential but reported no clock-synchronisation '
+      + 'result, so none is quoted.',
+    note: 'Read as `result?.clock_sync || "Synchronized"`, which INVENTED a synchronisation '
+      + 'claim whenever the field was absent — and the server\'s own vocabulary is "ok", '
+      + '"synchronized" and "assumed_ok", none of which is the capitalised word substituted. '
+      + 'Rendered as the server\'s word with no hue: `design/semantic.js` has no group for a '
+      + 'clock state, and Requirement 5.3 puts that question there and nowhere else.',
+  }),
+
+  // ── POST /api/exchanges/test-stored — the stored-credential probe ─────────
+  entry({
+    page: PAGES.EXCHANGE_MANAGER,
+    field: 'storedProbeUsdtBalance',
+    label: 'Balance',
+    requirement: '4.2',
+    read: 'exchangeApi.testStoredConnection',
+    endpoint: 'POST /api/exchanges/test-stored',
+    path: 'usdt_balance',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: EXCHANGE_API_MODULE,
+    reason: 'The stored credential was accepted but the exchange reported no USDT balance, '
+      + 'so none is quoted. A wallet holding no USDT reads 0.',
+    note: 'A second entry rather than a shared one, because this endpoint answers a DIFFERENT '
+      + 'shape: `:565` returns `status`, `exchange`, `usdt_balance`, `exchange_status` and '
+      + '`message` and NO `clock_sync` at all. The page carried the same `|| 0` here, so '
+      + 'both probe paths quoted a balance nobody read.',
+  }),
+];
+
+/*
+ * ═══════════════════════════════════════════════════════════════════════════
  * The declaration, and the two indexes over it
  * ═══════════════════════════════════════════════════════════════════════════
  */
@@ -3736,6 +4098,7 @@ export const PAGE_FIELDS = Object.freeze([
   ...WIZARD_FIELDS,
   ...PROFILE_FIELDS,
   ...BILLING_FIELDS,
+  ...EXCHANGE_MANAGER_FIELDS,
 ]);
 
 /**
