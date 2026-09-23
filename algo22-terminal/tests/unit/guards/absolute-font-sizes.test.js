@@ -327,6 +327,11 @@ const CLEARED_BY_THIS_SPEC = Object.freeze({
   'pages/Profile.jsx': Object.freeze({ was: 79, now: 0, task: '7.8' }),
   'pages/Billing.jsx': Object.freeze({ was: 39, now: 0, task: '7.9' }),
   'pages/ExchangeManager.jsx': Object.freeze({ was: 52, now: 0, task: '7.10' }),
+  // The last page in Requirement 4.5's group, and the largest in it. With this entry
+  // every page requirements §1.1 committed to a number for that the spec scheduled is
+  // at zero; what `PAGE_FIXED_POINT` still holds above zero is task 8's three files
+  // (`PaperTrading`, `StrategyDetail`) and task 9.2's `Landing.jsx`.
+  'pages/AuthPage.jsx': Object.freeze({ was: 29, now: 0, task: '7.11' }),
 });
 
 describe('absolute-font-sizes: the patterns measure the tree they were written for', () => {

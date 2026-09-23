@@ -860,6 +860,75 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // one leaves with its element; the radii onto `ds/Panel`, `ds/Field` and `ds/CommandButton`,
   // which own them.
   'pages/ExchangeManager.jsx': 0,
+  // 30 -> 0 at retail-ui-simplification task 7.11, in the same commit that deleted this
+  // page's font-size entry (29 -> 0). **THE LAST PAGE IN REQUIREMENT 4.5's GROUP**, and the
+  // one where the literals were least about trading and most about a screen built before the
+  // token layer existed: a gradient tile, a background glow, a hand-mixed card shadow, two
+  // RETIRED palettes' worth of banner colour and another company's logo. Mapped by the group
+  // the colour MARKS rather than by nearest hue (Requirement 5.3):
+  //
+  //   #EF5350 ×4  **the palette's own loss red, spelled as a number.** `status.error.fg` is
+  //               that exact value. Two were the strength verdict's *Weak* colour and two
+  //               were the form's inline messages; the messages are `text-status-error` and
+  //               the verdict is `ds/StatusBadge` now.
+  //   #F59E0B ×1  the *Fair* verdict. **It is `--color-status-warning` exactly** — the third
+  //               page in this spec to spell that token as a number (7.9's quota bar, 7.10's
+  //               venue count) — and here the GROUP is right as well as the value, which the
+  //               other two were not: a password the form will take but would rather not is
+  //               what `warning` means.
+  //   #10B981 ×6  **NOT in the palette.** Tailwind's emerald, where this app's green is
+  //               #26A69A. Five painted the four met-requirement ticks and *Passwords match*,
+  //               one painted *Strong*; all six come from `statusToken('ok')` now, so three
+  //               states' hues are chosen by `design/semantic.js` and not by this page.
+  //   rgba() ×2   the background glow's two radial washes — see the gradients below. One is a
+  //               violet and **there is no violet in the palette**, which is the Requirement
+  //               5.3 question answered the way task 7.10 answered it: nothing is
+  //               substituted, because nothing declared means it.
+  //   rgba() ×1   `0 40px 80px rgba(0,0,0,0.7)` under the card -> `token.shadow.overlay`
+  //               (`0 16px 48px rgba(0,0,0,0.60)`), the largest declared elevation. A
+  //               hand-mixed shadow half again as deep as any the token layer declares.
+  //   #00d4ff     the header medallion's gradient. #00d4ff IS `token.brand.base`; #0055ff is
+  //   #0055ff     a blue the palette does not have. Both leave with the gradient.
+  //   rgba() ×1   `0 0 20px rgba(0,212,255,0.25)`, the medallion's glow. REMOVED and NOTHING
+  //               replaces it: `tokens.css`'s elevation block says *no coloured glows. Calm
+  //               by default (Req 1.5)* and its alias block records `--animate-pulse-glow`
+  //               as "not carried forward" for the same reason.
+  //   #000 ×2     the medallion glyph, on that gradient. Pure black is not in the palette;
+  //               the glyph is `brand.base` on `brand.wash` now, which is task 7.3's
+  //               resolution for the same medallion on the two-factor screen. Fifth page in
+  //               this group to substitute a pure black or white (7.3, 7.6/7.7, 7.9, 7.10).
+  //   rgba() ×1   `rgba(255,255,255,0.05)` behind the Google command ->
+  //               `ds/CommandButton`'s `secondary` intent, which owns its own surface.
+  //   #4285F4     **Google's four brand colours, in an inline logo mark.** The second entry
+  //   #34A853     in this group whose literals belonged to another company, and task 7.9
+  //   #FBBC05     settled it: *there is no token for another company's identity and there
+  //   #EA4335     should not be one.* They leave with a DUPLICATED command (see below) and
+  //               the provider is stated in WORDS on the survivor, which is the one channel
+  //               that cannot be wrong about which provider it is.
+  //   #FF3D00     the failure band's text, wash and border. **The RETIRED pre-M1
+  //   rgba() ×2   orange-red**, not the current #EF5350.
+  //   #00C853     the confirmation band's text, wash and border. **The RETIRED pre-M1
+  //   rgba() ×2   green.** Both bands are `ds/Alert` now, which derives its hue, icon and
+  //               live-region role from `severity` and takes no colour at all — so six of
+  //               the thirty were two states' hues that would have had to be re-decided by
+  //               hand if they had been migrated one for one.
+  //
+  // ALL THREE OF THIS PAGE'S GRADIENTS GO, which is requirements §1.10's "AuthPage 3", and
+  // per design.md D5 each removal names its replacement. The two radial washes were halves of
+  // ONE contentless `position: absolute; inset: 0` element with `pointerEvents: "none"`;
+  // nothing replaces them, and what is underneath is `surface.canvas`, the flat page the shell
+  // already declares. The `linear-gradient(135deg, …)` on the header medallion becomes
+  // `brand.wash` flat with `line.strong` where a semi-transparent brand ring used to be — the
+  // same resolution task 5.2 gave Marketplace's featured card and task 7.3 gave this
+  // medallion's twin, so three surfaces resolve one construct one way.
+  //
+  // ONE CONTROL COUNT CHANGED, AND IT IS A DEDUPLICATION. The page rendered the Google command
+  // TWICE — once above the credential fields, once below the submit — same handler, same
+  // label, two treatments and two dividers. They are one control now, keeping the label, the
+  // `data-testid` two tests bind to, the in-flight text and the disabled-while-busy behaviour.
+  // Requirement 16 forbids removing a control; this removes a DUPLICATE of one, which is the
+  // move task 5.2 made when two card renderers carrying the same mistake became one.
+  'pages/AuthPage.jsx': 0,
 
   // -- Shared surfaces an in-scope task cleared or created ------------------
   // These are not pages and so are not on design.md's M6-M9 page list, but each one is
@@ -1003,7 +1072,11 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // to 0 and moved the entry into the in-scope block above, the way task 27.1 moved
   // `pages/StrategyDetail.jsx`. It is not a deferred page any more: Requirement 4.5 gave it
   // a task, and the task landed. The full hue map is on the entry.
-  'pages/AuthPage.jsx': 30,
+  // `pages/AuthPage.jsx: 30` stood here until retail-ui-simplification task 7.11 took it to 0
+  // and moved the entry into the in-scope block above — the LAST page in Requirement 4.5's
+  // group, so this is the last entry that block gains from it. Four of the thirty were another
+  // company's brand colours in an inline logo mark and six were two RETIRED palettes' banner
+  // hues; all three of the page's gradients went with them. The full map is on the entry.
   // `pages/TwoFA.jsx: 12` stood here until retail-ui-simplification task 7.3 took it to 0 and
   // moved the entry into the in-scope block above. The full map is on the entry; eight of the
   // twelve left with the two banners that became `ds/Alert`.

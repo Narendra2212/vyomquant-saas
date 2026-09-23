@@ -561,9 +561,49 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // read declared steps. This page is the first evidence that O1's option C
   // leaves less behind than it looks: migrating a page to the primitives clears
   // the built-ins as a side effect of clearing the arbitrary values.
-  // 9×9, 11×8, 10×7, 12×3, 20×1, 22×1. Task 7.11 (commit 17) — the largest page
-  // in Requirement 4.5's group at 1,181 lines, which is why it goes last.
-  'pages/AuthPage.jsx': 29,
+  // `pages/AuthPage.jsx` was here at 29 — 9×9, 11×8, 10×7, 12×3, 20×1, 22×1 — the
+  // largest page in Requirement 4.5's group and therefore the last of it.
+  // **Task 7.11 (commit 17) took it to 0 and the entry is DELETED rather than set
+  // to 0** (Requirement 1.5): the page is held at zero from here by `accounts for
+  // every file that still carries an absolute size`, which fires on it as
+  // unbudgeted if a size comes back, and re-adding this line is not the remedy.
+  //
+  // Where the 29 went, by §2.4's questions. 24 of them were at or below 12px, so
+  // almost every resolution is upward, which §2.5 calls the normal case. Eleven
+  // resolved by moving onto a primitive that already reads a declared step —
+  // `ds/Alert` ×2 (the failure and confirmation bands), `ds/CommandButton` ×4 (the
+  // submit, the Google command, resend and back), `ds/StatusBadge` ×1 (the password
+  // strength verdict), `ds/Field` ×1 (the inline email message), plus two that left
+  // with a DUPLICATED Google command and its now-pointless divider, and one
+  // container that held a sentence and two commands and so lost its declaration
+  // while each child took its own step (§2.4's own worked example, on this page).
+  // Eight sentences answered Q1 and went UP to `--text-body`: the header subtitle
+  // (11), the terms-and-risk line (11), the code-entry label (10), *Passwords
+  // match* (10), the confirm-mismatch message (10), the mode-toggle footer (10) and
+  // the two password inputs (12, Q3 read as a floor). The `<h1>` (22) and the six
+  // code boxes (20) both take `--text-page`, the second on task 7.3's finding that
+  // `control text`'s step is a floor and not a cap — Q3 would have shrunk a
+  // one-time code 35% inside a 54px box.
+  //
+  // FOUR RESOLUTIONS ARE FINDINGS ABOUT THE ROLE SET, and this is the page that
+  // reached Q9 twice: **§2.3 has no role for connective text and none for a
+  // navigation link.** The *OR* divider (10) and the four legal footer links (9×4)
+  // answer none of the nine questions, so both are taken at the label step
+  // (`--text-micro`) with the gap recorded rather than guessed. The two password
+  // labels (9×2) take `--text-small` rather than Q4's `--text-micro` because they
+  // sit beside a third label `ds/Field` renders at `--text-small` and a page commit
+  // cannot move a shared primitive's step. And an IMPERATIVE label satisfies Q1's
+  // finite-verb test, so *Enter 6-Digit Email Code* — a `<label htmlFor>`, the
+  // canonical Q4 element — resolves as a sentence because Q1 is asked first and the
+  // order is load-bearing.
+  //
+  // The same commit took this page's colour entry from 30 to 0 and moved it out of
+  // the deferred block; see `no-colour-literals.budget.js`, where the three
+  // gradients and Google's four brand colours are on the entry. TWELVE off-scale
+  // constructs neither guard can see went with them: `borderRadius: 18` (the third
+  // page in this group to carry the one number past `--radius-xl`) and
+  // `borderRadius: 10`, four `transition: all` durations at 150ms ×3 and 200ms ×1,
+  // and six `letterSpacing` values — including a NEGATIVE one on the `<h1>`.
   // `pages/Wizard.jsx` was here at 24 — 11×7, 10×4, 18×4, 9×3, 16×2, 8×1, 12×1,
   // 14×1, 24×1 — the first-run surface, so §2.4's Q1 carried more here than
   // anywhere: a wizard is mostly sentences and this one had every one of them at
