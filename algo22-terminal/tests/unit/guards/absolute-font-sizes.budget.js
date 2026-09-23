@@ -187,6 +187,27 @@
  *                             reports. All three are now declared in
  *                             `design/pageFields.js` under a `wizard` page and
  *                             render through `design/reported.js`.
+ *   21 entries / 521 sizes  — `pages/LegalPage.jsx` (15) cleared by task 7.7, and
+ *                             the clearance that proves pattern 2 on real bytes:
+ *                             **every one of the 15 was the quoted
+ *                             `fontSize: 'Npx'` syntax**, which is true of no other
+ *                             file in the tree, so a broken `FONT_SIZE_QUOTED`
+ *                             would have seeded this entry at 0 and left the commit
+ *                             measuring no change. Three left with their call site
+ *                             onto `ds/PageHeader`, `ds/Tabs` and
+ *                             `ds/CommandButton`; the other TWELVE were one cohort
+ *                             — the `<h2>` section headings — and they went UP to
+ *                             `--text-section` because the measurement is that
+ *                             **they were SMALLER than the prose they headed**:
+ *                             14px headings at preflight's inherited weight over
+ *                             paragraphs that declare no size and so render at the
+ *                             browser default 16px. `--text-title` is the exact
+ *                             number and was refused for that reason. The prose
+ *                             itself keeps NO declaration, which is the first time
+ *                             in this spec that the right answer to §2.4 is to
+ *                             declare nothing: Q1's `--text-body` is a 13px FLOOR,
+ *                             the sentences are already reader-scaled above it, and
+ *                             the step would have shrunk a legal document 19%.
  *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
@@ -432,10 +453,50 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // literally rather than a layout yield — §2.5's tell is a shrink standing beside
   // the overflow it avoids, and there is none. The same commit took this page's
   // colour entry from 53 to 0; see `no-colour-literals.budget.js`.
-  // 14×12, 10×2, 16×1. The only file in the tree whose sizes are **all** the
-  // quoted `fontSize: 'Npx'` syntax, so it is the one page that exercises
-  // `FONT_SIZE_QUOTED` end to end. Task 7.7 (commit 13).
-  'pages/LegalPage.jsx': 15,
+  // `pages/LegalPage.jsx` was here at 15 — 14×12, 10×2, 16×1 — the only file in
+  // the tree whose sizes are **all** the quoted `fontSize: 'Npx'` syntax, so it
+  // is the one page that exercises `FONT_SIZE_QUOTED` end to end. **Task 7.7
+  // (commit 13) took it to 0 and the entry is DELETED rather than set to 0**
+  // (Requirement 1.5): the page is held at zero from here by `accounts for every
+  // file that still carries an absolute size`, which fires on it as unbudgeted if
+  // a size comes back, and re-adding this line is not the remedy. It is also this
+  // guard's end-to-end proof of pattern 2: had `FONT_SIZE_QUOTED` been broken,
+  // this entry would have seeded at 0 and that commit would have measured no
+  // change at all.
+  //
+  // Where the 15 went. Three left with their call site — the page `<h1>` (16) onto
+  // `ds/PageHeader`'s `--text-page`, the four tab buttons (10) onto `ds/Tabs`, and
+  // the Back control (10) onto `ds/CommandButton`. The other TWELVE are one
+  // cohort: the `<h2>` section headings inside the four documents, Q8 headings one
+  // level below the page `<h1>`, resolved to `--text-section` (+29%).
+  //
+  // That cohort carries the one resolution on the page worth arguing, and the
+  // argument is a measurement: **the headings were SMALLER than the text they
+  // headed.** The twelve were declared at 14px while the paragraphs and list items
+  // beneath them declare no size at all, so the prose renders at the browser
+  // default — 16px — and Tailwind's preflight had reset the headings' weight to
+  // `inherit` as well. What made those lines read as headings was the ALL-CAPS and
+  // the brand hue, and Requirement 3.3 removes the first. `--text-title` (14px)
+  // was therefore refused despite being numerically exact: it would leave every
+  // section heading in a legal document below its own body text with the capitals
+  // gone too. `--text-section` is the first step above the prose and is what
+  // `pages/Wizard.jsx` gave its own `<h2>`s one commit earlier.
+  //
+  // The corollary is the reason this page clears 15 rather than 15-plus-the-prose:
+  // **the sentences keep no size declaration.** Q1's `--text-body` is 13px and a
+  // FLOOR, and this page's prose is already at the reader's own default and
+  // already scales with their browser setting, so declaring the step would be a
+  // 19% shrink of a legal document with no overflow to yield to. Text with no
+  // declaration satisfies Requirement 2.1 completely; there was nothing here for
+  // this guard to count and nothing for that commit to add.
+  //
+  // The same commit took this page's colour entry from 3 to 0 and moved it out of
+  // the deferred block; see `no-colour-literals.budget.js`. Four off-palette
+  // constructs neither guard can see went with them — a `backdropFilter:
+  // blur(20px)` glassmorphic wash the token layer does not declare, and TWO tokens
+  // with hex-alpha digits concatenated onto them (`${token.brand.base}15` and
+  // `${token.line.default}80`), which carry no `#` and so were never counted, plus
+  // 12 `textTransform: 'uppercase'` declarations resolved against Requirement 3.3.
   // `pages/TwoFA.jsx` was here at 12 — 10×5, 11×4, 12×1, 20×1, 22×1. **Task 7.3
   // (commit 9) took it to 0 and the entry is DELETED rather than set to 0**
   // (Requirement 1.5). Where the 12 went: the `<h1>` (20) to `--text-page` by Q8;

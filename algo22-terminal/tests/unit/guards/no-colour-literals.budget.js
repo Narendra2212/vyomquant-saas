@@ -655,6 +655,48 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // `--radius-xl` stops at 12. That is the same construct `pages/UpdatePasswordPage.jsx`
   // recorded at task 7.5, and the reason it is written down is that a scan will not find it.
   'pages/Wizard.jsx': 0,
+  // 3 -> 0 at retail-ui-simplification task 7.7, in the same commit that deleted this page's
+  // font-size entry (15 -> 0).
+  //
+  // Two of the three were one visual idea between them: `rgba(14,19,25,0.75)` on the card and
+  // `0 20px 40px rgba(0,0,0,0.5)` under it — a translucent dark pane lifted off the page by a
+  // shadow twice the depth of anything declared. `tokens.css` declares three elevations, no
+  // translucent surface, and its own annotation for the set is "no coloured glows. Calm by
+  // default", so both resolve to the declared pair: `bg-surface-raised` and `shadow-raised`.
+  //
+  // The third needed a decision rather than a lookup, and it is recorded because the VALUE
+  // moves while the NAME is exact. `rgba(0,0,0,0.2)` washed the reading pane DARKER than the
+  // card; `--color-surface-inset` (`#1A202C`) is marginally LIGHTER than
+  // `--color-surface-raised` (`#151821`). The token layer's own comment names `inset` for
+  // "inputs, wells", which is what the element is, so the declared name is followed rather
+  // than the old value matched — Requirement 5.3's rule pointed at a surface instead of a hue.
+  //
+  // ONE HUE DELIBERATELY NOT RE-DECIDED: the `⚠️ High-Risk Investment Warning` heading read
+  // `token.status.loss.fg` and now reads `text-status-loss` — the same `#EF5350`, through the
+  // same token, as the utility class step 5 asks for. It is arguably a *warning* rather than a
+  // *loss* and `--color-status-warning` is amber, so renaming it would change what a trader
+  // sees on a risk disclosure. Requirement 5.3 says raise it rather than pick; a typography
+  // commit is not where an existing risk hue gets swapped.
+  //
+  // FOUR OFF-PALETTE CONSTRUCTS NEITHER GUARD CAN SEE WENT WITH THEM, recorded because a scan
+  // will not find them for the next reader:
+  //
+  //   `backdropFilter: 'blur(20px)'` on the card — a glassmorphic wash the token layer does
+  //   not declare anywhere. It blurred the background the first literal supplied; with the
+  //   surface opaque there is nothing left for it to do and it is not reproduced.
+  //
+  //   `${token.brand.base}15` on the active tab's fill and `${token.line.default}80` on the
+  //   well's border — tokens with hex-alpha digits concatenated onto them, i.e. hand-mixed 8%
+  //   and 50% alphas wearing a token's name, with no `#` anywhere so HEX_LITERAL never matched
+  //   either. The first goes with the tab strip, whose selected state `ds/Tabs` owns (a 2px
+  //   `--color-brand` underline plus the label in `--color-brand`, marked on `aria-selected`
+  //   as well as in hue); the second becomes a plain `border-line-default`. Same blind spot
+  //   `pages/SecurityLogs.jsx` recorded at 7.4 and `pages/UpdatePasswordPage.jsx` at 7.5.
+  //
+  //   `fontFamily: 'monospace'` twice — on the whole card and again on the tab buttons, so
+  //   four legal documents rendered in a monospace stack. Requirement 3.1 reserves monospace
+  //   for values whose alignment or literalness carries meaning; a refund policy is prose.
+  'pages/LegalPage.jsx': 0,
 
   // -- Shared surfaces an in-scope task cleared or created ------------------
   // These are not pages and so are not on design.md's M6-M9 page list, but each one is
@@ -802,7 +844,10 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // five were the brand wash and pure black, each spelled twice.
   // `pages/StrategyDetail.jsx: 4` stood here until task 27.1 took it to 0 and moved the
   // entry into the in-scope block above. It is not a deferred page any more.
-  'pages/LegalPage.jsx': 3,
+  // `pages/LegalPage.jsx: 3` stood here until retail-ui-simplification task 7.7 took it to 0
+  // and moved the entry into the in-scope block above. All three were one visual idea — a
+  // translucent pane lifted off the page by a shadow twice the depth the token layer
+  // declares; the full note is on the entry.
   // `pages/SecurityLogs.jsx: 3` stood here until retail-ui-simplification task 7.4 took it to 0
   // and moved the entry into the in-scope block above. All three were the error banner's and
   // left with it; the full note is on the entry.
