@@ -208,6 +208,22 @@
  *                             declare nothing: Q1's `--text-body` is a 13px FLOOR,
  *                             the sentences are already reader-scaled above it, and
  *                             the step would have shrunk a legal document 19%.
+ *   20 entries / 442 sizes  — `pages/Profile.jsx` (79) cleared by task 7.8. **The
+ *                             largest single-file clearance in this spec and the
+ *                             largest single-file count this budget was ever seeded
+ *                             with**, on a 999-line page carrying 54 of its 79 sizes
+ *                             at or below the 11px floor. Roughly half left with their
+ *                             call site onto `ds/PageHeader`, `ds/Panel`, `ds/Metric`,
+ *                             `ds/StatusBadge`, `ds/CommandButton` and `ds/Field`; the
+ *                             rest resolved in place. The deleted entry below records
+ *                             the three resolutions that carry an argument — the two
+ *                             16px ties, the 24px that sized no text at all, and the
+ *                             four 8px money labels whose +25% is paid for by a grid
+ *                             reflow. It is also the page with the MOST substituted
+ *                             figures in this spec: ELEVEN kinds, past `Wizard.jsx`'s
+ *                             three, including a green *Configured* under MFA
+ *                             AUTHENTICATION with no read behind it and a referral
+ *                             code manufactured from the account's own UUID.
  *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
@@ -337,11 +353,51 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // -- src/pages/ — 14 files, 459 sizes. Requirement 1.4's seed, with
   //    PaperTrading corrected from 43 to 51 per §3.5. -------------------------
 
-  // 10×27, 11×13, 9×10, 12×7, 13×7, 8×4, 14×4, 16×4, 18×1, 20×1, 24×1.
-  // The largest single-file count in the tree, and 54 of the 79 are at or below
-  // 11px. Task 7.8 (commit 14) clears it, alongside 51 inline `monospace`
-  // declarations — the second-largest such block.
-  'pages/Profile.jsx': 79,
+  // `pages/Profile.jsx` was here at 79 — 10×27, 11×13, 9×10, 12×7, 13×7, 8×4,
+  // 14×4, 16×4, 18×1, 20×1, 24×1 — **the largest single-file count in the tree**,
+  // with 54 of the 79 at or below 11px. **Task 7.8 (commit 14) took it to 0 and the
+  // entry is DELETED rather than set to 0** (Requirement 1.5): the page is held at
+  // zero from here by `accounts for every file that still carries an absolute size`,
+  // which fires on it as unbudgeted if a size comes back, and re-adding this line is
+  // not the remedy.
+  //
+  // Roughly half of the 79 left with their call site rather than being mapped,
+  // because the step belongs to the primitive: the `<h1>` (20) and its subtitle (11)
+  // onto `ds/PageHeader`; the hand-built loading block (13, 11) and the whole
+  // seven-branch error screen (16, 13, 11) onto `ds/Panel`'s own arms; the four card
+  // headings (14×4) onto `ds/Panel`'s `<h2>`; the platform and referral labels and
+  // figures (18×1, 16×1, 13×4, 10×4, 8×4) onto `ds/Metric`; the verified and
+  // subscription chips onto `ds/StatusBadge`; the command labels onto
+  // `ds/CommandButton`; the four editor labels (10×4) onto `ds/Field`. Of the rest,
+  // the Q4 eyebrow labels and Q5 chips went to `--text-micro`, the Q1 sentences and
+  // Q3 control text to `--text-body`, and the two switch names to `--text-title` by
+  // Q8 — the same Q8-over-Q4 ordering task 7.2 recorded for `RiskSettings`'s
+  // identical label/description construct.
+  //
+  // Three resolutions carry an argument rather than a lookup. **Both 16px values are
+  // §2.2's undefined case**: 16 is equidistant from `--text-title` (14) and
+  // `--text-section` (18), so "nearest step" has no answer, and both are Q7 values
+  // that are their panel's hero, so both resolve UP. **The 24px was not a font size
+  // at all** — it sat on the 56px avatar circle, whose content is an `<img>` or a
+  // 26px glyph carrying its own `size` prop, so the declaration is removed rather
+  // than mapped. And **the four 8px referral labels are the layout-yield case**: they
+  // were the smallest text on the page, two pixels below the floor, labelling two
+  // counts and two money figures in a `repeat(4, 1fr)` grid inside the narrower
+  // column, so at `--text-micro` (+25%) the grid becomes 2-up below `sm` and 4-up
+  // above — §2.5's third mechanism, chosen over shrinking the figures, which is
+  // §2.5's named tell for an illegal shrink.
+  //
+  // This is also the page that carried the MOST substituted figures in this spec —
+  // ELEVEN kinds, past `pages/Wizard.jsx`'s three — and the worst single one found
+  // anywhere in it: the *MFA AUTHENTICATION* tile rendered a green dot and the word
+  // *Configured* as static JSX with no read behind it, so an account with no second
+  // factor was told its second factor was on. All eleven are declared in
+  // `design/pageFields.js` under a new `profile` page (24 entries) and render through
+  // `design/reported.js`. The same commit took this page's colour entry from 7 to 0
+  // and moved it out of the deferred block; see `no-colour-literals.budget.js`. Three
+  // off-palette constructs neither guard can see went with them: `${token.brand.base}33`,
+  // `${token.brand.base}15` and `${token.brand.base}40`, three tokens with two hex
+  // digits concatenated on, which carry no `#` and so were never counted.
   // 10×17, 12×15, 11×11, 14×9, 24×3, 9×2, 16×2, 8×1, 13×1. Second largest.
   // The page is already at zero colour literals, so task 8.3 (commit 21) is
   // almost entirely §2.4's size procedure.

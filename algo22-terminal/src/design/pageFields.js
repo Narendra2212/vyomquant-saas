@@ -146,6 +146,7 @@ export const PAGES = Object.freeze({
   RISK_SETTINGS: 'risk-settings',
   SECURITY_LOGS: 'security-logs',
   WIZARD: 'wizard',
+  PROFILE: 'profile',
 });
 
 /** Migration 015, named so a warning and this declaration spell it the same way. */
@@ -2522,6 +2523,620 @@ const WIZARD_FIELDS = [
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════
+ * Profile (retail-ui-simplification Requirement 4.2) — /app/profile
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Not one of §7's pages. It is here for the reason `RISK_SETTINGS` and `WIZARD` are: the
+ * page reports figures about the trader's own account, almost none of them were read from
+ * where the page claimed, and an invention is only reviewable once the real source path is
+ * written down beside it. `pages/Profile.jsx` is the largest single file in the migration
+ * group (999 lines) and it carried MORE substituted figures than any other page in this
+ * spec — more than `Wizard.jsx`, which held the previous record at three kinds.
+ *
+ * THE SIX READS, AND WHICH ONE IS NOT WHAT IT LOOKS LIKE
+ * -----------------------------------------------------
+ *   GET /api/user/profile             the `profiles` row. Real, per-account.
+ *   GET /api/billing/plan             an alias for `/api/billing/entitlements`. Real.
+ *   GET /api/security/logs            `security_logs` for this user. Real.
+ *   GET /api/notifications/settings   `notification_settings` for this user. Real.
+ *   GET /api/referral/stats           `ReferralStatsResponse`. Real.
+ *   GET /api/stats                    **NOT THIS ACCOUNT'S.** See below.
+ *
+ * **`GET /api/stats` IS PLATFORM-WIDE AND UNAUTHENTICATED.** `backend_app/main.py:938`
+ * declares it with no `Depends(get_current_user)` and calls
+ * `get_dashboard_data(user={"id": "public"})` — a literal sentinel id. So the four figures
+ * the *Automation Account Context* card reported as the trader's own fleet were the
+ * platform's aggregate, and would read the same for a brand-new account with nothing
+ * deployed. Two further properties of that response matter here and are recorded on the
+ * entries rather than left for the next reader to rediscover:
+ *
+ *   * `total_pnl` is `overview["today_pnl"]` — **today's** P&L, published under a key
+ *     spelling "total". The card's label said *TOTAL PNL*, so the figure was wrong about
+ *     its own period as well as about whose account it described.
+ *   * the handler's `except` arm returns a 200 carrying `0` for all five counts. A failed
+ *     aggregation is therefore indistinguishable on the wire from a genuinely idle
+ *     platform, which is §6's hazard one layer down. Requirement 16.7 puts `backend_app/`
+ *     out of reach; the page cannot tell them apart and these entries say so.
+ *
+ * WHAT WAS BEING INVENTED, MEASURED BEFORE THE MIGRATION
+ * -----------------------------------------------------
+ * **1. A security card that told every account its second factor was on.** The *MFA
+ * AUTHENTICATION* tile rendered a green dot and the word *Configured* as static JSX, with
+ * no read behind it at all. `/api/user/profile` returns the `profiles` row and nothing in
+ * it reports an enrolled factor; the page never called
+ * `getAuthenticatorAssuranceLevel` (which `pages/Wizard.jsx` does). An account with no
+ * second factor read *Configured*, in green, on the panel a trader opens to check exactly
+ * that. This is the worst single substitution found in this spec.
+ *
+ * **2. A referral code manufactured from the account's UUID.** The code rendered
+ * `referral.referral_code || profile?.id?.substring(0, 8).toUpperCase() || '...'` and the
+ * copy button copied the same expression. A trader whose referral read came back without a
+ * code was handed the first eight characters of their own primary key, in a field whose
+ * whole purpose is to be shared with other people, and nothing on screen said it was not
+ * their referral code. The signup link had the matching placeholder, `'https://...'`.
+ *
+ * **3. A subscription status that overrode the server's own.**
+ * `billing?.subscription_status === 'active' || Boolean(billing?.autoRenew)
+ * || Boolean(billing?.plan && billing.plan !== 'free')` — `autoRenew` is not a key on that
+ * response (the lifecycle keys are `subscription_status`, `renewal_date` and
+ * `cancel_at_period_end`), and the third clause means **any non-free plan reported
+ * *Active* whatever the server said**, so a `past_due` or `canceled` Pro subscription
+ * rendered Active with a green dot.
+ *
+ * **4. A plan name, and a renewal cycle, and an account status, that were literals.**
+ * `planDisplay` fell back to `billing?.name` — also not a key — and then to the string
+ * `'Free Tier'`, so a paid account whose billing read failed was told it was on the free
+ * tier; the same value drove the `TIER:` badge in the page header. The renewal line fell
+ * back to *Standard 30-day Cycle*, a billing-cycle claim with nothing behind it. And an
+ * *ACCOUNT ACTIVE* pill with a green dot, and a *PROTECTED* pill with a tick, were both
+ * static JSX.
+ *
+ * **5. A trading environment nothing reports.** The third automation tile rendered
+ * *Live + Paper* and, beneath it, a green dot reading *Isolated*. `design/semantic.js:236`
+ * is the rule this breaks from both directions at once: defaulting to LIVE is alarmist,
+ * defaulting to PAPER is dangerous, and this claimed both plus an isolation guarantee.
+ *
+ * **6. Six `|| 0` and two `?? 0`-shaped substitutions on counts and money.**
+ * `stats?.active_bots || 0`, `stats?.total_strategies || 0`, `stats?.total_trades || 0`,
+ * `(stats?.total_pnl || 0).toFixed(2)`, `referral.total_referrals || 0`,
+ * `referral.active_referrals || 0`, `(referral.pending_earnings || 0).toFixed(2)`,
+ * `(referral.lifetime_earnings || 0).toFixed(2)`. A genuine `0` is a reading and still
+ * renders `0`; what these did was make a failed read publish the same figure.
+ *
+ * **7. Three literals on a security audit record.** `ip_address || 'ip' || '127.0.0.1'`
+ * put a localhost address on an audit row, `created_at ? … : 'Active Session'` answered
+ * *when were you last here* with a reassurance, and each row's time fell back to *Recent*.
+ * `pages/SecurityLogs.jsx` carried the same three and task 7.4 removed them there; the
+ * same table was being read twice and only one reader had been fixed.
+ *
+ * WHAT IS DELIBERATELY NOT DECLARED HERE
+ * -------------------------------------
+ * `features` is a LIST, and `design/reported.js`'s `isReadableValue` refuses arrays by
+ * design — a `Reported<T>` is a scalar. The page guards it with `Array.isArray` the way
+ * `pages/SecurityLogs.jsx` guards its rows, and the absence of the capability chips is
+ * visible as the absence of the capability chips.
+ *
+ * The seven notification switch POSITIONS are not declared either, and that is the same
+ * decision `pages/RiskSettings.jsx` recorded for its three range controls: a switch must
+ * have a position before the read lands, and the positions the page uses are
+ * `NotificationSettingsRequest`'s own field defaults
+ * (`backend_app/core/models/pydantic_models.py:521`–`:536`), not numbers chosen on the
+ * page. A control's position and a reported figure are different things, and only the
+ * second belongs in this declaration.
+ */
+const PROFILE_READ = 'userApi.getProfile';
+const PROFILE_ENDPOINT = 'GET /api/user/profile';
+const PROFILE_BILLING_READ = 'userApi.getBillingPlan';
+const PROFILE_BILLING_ENDPOINT = 'GET /api/billing/plan';
+const PROFILE_STATS_READ = 'userApi.getStats';
+const PROFILE_STATS_ENDPOINT = 'GET /api/stats';
+const PROFILE_SECURITY_READ = 'userApi.getSecurityLogs';
+const PROFILE_SECURITY_ENDPOINT = 'GET /api/security/logs?limit=20';
+const PROFILE_REFERRAL_READ = 'referralApi.getStats';
+const PROFILE_REFERRAL_ENDPOINT = 'GET /api/referral/stats';
+const USER_API_MODULE = 'src/api/modules/user.js';
+const REFERRAL_API_MODULE = 'src/api/modules/referral.js';
+
+/** The one sentence that is true of all four `/api/stats` figures, spelled once. */
+const PLATFORM_STATS_BASIS =
+  'This figure comes from the platform-wide statistics endpoint, which reports across all '
+  + 'accounts rather than yours. Your own fleet and its results are on the dashboard and '
+  + 'the strategies page.';
+
+const PROFILE_FIELDS = [
+  entry({
+    page: PAGES.PROFILE,
+    field: 'accountName',
+    label: 'Account name',
+    requirement: '4.2',
+    read: PROFILE_READ,
+    endpoint: PROFILE_ENDPOINT,
+    inputs: ['display_name', 'username'],
+    verdict: VERDICT.DERIVED,
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: USER_API_MODULE,
+    derivation: 'display_name when the profile carries one, otherwise username — the '
+      + "page's own existing expression, minus its third arm. Both columns are optional on "
+      + '`profiles`, so an account that has set neither has no name to show.',
+    reason: 'You have not set a display name or a username yet, so there is no account '
+      + 'name to show. Edit profile is where both are set.',
+    note: 'The third arm was the literal `"Trader"`, which read as a name the account had '
+      + 'been given rather than as the absence of one.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'username',
+    label: 'Username',
+    requirement: '4.2',
+    read: PROFILE_READ,
+    endpoint: PROFILE_ENDPOINT,
+    path: 'username',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: USER_API_MODULE,
+    reason: 'This account has no username set, so there is no handle to show. Edit '
+      + 'profile is where one is chosen.',
+    note: 'The page rendered `"unconfigured"` as an @-handle, which looks like a handle.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'email',
+    label: 'Email address',
+    requirement: '4.2',
+    read: PROFILE_READ,
+    endpoint: PROFILE_ENDPOINT,
+    path: 'email',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: USER_API_MODULE,
+    reason: 'Your profile record did not carry an email address. Your sign-in address is '
+      + 'the one on your authentication record; contact support if this stays blank.',
+    note: 'The page rendered the literal `"No email"` — a claim about the account rather '
+      + 'than about the read, on the address every alert is dispatched to.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'emailVerified',
+    label: 'Email verification',
+    requirement: '4.2',
+    read: PROFILE_READ,
+    endpoint: PROFILE_ENDPOINT,
+    inputs: ['email_confirmed_at'],
+    verdict: VERDICT.DERIVED,
+    absence: ABSENCE.UNMEASURABLE,
+    derivation: 'Boolean(email_confirmed_at) — the PRESENCE of the confirmation timestamp, '
+      + 'not the timestamp. A null timestamp is a genuine "not verified" and renders as '
+      + 'one; only a profile that could not be read at all is an absence. The same '
+      + 'argument as the `wizard/emailVerified` entry above.',
+    reason: 'Your profile could not be read, so whether this address has been confirmed is '
+      + 'unknown here.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'telegramHandle',
+    label: 'Telegram dispatch',
+    requirement: '4.2',
+    read: PROFILE_READ,
+    endpoint: PROFILE_ENDPOINT,
+    inputs: ['telegram_id'],
+    verdict: VERDICT.DERIVED,
+    absence: ABSENCE.UNMEASURABLE,
+    documentedIn: USER_API_MODULE,
+    derivation: 'telegram_id, normalised to one leading @. A null is a genuine "not '
+      + 'configured" and renders as those words, exactly as the email case above: '
+      + 'collapsing it into the marker would turn a real state into an absence.',
+    reason: 'Your profile could not be read, so whether Telegram dispatch is configured is '
+      + 'unknown here.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'accountId',
+    label: 'Account identifier',
+    requirement: '4.2',
+    read: PROFILE_READ,
+    endpoint: PROFILE_ENDPOINT,
+    path: 'id',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: USER_API_MODULE,
+    reason: 'Your profile record did not carry an account identifier. Support needs this '
+      + 'value, so quote the email address on the account instead.',
+    note: '`profiles.id` is the primary key, so the marker is not expected. The page '
+      + 'rendered `"Loading..."` in its place, which outlived the load.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'memberSince',
+    label: 'Member since',
+    requirement: '4.2',
+    read: PROFILE_READ,
+    endpoint: PROFILE_ENDPOINT,
+    path: 'created_at',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: USER_API_MODULE,
+    reason: 'Your profile record did not carry a creation date, so how long this account '
+      + 'has existed is not shown here.',
+    note: 'This is the one figure on the page the previous version did NOT substitute — it '
+      + 'rendered the chip only when the timestamp was present. The entry exists so the '
+      + 'path and the reason are written down with the rest, and so the chip now says why '
+      + 'it is blank instead of vanishing.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'accountRole',
+    label: 'Account role',
+    requirement: '4.2',
+    read: PROFILE_READ,
+    endpoint: PROFILE_ENDPOINT,
+    path: 'role',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: USER_API_MODULE,
+    reason: 'This account\'s role was not reported. It does not affect what you can trade; '
+      + 'it is the label support uses.',
+    note: '`routers/user.py:46` fills `role` from the auth token when the profiles row has '
+      + 'none, so the marker is not expected. The page rendered the literal `"USER"`.',
+  }),
+
+  // ── GET /api/billing/plan ─────────────────────────────────────────────────
+  entry({
+    page: PAGES.PROFILE,
+    field: 'planName',
+    label: 'Current tier',
+    requirement: '4.2',
+    read: PROFILE_BILLING_READ,
+    endpoint: PROFILE_BILLING_ENDPOINT,
+    path: 'plan',
+    absence: ABSENCE.UNREPORTED,
+    reason: 'Your plan could not be read, so it is not shown here rather than guessed. '
+      + 'Manage subscription opens billing, which reads it again.',
+    note: 'The page fell back to `billing?.name` — not a key on this response — and then '
+      + 'to the literal `"Free Tier"`, so a PAID account whose billing read failed was '
+      + 'told it was on the free tier, in the header badge as well as on the card. A '
+      + 'genuine free plan still reads as the free tier; that is the reading the '
+      + 'substitution was impersonating.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'subscriptionStatus',
+    label: 'Subscription status',
+    requirement: '4.2',
+    read: PROFILE_BILLING_READ,
+    endpoint: PROFILE_BILLING_ENDPOINT,
+    path: 'subscription_status',
+    absence: ABSENCE.UNREPORTED,
+    reason: 'Your subscription status could not be read. Manage subscription opens '
+      + 'billing, which is the authority on whether this plan is currently paid.',
+    note: 'The page ORed the server\'s own status with `billing?.autoRenew` — not a key on '
+      + 'this response — and with `plan !== "free"`, so ANY non-free plan reported '
+      + '"Active" whatever the server said. A `past_due` or `canceled` subscription '
+      + 'rendered Active with a green dot. The status is now the server\'s, verbatim.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'renewalDate',
+    label: 'Renews',
+    requirement: '4.2',
+    read: PROFILE_BILLING_READ,
+    endpoint: PROFILE_BILLING_ENDPOINT,
+    path: 'renewal_date',
+    absence: ABSENCE.UNREPORTED,
+    reason: 'No next billing date is recorded against this account, so there is no renewal '
+      + 'date to show. A plan with no scheduled renewal is not billed again until one is.',
+    note: '`renewal_date` is `profiles.next_billing_date` and is null for an account with '
+      + 'no scheduled renewal. The page rendered *Standard 30-day Cycle* instead — a '
+      + 'billing-cycle claim with no read behind it.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'accountStatus',
+    label: 'Account status',
+    requirement: '4.2',
+    read: PROFILE_READ,
+    endpoint: PROFILE_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'Nothing reports an account-level standing separately from your subscription, '
+      + 'so this cannot be confirmed here. Your tier and its status are on the '
+      + 'subscription panel and are what govern access.',
+    note: 'The page header carried an *ACCOUNT ACTIVE* pill with a green dot as static '
+      + 'JSX. Being able to open the page is not evidence that the account is in good '
+      + 'standing, which is what that pill claimed.',
+  }),
+
+  // ── Security posture, and GET /api/security/logs ──────────────────────────
+  entry({
+    page: PAGES.PROFILE,
+    field: 'mfaConfigured',
+    label: 'Multi-factor authentication',
+    requirement: '4.2',
+    read: PROFILE_READ,
+    endpoint: PROFILE_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'Whether a second factor is enrolled is not reported by your profile, so it '
+      + 'cannot be confirmed here. Manage MFA opens the authenticator page, which reads '
+      + 'your current assurance level before it changes anything.',
+    note: 'THE WORST SUBSTITUTION IN THIS SPEC. The tile rendered a green dot and the word '
+      + '*Configured* as static JSX, with no read behind it, so an account with NO second '
+      + 'factor was told its second factor was on — on the panel a trader opens to check '
+      + 'exactly that. `supabase.auth.mfa.getAuthenticatorAssuranceLevel` is what answers '
+      + 'this and `pages/Wizard.jsx` already calls it; this page never did. Requirement '
+      + '16.2 keeps the tile and its Manage MFA control, Requirement 19.5 forbids filling '
+      + 'it with a plausible value, and those two are only compatible if the tile explains '
+      + 'itself.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'securityPosture',
+    label: 'Security posture',
+    requirement: '4.2',
+    read: PROFILE_READ,
+    endpoint: PROFILE_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'Nothing scores this account\'s security posture, so there is no overall '
+      + 'verdict to show. The events below are the record of what has actually happened.',
+    note: 'The panel carried a *PROTECTED* pill with a tick, in green, as static JSX. It '
+      + 'is the same class of claim as the MFA tile above and it sat directly beside it, '
+      + 'so the two reinforced each other.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'lastAccessAt',
+    label: 'Last access',
+    requirement: '4.2',
+    read: PROFILE_SECURITY_READ,
+    endpoint: PROFILE_SECURITY_ENDPOINT,
+    path: 'logs[].created_at',
+    absence: ABSENCE.RETENTION,
+    reason: 'No access event is recorded against this account yet, so there is no last '
+      + 'access time to show. Sign-in and access events appear here once recorded.',
+    note: 'The page rendered *Active Session* when the timestamp was missing — answering '
+      + '"when were you last here" with a reassurance. `pages/SecurityLogs.jsx` carried '
+      + 'the same fallback and task 7.4 removed it there; the same table is read twice.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'lastAccessIp',
+    label: 'Last access IP',
+    requirement: '4.2',
+    read: PROFILE_SECURITY_READ,
+    endpoint: PROFILE_SECURITY_ENDPOINT,
+    path: 'logs[].ip_address',
+    absence: ABSENCE.UNREPORTED,
+    reason: 'No address was recorded against your most recent access event, so there is '
+      + 'none to show. The address column is nullable on the audit record.',
+    note: 'The page rendered `"127.0.0.1"` — a localhost address on an audit record, which '
+      + 'reads as a claim that the session came from this machine.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'securityEventType',
+    label: 'Event',
+    requirement: '4.2',
+    read: PROFILE_SECURITY_READ,
+    endpoint: PROFILE_SECURITY_ENDPOINT,
+    path: 'logs[].event_type',
+    absence: ABSENCE.UNREPORTED,
+    reason: 'This record did not name the event it describes. Review all logs opens the '
+      + 'full audit trail, which carries every field the record holds.',
+    note: '`security_logs.event_type` is `NOT NULL`, so the marker is not expected. The '
+      + 'page read `log.event` and `log.action` before falling back to the literal '
+      + '`"Security Event"`, and neither key exists on that table.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'securityEventAt',
+    label: 'Recorded',
+    requirement: '4.2',
+    read: PROFILE_SECURITY_READ,
+    endpoint: PROFILE_SECURITY_ENDPOINT,
+    path: 'logs[].created_at',
+    absence: ABSENCE.UNREPORTED,
+    reason: 'This record did not carry a time, so there is none to show beside it.',
+    note: 'The page rendered the literal `"Recent"`, which reads as a statement about when '
+      + 'the event happened.',
+  }),
+
+  // ── GET /api/stats — the platform-wide endpoint ───────────────────────────
+  entry({
+    page: PAGES.PROFILE,
+    field: 'platformActiveBotCount',
+    label: 'Active bots (platform)',
+    requirement: '4.2',
+    read: PROFILE_STATS_READ,
+    endpoint: PROFILE_STATS_ENDPOINT,
+    path: 'active_bots',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: USER_API_MODULE,
+    reason: 'The platform statistics read did not report a running-bot count, so there is '
+      + 'no figure to show. Your own deployments are on the strategies page.',
+    tooltip: PLATFORM_STATS_BASIS,
+    note: 'The page read `stats?.active_bots || 0` and labelled it ACTIVE BOTS on a card '
+      + "titled *Automation Account Context*, so the platform's count was presented as the "
+      + "trader's own fleet. `main.py:938` declares this endpoint with no "
+      + '`Depends(get_current_user)` and calls the aggregation service with the literal '
+      + 'user id `"public"`. A genuine `0` is a reading and renders `0`.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'platformStrategyCount',
+    label: 'Strategies (platform)',
+    requirement: '4.2',
+    read: PROFILE_STATS_READ,
+    endpoint: PROFILE_STATS_ENDPOINT,
+    path: 'total_strategies',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: USER_API_MODULE,
+    reason: 'The platform statistics read did not report a strategy count, so there is no '
+      + 'figure to show. Your own strategies are on the strategies page.',
+    tooltip: PLATFORM_STATS_BASIS,
+    note: 'Read as `stats?.total_strategies || 0` and labelled *Total Strategies* inside '
+      + 'an account panel.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'platformTradeCount',
+    label: 'Trades (platform)',
+    requirement: '4.2',
+    read: PROFILE_STATS_READ,
+    endpoint: PROFILE_STATS_ENDPOINT,
+    path: 'total_trades',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: USER_API_MODULE,
+    reason: 'The platform statistics read did not report a trade count, so there is no '
+      + 'figure to show. Your own fills are in trade history.',
+    tooltip: PLATFORM_STATS_BASIS,
+    note: 'Read as `stats?.total_trades || 0` and labelled *Trades* inside an account '
+      + 'panel.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'platformTodayPnl',
+    label: "Today's P&L (platform)",
+    requirement: '4.2',
+    read: PROFILE_STATS_READ,
+    endpoint: PROFILE_STATS_ENDPOINT,
+    path: 'total_pnl',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: USER_API_MODULE,
+    reason: 'The platform statistics read did not report a P&L figure, so there is none to '
+      + 'show. Your own realised and unrealised P&L are on the portfolio page.',
+    tooltip: 'Today\'s P&L across all accounts on the platform, not yours. The response '
+      + 'key is spelled `total_pnl` but `main.py:948` fills it from the aggregation '
+      + "service's `today_pnl`, so the period is one day.",
+    note: 'THE FIGURE WAS WRONG ABOUT ITS OWN PERIOD AS WELL AS WHOSE IT WAS. The page '
+      + 'rendered `$${(stats?.total_pnl || 0).toFixed(2)}` under the label *TOTAL PNL*, '
+      + 'and coloured it green or red from the same substituted value — so a failed read '
+      + 'published `$0.00` in profit green. A genuine `0` is a reading and renders '
+      + '`$0.00` without the substitution behind it.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'tradingEnvironment',
+    label: 'Trading environment',
+    requirement: '4.2',
+    read: PROFILE_READ,
+    endpoint: PROFILE_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'Which environments this account can trade in is not reported here, so it is '
+      + 'not stated. Each deployment carries its own environment, and the badge on that '
+      + 'screen is the one that governs whether real orders are placed.',
+    note: 'The tile rendered *Live + Paper* and, beneath it, a green dot reading '
+      + '*Isolated*. `design/semantic.js:236` is the rule this breaks from both '
+      + 'directions at once — defaulting to LIVE is alarmist and defaulting to PAPER is '
+      + 'dangerous — and it also asserted an isolation guarantee nothing measures.',
+  }),
+
+  // ── GET /api/referral/stats ───────────────────────────────────────────────
+  entry({
+    page: PAGES.PROFILE,
+    field: 'referralCode',
+    label: 'Referral code',
+    requirement: '4.2',
+    read: PROFILE_REFERRAL_READ,
+    endpoint: PROFILE_REFERRAL_ENDPOINT,
+    path: 'referral_code',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: REFERRAL_API_MODULE,
+    reason: 'No referral code has been issued to this account yet, so there is none to '
+      + 'share. One is created the first time the referral programme is used.',
+    note: 'The page rendered `profile?.id?.substring(0, 8).toUpperCase()` when the code '
+      + 'was missing — the first eight characters of the account\'s own primary key — and '
+      + 'the copy button copied the same expression, in a field whose entire purpose is '
+      + 'to be handed to other people. The third arm was the literal `"..."`.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'referralLink',
+    label: 'Signup link',
+    requirement: '4.2',
+    read: PROFILE_REFERRAL_READ,
+    endpoint: PROFILE_REFERRAL_ENDPOINT,
+    path: 'referral_link',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: REFERRAL_API_MODULE,
+    reason: 'No signup link has been issued to this account yet, so there is none to copy. '
+      + 'It is created alongside your referral code.',
+    note: 'The page rendered the placeholder `"https://..."`, which a copy button beside '
+      + 'it would happily have copied.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'totalReferralCount',
+    label: 'Total',
+    requirement: '4.2',
+    read: PROFILE_REFERRAL_READ,
+    endpoint: PROFILE_REFERRAL_ENDPOINT,
+    path: 'total_referrals',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: REFERRAL_API_MODULE,
+    reason: 'The referral read did not report a total, so there is no count to show. A '
+      + 'genuine zero means nobody has signed up through your link yet.',
+    note: 'Read as `referral.total_referrals || 0`, which made "nobody yet" and "we could '
+      + 'not read this" the same figure.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'activeReferralCount',
+    label: 'Active',
+    requirement: '4.2',
+    read: PROFILE_REFERRAL_READ,
+    endpoint: PROFILE_REFERRAL_ENDPOINT,
+    path: 'active_referrals',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: REFERRAL_API_MODULE,
+    reason: 'The referral read did not report how many of your referrals hold a live '
+      + 'subscription, so there is no count to show.',
+    note: 'Read as `referral.active_referrals || 0`.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'pendingEarningsUsd',
+    label: 'Pending',
+    requirement: '4.2',
+    read: PROFILE_REFERRAL_READ,
+    endpoint: PROFILE_REFERRAL_ENDPOINT,
+    path: 'pending_earnings',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: REFERRAL_API_MODULE,
+    reason: 'Your pending commission balance could not be read, so it is not shown rather '
+      + 'than guessed. A genuine zero means nothing is currently awaiting approval.',
+    note: 'Read as `(referral.pending_earnings || 0).toFixed(2)`, so a failed read '
+      + 'published `$0.00` — a balance. This is `pages/Billing.jsx`\'s hazard on a '
+      + 'smaller figure: a money field that substitutes zero states an amount owed.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'lifetimeEarningsUsd',
+    label: 'Lifetime',
+    requirement: '4.2',
+    read: PROFILE_REFERRAL_READ,
+    endpoint: PROFILE_REFERRAL_ENDPOINT,
+    path: 'lifetime_earnings',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: REFERRAL_API_MODULE,
+    reason: 'Your lifetime commission total could not be read, so it is not shown rather '
+      + 'than guessed. A genuine zero means nothing has been earned yet.',
+    note: 'Read as `(referral.lifetime_earnings || 0).toFixed(2)`.',
+  }),
+  entry({
+    page: PAGES.PROFILE,
+    field: 'commissionRatePct',
+    label: 'Commission rate',
+    requirement: '4.2',
+    read: PROFILE_REFERRAL_READ,
+    endpoint: PROFILE_REFERRAL_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'The commission rate is not reported with your referral figures, so it is not '
+      + 'stated here. Each commission below carries the amount it actually earned.',
+    note: 'The panel carried a *20% RECURRING* pill as static JSX. '
+      + '`ReferralStatsResponse` reports counts, balances and history and no rate, so the '
+      + 'number was a marketing claim rendered as a reading.',
+  }),
+];
+
+/*
+ * ═══════════════════════════════════════════════════════════════════════════
  * The declaration, and the two indexes over it
  * ═══════════════════════════════════════════════════════════════════════════
  */
@@ -2546,6 +3161,7 @@ export const PAGE_FIELDS = Object.freeze([
   ...RISK_SETTINGS_FIELDS,
   ...SECURITY_LOGS_FIELDS,
   ...WIZARD_FIELDS,
+  ...PROFILE_FIELDS,
 ]);
 
 /**

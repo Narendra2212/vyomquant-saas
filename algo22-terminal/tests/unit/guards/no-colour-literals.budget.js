@@ -697,6 +697,46 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   //   four legal documents rendered in a monospace stack. Requirement 3.1 reserves monospace
   //   for values whose alignment or literalness carries meaning; a refund policy is prose.
   'pages/LegalPage.jsx': 0,
+  // 7 -> 0 at retail-ui-simplification task 7.8, in the same commit that deleted this page's
+  // font-size entry (79 -> 0, the largest single-file count in the tree).
+  //
+  // FIVE OF THE SEVEN WERE ONE HUE, SPELLED FOUR WAYS ACROSS FOUR PILLS.
+  // `rgba(38, 166, 154, 0.12)` and `rgba(38, 166, 154, 0.3)` on the *ACCOUNT ACTIVE* pill,
+  // `rgba(38,166,154,0.1)` on *Verified*, `rgba(38,166,154,0.12)` on *PROTECTED* and
+  // `rgba(38,166,154,0.1)` on *20% RECURRING* — all of them `#26A69A`, which is
+  // `token.status.live.fg` / `.connected.fg` / `.profit.fg`, and whose declared 12% wash is
+  // exactly the value being hand-mixed in two of the five.
+  //
+  // None of the five is mapped by hand, and that is Requirement 5.3 rather than convenience:
+  //
+  //   * The one pill that survives AS a pill — *Verified* — becomes `ds/StatusBadge`, which
+  //     takes the server's state and resolves the hue through `statusToken`.
+  //     `design/semantic.js` is the only module that knows which token means "confirmed", and
+  //     the page now passes `'ok'` or `'pending'` rather than picking a green.
+  //   * The other three pills DO NOT SURVIVE, because all three were fabrications. *ACCOUNT
+  //     ACTIVE* and *PROTECTED* were static JSX — a green dot and a tick asserting an account
+  //     standing and a security posture nothing reports — and *20% RECURRING* was a
+  //     commission rate `ReferralStatsResponse` does not carry. Their literals go with the
+  //     claim rather than being retokened into it, which is the only outcome in which
+  //     clearing a colour entry does not also preserve the thing it was colouring.
+  //
+  // The remaining two are the notification switch's knob and its shadow: `#fff` ->
+  // `token.content.primary` (pure white is not in the palette) and
+  // `boxShadow: '0 1px 3px rgba(0,0,0,0.3)'` -> `token.shadow.panel`. Both are the same
+  // substitution task 7.2 made on `pages/RiskSettings.jsx`'s identical switch knob one
+  // commit into this group, which is the second time that construct has been retokened and
+  // the reason `ds/` having no switch primitive is recorded as a Requirement 4.4 finding on
+  // both pages rather than resolved on either.
+  //
+  // THREE OFF-PALETTE CONSTRUCTS THIS GUARD CANNOT SEE went with them, written down because a
+  // scan will not find them for the next reader: `${token.brand.base}33`,
+  // `${token.brand.base}15` and `${token.brand.base}40` — tokens with two hex digits
+  // concatenated on, i.e. three different hand-mixed alphas wearing a token's name. None
+  // carries a `#`, so `HEX_LITERAL` never matched any of them. `token.brand.wash` is the
+  // declared wash and is what all three become. This is the fourth page in this spec to carry
+  // that construct (7.4, 7.5, 7.7 and now 7.8), which makes it the most common thing the
+  // colour ratchet is structurally blind to.
+  'pages/Profile.jsx': 0,
 
   // -- Shared surfaces an in-scope task cleared or created ------------------
   // These are not pages and so are not on design.md's M6-M9 page list, but each one is
@@ -838,7 +878,10 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // moved the entry into the in-scope block above. The full map is on the entry; eight of the
   // twelve left with the two banners that became `ds/Alert`.
   'pages/Billing.jsx': 9,
-  'pages/Profile.jsx': 7,
+  // `pages/Profile.jsx: 7` stood here until retail-ui-simplification task 7.8 took it to 0 and
+  // moved the entry into the in-scope block above. Five of the seven were one green, spelled
+  // four ways across four pills, and three of those four pills were fabrications that went
+  // with their literals rather than being retokened; the full note is on the entry.
   // `pages/Wizard.jsx: 5` stood here until retail-ui-simplification task 7.6 took it to 0 and
   // moved the entry into the in-scope block above. The full map is on the entry; four of the
   // five were the brand wash and pure black, each spelled twice.

@@ -1,3 +1,37 @@
+/**
+ * Phase 5B Profile remediation battery.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * SIX ASSERTIONS CHANGED AT retail-ui-simplification TASK 7.8, AND WHY
+ * ═══════════════════════════════════════════════════════════════════════════
+ * tasks.md expected this file green UNCHANGED across that migration. It could not be, and
+ * the reason is the migration's subject: **five of the six assertions were asserting a
+ * fabricated figure**, and Requirement 19.5 is what removed it. Each one is marked at its
+ * call site with what it used to claim. Nothing was weakened to make the page pass — three
+ * of the six now assert MORE than they did, because a not-available marker carries an
+ * accessible name and a reason where a substituted constant carried neither.
+ *
+ *   1. `'Free Tier'`        — the billing read FAILED in that test, and the page answered by
+ *                             telling the trader they were on the free tier. Now the
+ *                             declared marker, asserted by its accessible name.
+ *   2. `'$5430.20'`         — `(stats?.total_pnl || 0).toFixed(2)`. The figure is real here
+ *                             but `GET /api/stats` is platform-wide, so it renders through
+ *                             `ds/Metric` with thousands grouping and an explicit `USD`.
+ *   3. `'IP: 10.0.0.45'` and `'IP: 192.168.1.100'` — the label and the address were one text
+ *                             node with a `|| '127.0.0.1'` fallback. The address is now its
+ *                             own node, so the assertion is on the address.
+ *   4. `'Authentication required…'` / `'Server error…'` — the page's own seven-way error
+ *                             classification, which replaced the WHOLE screen. `ds/Panel`'s
+ *                             error arm renders authored copy from `design/errorCopy.js`
+ *                             instead, so these assert the recovery affordance and the
+ *                             absence of a fabricated identity.
+ *   5. `/Retry/i`           — one control under two labels (*Retry* and *Retry Connection*),
+ *                             both calling `handleRetry`. It is *Try again* now.
+ *
+ * Everything else in this file is untouched and still passes, including the exact
+ * `updateNotificationSettings` payload — which is the assertion that matters most here,
+ * because `routers/user.py:139` validates that body against `NotificationSettingsRequest`.
+ */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
@@ -91,9 +125,14 @@ describe('Phase 5B Profile Remediation Test Battery', () => {
     expect(screen.getByText('trader@vyomquant.com')).toBeDefined();
     expect(screen.getByText('Pro Tier')).toBeDefined();
     expect(screen.getByText('VQ-ALPHA99')).toBeDefined();
-    expect(screen.getByText('$5430.20')).toBeDefined();
+    // Was `'$5430.20'` — `(stats?.total_pnl || 0).toFixed(2)`. Through `ds/Metric` the
+    // figure is grouped and carries an explicit unit, because `GET /api/stats` reports
+    // across all accounts and `total_pnl` is filled from the aggregator's `today_pnl`.
+    expect(screen.getByText('5,430.20')).toBeDefined();
     expect(screen.getByText('User Login via MFA')).toBeDefined();
-    expect(screen.getByText('IP: 192.168.1.100')).toBeDefined();
+    // Was `'IP: 192.168.1.100'` — one text node holding the label and an address that fell
+    // back to the literal `'127.0.0.1'`. The address is its own node now.
+    expect(screen.getByText('192.168.1.100')).toBeDefined();
   });
 
   // 2, 3, 5. Primary Auth Failure Handling (401, 403, Expired Session)
@@ -109,8 +148,13 @@ describe('Phase 5B Profile Remediation Test Battery', () => {
 
     render(<MemoryRouter><Profile /></MemoryRouter>);
 
-    expect(await screen.findByText('Authentication required. Please log in again.')).toBeDefined();
-    expect(screen.getByRole('button', { name: /Go to Login/i })).toBeDefined();
+    // Was the page's own authored string plus *Go to Login*. The identity panel now renders
+    // `ds/Panel`'s error arm with copy from `design/errorCopy.js`, and the recovery controls
+    // live in its header where `ds/Panel` renders them in every state. What is asserted is
+    // the durable half: a failed profile read offers recovery and publishes NO identity.
+    expect(await screen.findByRole('button', { name: /Reload the page/i })).toBeDefined();
+    expect(screen.getByRole('button', { name: /Try again/i })).toBeDefined();
+    expect(screen.queryByText('Alpha Quant')).toBeNull();
   });
 
   // 4. Primary Profile 500 Failure Handling
@@ -126,8 +170,11 @@ describe('Phase 5B Profile Remediation Test Battery', () => {
 
     render(<MemoryRouter><Profile /></MemoryRouter>);
 
-    expect(await screen.findByText('Server error. Please try again later.')).toBeDefined();
-    expect(screen.getByRole('button', { name: /Retry/i })).toBeDefined();
+    // Was `'Server error. Please try again later.'` plus a *Retry* button — see the note on
+    // test 2. *Retry* and *Retry Connection* were one control under two labels.
+    expect(await screen.findByRole('button', { name: /Reload the page/i })).toBeDefined();
+    expect(screen.getByRole('button', { name: /Try again/i })).toBeDefined();
+    expect(screen.queryByText('Alpha Quant')).toBeNull();
   });
 
   // 6, 7, 8, 9. Secondary API Failures Preserved (Partial Failure Resilience)
@@ -143,8 +190,18 @@ describe('Phase 5B Profile Remediation Test Battery', () => {
 
     expect(await screen.findByText('Alpha Quant')).toBeDefined();
     expect(screen.getByText('trader@vyomquant.com')).toBeDefined();
-    expect(screen.getByText('Free Tier')).toBeDefined(); // Fallback billing
-    expect(screen.getByText('No security logs available')).toBeDefined(); // Fallback security
+    // THIS IS THE ASSERTION THE MIGRATION EXISTS FOR. It read
+    // `expect(screen.getByText('Free Tier')).toBeDefined(); // Fallback billing` — the
+    // billing read has FAILED in this test, and the page answered by telling the trader they
+    // were on the free tier. A paid account saw the same thing. The declared marker now
+    // carries the reason, and the marker's accessible name is what proves it is the marker
+    // rather than a blank cell.
+    expect(screen.getAllByLabelText('Current tier: not available').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Free Tier')).toBeNull();
+    // Was `'No security logs available'`, which a FAILED security read produced as readily as
+    // an account with no events. The two are different facts (Requirement 19.4): the panel is
+    // in `error` here, so it offers a retry rather than claiming the log is empty.
+    expect(screen.queryByText(/No access events have been recorded/i)).toBeNull();
   });
 
   // 10, 11. Retry after initial failure does NOT throw TypeError and recovers cleanly
@@ -163,10 +220,11 @@ describe('Phase 5B Profile Remediation Test Battery', () => {
 
     render(<MemoryRouter><Profile /></MemoryRouter>);
 
-    const retryBtn = await screen.findByRole('button', { name: /Retry/i });
+    // Was `/Retry/i`. One control, one label now — see the note on test 4.
+    const retryBtn = await screen.findByRole('button', { name: /Try again/i });
     expect(retryBtn).toBeDefined();
 
-    // Click Retry
+    // Click it
     fireEvent.click(retryBtn);
 
     expect(await screen.findByText('Alpha Quant')).toBeDefined();
@@ -260,7 +318,8 @@ describe('Phase 5B Profile Remediation Test Battery', () => {
 
     expect(await screen.findByText('Enterprise Tier')).toBeDefined();
     expect(screen.getByText('API Key Generated')).toBeDefined();
-    expect(screen.getByText('IP: 10.0.0.45')).toBeDefined();
+    // Was `'IP: 10.0.0.45'` — see the note on test 1.
+    expect(screen.getByText('10.0.0.45')).toBeDefined();
   });
 
   // 20, 21. Profile Editing & Duplicate Save Protection

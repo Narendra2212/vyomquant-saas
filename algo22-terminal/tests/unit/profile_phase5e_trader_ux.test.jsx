@@ -6,6 +6,35 @@ import Profile from '../../src/pages/Profile';
 import * as userModule from '../../src/api/modules/user';
 import * as referralModule from '../../src/api/modules/referral';
 
+/**
+ * Phase 5E Profile trader-UX battery.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * SIX ASSERTIONS CHANGED AT retail-ui-simplification TASK 7.8 — see the twin note in
+ * `profile_phase5b_remediation.test.jsx` for the full argument
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Four of the six were asserting a FABRICATION, and one of those four is the most
+ * consequential one this spec has found:
+ *
+ *   * `'ACCOUNT ACTIVE'` and `'PROTECTED'` — two green pills rendered as static JSX. Neither
+ *     had a read behind it. Both are declared ❌ UNAVAILABLE in `design/pageFields.js` now,
+ *     and the assertions are on the markers' accessible names.
+ *   * `'Automation Account Context'` — the panel title. Its four figures came from
+ *     `GET /api/stats`, which `backend_app/main.py:938` declares WITHOUT
+ *     `Depends(get_current_user)` and calls with the literal user id `"public"`, so the panel
+ *     reported the platform under a title claiming it reported the account. It is
+ *     *Platform-wide statistics* now and says so in prose as well.
+ *   * `/Total Strategies: 20/` — a label and a figure in one text node. They are a
+ *     `ds/Metric` label and value now.
+ *   * `'$450.00'` / `'$3200.00'` — `(referral.x || 0).toFixed(2)`. Grouped, with an explicit
+ *     `USD`, through `ds/Metric`.
+ *   * `'Authentication required…'` and `/Retry/i` — the page's own error screen; see the twin
+ *     note.
+ *
+ * Every navigation assertion in this file is untouched and still passes, which is what proves
+ * no route was lost: `/app/2fa`, `/app/security-logs`, `/app/exchange`, `/app/strategies`,
+ * `/app/billing`.
+ */
 const mockNavigate = vi.fn();
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom');
@@ -111,8 +140,14 @@ describe('Phase 5E Profile Trader UX Test Battery', () => {
     expect(screen.getByText('trader@vyomquant.io')).toBeDefined();
     expect(screen.getByText('Verified')).toBeDefined();
     expect(screen.getByText('@apexquant')).toBeDefined();
-    expect(screen.getByText('ACCOUNT ACTIVE')).toBeDefined();
+    // Was `screen.getByText('ACCOUNT ACTIVE')` — a green pill with a green dot, as static
+    // JSX. Being able to open the page is not evidence that the account is in good standing,
+    // which is what that pill claimed. The marker carries the reason instead.
+    expect(screen.getByLabelText('Account status: not available')).toBeDefined();
+    expect(screen.queryByText('ACCOUNT ACTIVE')).toBeNull();
     expect(screen.getByText('Enterprise Tier')).toBeDefined();
+    // Member since is real and still rendered, now with its own declared reason behind it.
+    expect(screen.getByText('Jan 2026')).toBeDefined();
   });
 
   // 3 & 4. Security Section
@@ -127,7 +162,14 @@ describe('Phase 5E Profile Trader UX Test Battery', () => {
     render(<MemoryRouter><Profile /></MemoryRouter>);
 
     expect(await screen.findByText('Security & Access')).toBeDefined();
-    expect(screen.getByText('PROTECTED')).toBeDefined();
+    // Was `screen.getByText('PROTECTED')` — a green pill with a tick, as static JSX, beside
+    // an *MFA AUTHENTICATION* tile that said *Configured* with equally little behind it. Both
+    // are declared UNAVAILABLE now and both markers carry their reason. The MFA one is the
+    // worst substitution in this spec: an account with no second factor was told it had one.
+    expect(screen.getByLabelText('Security posture: not available')).toBeDefined();
+    expect(screen.getByLabelText('Multi-factor authentication: not available')).toBeDefined();
+    expect(screen.queryByText('PROTECTED')).toBeNull();
+    expect(screen.queryByText('Configured')).toBeNull();
     expect(screen.getByText('MFA Verification Succeeded')).toBeDefined();
     expect(screen.getByText(/198.51.100.42/)).toBeDefined();
 
@@ -153,9 +195,15 @@ describe('Phase 5E Profile Trader UX Test Battery', () => {
 
     render(<MemoryRouter><Profile /></MemoryRouter>);
 
-    expect(await screen.findByText('Automation Account Context')).toBeDefined();
-    expect(screen.getByText('8')).toBeDefined(); // Active bots
-    expect(screen.getByText(/Total Strategies: 20/)).toBeDefined();
+    // Was `'Automation Account Context'`. The four figures under that title came from the
+    // PLATFORM-WIDE statistics endpoint, so the title was the claim rather than the figures.
+    expect(await screen.findByText('Platform-wide statistics')).toBeDefined();
+    expect(screen.getByText(/reports across all accounts rather than yours/i)).toBeDefined();
+    expect(screen.getByText('8')).toBeDefined(); // Active bots, platform-wide
+    // Was `/Total Strategies: 20/` — a label and a figure in one text node. They are a
+    // `ds/Metric` label and value now, and the label says whose figure it is.
+    expect(screen.getByText('Strategies (platform)')).toBeDefined();
+    expect(screen.getByText('20')).toBeDefined();
 
     const manageExchangesBtn = screen.getByRole('button', { name: /Manage Exchanges/i });
     fireEvent.click(manageExchangesBtn);
@@ -229,8 +277,13 @@ describe('Phase 5E Profile Trader UX Test Battery', () => {
 
     expect(await screen.findByText('Affiliate & Referral Program')).toBeDefined();
     expect(screen.getByText('VQ-APEX2026')).toBeDefined();
-    expect(screen.getByText('$450.00')).toBeDefined();
-    expect(screen.getByText('$3200.00')).toBeDefined();
+    // Was `'$450.00'` and `'$3200.00'` — `(referral.x || 0).toFixed(2)`, so a failed read
+    // published a balance. Grouped, with an explicit unit, through `ds/Metric`.
+    expect(screen.getByText('450.00')).toBeDefined();
+    expect(screen.getByText('3,200.00')).toBeDefined();
+    // The *20% RECURRING* pill was a commission rate `ReferralStatsResponse` does not carry.
+    expect(screen.getByLabelText('Commission rate: not available')).toBeDefined();
+    expect(screen.queryByText('20% RECURRING')).toBeNull();
   });
 
   // 12. Authentication Failure Handling
@@ -246,8 +299,12 @@ describe('Phase 5E Profile Trader UX Test Battery', () => {
 
     render(<MemoryRouter><Profile /></MemoryRouter>);
 
-    expect(await screen.findByText('Authentication required. Please log in again.')).toBeDefined();
-    expect(screen.getByRole('button', { name: /Go to Login/i })).toBeDefined();
+    // Was the page's own authored string plus *Go to Login* — see the twin note. The identity
+    // panel renders `ds/Panel`'s error arm with `design/errorCopy.js`'s authored copy, and
+    // the recovery controls sit in its header, which `ds/Panel` renders in every state.
+    expect(await screen.findByRole('button', { name: /Reload the page/i })).toBeDefined();
+    expect(screen.getByRole('button', { name: /Try again/i })).toBeDefined();
+    expect(screen.queryByText('Apex Quant Trader')).toBeNull();
   });
 
   // 13. Retry Resilience
@@ -266,7 +323,8 @@ describe('Phase 5E Profile Trader UX Test Battery', () => {
 
     render(<MemoryRouter><Profile /></MemoryRouter>);
 
-    const retryBtn = await screen.findByRole('button', { name: /Retry/i });
+    // Was `/Retry/i`. *Retry* and *Retry Connection* were one control under two labels.
+    const retryBtn = await screen.findByRole('button', { name: /Try again/i });
     fireEvent.click(retryBtn);
 
     expect(await screen.findByText('Apex Quant Trader')).toBeDefined();
