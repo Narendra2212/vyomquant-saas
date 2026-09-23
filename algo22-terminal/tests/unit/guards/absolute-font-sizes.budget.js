@@ -224,6 +224,21 @@
  *                             three, including a green *Configured* under MFA
  *                             AUTHENTICATION with no read behind it and a referral
  *                             code manufactured from the account's own UUID.
+ *   19 entries / 403 sizes  — `pages/Billing.jsx` (39) cleared by task 7.9, and **the
+ *                             first clearance in this spec to carry a SHRINK that is not
+ *                             a mistake**: three call sites were outranking their own
+ *                             container (a 24px `<h2>` equal to the page `<h1>`, a 22px
+ *                             card name above its panel's 14px heading, and a 36px price
+ *                             at a number the seven steps do not contain). 20 of the 39
+ *                             left with their call site onto `ds/Alert`,
+ *                             `ds/CommandButton`, `ds/Metric`, `ds/Panel` and
+ *                             `ds/DataTable`; four of the 19 that stayed are §2.4's
+ *                             one-call-site-two-roles case. It is the money surface
+ *                             design.md §6 is written about and it had substituted zeros
+ *                             in TEN places — including eight `|| 0`s over quota figures
+ *                             whose genuine value on the free plan really is `0`, and an
+ *                             invoice amount that put a dollar sign on every non-INR
+ *                             invoice. The deleted entry below records all of it.
  *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
@@ -424,9 +439,62 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // there. `names only files that still exist` is the assertion that fails if the
   // file goes and this line stays.
   'pages/Landing.jsx': 41,
-  // 11×15, 12×10, 10×5, 9×2, 13×2, 18×1, 20×1, 22×1, 24×1, 36×1. Task 7.9
-  // (commit 15). Money figures, so every one also gets a `pageFields.js` entry.
-  'pages/Billing.jsx': 39,
+  // `pages/Billing.jsx` was here at 39 — 11×15, 12×10, 10×5, 9×2, 13×2, 18×1,
+  // 20×1, 22×1, 24×1, 36×1, with 32 of the 39 at or below 12px. **Task 7.9 (commit
+  // 15) took it to 0 and the entry is DELETED rather than set to 0** (Requirement
+  // 1.5): the page is held at zero from here by `accounts for every file that still
+  // carries an absolute size`, which fires on it as unbudgeted if a size comes back.
+  //
+  // TWENTY of the 39 left with their call site, because the step belongs to the
+  // primitive: the two notice strips and the payment-failure block including its
+  // button (12, 12, 13, 12, 11) onto `ds/Alert`; the six remaining command labels
+  // (11×5, 12) onto `ds/CommandButton`; an allowance label, its figure, the price and
+  // the price's unit (11, 20, 36, 12) onto `ds/Metric`; the *Available Plans* heading,
+  // *No payment methods on file.* and *Loading plans…* (18, 12, 12) onto `ds/Panel`'s
+  // heading and its `empty` / `loading` arms; the `<table>` and its `<th>`s (11, 9)
+  // onto `ds/DataTable`. Of the 19 that resolved in place, five went to
+  // `--text-micro` as a label or a chip, eight to `--text-body` as a Q1 sentence or a
+  // Q7 secondary value, and FOUR are §2.4's one-call-site-two-roles case — *Renews*,
+  // *Cancels*, the allowance denominator and the card expiry each sat on a container
+  // holding an eyebrow word and a figure, so the container lost its declaration and
+  // the label took `--text-micro` while the figure took `--text-body`.
+  //
+  // **This page carries the only three SHRINKS in the group so far, and all three are
+  // hierarchy rather than §2.5's illegal "shrink to avoid a layout change".** Each one
+  // was outranking its own container. The current plan's name went 24 →
+  // `--text-section`, because at 24 it equalled the page `<h1>` and `tokens.css:74`
+  // reserves `--text-page` for that; each catalogue card's name went 22 →
+  // `--text-title`, because a card heading inside a panel may not outrank the panel's
+  // own heading, and the card's dominant element is its PRICE — the relationship the
+  // old 22-over-36 pair already had, preserved at 14-over-28; and the price itself
+  // went 36 → `--text-figure` (28), because 36 is not one of the seven steps, §2.2
+  // forbids an eighth, and `tokens.css:75` reserves `--text-figure` for a tier-1
+  // figure, which a plan price on a billing page is. The *Available Plans* heading
+  // shrinks 18 → `--text-title` as a consequence of adopting `ds/Panel` rather than as
+  // a mapping: three sibling regions on this page are panels, and one of the three at
+  // `--text-section` would read as a section containing the other two.
+  //
+  // One declaration is REMOVED rather than resolved: *Loading plans…* (12) was this
+  // read's entire loading AND failure state, so a 500 left it on screen forever.
+  // `ds/Panel`'s `loading` arm is a skeleton and its `error` arm carries a retry; a
+  // sentence that meant two different things does not survive as either.
+  //
+  // It is also the MONEY SURFACE design.md §6 is written about, and it had substituted
+  // zeros in TEN places — second only to `Profile.jsx`'s eleven, and worse per figure
+  // because every one of them is a price, a period or an entitlement. The clearest:
+  // eight `|| 0`s over `usage.*`/`quotas.*` where the free plan's real bot, ML and
+  // marketplace quotas are all literally `0`, so the fabricated zero and the genuine
+  // zero were the same glyph; `formatPlanPrice` substituting `0` so an unreadable price
+  // advertised itself as FREE (the same defect `Wizard.jsx` carried at task 7.6, on the
+  // same catalogue); a hardcoded `$` in front of an amount the same line labelled as
+  // another currency (`$2499 INR`); and an invoice amount whose else-arm put a dollar
+  // sign on every non-INR invoice whatever it was denominated in, both arms `|| 0`, so
+  // an unreadable amount rendered as a settled invoice for nothing. All ten are declared
+  // in `design/pageFields.js` under a new `billing` page (27 entries) and render through
+  // `design/reported.js`. The same commit took this page's colour entry from 9 to 0 and
+  // moved it out of the deferred block; see `no-colour-literals.budget.js`. Fourteen
+  // off-palette `${token.x.y}NN` constructs went with them — a token with two hex digits
+  // concatenated on, carrying no `#`, so no guard ever counted one.
   // `pages/StrategyMarketplace.jsx` was here at 30 — 10×16, 9×9, 11×5, all of
   // them `text-[Npx]` Tailwind arbitrary values, which was the whole of
   // Requirement 10.4. **Task 5.2 (commit 5) took it to 0 and the entry is DELETED

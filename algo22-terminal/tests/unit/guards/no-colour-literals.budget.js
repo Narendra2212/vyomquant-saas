@@ -737,6 +737,54 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // that construct (7.4, 7.5, 7.7 and now 7.8), which makes it the most common thing the
   // colour ratchet is structurally blind to.
   'pages/Profile.jsx': 0,
+  // 9 -> 0 at retail-ui-simplification task 7.9, in the same commit that deleted this page's
+  // font-size entry (39 -> 0). A MONEY SURFACE, and the only entry in this group where two of
+  // the literals belonged to another company.
+  //
+  //   #1a1f71 / #003087  **Visa's brand blues, on every card brand.** A two-stop gradient
+  //                      painted behind a generic `CreditCard` glyph whatever the stored
+  //                      method actually was, so a Mastercard or an Amex rendered in Visa's
+  //                      colours. REMOVED rather than retokened: there is no token for another
+  //                      company's identity and there should not be one. The tile is
+  //                      `surface-inset` with the glyph in `content-secondary`, and the brand
+  //                      is stated in WORDS beside it — the one channel that cannot be wrong
+  //                      about which network the card is on.
+  //   #f59e0b            the 70%-of-quota usage bar. **It is `--color-status-warning` exactly**
+  //                      — the same six digits the token layer declares — so this is a token
+  //                      spelled as a number, and `bg-status-warning` is the value it already
+  //                      was. `getUsageColor`'s whole three-branch body goes with it: the three
+  //                      hues are `statusToken`'s `loss` / `warning` / `profit` groups now.
+  //   #000 ×3            the *RECOMMENDED* ribbon, the *CURRENT* ribbon and the *Subscribe*
+  //                      button, all three text-on-brand -> `content.inverse` (#080A0E). Pure
+  //                      black is not in the palette; this is the third page in this group to
+  //                      carry that exact substitution (7.6, 7.7 and now 7.9), each time as
+  //                      text sitting on a brand-filled surface.
+  //   #fff ×2            the payment-failure button's label and the card glyph ->
+  //                      `content.primary` (#F0F2F5), the same substitution task 7.3 made on
+  //                      `TwoFA.jsx`'s switch knob.
+  //   #00000088          the currency dropdown's shadow -> `token.shadow.overlay`. A 53% black
+  //                      at a depth the token layer does not declare at all; `shadow.overlay`
+  //                      is the declared elevation for a floating layer, and this is the first
+  //                      page in the group to need that one rather than `shadow.panel` or
+  //                      `shadow.raised`.
+  //
+  // BOTH OF THIS PAGE'S TWO GRADIENTS GO, which is the pair requirements §1.10 counts as
+  // "Billing 2". The second was `linear-gradient(135deg, surface.raised, surface.panel)` on the
+  // current-plan card — a hand-built elevation between two declared surfaces, which is what
+  // `ds/Panel` is. Requirement 10.1's rule is that a gradient on a trading surface needs a
+  // declared token or it does not belong, and neither of these had one.
+  //
+  // FOURTEEN OFF-PALETTE CONSTRUCTS THIS GUARD CANNOT SEE went with them — the largest such
+  // cohort in this spec so far, and all one construct: `${token.status.loss.fg}12`, `…44`,
+  // `…10`, `…55`, `…35`, `${token.status.profit.fg}12`, `…44`, `…20`, `…50`,
+  // `${token.brand.base}15`, `…40`, `…20`, `…50` and `${token.line.default}20`. Each is a token
+  // with two hex digits concatenated on, i.e. fourteen hand-mixed alphas across three hues
+  // wearing a token's name; none carries a `#`, so `HEX_LITERAL` never matched one of them.
+  // `token.brand.wash` and the declared `status.*.wash` values are what they become, or they
+  // leave with the element that was painting them. This is the fifth page in this spec to carry
+  // the construct (7.4, 7.5, 7.7, 7.8 and now 7.9) and by far the heaviest, which is the
+  // strongest evidence yet that the ratchet's blindness to it is worth a guard of its own.
+  'pages/Billing.jsx': 0,
 
   // -- Shared surfaces an in-scope task cleared or created ------------------
   // These are not pages and so are not on design.md's M6-M9 page list, but each one is
@@ -877,7 +925,10 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // `pages/TwoFA.jsx: 12` stood here until retail-ui-simplification task 7.3 took it to 0 and
   // moved the entry into the in-scope block above. The full map is on the entry; eight of the
   // twelve left with the two banners that became `ds/Alert`.
-  'pages/Billing.jsx': 9,
+  // `pages/Billing.jsx: 9` stood here until retail-ui-simplification task 7.9 took it to 0 and
+  // moved the entry into the in-scope block above. Two of the nine were another company's
+  // brand colours, painted behind every stored card whatever the card actually was; the full
+  // map is on the entry.
   // `pages/Profile.jsx: 7` stood here until retail-ui-simplification task 7.8 took it to 0 and
   // moved the entry into the in-scope block above. Five of the seven were one green, spelled
   // four ways across four pills, and three of those four pills were fabrications that went

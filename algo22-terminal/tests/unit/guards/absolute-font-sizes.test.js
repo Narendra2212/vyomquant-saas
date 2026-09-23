@@ -325,6 +325,7 @@ const CLEARED_BY_THIS_SPEC = Object.freeze({
   'pages/Wizard.jsx': Object.freeze({ was: 24, now: 0, task: '7.6' }),
   'pages/LegalPage.jsx': Object.freeze({ was: 15, now: 0, task: '7.7' }),
   'pages/Profile.jsx': Object.freeze({ was: 79, now: 0, task: '7.8' }),
+  'pages/Billing.jsx': Object.freeze({ was: 39, now: 0, task: '7.9' }),
 });
 
 describe('absolute-font-sizes: the patterns measure the tree they were written for', () => {

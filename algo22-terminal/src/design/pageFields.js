@@ -147,6 +147,7 @@ export const PAGES = Object.freeze({
   SECURITY_LOGS: 'security-logs',
   WIZARD: 'wizard',
   PROFILE: 'profile',
+  BILLING: 'billing',
 });
 
 /** Migration 015, named so a warning and this declaration spell it the same way. */
@@ -3137,6 +3138,578 @@ const PROFILE_FIELDS = [
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════
+ * Billing (retail-ui-simplification Requirement 4.2) — /app/billing
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Not one of §7's pages. It is here for the reason `PROFILE` and `WIZARD` are, with one
+ * thing on top: **every figure on it is money, a period, or an entitlement the trader has
+ * paid for.** design.md §6 is written about this class of field and names this page as the
+ * one where collapsing a reported zero into an absence "would be most plausible and most
+ * expensive". A ₹0 invoice line and an invoice line nobody could read are different facts,
+ * and before this declaration they rendered as the same four characters.
+ *
+ * THE FOUR READS, AND WHAT EACH ONE REALLY ANSWERS
+ * ----------------------------------------------
+ *   GET /api/billing/plans           `PricingService.get_localized_plans`. PUBLIC — no
+ *                                    `Depends(get_current_user)` (`routers/billing.py:829`).
+ *                                    It answers the CATALOGUE plus the viewer's pricing
+ *                                    context (country, currency, symbol, FX). It says
+ *                                    nothing about what this account is subscribed to.
+ *   GET /api/billing/entitlements    `get_user_entitlements` plus three `profiles` columns.
+ *                                    This is the only read that knows the account's plan.
+ *   GET /api/billing/invoices        `billing_invoices` rows, newest first.
+ *   GET /api/billing/payment-methods the stored cards.
+ *
+ * The split matters because the page merged them: a plan NAME was capitalised out of
+ * `entitlements.plan` while the PRICE beside it came from the catalogue, so a failed
+ * entitlements read and a free account produced the same header.
+ *
+ * WHAT WAS SUBSTITUTED — TEN KINDS, ON A MONEY SURFACE
+ * --------------------------------------------------
+ * Each one is an entry below with its real source path or its explicit unavailability.
+ * The short version, so a reviewer knows what the diff is removing:
+ *
+ *   1. `currentPlan?.name || "Free"` — the same shape `pages/Profile.jsx` carried as
+ *      `'Free Tier'`, one page along, and this is the page Profile's *Manage subscription*
+ *      control sends the trader to in order to find out. A PAID account whose entitlements
+ *      read failed was told it was on the free plan.
+ *   2. `subscription_status` defaulted to `"active"` THREE times over — the initial state,
+ *      `data.subscription_status || "active"`, and `…?.toUpperCase() || "ACTIVE"` at the
+ *      render. So a failed read rendered a green *ACTIVE* pill, and `past_due` was
+ *      indistinguishable from "we could not read it".
+ *   3. Because 1 and 2 also fed `isFreePlan` and `isPaymentFailed`, a failed read TOOK THE
+ *      CONTROLS AWAY as well: no *Cancel*, no *Resume*, no *Manage billing*, and no
+ *      payment-failure banner for an account that was actually past due.
+ *   4. *Cancels at period end* — a period claim rendered when `renewal_date` was null.
+ *   5. Eight `|| 0`s over `usage.*` and `quotas.*`. **The free plan's real quotas for bots,
+ *      ML trainings and marketplace publishing are all literally `0`**
+ *      (`subscription_engine.py:86`–`:90`), so on this page the fabricated zero and the
+ *      genuine zero were the same pixels for the same trader — §6's hazard exactly.
+ *   6. `formatPlanPrice` returned `` `${currencySymbol}0` `` for a missing plan and used
+ *      `localized_price !== undefined ? … : 0` for a missing price, so an unreadable price
+ *      advertised itself as free. `pages/Wizard.jsx` had the same defect through different
+ *      keys and task 7.6 removed it there; the two pages priced the same catalogue.
+ *   7. `decimals` was recomputed in the page — `currency === "JPY" || currency === "KRW" ?
+ *      0 : 2` — when `plans[].decimals` is a real key on the same object (Requirement
+ *      16.4 forbids deriving client-side what the server reports).
+ *   8. `` `Billed as $${p.checkout_price || p.base_price} ${p.checkout_currency}` `` — a
+ *      HARDCODED `$` in front of an amount the same line labels as another currency, e.g.
+ *      `$2499 INR`. `plans[].checkout_currency_symbol` is a real key. The `|| p.base_price`
+ *      arm also swapped in a USD figure for a genuine `0`.
+ *   9. The invoice amount: `inv.currency === "INR" ? ₹amtINR : $amtUSD`, so **every invoice
+ *      in any currency other than INR rendered with a dollar sign** whatever it was
+ *      denominated in — and both arms were `|| 0`, so an unreadable amount rendered as
+ *      `$0`, a settled invoice for nothing.
+ *  10. The pricing context was defaulted to `"USD"` / `"$"` / `"US"` / `"United States"` /
+ *      `"ip"`, so a failed catalogue read rendered *United States (USD)* under an
+ *      *Auto-detected* chip — a geolocation claim for a lookup that never happened.
+ *
+ * WHAT IS DELIBERATELY NOT DECLARED HERE
+ * -------------------------------------
+ * `plans[].features` is a LIST and `design/reported.js`'s `isReadableValue` refuses arrays;
+ * `plans[].recommended` selects a treatment rather than reporting a figure. Both are
+ * `Wizard.jsx`'s precedent, recorded there for the same reasons. The 21-entry
+ * `supportedCurrencies` fallback is a CONTROL'S OPTION SET — reference data for a
+ * `<button>` list, superseded by the response's own `supported_currencies` — and a
+ * control's options and a reported figure are different things, which is the distinction
+ * `pages/Profile.jsx` recorded for `NotificationSettingsRequest`'s switch defaults.
+ * `usage` / `quotas` percentage bars carry no figure the two declared Metrics beside them
+ * do not: the bar renders only when BOTH are available, because a 0%-wide bar for an
+ * unread quota is the same fabrication as a `0`.
+ */
+const BILLING_PLANS_READ = 'billingApi.getPlans';
+const BILLING_PLANS_ENDPOINT = 'GET /api/billing/plans';
+const BILLING_ENTITLEMENTS_READ = 'billingApi.getEntitlements';
+const BILLING_ENTITLEMENTS_ENDPOINT = 'GET /api/billing/entitlements';
+const BILLING_INVOICES_READ = 'billingApi.getInvoices';
+const BILLING_INVOICES_ENDPOINT = 'GET /api/billing/invoices';
+const BILLING_METHODS_READ = 'billingApi.getPaymentMethods';
+const BILLING_METHODS_ENDPOINT = 'GET /api/billing/payment-methods';
+
+/** Every quota figure's absence says the same thing, because it has the same cause. */
+const QUOTA_UNREAD = 'Your entitlements could not be read, so this allowance is not shown '
+  + 'rather than guessed. Refresh reads them again.';
+
+const BILLING_FIELDS = [
+  // ── GET /api/billing/entitlements — the account's own subscription ────────
+  entry({
+    page: PAGES.BILLING,
+    field: 'planName',
+    label: 'Current plan',
+    requirement: '4.2',
+    read: BILLING_ENTITLEMENTS_READ,
+    endpoint: BILLING_ENTITLEMENTS_ENDPOINT,
+    path: 'plan',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'Your current plan could not be read, so it is not shown here rather than '
+      + 'guessed. The plans below are the catalogue, not what you hold; Refresh reads your '
+      + 'own subscription again.',
+    note: 'Read as `currentPlan?.name || "Free"`, over a `currentPlan` the page only ever '
+      + 'built inside `if (entitlementsRes.status === "fulfilled" && data.plan)` — so a 500, '
+      + 'a rejected promise and a body without a plan all rendered the word "Free" on a '
+      + 'paid account. `pages/Profile.jsx` carried the same substitution as "Free Tier" and '
+      + 'its *Manage subscription* control points HERE, so a trader checking the claim was '
+      + 'shown it twice. The display name is the plan id capitalised, which matches '
+      + '`SubscriptionEngine`\'s own names ("free" → "Free", "pro" → "Pro"); a genuinely '
+      + 'free account still reads Free, and that is the reading the fallback impersonated.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'subscriptionStatus',
+    label: 'Subscription status',
+    requirement: '4.2',
+    read: BILLING_ENTITLEMENTS_READ,
+    endpoint: BILLING_ENTITLEMENTS_ENDPOINT,
+    path: 'subscription_status',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'Your subscription status could not be read. Manage billing opens the payment '
+      + 'provider\'s portal, which is the authority on whether this plan is currently paid.',
+    note: 'DEFAULTED TO "active" THREE TIMES: `useState("active")`, '
+      + '`data.subscription_status || "active"`, and `…?.toUpperCase()?.replace("_", " ") '
+      + '|| "ACTIVE"` at the chip. A failed read therefore rendered a green ACTIVE pill, and '
+      + 'the same value fed `isPaymentFailed`, so an account that really was `past_due` got '
+      + 'no payment-failure banner either. `profiles.subscription_status` is the server\'s '
+      + 'own column and is now rendered verbatim through `ds/StatusBadge`.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'renewalDate',
+    label: 'Renews',
+    requirement: '4.2',
+    read: BILLING_ENTITLEMENTS_READ,
+    endpoint: BILLING_ENTITLEMENTS_ENDPOINT,
+    path: 'renewal_date',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'No next billing date is recorded against this account, so there is no renewal '
+      + 'date to show. A plan with no scheduled renewal is not billed again until one is set.',
+    note: '`profiles.next_billing_date`, null for an account with no scheduled renewal. The '
+      + 'cancellation line read `renewalDate ? fmtDate(renewalDate) : "at period end"`, so a '
+      + 'missing date became a claim about WHEN access ends — and `fmtDate` itself answered '
+      + '"N/A", a marker with no reason, which Requirement 19.3 is the other half of.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'cancelAtPeriodEnd',
+    label: 'Cancellation scheduled',
+    requirement: '4.2',
+    read: BILLING_ENTITLEMENTS_READ,
+    endpoint: BILLING_ENTITLEMENTS_ENDPOINT,
+    path: 'cancel_at_period_end',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'Whether a cancellation is already scheduled could not be read, so neither '
+      + 'Cancel nor Resume is offered on a guess. Manage billing opens the provider\'s '
+      + 'portal, which reports the current schedule.',
+    note: '`bool(profiles.cancel_at_period_end)`, so `false` is a reading and means the '
+      + 'plan renews. It selects between the Cancel and Resume controls, which is why an '
+      + 'absence has to be a state rather than a default: `|| false` offered Cancel to an '
+      + 'account that had already cancelled.',
+  }),
+
+  // ── GET /api/billing/entitlements — the four quota pairs ──────────────────
+  //
+  // Eight entries and not four, because `usage.x` and `quotas.x` are two readings from two
+  // objects and either can be absent on its own. The free plan's real `bots`,
+  // `ml_trainings` and `marketplace_published` quotas are `0`, so on this page a genuine
+  // zero allowance and an unread one were the same glyph — design.md §6's hazard on the
+  // field where it is least visible. `-1` is the server's "unlimited" and renders `∞`.
+  entry({
+    page: PAGES.BILLING,
+    field: 'strategiesUsed',
+    label: 'Strategies used',
+    requirement: '4.2',
+    read: BILLING_ENTITLEMENTS_READ,
+    endpoint: BILLING_ENTITLEMENTS_ENDPOINT,
+    path: 'usage.strategies',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: QUOTA_UNREAD,
+    note: 'Read as `usage.strategies || 0`. A genuine `0` means none saved yet.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'strategiesQuota',
+    label: 'Strategies included',
+    requirement: '4.2',
+    read: BILLING_ENTITLEMENTS_READ,
+    endpoint: BILLING_ENTITLEMENTS_ENDPOINT,
+    path: 'quotas.strategies',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: QUOTA_UNREAD,
+    note: 'Read as `quotas.strategies || 0`, which rendered the denominator of a paid '
+      + 'allowance as zero whenever the read failed. `-1` is unlimited.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'botsUsed',
+    label: 'Live bots used',
+    requirement: '4.2',
+    read: BILLING_ENTITLEMENTS_READ,
+    endpoint: BILLING_ENTITLEMENTS_ENDPOINT,
+    path: 'usage.bots',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: QUOTA_UNREAD,
+    note: 'Read as `usage.bots || 0`. A genuine `0` means nothing is deployed.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'botsQuota',
+    label: 'Live bots included',
+    requirement: '4.2',
+    read: BILLING_ENTITLEMENTS_READ,
+    endpoint: BILLING_ENTITLEMENTS_ENDPOINT,
+    path: 'quotas.bots',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: QUOTA_UNREAD,
+    note: '**THE CLEAREST CASE OF §6 ON THIS PAGE.** The free plan\'s bot quota is really '
+      + '`0` (`subscription_engine.py:87`), so `quotas.bots || 0` rendered the same "0" for '
+      + '"your plan includes no live bots" and for "we could not read your plan" — to the '
+      + 'same trader, on the same tile, beside a Subscribe button.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'mlTrainingsUsed',
+    label: 'ML models used',
+    requirement: '4.2',
+    read: BILLING_ENTITLEMENTS_READ,
+    endpoint: BILLING_ENTITLEMENTS_ENDPOINT,
+    path: 'usage.ml_trainings',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: QUOTA_UNREAD,
+    note: 'Read as `usage.ml_trainings || 0`. Reset monthly '
+      + '(`subscription_engine.py:383`), so a genuine `0` is the normal state early in a '
+      + 'billing period.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'mlTrainingsQuota',
+    label: 'ML models included',
+    requirement: '4.2',
+    read: BILLING_ENTITLEMENTS_READ,
+    endpoint: BILLING_ENTITLEMENTS_ENDPOINT,
+    path: 'quotas.ml_trainings',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: QUOTA_UNREAD,
+    note: 'Read as `quotas.ml_trainings || 0`. Free and Starter really are `0`, so the '
+      + 'substitution was invisible on exactly the two plans a retail trader starts on.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'marketplacePublishedUsed',
+    label: 'Marketplace listings used',
+    requirement: '4.2',
+    read: BILLING_ENTITLEMENTS_READ,
+    endpoint: BILLING_ENTITLEMENTS_ENDPOINT,
+    path: 'usage.marketplace_published',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: QUOTA_UNREAD,
+    note: 'Read as `usage.marketplace_published || 0`.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'marketplacePublishedQuota',
+    label: 'Marketplace listings included',
+    requirement: '4.2',
+    read: BILLING_ENTITLEMENTS_READ,
+    endpoint: BILLING_ENTITLEMENTS_ENDPOINT,
+    path: 'quotas.marketplace_published',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: QUOTA_UNREAD,
+    note: 'Read as `quotas.marketplace_published || 0`. Enterprise is `-1`, the server\'s '
+      + 'unlimited sentinel, which renders `∞` and is a reading like any other.',
+  }),
+
+  // ── GET /api/billing/plans — the viewer's pricing context ─────────────────
+  //
+  // This read is PUBLIC and says nothing about the account. Everything in this group
+  // describes the money the CATALOGUE is quoted in, which is why a fabricated default here
+  // is a claim about a lookup rather than about a subscription.
+  entry({
+    page: PAGES.BILLING,
+    field: 'displayCurrency',
+    label: 'Display currency',
+    requirement: '4.2',
+    read: BILLING_PLANS_READ,
+    endpoint: BILLING_PLANS_ENDPOINT,
+    path: 'currency',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'The currency this catalogue is priced in could not be read, so no denomination '
+      + 'is stated rather than assumed. Every price below states its own currency.',
+    note: 'Defaulted to `"USD"` in `useState`, so a failed catalogue read named a currency '
+      + 'nobody resolved — and the page then quoted prices "in" it. The trader\'s explicit '
+      + 'pick from the currency control overrides it, because that is a choice and not a '
+      + 'reading.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'displayCurrencySymbol',
+    label: 'Currency symbol',
+    requirement: '4.2',
+    read: BILLING_PLANS_READ,
+    endpoint: BILLING_PLANS_ENDPOINT,
+    path: 'currency_symbol',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'No currency glyph was reported for this catalogue, so the currency code is '
+      + 'shown instead of a symbol that might belong to a different currency.',
+    note: 'Defaulted to `"$"`, which is the single most consequential one-character '
+      + 'substitution on the page: `FXService.get_currency_symbol` is what answers this, and '
+      + 'a `$` in front of a rupee amount misstates the figure by roughly two orders of '
+      + 'magnitude. The code is the fallback because a code cannot be misread as a symbol.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'billingRegion',
+    label: 'Billing region',
+    requirement: '4.2',
+    read: BILLING_PLANS_READ,
+    endpoint: BILLING_PLANS_ENDPOINT,
+    path: 'country_name',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'Your billing region was not reported, so none is stated. It affects which '
+      + 'currency prices are quoted in, not what you can trade.',
+    note: 'Defaulted to `"United States"` beside a `"US"` code that nothing read. '
+      + '`CountryDetector` resolves this from the request; a page that answers it from a '
+      + 'literal is telling a trader where the server thinks they are without asking.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'currencySource',
+    label: 'Currency source',
+    requirement: '4.2',
+    read: BILLING_PLANS_READ,
+    endpoint: BILLING_PLANS_ENDPOINT,
+    path: 'currency_source',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'Whether this currency was detected for you or saved as your preference was not '
+      + 'reported, so neither is claimed. The currency control changes it either way.',
+    note: 'Defaulted to `"ip"`, which the page rendered as an *Auto-detected* chip — so a '
+      + 'failed read published the result of a geolocation that never ran. `"ip"` and '
+      + 'anything else are both readings; the absence is not.',
+  }),
+
+  // ── GET /api/billing/plans — one catalogue card ───────────────────────────
+  entry({
+    page: PAGES.BILLING,
+    field: 'cataloguePlanName',
+    label: 'Plan',
+    requirement: '4.2',
+    read: BILLING_PLANS_READ,
+    endpoint: BILLING_PLANS_ENDPOINT,
+    path: 'plans[].name',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'This plan\'s name could not be read, so the card is not headed with a guess. '
+      + 'Refresh reads the catalogue again.',
+    note: '`SubscriptionEngine`\'s plan record always carries a name, so the marker is not '
+      + 'expected — the render path makes it reachable anyway, because a card headed with '
+      + '`undefined` beside a Subscribe button is worse than a card that says it could not '
+      + 'read its own name.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'cataloguePlanDescription',
+    label: 'Plan summary',
+    requirement: '4.2',
+    read: BILLING_PLANS_READ,
+    endpoint: BILLING_PLANS_ENDPOINT,
+    path: 'plans[].description',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'No summary was reported for this plan. The capabilities listed on the card are '
+      + 'the plan\'s own and are unaffected.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'cataloguePlanPrice',
+    label: 'Monthly price',
+    requirement: '4.2',
+    read: BILLING_PLANS_READ,
+    endpoint: BILLING_PLANS_ENDPOINT,
+    path: 'plans[].localized_price',
+    inputs: ['plans[].currency', 'plans[].currency_symbol', 'plans[].decimals'],
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'This plan\'s price could not be read, so it is not shown here rather than '
+      + 'guessed. Subscribe opens checkout, which prices the plan server-side and states '
+      + 'the amount before anything is charged.',
+    note: '`formatPlanPrice` returned `` `${currencySymbol}0` `` for a missing plan and '
+      + 'substituted `0` for a missing `localized_price`, so **an unreadable price '
+      + 'advertised itself as free** — the same defect `pages/Wizard.jsx` carried through '
+      + '`p.inr`/`p.usd` and task 7.6 removed, on the same catalogue. A genuine `0` IS the '
+      + 'free tier and still renders as a zero price. `decimals` comes from this object '
+      + 'too: the page recomputed it as `currency === "JPY" || currency === "KRW" ? 0 : 2`, '
+      + 'which is a client-side derivation of a money format the server reports '
+      + '(Requirement 16.4) and which rounded every other zero-decimal currency to two.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'cataloguePlanCheckoutPrice',
+    label: 'Charged at checkout',
+    requirement: '4.2',
+    read: BILLING_PLANS_READ,
+    endpoint: BILLING_PLANS_ENDPOINT,
+    path: 'plans[].checkout_price',
+    inputs: [
+      'plans[].checkout_currency',
+      'plans[].checkout_currency_symbol',
+      'plans[].is_direct_checkout',
+    ],
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'The amount the payment provider will charge was not reported, so it is not '
+      + 'stated here. Checkout states the charge in its own currency before you confirm.',
+    note: 'Rendered as `` `Billed as $${p.checkout_price || p.base_price} '
+      + '${p.checkout_currency}` `` — **a hardcoded dollar sign in front of an amount the '
+      + 'same sentence labels as another currency.** `checkout_currency_symbol` is a real '
+      + 'key on this object. The `|| p.base_price` arm was a second substitution on top: '
+      + '`base_price` is USD by declaration (`pricing_service.py:186`), so a genuine `0` '
+      + 'checkout amount was replaced with a figure in a different currency entirely.',
+  }),
+
+  // ── GET /api/billing/invoices ─────────────────────────────────────────────
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoiceReference',
+    label: 'Invoice',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    path: '[].id',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'This invoice carries no reference, so there is nothing to quote for it. The '
+      + 'payment provider\'s portal lists the same invoices with their own references.',
+    note: 'Rendered as `String(inv.id).slice(0, 8) + "..."` under `cursor: pointer` with no '
+      + '`onClick` and no keyboard path — a truncated identifier dressed as a link. The '
+      + 'truncation stays (design.md §2.5 mechanism 4 permits it for an IDENTIFIER) with '
+      + 'the full reference on the element\'s `title`; the false affordance does not.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoiceDate',
+    label: 'Date',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    path: '[].date',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'This invoice carries no date, so none is shown. The rows are ordered newest '
+      + 'first by the server whether or not each one states its date.',
+    note: '`billing_invoices.created_at`. `fmtDate` answered the literal `"N/A"` for a '
+      + 'missing value, which is a marker with no reason — the half Requirement 19.3 calls '
+      + 'load-bearing.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoiceAmount',
+    label: 'Amount',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    inputs: ['[].currency', '[].amtINR', '[].amtUSD'],
+    verdict: VERDICT.DERIVED,
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    derivation: 'The row carries TWO amounts and its own denomination, so the amount is '
+      + 'selected by the currency rather than read from one path: `currency === "INR"` → '
+      + '`amtINR`, `currency === "USD"` → `amtUSD`. **Any other currency has no matching '
+      + 'column and is therefore an absence, not a dollar figure.**',
+    reason: 'This invoice\'s amount is recorded in a currency this page has no column for, '
+      + 'or was not reported at all, so no figure is shown rather than one in the wrong '
+      + 'denomination. Manage billing opens the provider\'s portal, which holds the '
+      + 'original invoice.',
+    note: '`inv.currency === "INR" ? ₹${amtINR || 0} : $${amtUSD || 0}`. Two faults in one '
+      + 'expression: the else arm put a **dollar sign in front of every non-INR invoice '
+      + 'whatever it was denominated in**, and both arms substituted `0`, so an unreadable '
+      + 'amount rendered as a settled invoice for nothing. `routers/billing.py:1085` fills '
+      + 'both columns from `amount_usd` / `amount_inr` with a server-side `0` default of '
+      + 'its own, which is a backend concern and out of scope here (Requirement 16.7) — '
+      + 'what is in scope is that the page added a second one.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoiceStatus',
+    label: 'Status',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    path: '[].status',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'This invoice reports no status, so neither paid nor unpaid is claimed for it. '
+      + 'The provider\'s portal is the authority on whether it settled.',
+    note: 'The server defaults the column to `"unknown"`, which `design/semantic.js` '
+      + 'already resolves to the neutral group — so an unknown status is a reading and is '
+      + 'rendered as one rather than being coloured as a failure.',
+  }),
+
+  // ── GET /api/billing/payment-methods ──────────────────────────────────────
+  entry({
+    page: PAGES.BILLING,
+    field: 'cardBrand',
+    label: 'Card',
+    requirement: '4.2',
+    read: BILLING_METHODS_READ,
+    endpoint: BILLING_METHODS_ENDPOINT,
+    path: '[].brand',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'The card network on this payment method was not reported. Manage via the '
+      + 'provider portal shows the stored method in full.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'cardLast4',
+    label: 'Card ending',
+    requirement: '4.2',
+    read: BILLING_METHODS_READ,
+    endpoint: BILLING_METHODS_ENDPOINT,
+    path: '[].last4',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'The last four digits of this card were not reported, so the method cannot be '
+      + 'identified here. It is unchanged either way, and the provider portal shows it.',
+    note: 'The last four digits are the only part of a card number this application ever '
+      + 'holds or renders; nothing on this page has access to the rest.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'cardExpiry',
+    label: 'Expires',
+    requirement: '4.2',
+    read: BILLING_METHODS_READ,
+    endpoint: BILLING_METHODS_ENDPOINT,
+    inputs: ['[].expiry_month', '[].expiry_year'],
+    verdict: VERDICT.DERIVED,
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    derivation: '`${expiry_month}/${expiry_year}`, the page\'s own existing expression. '
+      + 'BOTH parts are required: a month with no year, or a year with no month, is not an '
+      + 'expiry date and is an absence rather than half a figure.',
+    reason: 'This card\'s expiry date was not reported, so none is shown. A card that has '
+      + 'expired is declined at the next charge whether or not the date is displayed here.',
+    note: 'Rendered as `Expires {expiry_month}/{expiry_year}`, which put the literal '
+      + '"Expires undefined/undefined" on screen when either part was missing.',
+  }),
+];
+
+/*
+ * ═══════════════════════════════════════════════════════════════════════════
  * The declaration, and the two indexes over it
  * ═══════════════════════════════════════════════════════════════════════════
  */
@@ -3162,6 +3735,7 @@ export const PAGE_FIELDS = Object.freeze([
   ...SECURITY_LOGS_FIELDS,
   ...WIZARD_FIELDS,
   ...PROFILE_FIELDS,
+  ...BILLING_FIELDS,
 ]);
 
 /**
