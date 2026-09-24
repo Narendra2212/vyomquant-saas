@@ -178,4 +178,50 @@ describe('Accordion: its own contract', () => {
     expect(document.querySelector('h2')).toBeTruthy();
     expect(screen.getByText('1 setting')).toBeTruthy();
   });
+
+  /**
+   * `retail-ui-simplification` task 12.3's follow-up. Requirements 17, 20.1, 20.2.
+   *
+   * The count above is right for Requirement 15.6's advanced FORM fields and wrong for what
+   * task 12.3 put behind this primitive: two safety caveats on `pages/LiveTrading.jsx`, where
+   * "1 setting" claims a setting that is not in there and, on a page that stops real
+   * deployments, implies something operable — so a trader clicking for a control finds a
+   * sentence. `countNoun` names the noun; it does not suppress the count, because `fields` is
+   * required and non-empty, so a number always exists and only the noun is call-site
+   * knowledge.
+   *
+   * The test above is the other half of this one and is deliberately untouched: it still
+   * reads `2 settings` and `1 setting` from call sites that pass no `countNoun`, which is the
+   * proof the default did not move and that `Backtester` and `ParameterForm` are unaffected.
+   */
+  it('takes the noun for its count as a prop, and defaults it to the settings wording', () => {
+    mountForm({ countNoun: 'explanation' });
+    expect(screen.getByText('2 explanations')).toBeTruthy();
+    expect(screen.queryByText('2 settings')).toBeNull();
+
+    // Requirements 20.1 and 20.2: the toggle keeps its accessible name and its expanded
+    // state. The count is inside the button, so a wrong noun is also a wrong name.
+    const toggle = screen.getByRole('button', { name: /Advanced settings/ });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.textContent).toContain('2 explanations');
+
+    cleanup();
+    render(
+      <Accordion title="Why this list can be short" fields={['registry-why']} countNoun="explanation">
+        <Field id="registry-why" label="Why" />
+      </Accordion>,
+    );
+    expect(screen.getByText('1 explanation')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Why this list can be short/ })).toBeTruthy();
+  });
+
+  it('falls back to the default noun rather than letting an empty one suppress the count', () => {
+    // No magic empty string: a call site that passes nothing usable gets the old wording, not
+    // a toggle with a bare chevron where the count was.
+    mountForm({ countNoun: '   ' });
+    expect(screen.getByText('2 settings')).toBeTruthy();
+    cleanup();
+    mountForm({ countNoun: null });
+    expect(screen.getByText('2 settings')).toBeTruthy();
+  });
 });

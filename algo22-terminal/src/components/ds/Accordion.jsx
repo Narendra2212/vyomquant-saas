@@ -132,6 +132,19 @@ export function partitionAdvanced(fields) {
  *   accordion collapses. Typically `partitionAdvanced(FORM).advanced`.
  * @param {string} [props.summary] What is inside, so the trader can decide whether to
  *   open it without opening it.
+ * @param {string} [props.countNoun] The SINGULAR noun for what `fields` counts, used in
+ *   the trailing count beside the title. Defaults to `'setting'` — Requirement 15.6's
+ *   case and every existing call site — and is pluralised by appending `s`, which is
+ *   exactly what the count has always done, so omitting this prop renders the
+ *   character-identical string it rendered before the prop existed.
+ *
+ *   Pass it when `fields` does not count settings. `retail-ui-simplification` task 12.3
+ *   put two safety caveats on `pages/LiveTrading.jsx` behind this primitive, where
+ *   "1 setting" was wrong twice: there is no setting in there, and on a live-trading
+ *   page "setting" implies something operable, so a trader clicking for a control finds
+ *   a sentence. `countNoun="explanation"` is the fix. An empty or non-string value falls
+ *   back to the default rather than suppressing the count — the count is not optional
+ *   (see the note beside it in the render).
  * @param {boolean} [props.defaultOpen] Requirement 15.6's answer is `false`, which is
  *   why that is the default. A page passing `true` is opting out and should say why.
  * @param {2|3|4} [props.level] Heading level for the toggle, matching `ds/Panel`'s
@@ -144,6 +157,7 @@ export function Accordion({
   title,
   fields,
   summary,
+  countNoun = 'setting',
   defaultOpen = false,
   level = 3,
   id,
@@ -172,6 +186,10 @@ export function Accordion({
   );
 
   const declared = Array.isArray(fields) ? fields.filter(hasText) : [];
+  // Optional props in this file fall back rather than throw (see `summary`, `level`), and
+  // the fallback here is the old hardcoded noun — so `countNoun` absent, empty, or not a
+  // string all render what the primitive rendered before the prop existed.
+  const noun = hasText(countNoun) ? countNoun.trim() : 'setting';
   const panelId = `${baseId}-panel`;
   const toggleId = `${baseId}-toggle`;
   // The APG accordion pattern: the toggle lives in a heading, so the region is
@@ -202,9 +220,15 @@ export function Accordion({
           </span>
           <span className="flex shrink-0 items-center gap-2">
             {/* The count is the honest summary of a closed region: "3 settings" tells
-                the trader whether opening it is worth the click. */}
+                the trader whether opening it is worth the click. It is not suppressible,
+                and `countNoun` rather than a `showCount={false}` is why: `fields` is
+                REQUIRED and asserted non-empty above, so there is always a set behind the
+                toggle and always a number to report. The one thing the primitive cannot
+                know is what the set is made of, so that — and only that — is the prop. An
+                opt-out would also give the toggle a second shape, with the chevron alone
+                where the count was, which is the variant Requirement 17.2 refuses. */}
             <span className="text-micro text-content-secondary">
-              {`${declared.length} setting${declared.length === 1 ? '' : 's'}`}
+              {`${declared.length} ${noun}${declared.length === 1 ? '' : 's'}`}
             </span>
             <ChevronDown
               size={14}

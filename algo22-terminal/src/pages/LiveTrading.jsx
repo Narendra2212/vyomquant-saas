@@ -1382,13 +1382,15 @@ const REGISTRY_CAVEAT_SURFACE = `${REGISTRY_CAVEAT_CLAIM} ${REGISTRY_CAVEAT_ACTI
  * toggle, and a question rather than a label, so a trader can tell whether the answer is worth
  * a click without being told the answer.
  *
- * FINDING, recorded rather than worked around. `ds/Accordion` renders a trailing
- * "N setting(s)" count beside this title — it was built for Requirement 15.6's advanced FORM
- * fields, and `Accordion.test.jsx`'s `names the region from a heading, and says how much is
- * inside` pins that wording. Beside a caveat the noun is wrong: there is no setting in here.
- * The fix is a prop on the primitive, which lands on `Backtester` and `ParameterForm` too and
- * is therefore its own commit under Requirement 22.1 rather than this page's. Nothing here
- * reshapes the caveat to avoid it.
+ * FINDING FROM TASK 12.3, CLOSED BY ITS FOLLOW-UP. `ds/Accordion` renders a trailing
+ * "N <noun>(s)" count beside this title, and the noun was hardcoded to Requirement 15.6's
+ * "setting" — so this disclosure read "1 setting", which is wrong twice: there is no setting
+ * in here, and on a page that stops real deployments "setting" implies something operable, so
+ * a trader clicking for a control would find a sentence. The fix was `countNoun` on the
+ * primitive, defaulting to `setting` so `Backtester` and `ParameterForm` are untouched; it
+ * landed in its own commit under Requirement 22.1 because a regression on those two must
+ * bisect to the primitive rather than to this page. Nothing here reshaped the caveat to avoid
+ * it, and the title below is byte-identical to the one task 12.3 committed.
  */
 const REGISTRY_CAVEAT_DISCLOSURE = "Why a deployment that is running can be missing from this list";
 
@@ -2845,6 +2847,11 @@ export default function LiveTrading() {
                 key={listIsIncomplete ? "incomplete" : "complete"}
                 title={REGISTRY_CAVEAT_DISCLOSURE}
                 fields={REGISTRY_CAVEAT_DISCLOSED}
+                /* `ds/Accordion` counts `fields` beside the title and defaults the noun to
+                   Requirement 15.6's "setting". There is no setting behind this toggle, and
+                   on a page that stops real deployments "setting" reads as something
+                   operable — a trader clicking for a control would find a sentence. */
+                countNoun="explanation"
                 defaultOpen={listIsIncomplete}
                 data-selector-disclosure="in-process-registry"
               >
@@ -2861,6 +2868,8 @@ export default function LiveTrading() {
               key={listIsIncomplete ? "incomplete" : "complete"}
               title={SELECTION_CAVEAT_DISCLOSURE}
               fields={SELECTION_CAVEAT_DISCLOSED}
+              /* Same noun for the same reason as the disclosure above. */
+              countNoun="explanation"
               defaultOpen={listIsIncomplete}
               data-selector-caveat="selection-scope"
               data-selector-disclosure="selection-scope"
