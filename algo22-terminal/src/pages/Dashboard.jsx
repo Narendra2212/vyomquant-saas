@@ -252,12 +252,13 @@ import {
 import { Link } from "react-router-dom";
 import {
   Activity, ArrowRight, BarChart2,
-  Layers, RefreshCw, Server, Wallet,
+  Layers, Plus, RefreshCw, Server, Wallet,
   ShieldAlert, AlertOctagon
 } from "lucide-react";
 import { dashboardApi } from "../api/modules/dashboard";
 import { riskApi } from "../api/modules/risk";
 import wsClient from "../websocketClient";
+import { Accordion } from "../components/ds/Accordion";
 import { Alert } from "../components/ds/Alert";
 import { CommandButton } from "../components/ds/CommandButton";
 import { ConfirmDialog } from "../components/ds/ConfirmDialog";
@@ -1300,6 +1301,99 @@ const EQUITY_EMPTY = Object.freeze({
 });
 
 /* ══════════════════════════════════════════════════════════════════════════
+ * ONE NEXT ACTION ON A FRESH ACCOUNT — Requirements 8.1, 8.2 (task 12.6)
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * Six of this page's seven panels carry an empty branch, and on an account that has done
+ * nothing all six resolve at once. Every one of them already NAMES an action — `ds/EmptyState`
+ * throws in development without one (Requirement 14.1) — so the defect Requirement 8.1
+ * describes is not missing copy. It is that six actions are offered identically, and six
+ * things marked the same mark nothing.
+ *
+ * WHICH ONE IS EMPHASISED, AND WHY IT IS NOT "CONNECT AN EXCHANGE"
+ * ---------------------------------------------------------------
+ * The emphasised action is the one a brand-new account can complete with no prior setup, at
+ * no risk to real money, that unlocks the most of the rest of the product. Of the six:
+ * "Deploy a strategy" needs a strategy that does not exist yet; "Open Signal Trace", "Open
+ * trade history" and "Open portfolio" each lead to another page with nothing on it; and
+ * "Connect an exchange" is the step that makes real-money trading possible, which is the
+ * wrong first ask of a trader who has not seen the product work yet. It stays present and
+ * reachable in the health panel — it is simply not the emphasised one.
+ *
+ * `STRATEGIES_EMPTY`'s "Build a strategy" is the one that survives all three tests, so the
+ * fleet panel carries the page's single `ds/CommandButton intent="primary"`. Its label
+ * differs from the empty state's on purpose, the way `Strategies.jsx`'s "New strategy"
+ * differs from its own `NO_STRATEGIES_STATE` action: one is the page's emphasised next step,
+ * the other is the panel explaining itself, and giving both the same words would read as the
+ * same control rendered twice.
+ *
+ * THE OTHER FIVE KEEP EVERYTHING EXCEPT THE EMPHASIS
+ * --------------------------------------------------
+ * No empty branch is edited, no action is removed and no state is renamed. Requirement 19.4:
+ * reduced weight is not collapse — the state name, its copy and its action all stay, and each
+ * of the five keeps the accessible name and keyboard path it has today (Requirement 6.4).
+ * What changes is that exactly one control is now marked as the next thing to do, so the
+ * other five read as what they are: the account's remaining absences, in their own panels.
+ */
+
+/**
+ * The three tier-2 zones that cannot fill until something is running, collapsed together.
+ *
+ * Requirement 8.2 caps simultaneously-visible `empty` panels at three and this page shows
+ * six. These are the three that go behind a disclosure, and they are the three that are
+ * empty as a CONSEQUENCE of the first three rather than as a fact of their own: a signal is
+ * recorded by a deployed strategy, an order is filled against a signal, and the equity curve
+ * is drawn from snapshots of what those produced. A trader with no strategy learns nothing
+ * from three panels restating it, and each one's action only leads to another empty page.
+ *
+ * Collapsed, not dropped, and only when all three are empty at once — `ds/Accordion` keeps
+ * the toggle in a heading and in the tab order, so every one of the three panels, its state
+ * name, its copy and its action are one keypress away (Requirement 6.4). The moment any of
+ * the three has a row, all three render in place exactly as they did before.
+ *
+ * `countNoun` because the default noun is `'setting'` and there is no setting in here.
+ */
+const DOWNSTREAM_FIELDS = Object.freeze(["recentSignals", "recentOrders", "equityCurve"]);
+
+const DOWNSTREAM_SUMMARY =
+  "Nothing has been recorded on this account yet, which is why all three are empty — no read "
+  + "failed. Each one still says what is missing and what to do.";
+
+/**
+ * The three downstream zones, in place or behind one disclosure.
+ *
+ * A composition of `ds/Accordion`, not a variant of it and not a second collapsed treatment:
+ * the primitive holds the toggle, the heading, the count and the unmount, and this decides
+ * only WHETHER the account is in the state that warrants collapsing (Requirement 17.2).
+ *
+ * `level={2}` rather than the primitive's default `3`. The zones inside are `ds/Panel`s whose
+ * titles are `h2`, and this disclosure is their sibling in the tier-2 column — an `h3` here
+ * would put two `h2`s inside an `h3`.
+ *
+ * Unmounted while closed rather than hidden, which is `ds/Accordion`'s own decision and the
+ * right one: a `hidden` subtree is still tabbable in some engines and still answers every DOM
+ * query, so "collapsed" would stop being decidable. The toggle is in the tab order and in the
+ * heading list, which is the keyboard path Requirement 6.4 asks for.
+ *
+ * @param {{collapsed: boolean, children: React.ReactNode}} props
+ */
+function DownstreamZones({ collapsed, children }) {
+  if (!collapsed) return <>{children}</>;
+
+  return (
+    <Accordion
+      title="Signals, orders and equity"
+      fields={DOWNSTREAM_FIELDS}
+      countNoun="panel"
+      summary={DOWNSTREAM_SUMMARY}
+      level={2}
+    >
+      {children}
+    </Accordion>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
  * THE REQUIREMENT 3.3 ALERT STRIP (task 19.2 part A)
  * ══════════════════════════════════════════════════════════════════════════
  *
@@ -1984,6 +2078,42 @@ export default function Dashboard() {
     ? PANEL_STATES.ERROR
     : zoneState(positions.length > 0);
 
+  /*
+   * THE FOUR ZONE STATES REQUIREMENT 8 READS, NAMED RATHER THAN INLINED
+   *
+   * Each was `state={zoneState(...)}` at its call site. They are hoisted because two of this
+   * page's renderings now depend on the STATE a zone resolved to and not on whether its list
+   * has rows: the fleet panel carries the page's one primary action while it is `empty`, and
+   * the three downstream zones collapse while all three are `empty`. Reading `.length` for
+   * either would decide during `loading` — before the read has answered — and collapse a
+   * panel that has not yet said whether it has anything, which is `zoneState`'s whole subject.
+   *
+   * `empty` is the only state either condition accepts. A zone that is `error` or
+   * `unavailable` is not a zone the trader has nothing in (Requirements 8.3, 19.4), so
+   * neither condition can reach one, and `positionsState`'s degraded arm is untouched.
+   */
+  const strategiesState = zoneState(strategies.length > 0);
+  const signalsState = zoneState(signals.length > 0);
+  const ordersState = zoneState(executions.length > 0);
+  const equityState = zoneState(equityCurve.length > 0);
+
+  /**
+   * Requirement 8.1: the fleet panel is the one that carries a primary action, and only on
+   * the account Requirement 8.1 describes. With a strategy on the books the fleet panel is
+   * reporting rather than asking, and a primary control there would be competing with tier 1.
+   */
+  const fleetEmpty = strategiesState === PANEL_STATES.EMPTY;
+
+  /**
+   * Requirement 8.2: six empty panels minus the three that only echo the first three.
+   *
+   * All three, not any: with a signal recorded but no fill, "no orders filled" is a fact of
+   * its own and belongs on screen beside the signal that produced none.
+   */
+  const downstreamEmpty = signalsState === PANEL_STATES.EMPTY
+    && ordersState === PANEL_STATES.EMPTY
+    && equityState === PANEL_STATES.EMPTY;
+
   /** The top five §7.1 draws. The link beside them is where the rest are. */
   const positionRows = useMemo(() => positions.slice(0, POSITIONS_LIMIT), [positions]);
   const positionCols = useMemo(() => positionColumns(currency), [currency]);
@@ -2398,10 +2528,34 @@ export default function Dashboard() {
               act on. */}
           <Panel
             title={labelOf("activeStrategyCount")}
-            state={zoneState(strategies.length > 0)}
+            state={strategiesState}
             loading={{ kind: "skeleton-cards", rows: 3 }}
             empty={STRATEGIES_EMPTY}
-            actions={<PanelLink to="/app/strategies">Manage strategies</PanelLink>}
+            /* THE PAGE'S ONE PRIMARY ACTION (Requirement 8.1, task 12.6). See the note
+               beside `DOWNSTREAM_FIELDS` for why this action and not one of the other five.
+
+               `ds/CommandButton intent="primary"` is the only "this is the next thing to do"
+               the design system publishes — `data-ds-intent` on the rendered control — and it
+               is published as an attribute rather than inferred from a class string, which is
+               what makes "exactly one" countable in `freshAccount.test.jsx`. `to` rather than
+               `onClick={() => navigate(...)}`: this is a navigation, so it belongs in the DOM
+               as a link and announces where it goes, which is `PanelLink`'s argument and the
+               reason `ui/Button`'s `to` exists. No new intent, no new variant, no new
+               primitive (Requirement 17.2).
+
+               "Manage strategies" is NOT displaced by it. A fresh account manages nothing, but
+               removing a control because it currently has little to do is how a page loses a
+               route (Requirements 16.2-16.5), so both stand and only one is emphasised. */
+            actions={(
+              <>
+                {fleetEmpty ? (
+                  <CommandButton intent="primary" icon={Plus} to="/app/builder">
+                    New strategy
+                  </CommandButton>
+                ) : null}
+                <PanelLink to="/app/strategies">Manage strategies</PanelLink>
+              </>
+            )}
             data-region="activeStrategyCount"
           >
             <div className="mb-4 grid grid-cols-2 gap-4">
@@ -2653,6 +2807,15 @@ export default function Dashboard() {
           </Panel>
         </div>
 
+        {/* ── ROWS 2 AND 3, IN PLACE OR BEHIND ONE DISCLOSURE ─────────────────────────
+            Requirement 8.2 caps simultaneously-visible `empty` panels at three; row 1 is
+            already three. So when — and only when — all three of these have nothing, the
+            three go behind `ds/Accordion` and row 1 is what a fresh account reads: the
+            strategy to build, the exposure it would open, and the venue it would need. The
+            three collapsed panels keep their state, their copy and their action, one keypress
+            away. See `DOWNSTREAM_FIELDS` for why these three and not another three. */}
+        <DownstreamZones collapsed={downstreamEmpty}>
+
         {/* ── ROW 2: what the engine decided, and what the venue filled ───────────────
             Two panels rather than the one box §7.1 draws, because signals and orders are
             two lists that arrive and empty independently: one panel would have to pick a
@@ -2662,7 +2825,7 @@ export default function Dashboard() {
 
           <Panel
             title={labelOf("recentSignals")}
-            state={zoneState(signals.length > 0)}
+            state={signalsState}
             loading={{ kind: "skeleton-table", rows: 5, columns: 2 }}
             empty={SIGNALS_EMPTY}
             actions={<PanelLink to="/app/signal-trace">Open Signal Trace</PanelLink>}
@@ -2682,7 +2845,7 @@ export default function Dashboard() {
             title={labelOf("recentOrders")}
             money
             environment={panelEnvironment}
-            state={zoneState(executions.length > 0)}
+            state={ordersState}
             loading={{ kind: "skeleton-table", rows: 5, columns: 6 }}
             empty={ORDERS_EMPTY}
             actions={<PanelLink to="/app/trades">Open trade history</PanelLink>}
@@ -2712,13 +2875,15 @@ export default function Dashboard() {
           title={labelOf("equityCurve")}
           money
           environment={panelEnvironment}
-          state={zoneState(equityCurve.length > 0)}
+          state={equityState}
           loading={{ kind: "skeleton-chart" }}
           empty={EQUITY_EMPTY}
           data-region="equityCurve"
         >
           <EquityCurveChart rows={equityCurve} currency={currency} />
         </Panel>
+
+        </DownstreamZones>
       </div>
 
         </>

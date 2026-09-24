@@ -18,6 +18,17 @@
  * asserted. A file written after the change would only ever have seen the state
  * it was copied from.
  *
+ * ---------------------------------------------------------------------------
+ * TASK 12.6 HAS SINCE MOVED DASHBOARD'S ROW, AND IT WAS OBSERVED MOVING
+ * ---------------------------------------------------------------------------
+ * `pages/Dashboard.jsx` was seeded at 7 panels / 6 empty / 6 actions / 0 primary
+ * and now reads 4 / 3 / 3 / 1. The seed was confirmed failing against the page as
+ * it stood before that commit, which is the whole reason it was written first —
+ * the note on the row itself records what each number did and why.
+ *
+ * Requirement 8.4's other four are still at their task 12.2 seeds. Task 12.7 is
+ * the commit that moves them and this paragraph is how its diff is scoped.
+ *
  * ===========================================================================
  * THE FACTS THIS FILE VERIFIES RATHER THAN ASSUMES
  * ===========================================================================
@@ -35,6 +46,11 @@
  *   4. They resolve **at equal weight, with no single element marked as the next
  *      thing to do**. Confirmed as a count: zero elements on the page present as
  *      a primary action. That is the number task 12.6 raises to one.
+ *
+ * All four are §9.3's reading of the page BEFORE task 12.6. Three of them are now
+ * true only with the disclosure open, and that is what `keeps the three collapsed
+ * zones' state, copy and action one keypress away` asserts — the claims did not
+ * stop holding, they moved behind one toggle.
  *
  * ===========================================================================
  * WHAT "PRESENTS AS A PRIMARY ACTION" MEANS HERE, AND WHY
@@ -115,14 +131,18 @@
  *      remaining panels to be "at reduced visual weight OR collapsed", and jsdom
  *      has no geometry. A panel inside a closed `ds/Accordion` is not in the DOM
  *      at all, so it would leave `emptyPanels` — which is right; one behind a
- *      `hidden` attribute or a `max-h-0` class would not, which is wrong. If task
- *      12.7 takes the second route this file needs an extra clause.
+ *      `hidden` attribute or a `max-h-0` class would not, which is wrong. Task
+ *      12.6 took the first route, so Dashboard's lowered count is a real collapse
+ *      and the opened census proves the three panels are still there. If task
+ *      12.7 takes the second route on any of the other four, this file needs an
+ *      extra clause: `emptyPanels` would stay high and REDUCED WEIGHT would be
+ *      the thing nothing here can see.
  *   2. **Which action is primary is a [JUDGEMENT]** that goes to the requester
  *      (§9.3). This file makes "exactly one" checkable and decides nothing about
  *      which one it is.
  */
 
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -346,8 +366,27 @@ const primeReads = () => {
  * primary actions on a fresh account is the same defect as none.
  */
 const FRESH_ACCOUNT = Object.freeze({
+  /*
+   * MOVED BY TASK 12.6, WHICH IS THE COMMIT THIS ROW EXISTS TO OBSERVE.
+   *
+   * Seeded at `panels: 7, emptyPanels: 6, emptyActions: 6, primaryActions: 0` — the tree as
+   * task 12.2 found it, and the four numbers §9.3 describes in prose. Task 12.6 emphasised
+   * ONE of the six actions and put the three downstream zones behind one disclosure:
+   *
+   *   primaryActions 0 → 1   the fleet panel's `ds/CommandButton intent="primary"`, and it
+   *                          is the only one on the page. Requirement 8.1.
+   *   emptyPanels    6 → 3   Requirement 8.2's cap, met exactly. Row 1 is what a fresh
+   *                          account reads; signals, orders and equity are behind a
+   *                          `ds/Accordion`, which unmounts while closed.
+   *   panels         7 → 4   the same three, counted as panels rather than as empty panels.
+   *   emptyActions   6 → 3   one per empty panel STILL ON SCREEN. The other three did not
+   *                          lose their action — `the three collapsed zones keep their state,
+   *                          their copy and their action` below opens the disclosure and
+   *                          counts all six back, which is the assertion that tells a
+   *                          collapse apart from a deletion (Requirement 19.4).
+   */
   'pages/Dashboard.jsx': Object.freeze({
-    panels: 7, emptyPanels: 6, emptyActions: 6, primaryActions: 0,
+    panels: 4, emptyPanels: 3, emptyActions: 3, primaryActions: 1,
   }),
   /*
    * `Strategies` is the one page already at Requirement 8.1's target: `:1778`'s
@@ -577,26 +616,94 @@ describe('a fresh account: the seeded counts', () => {
 describe('a fresh account: Dashboard is §9.3\'s case', () => {
   const dashboard = () => measured('pages/Dashboard.jsx');
 
-  it('renders 7 panels, 6 of which resolve to empty, all at once', () => {
-    // §9.3's first three claims, taken from one render of one settled page. The seventh
-    // panel is the one with no empty branch.
+  it('holds Requirement 8.2\'s cap of 3 visible empty panels', () => {
+    // §9.3's first three claims were "7 panels, 6 empty, all at once", and task 12.6 is what
+    // changed the second and third. What is left of the first is asserted here: three panels
+    // stand on a fresh account, all three of them present as empty, and the fourth — the
+    // account summary — is the one with no empty branch. The three that are gone from this
+    // count are collapsed, not deleted; the last test in this block is where that is shown.
     const census = dashboard();
-    expect(census.panels).toBe(7);
-    expect(census.emptyPanels).toBe(6);
+    expect(census.emptyPanels).toBeLessThanOrEqual(3);
+    expect(census.panels).toBe(4);
+    expect(census.emptyPanels).toBe(3);
     expect(census.panels - census.emptyPanels).toBe(1);
     // One `ds/EmptyState` per empty panel — no panel is empty without saying so, and none
     // renders two.
     expect(census.emptyStates).toBe(census.emptyPanels);
   });
 
-  it('marks none of the six as the next thing to do', () => {
-    // §9.3's fourth claim as a number: six actions on screen, none of them distinguished.
-    // This is the assertion task 12.6 turns from 0 to 1, and the one that fails the moment
-    // a second panel is also marked primary.
+  it('marks exactly one of them as the next thing to do', () => {
+    // §9.3's fourth claim, inverted by task 12.6: six actions offered identically became one
+    // marked action beside the rest. This fails at 0 (nothing is the next thing to do) and at
+    // 2 (two next actions on a fresh account is the same defect as none — Requirement 8.1).
     const census = dashboard();
-    expect(census.emptyActions).toBe(6);
-    expect(census.primaryActions).toBe(0);
+    expect(census.primaryActions).toBe(1);
+    // And the emphasis did not come out of an action's hide: every empty panel on screen
+    // still offers one.
+    expect(census.emptyActions).toBe(census.emptyStates);
   });
+
+  it('keeps the three collapsed zones\' state, copy and action one keypress away', async () => {
+    /*
+     * REQUIREMENT 19.4, AND THE ONE THING THE COUNTS ABOVE CANNOT SEE.
+     *
+     * `emptyPanels: 3` is what a collapse and a deletion both look like from outside. So this
+     * opens the disclosure and counts again: all 7 panels come back, all 6 present as empty,
+     * all 6 name an action, and the primary action is still the only one. "Reduced weight is
+     * not collapse — the state name, its copy and its action all stay" is that pair of
+     * censuses, not a sentence in a docblock.
+     *
+     * Reached the way a keyboard user reaches it (Requirement 6.4): the toggle is a `button`
+     * in a heading, so it has an accessible name and it is in the tab order, and this test
+     * finds it by that name rather than by a class or a test id.
+     */
+    primeReads();
+    const { container } = render(<MemoryRouter><Dashboard /></MemoryRouter>);
+
+    await waitFor(
+      () => {
+        expect(
+          container.querySelectorAll('[data-panel-state="loading"],[data-panel-state="idle"]')
+            .length,
+        ).toBe(0);
+      },
+      { timeout: 10000 },
+    );
+
+    const closed = censusOf(container);
+    expect(closed.emptyPanels).toBe(3);
+
+    const toggle = screen.getByRole('button', { name: /signals, orders and equity/i });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    });
+
+    const open = censusOf(container);
+    expect(
+      {
+        panels: open.panels,
+        emptyPanels: open.emptyPanels,
+        emptyActions: open.emptyActions,
+        primaryActions: open.primaryActions,
+      },
+      `opened, Dashboard shows panel states ${open.states.join(', ')} and empty variants `
+        + `${open.variants.join(', ') || '(none)'}.\n\n`
+        + 'All 7 panels and all 6 empty actions must be behind that one toggle. If the opened\n'
+        + 'counts are lower than the seed task 12.2 took, a panel was REMOVED rather than\n'
+        + 'collapsed, which Requirement 19.4 forbids however few states it leaves on screen.',
+    ).toEqual({ panels: 7, emptyPanels: 6, emptyActions: 6, primaryActions: 1 });
+
+    // And opening it did not turn an absence into a failure: the three that came back say
+    // the trader has none of these, not that a read could not be made (Requirement 8.3).
+    expect(open.states).not.toContain('unavailable');
+    expect(open.states).not.toContain('error');
+
+    cleanup();
+    vi.restoreAllMocks();
+  }, 30000);
 });
 
 /* ══════════════════════════════════════════════════════════════════════════════════════
