@@ -19,6 +19,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
 import { act, render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
+/*
+ * `MemoryRouter` around every mount below, added by retail-ui-simplification task 12.7.
+ *
+ * This file mounted the page bare until that task, because nothing it rendered needed a router:
+ * the positions panel's empty-state action is a `ds/ActionControl`, which asks
+ * `useInRouterContext()` and falls back to a plain `<a href>` outside one — deliberately, so a
+ * panel state can be rendered in isolation.
+ *
+ * Task 12.7 gave the page its one Requirement 8.1 primary action as a `ds/CommandButton to=…`,
+ * and that path is NOT guarded: `ds/CommandButton` spreads `to` to `ui/Button`, which returns a
+ * react-router `<Link>` unconditionally. Outside a router that throws while destructuring the
+ * router context, which took every test in this file down at once rather than failing one
+ * assertion. Every page is inside a router at runtime (`App.jsx`), and
+ * `tests/unit/design/tierRegistry.jsx` already wraps every registered page for the same reason,
+ * so the wrapper is this file catching up rather than a change to what any test asserts.
+ */
+import { MemoryRouter } from 'react-router-dom';
 import Portfolio from '../../src/pages/Portfolio';
 import * as portfolioModule from '../../src/api/modules/portfolio';
 import * as paperModule from '../../src/api/modules/paper';
@@ -395,7 +412,7 @@ describe('Portfolio absence-state rendering', () => {
       dashboard: () => Promise.resolve(dashboardBody({ overview: {}, drawdown: null })),
     });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(tierOneContainer()).not.toBeNull());
 
@@ -428,7 +445,7 @@ describe('Portfolio absence-state rendering', () => {
       dashboard: () => Promise.reject(new Error('positions upstream timed out')),
     });
 
-    const failed = render(<Portfolio />);
+    const failed = render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     // §7.4's rule for a tier-1 row on a failure, applied here: the figures are not rendered at
     // all. Not as zeros, and not as eight markers either - a transport failure is one fact
@@ -469,7 +486,7 @@ describe('Portfolio absence-state rendering', () => {
       })),
     });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(tierOneContainer()).not.toBeNull());
 
@@ -516,7 +533,7 @@ describe('Portfolio absence-state rendering', () => {
       is_simulated: true,
     });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(tierOneContainer()).not.toBeNull());
     // Requirement 12.2 through `ds/Panel money`: the panel holding the money figures carries
@@ -574,7 +591,7 @@ describe('Portfolio absence-state rendering', () => {
     })));
     stubLiveReads({ dashboard });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     // The normalised position renders, from the endpoint that actually serves positions to a
     // trader (design.md §7.6).
@@ -611,7 +628,7 @@ describe('Portfolio absence-state rendering', () => {
       })),
     });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     // The server's own prose, verbatim. Not a sentence composed on the client.
     //
@@ -645,7 +662,7 @@ describe('Portfolio absence-state rendering', () => {
       dashboard: () => Promise.resolve(dashboardBody({ positions: [], openPositionsCount: 0 })),
     });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     // Same `positions: []` as the test above, opposite meaning, because `degraded` is null.
     await waitFor(() => expect(screen.getByText('No open positions')).toBeDefined());
@@ -681,7 +698,7 @@ describe('Portfolio absence-state rendering', () => {
       })),
     });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(positionsPanel().querySelector('table')).not.toBeNull());
     expect(positionRow('ETH/USDT')).not.toBeNull();
@@ -722,7 +739,7 @@ describe('Portfolio tier 1 (task 16.1)', () => {
   it('renders every declared tier-1 field, and none of them outside the one container', async () => {
     stubLiveReads({ dashboard: () => Promise.resolve(dashboardBody()) });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(tierOneContainer()).not.toBeNull());
 
@@ -751,7 +768,7 @@ describe('Portfolio tier 1 (task 16.1)', () => {
   it('renders current drawdown IN the tier-1 container (Requirement 10.2)', async () => {
     stubLiveReads({ dashboard: () => Promise.resolve(dashboardBody({ drawdown: 3.2 })) });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(tierOneContainer()).not.toBeNull());
 
@@ -771,7 +788,7 @@ describe('Portfolio tier 1 (task 16.1)', () => {
     // `today_return_pct`, so a page reading it renders a profitable day as a drawdown.
     stubLiveReads({ dashboard: () => Promise.resolve(dashboardBody({ drawdown: 3.2 })) });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(tierOneContainer()).not.toBeNull());
 
@@ -786,7 +803,7 @@ describe('Portfolio tier 1 (task 16.1)', () => {
     // fabricated all-clear.
     stubLiveReads({ dashboard: () => Promise.resolve(dashboardBody({ drawdown: null })) });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(tierOneContainer()).not.toBeNull());
 
@@ -809,7 +826,7 @@ describe('Portfolio tier 1 (task 16.1)', () => {
   it('renders BC-5\'s lifetime realised P&L as a figure, distinctly from today\'s', async () => {
     stubLiveReads({ dashboard: () => Promise.resolve(dashboardBody()) });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(tierOneContainer()).not.toBeNull());
 
@@ -831,7 +848,7 @@ describe('Portfolio tier 1 (task 16.1)', () => {
       })),
     });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(tierOneContainer()).not.toBeNull());
 
@@ -846,7 +863,7 @@ describe('Portfolio tier 1 (task 16.1)', () => {
   it('reads available balance from the dashboard, never from /api/portfolio/summary', async () => {
     stubLiveReads({ dashboard: () => Promise.resolve(dashboardBody()) });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(tierOneContainer()).not.toBeNull());
 
@@ -862,7 +879,7 @@ describe('Portfolio tier 1 (task 16.1)', () => {
   it('labels the used_balance derivation, and states the derivation in its tooltip', async () => {
     stubLiveReads({ dashboard: () => Promise.resolve(dashboardBody()) });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(tierOneContainer()).not.toBeNull());
 
@@ -919,7 +936,7 @@ describe('Portfolio tiers 2 and 3 (task 16.2)', () => {
       })),
     });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(region('positions-summary')).not.toBeNull());
 
@@ -990,7 +1007,7 @@ describe('Portfolio tiers 2 and 3 (task 16.2)', () => {
       })),
     });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(positionsPanel().querySelector('table')).not.toBeNull());
     const row = positionRow('BTC/USDT');
@@ -1018,7 +1035,7 @@ describe('Portfolio tiers 2 and 3 (task 16.2)', () => {
   it('renders ErrorState and NO table at all for a failed positions read', async () => {
     stubLiveReads({ dashboard: () => Promise.reject(new Error('redis read timed out')) });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(positionsPanel()).not.toBeNull());
     await waitFor(() => expect(positionsPanel().dataset.panelState).toBe('error'));
@@ -1049,7 +1066,7 @@ describe('Portfolio tiers 2 and 3 (task 16.2)', () => {
       dashboard: () => Promise.resolve(dashboardBody({ positions: [], openPositionsCount: 0 })),
     });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(screen.getByText('No open positions')).toBeDefined());
 
@@ -1089,7 +1106,7 @@ describe('Portfolio tiers 2 and 3 (task 16.2)', () => {
       ],
     });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     // All three tier-3 regions go through `ds/Chart`, and both axis labels are present on each
     // — Requirement 15.5's half that is a required prop.
@@ -1156,7 +1173,7 @@ describe('Portfolio tiers 2 and 3 (task 16.2)', () => {
       is_simulated: true,
     });
 
-    render(<Portfolio />);
+    render(<MemoryRouter><Portfolio /></MemoryRouter>);
 
     await waitFor(() => expect(tierOneContainer()).not.toBeNull());
     fireEvent.click(screen.getByRole('radio', { name: /paper/i }));

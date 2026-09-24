@@ -26,8 +26,21 @@
  * it stood before that commit, which is the whole reason it was written first —
  * the note on the row itself records what each number did and why.
  *
- * Requirement 8.4's other four are still at their task 12.2 seeds. Task 12.7 is
- * the commit that moves them and this paragraph is how its diff is scoped.
+ * ---------------------------------------------------------------------------
+ * AND TASK 12.7'S FIRST HALF HAS MOVED PORTFOLIO'S, OBSERVED THE SAME WAY
+ * ---------------------------------------------------------------------------
+ * `pages/Portfolio.jsx` was seeded at 5 panels / 4 empty / 4 actions / 0 primary
+ * and now reads 2 / 1 / 1 / 1, confirmed failing against the page as it stood
+ * before that commit. The note on the row itself records what each number did.
+ *
+ * `pages/Strategies.jsx` is the one page that needed nothing: it was seeded at
+ * one primary action and two empty panels, which is inside Requirement 8.2's cap,
+ * so 12.7 verified it and left the file unedited.
+ *
+ * `pages/TradeHistory.jsx` and `pages/LiveTrading.jsx` are still at their task
+ * 12.2 seeds. Both are already inside 8.2's cap and both are at zero primary
+ * actions, so what is left is 8.1 alone. Task 12.7's second half is the commit
+ * that moves them and this paragraph is how its diff is scoped.
  *
  * ===========================================================================
  * THE FACTS THIS FILE VERIFIES RATHER THAN ASSUMES
@@ -131,12 +144,13 @@
  *      remaining panels to be "at reduced visual weight OR collapsed", and jsdom
  *      has no geometry. A panel inside a closed `ds/Accordion` is not in the DOM
  *      at all, so it would leave `emptyPanels` — which is right; one behind a
- *      `hidden` attribute or a `max-h-0` class would not, which is wrong. Task
- *      12.6 took the first route, so Dashboard's lowered count is a real collapse
- *      and the opened census proves the three panels are still there. If task
- *      12.7 takes the second route on any of the other four, this file needs an
- *      extra clause: `emptyPanels` would stay high and REDUCED WEIGHT would be
- *      the thing nothing here can see.
+ *      `hidden` attribute or a `max-h-0` class would not, which is wrong. Tasks
+ *      12.6 and 12.7 both took the first route, so Dashboard's and Portfolio's
+ *      lowered counts are real collapses and each one's opened census proves the
+ *      three panels are still there. If the rest of 12.7 takes the second route
+ *      on either of the last two pages, this file needs an extra clause:
+ *      `emptyPanels` would stay high and REDUCED WEIGHT would be the thing
+ *      nothing here can see.
  *   2. **Which action is primary is a [JUDGEMENT]** that goes to the requester
  *      (§9.3). This file makes "exactly one" checkable and decides nothing about
  *      which one it is.
@@ -397,8 +411,35 @@ const FRESH_ACCOUNT = Object.freeze({
   'pages/Strategies.jsx': Object.freeze({
     panels: 2, emptyPanels: 2, emptyActions: 2, primaryActions: 1,
   }),
+  /*
+   * MOVED BY TASK 12.7's FIRST HALF, WHICH IS THE COMMIT THIS ROW EXISTS TO OBSERVE.
+   *
+   * Seeded at `panels: 5, emptyPanels: 4, emptyActions: 4, primaryActions: 0` — the tree as task
+   * 12.2 found it. The page's five panels are the tier-1 summary (the one with no empty branch),
+   * open positions, allocation, the equity curve and daily P&L; the last four all resolve `empty`
+   * on a zero-data account at once, and none of them was marked as the next thing to do. Task
+   * 12.7 emphasised ONE of the four actions and put the three history panels behind one
+   * disclosure:
+   *
+   *   primaryActions 0 → 1   the positions panel's `ds/CommandButton intent="primary"`
+   *                          to `/app/strategies`, and it is the only one on the page. The three
+   *                          panels that declare that same destination are the ones that
+   *                          collapse; the one that stays is the one whose absence is a fact of
+   *                          its own. Requirement 8.1.
+   *   emptyPanels    4 → 1   Requirement 8.2's cap of 3, met with room. Allocation, equity and
+   *                          daily P&L are behind a `ds/Accordion`, which unmounts while closed,
+   *                          and only while all three are `empty` together.
+   *   panels         5 → 2   the same three, counted as panels rather than as empty panels. The
+   *                          tier-3 CONTAINER still renders — the disclosure is inside it, so the
+   *                          page's declared tier order is untouched (Property 4).
+   *   emptyActions   4 → 1   one per empty panel STILL ON SCREEN. The other three did not lose
+   *                          their action — `keeps the three collapsed history panels' state,
+   *                          copy and action one keypress away` below opens the disclosure and
+   *                          counts all four back, which is the assertion that tells a collapse
+   *                          apart from a deletion (Requirement 19.4).
+   */
   'pages/Portfolio.jsx': Object.freeze({
-    panels: 5, emptyPanels: 4, emptyActions: 4, primaryActions: 0,
+    panels: 2, emptyPanels: 1, emptyActions: 1, primaryActions: 1,
   }),
   'pages/TradeHistory.jsx': Object.freeze({
     panels: 2, emptyPanels: 1, emptyActions: 1, primaryActions: 0,
@@ -595,17 +636,48 @@ describe('a fresh account: the seeded counts', () => {
     });
   }
 
-  it('shows Requirement 8.2 is not met yet on any of the five, which is what 12.6 and 12.7 are for', () => {
-    // Non-vacuity for the direction of travel: if every page were already inside the cap,
-    // the two closing commits would have nothing to do and these seeds would be describing
-    // a finished state rather than a starting one.
+  it('holds Requirement 8.2\'s cap on all five, and shows 8.1 is what the rest of 12.7 is for', () => {
+    /*
+     * WHAT THIS CLAUSE ASSERTED BEFORE, AND WHY IT HAD TO CHANGE IN THIS COMMIT.
+     *
+     * It read `over.length > 0` over the pages with more than three empty panels: non-vacuity
+     * for the direction of travel, so that the closing commits could not be describing a
+     * finished state. `pages/Portfolio.jsx` at 4 was the last page over the cap, so the moment
+     * task 12.7's first half landed that premise stopped being true — and a clause whose premise
+     * is false is not a guard that was widened, it is a guard that has been DISCHARGED.
+     *
+     * So the 8.2 half is replaced by the stronger claim, asserted rather than assumed: all five
+     * pages are now inside the cap of 3, and `toBeLessThanOrEqual` on every row is what stops
+     * the count creeping back up on a page nobody is editing.
+     *
+     * The non-vacuity moves to the number that is still moving. Requirement 8.1 wants exactly
+     * one primary action per page and `pages/TradeHistory.jsx` and `pages/LiveTrading.jsx` are
+     * still at zero, which is the other half of task 12.7 and is why those two rows are
+     * untouched here. When that commit lands, THIS clause is the one that fails and the seeds
+     * below it are the ones that move.
+     */
     const over = Object.entries(FRESH_ACCOUNT)
       .filter(([, seed]) => seed.emptyPanels > 3)
-      .map(([file]) => file);
+      .map(([file]) => `${file} (${FRESH_ACCOUNT[file].emptyPanels})`);
 
-    expect(over.length, `pages within Requirement 8.2's cap of 3 already: ${
-      Object.keys(FRESH_ACCOUNT).filter((f) => FRESH_ACCOUNT[f].emptyPanels <= 3).join(', ')
-    }`).toBeGreaterThan(0);
+    expect(
+      over,
+      'Requirement 8.2 caps simultaneously-visible empty panels at 3. These pages are over it,\n'
+        + 'which after tasks 12.6 and 12.7 means a panel came back rather than that one is\n'
+        + `pending:\n${over.map((row) => `  ${row}`).join('\n')}`,
+    ).toEqual([]);
+
+    const unmarked = Object.entries(FRESH_ACCOUNT)
+      .filter(([, seed]) => seed.primaryActions !== 1)
+      .map(([file]) => `${file} (${FRESH_ACCOUNT[file].primaryActions})`);
+
+    expect(
+      unmarked.length,
+      'Every page already marks exactly one next action, so Requirement 8.1 is met everywhere\n'
+        + 'and the rest of task 12.7 has nothing to do. Either that commit has landed — in which\n'
+        + 'case this clause is the one to discharge, the way the 8.2 half above was — or a seed\n'
+        + 'was written from the finished state rather than measured.',
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -698,6 +770,79 @@ describe('a fresh account: Dashboard is §9.3\'s case', () => {
 
     // And opening it did not turn an absence into a failure: the three that came back say
     // the trader has none of these, not that a read could not be made (Requirement 8.3).
+    expect(open.states).not.toContain('unavailable');
+    expect(open.states).not.toContain('error');
+
+    cleanup();
+    vi.restoreAllMocks();
+  }, 30000);
+});
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+ * 3b. Portfolio's collapse, opened — task 12.7's first half
+ * ══════════════════════════════════════════════════════════════════════════════════════ */
+
+describe('a fresh account: Portfolio\'s three history panels are collapsed, not deleted', () => {
+  it('keeps the three collapsed history panels\' state, copy and action one keypress away', async () => {
+    /*
+     * REQUIREMENT 19.4, AND THE ONE THING THE COUNTS ABOVE CANNOT SEE.
+     *
+     * `emptyPanels: 1` is what a collapse and a deletion both look like from outside, and
+     * `emptyActions: 1` is what "three actions were de-emphasised" and "three actions were
+     * removed" both look like. So this opens the disclosure and counts again: all 5 panels come
+     * back, all 4 present as empty, all 4 name an action, and the primary action is still the
+     * only one. "Reduced weight is not collapse — the state name, its copy and its action all
+     * stay" is that pair of censuses, not a sentence in a docblock.
+     *
+     * Reached the way a keyboard user reaches it (Requirement 6.4): `ds/Accordion`'s toggle is a
+     * `button` in a heading, so it has an accessible name and it is in the tab order, and this
+     * finds it by that name rather than by a class or a test id.
+     */
+    primeReads();
+    const { container } = render(<MemoryRouter><Portfolio /></MemoryRouter>);
+
+    await waitFor(
+      () => {
+        expect(
+          container.querySelectorAll('[data-panel-state="loading"],[data-panel-state="idle"]')
+            .length,
+        ).toBe(0);
+      },
+      { timeout: 10000 },
+    );
+
+    const closed = censusOf(container);
+    expect(closed.emptyPanels).toBe(1);
+    expect(closed.primaryActions).toBe(1);
+
+    const toggle = screen.getByRole('button', { name: /allocation, equity and daily p&l/i });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    });
+
+    const open = censusOf(container);
+    expect(
+      {
+        panels: open.panels,
+        emptyPanels: open.emptyPanels,
+        emptyActions: open.emptyActions,
+        primaryActions: open.primaryActions,
+      },
+      `opened, Portfolio shows panel states ${open.states.join(', ')} and empty variants `
+        + `${open.variants.join(', ') || '(none)'}.\n\n`
+        + 'All 5 panels and all 4 empty actions must be behind that one toggle. If the opened\n'
+        + 'counts are lower than the seed task 12.2 took, a panel was REMOVED rather than\n'
+        + 'collapsed, which Requirement 19.4 forbids however few states it leaves on screen.',
+    ).toEqual({ panels: 5, emptyPanels: 4, emptyActions: 4, primaryActions: 1 });
+
+    // And opening it did not turn an absence into a failure. The three that came back say the
+    // trader has none of these — not that a read could not be made, and not that the figures are
+    // unavailable on this ledger, which is what the paper account's three tier-3 panels report
+    // and is a different fact (Requirement 8.3). The collapse condition accepts
+    // `PANEL_STATES.EMPTY` and nothing else, so neither state can be hidden by it.
     expect(open.states).not.toContain('unavailable');
     expect(open.states).not.toContain('error');
 

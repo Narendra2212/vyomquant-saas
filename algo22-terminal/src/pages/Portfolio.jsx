@@ -123,9 +123,10 @@ import {
   useMemo,
   useState,
 } from "react";
-import { Activity, Layers, RefreshCw, TrendingUp, Wallet } from "lucide-react";
+import { Activity, Layers, Plus, RefreshCw, TrendingUp, Wallet } from "lucide-react";
 
 import { api } from "../api";
+import { Accordion } from "../components/ds/Accordion";
 import { Alert } from "../components/ds/Alert";
 import { CommandButton } from "../components/ds/CommandButton";
 import { DataTable } from "../components/ds/DataTable";
@@ -829,6 +830,115 @@ const HEATMAP_EMPTY = Object.freeze({
 });
 
 /* ══════════════════════════════════════════════════════════════════════════
+ * ONE NEXT ACTION ON A FRESH ACCOUNT — Requirements 8.1, 8.2 (task 12.7)
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * Four of this page's five panels carry an empty branch — positions, allocation, equity curve
+ * and daily P&L — and on an account that has done nothing all four resolve at once. Every one
+ * of them already NAMES an action, because `ds/EmptyState` throws in development without one
+ * (Requirement 14.1), so the defect Requirement 8.1 describes is not missing copy. It is that
+ * four actions are offered identically, and four things marked the same mark nothing.
+ *
+ * WHICH ONE IS EMPHASISED
+ * -----------------------
+ * The emphasised action is the one a brand-new account can complete with no prior setup, at no
+ * risk to real money, that unlocks the most of the rest of the product. This page declares
+ * four and only two destinations between them:
+ *
+ *   `/app/strategies`  POSITIONS_EMPTY, ALLOCATION_EMPTY and EQUITY_EMPTY all offer "Review
+ *                      strategies". Needs no credentials, places no order, and is the upstream
+ *                      of every one of this page's four absences — a position, an allocation
+ *                      and an equity point are each recorded by a strategy that runs. It is
+ *                      also the page that already carries its own primary action, so it is one
+ *                      hop from where a strategy is actually built rather than a dead end.
+ *   `/app/trades`      HEATMAP_EMPTY's "Review trade history". Zero setup and no risk too, but
+ *                      a fresh account has no trade history, so it leads to another empty page
+ *                      and unlocks nothing. It stays present and reachable — it is simply not
+ *                      the emphasised one.
+ *
+ * So `/app/strategies` is the emphasis, and it is carried by the positions panel: the one
+ * whose absence is a fact of its own rather than a consequence, and the one that stays on
+ * screen when the three history panels collapse.
+ *
+ * RECORDED COMPROMISE. As on `Dashboard` at task 12.6, none of this page's declared actions
+ * offers the marketplace, a paper trade or a backtest, so the preferred path — pick a
+ * ready-made strategy, paper-trade it, then backtest — is not reachable from here. Nor does
+ * any of them offer `/app/builder` directly, so the emphasised action is one hop short of
+ * where a strategy is created. Neither gap is closed by repointing a declared action:
+ * Requirements 16.2–16.5 make where an action goes part of the page, not a knob.
+ *
+ * THE OTHER THREE KEEP EVERYTHING EXCEPT THE EMPHASIS
+ * --------------------------------------------------
+ * No empty branch is edited, no action is removed and no state is renamed. Requirement 19.4:
+ * reduced weight is not collapse — the state name, its copy and its action all stay, and each
+ * keeps the accessible name and keyboard path it has today (Requirement 6.4).
+ */
+
+/**
+ * The three history panels that cannot fill until something has run, collapsed together.
+ *
+ * Requirement 8.2 caps simultaneously-visible `empty` panels at three and this page shows
+ * four. These are the three that go behind a disclosure, and they are the three that are empty
+ * as a CONSEQUENCE of the positions panel above them rather than as facts of their own: an
+ * allocation is the assets a position holds, the equity curve is drawn from snapshots of what
+ * those were worth, and a daily-P&L bar exists for a day on which this account executed. A
+ * trader with nothing running learns nothing from three more panels restating it.
+ *
+ * Collapsed, not dropped, and only when all three are `empty` at once — with one asset held,
+ * "no daily P&L recorded" is a fact of its own and belongs on screen beside the allocation
+ * that has rows. `ds/Accordion` keeps the toggle in a heading and in the tab order, so all
+ * three panels, their state names, their copy and their actions are one keypress away
+ * (Requirement 6.4).
+ *
+ * `countNoun` because the primitive's default noun is `'setting'` and there is no setting in
+ * here. `col-span-2` because the tier-3 container is a two-column grid and this stands across
+ * it, which is the class the daily-P&L panel already uses for the same reason.
+ */
+const HISTORY_FIELDS = Object.freeze(["allocation", "equityCurve", "heatmap"]);
+
+const HISTORY_SUMMARY =
+  "This account has recorded no holdings, no equity history and no trading days yet, which is "
+  + "why all three are empty — no read failed and nothing is unavailable. Each one still says "
+  + "what is missing, why it matters and what to do.";
+
+/**
+ * The three history panels, in place or behind one disclosure.
+ *
+ * A composition of `ds/Accordion`, not a variant of it and not a second collapsed treatment:
+ * the primitive holds the toggle, the heading, the count and the unmount, and this decides
+ * only WHETHER the account is in the state that warrants collapsing (Requirement 17.2).
+ *
+ * `level={2}` rather than the primitive's default `3`. The panels inside are `ds/Panel`s whose
+ * titles are `h2`, and this disclosure is their sibling inside the tier-3 container — an `h3`
+ * here would put three `h2`s inside an `h3`.
+ *
+ * Unmounted while closed rather than hidden, which is `ds/Accordion`'s own decision and the
+ * right one: a `hidden` subtree is still tabbable in some engines and still answers every DOM
+ * query, so "collapsed" would stop being decidable.
+ *
+ * Rendered INSIDE the tier-3 container rather than around it, so the page's three declared
+ * tier containers are on screen in declared order whatever this decides (Property 4).
+ *
+ * @param {{collapsed: boolean, children: React.ReactNode}} props
+ */
+function HistoryZones({ collapsed, children }) {
+  if (!collapsed) return <>{children}</>;
+
+  return (
+    <Accordion
+      title="Allocation, equity and daily P&L"
+      fields={HISTORY_FIELDS}
+      countNoun="panel"
+      summary={HISTORY_SUMMARY}
+      level={2}
+      className="col-span-2"
+    >
+      {children}
+    </Accordion>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
  * THE PAGE
  * ══════════════════════════════════════════════════════════════════════════ */
 
@@ -1161,6 +1271,32 @@ export default function Portfolio() {
   const equityState = historyState(equityCurve, equityError);
   const dailyPnlState = historyState(dailyPnl, dailyPnlError);
 
+  /*
+   * THE TWO REQUIREMENT 8 CONDITIONS — `empty` ONLY, AND THAT IS THE POINT
+   *
+   * Read off the STATE each region resolved to, never off a list's `.length`. A `.length` of
+   * zero is also what `loading` looks like before the read answers and what `error` looks like
+   * after one fails, so either condition built on it would emphasise an action — or collapse a
+   * panel — over a region that has not yet said whether it holds anything.
+   *
+   * `PANEL_STATES.EMPTY` is the only state either one accepts. A region that is `error` or
+   * `unavailable` is not a region the trader has nothing in (Requirements 8.3, 19.4), so
+   * neither condition can reach one: a failed history read stands in place with its own error
+   * state, the paper ledger's three `unavailable` panels stand in place with the declared
+   * reason they carry, and `positionsState`'s degraded arm is untouched.
+   */
+  const positionsEmpty = positionsState === PANEL_STATES.EMPTY;
+
+  /**
+   * Requirement 8.2: four empty panels minus the three that only echo the first.
+   *
+   * All three, not any: with one asset held but no trading day yet, "no daily P&L recorded" is
+   * a fact of its own and belongs beside the allocation that has rows.
+   */
+  const historyEmpty = allocationState === PANEL_STATES.EMPTY
+    && equityState === PANEL_STATES.EMPTY
+    && dailyPnlState === PANEL_STATES.EMPTY;
+
   const panelEnvironment = isPaper ? "PAPER" : "LIVE";
   const unavailableReason = { reason: PAPER_HISTORY_UNAVAILABLE };
   const retry = { context: "portfolio", onRetry: loadPortfolioData };
@@ -1278,13 +1414,45 @@ export default function Portfolio() {
           loading={{ kind: "skeleton-table", rows: 5, columns: 10 }}
           empty={POSITIONS_EMPTY}
           error={{ error: positionsError, ...retry }}
-          actions={isPaper ? (
-            <TradingEnvironmentBadge
-              environment={positionsProvenance?.environment ?? null}
-              isSimulated={positionsProvenance?.isSimulated === true}
-              variant="chip"
-            />
-          ) : null}
+          /* THE PAGE'S ONE PRIMARY ACTION (Requirement 8.1, task 12.7). See the note beside
+             `HISTORY_FIELDS` for why this action and not one of the other three, and for the
+             compromise that goes with it.
+
+             `ds/CommandButton intent="primary"` is the only "this is the next thing to do" the
+             design system publishes — `data-ds-intent` on the rendered control — and it is
+             published as an attribute rather than inferred from a class string, which is what
+             makes "exactly one" countable in `freshAccount.test.jsx`. `to` rather than
+             `onClick={() => navigate(...)}`: this is a navigation, so it belongs in the DOM as
+             a link, announces where it goes and honours a modifier-click. No new intent, no
+             new variant, no new primitive (Requirement 17.2).
+
+             Its label differs from `POSITIONS_EMPTY`'s "Review strategies" on purpose, the way
+             `Strategies.jsx`'s "New strategy" differs from its own empty state's action: one is
+             the page's emphasised next step and the other is the panel explaining itself, and
+             both are on screen at once here, so the same words twice would read as one control
+             rendered twice.
+
+             Only while the panel is `empty`. With a position on the books this panel is
+             reporting rather than asking, and a primary control here would be competing with
+             tier 1. The paper badge is NOT displaced by it — removing a control because it
+             currently has little to say is how a page loses a feature (Requirements
+             16.2–16.5), so both stand and only one is emphasised. */
+          actions={(
+            <>
+              {positionsEmpty ? (
+                <CommandButton intent="primary" icon={Plus} to="/app/strategies">
+                  Add a strategy
+                </CommandButton>
+              ) : null}
+              {isPaper ? (
+                <TradingEnvironmentBadge
+                  environment={positionsProvenance?.environment ?? null}
+                  isSimulated={positionsProvenance?.isSimulated === true}
+                  variant="chip"
+                />
+              ) : null}
+            </>
+          )}
           data-region="positions"
         >
           {/* ── SUMMARY (Requirement 10.3) — above the table, always ────────────────── */}
@@ -1365,6 +1533,15 @@ export default function Portfolio() {
         {...{ [TIER_PAGE_ATTRIBUTE]: PAGES.PORTFOLIO, [TIER_ATTRIBUTE]: 3 }}
         className="grid min-w-0 grid-cols-2 gap-4"
       >
+        {/* ── THE THREE HISTORY PANELS, IN PLACE OR BEHIND ONE DISCLOSURE ──────────────
+            Requirement 8.2 caps simultaneously-visible `empty` panels at three and this page
+            shows four. So when — and only when — all three of these have nothing, the three go
+            behind `ds/Accordion` and the positions panel above is what a fresh account reads:
+            the exposure it has none of, and the one next step that leads anywhere. The three
+            collapsed panels keep their state, their copy and their action, one keypress away.
+            See `HISTORY_FIELDS` for why these three and not another three. */}
+        <HistoryZones collapsed={historyEmpty}>
+
         <Panel
           title={labelOf("allocation")}
           state={allocationState}
@@ -1418,6 +1595,8 @@ export default function Portfolio() {
         >
           <DailyPnlChart rows={dailyPnlRows} currency={currency} />
         </Panel>
+
+        </HistoryZones>
       </div>
     </div>
   );
