@@ -550,3 +550,220 @@ describe('Dashboard tier 2 — the top five positions and the link to the rest (
     expect(link.getAttribute('href')).toBe('/app/portfolio');
   });
 });
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+ * THE TWO ABSENCE ACCOUNTS — retail-ui-simplification task 12.5
+ * Requirements 7.1, 7.2, 7.4, 7.5, 19.1, 19.2, 19.5, 19.6, 20.1, 20.2. design.md §6.1, §6.2.
+ * ══════════════════════════════════════════════════════════════════════════════════════
+ *
+ * WHY THIS EXISTS, AND WHY IT IS NOT A BUDGET ASSERTION
+ * ----------------------------------------------------
+ * Task 12.5 asked for `pages/Dashboard.jsx`'s "1225 characters in 13 constants" to go
+ * behind disclosure. Measured on the tree, the page declares 13 page-level string constants
+ * holding 1162 characters (§1.7's seed is stale by 63, as it was by 45 on `LiveTrading` and
+ * 75 on `SignalTrace`) and only FOUR of them are prose:
+ *
+ *   * `CHIP_CLASSES` 412 and `PANEL_LINK_CLASSES` 205 are Tailwind class lists — 617 of the
+ *     1162 characters are not user-facing text at all.
+ *   * `DEFAULT_PERIOD` "1M", `PNL_CHANNEL`, `STRATEGY_STATUS_CHANNEL`,
+ *     `EXCHANGE_HEALTH_CHANNEL`, `ALERT_CONDITION_REGION`, `CONDITION_SEVERITY` and
+ *     `UNEVALUABLE_SEVERITY` are tokens — a period key, three channel names, a `pageFields`
+ *     key and two `ds/Alert` severities, 60 characters between them.
+ *   * `RECOVER_DESCRIPTION` 102 and `HALT_ACKNOWLEDGEMENT_LABEL` 51 are the kill switch's
+ *     CONFIRMATION copy, which Requirement 16.5 puts out of reach of this pass entirely.
+ *   * `NO_LIQUIDATION_DISTANCE_REASON` 124 and `VENUE_CONSTANT_NOTE` 208 are the only two
+ *     left, and both are design.md §6.1 COLUMN 2 — each accounts for one specific absent
+ *     figure and each renders beside the marker it explains, in the state it explains.
+ *     §6.2's question — remove it, and can a trader still tell this absence from a different
+ *     one and still tell why — is answered "no" for both. So nothing moved.
+ *
+ * The page has no page- or panel-level BACKGROUND prose to move, which is `SignalTrace`'s
+ * result in task 12.4 for a different reason. `standing-prose.budget.js` keeps
+ * `'pages/Dashboard.jsx': 168` untouched: design.md §5.5 counts the text before the FIRST
+ * `data-region` node, which on this page is the alert band above tier 1, and both accounts
+ * render inside a tier-2 `ds/Panel` far below it. Neither was ever in that number.
+ *
+ * WHAT IS PINNED, IN TWO CLAUSES
+ * -----------------------------
+ *   1. **Each account renders character-for-character at EVERY site that must carry it.**
+ *      The literals are retyped here on purpose: Requirement 19.6 forbids paraphrasing
+ *      prose shorter, and a substring check passes a tightening. Asserted PER SITE —
+ *      per position row for the liquidation reason — because task 12.4's own first attempt
+ *      passed under the defect it was written against by checking page-wide `textContent`
+ *      while a second render site still carried the string.
+ *   2. **Behind no collapsed control, and inside no hidden subtree.** A `ds/Accordion`
+ *      unmounts its closed body, so wrapping either of these would make it vanish and
+ *      clause 1 would catch it. A disclosure that merely HIDES its body would not, so this
+ *      walks every `aria-expanded="false"` control and fails if the region it names carries
+ *      one of the two.
+ *
+ * Each account's MEASURED arm is asserted beside its absent one, so "renders the account"
+ * is a distinction and not a page that never renders the figure: a futures position with a
+ * real level and a real mark renders a distance and NO reason, and a panel with no venue at
+ * all renders no venue note, because there is then no unreported per-venue field to explain.
+ */
+
+/** The two §6.1 column-2 accounts, verbatim from `pages/Dashboard.jsx`. */
+const ABSENCE_ACCOUNTS = Object.freeze([
+  Object.freeze({
+    where: 'NO_LIQUIDATION_DISTANCE_REASON (Dashboard.jsx:938)',
+    text: 'No liquidation distance can be computed — the position is spot, or the venue '
+      + 'reported no liquidation price or no mark price.',
+  }),
+  Object.freeze({
+    where: 'VENUE_CONSTANT_NOTE (Dashboard.jsx:1170)',
+    text: 'Per-venue connection state and latency are not measured: the aggregation service '
+      + 'publishes a fixed value for both, so neither is reported here. The measured figure '
+      + "is the account's exchange API latency above.",
+  }),
+]);
+
+const LIQUIDATION_REASON = ABSENCE_ACCOUNTS[0].text;
+const VENUE_NOTE = ABSENCE_ACCOUNTS[1].text;
+
+/**
+ * Clause 2, run over a settled render: no collapsed disclosure stands between a trader and
+ * either account, and neither sits inside a `hidden` subtree.
+ */
+const expectNotBehindADisclosure = (container) => {
+  const behind = [];
+
+  for (const button of container.querySelectorAll('button[aria-expanded="false"]')) {
+    const controlled = document.getElementById(button.getAttribute('aria-controls') ?? '');
+    if (controlled === null) continue;
+    for (const account of ABSENCE_ACCOUNTS) {
+      if (controlled.textContent.includes(account.text)) {
+        behind.push(`${account.where} — behind the collapsed "${button.textContent.trim()}"`);
+      }
+    }
+  }
+
+  for (const account of ABSENCE_ACCOUNTS) {
+    const carriers = [...container.querySelectorAll('*')].filter(
+      (node) => node.textContent.includes(account.text)
+        && [...node.children].every((child) => !child.textContent.includes(account.text)),
+    );
+    for (const carrier of carriers) {
+      if (carrier.closest('[hidden]') !== null) {
+        behind.push(`${account.where} — inside a hidden subtree`);
+      }
+    }
+  }
+
+  expect(
+    behind,
+    'An absence account is reachable only through a disclosure, or is hidden while the\n'
+      + 'state it explains is on screen. A string that accounts for one specific absent\n'
+      + 'figure has to render beside the marker it explains (design.md §6.2), so it may not\n'
+      + 'be moved behind a collapsed control by a simplification pass:\n'
+      + `  ${behind.join('\n  ')}`,
+  ).toEqual([]);
+};
+
+describe('Dashboard — the two absence accounts render beside the markers they explain', () => {
+  beforeEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('states why a liquidation distance is absent in every row that has none, and states a real one as a figure', async () => {
+    /*
+     * Three rows reaching all three outcomes the one sentence has to separate: a SPOT
+     * position (no liquidation level exists), a FUTURES position whose venue reported no
+     * level, and a futures position with a real level and a real mark. The first two are
+     * blank cells for different reasons and the sentence is what names both; the third is
+     * the measurement, so the marker is a distinction rather than a column that never fills.
+     */
+    read().mockResolvedValue(body({
+      positions: [
+        position(1, { market_type: 'spot', liquidation_price: null }),
+        position(2, { market_type: 'future', margin_type: 'isolated', liquidation_price: null }),
+        position(3, {
+          market_type: 'future',
+          margin_type: 'isolated',
+          side: 'long',
+          mark_price: 110,
+          liquidation_price: 90,
+        }),
+      ],
+      risk: { open_positions_count: 3 },
+    }));
+
+    const { container } = mount();
+    await settled();
+
+    const rows = [...region('openPositions').querySelectorAll('tbody tr[data-row-id]')];
+    expect(rows.map((row) => row.getAttribute('data-row-id')))
+      .toEqual(['pos_1', 'pos_2', 'pos_3']);
+
+    // Clause 1, PER ROW. `pos_3` is the measured arm and is asserted not to carry it, so a
+    // page that printed the reason unconditionally would fail here too.
+    const missing = rows
+      .filter((row) => !row.textContent.includes(LIQUIDATION_REASON))
+      .map((row) => row.getAttribute('data-row-id'));
+    expect(
+      missing,
+      'A row whose liquidation distance is absent renders the marker without the sentence\n'
+        + 'that says WHY it is absent, so a spot position and a futures position whose venue\n'
+        + 'reported no level read as the same blank cell (Requirement 19.3, design.md §6.2).\n'
+        + `  ${ABSENCE_ACCOUNTS[0].where} — absent from row(s) ${missing.join(', ')}`,
+    ).toEqual(['pos_3']);
+
+    // The measured arm: a real level over a real mark renders a distance, and no reason.
+    expect(rows[2].textContent).not.toContain(LIQUIDATION_REASON);
+    expect(rows[2].textContent).toContain('18.2');
+
+    // Two markers, not three: `empty`, `unavailable` and a measurement stay three different
+    // facts (Requirements 19.4, 19.5).
+    expect(screen.getAllByLabelText('Liquidation distance: not available')).toHaveLength(2);
+
+    expectNotBehindADisclosure(container);
+  });
+
+  it('states why the two per-venue fields are blank, on the panel that renders them blank', async () => {
+    read().mockResolvedValue(body({
+      exchange: {
+        total_exchanges: 2,
+        connected_exchanges: 2,
+        can_trade: true,
+        exchanges: [
+          { exchange_id: 'binance', status: 'connected', latency_ms: 35, last_sync: '2026-08-26T12:00:00Z' },
+          { exchange_id: 'bybit', status: 'connected', latency_ms: 35, last_sync: null },
+        ],
+      },
+    }));
+
+    const { container } = mount();
+    await settled();
+
+    const health = region('exchangeHealth');
+    // Clause 1: the whole sentence, on the panel whose venue rows report both fields as
+    // unreported. `not measured` alone — which the task-19.1b assertion above checks —
+    // survives a rewrite that drops the reason WHY, which is the aggregation service's
+    // fixed value, and that is the half a trader cannot learn anywhere else.
+    expect(
+      health.textContent.includes(VENUE_NOTE),
+      `${ABSENCE_ACCOUNTS[1].where} — absent from, or reworded on, the exchangeHealth panel`,
+    ).toBe(true);
+
+    // It is beside the rows it explains, not somewhere else on the page.
+    for (const venue of ['binance', 'bybit']) {
+      expect(health.querySelector(`[data-exchange="${venue}"]`)).not.toBeNull();
+    }
+
+    expectNotBehindADisclosure(container);
+  });
+
+  it('renders no venue note when there is no venue, so the note is not standing prose', async () => {
+    // The measured arm of the second account: with no venue there is no unreported
+    // per-venue field to account for, so the sentence is absent rather than standing.
+    read().mockResolvedValue(body({
+      exchange: { total_exchanges: 0, connected_exchanges: 0, can_trade: false, exchanges: [] },
+    }));
+
+    mount();
+    await settled();
+
+    expect(region('exchangeHealth').textContent).not.toContain(VENUE_NOTE);
+  });
+});

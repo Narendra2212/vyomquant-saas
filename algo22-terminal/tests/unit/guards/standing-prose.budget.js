@@ -163,6 +163,68 @@
  * though the sentence still rendered in stage 8.
  *
  * ===========================================================================
+ * TASK 12.5 LANDED AND `Dashboard` DID NOT MOVE EITHER. THIRD CAUSE
+ * ===========================================================================
+ * Three pages, three different reasons, one result. `Dashboard` is ANCHORED, so
+ * 12.3's cause applies — but the decisive measurement is that the page has no
+ * background prose to move at all, and most of what §1.7 counted is not prose.
+ * Measured on the tree at deda13e: 13 page-level string constants holding 1162
+ * characters, so the 13 is right and the 1225 is stale by 63 (it was stale by 45
+ * on `LiveTrading` and 75 on `SignalTrace`). The 13, by role:
+ *
+ *   * **617 characters are Tailwind class lists.** `CHIP_CLASSES` 412 at :423 and
+ *     `PANEL_LINK_CLASSES` 205 at :487. Over half the seeded total is not
+ *     user-facing text, which is why "1225 characters of prose" was never a
+ *     description of this page.
+ *   * **60 characters are tokens.** `DEFAULT_PERIOD` `"1M"` 2, `PNL_CHANNEL` 3,
+ *     `STRATEGY_STATUS_CHANNEL` 15, `EXCHANGE_HEALTH_CHANNEL` 15,
+ *     `ALERT_CONDITION_REGION` `"alertCondition"` 14 (a `pageFields` key),
+ *     `CONDITION_SEVERITY` `"warning"` 7 and `UNEVALUABLE_SEVERITY` `"info"` 4.
+ *   * **153 characters are CONFIRMATION copy and Requirement 16.5 puts them out
+ *     of reach of this pass entirely.** `RECOVER_DESCRIPTION` 102 at :1419 and
+ *     `HALT_ACKNOWLEDGEMENT_LABEL` 51 at :1431. A confirmation is friction on
+ *     purpose; no step of it is reworded, moved behind a disclosure or given less
+ *     weight. `KILL_SWITCH_TITLE`, `KILL_SWITCH_CONFIRM_LABEL`, `HALT_DESCRIPTION`
+ *     and `HALT_ACKNOWLEDGEMENT` are `Object.freeze` maps rather than string
+ *     constants so they are not among the 13, and they are equally untouchable.
+ *   * **332 characters are §6.1 column-2 absence accounts, and they are the only
+ *     prose on the page.** `NO_LIQUIDATION_DISTANCE_REASON` 124 at :938 and
+ *     `VENUE_CONSTANT_NOTE` 208 at :1170. §6.2's question — remove it and can a
+ *     trader still tell this absence from a different one, and still tell why — is
+ *     answered "no" for both, and each renders beside the marker it explains:
+ *     the first is a `NotAvailableMarker` `reason`, so like `SignalTrace`'s
+ *     `NO_DURATION_REASON` it is part of the marker's own accessible name and
+ *     there is no disclosure it could go behind at all; the second renders only
+ *     when `exchange.exchanges[]` has rows, directly below the venue list whose
+ *     two constant fields it accounts for.
+ *
+ * So there is NO page- or panel-level background prose on this page — nothing that
+ * explains how the dashboard works or what a tier means, which is the only category
+ * Requirement 7.2's disclosure remedy applies to. Nothing moved.
+ *
+ * `'pages/Dashboard.jsx': 168` is untouched, and it could not have moved on any
+ * reading: §5.5 counts the text before the first `data-region` node, which on this
+ * page is the alert band above tier 1 (`kill-switch-active` / `circuit-breaker` /
+ * `alertCondition`, all of them above `data-region="tier-1"`), so the 168 is the
+ * `ds/PageHeader` band — `Command Center`, its subtitle, the environment switch
+ * and the period control. Both accounts render inside a tier-2 `ds/Panel` far
+ * below that anchor, and `VENUE_CONSTANT_NOTE` additionally needs a venue the
+ * zero-data fixture does not have. Requirement 7.1's target is 400 and this page
+ * was already inside it at 168 before the task ran.
+ *
+ * The regression lives where a claim about this page's rendering belongs:
+ * `tests/unit/dashboard-tier2.test.jsx` gains three declarations asserting both
+ * accounts character-for-character (Requirement 19.6) at EVERY site that must
+ * carry them — per position row, not page-wide, which is the false negative task
+ * 12.4 was rewritten to close — behind no `aria-expanded="false"` control and
+ * inside no `hidden` subtree (Requirements 20.1, 20.2), with each account's
+ * MEASURED arm asserted beside its absent one. Confirmed failing on a tree with
+ * `VENUE_CONSTANT_NOTE` wrapped in a closed `ds/Accordion` and
+ * `NO_LIQUIDATION_DISTANCE_REASON` paraphrased shorter — the two edits task 12.5
+ * asked for — naming `absent from row(s) pos_1, pos_2, pos_3` and
+ * `absent from, or reworded on, the exchangeHealth panel`.
+ *
+ * ===========================================================================
  * PROVENANCE OF THE SEED
  * ===========================================================================
  * Requirement 7.4 and design.md §1.7 seed this list from a SOURCE-CONSTANT
@@ -262,6 +324,12 @@ export const STANDING_PROSE_BUDGET = Object.freeze({
   // `ds/Accordion` render inside the `data-region="deployment"` panel, so they were never in
   // this number. See the header section on it before concluding the task under-delivered.
   'pages/LiveTrading.jsx': 135,
+  // UNCHANGED BY TASK 12.5, ON PURPOSE. Of this page's 13 string constants, 617 characters are
+  // Tailwind class lists, 60 are tokens, 153 are the kill switch's confirmation copy that
+  // Requirement 16.5 protects, and the only 332 characters of prose are two §6.1 column-2
+  // absence accounts that may not move — leaving no background prose on the page at all. The
+  // 168 is the `ds/PageHeader` band above the alert band anyway. See the header section on it
+  // before concluding the task under-delivered.
   'pages/Dashboard.jsx': 168,
   'pages/Backtester.jsx': 101,
   'pages/Portfolio.jsx': 91,
