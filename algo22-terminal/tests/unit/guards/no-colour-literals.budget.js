@@ -1110,7 +1110,9 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   'pages/Landing.jsx': 18,
   'components/landing/Hero.jsx': 3,
   'components/landing/ScreenshotsSection.jsx': 3,
-  'components/landing/PortfolioAnalytics.jsx': 2,
+  // Retained deliberately, unlike the seven unreferenced landing components deleted
+  // alongside this entry's removal: this file is `no-placeholders.test.js`'s non-vacuity
+  // fixture. See the header on the file itself.
   'components/landing/ScreenshotComingSoon.jsx': 2,
 });
 
