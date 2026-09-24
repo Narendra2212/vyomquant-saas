@@ -6,6 +6,10 @@
  * vyomquant-ui-redesign task 15.1. design.md §7.7. Requirements 11.1, 11.3, 11.4, 11.6,
  * 12.2, 15.4, 17.2.
  *
+ * retail-ui-simplification task 12.7 (Requirements 8.1, 8.3, 8.4): one — and only one —
+ * element on this page is marked as the next thing to do on a fresh account. See the
+ * `actions` comment on the Trades panel for which action, and why that one.
+ *
  * Three modules landed before this page and it renders through all three rather than
  * deciding anything they already decide:
  *
@@ -97,7 +101,7 @@
  */
 
 import { useCallback, useId, useMemo, useState } from 'react';
-import { Download, Receipt, RefreshCw } from 'lucide-react';
+import { Download, Plus, Receipt, RefreshCw } from 'lucide-react';
 
 import { api } from '../api';
 import { CommandButton } from '../components/ds/CommandButton';
@@ -729,6 +733,38 @@ export default function TradeHistory() {
         loading={{ kind: 'skeleton-table', rows: 8, columns: columns.length }}
         empty={noDataState}
         error={{ error, context: 'trades', onRetry: refetch }}
+        /* ── Requirement 8.1: the one next action a fresh account is given ────
+           `PANEL_STATES.EMPTY` and nothing else. `Panel` renders `actions` in every
+           state, so the condition is what keeps this off a panel that could not be
+           read: `error`, `unavailable` and `empty` stay three different facts
+           (Requirement 8.3), and "go and add a strategy" is only the next thing to do
+           when the ledger is genuinely empty rather than unreadable.
+
+           WHY THIS DESTINATION. The rule is the action a brand-new account can
+           complete with (a) no prior setup, (b) no real-money risk and (c) the largest
+           unlock of the rest of the product. `/app/strategies` is a navigation, so it
+           needs no credentials and places no order; every row this ledger will ever
+           hold is written by a strategy that ran, so it is the upstream of this page's
+           absence on BOTH ledgers — a paper session records a trade only once a
+           strategy is running in it — and it is the one page already carrying its own
+           Requirement 8.1 primary action, one hop from where a strategy is built.
+
+           In THIS panel's header rather than in `PageHeader`, because the emphasis
+           belongs to the panel whose absence it answers and it has to come and go with
+           that panel's state — `PageHeader`'s two actions are page-wide and stay
+           `secondary`. It costs 15 characters of standing prose either way: this page
+           has no `data-region` node yet, so §5.5 counts its whole rendered text, and
+           `standing-prose.budget.js` raises this page's entry by exactly that and says
+           why (Requirement 7.4).
+
+           The label differs from the empty state's `Review your strategies` because
+           both are on screen at once, and `to` rather than an `onClick` navigate so the
+           control announces where it goes and honours a modifier-click. */
+        actions={state === PANEL_STATES.EMPTY ? (
+          <CommandButton intent="primary" icon={Plus} to="/app/strategies">
+            Add a strategy
+          </CommandButton>
+        ) : null}
       >
         <div className="flex min-w-0 flex-col gap-3">
           <FilterBar

@@ -256,7 +256,9 @@
  *   SignalTrace                1351        541   unanchored; whole page, no rows
  *   Dashboard                  1225        168   anchored above the alert band
  *   Portfolio                   774         91   anchored at the tier-1 container
- *   TradeHistory                584        816   unanchored; whole page, no rows
+ *   TradeHistory                584        831   unanchored; whole page, no rows
+ *                                                (816 at task 12.1; +15 is task 12.7's
+ *                                                Requirement 8.1 CTA — see the entry)
  *   Strategies                  420        656   unanchored; whole page, no rows
  *   StrategyMarketplace         186        498   unanchored; whole page, no rows
  *   Backtester                  157        101   anchored at the configuration column
@@ -340,7 +342,27 @@ export const STANDING_PROSE_BUDGET = Object.freeze({
    * prose and empty-state copy with no rows in them. Tasks 5-7 migrate all four, and each
    * one's first `data-region` will take most of its number away with it.
    */
-  'pages/TradeHistory.jsx': 816,
+  /*
+   * RAISED BY TASK 12.7, FROM 816 TO 831, AND THE +15 IS NAMED RATHER THAN ABSORBED.
+   *
+   * Requirement 7.4 says this count SHALL only decrease, so a rise is a thing to justify in
+   * the open and not to widen quietly. What was added is Requirement 8.1's primary action —
+   * the trades panel's `Add a strategy`, 14 characters and one separator, rendered only while
+   * that panel is `empty`. It is the one element a fresh account is told to act on, and this
+   * page had none.
+   *
+   * The two requirements point opposite ways here and 8.1 is the one with a fresh account in
+   * front of it. The alternative was to drop the CTA to keep a number down, which is Requirement
+   * 7.4 bought with 8.1 and is the wrong trade; the other alternative — moving the CTA above
+   * the header, or hiding it behind a disclosure — would be worse on both counts.
+   *
+   * It is counted at all only because this page is UNANCHORED: with no `data-region` node
+   * anywhere, §5.5 counts the whole rendered text, so a control label inside a panel header
+   * lands in the number. `Portfolio.jsx` took the same CTA in the same position in the same
+   * task and did not move, because it is anchored at its tier-1 container. So this 15 comes back
+   * out when tasks 5-7 give this page its first `data-region`, along with most of the other 816.
+   */
+  'pages/TradeHistory.jsx': 831,
   'pages/Strategies.jsx': 656,
   // UNCHANGED BY TASK 12.4, ON PURPOSE. All six of this page's prose constants are §6.1
   // column-2 absence accounts that may not move, and none of them renders on a zero-data

@@ -441,8 +441,27 @@ const FRESH_ACCOUNT = Object.freeze({
   'pages/Portfolio.jsx': Object.freeze({
     panels: 2, emptyPanels: 1, emptyActions: 1, primaryActions: 1,
   }),
+  /*
+   * MOVED BY TASK 12.7's SECOND HALF, AND ONLY IN ONE OF THE FOUR NUMBERS.
+   *
+   * Seeded at `panels: 2, emptyPanels: 1, emptyActions: 1, primaryActions: 0` — the tree as task
+   * 12.2 found it. This page was ALREADY inside Requirement 8.2's cap: two panels, the ledger
+   * summary (which has no empty branch and resolves `ready`) and the trades table, and only the
+   * second presents as empty on a zero-data account. So 8.2 asked for nothing here and nothing
+   * was collapsed — no `ds/Accordion` was added, `emptyPanels` and `emptyActions` did not move,
+   * and there is no opened census below this row because there is no disclosure to open.
+   *
+   *   primaryActions 0 → 1   the trades panel's `ds/CommandButton intent="primary"` to
+   *                          `/app/strategies`, rendered only while that panel is
+   *                          `PANEL_STATES.EMPTY`, and it is the only one on the page.
+   *                          Requirement 8.1.
+   *   panels         2 → 2   unchanged.
+   *   emptyPanels    1 → 1   unchanged, and already inside 8.2's cap of 3.
+   *   emptyActions   1 → 1   unchanged. The empty state keeps its own `Review your strategies`
+   *                          action beside the emphasised one (Requirement 19.4).
+   */
   'pages/TradeHistory.jsx': Object.freeze({
-    panels: 2, emptyPanels: 1, emptyActions: 1, primaryActions: 0,
+    panels: 2, emptyPanels: 1, emptyActions: 1, primaryActions: 1,
   }),
   /*
    * `LiveTrading` has FIVE panels and only ONE presents as empty, which looks like a page
