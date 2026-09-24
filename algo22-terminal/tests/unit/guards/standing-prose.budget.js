@@ -111,6 +111,58 @@
  * `Dashboard`'s panel prose. Expect their numbers not to move either.
  *
  * ===========================================================================
+ * TASK 12.4 LANDED AND `SignalTrace` DID NOT MOVE EITHER, FOR A SECOND REASON
+ * ===========================================================================
+ * The section above predicted this and the prediction held, but the cause is
+ * not the one it named. `SignalTrace` is UNANCHORED — no `data-region` node —
+ * so its 541 is the whole page's rendered text and there is no "inside the
+ * first region" for prose to hide in. Moving text off this page WOULD lower the
+ * number. Nothing moved anyway, and these are the two measurements:
+ *
+ *   1. **Only 6 of the 14 constants are prose.** §1.7's seed counts 14
+ *      page-level string constants for this page and 1351 characters; measured
+ *      on the tree at 02feb6f it is 14 constants and 1276 characters (the seed
+ *      is stale by 75, as it was by 45 on `LiveTrading`'s `SELECTION_CAVEAT`).
+ *      Eight of the 14 are not prose at all: seven are the field-path tokens an
+ *      absence reason is built from — `NODES_PATH` `trace.dag_nodes.nodes[]`,
+ *      `MARKET_PATH`, `ML_PATH`, `RISK_PATH`, `EXCHANGE_PATH`, `OUTCOME_PATH`,
+ *      `POSITION_PATH`, 188 characters between them — and the eighth is
+ *      `COUNT_NOUN`, the 7-character word `FilterBar` counts in. The prose is
+ *      `NO_DURATION_REASON` 191, `REASON_NO_NODE_IO` 189,
+ *      `REASON_DECISION_ONLY` 170, `REASON_EVENT_REPEATS_SECTIONS` 162,
+ *      `REASON_CHECK_VERDICT_UNREPORTED` 172 and `REASON_NO_EXCHANGE_RESPONSE`
+ *      197 — 1081 characters, and the plan's "longest at 253" is that last one,
+ *      measured at 197.
+ *   2. **All six are design.md §6.1's column 2, so none of them may move.**
+ *      Each is the account of one specific absent value and each renders ONLY in
+ *      the state it accounts for, beside the `NotAvailableMarker` it explains:
+ *      §6.2's question — remove it and can a trader still tell this absence from
+ *      a different one, and still tell why — is answered "no" for every one of
+ *      the six. `NO_DURATION_REASON` is the sharpest case and settles the shape
+ *      of the answer: it renders inside the stage row's own `<button>`
+ *      (`SignalTrace.jsx:1534`), so it is part of the control's accessible name
+ *      and there is no disclosure it could go behind at all.
+ *
+ * Neither number in this file could have moved regardless, which is the part
+ * worth keeping: all six need a signal SELECTED and a stage OPENED and the
+ * absence they explain before they render, and the fixture here is a zero-data
+ * account with no signal to select. So they were never in the 541 on any
+ * reading of §5.5 — not "after the anchor" as on `LiveTrading`, but "not in the
+ * fresh-account render at all, and then in one state only". The budget file's
+ * own scope note already exempts them: "anything that renders in ONE STATE ONLY
+ * is not standing prose".
+ *
+ * Requirement 7 is P2 and a correct null result is the deliverable here. The
+ * regression lives where a claim about this page's rendering belongs:
+ * `tests/unit/pages/signalTraceExpansion.property.test.jsx`'s task-12.4
+ * declaration renders one trace missing all six things at once, opens the nine
+ * stages, and asserts each sentence character-for-character in EVERY stage that
+ * should carry it and behind no second collapsed control. Confirmed failing on
+ * a tree with `REASON_NO_EXCHANGE_RESPONSE` wrapped in a closed `ds/Accordion`
+ * — which is the edit task 12.4 asked for — and it failed naming stage 7 even
+ * though the sentence still rendered in stage 8.
+ *
+ * ===========================================================================
  * PROVENANCE OF THE SEED
  * ===========================================================================
  * Requirement 7.4 and design.md §1.7 seed this list from a SOURCE-CONSTANT
@@ -222,6 +274,10 @@ export const STANDING_PROSE_BUDGET = Object.freeze({
    */
   'pages/TradeHistory.jsx': 816,
   'pages/Strategies.jsx': 656,
+  // UNCHANGED BY TASK 12.4, ON PURPOSE. All six of this page's prose constants are §6.1
+  // column-2 absence accounts that may not move, and none of them renders on a zero-data
+  // account anyway — they need a signal selected and a stage opened. See the header section
+  // on it before concluding the task under-delivered.
   'pages/SignalTrace.jsx': 541,
   'pages/StrategyMarketplace.jsx': 498,
 });

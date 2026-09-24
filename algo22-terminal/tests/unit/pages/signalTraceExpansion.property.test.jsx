@@ -582,3 +582,277 @@ describe('Property 17: every trace stage starts collapsed and expands independen
     );
   }, SLOW);
 });
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * retail-ui-simplification task 12.4 — the six absence accounts stay put
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * Requirements 7.2, 19.6, 20.1, 20.2. design.md §6, §6.1 (Decision D4), §6.2.
+ *
+ * WHY THIS IS HERE WHEN TASK 12.4 MOVED NOTHING
+ * ---------------------------------------------
+ * Task 12.4 was planned as "move `SignalTrace.jsx`'s standing prose behind disclosure —
+ * 1351 characters in 14 constants". Measured, the page declares 14 page-level string
+ * constants holding 1276 characters, and only SIX of them are prose: the other eight are
+ * the field-path tokens an absence reason is built from (`trace.dag_nodes.nodes[]` and its
+ * siblings) plus `COUNT_NOUN`. All six are the sentences below, and every one of them is
+ * design.md §6.1's COLUMN 2 — prose whose job is to account for one specific absent value.
+ * §6.2's question, asked of each: remove the string and can a trader still tell this
+ * absence from a different one, and still tell why? No. So not one of them moved, and this
+ * declaration is what stops a later pass moving them, because the plan asked for exactly
+ * that and the reason it must not happen is not visible from the constant's declaration.
+ *
+ * Each one renders ONLY in the state it describes, which is what makes putting it behind a
+ * closed disclosure worse than leaving it standing: a trader looking at a stage that
+ * reports nothing would see that it reports nothing and not why, which is the defect this
+ * spec has spent twenty commits removing. `NO_DURATION_REASON` is the sharpest case — it
+ * renders inside the stage's own `<button>` (`SignalTrace.jsx:1534`), so it is part of the
+ * control's accessible name and there is no disclosure it could go behind at all.
+ *
+ * None of the six is standing prose either, on §5.5's definition or on any reading of it:
+ * they need a signal selected AND a stage opened AND the absence they explain, so
+ * `standing-prose.budget.js`'s 541 for this page never contained one of them and did not
+ * move when this task landed. That measurement is recorded in the budget file's header.
+ *
+ * WHAT THIS ASSERTS, AND WHY IN THESE TWO CLAUSES
+ * ----------------------------------------------
+ *   1. **Present, character for character, in EVERY stage that should carry it.** Requirement
+ *      19.6 permits moving prose and forbids rewording it, so the sentences are spelled out
+ *      here in full rather than imported: a test that read them out of the page would agree
+ *      with any edit, including a tightening. Asserted per stage region and not over the
+ *      whole page, because two of these sentences render at two sites — a page-wide
+ *      `textContent` check would let one site be hidden while the other kept it passing,
+ *      which is exactly the false negative this assertion was rewritten to close.
+ *   2. **Not behind a further collapsed control.** A `ds/Accordion` unmounts its closed
+ *      body, so wrapping one of these would make it vanish from its stage and clause 1 would
+ *      catch it. A disclosure that merely HIDES its body would not, so this walks every
+ *      remaining `aria-expanded="false"` control and fails if the region it names carries
+ *      one of the six — and the same walk checks no account is inside a `hidden` subtree.
+ *
+ * The fixture is one payload that reaches all six absences at once, which is possible
+ * because they are absences of different things in one trace rather than alternatives.
+ */
+
+/**
+ * The six, verbatim from `pages/SignalTrace.jsx`, with the state each one accounts for and
+ * the stages that must carry it for {@link ABSENCE_PAYLOAD}.
+ *
+ * `where` is the declaration, so a failure names the constant rather than a sentence.
+ * `stages` is the render SITES, enumerated: `REASON_NO_EXCHANGE_RESPONSE` renders in both
+ * stage 7 and stage 8 and each is a separate account of a separate absence, so both are
+ * named and hiding either one fails. `inControl` marks the one that renders inside the
+ * stage's own `<button>` rather than in its region, which is why it needs no click.
+ */
+const ABSENCE_ACCOUNTS = Object.freeze([
+  Object.freeze({
+    where: 'NO_DURATION_REASON (:392)',
+    state: 'a stage no `LATENCY_SOURCE` entry can report a duration for',
+    inControl: true,
+    stages: Object.freeze(['signal', 'order-decision', 'submission', 'position-update']),
+    text:
+      'Nothing in this response reports a duration for this stage. An unreported duration '
+      + 'and a zero duration are different facts, so no figure is shown rather than a 0ms '
+      + 'that would read as instant.',
+  }),
+  Object.freeze({
+    where: 'REASON_NO_NODE_IO (:678)',
+    state: 'a node reconstructed from the signal row, which carries no ports',
+    stages: Object.freeze(['indicators']),
+    text:
+      'This node record reports no ports. Per-port inputs and outputs are recorded by the '
+      + 'live trace engine only, so a node reconstructed from the signal row carries the '
+      + 'evaluated reading instead.',
+  }),
+  Object.freeze({
+    where: 'REASON_DECISION_ONLY (:931)',
+    state: 'stage 4 with a decision but no LOGIC-category node behind it',
+    stages: Object.freeze(['logic']),
+    text:
+      'The retained node trace carries no LOGIC-category node for this signal, so there are '
+      + 'no per-node inputs or outputs to show. The decision above is the signal record\u2019s own.',
+  }),
+  Object.freeze({
+    where: 'REASON_EVENT_REPEATS_SECTIONS (:965)',
+    state: 'stage 5 whose event payload holds nothing stages 1 and 2 do not already show',
+    stages: Object.freeze(['signal']),
+    text:
+      'The SIGNAL_GENERATED payload repeats `signal.indicators` and `signal.market_info`, '
+      + 'which stages 1 and 2 render in full from the same row. It carries nothing else.',
+  }),
+  Object.freeze({
+    where: 'REASON_CHECK_VERDICT_UNREPORTED (:1038)',
+    state: 'a named risk check for which the server records no per-check verdict',
+    stages: Object.freeze(['order-decision']),
+    text:
+      'The risk section names the checks it performed and reports one verdict over the whole '
+      + 'set, so there is no per-check result recorded. The risk verdict above is that verdict.',
+  }),
+  Object.freeze({
+    where: 'REASON_NO_EXCHANGE_RESPONSE (:1188)',
+    state: 'stages 7 and 8 with no engine-observed exchange record retained',
+    stages: Object.freeze(['submission', 'execution']),
+    text:
+      'No engine-observed exchange response is retained for this signal, so the timeline '
+      + 'event above is the whole record of the venue\u2019s answer. The trace store keeps the '
+      + 'engine\u2019s record for about an hour.',
+  }),
+]);
+
+/**
+ * One trace that is missing six different things at once.
+ *
+ * Every absence is reached through the projection rather than by handing `SignalTimeline` a
+ * stage shape directly, so the states asserted below are states the server can actually
+ * produce:
+ *
+ *   * `dag_nodes.nodes` holds ONE node, an `INDICATOR` with a reading and no ports — so
+ *     stage 2 lists a node with nothing per-port to show (`REASON_NO_NODE_IO`), and stage 4
+ *     takes `resolveLogic`'s "nodes retained, none of them LOGIC, decision present" branch
+ *     (`signalTraceStages.js:444`) which is the one `REASON_DECISION_ONLY` exists for.
+ *   * `risk_validation.detail.checks` is a `List[str]`, which is the shape the backend
+ *     sends and the reason a per-check verdict cannot exist.
+ *   * `execution` carries an `outcome` and NO `exchange_response`, so stages 7 and 8 are
+ *     backed by their own timeline events while the engine record is what is missing.
+ *   * the four stages absent from `LATENCY_SOURCE` have no duration slot to fill in any
+ *     payload, which is why `NO_DURATION_REASON` needs nothing from this fixture.
+ */
+const ABSENCE_PAYLOAD = Object.freeze({
+  signal: {
+    decision: 'BUY',
+    market_info: { symbol: 'BTC/USDT', timeframe: '15m', reported: { close: 63118 } },
+    indicators: { rsi_14: 28.4 },
+  },
+  trace: {
+    dag_nodes: {
+      source: 'signals_row',
+      nodes: [
+        {
+          node_id: 'rsi_14',
+          node_type: 'INDICATOR',
+          node_label: 'RSI 14',
+          status: 'pass',
+          reading: { rsi_14: 28.4 },
+        },
+      ],
+    },
+    ml_inference: {
+      source: 'signal_trace_engine',
+      applicable: true,
+      detail: { model_id: 'm-1', confidence: 0.68 },
+    },
+    risk_validation: {
+      source: 'signal_trace_engine',
+      detail: { passed: true, blocked: false, checks: ['exposure', 'daily_loss'] },
+    },
+    execution: {
+      source: 'signal_trace_engine',
+      outcome: {
+        execution_price: 63118,
+        filled_quantity: 0.014,
+        latency_ms: 12,
+        executed_at: '2024-05-01T12:04:03Z',
+      },
+    },
+  },
+  timeline: KNOWN_EVENTS.map((name) => event(name, { decision: 'BUY', symbol: 'BTC/USDT' })),
+  lifecycle_state_source: 'canonical',
+});
+
+describe('task 12.4: every absence account renders in the state it describes', () => {
+  it('carries all six on the surface of their own state, none behind a second disclosure', () => {
+    try {
+      const trace = buildSignalTraceStages(ABSENCE_PAYLOAD);
+      const { container } = render(
+        <SignalTimeline stages={trace.stages} degraded={trace.degraded} />,
+      );
+
+      // The nine stage controls, opened one by one — the one click a trader pays. Matched by
+      // ACCESSIBLE NAME rather than by taking every `aria-expanded` button on the page, so a
+      // disclosure ADDED inside a stage body is not opened here and is left for clause 2 to
+      // report. That is the difference between "one click" and "two". `computeAccessibleName`
+      // over the collapsed rows for the reason the header gives: Testing Library's `name`
+      // option is the same computation behind a full accessibility filter of the tree.
+      const collapsed = [...container.querySelectorAll('button[aria-expanded][aria-controls]')];
+
+      /** Stage id → the control that opens it and the region it names. */
+      const byStage = new Map(
+        STAGE_ROWS.map((row) => {
+          const button = collapsed.find((candidate) =>
+            controlPattern(row).test(computeAccessibleName(candidate)));
+          expect(button, `stage ${row.number} (${row.name}) has no control to open`).toBeDefined();
+          fireEvent.click(button);
+          const region = document.getElementById(button.getAttribute('aria-controls'));
+          expect(region, `stage ${row.number}'s aria-controls names no element`).not.toBeNull();
+          return [row.id, { row, button, region }];
+        }),
+      );
+
+      // Clause 1. Character for character (Requirement 19.6), per SITE, and non-vacuity for
+      // the fixture at the same time: a payload that stopped reaching one of these absences
+      // fails here rather than passing over a sentence that never rendered.
+      const missing = [];
+
+      for (const account of ABSENCE_ACCOUNTS) {
+        for (const id of account.stages) {
+          const stage = byStage.get(id);
+          expect(stage, `${account.where} names no stage ${id}`).toBeDefined();
+          // In the control for `NO_DURATION_REASON` — it is the marker's reason inside the
+          // row's own `<button>`, so it is on screen before any click — and in the region
+          // for the other five, which are the bodies of the sections they account for.
+          const carrier = account.inControl === true ? stage.button : stage.region;
+          if (!carrier.textContent.includes(account.text)) {
+            missing.push(`${account.where} — absent from stage ${stage.row.number} `
+              + `(${stage.row.name}), where it explains ${account.state}`);
+          }
+        }
+      }
+
+      expect(
+        missing,
+        'These absence accounts are not in the stage that should carry them. design.md\n'
+          + '§6.1 puts every one of them in column 2: prose that accounts for one specific\n'
+          + 'absent value, which Requirement 19.3 forbids shortening and 19.6 forbids\n'
+          + 'rewording. If one moved behind a `ds/Accordion`, that is the move task 12.4\n'
+          + 'considered and rejected — a trader reading a stage that reports nothing would\n'
+          + `see that it reports nothing and not why:\n${missing.join('\n')}`,
+      ).toEqual([]);
+
+      // Clause 2. No collapsed control stands between the trader and an account, and no
+      // account sits inside a `hidden` subtree once its own stage is open.
+      const behind = [];
+
+      for (const button of container.querySelectorAll('button[aria-expanded="false"]')) {
+        const region = document.getElementById(button.getAttribute('aria-controls') ?? '');
+        if (region === null) continue;
+        for (const account of ABSENCE_ACCOUNTS) {
+          if (region.textContent.includes(account.text)) {
+            behind.push(`${account.where} — behind the collapsed "${computeAccessibleName(button)}"`);
+          }
+        }
+      }
+
+      for (const account of ABSENCE_ACCOUNTS) {
+        const carriers = [...container.querySelectorAll('*')].filter(
+          (element) =>
+            element.textContent.includes(account.text)
+            && ![...element.children].some((child) => child.textContent.includes(account.text)),
+        );
+        for (const carrier of carriers) {
+          if (carrier.closest('[hidden]') !== null) {
+            behind.push(`${account.where} — inside a hidden subtree`);
+          }
+        }
+      }
+
+      expect(
+        behind,
+        'An absence account is reachable only through a SECOND disclosure, or is hidden\n'
+          + 'while the stage it belongs to is open. A string that explains an absence has to\n'
+          + 'render in the state it describes (design.md §6.2), so one click on the stage is\n'
+          + `the whole cost of reaching it:\n${behind.join('\n')}`,
+      ).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+});
