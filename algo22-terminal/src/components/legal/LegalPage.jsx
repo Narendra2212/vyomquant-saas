@@ -17,7 +17,7 @@ const legalContent = {
       },
       {
         heading: '3. Exchange API Credentials',
-        body: `Exchange API keys you provide are encrypted at rest using AES-256. We never store your API secret in plaintext. Read-only API permissions are enforced by default. You may delete your API keys at any time from the platform settings.`,
+        body: `Exchange API keys you provide are encrypted at rest. We never store your API secret in plaintext. Read-only API permissions are enforced by default. You may delete your API keys at any time from the platform settings.`,
       },
       {
         heading: '4. Data Retention',

@@ -58,7 +58,10 @@
  * are blocked on the answer and invisible to every test here. **No symptom reproduced**
  * (Requirement 13.5), and that is the result rather than a blocker: no defect list was invented,
  * and the one concrete content finding (`SecuritySection`'s `AES-256` claim against a Fernet
- * vault) is filed under Requirement 13.6 in the other file, not fixed here.
+ * vault) is filed under Requirement 13.6 in the other file and has since been **fixed**, by the
+ * `fix(landing): stop advertising AES-256 on a Fernet vault` commit, which withdrew the claim from
+ * `SecuritySection.jsx`, `FAQ.jsx` and `components/legal/LegalPage.jsx` and left the backend
+ * docblocks out of scope. Nothing in this file asserted that copy, so no assertion here moved.
  *
  * WHAT MUST NOT BE LOST FROM THIS FILE
  * -----------------------------------

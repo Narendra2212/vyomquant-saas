@@ -198,10 +198,11 @@
  *     Identifying a mobile layout fault is Requirement 13's job even though fixing it is out of
  *     scope by out-of-scope item 6, and the distinction is recorded rather than assumed.
  *
- * A NAMED INSTANCE OF THE "INCORRECT CONTENT" CANDIDATE — FILED, NOT FIXED (Requirement 13.6)
+ * A NAMED INSTANCE OF THE "INCORRECT CONTENT" CANDIDATE — FILED, AND FIXED IN THIS COMMIT
+ * (Requirement 13.6)
  * ------------------------------------------------------------------------------------------
  * Found while reading sources for the assertions below, and measured rather than inferred.
- * `SecuritySection.jsx:8` advertises **`AES-256 Encryption`** and `:9` says "All sensitive data
+ * `SecuritySection.jsx:8` advertised **`AES-256 Encryption`** and `:9` said "All sensitive data
  * and API keys are encrypted at rest using industry-standard AES-256 encryption". The vault is
  * `backend/api_key_vault.py`, and at `:97`/`:99` it builds
  * `MultiFernet([Fernet(k.encode()) for k in master_keys])`. Fernet is **AES-128-CBC with an
@@ -216,17 +217,24 @@
  * in the same terms. The landing surface was simply not in that commit's scope, so the product
  * now says two different things about one vault on two pages. It survives on the live landing
  * surface twice — here and in `FAQ.jsx:12` — and once more in `components/legal/LegalPage.jsx:20`
- * and once in the dead `pages/Landing.jsx:351`, where it reads "AES-256 GCM" and is wrong twice.
+ * and once in the dead `pages/Landing.jsx:351`, where it read "AES-256 GCM" and was wrong twice.
+ * That last instance needed no edit: it went with commit `80b853b`'s deletion of that file.
  *
- * **The `SecuritySection` case below currently pins the wrong claim.** It asserts the string
- * `'AES-256 Encryption'` because that is what the component renders, which is correct as a
- * content measurement and is exactly how a copy defect gets enshrined. It is left as it is on
- * purpose: task 10.3 is a recording and makes no fix, and a public statement about encryption
- * strength on a marketing page is the requester's call, not a test author's. Filed under
- * Requirement 13.6 as an instance of Requirement 13.3's "incorrect content" candidate, with that
- * `it` as its regression test — it fails on the day the copy is corrected, which is the signal
- * that the correction happened, and the correcting commit updates both together. `FAQ.jsx:12`'s
- * sentence is not pinned by any assertion here; only its question is.
+ * **The claim is now withdrawn from all three live sites, and the requester authorised it.** This
+ * commit corrects `SecuritySection.jsx:8`/`:9`, `FAQ.jsx:12` and `components/legal/LegalPage.jsx:20`
+ * on the precedent task 7.10 set: state that keys are encrypted before they are stored, and name
+ * no cipher. The `SecuritySection` case below was updated in the same commit — it had asserted
+ * `'AES-256 Encryption'` because that is what the component rendered, which was correct as a
+ * content measurement and is exactly how a copy defect gets enshrined; it now pins
+ * `'Authenticated Encryption at Rest'`, and the failure it produced against the old component was
+ * the signal that the correction landed. `LegalPage.jsx:20` lost only the words " using AES-256",
+ * so no obligation in that clause was added or removed. `FAQ.jsx:12`'s sentence is still not
+ * pinned by any assertion here; only its question is.
+ *
+ * **The backend docblocks at `api_key_vault.py:5`, `:64`, `:94` and `:283` remain wrong and are
+ * out of scope here** — Requirement 16.7 forbids any `backend_app/` diff in this spec, so the
+ * source of the inherited label is left for a separate backend commit. The frontend no longer
+ * repeats it.
  *
  * STILL CHECKED, NOT RE-COVERED (Requirement 13.4)
  * -----------------------------------------------
@@ -406,7 +414,7 @@ describe('Landing_Surface — each rendered section carries its own content (tas
       ).toBeTruthy();
 
       [
-        'AES-256 Encryption',
+        'Authenticated Encryption at Rest',
         'Secure API Key Storage',
         'Role-Based Access Control',
         'Audit Logging',

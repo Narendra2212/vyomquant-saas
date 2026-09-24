@@ -9,7 +9,7 @@ const platformFaqs = [
 ]
 
 const billingFaqs = [
-  { question: 'Is my exchange API key information secure?', answer: 'AES-256 encryption at rest. Keys never traverse the frontend. Row-level security isolation ensures your credentials are logically separated from all other users.' },
+  { question: 'Is my exchange API key information secure?', answer: 'Authenticated encryption at rest. Keys never traverse the frontend. Row-level security isolation ensures your credentials are logically separated from all other users.' },
   { question: 'Can I cancel or change my subscription tier at any time?', answer: 'Yes. Modify or cancel your subscription at any time from the account panel. Changes take effect at the next billing cycle.' },
   { question: 'What happens to my strategies if I downgrade to Free?', answer: 'Your strategies remain in read-only state. Live bots are paused. You retain access to paper mode and community features.' },
   { question: 'Is there a free trial for Pro or Elite features?', answer: 'The Free tier provides full platform access with capacity limits. Upgrade to Pro or Elite when you require additional bots, backtests, or ML slots.' },

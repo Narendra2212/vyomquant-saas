@@ -5,8 +5,8 @@ export default function SecuritySection() {
   const securityFeatures = [
     {
       icon: ShieldCheck,
-      title: 'AES-256 Encryption',
-      desc: 'All sensitive data and API keys are encrypted at rest using industry-standard AES-256 encryption.'
+      title: 'Authenticated Encryption at Rest',
+      desc: 'Your API keys are encrypted before they are stored, with an integrity check on every record so tampering is detectable.'
     },
     {
       icon: Key,
