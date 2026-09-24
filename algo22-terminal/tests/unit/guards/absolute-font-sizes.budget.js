@@ -255,6 +255,13 @@
  *                             `missing ? 13 : 18` conditional, which collapsed to ONE
  *                             step and took `wordBreak: 'break-all'` with it, and the
  *                             `'1.25rem'` page `<h1>` of blind spot 1.
+ *   16 entries / 263 sizes  — `pages/StrategyDetail.jsx` 61 → 53 by task 8.3, slice 1 of 2:
+ *                             the seven Q4 label call sites and the one Q6 `<table>`. **The
+ *                             entry SURVIVES** — this line records a MOVE, not a clearance, and
+ *                             it is here because the running total above has to stay checkable
+ *                             against the map. Q5 contributed nothing on that page: every chip
+ *                             there is `Tag2`, which declares no size of its own. Slice 2 owns
+ *                             the remaining 53.
  *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
@@ -429,10 +436,21 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // off-palette constructs neither guard can see went with them: `${token.brand.base}33`,
   // `${token.brand.base}15` and `${token.brand.base}40`, three tokens with two hex
   // digits concatenated on, which carry no `#` and so were never counted.
-  // 10×17, 12×15, 11×11, 14×9, 24×3, 9×2, 16×2, 8×1, 13×1. Second largest.
-  // The page is already at zero colour literals, so task 8.3 (commit 21) is
+  // Seeded at 61 — 10×17, 12×15, 11×11, 14×9, 24×3, 9×2, 16×2, 8×1, 13×1. Second
+  // largest. The page is already at zero colour literals, so task 8.3 (commit 21) is
   // almost entirely §2.4's size procedure.
-  'pages/StrategyDetail.jsx': 61,
+  //
+  // **Task 8.3 is sliced, and this is the entry MID-MOVE.** Slice 1 of 2 took the Q4
+  // labels and the one Q6 table: the two figure-grid label rows (9), the seven
+  // execution-ledger `<th>`s (8), that table's row-count caption (10), the analytics
+  // and currency eyebrows (10), `Publication Status` (12) and the ledger `<table>`
+  // itself (10) — seven label call sites to `--text-micro` and one cell declaration to
+  // `--text-small`, because §2.4 asks Q4 before Q6 and a column header is a label.
+  // **Q5 contributed nothing:** every chip on this page is `Tag2`, which declares no
+  // size of its own, so there was no chip call site to resolve. Remaining 53 —
+  // 12×14, 10×13, 11×11, 14×9, 24×3, 16×2, 13×1 — is slice 2's: the Q1 sentences, the
+  // Q7 values, the Q8 headings and the `Label: value` metadata rows.
+  'pages/StrategyDetail.jsx': 53,
   // `pages/ExchangeManager.jsx` was here at 52 — 12×14, 13×14, 11×10, 24×5, 14×3,
   // 16×3, 10×2, 18×1, with 50 of the 52 at or below 16px. **Task 7.10 (commit 16)
   // took it to 0 and the entry is DELETED rather than set to 0** (Requirement 1.5):

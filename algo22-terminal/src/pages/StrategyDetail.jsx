@@ -86,6 +86,36 @@ import DeploymentConsole from "../components/DeploymentConsole";
  * `pages/Strategies.jsx` already link to. `activeTab` is keyed by string id and every
  * tab is rendered from `tabs.map` with `key={tab.id}`, so there is no positional
  * index to go stale, and the default (`"overview"`) was never the removed tab.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * TASK 8.3, SLICE 1 OF 2 — THE LABELS AND THE TABLE HEADERS
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * retail-ui-simplification task 8.3. design.md §2.3–§2.5; Requirements 1.1, 2.1, 2.2, 2.4, 3.1,
+ * 3.2, 4.6. Eight of this page's 61 absolute sizes resolve here — **61 → 53** — each carrying
+ * Requirement 2.4's note in the form `fontSize: 9 → --text-micro (label)`:
+ *
+ * | call site                                                   | was | role     | step    |
+ * |-------------------------------------------------------------|-----|----------|---------|
+ * | the two figure-grid label rows (`m.l`)                      |   9 | Q4 label | `micro` |
+ * | 7 `<th>`s; the ledger caption; 2 eyebrows; `Publication Status` | 8, 10, 12 | Q4 label | `micro` |
+ * | the execution ledger's `<table>`                             |  10 | Q6 cell  | `small` |
+ *
+ * **Q5 contributes nothing, and that is a measurement rather than an omission.** Every chip here
+ * is `Tag2`, which declares no size, so the page holds no chip call site; the tab strip and the
+ * time-range strip look like chips and are controls, and `ds/Tabs.jsx:328` renders the same thing
+ * at `text-title`, so they go with slice 2's headings. §2.4's Q4-before-Q6 order is what splits
+ * the ledger — the `<table>` sets the body step and each `<th>` overrides it, because a column
+ * header names a column. `Publication Status` is the one SHRINK: a field label rendered at the
+ * 12px this page gives its panel `<h3>`s, stopping at `--text-micro`, which IS the floor.
+ *
+ * §2.5's yields: **none taken.** This file declares no `whiteSpace: 'nowrap'` anywhere, so yield
+ * 1 was already available and is what absorbs the `<th>`'s 25%; no padding, gap or column count
+ * moved. Requirement 3.1/3.2 on the monospace this slice touched: **dropped** on the three labels
+ * — a name is not a number — and **kept** on the ledger's cells and on the currency eyebrow, an
+ * ISO 4217 code being an identifier. Slice 2 holds the rest — every Q1 sentence, Q7 value and Q8
+ * heading, the 16px and 24px cohorts, the `Label: value` rows — so **the entry falls to 53 and
+ * STAYS.**
  */
 
 /**
@@ -682,7 +712,13 @@ function OverviewTab({ strategy }) {
             { l: "Sharpe", v: perf.sharpe_ratio || 0, c: token.content.secondary },
           ].map(m => (
             <div key={m.l} style={{ background: token.surface.inset, borderRadius: 6, padding: 8 }}>
-              <div style={{ color: token.content.muted, fontSize: 9, fontFamily: "monospace" }}>{m.l}</div>
+              <div style={{
+                color: token.content.muted,
+                // fontSize: 9 → --text-micro (label). Q4: `m.l` names the figure on the line
+                // below it, so it resolves before Q7 is ever asked. Requirement 3.2 — the
+                // monospace belongs to the number, not to the number's name; dropped here.
+                fontSize: token.text.micro,
+              }}>{m.l}</div>
               <div style={{ color: m.c, fontSize: 14, fontWeight: 900 }}>{m.v}</div>
             </div>
           ))}
@@ -1173,7 +1209,13 @@ function MetricsTab({ strategyId }) {
           { l: "Total Trades", v: metrics.total_trades || 0, c: token.content.primary },
         ].map(m => (
           <Card key={m.l} cls="p-4">
-            <div style={{ color: token.content.muted, fontSize: 9, fontFamily: "monospace", marginBottom: 4 }}>{m.l}</div>
+            <div style={{
+              color: token.content.muted,
+              // fontSize: 9 → --text-micro (label). Same construct as the Overview grid above,
+              // same Q4 answer, same Requirement 3.2 drop of the monospace.
+              fontSize: token.text.micro,
+              marginBottom: 4,
+            }}>{m.l}</div>
             <div style={{ color: m.c, fontSize: 16, fontWeight: 900 }}>{m.v}</div>
           </Card>
         ))}
@@ -1307,13 +1349,41 @@ function ExecutionsTab({ strategyId }) {
     <Card className="overflow-hidden">
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${token.line.default}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h3 style={{ color: token.content.primary, fontSize: 13, fontWeight: 700, margin: 0 }}>Execution Ledger</h3>
-        <span style={{ color: token.content.muted, fontSize: 10, fontFamily: "monospace" }}>{executions.length} orders recorded</span>
+        <span style={{
+          color: token.content.muted,
+          // fontSize: 10 → --text-micro (label). Q4's table caption: it names what the table
+          // below it holds. Requirement 3.2 — a caption is prose ABOUT the rows, not a value
+          // in one, so the monospace is dropped here and kept on the cells.
+          fontSize: token.text.micro,
+        }}>{executions.length} orders recorded</span>
       </div>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, fontFamily: "monospace" }}>
+      <table style={{
+        width: "100%",
+        borderCollapse: "collapse",
+        // fontSize: 10 → --text-small (table cell). Q6: every `<td>` below sits in a column
+        // with siblings, and alignment down the column is what makes the ledger scannable.
+        // Requirement 3.1 — the monospace STAYS: these cells are order ids, timestamps,
+        // symbols, prices and fill counts, and proportional digits break the column.
+        fontSize: token.text.small,
+        fontFamily: "monospace",
+      }}>
         <thead>
           <tr style={{ borderBottom: `1px solid ${token.line.default}`, background: token.surface.inset }}>
             {["Order ID", "Timestamp", "Symbol", "Side", "Price", "Filled / Size", "Status"].map(h => (
-              <th key={h} style={{ color: token.content.muted, fontWeight: 900, padding: "8px 14px", textAlign: "left", fontSize: 8, letterSpacing: 1.5, textTransform: "uppercase" }}>{h}</th>
+              <th key={h} style={{
+                color: token.content.muted,
+                fontWeight: 900,
+                padding: "8px 14px",
+                textAlign: "left",
+                // fontSize: 8 → --text-micro (label). §2.4 orders Q4 ahead of Q6 for exactly
+                // this element: a `<th>` names its column, so it is a label and does NOT take
+                // the `--text-small` the body took. It was the smallest text on the page, two
+                // pixels under the floor, and it grows 25%; nothing here declares `nowrap`, so
+                // §2.5's first yield was already available and absorbs it.
+                fontSize: token.text.micro,
+                letterSpacing: 1.5,
+                textTransform: "uppercase",
+              }}>{h}</th>
             ))}
           </tr>
         </thead>
@@ -1554,7 +1624,16 @@ function MarketplaceTab({ strategy }) {
       <Card className="p-4">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <div style={{ color: token.content.primary, fontWeight: 600, fontSize: 12 }}>Publication Status</div>
+            <div style={{
+              color: token.content.primary,
+              fontWeight: 600,
+              // fontSize: 12 → --text-micro (label). Q4 — a field label naming the chip on the
+              // line beneath it — and the one legal SHRINK in this slice: it was rendered at the
+              // same 12px this page gives its panel `<h3>`s, so a field label was outranking the
+              // headings around it. `--text-micro` IS the floor, so it stops there, and no
+              // overflow in this diff is being avoided by it (§2.5).
+              fontSize: token.text.micro,
+            }}>Publication Status</div>
             <Tag2 c={hasLibraryEntry ? "green" : "gray"}>
               {hasLibraryEntry ? "Published to Library" : "Not Published"}
             </Tag2>
@@ -1633,7 +1712,15 @@ function useCreatorAnalytics() {
 function AnalyticsFigure({ label, value, reason, tone = null }) {
   return (
     <Card className="p-4">
-      <div style={{ color: token.content.secondary, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>
+      <div style={{
+        color: token.content.secondary,
+        // fontSize: 10 → --text-micro (label). Q4 eyebrow: uppercase, tracked, and it names the
+        // figure — or `NotAvailableMarker`'s reason — directly beneath it. Same rendered size at
+        // the browser default, and now it moves with the reader's preference.
+        fontSize: token.text.micro,
+        textTransform: "uppercase",
+        letterSpacing: 1,
+      }}>
         {label}
       </div>
       {value === null ? (
@@ -1733,7 +1820,14 @@ function RevenueTab() {
             return (
               <div key={code ?? 'unnamed'}>
                 <div style={{
-                  color: token.content.secondary, fontSize: 10, fontFamily: "monospace",
+                  color: token.content.secondary,
+                  // fontSize: 10 → --text-micro (label). Q4 eyebrow: it names the four figure
+                  // cards under it. Requirement 3.1 — the monospace STAYS, because what it
+                  // renders is a server-supplied ISO 4217 code and `INR` against `IDR` is the
+                  // identifier skim monospace exists for. The absent-currency fallback is the
+                  // one string here that is prose, and it is not worth a second declaration.
+                  fontSize: token.text.micro,
+                  fontFamily: "monospace",
                   textTransform: "uppercase", letterSpacing: 1, marginBottom: 8,
                 }}>
                   {code ?? 'Currency not reported'}
