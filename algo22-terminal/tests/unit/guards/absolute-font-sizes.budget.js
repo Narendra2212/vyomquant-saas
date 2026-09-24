@@ -262,6 +262,19 @@
  *                             against the map. Q5 contributed nothing on that page: every chip
  *                             there is `Tag2`, which declares no size of its own. Slice 2 owns
  *                             the remaining 53.
+ *   15 entries / 210 sizes  — `pages/StrategyDetail.jsx` (61) cleared by task 8.3, slice 2
+ *                             of 2: 53 → 0 and **the entry is DELETED**. Seventeen Q8
+ *                             headings to `--text-title` (the page spelled ONE heading depth
+ *                             as 12, 13 and 14), eleven Q1 sentences to `--text-body`, the
+ *                             Q7 values by construct — the three 24px hero Cards and the
+ *                             16px metrics grid, which is the same construct, both to
+ *                             `--text-figure`. Twelve `Label: value` rows are §2.4's
+ *                             one-declaration-two-roles case and split through a page-local
+ *                             `MetaRow`; four more declarations were REMOVED rather than
+ *                             mapped. With this line every page requirements §1.1 committed
+ *                             a number for that this spec schedules is at zero — what
+ *                             remains above zero is task 9.2's `Landing.jsx` (41) and the
+ *                             ten resting `components/` entries.
  *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
@@ -440,17 +453,45 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // largest. The page is already at zero colour literals, so task 8.3 (commit 21) is
   // almost entirely §2.4's size procedure.
   //
-  // **Task 8.3 is sliced, and this is the entry MID-MOVE.** Slice 1 of 2 took the Q4
-  // labels and the one Q6 table: the two figure-grid label rows (9), the seven
-  // execution-ledger `<th>`s (8), that table's row-count caption (10), the analytics
-  // and currency eyebrows (10), `Publication Status` (12) and the ledger `<table>`
-  // itself (10) — seven label call sites to `--text-micro` and one cell declaration to
-  // `--text-small`, because §2.4 asks Q4 before Q6 and a column header is a label.
-  // **Q5 contributed nothing:** every chip on this page is `Tag2`, which declares no
-  // size of its own, so there was no chip call site to resolve. Remaining 53 —
-  // 12×14, 10×13, 11×11, 14×9, 24×3, 16×2, 13×1 — is slice 2's: the Q1 sentences, the
-  // Q7 values, the Q8 headings and the `Label: value` metadata rows.
-  'pages/StrategyDetail.jsx': 53,
+  // **Task 8.3 was sliced in two, and this entry was MID-MOVE between them.** Slice 1
+  // took the Q4 labels and the one Q6 table: the two figure-grid label rows (9), the
+  // seven execution-ledger `<th>`s (8), that table's row-count caption (10), the
+  // analytics and currency eyebrows (10), `Publication Status` (12) and the ledger
+  // `<table>` itself (10) — seven label call sites to `--text-micro` and one cell
+  // declaration to `--text-small`, because §2.4 asks Q4 before Q6 and a column header is
+  // a label. **Q5 contributed nothing:** every chip on this page is `Tag2`, which
+  // declares no size of its own, so there was no chip call site to resolve.
+  //
+  // **Now 0 — the entry is DELETED, not set to 0 (Requirement 1.5). Slice 2 took the
+  // remaining 53** — 12×14, 10×13, 11×11, 14×9, 24×3, 16×2, 13×1 — and the page is held
+  // at zero from here by `accounts for every file that still carries an absolute size`,
+  // which fires on it as unbudgeted if a size comes back; re-adding this line is not the
+  // remedy. Seventeen Q8 headings take `--text-title`, which is the number worth naming:
+  // this page spelled ONE depth — a heading naming the panel or the tab region under it —
+  // as 12, 13 and 14 in the same file, and the `<h2>` above them at 16 was not a step
+  // either. Eleven Q1 sentences take `--text-body` and DROP the monospace with it. The
+  // Q7 values split three ways by construct rather than by number: the three 24px Cards
+  // whose whole content is one name and one figure go UP to `--text-figure`, **and the
+  // 16px metrics grid goes up to meet them** because it is the SAME construct — one
+  // construct at two numbers is §2.2's third objection to nearest-step, and shrinking
+  // the revenue figures down instead would be §2.5's named tell for an illegal shrink;
+  // the four row-shaped panels' identifiers take `--text-title` over `--text-body` for
+  // their metadata line, keeping the pair's contrast at one step instead of at 2px.
+  //
+  // **TWELVE `Label: value` metadata rows are §2.4's one-declaration-two-roles case**,
+  // the same shape `PaperTrading.jsx:3367` had: one `fontSize: 10` and one monospace
+  // covered both halves, so the four containers declare neither and a page-local
+  // `MetaRow` gives the name `--text-micro` (monospace dropped) and the reading
+  // `--text-body` (monospace kept). The rendered string is unchanged character for
+  // character — the colon stays on the label. THREE MORE declarations were REMOVED
+  // rather than mapped: the error banner's `✕` glyph and the empty-ledger hint both
+  // inherit their container's step, and the `<pre>` diff and blueprint answer Q6 on its
+  // own terms at `--text-small`. §2.5's yields: **none taken** — this file declares no
+  // `whiteSpace: 'nowrap'`, so yield 1 was already available, and no padding, gap or
+  // column count moved. Requirement 3.1/3.2 on the 23 monospace declarations slice 1 did
+  // not reach: **12 DROPPED** on prose, **4 SPLIT** on the metadata containers, **7 KEPT**
+  // on timestamps, region ids, dataset names, exchange codes and the two JSON blocks —
+  // 25 declarations down to 10, all of them now on a value or an identifier.
   // `pages/ExchangeManager.jsx` was here at 52 — 12×14, 13×14, 11×10, 24×5, 14×3,
   // 16×3, 10×2, 18×1, with 50 of the 52 at or below 16px. **Task 7.10 (commit 16)
   // took it to 0 and the entry is DELETED rather than set to 0** (Requirement 1.5):

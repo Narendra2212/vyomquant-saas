@@ -116,6 +116,35 @@ import DeploymentConsole from "../components/DeploymentConsole";
  * ISO 4217 code being an identifier. Slice 2 holds the rest — every Q1 sentence, Q7 value and Q8
  * heading, the 16px and 24px cohorts, the `Label: value` rows — so **the entry falls to 53 and
  * STAYS.**
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * TASK 8.3, SLICE 2 OF 2 — THE PAGE REACHES ZERO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * The remaining 53, by §2.4's ordered questions. **53 → 0, and the budget entry is DELETED
+ * rather than set to 0** (Requirement 1.5). Every call site carries its note on the line.
+ *
+ * | cohort                                                       | was       | step       |
+ * |--------------------------------------------------------------|-----------|------------|
+ * | 17 Q8 headings — panel `<h3>`/`<h4>` and per-tab `<h3>`       | 12,13,14  | `title`    |
+ * | the identity `<h2>`, one depth under the route's `<h1>`        | 16        | `section`  |
+ * | 11 Q1 sentences — errors, notices, empty and loading states    | 10,11     | `body`     |
+ * | 4 Q7 hero figures — a Card holding one name and one figure      | 16, 24    | `figure`   |
+ * | 6 Q7 row identifiers + the signed return; 1 inset tile          | 12, 14    | `title`    |
+ * | 5 Q7 secondary readings under those identifiers                 | 10        | `body`     |
+ * | 2 `<pre>` blocks — Q6 on its own terms, alignment IS the meaning | 10        | `small`    |
+ * | the status word beside `StatusDot`; both control strips          | 12; 10,11 | `micro`; `title` |
+ * | 12 `Label: value` rows + 3 more — DECLARATIONS REMOVED           | 10,11,12  | see notes  |
+ *
+ * **The page spelled one heading depth as 12, 13 and 14**, which is §2.2's third objection to a
+ * nearest-step rule standing in the tree; it has four heading depths and the scale has three
+ * steps, so the two deepest share `--text-title` and that collapse is recorded, not resolved.
+ * **The 16px metrics grid goes UP to meet the 24px figure Cards** because it is the same
+ * construct; shrinking those to meet it would be §2.5's named tell for an illegal shrink.
+ * §2.5's yields: **none taken** — no `nowrap` here, so yield 1 was already available, and no
+ * padding, gap or column count moved. Requirement 3.1/3.2 on the 23 monospace declarations
+ * slice 1 did not reach: **12 DROPPED** on prose, **4 SPLIT** on the metadata containers,
+ * **7 KEPT** on timestamps, ids, codes and the two JSON blocks. 25 declarations down to 10.
  */
 
 /**
@@ -489,7 +518,12 @@ export default function StrategyDetail() {
           // washes are ~8% and ~19%, so only the SOURCE of the hue changes here. Guidance
           // note 4 — keep the composition, retarget where the colour comes from.
           background: token.status.error.fg + "15", border: `1px solid ${token.status.error.fg}30`,
-          color: token.status.error.fg, fontSize: 11, fontFamily: "monospace",
+          color: token.status.error.fg,
+          // fontSize: 11 → --text-body (sentence). Q1: every string that reaches `actionError`
+          // is a whole sentence from a refused deploy, delete or publish, and it wraps.
+          // Requirement 3.2 — the monospace is DROPPED with it: a refusal is prose, and prose
+          // is skimmed by word shape.
+          fontSize: token.text.body,
           display: "flex", justifyContent: "space-between", alignItems: "center",
         }}>
           <span>{actionError}</span>
@@ -497,7 +531,12 @@ export default function StrategyDetail() {
             type="button"
             aria-label="Dismiss this error"
             onClick={() => setActionError(null)}
-            style={{ background: "none", border: "none", color: token.status.error.fg, cursor: "pointer", fontSize: 12 }}
+            // fontSize: 12 → DECLARATION REMOVED. The `✕` is this banner's dismiss
+            // affordance, not text with a role of its own, so it reads at the banner's
+            // `--text-body` by inheritance. §2.3's unit-and-suffix rule one door along: a
+            // glyph pinned to its own number drifts the next time the banner's step moves.
+            // The `aria-label` is what names the control, and it is untouched.
+            style={{ background: "none", border: "none", color: token.status.error.fg, cursor: "pointer" }}
           >
             ✕
           </button>
@@ -518,23 +557,44 @@ export default function StrategyDetail() {
           field and answers ENVIRONMENT UNCONFIRMED when the server did not say, so removing
           this chip removes a guess and a contradiction in one go. */}
       <Card className="p-4 mb-4">
-        <h2 style={{ color: token.content.primary, fontSize: 16, fontWeight: 700, margin: 0 }}>{strat.name}</h2>
-        <p style={{ color: token.content.secondary, fontSize: 11, fontFamily: "monospace", margin: "4px 0 12px 0" }}>
+        {/* fontSize: 16 → --text-section (heading). Q8 by nesting depth, which this page has
+            four of and the scale has three steps for: `PageHeader` owns the route's `<h1>` at
+            `--text-page`, this `<h2>` names the identity section one level under it, and BOTH
+            remaining depths — the per-tab `<h3>`s and the in-panel `<h3>`/`<h4>`s — share
+            `--text-title` below. That collapse is recorded rather than resolved: four depths
+            into three steps is a finding about the scale, not a licence to invent an eighth. */}
+        <h2 style={{ color: token.content.primary, fontSize: token.text.section, fontWeight: 700, margin: 0 }}>{strat.name}</h2>
+        <p style={{
+          color: token.content.secondary,
+          // fontSize: 11 → --text-body (sentence). Q1 — a description is prose that wraps, and
+          // Requirement 3.2 drops the monospace: what a strategy does is not an identifier.
+          fontSize: token.text.body,
+          margin: "4px 0 12px 0",
+        }}>
           {strat.description || "No description"}
         </p>
         <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <StatusDot status={strat.status} />
-            <span style={{ color: token.content.primary, fontWeight: 600, fontSize: 12 }}>{strat.status}</span>
+            <span style={{
+              color: token.content.primary, fontWeight: 600,
+              // fontSize: 12 → --text-micro (chip). Q5 with its pill clause the only one
+              // failing: `StatusDot` plus one state word IS the chip construct unbordered, and
+              // it stands in a row beside three `Tag2` chips it was outranking by 3px. Q4 lands
+              // on the same step — the word names the dot — so the two readings agree and there
+              // is nothing to raise under Q9. A legal SHRINK that stops AT the floor.
+              fontSize: token.text.micro,
+            }}>{strat.status}</span>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <Tag2 c="cyan">{strat.symbol}</Tag2>
             <Tag2 c="purple">{strat.timeframe}</Tag2>
             <Tag2 c="gray">v{strat.current_version || "1.0"}</Tag2>
           </div>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 20, fontSize: 10, fontFamily: "monospace", color: token.content.muted }}>
-            <div>Created: {strat.created_at ? new Date(strat.created_at).toLocaleDateString() : "N/A"}</div>
-            <div>Updated: {strat.updated_at ? new Date(strat.updated_at).toLocaleDateString() : "N/A"}</div>
+          {/* fontSize: 10 → DECLARATION REMOVED; see {@link MetaRow}. */}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 20, color: token.content.muted }}>
+            <MetaRow label="Created:">{strat.created_at ? new Date(strat.created_at).toLocaleDateString() : "N/A"}</MetaRow>
+            <MetaRow label="Updated:">{strat.updated_at ? new Date(strat.updated_at).toLocaleDateString() : "N/A"}</MetaRow>
           </div>
         </div>
       </Card>
@@ -554,8 +614,13 @@ export default function StrategyDetail() {
               color: activeTab === tab.id ? token.brand.base : token.content.muted,
               border: activeTab === tab.id ? `1px solid ${token.brand.base + "30"}` : "1px solid transparent",
               borderRadius: 6,
-              fontSize: 11,
-              fontFamily: "monospace",
+              // fontSize: 11 → --text-title (control). Slice 1 recorded this strip and the
+              // metrics time-range strip as controls rather than chips, and settled them here:
+              // `ds/Tabs.jsx:328` renders the migrated pages' tab buttons at `text-title`, so
+              // the same construct takes the same step rather than a second opinion about it.
+              // Requirement 3.2 — the monospace is DROPPED: a tab label is a name, and
+              // `Marketplace` against `Metrics` is told apart by word shape, not by alignment.
+              fontSize: token.text.title,
               cursor: "pointer",
               transition: "all 0.2s"
             }}
@@ -677,6 +742,31 @@ export default function StrategyDetail() {
   );
 }
 
+/**
+ * One `Label: value` metadata row, split into its two roles.
+ *
+ * §2.4's one-declaration-two-roles case, which this page held twelve times over four panels.
+ * Each row carried ONE `fontSize: 10` and ONE `fontFamily: 'monospace'` across both halves,
+ * and no single step is right for both: Q4 sends the name to `--text-micro` and Q7 sends the
+ * reading to `--text-body`, so the container declares neither and each half takes its own.
+ * Requirement 3.1/3.2 splits on the same line — the name is prose and DROPS the monospace,
+ * the reading is a code, a count, a version or a timestamp and KEEPS it.
+ *
+ * The colon stays on the label and the separating space stays between the two spans, so the
+ * rendered string is unchanged character for character. Colour is inherited, not declared, so
+ * each call site keeps the hue it already had.
+ */
+function MetaRow({ label, children }) {
+  return (
+    <div>
+      {/* fontSize: 10 → --text-micro (label) */}
+      <span style={{ fontSize: token.text.micro }}>{label}</span>{' '}
+      {/* fontSize: 10 → --text-body (value); monospace KEPT */}
+      <span style={{ fontSize: token.text.body, fontFamily: "monospace" }}>{children}</span>
+    </div>
+  );
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // TAB COMPONENTS
 // ══════════════════════════════════════════════════════════════════════════
@@ -688,7 +778,11 @@ function OverviewTab({ strategy }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
       <Card className="p-4">
-        <h3 style={{ color: token.content.primary, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>Performance</h3>
+        {/* fontSize: 12 → --text-title (heading). Q8 at panel depth — an `<h3>` naming the Card
+            it opens. The eight per-tab `<h3>`s below were already rendering at 14px and the
+            in-panel ones at 12px and 13px, three numbers for two depths; both depths take
+            `--text-title` now, which is the step the scale has for a panel heading. */}
+        <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Performance</h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
           {[
             /*
@@ -719,30 +813,40 @@ function OverviewTab({ strategy }) {
                 // monospace belongs to the number, not to the number's name; dropped here.
                 fontSize: token.text.micro,
               }}>{m.l}</div>
-              <div style={{ color: m.c, fontSize: 14, fontWeight: 900 }}>{m.v}</div>
+              {/* fontSize: 14 → --text-title (value). Q7, and this page declares no tier in
+                  `design/pageHierarchy.js`, so §2.2's recorded resolution applies: nearest step
+                  as a tie-break of last resort, ties up. 14px IS `--text-title` exactly, and
+                  the tile is a panel inside a panel, so it cannot be the tier-1 hero the
+                  Metrics and Risk tabs' figures are. Same rendered size, now reader-relative. */}
+              <div style={{ color: m.c, fontSize: token.text.title, fontWeight: 900 }}>{m.v}</div>
             </div>
           ))}
         </div>
       </Card>
       
       <Card className="p-4">
-        <h3 style={{ color: token.content.primary, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>Strategy Info</h3>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 10, fontFamily: "monospace", color: token.content.secondary }}>
-          <div>Exchange: {strat.exchange}</div>
-          <div>Symbol: {strat.symbol}</div>
-          <div>Timeframe: {strat.timeframe}</div>
-          <div>Environment: {strat.environment}</div>
-          <div>Version: {strat.current_version}</div>
+        {/* fontSize: 12 → --text-title (heading). Q8, panel depth. */}
+        <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Strategy Info</h3>
+        {/* fontSize: 10 → DECLARATION REMOVED; see {@link MetaRow}. The five rows below are
+            `Label: value` pairs and each half now takes its own step. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, color: token.content.secondary }}>
+          <MetaRow label="Exchange:">{strat.exchange}</MetaRow>
+          <MetaRow label="Symbol:">{strat.symbol}</MetaRow>
+          <MetaRow label="Timeframe:">{strat.timeframe}</MetaRow>
+          <MetaRow label="Environment:">{strat.environment}</MetaRow>
+          <MetaRow label="Version:">{strat.current_version}</MetaRow>
         </div>
       </Card>
       
       <Card className="p-4">
-        <h3 style={{ color: token.content.primary, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>Status</h3>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 10, fontFamily: "monospace", color: token.content.secondary }}>
-          <div>Status: {strat.status}</div>
-          <div>Health: {strategy.health || "healthy"}</div>
-          <div>Worker: {strategy.worker_status || "active"}</div>
-          <div>Exchange: {strategy.exchange_status || "connected"}</div>
+        {/* fontSize: 12 → --text-title (heading). Q8, panel depth. */}
+        <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Status</h3>
+        {/* fontSize: 10 → DECLARATION REMOVED; see {@link MetaRow}. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, color: token.content.secondary }}>
+          <MetaRow label="Status:">{strat.status}</MetaRow>
+          <MetaRow label="Health:">{strategy.health || "healthy"}</MetaRow>
+          <MetaRow label="Worker:">{strategy.worker_status || "active"}</MetaRow>
+          <MetaRow label="Exchange:">{strategy.exchange_status || "connected"}</MetaRow>
         </div>
       </Card>
     </div>
@@ -752,7 +856,10 @@ function OverviewTab({ strategy }) {
 function DeploymentsTab({ deployments }) {
   return (
     <div>
-      <h3 style={{ color: token.content.primary, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Active Deployments</h3>
+      {/* fontSize: 14 → --text-title (heading). Q8 at per-tab depth — it names the region the
+          tab holds. Already 14px, so nothing moves on screen; what changes is that the number
+          is gone and the heading now scales with the reader's browser preference (Req 2.1). */}
+      <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Active Deployments</h3>
       {deployments.length === 0 ? (
         <Card className="p-8" style={{ textAlign: "center", color: token.content.muted }}>
           No active deployments
@@ -763,8 +870,17 @@ function DeploymentsTab({ deployments }) {
             <Card key={dep.id} cls="p-4">
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
-                  <div style={{ color: token.content.primary, fontWeight: 600, fontSize: 12 }}>Version {dep.version}</div>
-                  <div style={{ color: token.content.muted, fontSize: 10, fontFamily: "monospace" }}>
+                  {/* fontSize: 12 → --text-title (value). Q7: the version is what this row
+                      exists to identify, and it is the row's panel-level reading. The four
+                      row-shaped panels on this page (deployments, backtests, versions, signals)
+                      all carried 12px over 10px and all take `--text-title` over `--text-body`,
+                      so the pair keeps its contrast at one step instead of at two pixels. */}
+                  <div style={{ color: token.content.primary, fontWeight: 600, fontSize: token.text.title }}>Version {dep.version}</div>
+                  {/* fontSize: 10 → --text-body (value, in-panel secondary). Q7 again, not Q4:
+                      these are facts of their own, and removing the version above does not make
+                      them meaningless, which is the clause a label has to satisfy. Requirement
+                      3.1 — the monospace STAYS: a region id and a timestamp are identifiers. */}
+                  <div style={{ color: token.content.muted, fontSize: token.text.body, fontFamily: "monospace" }}>
                     {dep.environment} • {dep.worker_region} • {dep.created_at ? new Date(dep.created_at).toLocaleString() : "N/A"}
                   </div>
                 </div>
@@ -785,7 +901,8 @@ function BacktestsTab({ backtests, strategyId }) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <h3 style={{ color: token.content.primary, fontSize: 14, fontWeight: 700, margin: 0 }}>Backtest History</h3>
+        {/* fontSize: 14 → --text-title (heading). Q8, per-tab depth. */}
+        <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, margin: 0 }}>Backtest History</h3>
         <Button variant="primary" size="xs" icon={BarChart2} onClick={() => navigate(`/app/backtest?strategy_id=${strategyId}`)}>
           Run New Backtest
         </Button>
@@ -805,13 +922,19 @@ function BacktestsTab({ backtests, strategyId }) {
             <Card key={bt.id} cls="p-4 hover:border-cyan-500/30 transition-all cursor-pointer" onClick={() => navigate(`/app/backtest?strategy_id=${strategyId}`)}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
-                  <div style={{ color: token.content.primary, fontWeight: 600, fontSize: 12 }}>Version {bt.version}</div>
-                  <div style={{ color: token.content.muted, fontSize: 10, fontFamily: "monospace" }}>
+                  {/* fontSize: 12 → --text-title (value). Q7, as the deployments row above. */}
+                  <div style={{ color: token.content.primary, fontWeight: 600, fontSize: token.text.title }}>Version {bt.version}</div>
+                  {/* fontSize: 10 → --text-body (value, secondary); monospace KEPT — a dataset
+                      name, two ISO dates and a timestamp are identifiers. */}
+                  <div style={{ color: token.content.muted, fontSize: token.text.body, fontFamily: "monospace" }}>
                     {bt.dataset} • {bt.start_date} to {bt.end_date} • {bt.created_at ? new Date(bt.created_at).toLocaleString() : "N/A"}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <div style={{ color: pnlToken(bt.total_return_pct).fg, fontWeight: 900, fontSize: 12 }}>
+                  {/* fontSize: 12 → --text-title (value). Q7 and the clearest case of it on the
+                      page: a signed return with a unit, rendered at the row's own step beside
+                      the version it belongs to. The sign is still `pnlToken`'s, unchanged. */}
+                  <div style={{ color: pnlToken(bt.total_return_pct).fg, fontWeight: 900, fontSize: token.text.title }}>
                     {bt.total_return_pct >= 0 ? "+" : ""}{bt.total_return_pct}%
                   </div>
                   <Tag2 c={bt.status === "completed" ? "green" : "orange"}>
@@ -975,13 +1098,18 @@ function VersionsTab({ strategyId }) {
 
   return (
     <div>
-      <h3 style={{ color: token.content.primary, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Version History</h3>
+      {/* fontSize: 14 → --text-title (heading). Q8, per-tab depth. */}
+      <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Version History</h3>
 
       {error && (
         <div style={{
           marginBottom: 12, padding: "8px 12px", borderRadius: token.radius.md,
           background: token.status.error.fg + "15", border: `1px solid ${token.status.error.fg}30`,
-          color: token.status.error.fg, fontSize: 11, fontFamily: "monospace",
+          color: token.status.error.fg,
+          // fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1 — a restore or deploy
+          // failure arrives as a sentence, and this is the one place the trader learns a
+          // version action did not happen.
+          fontSize: token.text.body,
         }}>
           {error}
         </div>
@@ -991,7 +1119,11 @@ function VersionsTab({ strategyId }) {
         <div style={{
           marginBottom: 12, padding: "8px 12px", borderRadius: 6,
           background: token.brand.base + "15", border: `1px solid ${token.brand.base}30`,
-          color: token.brand.base, fontSize: 11, fontFamily: "monospace",
+          color: token.brand.base,
+          // fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1: a finite verb and a
+          // terminal full stop, and it is an instruction about what to do next. Not a word of
+          // it changed.
+          fontSize: token.text.body,
         }}>
           Comparing from version {compareWith} — select another version to compare against.
         </div>
@@ -1000,12 +1132,20 @@ function VersionsTab({ strategyId }) {
       {comparison && (
         <Card className="p-4 mb-4">
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-            <h4 style={{ color: token.content.primary, fontSize: 12, fontWeight: 700, margin: 0 }}>
+            {/* fontSize: 12 → --text-title (heading). Q8 at panel depth — an `<h4>` naming the
+                Card it opens, one heading level deeper than the per-tab `<h3>` above and on the
+                same step, which is the four-depths-into-three collapse the `<h2>` records. */}
+            <h4 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, margin: 0 }}>
               Comparison: {comparison.a} vs {comparison.b}
             </h4>
             <button onClick={() => setComparison(null)} style={{ background: "none", border: "none", color: token.content.muted, cursor: "pointer" }}>✕</button>
           </div>
-          <pre style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", overflow: "auto", maxHeight: 300 }}>
+          {/* fontSize: 10 → --text-small (table cell). Q6 on its own terms: a pretty-printed
+              diff is lines in a column where vertical alignment across them IS the meaning, and
+              `--text-small` is the one step §2.3 justifies by density rather than legibility —
+              the same step slice 1 gave the execution ledger. Requirement 3.1 — the monospace
+              STAYS, because the alignment it buys is the whole reason to render a blob of JSON. */}
+          <pre style={{ color: token.content.secondary, fontSize: token.text.small, fontFamily: "monospace", overflow: "auto", maxHeight: 300 }}>
             {JSON.stringify(comparison.data, null, 2)}
           </pre>
         </Card>
@@ -1022,11 +1162,13 @@ function VersionsTab({ strategyId }) {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ color: token.content.primary, fontWeight: 600, fontSize: 12 }}>{ver.version}</span>
+                    {/* fontSize: 12 → --text-title (value). Q7, as the two rows above. */}
+                    <span style={{ color: token.content.primary, fontWeight: 600, fontSize: token.text.title }}>{ver.version}</span>
                     {ver.is_current && <Tag2 c="green">Current</Tag2>}
                     {ver.is_draft && <Tag2 c="gray">Draft</Tag2>}
                   </div>
-                  <div style={{ color: token.content.muted, fontSize: 10, fontFamily: "monospace" }}>
+                  {/* fontSize: 10 → --text-body (value, secondary); monospace KEPT — a timestamp. */}
+                  <div style={{ color: token.content.muted, fontSize: token.text.body, fontFamily: "monospace" }}>
                     {ver.created_at ? new Date(ver.created_at).toLocaleString() : "N/A"}
                   </div>
                 </div>
@@ -1183,8 +1325,12 @@ function MetricsTab({ strategyId }) {
               color: timeRange === range ? token.brand.base : token.content.muted,
               border: timeRange === range ? `1px solid ${token.brand.base + "30"}` : `1px solid ${token.line.default}`,
               borderRadius: 6,
-              fontSize: 10,
-              fontFamily: "monospace",
+              // fontSize: 10 → --text-title (control). Resolved with the tab strip above and for
+              // the same reason: slice 1 recorded both as controls, not chips, and `ds/Tabs.jsx:328`
+              // renders this construct at `text-title`. The two strips were 11px and 10px for the
+              // same job, which is the inconsistency §2.2 warns a nearest-step rule would ratify.
+              // Requirement 3.2 — the monospace is DROPPED: `1D`/`1W`/`3M` is a control's name.
+              fontSize: token.text.title,
               cursor: "pointer"
             }}
           >
@@ -1216,7 +1362,15 @@ function MetricsTab({ strategyId }) {
               fontSize: token.text.micro,
               marginBottom: 4,
             }}>{m.l}</div>
-            <div style={{ color: m.c, fontSize: 16, fontWeight: 900 }}>{m.v}</div>
+            {/* fontSize: 16 → --text-figure (value). Q7, and the construct decides it rather than
+                the number: a Card whose entire content is one `--text-micro` name and one figure
+                is exactly {@link AnalyticsFigure}, which rendered the same construct at 24px. One
+                construct at two numbers is §2.2's third objection to nearest-step, so both take
+                one step — and it is the GROWTH direction, because shrinking the revenue figures to
+                meet these would be a shrink chosen to avoid a layout change (§2.5 forbids that).
+                Each tab is its own view and its figure grid is that view's tier-1 region, so the
+                `figure` step is not being spent twice on one screen. */}
+            <div style={{ color: m.c, fontSize: token.text.figure, fontWeight: 900 }}>{m.v}</div>
           </Card>
         ))}
       </div>
@@ -1250,17 +1404,28 @@ function RiskTab({ strategyId }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
       <Card className="p-4">
-        <h3 style={{ color: token.content.primary, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>Drawdown</h3>
+        {/* fontSize: 12 → --text-title (heading). Q8, panel depth. */}
+        <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Drawdown</h3>
         {/* A magnitude, not a signed figure — `status.loss.fg`, not `pnlToken`. */}
-        <div style={{ color: token.status.loss.fg, fontSize: 24, fontWeight: 900 }}>{risk.max_drawdown || 0}%</div>
+        {/* fontSize: 24 → --text-figure (value). Q7: the sole figure of its Card, carrying a unit,
+            and the largest text this page rendered. Nothing here declares a tier, so §2.2's
+            tie-break resolves it inside Q7's three outcomes — `figure` at 28px against `title` at
+            14px — and up. A genuine `0` still renders `0`; the `|| 0` is untouched. */}
+        <div style={{ color: token.status.loss.fg, fontSize: token.text.figure, fontWeight: 900 }}>{risk.max_drawdown || 0}%</div>
       </Card>
       <Card className="p-4">
-        <h3 style={{ color: token.content.primary, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>Exposure</h3>
-        <div style={{ color: token.content.primary, fontSize: 24, fontWeight: 900 }}>{risk.current_exposure || 0}%</div>
-        <div style={{ color: token.content.muted, fontSize: 10, fontFamily: "monospace" }}>Limit: {risk.exposure_limit || 100}%</div>
+        {/* fontSize: 12 → --text-title (heading). Q8, panel depth. */}
+        <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Exposure</h3>
+        {/* fontSize: 24 → --text-figure (value). As Drawdown above. */}
+        <div style={{ color: token.content.primary, fontSize: token.text.figure, fontWeight: 900 }}>{risk.current_exposure || 0}%</div>
+        {/* fontSize: 10 → DECLARATION REMOVED; see {@link MetaRow}. The limit is the twelfth
+            `Label: value` row and the one that most needed splitting: it sat under a figure it
+            qualifies, at one step for both halves. */}
+        <div style={{ color: token.content.muted }}><MetaRow label="Limit:">{risk.exposure_limit || 100}%</MetaRow></div>
       </Card>
       <Card className="p-4">
-        <h3 style={{ color: token.content.primary, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>Circuit Breaker</h3>
+        {/* fontSize: 12 → --text-title (heading). Q8, panel depth. */}
+        <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Circuit Breaker</h3>
         <Tag2 c={risk.kill_switch_active ? "red" : "green"}>
           {risk.kill_switch_active ? "Active" : "Inactive"}
         </Tag2>
@@ -1276,9 +1441,12 @@ function ConfigurationTab({ strategy }) {
 
   return (
     <div>
-      <h3 style={{ color: token.content.primary, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Strategy Configuration</h3>
+      {/* fontSize: 14 → --text-title (heading). Q8, per-tab depth. */}
+      <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Strategy Configuration</h3>
       <Card className="p-4">
-        <pre style={{ color: token.content.secondary, fontSize: 10, fontFamily: "monospace", overflow: "auto" }}>
+        {/* fontSize: 10 → --text-small (table cell); monospace KEPT. Q6 as the comparison diff
+            above — an indented blueprint is a column whose alignment carries the nesting. */}
+        <pre style={{ color: token.content.secondary, fontSize: token.text.small, fontFamily: "monospace", overflow: "auto" }}>
           {JSON.stringify(blueprint, null, 2)}
         </pre>
       </Card>
@@ -1318,7 +1486,9 @@ function ExecutionsTab({ strategyId }) {
   if (loading) {
     return (
       <Card className="p-8" style={{ textAlign: "center", color: token.content.muted }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontFamily: "monospace", fontSize: 11 }}>
+        {/* fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1 — a loading line is
+            prose, and it is the one text on screen while the ledger is unread. */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: token.text.body }}>
           <Activity size={14} className="animate-spin" style={{ color: token.brand.base }} />
           <span>Loading execution records...</span>
         </div>
@@ -1327,18 +1497,24 @@ function ExecutionsTab({ strategyId }) {
   }
 
   if (error) {
+    // fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1 — a failed read explains
+    // itself in a sentence, and this is what stands in for the ledger when it cannot be had.
     return (
-      <Card className="p-8" style={{ textAlign: "center", color: token.status.error.fg, fontFamily: "monospace", fontSize: 11 }}>
+      <Card className="p-8" style={{ textAlign: "center", color: token.status.error.fg, fontSize: token.text.body }}>
         {error}
       </Card>
     );
   }
 
   if (executions.length === 0) {
+    // fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1.
     return (
-      <Card className="p-8" style={{ textAlign: "center", color: token.content.muted, fontFamily: "monospace", fontSize: 11 }}>
+      <Card className="p-8" style={{ textAlign: "center", color: token.content.muted, fontSize: token.text.body }}>
         No execution records found for this strategy yet.
-        <div style={{ color: token.content.muted, fontSize: 10, marginTop: 4 }}>
+        {/* fontSize: 10 → DECLARATION REMOVED. Q1 sends this sentence to `--text-body` too, and
+            its parent now declares exactly that, so a second declaration would only be a second
+            place for the step to drift from. It inherits. Not a word of either line changed. */}
+        <div style={{ color: token.content.muted, marginTop: 4 }}>
           Executions will populate here when the strategy triggers live or paper orders.
         </div>
       </Card>
@@ -1348,7 +1524,9 @@ function ExecutionsTab({ strategyId }) {
   return (
     <Card className="overflow-hidden">
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${token.line.default}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h3 style={{ color: token.content.primary, fontSize: 13, fontWeight: 700, margin: 0 }}>Execution Ledger</h3>
+        {/* fontSize: 13 → --text-title (heading). Q8 at panel depth, and the third number this
+            page used for one depth — 12, 13 and 14 for the same job. One step now. */}
+        <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, margin: 0 }}>Execution Ledger</h3>
         <span style={{
           color: token.content.muted,
           // fontSize: 10 → --text-micro (label). Q4's table caption: it names what the table
@@ -1444,7 +1622,8 @@ function SignalsTab({ strategyId }) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <h3 style={{ color: token.content.primary, fontSize: 14, fontWeight: 700, margin: 0 }}>Recent Signals</h3>
+        {/* fontSize: 14 → --text-title (heading). Q8, per-tab depth. */}
+        <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, margin: 0 }}>Recent Signals</h3>
         <Button
           variant="primary"
           size="xs"
@@ -1487,14 +1666,18 @@ function SignalsTab({ strategyId }) {
                     {sig.decision}
                   </Tag2>
                   <div>
-                    <span style={{ color: token.content.primary, fontWeight: 600, fontSize: 12 }}>{sig.symbol}</span>
-                    <span style={{ color: token.content.muted, fontSize: 10, fontFamily: "monospace", marginLeft: 8 }}>
+                    {/* fontSize: 12 → --text-title (value). Q7, as the three rows above. */}
+                    <span style={{ color: token.content.primary, fontWeight: 600, fontSize: token.text.title }}>{sig.symbol}</span>
+                    {/* fontSize: 10 → --text-body (value, secondary); monospace KEPT — a timeframe
+                        and an exchange id are server-supplied codes. */}
+                    <span style={{ color: token.content.muted, fontSize: token.text.body, fontFamily: "monospace", marginLeft: 8 }}>
                       {sig.timeframe} • {sig.exchange_id}
                     </span>
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <span style={{ color: token.content.muted, fontSize: 10, fontFamily: "monospace" }}>
+                  {/* fontSize: 10 → --text-body (value, secondary); monospace KEPT — a timestamp. */}
+                  <span style={{ color: token.content.muted, fontSize: token.text.body, fontFamily: "monospace" }}>
                     {sig.created_at ? new Date(sig.created_at).toLocaleTimeString() : "-"}
                   </span>
                   <Tag2 c={sig.status === "executed" ? "green" : sig.status === "rejected" ? "red" : "orange"}>
@@ -1601,7 +1784,8 @@ function MarketplaceTab({ strategy }) {
 
   return (
     <div>
-      <h3 style={{ color: token.content.primary, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Marketplace Status</h3>
+      {/* fontSize: 14 → --text-title (heading). Q8, per-tab depth. */}
+      <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Marketplace Status</h3>
 
       {/* What replaced the two `window.alert` calls.
           `ds/Alert` rather than a hand-rolled banner: it already owns the severity token,
@@ -1726,7 +1910,16 @@ function AnalyticsFigure({ label, value, reason, tone = null }) {
       {value === null ? (
         <NotAvailableMarker label={label} reason={reason} />
       ) : (
-        <div style={{ color: tone ?? token.content.primary, fontSize: 24, fontWeight: 700 }}>{value}</div>
+        <div style={{
+          color: tone ?? token.content.primary,
+          // fontSize: 24 → --text-figure (value). Q7: the sole figure of its Card, under a
+          // `--text-micro` eyebrow that names it. This is the construct the Metrics grid was
+          // rendering at 16px, and both take one step now. The `value === null` arm above is
+          // untouched — `NotAvailableMarker` still carries the reason and the accessible name, so
+          // a figure nobody could read still says so rather than arriving as a plausible number.
+          fontSize: token.text.figure,
+          fontWeight: 700,
+        }}>{value}</div>
       )}
     </Card>
   );
@@ -1735,14 +1928,18 @@ function AnalyticsFigure({ label, value, reason, tone = null }) {
 /** The shared loading / failed arms, so both tabs report a broken read the same way. */
 function AnalyticsReadState({ state }) {
   if (state === "loading") {
+    // fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1.
     return (
-      <Card className="p-8" style={{ textAlign: "center", color: token.content.muted, fontFamily: "monospace", fontSize: 11 }}>
+      <Card className="p-8" style={{ textAlign: "center", color: token.content.muted, fontSize: token.text.body }}>
         Reading your creator ledger…
       </Card>
     );
   }
+  // fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1, and one of the sentences
+  // Requirement 2.3 is written about: two clauses explaining that nothing is shown on purpose,
+  // rendered 15% below the floor. Not a word of it changed.
   return (
-    <Card className="p-8" style={{ textAlign: "center", color: token.status.error.fg, fontFamily: "monospace", fontSize: 11 }}>
+    <Card className="p-8" style={{ textAlign: "center", color: token.status.error.fg, fontSize: token.text.body }}>
       Your creator analytics could not be read. Nothing is shown rather than a figure that
       is not yours.
     </Card>
@@ -1761,7 +1958,8 @@ function SubscribersTab() {
 
   return (
     <div>
-      <h3 style={{ color: token.content.primary, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Subscriber Analytics</h3>
+      {/* fontSize: 14 → --text-title (heading). Q8, per-tab depth. */}
+      <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Subscriber Analytics</h3>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
         <AnalyticsFigure
           // The server's own name for the column. It counts Subscriptions ever taken on
@@ -1799,14 +1997,17 @@ function RevenueTab() {
 
   return (
     <div>
-      <h3 style={{ color: token.content.primary, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Revenue Analytics</h3>
+      {/* fontSize: 14 → --text-title (heading). Q8, per-tab depth. */}
+      <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Revenue Analytics</h3>
 
       {/* One block per currency, and no grand total. `earnings[]` is the ledger sum of
           `owner_share_minor` over non-reversal Settlement_Records minus the reversals, per
           currency — the same quantity the settlement property test pins. Nothing here adds
           two currencies together and nothing converts one. */}
       {earnings.length === 0 ? (
-        <Card className="p-8" style={{ textAlign: "center", color: token.content.muted, fontFamily: "monospace", fontSize: 11 }}>
+        /* fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1 — a finite verb and a
+           terminal full stop. An empty ledger is a state, not a zero, and it stays one. */
+        <Card className="p-8" style={{ textAlign: "center", color: token.content.muted, fontSize: token.text.body }}>
           Your settlement ledger holds no records yet, so there is nothing to total.
         </Card>
       ) : (

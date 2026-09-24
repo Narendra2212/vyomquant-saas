@@ -343,16 +343,20 @@ const CLEARED_BY_THIS_SPEC = Object.freeze({
   // to ONE step, and the `'1.25rem'` page `<h1>` of §3.6's first blind spot. So the
   // budget entry is now DELETED, which `record.now === 0` asserts below.
   'pages/PaperTrading.jsx': Object.freeze({ was: 51, now: 0, task: '8.1' }),
-  // The second entry this map watches MOVE, and the first one it records while the budget
-  // entry is still alive. Task 8.3 is sliced in two: slice 1 took the seven Q4 label call
-  // sites (the two figure-grid label rows, the seven execution-ledger `<th>`s, that table's
-  // row-count caption, the analytics and currency eyebrows, `Publication Status`) to
-  // `--text-micro` and the one Q6 `<table>` to `--text-small` — §2.4 asks Q4 before Q6, and
-  // this page is the clean case for it, the `<table>` setting the body step and each `<th>`
-  // overriding it. Q5 contributed nothing: every chip here is `Tag2`, which declares no size.
-  // `now` is 53 rather than 0, so the assertion below does NOT require the budget entry to be
-  // deleted — it stays until slice 2 lands.
-  'pages/StrategyDetail.jsx': Object.freeze({ was: 61, now: 53, task: '8.3 (slice 1 of 2)' }),
+  // The second entry this map watched MOVE, and the only one it recorded while the budget
+  // entry was still alive: 61 → 53 (slice 1, the seven Q4 label call sites to `--text-micro`
+  // and the one Q6 `<table>` to `--text-small` — §2.4 asks Q4 before Q6, and this page is the
+  // clean case for it, the `<table>` setting the body step and each `<th>` overriding it) → 0
+  // (slice 2, the seventeen Q8 headings to `--text-title`, the eleven Q1 sentences to
+  // `--text-body`, and the Q7 values by construct rather than by number — the three 24px hero
+  // Cards and the 16px metrics grid are the same construct and both take `--text-figure`).
+  // Q5 contributed nothing on either slice: every chip here is `Tag2`, which declares no size.
+  // Four declarations went rather than moved — the twelve `Label: value` metadata rows are
+  // §2.4's one-declaration-two-roles case and their four containers declare no size at all,
+  // so `MetaRow` gives the name `--text-micro` and the reading `--text-body` — which is why
+  // this guard counts occurrences rather than elements. `now` is 0, so the assertion below
+  // requires the budget entry to be DELETED (Requirement 1.5).
+  'pages/StrategyDetail.jsx': Object.freeze({ was: 61, now: 0, task: '8.3' }),
 });
 
 describe('absolute-font-sizes: the patterns measure the tree they were written for', () => {
