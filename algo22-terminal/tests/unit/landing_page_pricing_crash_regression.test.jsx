@@ -136,9 +136,11 @@ describe('Landing Page & Pricing — INR-only tier contract', () => {
       );
 
       await waitFor(() => {
-        expect(container.querySelector('#pricing')).toBeDefined();
-        expect(container.querySelector('#architecture')).toBeDefined();
-        expect(container.querySelector('#waitlist')).toBeDefined();
+        // `null` is defined, so `toBeDefined()` here passed whether or not the
+        // anchor existed. `not.toBeNull()` is what asks the question.
+        expect(container.querySelector('#pricing')).not.toBeNull();
+        expect(container.querySelector('#architecture')).not.toBeNull();
+        expect(container.querySelector('#waitlist')).not.toBeNull();
         expect(screen.getByText('Infrastructure Tiers')).toBeDefined();
       });
     });
