@@ -1,7 +1,7 @@
 /**
- * tests/unit/landing/landingSections.test.jsx — retail-ui-simplification task 10.2.
+ * tests/unit/landing/landingSections.test.jsx — retail-ui-simplification tasks 10.2 and 10.3.
  *
- * Requirements 13.1, 13.2, 13.3, 13.6, 18.1.
+ * Requirements 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 18.1.
  *
  * WHAT THIS FILE IS
  * -----------------
@@ -87,6 +87,165 @@
  * specific viewport, a missing or 403 asset, and incorrect content. None of the three is
  * observable in jsdom — the first needs a real viewport, the second a real network, the third the
  * requester's own description of what the page should say. That is the question task 10.3 puts.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * TASK 10.3 — THE RECORDING (Requirement 13.1)
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Requirement 13.1 asks the landing work to begin with a recording, and this repository keeps
+ * its records in the header of the file that took the measurement: every guard under
+ * `tests/unit/guards/` carries its measurement history in its own header, and
+ * `downloadSurface.test.jsx` carries the mechanism behind the last asset failure in its.
+ *
+ * **This section adds no assertion.** The fourteen `it` blocks below are the ones commit
+ * 5fec432 landed, unchanged; the eleven in `landing_page_pricing_crash_regression.test.jsx`
+ * are likewise untouched. Both files staying green across this edit is the only thing that
+ * proves a recording did not quietly rewrite a test.
+ *
+ * OUTCOME 1 — THE TREE MOUNTS AND THE ANCHORS ARE REAL (task 10.1, commit 62c1e0e)
+ * -------------------------------------------------------------------------------
+ * Three assertions that could not fail were repaired first: `expect(…).toBeDefined()` passes on
+ * `null`, so `#pricing`, `#architecture` and `#waitlist` were unchecked rather than checked. The
+ * repaired form was proved to have teeth with a throwaway probe against a non-existent anchor —
+ * the old form passed it, the new form failed it — and the probe was reverted.
+ *
+ * Measured after the repair: all three anchors are present, the tree mounts without throwing,
+ * `Infrastructure Tiers` resolves, and all five `Navbar` scroll targets — `#platform`,
+ * `#architecture`, `#security`, `#pricing`, `#faq` — resolve to a section the page renders.
+ * That last one is worth its line because `Navbar`'s `scrollToSection` is
+ * `if (el) el.scrollIntoView(…)`: a missing target is a click that does nothing, silently, with
+ * no console trace. **There is no dead nav link.** 11/11 pass.
+ *
+ * OUTCOME 2 — ALL FOURTEEN SECTIONS CARRY THEIR OWN CONTENT (task 10.2, commit 5fec432)
+ * ------------------------------------------------------------------------------------
+ * This file. Every section mounted alone, every assertion a `getByText`/`getByRole` against copy
+ * read out of that component's source. **None renders empty and none renders chrome only** — the
+ * two chrome-only traps were checked by name, `ScreenshotsSection`'s default tab body and
+ * `Waitlist`'s form column, because a tab strip over an empty frame and a heading over a missing
+ * form are both "broken" to a visitor and invisible to outcome 1. Teeth proved with two negative
+ * probes that failed as required and were reverted. 14/14 pass. `downloadSurface.test.jsx` stays
+ * 23/23 and the installer withdrawal is intact.
+ *
+ * OUTCOME 3 — THE STANDING HYPOTHESIS, SETTLED IN `git` (§8.3)
+ * -----------------------------------------------------------
+ * §1.11 records the requester's recollection: two recent changes — six missing imports plus an
+ * unused `useNavigate`, and the INR-only pricing conversion — both believed to be against
+ * `src/pages/Landing.jsx`, which is routed nowhere. If that is where they landed, they changed
+ * nothing a visitor sees, and "still broken" is the expected outcome of a correct fix applied to
+ * a dead file. Both paths were logged. In the window the recollection covers, 19–21 Sep:
+ *
+ *   git log --oneline -- algo22-terminal/src/pages/Landing.jsx
+ *     0ecf86a  2026-09-20  ci(lint): run eslint in CI and clear the error backlog (4.5)
+ *     218ba9f  2026-09-19  refactor(legacy): read tokens directly in Landing and Profile (27.2)
+ *     (older: b8933d7 2026-08-30, f1e3acf 2026-08-07, dee0014 2026-07-28)
+ *
+ *   git log --oneline -- algo22-terminal/src/components/landing/
+ *     55382cb  2026-09-21  feat(landing): quote the four tiers in rupees only and retire the
+ *                          currency toggle …
+ *     1201767  2026-09-20  fix(download): withdraw the four unbacked installer links … (4.3)
+ *     (older: 84c287e 2026-08-31 and seven more back to 36aa957)
+ *
+ * **The import half is CONFIRMED.** `0ecf86a`'s diff on `src/pages/Landing.jsx` adds exactly six
+ * imports — `useNavigate` from `react-router-dom`, and `ChevronDown`, `ChevronUp`, `GitBranch`,
+ * `TrendingUp`, `Bot` from `lucide-react` — plus `const navigate = useNavigate()` inside
+ * `LandingPricingCard`. That commit appears nowhere in the second log: it touched no file under
+ * `src/components/landing/`. The import fix landed entirely in the unmounted file and a visitor
+ * saw nothing change. Two details of the recollection do not survive the diff and neither alters
+ * the conclusion: the fix arrived inside a repository-wide eslint-backlog sweep rather than as a
+ * landing fix, and the `useNavigate` is used, at `:132` — there is no unused one in the file.
+ *
+ * **The INR half is REFUTED.** `55382cb` is on `src/components/landing/` and does not appear in
+ * the first log at all: it did not touch `src/pages/Landing.jsx`. That work reached the live
+ * surface, which is what `landing_page_pricing_crash_regression.test.jsx` independently asserts —
+ * the live `Pricing.jsx` is INR-only, four tiers, no currency toggle.
+ *
+ * So §8.3's predicted signature, two commits on the first path and none on the second, is half
+ * observed: the two are there, and the second path has two of its own. **It explains why a fix
+ * had no effect. It says nothing about what the original symptom is** — which is why outcomes 1
+ * and 2 had to run anyway, and did.
+ *
+ * THE ONE QUESTION NOW OUTSTANDING (Requirement 13.1, step 3)
+ * ----------------------------------------------------------
+ * Asked third rather than first, deliberately: outcomes 1 and 2 cost one scoped run and one new
+ * file, and they make the question answerable in a single exchange instead of a second round of
+ * "it looks broken".
+ *
+ *   The live tree mounts, all **fourteen** sections render their own content, the three in-page
+ *   anchors and all five nav targets resolve, and pricing is intact and INR-only — so which of
+ *   Requirement 13.3's three surviving candidates is the symptom: a layout fault at a specific
+ *   viewport (at what width, and on which browser — the landing route is the one surface
+ *   reachable below the app's gate), a missing or 403 asset (which URL, and does it fail on the
+ *   deployed bundle, a local build, or both), or incorrect content (which sentence, and what
+ *   should it say)?
+ *
+ * The count in the question is fourteen, not the plan's thirteen. See THIRTEEN OR FOURTEEN above:
+ * the "13" is a miscount and Requirement 15.1 already says fourteen.
+ *
+ * WHAT IS BLOCKED BEHIND THAT ANSWER
+ * ----------------------------------
+ * §8.2's steps 4 and 5, both invisible to every test in this repository:
+ *
+ *   * **Step 4, the deployed bundle.** `HEAD` on the referenced asset paths, looking for the 403
+ *     class of fault this surface has already had once. The mechanism is recorded in
+ *     `downloadSurface.test.jsx`'s header: `aws s3 sync dist/ --delete` deletes any prefix
+ *     `dist/` does not carry, so a directory CI never builds is removed from the bucket on every
+ *     deploy. That is how four advertised installers came to return 403. jsdom issues no
+ *     requests, so nothing below can see it.
+ *   * **Step 5, a viewport sweep.** `/` renders `LandingPage` outside the shell (`App.jsx:590`),
+ *     so it is the one surface a visitor reaches on a phone. One correction to the plan's
+ *     wording: the gate is `shell/ResponsiveGate` at 768px, not `DesktopOnlyOverlay` at 1000px —
+ *     that component was unwired by vyomquant-ui-redesign task 8.5 and deleted by task 27.3
+ *     (`App.jsx:13`). The conclusion is unchanged; the mechanism named in §8.2 is stale.
+ *     Identifying a mobile layout fault is Requirement 13's job even though fixing it is out of
+ *     scope by out-of-scope item 6, and the distinction is recorded rather than assumed.
+ *
+ * A NAMED INSTANCE OF THE "INCORRECT CONTENT" CANDIDATE — FILED, NOT FIXED (Requirement 13.6)
+ * ------------------------------------------------------------------------------------------
+ * Found while reading sources for the assertions below, and measured rather than inferred.
+ * `SecuritySection.jsx:8` advertises **`AES-256 Encryption`** and `:9` says "All sensitive data
+ * and API keys are encrypted at rest using industry-standard AES-256 encryption". The vault is
+ * `backend/api_key_vault.py`, and at `:97`/`:99` it builds
+ * `MultiFernet([Fernet(k.encode()) for k in master_keys])`. Fernet is **AES-128-CBC with an
+ * HMAC-SHA256 tag**, the two 16-byte halves of the same 32-byte key; the "256" is the key
+ * material, not the cipher width. No AES-256 cipher is constructed anywhere in this repository —
+ * `backend_app/core/credential_vault.py` is Fernet too. The label is wrong in the backend's own
+ * docblock first (`:5`, `:64`, `:94`, `:283`), so the landing copy inherited it rather than
+ * inventing it.
+ *
+ * This is not a new judgement. **This spec has already withdrawn the identical claim once**, from
+ * `ExchangeManager.jsx` in task 7.10 (commit 45a074c), recorded as item 6 of that file's header
+ * in the same terms. The landing surface was simply not in that commit's scope, so the product
+ * now says two different things about one vault on two pages. It survives on the live landing
+ * surface twice — here and in `FAQ.jsx:12` — and once more in `components/legal/LegalPage.jsx:20`
+ * and once in the dead `pages/Landing.jsx:351`, where it reads "AES-256 GCM" and is wrong twice.
+ *
+ * **The `SecuritySection` case below currently pins the wrong claim.** It asserts the string
+ * `'AES-256 Encryption'` because that is what the component renders, which is correct as a
+ * content measurement and is exactly how a copy defect gets enshrined. It is left as it is on
+ * purpose: task 10.3 is a recording and makes no fix, and a public statement about encryption
+ * strength on a marketing page is the requester's call, not a test author's. Filed under
+ * Requirement 13.6 as an instance of Requirement 13.3's "incorrect content" candidate, with that
+ * `it` as its regression test — it fails on the day the copy is corrected, which is the signal
+ * that the correction happened, and the correcting commit updates both together. `FAQ.jsx:12`'s
+ * sentence is not pinned by any assertion here; only its question is.
+ *
+ * STILL CHECKED, NOT RE-COVERED (Requirement 13.4)
+ * -----------------------------------------------
+ * Four items keep the standing §8.1 gave them and nothing here re-opens them: the legacy
+ * utilities `accent-cyan`, `text-muted` and `accent-cyan-dim` resolve as aliases in
+ * `tokens.css:150`/`:152`/`:162` and `dead-tailwind.test.js` fails on any class that does not;
+ * `ScreenshotComingSoon.jsx`'s placeholder is unreachable because nothing imports it, and
+ * `no-placeholders.test.js` uses it as its own non-vacuity fixture; `DownloadSection`'s four
+ * installer links were withdrawn to `ds/Panel`'s `unavailable` state by
+ * production-launch-hardening task 4.3; and pricing is INR-only with no toggle.
+ *
+ * WHAT THIS RECORDING IS NOT
+ * --------------------------
+ * It is not a defect list, and Requirement 13.5 is why: **no symptom reproduced.** The tree
+ * mounts, all fourteen sections render, the anchors and nav targets resolve, pricing is intact,
+ * and nothing reproduced at the viewport jsdom provides. That is the result, not a blocker —
+ * Requirements 14 and 15 proceed on their own merits, and the one concrete finding above is
+ * filed rather than fixed. Three recorded outcomes and one specific question is the bar §8.4
+ * sets. It cannot prove no fault exists; it can prove the investigation was not skipped.
  */
 
 import React from 'react';
