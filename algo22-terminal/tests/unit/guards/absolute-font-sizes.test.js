@@ -332,14 +332,18 @@ const CLEARED_BY_THIS_SPEC = Object.freeze({
   // at zero; what `PAGE_FIXED_POINT` still holds above zero is task 8's three files
   // (`PaperTrading`, `StrategyDetail`) and task 9.2's `Landing.jsx`.
   'pages/AuthPage.jsx': Object.freeze({ was: 29, now: 0, task: '7.11' }),
-  // **Not cleared — moved.** `now` is 41 and not 0, which is the case the
-  // `record.now === 0` branch below exists for: task 8.1 is sliced, slice 1 took
-  // the ten module-level style objects, and the remaining 41 are in the JSX body.
-  // So this page keeps its budget entry (at 41) and will appear here again with a
-  // lower `now` as slices 2 and 3 land. The entry is here rather than absent
-  // because the failure message above asks the change that moved §1.1's number for
-  // an explanation, and a partial move owes one exactly as a clearance does.
-  'pages/PaperTrading.jsx': Object.freeze({ was: 51, now: 41, task: '8.1 (slice 1 of 3)' }),
+  // **Not cleared — moved.** `now` is 18 and not 0, which is the case the
+  // `record.now === 0` branch below exists for: task 8.1 is sliced. Slice 1 took the
+  // ten module-level style objects (51 → 41) and slice 2 took the twenty-three
+  // sentence call sites in the JSX body (41 → 18) — the seventeen 9px explanations
+  // Requirement 2.3 is written about, five 10px prose blocks including the page's one
+  // `role="alert"` line, and `:3367`'s mixed-role container, whose declaration went
+  // and whose children split `--text-micro` / `--text-body`. So this page keeps its
+  // budget entry (at 18) and will appear here once more, with a lower `now`, when
+  // slice 3 lands. The entry is here rather than absent because the failure message
+  // above asks the change that moved §1.1's number for an explanation, and a partial
+  // move owes one exactly as a clearance does.
+  'pages/PaperTrading.jsx': Object.freeze({ was: 51, now: 18, task: '8.1 (slice 2 of 3)' }),
 });
 
 describe('absolute-font-sizes: the patterns measure the tree they were written for', () => {

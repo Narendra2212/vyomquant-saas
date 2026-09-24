@@ -195,6 +195,37 @@
  * Slices 2 and 3 hold the remaining call sites in the JSX body — the seventeen 9px explanations
  * Requirement 2.3 is written about, `:707`'s conditional, the eight recharts axis props and the
  * page `<h1>` — so this file's budget entry falls but does not reach zero here, and it stays.
+ *
+ * TASK 8.1, SLICE 2 OF 3 — THE SENTENCES STOP BEING RENDERED BELOW THE FLOOR
+ * --------------------------------------------------------------------------
+ * Twenty-three call sites in the JSX body, every one of them §2.4's **Q1 — a finite verb, or a
+ * terminal full stop, or prose that wraps** — take `--text-body`. Same note form as slice 1:
+ *
+ * | cohort                                                        | was | step          |
+ * |---------------------------------------------------------------|-----|---------------|
+ * | 17 hints, notes, footnotes and explanations                    |   9 | `--text-body` |
+ * | 5 report lists, the tooltip body, prose blocks, the `alert`     |  10 | `--text-body` |
+ * | the mixed-role legend row — declaration REMOVED                |   9 | see below     |
+ *
+ * **This is the slice the complaint was about.** Five of the seventeen are the multi-sentence
+ * explanations `production-launch-hardening` required this page to make about its own honesty —
+ * that a negative latency means the clocks disagree and is shown as recorded, that no price is
+ * carried forward and none is synthesised, that three series stay distinguishable without relying
+ * on colour — and they were rendered 31% below the legibility floor. They grow by 44%. **Not one
+ * word of any of them changed**, and §2.5's rule that prose is never truncated is why.
+ *
+ * The legend row above the price chart is §2.4's **one declaration, three roles** case: one
+ * `fontSize: 9` covered two chart legend labels (Q4 → `--text-micro`) and one sentence about
+ * where fill markers are placed (Q1 → `--text-body`), so the container declares no size at all
+ * and each child takes its own step. Picking one step for the row is wrong for two of the three.
+ *
+ * §2.5's yields: no call site in this slice carried `whiteSpace: 'nowrap'`, so yield 1 — let it
+ * wrap — was already available and is what absorbs the growth. The stop and reset report lists
+ * additionally take yield 2, moving `gap: 6` onto `space['2']` now that their rows wrap inside a
+ * 220px track; their columns are NOT reduced, because yield 1 came first and sufficed.
+ *
+ * Slice 3 holds what is left: the eight recharts axis props, the two remaining 10px chips and
+ * seven 11px call sites, the 16px latency figure, `:707`'s conditional and the page `<h1>`.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -676,7 +707,10 @@ const StaleNote = ({ lastPriceAt }) => (
       gap: 5,
       marginTop: 4,
       color: statusToken('warning').fg,
-      fontSize: 9,
+      // fontSize: 9 → --text-body (sentence). The note names the last validated price instant, or
+      // says none was reported — the statement Requirement 18.15 exists for, so it is read at the
+      // default step and not below the floor.
+      fontSize: token.text.body,
       fontFamily: 'monospace',
     }}
   >
@@ -762,7 +796,18 @@ const Figure = ({
         {!missing && unit ? <span style={{ fontSize: 11, color: token.content.secondary, marginLeft: 4 }}>{unit}</span> : null}
       </div>
       {hint ? (
-        <div style={{ color: token.content.muted, fontSize: 9, fontFamily: 'monospace', marginTop: 4 }}>{hint}</div>
+        <div
+          style={{
+            color: token.content.muted,
+            // fontSize: 9 → --text-body (sentence). Every `hint` this component is given is prose —
+            // "A price is shown only once a validated candle has arrived — none is synthesised."
+            fontSize: token.text.body,
+            fontFamily: 'monospace',
+            marginTop: 4,
+          }}
+        >
+          {hint}
+        </div>
       ) : null}
       {stale ? <StaleNote lastPriceAt={lastPriceAt} /> : null}
       <div style={{ marginTop: 8 }}>
@@ -814,7 +859,16 @@ const PanelNotice = ({ tone, Icon, heading, testId, children, code = null, foote
           {children}
         </div>
         {code ? (
-          <div style={{ color: token.content.muted, fontSize: 9, fontFamily: 'monospace', marginTop: 4 }}>
+          <div
+            style={{
+              color: token.content.muted,
+              // fontSize: 9 → --text-body (sentence). It ends in a full stop and it carries the
+              // server's own refusal code, which is the distinction the eight states narrow away.
+              fontSize: token.text.body,
+              fontFamily: 'monospace',
+              marginTop: 4,
+            }}
+          >
             Reported by the server as <code>{code}</code>.
           </div>
         ) : null}
@@ -1094,7 +1148,11 @@ const ChartTooltip = ({ active, payload, rows }) => {
         borderRadius: token.radius.md,
         padding: '8px 10px',
         fontFamily: 'monospace',
-        fontSize: 10,
+        // fontSize: 10 → --text-body (sentence). The tooltip body is where the figure a trader
+        // reads comes from — the recorded string, not the plotted number — so it is read at the
+        // default step. It floats and is content-sized, so the growth widens it rather than
+        // clipping anything.
+        fontSize: token.text.body,
         color: token.content.primary,
         boxShadow: token.shadow.raised,
       }}
@@ -2530,7 +2588,15 @@ export default function PaperTrading() {
                 ))}
               </select>
               {selectedEntry ? (
-                <div style={{ color: token.content.muted, fontSize: 9, marginTop: 4 }}>
+                <div
+                  style={{
+                    color: token.content.muted,
+                    // fontSize: 9 → --text-body (sentence). Two sentences about where a subscribed
+                    // strategy's definition lives; word for word, at the default step.
+                    fontSize: token.text.body,
+                    marginTop: 4,
+                  }}
+                >
                   {selectedEntry.ownership === 'SUBSCRIBED'
                     ? 'Subscribed. The strategy definition stays with its owner — the server resolves it from the Listing.'
                     : 'Owned.'}
@@ -2605,7 +2671,18 @@ export default function PaperTrading() {
                   borderColor: capitalError ? statusToken('loss').fg : token.line.default,
                 }}
               />
-              <div id="paper-capital-help" style={{ fontSize: 9, marginTop: 4, color: capitalError ? statusToken('loss').fg : token.content.muted }}>
+              <div
+                id="paper-capital-help"
+                style={{
+                  // fontSize: 9 → --text-body (sentence). This is the `aria-describedby` target of
+                  // the capital field: it carries the validation message and the exact minor-unit
+                  // count. It was the smallest text beside the one input where a misread costs a
+                  // wrong number — `fieldStyle` took `--text-body` in slice 1 and its help follows.
+                  fontSize: token.text.body,
+                  marginTop: 4,
+                  color: capitalError ? statusToken('loss').fg : token.content.muted,
+                }}
+              >
                 {capitalError
                   || (capitalPreview.ok
                     ? `Sent as ${formatCount(capitalPreview.minor)} minor units — an exact whole number, never a rounded float.`
@@ -2696,7 +2773,17 @@ export default function PaperTrading() {
                 <RotateCcw size={13} aria-hidden="true" />
                 <span style={{ marginLeft: 6 }}>{busy === 'reset' ? 'Resetting…' : 'Reset'}</span>
               </Button>
-              <span style={{ color: token.content.muted, fontSize: 9, minWidth: 0, flexBasis: singleColumn ? undefined : '100%' }}>
+              <span
+                style={{
+                  color: token.content.muted,
+                  // fontSize: 9 → --text-body (sentence). It ends in a full stop and it is the only
+                  // place the page says which of the four transitions the reported state admits.
+                  // `flexBasis: '100%'` already gives it its own row, so the growth costs no layout.
+                  fontSize: token.text.body,
+                  minWidth: 0,
+                  flexBasis: singleColumn ? undefined : '100%',
+                }}
+              >
                 {`Admitted from ${sessionState || 'the reported state'}: ${availableOperations.join(', ')}.`}
               </span>
             </div>
@@ -2762,7 +2849,23 @@ export default function PaperTrading() {
           <ul
             data-responsive-grid="stop-report"
             data-single-column={String(singleColumn)}
-            style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gridTemplateColumns: gridColumns(220), gap: 6, fontSize: 10, color: token.content.secondary, minWidth: 0 }}
+            style={{
+              listStyle: 'none',
+              margin: 0,
+              padding: 0,
+              display: 'grid',
+              gridTemplateColumns: gridColumns(220),
+              // §2.5 yield 2: 6 is off the declared scale and the rows now wrap inside a 220px
+              // track, so the gap moves onto `space['2']`. The columns are NOT reduced — yield 1
+              // was available first, since nothing in this list carries `whiteSpace: 'nowrap'`.
+              gap: token.space['2'],
+              // fontSize: 10 → --text-body (sentence). Six `label: value` lines reporting whether
+              // the stop actually completed, read from the response's own flags. This is the report
+              // a trader consults when a stop did not finish, so it takes the default step.
+              fontSize: token.text.body,
+              color: token.content.secondary,
+              minWidth: 0,
+            }}
           >
             <li>
               Outstanding:{' '}
@@ -2809,7 +2912,21 @@ export default function PaperTrading() {
           <ul
             data-responsive-grid="reset-report"
             data-single-column={String(singleColumn)}
-            style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gridTemplateColumns: gridColumns(220), gap: 6, fontSize: 10, color: token.content.secondary, minWidth: 0 }}
+            style={{
+              listStyle: 'none',
+              margin: 0,
+              padding: 0,
+              display: 'grid',
+              gridTemplateColumns: gridColumns(220),
+              // §2.5 yield 2, as on the stop report above and for the same reason.
+              gap: token.space['2'],
+              // fontSize: 10 → --text-body (sentence). Four `label: value` lines recording what the
+              // reset restored and what it could not cancel; nothing here was deleted, and the list
+              // saying so is read at the default step.
+              fontSize: token.text.body,
+              color: token.content.secondary,
+              minWidth: 0,
+            }}
           >
             <li>
               Restored capital:{' '}
@@ -2859,10 +2976,16 @@ export default function PaperTrading() {
                 />
                 <StatusPill tone="muted" Icon={Radio} label={`Transport ${session?.feed_transport ?? 'not reported'}`} />
               </div>
-              <div style={{ color: token.content.muted, fontSize: 9 }}>
+              <div style={{ color: token.content.muted, fontSize: token.text.body }}>
+                {/* fontSize: 9 → --text-body (sentence). `feedCopy.note` is the feed state
+                    explained in words, and the fallback is a full sentence about a state the
+                    platform does not recognise being shown verbatim. */}
                 {feedCopy?.note ?? 'This feed state is not one of the five the platform records; it is shown verbatim.'}
               </div>
-              <div style={{ color: token.content.secondary, fontSize: 9 }}>
+              <div style={{ color: token.content.secondary, fontSize: token.text.body }}>
+                {/* fontSize: 9 → --text-body (sentence). §2.6 groups this with the panel's notes
+                    rather than with its labels: it is a prose line naming where the market data
+                    came from, and it reads on the same line as the feed note above it. */}
                 Source: <span style={{ color: token.content.primary }}>{session?.market_data_source ?? NOT_REPORTED}</span>
               </div>
               <SimulatedTag />
@@ -2882,10 +3005,14 @@ export default function PaperTrading() {
                 />
                 <StatusPill tone="muted" label={`Events ${formatCount(session?.event_sequence) ?? '0'}`} />
               </div>
-              <div style={{ color: token.content.secondary, fontSize: 9 }}>
+              <div style={{ color: token.content.secondary, fontSize: token.text.body }}>
+                {/* fontSize: 9 → --text-body (sentence). The session's own identity line, grouped
+                    with this panel's prose by §2.6; each segment renders an em dash when the
+                    server did not report it, which is a statement and not a label. */}
                 {session?.symbol ?? '—'} · {session?.timeframe ?? '—'} · {session?.exchange_id ?? '—'}
               </div>
-              <div style={{ color: token.content.secondary, fontSize: 9 }}>
+              <div style={{ color: token.content.secondary, fontSize: token.text.body }}>
+                {/* fontSize: 9 → --text-body (sentence). */}
                 Recorded capital{' '}
                 <span style={{ color: token.content.primary }}>
                   {formatMinorUnits(session?.initial_capital_minor, sessionCurrency) ?? NOT_REPORTED} {sessionCurrency}
@@ -2934,7 +3061,13 @@ export default function PaperTrading() {
               <div style={{ color: token.content.primary, fontWeight: 900, fontSize: 16 }}>
                 {formatLatency(latestTick?.latencyMs) ?? NOT_REPORTED}
               </div>
-              <div style={{ color: token.content.muted, fontSize: 9 }}>
+              {/* fontSize: 9 → --text-body (sentence). §2.6 names this pair — this line and
+                  `labelStyle` — as the case that proves the mapping is keyed on role rather than on
+                  the number: both were 9px, and they resolve three steps apart. This is a
+                  two-clause explanation of a safety-relevant behaviour that
+                  `production-launch-hardening` required the page to state, and it was rendered 31%
+                  below the legibility floor. Word for word, at +44%. */}
+              <div style={{ color: token.content.muted, fontSize: token.text.body }}>
                 Delivery latency of the last validated candle. A negative value means the clocks
                 disagree and is shown as recorded; an unmeasured one reads “{NOT_REPORTED}” rather
                 than zero.
@@ -3021,7 +3154,10 @@ export default function PaperTrading() {
               ) : null}
             </div>
 
-            <div style={{ color: token.content.muted, fontSize: 9 }}>
+            {/* fontSize: 9 → --text-body (sentence). Three sentences on what a reconnect re-reads,
+                what it discards and how often the safety poll runs while the socket is down — the
+                explanation of why nothing here is presented as current when it is not. */}
+            <div style={{ color: token.content.muted, fontSize: token.text.body }}>
               On reconnect the page asks{' '}
               <code>events(sessionId, {formatCount(retained.lastSequence) ?? '0'})</code> for the
               frames the drop swallowed, and discards any whose <code>event_id</code> it has already
@@ -3053,7 +3189,10 @@ export default function PaperTrading() {
           data-ticks-discarded={retained.ticksDiscarded}
           style={{
             color: token.content.secondary,
-            fontSize: 10,
+            // fontSize: 10 → --text-body (sentence). Requirement 27.5's bounds, disclosed in prose
+            // rather than left as an invisible policy. A disclosure a retail reader cannot read has
+            // not disclosed anything, so it takes the default step.
+            fontSize: token.text.body,
             fontFamily: 'monospace',
             lineHeight: 1.6,
             marginTop: token.space['3'],
@@ -3276,7 +3415,15 @@ export default function PaperTrading() {
             </AreaChart>
           </ResponsiveContainer>
           <div
-            style={{ color: token.content.muted, fontSize: 9, marginTop: 6 }}
+            style={{
+              color: token.content.muted,
+              // fontSize: 9 → --text-body (sentence). Both arms are multi-sentence: that a reset
+              // begins a new series and the dashed lines mark it, and that the snapshots are
+              // plotted in the order the server returned them and are not re-sorted — "the
+              // drawdown of a resorted series is not the drawdown of the series that was read".
+              fontSize: token.text.body,
+              marginTop: 6,
+            }}
             data-testid="paper-equity-series"
             data-chart-points={equityPoints.length}
             data-chart-point-cap={MAX_CHART_POINTS_PER_SERIES}
@@ -3332,7 +3479,10 @@ export default function PaperTrading() {
                 <Line dataKey="total" name="Total" stroke={statusToken('profit').fg} strokeWidth={2} strokeDasharray="1 3" dot={false} connectNulls={false} />
               </ComposedChart>
             </ResponsiveContainer>
-            <div style={{ color: token.content.muted, fontSize: 9, marginTop: 6 }}>
+            {/* fontSize: 9 → --text-body (sentence). This is the page's non-colour key: it is what
+                makes the three series distinguishable to a reader who cannot separate them by hue,
+                so rendering it below the floor removed the accommodation it describes. */}
+            <div style={{ color: token.content.muted, fontSize: token.text.body, marginTop: 6 }}>
               Realized is solid, unrealized is long-dashed and total is dotted, so the three series
               are distinguishable without relying on colour. An unrealized or total figure that had
               no current price behind it leaves a gap rather than being drawn as zero.
@@ -3416,14 +3566,26 @@ export default function PaperTrading() {
               <Scatter dataKey="sellFill" name="Sell fill" fill={statusToken('sell').fg} shape="diamond" />
             </ComposedChart>
           </ResponsiveContainer>
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6, fontSize: 9, color: token.content.muted }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          {/* §2.4's one-declaration-three-roles case, and the reason the ratchet counts occurrences
+              rather than elements. This row carried ONE `fontSize: 9` over three children with two
+              different roles: two chart legend labels and one sentence about where fill markers are
+              placed. Q4 sends the labels to `--text-micro` and Q1 sends the sentence to
+              `--text-body`, so:
+
+                fontSize: 9 → REMOVED from the container (no single step is right for all three)
+                fontSize: 9 → --text-micro (label)    on the two legend spans
+                fontSize: 9 → --text-body (sentence)  on the third
+
+              The row already wraps (`flexWrap: 'wrap'`), so §2.5's first yield absorbs the
+              sentence's growth and the legend keeps its 14px gap. */}
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6, color: token.content.muted }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: token.text.micro }}>
               <ArrowUpRight size={11} aria-hidden="true" style={{ color: statusToken('buy').fg }} /> Buy fill — triangle
             </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: token.text.micro }}>
               <ArrowDownRight size={11} aria-hidden="true" style={{ color: statusToken('sell').fg }} /> Sell fill — diamond
             </span>
-            <span>
+            <span style={{ fontSize: token.text.body }}>
               {formatCount(derived.fills.length) ?? '0'} fill marker(s) placed on the last candle at or
               before each fill.
             </span>
@@ -3456,7 +3618,10 @@ export default function PaperTrading() {
             rowKey={(row) => row.id}
             columns={positionColumns}
           />
-          <div style={{ color: token.content.muted, fontSize: 9, marginTop: 6 }}>
+          {/* fontSize: 9 → --text-body (sentence). "no price is carried forward and none is
+              synthesised" is one of the three statements `production-launch-hardening` required
+              this page to make about its own honesty. It grows; it is not shortened. */}
+          <div style={{ color: token.content.muted, fontSize: token.text.body, marginTop: 6 }}>
             A current price, an unrealized figure or a priced-at instant that the server did not
             report reads “{NOT_REPORTED}” — no price is carried forward and none is synthesised.
           </div>
@@ -3483,7 +3648,9 @@ export default function PaperTrading() {
             rowKey={(row) => row.id}
             columns={orderColumns}
           />
-          <div style={{ color: token.content.muted, fontSize: 9, marginTop: 6 }}>
+          {/* fontSize: 9 → --text-body (sentence). It ends in a full stop and it is the page's one
+              statement that no fee on this table is a float. */}
+          <div style={{ color: token.content.muted, fontSize: token.text.body, marginTop: 6 }}>
             Fees are the integer Minor_Units the order recorded, decimal-shifted for display only.
           </div>
         </PanelBody>
@@ -3537,7 +3704,9 @@ export default function PaperTrading() {
               rowKey={(signal) => signal.eventId ?? `${signal.sequence}`}
               columns={signalColumns}
             />
-            <div style={{ color: token.content.muted, fontSize: 9, marginTop: 6 }}>
+            {/* fontSize: 9 → --text-body (sentence). The zero-versus-unavailable statement for this
+                table, which §6 is written about: an absent price reads as absent, never as 0.0. */}
+            <div style={{ color: token.content.muted, fontSize: token.text.body, marginTop: 6 }}>
               A signal recorded without a validated price shows “{NOT_REPORTED}” for its price
               rather than a zero.
             </div>
@@ -3564,7 +3733,17 @@ export default function PaperTrading() {
               columns={executionColumns}
             />
             {derived.errors.length ? (
-              <div role="alert" style={{ marginTop: 8, color: statusToken('loss').fg, fontSize: 10 }}>
+              <div
+                role="alert"
+                style={{
+                  marginTop: 8,
+                  color: statusToken('loss').fg,
+                  // fontSize: 10 → --text-body (sentence). The page's only `role="alert"`: it counts
+                  // the error frames recorded on the session and prints the most recent code and
+                  // message. An alert a reader has to squint at is an alert that does not arrive.
+                  fontSize: token.text.body,
+                }}
+              >
                 {formatCount(derived.errors.length)} error frame(s) recorded on this session. The most
                 recent: {derived.errors[derived.errors.length - 1].code ?? NOT_REPORTED} —{' '}
                 {derived.errors[derived.errors.length - 1].message ?? NOT_REPORTED}

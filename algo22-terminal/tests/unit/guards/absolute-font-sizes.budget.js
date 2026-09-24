@@ -490,11 +490,32 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // `whiteSpace: 'nowrap'` and moving `padding: '1px 5px'` onto the declared 4px
   // grid, with its `FlaskConical` glyph following to 10. Nothing shrank.
   //
-  // **The entry stays**, because 41 is not zero: the remaining call sites are in
-  // the JSX body and belong to slices 2 and 3 — the seventeen 9px explanations,
-  // `:707`'s `missing ? 13 : 18` conditional, the eight recharts axis props, and
-  // the `'1.25rem'` page `<h1>` at `:2355` that blind spot 1 cannot see.
-  'pages/PaperTrading.jsx': 41,
+  // **Now 18 — 9×8, 11×7, 10×2, 16×1. Task 8.1 slice 2 of 3 took the TWENTY-THREE
+  // sentence call sites in the JSX body, and only those**: the seventeen 9px hints,
+  // notes and footnotes, the five 10px report lists / tooltip body / prose blocks
+  // including the page's one `role="alert"` line, and `:3367`'s mixed-role container.
+  // Every one is Q1 → `--text-body`, a +30% to +44% growth on multi-sentence
+  // explanations of safety-relevant behaviour — that a negative latency means the
+  // clocks disagree and is shown as recorded, that no price is carried forward and
+  // none is synthesised, that three series stay distinguishable without relying on
+  // colour. These are Requirement 2.3's subject and the reason this spec exists; not
+  // one word of any of them changed.
+  //
+  // `:3367` is §2.4's one-declaration-three-roles case and is why this budget counts
+  // occurrences rather than elements: one `fontSize: 9` sat over two chart legend
+  // labels and one sentence, so the CONTAINER lost its declaration and the children
+  // took `--text-micro` (Q4) and `--text-body` (Q1) separately. One violation, three
+  // resolutions. §2.5's yields: nothing here carried `whiteSpace: 'nowrap'`, so yield
+  // 1 was already available and absorbs the growth; the two report lists additionally
+  // took yield 2, moving `gap: 6` onto `space['2']` now that their rows wrap inside a
+  // 220px track. Columns were NOT reduced and nothing shrank.
+  //
+  // **The entry stays**, because 18 is not zero. Slice 3 holds the rest: the eight
+  // `fontSize={9}` recharts axis props (all 8 of the remaining 9s), the two 10px and
+  // seven 11px call sites, `:2882`'s 16px latency figure, plus the two constructs the
+  // patterns cannot see — `:707`'s `missing ? 13 : 18` conditional and the
+  // `'1.25rem'` page `<h1>`, which blind spot 1 records.
+  'pages/PaperTrading.jsx': 18,
   // 12×9, 11×6, 9×4, 13×4, 14×4, 32×4, 10×3, 15×2, 20×2, 18×1, 22×1, 36×1.
   // **This entry is deleted, not lowered, by task 9.2 (commit 23), which deletes
   // the file.** `Landing.jsx` carries its own `DEPRECATED / UNMOUNTED` header and
