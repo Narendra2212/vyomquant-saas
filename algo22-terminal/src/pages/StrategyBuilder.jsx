@@ -70,6 +70,36 @@
  * from `design/semantic.js`. The legacy `C` shim is no longer imported here at all (task 24.4),
  * so a colour cannot re-enter by copying a neighbouring line. The inspector's `ParameterForm`
  * is Tailwind-classed; that boundary is deliberate and left as is.
+ *
+ * ── retail-ui-simplification task 8.2: the family and the caps ───────────────────────────────
+ *
+ * This file carries **no absolute font size** and **no colour literal**, which is why its share
+ * of that spec is typography-by-family rather than typography-by-size: 14 inline
+ * `fontFamily: 'monospace'` declarations and 13 `textTransform: 'uppercase'` occurrences, each
+ * classified at its call site under Requirements 3.1 and 3.3 rather than swept.
+ *
+ * **Monospace: 5 KEPT, 9 DROPPED**, and the kept five are now spelled `token.font.mono` rather
+ * than the bare generic family, so the header sentence above — every value from `tokens.js` — is
+ * true of the font too, and `StageLaneStrip` is no longer the only site on the page reading the
+ * token. Kept: the port-type chips, the registry error code, the validation issue code, the
+ * `expected … got …` JSON pair, and the palette entry's `block_id`. Dropped: the sync indicator
+ * label, the retry button, the inspector's `Block` eyebrow, the no-descriptor sentence, the
+ * palette search label, the search result count, the loading and empty lines, and — the largest
+ * of the nine — the **status strip container**, where one declaration had set the family for five
+ * status cells, four counts, a shortcut hint and a server sentence quoted verbatim.
+ *
+ * **Caps: 11 KEPT, 2 DROPPED.** Requirement 3.3's ceiling is three words, and the eleven that
+ * stay are all at or under it: the stage names, the category names, `Validation issues`,
+ * `Refused connections`, `Whole strategy`, `Block`, `Search blocks`, `Block palette unavailable`
+ * (exactly three) and a one-word severity. The two that go are the per-marker issue headings —
+ * `Block rsi-1 — 2 errors, 1 warning` is past the ceiling on word count and prints an id in a
+ * case nothing else in the system uses. One keep is recorded as a **no-op** rather than a win:
+ * on the node stage strip, `categoryName` derives from a constant the registry already serves in
+ * capitals, so the class transforms nothing there.
+ *
+ * **Nothing else moved.** No node, connection rule, validation message, drag handler or
+ * review-mode suppression; no `fontSize` introduced, no page-local token object, no new
+ * primitive. Every rendered string is character-for-character what it was.
  */
 
 import React, {
@@ -825,7 +855,13 @@ const DragLegalityContext = createContext(null);
 const ApiSyncIndicator = ({ color, text, active = true }) => (
   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', paddingTop: 6, borderTop: `1px dashed ${token.line.default}` }}>
     <div style={{ width: 6, height: 6, borderRadius: '50%', background: active ? color : token.content.muted, boxShadow: active ? `0 0 8px ${color}` : 'none', transition: 'all 0.3s' }} />
-    <span className="text-micro" style={{ color: active ? token.content.secondary : token.content.muted, letterSpacing: 1, fontFamily: 'monospace', textTransform: 'uppercase', fontWeight: 700 }}>{text}</span>
+    {/* Requirement 3.1 — the monospace is DROPPED: `text` is the indicator's own word for a
+        sync state, a human-readable label rather than a value whose characters are compared.
+        `uppercase` STAYS under Requirement 3.3: this is a chip, and the construct admits a
+        status word, not a sentence. RECORDED, not resolved: `text` is a prop and this component
+        has no call site in `src/` at all, so its word count cannot be measured from the tree —
+        the three-word ceiling is unverifiable here rather than satisfied. */}
+    <span className="text-micro" style={{ color: active ? token.content.secondary : token.content.muted, letterSpacing: 1, textTransform: 'uppercase', fontWeight: 700 }}>{text}</span>
   </div>
 );
 
@@ -946,6 +982,15 @@ const StageLaneStrip = ({ bands }) => (
           }}
         >
           <LaneIcon size={12} aria-hidden="true" style={{ color: band.fg, flexShrink: 0 }} />
+          {/* Requirement 3.3 — `uppercase` STAYS: the longest label `DECLARED_STAGE_BANDS` holds is
+              `Market data`, two words, and the other five are one. The transform is real work
+              rather than a no-op, since `semantic.js` declares them in sentence case.
+
+              RECORDED, not resolved: the `token.font.mono` on the next line is NOT one of this
+              tasks 14 sites — the 14 are the inline `'monospace'` literals, and this one already
+              reads the token. Keyed on role, a stage name is a label and Requirement 3.1 would
+              reach it; it is left alone because it sits outside the population 3.2 counts, and
+              editing it here would put the diff out of step with the recorded numbers. */}
           <span
             className="text-micro"
             style={{
@@ -1121,6 +1166,13 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
           borderBottom: `1px ${band.border} ${color}`,
           color,
           letterSpacing: 1,
+          // Requirement 3.3 — `uppercase` STAYS, and it covers both children. `band.label` is two
+          // words at most and the transform does real work on it. On `categoryName` it is mostly a
+          // NO-OP: the value is `category.replace(/_/g, ' ')` over a constant the registry serves
+          // in caps, so `FEATURE ENGINEERING` was already capitals in the source string and the
+          // class transforms nothing. The one case it does transform is `not reported`, two words,
+          // which is inside the ceiling — so there is no readability win to claim on this line,
+          // and no reason to remove it either. `aria-label` above spells both out unchanged.
           textTransform: 'uppercase',
         }}
       >
@@ -1287,7 +1339,12 @@ const PortChips = ({ ports, direction }) => {
             borderRadius: '0.25rem',
             padding: '1px 4px',
             color: token.content.secondary,
-            fontFamily: 'monospace',
+            // Requirement 3.1 — monospace KEPT, and spelled as the token rather than as the bare
+            // generic family: a chip reads `in SERIES` or `out FRAME`, where the type name is the
+            // registry's own literal and the author compares it against the type on the other end
+            // of the connection. `token.font.mono` is what `StageLaneStrip` above and `ds/Chart`
+            // already resolve to, so the kept cases on this page are one decision, not two.
+            fontFamily: token.font.mono,
             background: token.surface.raised,
           }}
         >
@@ -1324,6 +1381,9 @@ const PaletteErrorPanel = ({ error, onRetry, retrying }) => {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: fg }}>
         <AlertTriangle size={14} />
+        {/* Requirement 3.3 — `uppercase` STAYS at exactly the ceiling: `Block palette
+            unavailable` is three words. The four sentences under it are where this panel does its
+            explaining and none of them is transformed. */}
         <span className="text-micro" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
           Block palette unavailable
         </span>
@@ -1331,7 +1391,11 @@ const PaletteErrorPanel = ({ error, onRetry, retrying }) => {
       <p className="text-micro" style={{ color: token.content.secondary, margin: 0 }}>
         {error ? error.message : 'The block registry could not be loaded.'}
       </p>
-      <p className="text-micro" style={{ color: token.content.muted, margin: 0, fontFamily: 'monospace' }}>
+      {/* Requirement 3.1 — monospace KEPT: a registry error code and an HTTP status are
+          server-supplied literals, and this is the line a trader quotes when reporting that the
+          palette is empty. The sentence above it and the three below it are prose and carry no
+          family of their own. */}
+      <p className="text-micro" style={{ color: token.content.muted, margin: 0, fontFamily: token.font.mono }}>
         {error ? error.code : 'REGISTRY_UNAVAILABLE'}
         {error && error.status ? ` · HTTP ${error.status}` : ''}
       </p>
@@ -1361,7 +1425,9 @@ const PaletteErrorPanel = ({ error, onRetry, retrying }) => {
           borderRadius: '0.375rem',
           padding: '6px 10px',
           color: token.content.primary,
-          fontFamily: 'monospace',
+          // Requirement 3.1 — monospace DROPPED: `Retry` and `Retrying…` are a control's name,
+          // and a button label is found by word shape. Nothing else about the button moves; it
+          // is the same `<button>`, the same handler and the same accessible name.
           cursor: retrying ? 'wait' : 'pointer',
         }}
       >
@@ -1407,18 +1473,32 @@ const ValidationIssueRow = ({ issue, onFocus }) => {
   */
   const colour = SEVERITY_COLOUR[severity] || token.content.secondary;
   const target = issue.edge_id ? `connection ${issue.edge_id}` : issue.node_id ? `block ${issue.node_id}` : 'the whole strategy';
+  /*
+    Requirements 3.1 and 3.3 across this row, which holds three of the pages 14 monospace sites
+    and one of its 13 uppercase sites, and resolves them four different ways:
+
+    * `severity` KEEPS `uppercase`. `SEVERITY_ERROR` is the string `error` and `SEVERITY_WARNING`
+      is `warning`, so the transform is doing real work on a ONE-word chip. Inside 3.3s ceiling.
+    * `issue.code` KEEPS monospace. A code is the backends own literal and is what an author
+      quotes when a refusal is not self-explanatory.
+    * `expected …  got …` KEEPS monospace. Both sides are `JSON.stringify` output, read against
+      each other character by character, which is the case 3.1 reserves the family for.
+    * `fix_hint`, `message` and the override sentence carry NO family and gain none. They are
+      the backends prose, rendered verbatim (Requirement 8.9), and prose is skimmed by word
+      shape. Not a character of any of the three strings changes here.
+  */
   const body = (
     <>
       <span className="text-micro" style={{ color: colour, fontWeight: 700, textTransform: 'uppercase' }}>
         {severity}
       </span>{' '}
-      <span className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>{issue.code}</span>{' '}
+      <span className="text-micro" style={{ color: token.content.muted, fontFamily: token.font.mono }}>{issue.code}</span>{' '}
       <span style={{ color: token.content.primary }}>{issue.fix_hint ? issue.fix_hint : issue.message}</span>
       {issue.fix_hint && issue.message && issue.fix_hint !== issue.message ? (
         <span style={{ display: 'block', color: token.content.secondary }}>{issue.message}</span>
       ) : null}
       {issue.expected !== null && issue.expected !== undefined ? (
-        <span style={{ display: 'block', color: token.content.muted, fontFamily: 'monospace' }}>
+        <span style={{ display: 'block', color: token.content.muted, fontFamily: token.font.mono }}>
           expected {JSON.stringify(issue.expected)} · got {JSON.stringify(issue.actual ?? null)}
         </span>
       ) : null}
@@ -1534,6 +1614,7 @@ const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEd
       data-refusal-count={refusals.length}
       style={{ borderTop: `1px solid ${token.line.default}`, padding: '8px 12px', overflowY: 'auto', maxHeight: 260 }}
     >
+      {/* Requirement 3.3 — `uppercase` STAYS: two words, and it is the panels own title. */}
       <h3 className="text-micro" style={{ color: token.content.secondary, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: 1 }}>
         Validation issues
       </h3>
@@ -1563,7 +1644,14 @@ const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEd
         <section aria-label="Connections that were refused" data-testid="refused-connections">
           {/* All four group headings in this panel read `token.content.muted`. Task 24.4a wrote
               this one that way while its three siblings still went through the shim; the
-              follow-up moved them onto the same token, so the four are now one decision. */}
+              follow-up moved them onto the same token, so the four are now one decision.
+
+              On the CAPS axis they are not one decision, and Requirement 3.3 is what separates
+              them. The two fixed headings — `Refused connections` and `Whole strategy`, two words
+              each, plus a parenthesised count — keep `uppercase`. The two per-marker headings
+              below do not: `Block rsi-1 — 2 errors, 1 warning` is six words before the count is
+              even read, which is past the ceiling, and the first of those words is an identifier
+              the transform would print in a case the graph does not use. */}
           <h4 className="text-micro" style={{ color: token.content.muted, margin: '4px 0 0', textTransform: 'uppercase' }}>
             Refused connections ({refusals.length})
           </h4>
@@ -1596,7 +1684,11 @@ const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEd
             data-node-id={marker.id}
             data-severity={marker.severity}
             data-issue-count={marker.count}
-            style={{ color: token.content.muted, margin: '4px 0 0', textTransform: 'uppercase' }}
+            // Requirement 3.3 — `uppercase` DROPPED. `markerLabel` returns `2 errors, 1 warning`,
+            // so the shortest form of this heading is five words and the usual one is more. The
+            // second reason is the stronger one: `marker.id` is a node id, and all-caps rendered
+            // it in a case the canvas, the payload and the backend report never use.
+            style={{ color: token.content.muted, margin: '4px 0 0' }}
           >
             Block {marker.id} — {markerLabel(marker)}
           </h4>
@@ -1620,7 +1712,10 @@ const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEd
             data-edge-id={marker.id}
             data-severity={marker.severity}
             data-issue-count={marker.count}
-            style={{ color: token.content.muted, margin: '4px 0 0', textTransform: 'uppercase' }}
+            // Requirement 3.3 — `uppercase` DROPPED, for the same two reasons as the node heading
+            // above, and harder: an edge id is `reactflow__edge-rsi-1out-logic-2in`, which caps
+            // turns into a string that matches nothing the author can look up.
+            style={{ color: token.content.muted, margin: '4px 0 0' }}
           >
             Connection {marker.id} — {markerLabel(marker)}
           </h4>
@@ -3567,7 +3662,10 @@ function StrategyBuilderCanvas({
   const inspectorFields = selectedNode === null ? null : (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
       <div>
-        <div className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', marginBottom: '8px' }}>
+        {/* Requirement 3.1 — monospace DROPPED: this is the eyebrow naming the section, not the
+            identifier. The identifier is the `Tag2` on the next line, which is where the family
+            belongs. Requirement 3.3 — `uppercase` STAYS: one word. */}
+        <div className="text-micro" style={{ color: token.content.muted, letterSpacing: 1, textTransform: 'uppercase', marginBottom: '8px' }}>
           Block
         </div>
         <Tag2>{selectedNode.data.block_id}</Tag2>
@@ -3632,7 +3730,12 @@ function StrategyBuilderCanvas({
           onBlockingChange={handleInspectorBlocking}
         />
       ) : (
-        <p className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>
+        /* Requirement 3.1 — monospace DROPPED: this is a whole sentence, and it is the reason an
+           inspector has no fields to show. It is the one text a trader reads when a block cannot
+           be inspected, so it is the last string on the page that should be set in a family that
+           suppresses word shape. The sentence itself is untouched, quoted id included: the id is
+           already rendered on its own, in the `Tag2` and the eyebrow above, where mono is kept. */
+        <p className="text-micro" style={{ color: token.content.muted }}>
           The registry publishes no descriptor for “{selectedNode.data.block_id}”, so its
           parameters cannot be shown.
         </p>
@@ -4124,10 +4227,13 @@ function StrategyBuilderCanvas({
           }}
         >
             <div style={{ padding: '12px', borderBottom: `1px solid ${token.line.default}` }}>
+              {/* Requirement 3.1 — monospace DROPPED: a form label is prose. Requirement 3.3 —
+                  `uppercase` STAYS: `Search blocks` is two words. The `htmlFor` pairing, the
+                  `aria-describedby` on the input and the live count below it are untouched. */}
               <label
                 htmlFor="palette-search"
                 className="text-micro"
-                style={{ color: token.content.muted, fontFamily: 'monospace', letterSpacing: 1, textTransform: 'uppercase', display: 'block', marginBottom: '6px' }}
+                style={{ color: token.content.muted, letterSpacing: 1, textTransform: 'uppercase', display: 'block', marginBottom: '6px' }}
               >
                 Search blocks
               </label>
@@ -4152,11 +4258,20 @@ function StrategyBuilderCanvas({
                   }}
                 />
               </div>
+              {/* Requirement 3.1 — monospace DROPPED, and this is the pages one mixed-role
+                  container on the family axis, so the reasoning is written down rather than
+                  implied. Two of the three arms are prose announced by a live region — `Loading
+                  the block registry…` and `0 blocks` — and the third is a count plus the registry
+                  version. The one literal in it is that version string. It is not split onto a
+                  span of its own: the count is inline, wrapping, and aligned against nothing, so
+                  the alignment 3.1 reserves the family for is not available here to be bought,
+                  and splitting the text nodes of a `role="status"` region to set a family on four
+                  characters is a cost with no reading behind it. Resolved to the dominant role. */}
               <p
                 id="palette-search-result-count"
                 role="status"
                 className="text-micro"
-                style={{ color: token.content.muted, margin: '6px 0 0', fontFamily: 'monospace' }}
+                style={{ color: token.content.muted, margin: '6px 0 0' }}
               >
                 {registry.isReady
                   ? `${totalMatches} block${totalMatches === 1 ? '' : 's'} · registry ${registry.registryVersion}`
@@ -4170,9 +4285,12 @@ function StrategyBuilderCanvas({
               {registry.isError ? (
                 <PaletteErrorPanel error={registry.error} onRetry={handleRetryRegistry} retrying={retryingRegistry} />
               ) : registry.isLoading && !registry.isReady ? (
-                <p className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>Loading blocks…</p>
+                // Requirement 3.1 — monospace DROPPED on both of the next two: a loading line and
+                // an empty-palette line are prose, and the second of them quotes what the author
+                // typed back at them, which is a sentence about their search rather than a value.
+                <p className="text-micro" style={{ color: token.content.muted }}>Loading blocks…</p>
               ) : visibleSections.length === 0 ? (
-                <p className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }} data-testid="palette-empty">
+                <p className="text-micro" style={{ color: token.content.muted }} data-testid="palette-empty">
                   {searchQuery.trim() === '' ? 'No blocks available.' : `Nothing matches “${searchQuery}”.`}
                 </p>
               ) : (
@@ -4202,6 +4320,10 @@ function StrategyBuilderCanvas({
                       >
                         {isCollapsed ? <ChevronRight size={14} aria-hidden="true" style={{ color: token.content.muted }} /> : <ChevronDown size={14} aria-hidden="true" style={{ color: token.content.muted }} />}
                         <CategoryIcon size={14} aria-hidden="true" style={{ color: getCategoryColor(section.id) }} />
+                        {/* Requirement 3.3 — `uppercase` STAYS: the registry serves seven category
+                            display names and the longest, `ML / DL Models`, is three words. A
+                            category name is the skimmable thing in the palette, which is the case
+                            3.3 keeps caps for. */}
                         <span className="text-micro" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
                           {section.display_name}
                         </span>
@@ -4245,7 +4367,11 @@ function StrategyBuilderCanvas({
                               <div className="text-small" style={{ fontWeight: 600, color: token.content.primary }}>
                                 {block.display_name || block.block_id}
                               </div>
-                              <div className="text-micro" style={{ color: token.content.muted, fontFamily: 'monospace' }}>
+                              {/* Requirement 3.1 — monospace KEPT: `block_id` is the identifier
+                                  the drag payload carries and the one string that must match the
+                                  registry exactly. The display name above it and the description
+                                  below it are prose and carry no family. */}
+                              <div className="text-micro" style={{ color: token.content.muted, fontFamily: token.font.mono }}>
                                 {block.block_id}
                               </div>
                               {block.description ? (
@@ -4469,7 +4595,19 @@ function StrategyBuilderCanvas({
         aria-label="Builder status"
         data-testid="status-strip"
         className="text-micro"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px', background: token.surface.raised, borderTop: `1px solid ${token.line.default}`, fontFamily: 'monospace', color: token.content.muted, gap: 12, flexWrap: 'wrap' }}
+        /*
+          Requirement 3.1 — monospace DROPPED, and this is the largest single reading win in the
+          file, because the declaration was on the CONTAINER: one property set the family for five
+          `StatusCell`s, the feed sentence, four counts and the shortcut hint. What it actually
+          rendered was the strips words — `validation`, `feed`, `save`, `training`, `realtime`,
+          `nodes`, `connections`, `checks`, `registry`, `(unknown)`, `required parameters unset` —
+          plus `feed.display`, a whole sentence quoted verbatim from the server under Requirement
+          19.8. The strip is a wrapping inline row, not a column: nothing in it is aligned against
+          anything, so the family was buying the terminal look Requirement 3 names as the thing to
+          stop spending on, and nothing else. Every cell keeps its text, its `title`, its data
+          attributes and the live region around it.
+        */
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px', background: token.surface.raised, borderTop: `1px solid ${token.line.default}`, color: token.content.muted, gap: 12, flexWrap: 'wrap' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           <StatusCell
