@@ -471,14 +471,30 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // the colour entry; the fifteen hand-mixed alphas, unusually, WERE counted, because
   // this page spells them as eight-digit hex rather than as a token with two digits
   // concatenated on.
-  // 9×31, 11×10, 10×8, 8×1, 16×1. **51, not Requirement 1.4's 43** — §3.5's
-  // first correction. The eight extra are `fontSize={9}` recharts axis props and
-  // this is the only file in `src/` carrying that syntax. 49 of the 51 are at or
-  // below 11px and 31 are at 9px, which is Requirement 2.3/2.4's subject: the
-  // page renders multi-sentence explanatory prose below the 11px floor. Task 8.1
-  // (commit 19) clears it, including the `'1.25rem'` at `:2355` that blind spot
-  // 1 cannot see.
-  'pages/PaperTrading.jsx': 51,
+  // Seeded at 51 — 9×31, 11×10, 10×8, 8×1, 16×1 — **51, not Requirement 1.4's
+  // 43**, §3.5's first correction. The eight extra are `fontSize={9}` recharts
+  // axis props and this is the only file in `src/` carrying that syntax. 49 of
+  // the 51 were at or below 11px and 31 were at 9px, which is Requirement
+  // 2.3/2.4's subject: the page renders multi-sentence explanatory prose below
+  // the 11px floor.
+  //
+  // **Now 41 — 9×26, 10×7, 11×7, 16×1. Task 8.1 slice 1 of 3 took the TEN
+  // module-level style objects, and only those.** `labelStyle`, `thStyle`,
+  // `tableCaptionStyle`, `stackedLabelStyle` and `PanelNotice`'s eyebrow (9×5)
+  // are Q4 labels at `--text-micro`; `fieldStyle` (11) is Q3 control text at
+  // `--text-body`; `tdStyle` and `stackedValueStyle` (11×2) are Q6 cells at
+  // `--text-small`; `StatusPill` (10) and `SimulatedTag` (8) are Q5 chips at
+  // `--text-micro`. Three of the ten were already at their step's value and did
+  // not move. `SimulatedTag` is the layout-yield case — the only text on the page
+  // two pixels below the floor, at 19 call sites — and it paid for +25% by losing
+  // `whiteSpace: 'nowrap'` and moving `padding: '1px 5px'` onto the declared 4px
+  // grid, with its `FlaskConical` glyph following to 10. Nothing shrank.
+  //
+  // **The entry stays**, because 41 is not zero: the remaining call sites are in
+  // the JSX body and belong to slices 2 and 3 — the seventeen 9px explanations,
+  // `:707`'s `missing ? 13 : 18` conditional, the eight recharts axis props, and
+  // the `'1.25rem'` page `<h1>` at `:2355` that blind spot 1 cannot see.
+  'pages/PaperTrading.jsx': 41,
   // 12×9, 11×6, 9×4, 13×4, 14×4, 32×4, 10×3, 15×2, 20×2, 18×1, 22×1, 36×1.
   // **This entry is deleted, not lowered, by task 9.2 (commit 23), which deletes
   // the file.** `Landing.jsx` carries its own `DEPRECATED / UNMOUNTED` header and

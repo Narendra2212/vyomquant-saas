@@ -332,6 +332,14 @@ const CLEARED_BY_THIS_SPEC = Object.freeze({
   // at zero; what `PAGE_FIXED_POINT` still holds above zero is task 8's three files
   // (`PaperTrading`, `StrategyDetail`) and task 9.2's `Landing.jsx`.
   'pages/AuthPage.jsx': Object.freeze({ was: 29, now: 0, task: '7.11' }),
+  // **Not cleared — moved.** `now` is 41 and not 0, which is the case the
+  // `record.now === 0` branch below exists for: task 8.1 is sliced, slice 1 took
+  // the ten module-level style objects, and the remaining 41 are in the JSX body.
+  // So this page keeps its budget entry (at 41) and will appear here again with a
+  // lower `now` as slices 2 and 3 land. The entry is here rather than absent
+  // because the failure message above asks the change that moved §1.1's number for
+  // an explanation, and a partial move owes one exactly as a clearance does.
+  'pages/PaperTrading.jsx': Object.freeze({ was: 51, now: 41, task: '8.1 (slice 1 of 3)' }),
 });
 
 describe('absolute-font-sizes: the patterns measure the tree they were written for', () => {

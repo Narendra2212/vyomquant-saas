@@ -169,6 +169,32 @@
  * structural reading available is a collection content model on the shared panels plus a state
  * vocabulary that admits this page's eight — changes to `components/trading/*` and to §11.1, not
  * to this page, and not ones to make while Live Trading is the only other consumer.
+ *
+ * TASK 8.1, SLICE 1 OF 3 — THE SHARED STYLE OBJECTS TAKE A DECLARED STEP
+ * ----------------------------------------------------------------------
+ * The ten module-level style objects below no longer name a device-pixel size. Each carries the
+ * note Requirement 2.4 asks for, in the form `fontSize: 9 → --text-micro (label)`, and each step
+ * comes from §2.4's ordered procedure rather than from the number it replaced:
+ *
+ * | object                             | was | role         | step           |
+ * |------------------------------------|-----|--------------|----------------|
+ * | `labelStyle`, `tableCaptionStyle`  |   9 | Q4 label     | `--text-micro` |
+ * | `thStyle`, `stackedLabelStyle`     |   9 | Q4 label     | `--text-micro` |
+ * | the {@link PanelNotice} eyebrow    |   9 | Q4 label     | `--text-micro` |
+ * | `fieldStyle`                       |  11 | Q3 control   | `--text-body`  |
+ * | `tdStyle`, `stackedValueStyle`     |  11 | Q6 cell      | `--text-small` |
+ * | {@link StatusPill}                 |  10 | Q5 chip      | `--text-micro` |
+ * | {@link SimulatedTag}               |   8 | Q5 chip      | `--text-micro` |
+ *
+ * `tdStyle`, `stackedValueStyle` and `StatusPill` are already at their step's value, so they do
+ * not move; the other seven grow. **{@link SimulatedTag} is the one that costs layout** — it is
+ * the only text on the page two pixels below the floor, it renders at 19 call sites beside every
+ * figure and in every panel title, and +25% does not fit inside `padding: '1px 5px'` with a
+ * `nowrap`. §2.5's yields are taken in its declared order and recorded on the object itself.
+ *
+ * Slices 2 and 3 hold the remaining call sites in the JSX body — the seventeen 9px explanations
+ * Requirement 2.3 is written about, `:707`'s conditional, the eight recharts axis props and the
+ * page `<h1>` — so this file's budget entry falls but does not reach zero here, and it stays.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -431,7 +457,8 @@ const panelStyle = {
 
 const labelStyle = {
   color: token.content.secondary,
-  fontSize: 9,
+  // fontSize: 9 → --text-micro (label)
+  fontSize: token.text.micro,
   fontFamily: 'monospace',
   fontWeight: 900,
   letterSpacing: 2,
@@ -446,7 +473,10 @@ const fieldStyle = {
   border: `1px solid ${token.line.default}`,
   borderRadius: token.radius.lg,
   padding: '8px 10px',
-  fontSize: 11,
+  // fontSize: 11 → --text-body (control text). Q3 precedes Q6: this text is editable, it has no
+  // column, and it is the one place on the page where a misread costs a wrong number typed into a
+  // capital field. `--text-small` would leave the trader typing below the page's own default.
+  fontSize: token.text.body,
   fontFamily: 'monospace',
   color: token.content.primary,
   outline: 'none',
@@ -457,7 +487,9 @@ const thStyle = {
   fontWeight: 700,
   padding: '8px 10px',
   textAlign: 'left',
-  fontSize: 9,
+  // fontSize: 9 → --text-micro (label). A `<th>` names the cells beneath it, so §2.4's Q4 catches
+  // it before Q6 and it takes the label step rather than `tdStyle`'s table-cell step.
+  fontSize: token.text.micro,
   letterSpacing: 1,
   textTransform: 'uppercase',
   whiteSpace: 'nowrap',
@@ -466,7 +498,10 @@ const thStyle = {
 const tdStyle = {
   color: token.content.primary,
   padding: '8px 10px',
-  fontSize: 11,
+  // fontSize: 11 → --text-small (table cell). The step is the same 11px at the browser default, so
+  // this cell does not grow and §2.5's first yield is not owed: `whiteSpace: 'nowrap'` stays, and
+  // the column alignment that carries meaning across rows is unchanged.
+  fontSize: token.text.small,
   fontFamily: 'monospace',
   whiteSpace: 'nowrap',
 };
@@ -475,7 +510,8 @@ const tdStyle = {
 const tableCaptionStyle = {
   textAlign: 'left',
   color: token.content.muted,
-  fontSize: 9,
+  // fontSize: 9 → --text-micro (label)
+  fontSize: token.text.micro,
   fontFamily: 'monospace',
   letterSpacing: 1,
   textTransform: 'uppercase',
@@ -500,7 +536,9 @@ const stackedRowStyle = {
 /** The column's header, carried into the stacked row as the `<dt>` it describes. */
 const stackedLabelStyle = {
   color: token.content.muted,
-  fontSize: 9,
+  // fontSize: 9 → --text-micro (label). It is the same column header `thStyle` renders, carried
+  // into the stacked row as its `<dt>`, so it takes the same step.
+  fontSize: token.text.micro,
   fontFamily: 'monospace',
   fontWeight: 700,
   letterSpacing: 1,
@@ -510,7 +548,9 @@ const stackedLabelStyle = {
 
 const stackedValueStyle = {
   color: token.content.primary,
-  fontSize: 11,
+  // fontSize: 11 → --text-small (table cell). The stacked row is the same cell in a second layout,
+  // so it takes `tdStyle`'s step and the two layouts stay the same size as well as the same voice.
+  fontSize: token.text.small,
   fontFamily: 'monospace',
   margin: 0,
   minWidth: 0,
@@ -555,7 +595,12 @@ const SimulatedTag = () => (
       display: 'inline-flex',
       alignItems: 'center',
       gap: 3,
-      fontSize: 8,
+      // fontSize: 8 → --text-micro (chip). +25%, and the two pixels it was below the floor are the
+      // only reason it fitted. §2.5's yields, taken in order: `whiteSpace: 'nowrap'` is gone, so at
+      // 19 call sites the tag now breaks between glyph and word instead of widening its container;
+      // the padding moves onto the declared 4px grid; and the glyph follows to 10 below. Nothing
+      // here shrinks to make room and no px size comes back.
+      fontSize: token.text.micro,
       fontFamily: 'monospace',
       fontWeight: 900,
       letterSpacing: 1.5,
@@ -565,11 +610,13 @@ const SimulatedTag = () => (
       borderWidth: 1,
       borderStyle: ENVIRONMENT.PAPER.border,
       borderColor: ENVIRONMENT.PAPER.fg,
-      padding: '1px 5px',
-      whiteSpace: 'nowrap',
+      // Was `'1px 5px'`, off the grid on both axes. `--spacing-1` / `--spacing-2` are the nearest
+      // declared steps and the horizontal 0.5rem is what `ds/TradingEnvironmentBadge`'s own `chip`
+      // variant already spends, so the two treatments of one environment statement agree.
+      padding: `${token.space['1']} ${token.space['2']}`,
     }}
   >
-    <FlaskConical size={9} strokeWidth={2.5} aria-hidden="true" />
+    <FlaskConical size={10} strokeWidth={2.5} aria-hidden="true" />
     Simulated
   </span>
 );
@@ -587,7 +634,9 @@ const StatusPill = ({ tone = 'muted', label, Icon = null, title }) => (
       display: 'inline-flex',
       alignItems: 'center',
       gap: 5,
-      fontSize: 10,
+      // fontSize: 10 → --text-micro (chip). Already at the step's value, so the pill neither grows
+      // nor owes a yield; what changes is that the number is now declared once in the token layer.
+      fontSize: token.text.micro,
       fontFamily: 'monospace',
       fontWeight: 800,
       letterSpacing: 0.6,
@@ -747,8 +796,11 @@ const PanelNotice = ({ tone, Icon, heading, testId, children, code = null, foote
       <div style={{ minWidth: 0 }}>
         <div
           style={{
+            // fontSize: 9 → --text-micro (label). The eyebrow names the sentence beneath it — one
+            // word, uppercase, at weight 900 — so it is Q4 and not Q1. The sentence itself is a
+            // separate resolution and is not in this slice.
+            fontSize: token.text.micro,
             color: toneColour(tone) || token.content.secondary,
-            fontSize: 9,
             fontFamily: 'monospace',
             fontWeight: 900,
             letterSpacing: 1.5,
