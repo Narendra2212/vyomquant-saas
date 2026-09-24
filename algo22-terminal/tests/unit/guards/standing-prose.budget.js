@@ -72,6 +72,45 @@
  *      coming back is an entry at 0 asserted in both directions.
  *
  * ===========================================================================
+ * TASK 12.3 LANDED AND `LiveTrading` DID NOT MOVE. THAT IS THE CORRECT RESULT
+ * ===========================================================================
+ * Task 12.3 stated its own regression assertion as "`LiveTrading`'s rendered
+ * count fails before it is lowered in this same commit and passes after". It
+ * does not, it cannot, and the number below was deliberately left at 135 when
+ * the task landed. The measurement, so the next reader does not re-derive it:
+ *
+ *   * §5.5 defines standing prose POSITIONALLY — the text before the first
+ *     element carrying `data-region`. Nothing in that definition is about which
+ *     constant a sentence came from.
+ *   * `LiveTrading.jsx`'s first `data-region` in document order is
+ *     `DEPLOYMENT_FIELD`, on the Deployments panel. Both caveats render INSIDE
+ *     that panel, several nodes after the anchor.
+ *   * So the 671 characters task 12.3 moved (`REGISTRY_CAVEAT` 384 and
+ *     `SELECTION_CAVEAT` 287 — the plan's 242 for the second one is stale) were
+ *     never part of the 135. Moving them behind a `ds/Accordion` changes what a
+ *     trader reads and changes this number by zero.
+ *
+ * The plan's assertion was written against a definition this seed does not use:
+ * "prose above the data" read as "panel-level prose", where §5.5 says "before the
+ * first `data-region` node". Both are defensible readings of Requirement 7.1;
+ * only one of them is the one the budget was seeded with, and §5.5 is an approved
+ * document. Widening the definition here to make the assertion true would
+ * re-seed a guard committed one commit earlier and silently move all eight
+ * pages' numbers — the `absolute-font-sizes` failure mode, in a file whose whole
+ * job is to be a ratchet. Raised as a finding; the definition is untouched.
+ *
+ * What that leaves is that a claim about one page's rendering is asserted where
+ * it belongs: `liveTrading.test.jsx`'s four task-12.3 declarations pin the split
+ * itself — the operative half unconditional, the explanation absent from the tree
+ * while closed, the toggle named and reporting `aria-expanded`, and both
+ * disclosures EXPANDED in the empty and partial states. Requirement 7.1's target
+ * is 400 and `LiveTrading` was already inside it at 135 before the task ran, so
+ * nothing about the budget was load-bearing for this work.
+ *
+ * Tasks 12.4 and 12.5 are in the same position for `SignalTrace` and
+ * `Dashboard`'s panel prose. Expect their numbers not to move either.
+ *
+ * ===========================================================================
  * PROVENANCE OF THE SEED
  * ===========================================================================
  * Requirement 7.4 and design.md §1.7 seed this list from a SOURCE-CONSTANT
@@ -167,6 +206,9 @@ export const STANDING_PROSE_BUDGET = Object.freeze({
    * therefore outside this count — blind spot 1 in `standing-prose.test.js`'s header, which
    * is where the consequence for tasks 12.3-12.5 is recorded.
    */
+  // UNCHANGED BY TASK 12.3, ON PURPOSE. The 671 characters that task moved behind a
+  // `ds/Accordion` render inside the `data-region="deployment"` panel, so they were never in
+  // this number. See the header section on it before concluding the task under-delivered.
   'pages/LiveTrading.jsx': 135,
   'pages/Dashboard.jsx': 168,
   'pages/Backtester.jsx': 101,

@@ -1054,6 +1054,169 @@ describe('LiveTrading deployment selector (task 20.1d)', () => {
       .toBeLessThan(documentOrder.indexOf(selectorRows()[0]));
   });
 
+  /* ────────────────────────────────────────────────────────────────────────────────────
+   * PROGRESSIVE DISCLOSURE ON THE TWO CAVEATS (task 12.3)
+   * ────────────────────────────────────────────────────────────────────────────────────
+   *
+   * Requirements 7.1, 7.2, 7.3, 7.5, 19.6, 20.1, 20.2. design.md §9.2, Decision D9.
+   *
+   * These four assert the SPLIT rather than a character count, and that is deliberate.
+   * `guards/standing-prose.test.js` measures the text a page renders BEFORE its first
+   * `data-region` node, which is design.md §5.5's definition; both caveats render INSIDE
+   * the `ds/Panel` that carries `data-region="deployment"`, so neither was ever in that
+   * number and moving them does not change it. The claim this task actually makes is about
+   * this page's rendering, so it is asserted on this page.
+   *
+   * What is pinned, and why each half of it is load-bearing:
+   *
+   *   * The operative half renders UNCONDITIONALLY. `LiveTrading.jsx`'s module docblock
+   *     records that the endpoint reports only what the current backend process holds in
+   *     memory, so a deployment started before a restart or on another worker is absent from
+   *     the list while still trading — and a trader who reads the list as complete can
+   *     double-deploy real money. That sentence may never be one click away.
+   *   * The explanation is NOT in the render tree while closed, which is the difference
+   *     between a disclosure and a `max-height: 0` panel: `ds/Accordion` unmounts its body,
+   *     so a closed explanation holds no tab stop.
+   *   * Nothing is paraphrased. The three sentences below join back to the 384-character
+   *     paragraph the page used to render as one `<p>`, and the assertion is on the join, so
+   *     a later edit that tightens one of them fails here (Requirement 19.6).
+   *   * Empty or partial, the disclosures render EXPANDED. `LiveTrading.jsx`'s `selectorState`
+   *     comment already refused `ds/Panel`'s `empty` state for suppressing the sentence that
+   *     explains why "nothing is running" may be false; a closed disclosure in the same state
+   *     is that arrangement one level up.
+   */
+
+  /**
+   * The registry caveat's three sentences, TRANSCRIBED rather than imported.
+   *
+   * A constant imported from the file under test agrees with itself by construction, so it
+   * could not catch the one failure mode Requirement 19.6 names. These are the characters.
+   */
+  const CAVEAT_CLAIM = 'This list may be incomplete.';
+  const CAVEAT_WHY = 'It reports the deployments the backend process currently holds in memory, '
+    + 'so one started by an earlier process — before a restart, or on another worker — is not '
+    + 'listed here even though it is still recorded and may still be trading.';
+  const CAVEAT_ACTION = 'Treat a deployment you cannot find as UNKNOWN rather than stopped, and '
+    + 'do not deploy it again on the strength of this list.';
+
+  /** The selection caveat, whole — it moves behind a disclosure without being cut. */
+  const CAVEAT_SELECTION = 'Selecting a deployment re-scopes the strategy, the market and the '
+    + "latest signal below to that deployment's strategy. It does not re-scope the realised "
+    + 'P&L, the risk state or the position: those are reported for the whole account, and no '
+    + 'read on this page attributes them to a deployment.';
+
+  const caveatSurface = () =>
+    document.querySelector('[data-selector-caveat="in-process-registry"] p');
+  const disclosureToggle = (name) =>
+    document.querySelector(`[data-selector-disclosure="${name}"] button`);
+
+  /** One strategy, one deployment: rows present and every strategy answered. */
+  const completeList = () => bothRead({
+    deployments: (id) => Promise.resolve(deploymentsBody(id, [deployment()])),
+  });
+
+  it('keeps the caveat\'s claim and its action on the surface, and puts only the explanation behind a disclosure', async () => {
+    completeList();
+
+    mount();
+
+    await waitFor(() => expect(selectorRows()).toHaveLength(1));
+
+    // Requirement 19.6, asserted on the join: moving is permitted, paraphrasing shorter is
+    // not, and these three sentences still ARE the paragraph.
+    expect([CAVEAT_CLAIM, CAVEAT_WHY, CAVEAT_ACTION].join(' ')).toHaveLength(384);
+
+    // The operative half is a plain paragraph — not the trigger, not the body.
+    expect(caveatSurface().textContent).toBe(`${CAVEAT_CLAIM} ${CAVEAT_ACTION}`);
+    expect(caveatSurface().closest('[data-selector-disclosure]')).toBeNull();
+    expect(caveatSurface().closest('button')).toBeNull();
+
+    // And with rows present and the list complete, neither explanation is in the tree at
+    // all. `ds/Accordion` unmounts a closed body rather than hiding it, so there is no tab
+    // stop in there and nothing for a screen reader to read past.
+    expect(document.body.textContent).not.toContain(CAVEAT_WHY);
+    expect(document.body.textContent).not.toContain(CAVEAT_SELECTION);
+  });
+
+  it('exposes both explanations through a named toggle that reports its own expanded state', async () => {
+    completeList();
+
+    mount();
+
+    await waitFor(() => expect(selectorRows()).toHaveLength(1));
+
+    // Requirement 20.2: a keyboard-operable control with an accessible name and a
+    // programmatic expanded state. Found BY ROLE AND NAME, which is the whole of the claim —
+    // a chevron with no name would still have an `aria-expanded`.
+    const why = disclosureToggle('in-process-registry');
+    expect(screen.getByRole('button', { name: /Why a deployment that is running can be missing/ }))
+      .toBe(why);
+    expect(why.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(why);
+
+    expect(why.getAttribute('aria-expanded')).toBe('true');
+    const whyBody = document.getElementById(why.getAttribute('aria-controls'));
+    expect(whyBody.getAttribute('role')).toBe('region');
+    // Verbatim, not a summary of it.
+    expect(whyBody.textContent).toBe(CAVEAT_WHY);
+
+    // The selection caveat moves WHOLE: neither of its two sentences splits off, because the
+    // first names what a selection re-scopes and the second names what it does not, and
+    // hiding either one alone leaves the page asserting half of the distinction.
+    const scope = disclosureToggle('selection-scope');
+    expect(screen.getByRole('button', { name: /What selecting a deployment re-scopes below/ }))
+      .toBe(scope);
+    expect(scope.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(scope);
+
+    expect(scope.getAttribute('aria-expanded')).toBe('true');
+    expect(document.getElementById(scope.getAttribute('aria-controls')).textContent)
+      .toBe(CAVEAT_SELECTION);
+  });
+
+  it('renders both explanations EXPANDED when the list is empty, never behind a closed toggle', async () => {
+    // The trap `selectorState` records: `ds/Panel`'s `empty` renders no children, so the
+    // panel would say "nothing is running" with the sentence explaining why that may be
+    // false suppressed. A closed disclosure here is the same arrangement one level up.
+    bothRead();
+
+    mount();
+
+    await waitFor(() => expect(document.querySelector('[data-deployments-empty]')).not.toBeNull());
+
+    expect(disclosureToggle('in-process-registry').getAttribute('aria-expanded')).toBe('true');
+    expect(disclosureToggle('selection-scope').getAttribute('aria-expanded')).toBe('true');
+    expect(document.body.textContent).toContain(CAVEAT_WHY);
+    expect(document.body.textContent).toContain(CAVEAT_SELECTION);
+
+    // And the surface half is still above it, unchanged by the state.
+    expect(caveatSurface().textContent).toBe(`${CAVEAT_CLAIM} ${CAVEAT_ACTION}`);
+  });
+
+  it('renders both explanations EXPANDED when the fan-out answered only partly', async () => {
+    // Rows ARE present, so this is not the empty branch — the list is short by a known
+    // amount for a second reason on top of the registry's, which is the other state in which
+    // the explanation is the answer rather than background.
+    bothRead({
+      strategies: twoStrategies(),
+      deployments: (id) => (id === 's1'
+        ? Promise.reject(new ApiError('The deployment read failed.', { status: 503 }))
+        : Promise.resolve(deploymentsBody(id, [deployment({ deployment_id: 'dep-s2' })]))),
+    });
+
+    mount();
+
+    await waitFor(() => expect(selectorRows()).toHaveLength(1));
+    expect(document.querySelector('[data-deployments-read="partial"]')).not.toBeNull();
+
+    expect(disclosureToggle('in-process-registry').getAttribute('aria-expanded')).toBe('true');
+    expect(disclosureToggle('selection-scope').getAttribute('aria-expanded')).toBe('true');
+    expect(document.body.textContent).toContain(CAVEAT_WHY);
+    expect(document.body.textContent).toContain(CAVEAT_SELECTION);
+  });
+
   it('surfaces a row whose own environment disagrees with the LIVE route', async () => {
     bothRead({
       deployments: (id) => Promise.resolve(deploymentsBody(id, [

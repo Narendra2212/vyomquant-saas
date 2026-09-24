@@ -111,17 +111,27 @@
  * `strategy_deployments` table holds. Nothing on the client can repair that; the only honest
  * response is to stop the list from being read as exhaustive.
  *
- * So {@link REGISTRY_CAVEAT} is rendered ONCE, above the rows, in every state where there are
- * rows or an absence to explain, and it is written for a trader rather than for a reader of
- * this file: a deployment you expect and cannot find here is UNKNOWN, not stopped, so this
- * screen is not grounds for deploying it again. That last clause is the actionable half — the
- * cost of misreading an incomplete list on this page is a duplicate live deployment.
+ * So {@link REGISTRY_CAVEAT_SURFACE} is rendered ONCE, above the rows, in every state where
+ * there are rows or an absence to explain, and it is written for a trader rather than for a
+ * reader of this file: a deployment you expect and cannot find here is UNKNOWN, not stopped, so
+ * this screen is not grounds for deploying it again. That last clause is the actionable half —
+ * the cost of misreading an incomplete list on this page is a duplicate live deployment.
  *
  * It is a sentence and not a `ds/Alert`, deliberately. It is a permanent property of the read,
  * true on every load and on every account, and §11.1's alert vocabulary is for conditions.
  * An always-on warning banner is the one that gets dismissed by habit; the partial-failure
  * alert above it is a condition, and keeping the two visibly different is what lets the
  * conditional one still register.
+ *
+ * WHAT A TRADER HAS TO ASK FOR, AND WHAT THEY NEVER DO (task 12.3, Requirement 7.3)
+ * --------------------------------------------------------------------------------
+ * The claim and the action are on the surface always. The EXPLANATION of why a running
+ * deployment can be absent — {@link REGISTRY_CAVEAT_WHY} — sits behind a `ds/Accordion`, as
+ * does {@link SELECTION_CAVEAT}, so 671 characters of true and load-bearing prose stop standing
+ * between a trader and "what is running" without one character of it being reworded or lost.
+ * Both disclosures render EXPANDED whenever the list is empty or partial: that is the state in
+ * which the explanation is the whole answer, and a closed disclosure there would reproduce, one
+ * level up, the `ds/Panel`-`empty` trap {@link selectorState} already refuses.
  *
  * ONE DEFECT IN A READ PATH, FIXED HERE BECAUSE THIS TASK ADOPTS THE FIELD
  * -----------------------------------------------------------------------
@@ -238,6 +248,7 @@ import { ordersApi } from "../api/modules/orders";
 // `api.strategies`, so this is the same function with one fewer module graph pulled into
 // this route's chunk (§26, and `Dashboard.jsx`'s import of `api/modules/dashboard`).
 import { strategiesApi } from "../api/modules/strategies";
+import { Accordion } from "../components/ds/Accordion";
 import { Alert } from "../components/ds/Alert";
 import { CommandButton } from "../components/ds/CommandButton";
 // The ONE confirmation surface (§5.1, §8.3). Task 20.3's three controls all go through it, and
@@ -1233,7 +1244,7 @@ const buildTierThree = (dashboardBody, strategiesBody, orderReport) => {
  * `Promise.allSettled`, not `Promise.all`. `all` rejects on the first failure, which would
  * make one strategy's timeout erase every deployment the account has — the same erasure part
  * C refused when it kept the venue's orders read out of the page-level branch. Here the union
- * keeps what answered and reports what did not, and {@link REGISTRY_CAVEAT}'s neighbour alert
+ * keeps what answered and reports what did not, and {@link REGISTRY_CAVEAT_SURFACE}'s neighbour alert
  * names the unread strategies so a short list is never read as a complete one.
  *
  * WHAT A ROW CARRIES, AND WHAT IT DOES NOT
@@ -1320,13 +1331,75 @@ const DEPLOYMENT_STATUS_KEY = "status";
  *
  * The last clause is the actionable one. The expensive misreading here is not "this list is
  * short", it is "this deployment is not running, so I will start it again".
+ *
+ * SPLIT FOR PROGRESSIVE DISCLOSURE (task 12.3), AT SENTENCE BOUNDARIES AND NOWHERE ELSE
+ * ------------------------------------------------------------------------------------
+ * The paragraph was 384 characters standing between a trader and the answer to "what is
+ * running". Requirement 7.3 keeps its OPERATIVE half on the surface at all times and puts
+ * the explanation of WHY behind a disclosure; Requirement 19.6 permits that move and forbids
+ * paraphrasing it shorter. So the three constants below are the paragraph's own three
+ * sentences, cut at the full stops and otherwise untouched:
+ *
+ *     `${CLAIM} ${WHY} ${ACTION}` — the 384 characters, character for character
+ *
+ * `liveTrading.test.jsx` asserts that join and its length, so an edit that shortens one of
+ * the three fails rather than passes. {@link REGISTRY_CAVEAT_WHY} is the only piece that is
+ * ever closed, and it is the only one that answers "why" rather than "what do I do".
  */
-const REGISTRY_CAVEAT =
-  "This list may be incomplete. It reports the deployments the backend process currently "
+const REGISTRY_CAVEAT_CLAIM = "This list may be incomplete.";
+
+/**
+ * WHY the list can be short — the in-process registry, the restart, the other worker.
+ *
+ * The only part of the caveat a trader has to ask for. It explains the claim above it and
+ * changes no decision on its own: a trader who acts on {@link REGISTRY_CAVEAT_ACTION} without
+ * reading this is already safe, which is the test for what may sit behind a disclosure.
+ *
+ * "It" is "This list" — {@link REGISTRY_CAVEAT_CLAIM}, which is why that sentence stays on the
+ * surface rather than moving in here with this one.
+ */
+const REGISTRY_CAVEAT_WHY =
+  "It reports the deployments the backend process currently "
   + "holds in memory, so one started by an earlier process — before a restart, or on another "
-  + "worker — is not listed here even though it is still recorded and may still be trading. "
-  + "Treat a deployment you cannot find as UNKNOWN rather than stopped, and do not deploy it "
+  + "worker — is not listed here even though it is still recorded and may still be trading.";
+
+/**
+ * The actionable sentence, and the reason this caveat is safety-relevant rather than
+ * housekeeping: the cost of reading a short list as a complete one is a duplicate LIVE
+ * deployment. It is never behind anything.
+ */
+const REGISTRY_CAVEAT_ACTION =
+  "Treat a deployment you cannot find as UNKNOWN rather than stopped, and do not deploy it "
   + "again on the strength of this list.";
+
+/** The two sentences that stay on the surface in every state, as one paragraph. */
+const REGISTRY_CAVEAT_SURFACE = `${REGISTRY_CAVEAT_CLAIM} ${REGISTRY_CAVEAT_ACTION}`;
+
+/**
+ * The name of the disclosure {@link REGISTRY_CAVEAT_WHY} sits behind.
+ *
+ * `ds/Accordion` requires a title and this is it: always on screen, the accessible name of the
+ * toggle, and a question rather than a label, so a trader can tell whether the answer is worth
+ * a click without being told the answer.
+ *
+ * FINDING, recorded rather than worked around. `ds/Accordion` renders a trailing
+ * "N setting(s)" count beside this title — it was built for Requirement 15.6's advanced FORM
+ * fields, and `Accordion.test.jsx`'s `names the region from a heading, and says how much is
+ * inside` pins that wording. Beside a caveat the noun is wrong: there is no setting in here.
+ * The fix is a prop on the primitive, which lands on `Backtester` and `ParameterForm` too and
+ * is therefore its own commit under Requirement 22.1 rather than this page's. Nothing here
+ * reshapes the caveat to avoid it.
+ */
+const REGISTRY_CAVEAT_DISCLOSURE = "Why a deployment that is running can be missing from this list";
+
+/**
+ * What {@link REGISTRY_CAVEAT_DISCLOSURE} collapses, declared as data.
+ *
+ * `ds/Accordion` takes the collapsed set as a prop and publishes it, so what is behind the
+ * toggle is readable from the DOM rather than inferred from where a closing tag landed. One
+ * entry, because one sentence moves.
+ */
+const REGISTRY_CAVEAT_DISCLOSED = Object.freeze(["registry-incompleteness-why"]);
 
 /** What a selection re-scopes, and what it deliberately does not. Rendered beside the table. */
 const SELECTION_CAVEAT =
@@ -1334,6 +1407,31 @@ const SELECTION_CAVEAT =
   + "that deployment's strategy. It does not re-scope the realised P&L, the risk state or the "
   + "position: those are reported for the whole account, and no read on this page attributes "
   + "them to a deployment.";
+
+/**
+ * The name of the disclosure {@link SELECTION_CAVEAT} moves behind — WHOLE, and this is why.
+ *
+ * Task 12.3 asks for the operative half — that a selection re-scopes some of what is below and
+ * not all of it — to stay visible while the two enumerations move. No sentence boundary in the
+ * caveat does that. Its first sentence names the three things a selection DOES re-scope and its
+ * second names the three it does not, and both possible cuts break something:
+ *
+ *   * first sentence visible, second collapsed — the page then states that a selection
+ *     re-scopes the strategy, the market and the latest signal, with the limit that the
+ *     realised P&L, the risk state and the position stay account-wide one click away. That is
+ *     precisely the misreading this caveat exists to prevent, so the cut would MAKE the hazard.
+ *   * second sentence visible, first collapsed — "It does not re-scope…" with its antecedent
+ *     inside a closed disclosure. A dangling pronoun on a page about real money.
+ *
+ * So the caveat moves whole and this title carries the operative half. It is always on screen
+ * and it names BOTH sides of the distinction, which is what stops a closed disclosure from
+ * leaving half a truth on the page. Requirement 19.6 is then satisfied the strict way: not one
+ * character of the caveat is reworded, reordered or dropped.
+ */
+const SELECTION_CAVEAT_DISCLOSURE = "What selecting a deployment re-scopes below, and what it does not";
+
+/** What {@link SELECTION_CAVEAT_DISCLOSURE} collapses, declared as data. See above. */
+const SELECTION_CAVEAT_DISCLOSED = Object.freeze(["selection-scope-enumeration"]);
 
 /**
  * One record → one row of the union.
@@ -2572,11 +2670,16 @@ export default function LiveTrading() {
    * `empty` is deliberately NOT among the outcomes, even though zero deployments is exactly
    * what `ds/Panel`'s `empty` state is for. Requirement 14.1's three fields are rendered — by
    * `ds/EmptyState`, as a child — because the empty rendering has to sit BESIDE
-   * {@link REGISTRY_CAVEAT} and beside the partial-failure alert, and `empty` renders no
+   * {@link REGISTRY_CAVEAT_SURFACE} and beside the partial-failure alert, and `empty` renders no
    * children at all: the panel would then say "nothing is running" with the sentence
    * explaining why that may be false suppressed. `error` is reachable only if the fan-out
    * itself throws rather than one of its calls failing, which {@link readDeploymentUnion}
    * settles — so it is wired for honesty, not because it is expected.
+   *
+   * Task 12.3's disclosures are the SAME trap one level up, and {@link listIsIncomplete} is
+   * what refuses it: a `ds/Accordion` that were closed here would put the sentence explaining
+   * why "nothing is running" may be false behind a click, which is the arrangement this comment
+   * has already rejected once.
    */
   const selectorState = strategyIds.length === 0
     ? PANEL_STATES.READY
@@ -2595,6 +2698,25 @@ export default function LiveTrading() {
     unreadCount: unreadStrategies.length,
     retry,
   });
+
+  /**
+   * Whether the list in front of the trader is KNOWN to be short, as opposed to merely
+   * possibly short — which it always is, and which is what {@link REGISTRY_CAVEAT_SURFACE}
+   * says on the surface in every state.
+   *
+   * Two cases, and both are states in which the explanation is the whole answer rather than
+   * background:
+   *
+   *   * no row at all. `ds/EmptyState` then says "nothing is running", and
+   *     {@link REGISTRY_CAVEAT_WHY} is the sentence that says why that may be false.
+   *   * a partial fan-out. Some strategy did not answer, so the list is short by a known
+   *     amount for a second reason on top of the registry's.
+   *
+   * Task 12.3, and the comment on {@link selectorState} that arrived at the same rule for
+   * `ds/Panel`'s `empty`: in these two states the disclosures render EXPANDED. They collapse
+   * only where there are rows AND every strategy answered.
+   */
+  const listIsIncomplete = deploymentRows.length === 0 || unreadStrategies.length > 0;
 
   return (
     <div className="flex min-w-0 flex-col gap-4 overflow-y-auto bg-surface-canvas p-5 text-content-primary">
@@ -2704,21 +2826,47 @@ export default function LiveTrading() {
             {/* ── The incompleteness, ONCE, above the rows it qualifies ─────────────
                 A sentence and not an alert: it is a permanent property of the read rather
                 than a condition, and an always-on warning banner is the one that stops being
-                read. See the module docblock. */}
-            <p
-              className="text-small text-content-secondary"
+                read. See the module docblock.
+
+                The claim and the action are unconditional — no state of this page hides
+                them, and `data-selector-caveat="in-process-registry"` is on the wrapper that
+                carries them rather than on the disclosure, so the attribute travels with the
+                half that is always readable. Only the WHY is behind the toggle. */}
+            <div
+              className="flex min-w-0 flex-col gap-2"
               data-selector-caveat="in-process-registry"
             >
-              {REGISTRY_CAVEAT}
-            </p>
+              <p className="text-small text-content-secondary">{REGISTRY_CAVEAT_SURFACE}</p>
+              <Accordion
+                /* Remounted when the list stops being — or becomes — knowably short, because
+                   `ds/Accordion` reads `defaultOpen` once, at mount. Without this a refresh
+                   that turned a complete list into a partial one would leave the explanation
+                   closed, which is the state it exists for. */
+                key={listIsIncomplete ? "incomplete" : "complete"}
+                title={REGISTRY_CAVEAT_DISCLOSURE}
+                fields={REGISTRY_CAVEAT_DISCLOSED}
+                defaultOpen={listIsIncomplete}
+                data-selector-disclosure="in-process-registry"
+              >
+                <p className="text-small text-content-secondary">{REGISTRY_CAVEAT_WHY}</p>
+              </Accordion>
+            </div>
             {/* What a selection does and does not re-scope, stated where the expectation is
-                formed rather than only in each account-wide slot's hint. */}
-            <p
-              className="text-small text-content-secondary"
+                formed rather than only in each account-wide slot's hint.
+
+                WHOLE behind the toggle, and the title carries the operative half — see
+                {@link SELECTION_CAVEAT_DISCLOSURE} for the two cuts that were rejected and
+                why each of them would have been worse than not splitting. */}
+            <Accordion
+              key={listIsIncomplete ? "incomplete" : "complete"}
+              title={SELECTION_CAVEAT_DISCLOSURE}
+              fields={SELECTION_CAVEAT_DISCLOSED}
+              defaultOpen={listIsIncomplete}
               data-selector-caveat="selection-scope"
+              data-selector-disclosure="selection-scope"
             >
-              {SELECTION_CAVEAT}
-            </p>
+              <p className="text-small text-content-secondary">{SELECTION_CAVEAT}</p>
+            </Accordion>
 
             {/* ── Partial fan-out failure, DISCLOSED (part C's precedent) ───────────
                 The strategies that answered keep their rows; the ones that did not are named,
