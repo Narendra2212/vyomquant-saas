@@ -359,13 +359,43 @@ const CLEARED_BY_THIS_SPEC = Object.freeze({
   'pages/StrategyDetail.jsx': Object.freeze({ was: 61, now: 0, task: '8.3' }),
 });
 
+/**
+ * The pages this spec DELETED, and the count each took with it.
+ *
+ * A third category, and the distinction is the point. `CLEARED_BY_THIS_SPEC` records a
+ * page that still renders and no longer carries an absolute size; this records a page
+ * that stopped existing. The loop below measures a deleted file as `NOT SCANNED`, never
+ * as `0`, so a deletion cannot be recorded as a clearance without the assertion noticing
+ * — and `PAGE_FIXED_POINT` stays exactly as requirements §1.1 wrote it either way.
+ *
+ * `was` is asserted against `PAGE_FIXED_POINT`, and membership is asserted disjoint from
+ * `CLEARED_BY_THIS_SPEC`, so the two maps cannot both claim a file. The teeth point both
+ * ways: a file listed here that comes BACK into the tree measures a count instead of
+ * `NOT SCANNED` and fails, which is what stops a deleted page being restored silently.
+ *
+ * `pages/Landing.jsx` is the only entry. It carried its own `DEPRECATED / UNMOUNTED —
+ * LEGACY LANDING PAGE` header and was routed nowhere: `App.jsx:44` lazy-imports
+ * `components/landing/LandingPage` and `:590` routes that at `/`. Counting 41 sizes
+ * against a file nothing renders spent this ratchet on nothing, which is Requirement
+ * 14.2's complaint, and Requirement 4.5's parenthesis — "(`Landing.jsx`, per Requirement
+ * 14)" — is what makes deletion the discharge rather than migration.
+ */
+const DELETED_BY_THIS_SPEC = Object.freeze({
+  'pages/Landing.jsx': Object.freeze({ was: 41, task: '9.2' }),
+});
+
 describe('absolute-font-sizes: the patterns measure the tree they were written for', () => {
   it('reproduces requirements §1.1 per-page counts exactly', () => {
     const expected = {};
     const measured = {};
     for (const relative of Object.keys(PAGE_FIXED_POINT)) {
       const cleared = CLEARED_BY_THIS_SPEC[relative];
-      expected[relative] = cleared ? cleared.now : PAGE_FIXED_POINT[relative];
+      const deleted = DELETED_BY_THIS_SPEC[relative];
+      // A deleted page's only correct measurement is that the scan does not reach it.
+      // Stating it as `NOT SCANNED` rather than as 0 is what keeps a deletion and a
+      // clearance distinguishable, and what makes a restored file fail here.
+      if (deleted) expected[relative] = 'NOT SCANNED';
+      else expected[relative] = cleared ? cleared.now : PAGE_FIXED_POINT[relative];
       const file = SCANNED.find((f) => f.relative === relative);
       measured[relative] = file ? file.count : 'NOT SCANNED';
     }
@@ -375,10 +405,13 @@ describe('absolute-font-sizes: the patterns measure the tree they were written f
       .map((relative) => {
         const file = SCANNED.find((f) => f.relative === relative);
         const cleared = CLEARED_BY_THIS_SPEC[relative];
+        const deleted = DELETED_BY_THIS_SPEC[relative];
         return `${relative} — ${
-          cleared
-            ? `task ${cleared.task} took it to ${cleared.now}`
-            : `requirements §1.1 says ${PAGE_FIXED_POINT[relative]}`
+          deleted
+            ? `task ${deleted.task} DELETED the file, so it must not be scanned at all`
+            : cleared
+              ? `task ${cleared.task} took it to ${cleared.now}`
+              : `requirements §1.1 says ${PAGE_FIXED_POINT[relative]}`
         }, measured ${measured[relative]}`
           + (file && file.count ? ` (${distribution(file.sizes)})` : '');
       });
@@ -390,7 +423,8 @@ describe('absolute-font-sizes: the patterns measure the tree they were written f
         + `the self-tests above should have caught it and one of them needs strengthening —\n`
         + `or the tree moved, in which case the budget seeded from these numbers is stale\n`
         + `and the change that moved them owes an explanation. A page this spec cleared on\n`
-        + `purpose goes in CLEARED_BY_THIS_SPEC with its task number, which IS that\n`
+        + `purpose goes in CLEARED_BY_THIS_SPEC with its task number, and a page this spec\n`
+        + `DELETED goes in DELETED_BY_THIS_SPEC with its task number; either one IS that\n`
         + `explanation; §1.1's own figure stays where it is:\n${list(drifted)}`,
     ).toEqual([]);
 
@@ -411,6 +445,29 @@ describe('absolute-font-sizes: the patterns measure the tree they were written f
           `${relative} measures zero, so its budget entry must be DELETED, not left behind`,
         ).toBeUndefined();
       }
+    }
+
+    // A deleted page's recorded starting count is §1.1's own; it is not also claimed as
+    // cleared; the file really is gone from src/; and its budget entry went with it.
+    for (const [relative, record] of Object.entries(DELETED_BY_THIS_SPEC)) {
+      expect(record.was, `${relative}: DELETED_BY_THIS_SPEC disagrees with §1.1`).toBe(
+        PAGE_FIXED_POINT[relative],
+      );
+      expect(
+        relative in CLEARED_BY_THIS_SPEC,
+        `${relative} cannot be both cleared and deleted — a cleared page still renders`,
+      ).toBe(false);
+      expect(
+        existsSync(path.join(SRC, relative)),
+        `${relative} is recorded as deleted by task ${record.task} but is back in src/. `
+          + `Either the deletion was reverted — in which case this entry is wrong and the `
+          + `budget needs its ${record.was} back — or the file was recreated, which needs `
+          + `its own reason.`,
+      ).toBe(false);
+      expect(
+        ABSOLUTE_FONT_SIZE_BUDGET[relative],
+        `${relative} no longer exists, so its budget entry must be DELETED, not left behind`,
+      ).toBeUndefined();
     }
   });
 });
@@ -480,8 +537,8 @@ describe('absolute-font-sizes: the decreasing budget', () => {
     expect(
       gone,
       `These budget entries name files that are no longer in src/. A deleted file takes its\n`
-        + `entry with it — remove them from ${BUDGET_FILE}. Task 9.2 deletes\n`
-        + `pages/Landing.jsx and its 41, and task 9.1 deletes seven landing components:\n${list(gone)}`,
+        + `entry with it — remove them from ${BUDGET_FILE}. Task 9.2 deleted\n`
+        + `pages/Landing.jsx and its 41, and task 9.1 deleted seven landing components:\n${list(gone)}`,
     ).toEqual([]);
   });
 

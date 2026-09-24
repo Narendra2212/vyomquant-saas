@@ -181,11 +181,17 @@ export const OUT_OF_SCOPE_NATIVE_DIALOG_BUDGET = Object.freeze({
   // three the plan's `window.confirm` grep would have missed. Exchange Manager is
   // deferred by §17.2.
   'pages/ExchangeManager.jsx': 1,
-  // Bare `alert("Demo request submitted! …")` at line 604, in the demo-modal
-  // submit handler. The landing page is out of scope for v1 throughout this spec
-  // (§17.2, and `index.css`'s own header says the same of the landing
-  // `@utility` compositions).
-  'pages/Landing.jsx': 1,
+  // `pages/Landing.jsx` was here at 1 — a bare `alert("Demo request submitted! …")`
+  // in the demo-modal submit handler, and one of the three bare forms a
+  // `window.confirm` grep would have missed. **retail-ui-simplification task 9.2
+  // DELETED the file**, so the entry went with it rather than being migrated: the
+  // page was routed nowhere (`App.jsx:44` lazy-imports
+  // `components/landing/LandingPage` and `:590` routes that at `/`), so the dialog
+  // was unreachable and no trader could ever have been blocked by it.
+  // `names only files that still exist` is the assertion that failed while the file
+  // was gone and this line was not, and `finds the dialogs that are really in the
+  // tree` is the second — this file was one of that guard's five fixed points, and
+  // it is now four.
 
   // -- Deferred components (§17.2) ------------------------------------------
   // `window.confirm("Are you sure you want to clear all notifications?")` at

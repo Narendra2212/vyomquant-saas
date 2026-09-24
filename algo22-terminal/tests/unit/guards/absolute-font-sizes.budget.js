@@ -273,8 +273,15 @@
  *                             `MetaRow`; four more declarations were REMOVED rather than
  *                             mapped. With this line every page requirements §1.1 committed
  *                             a number for that this spec schedules is at zero — what
- *                             remains above zero is task 9.2's `Landing.jsx` (41) and the
- *                             ten resting `components/` entries.
+ *                             remained above zero was task 9.2's `Landing.jsx` (41) and the
+ *                             ten resting `components/` entries. **Task 9.2 then deleted
+ *                             `Landing.jsx` outright rather than migrating it, so NO
+ *                             `pages/` entry survives in this budget at all**: what is
+ *                             left is 14 entries totalling 169 — those ten, plus
+ *                             Requirement 1.4's four `components/landing/` seeds
+ *                             (`ScreenshotsSection` 12, `Hero` 2, `DownloadSection` 1,
+ *                             `HowItWorks` 1), which are the live landing surface and
+ *                             belong to Requirement 15.2 rather than to Requirement 14.
  *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
@@ -613,16 +620,19 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // `<h1>` (Q8 → `--text-page`, blind spot 1) changed this count; both are cleared.
   // No 11px table cell remained for slice 3 — `tdStyle` and `stackedValueStyle` were
   // slice 1's, and Q6 → `--text-small` is recorded there.
-  // 12×9, 11×6, 9×4, 13×4, 14×4, 32×4, 10×3, 15×2, 20×2, 18×1, 22×1, 36×1.
-  // **This entry is deleted, not lowered, by task 9.2 (commit 23), which deletes
-  // the file.** `Landing.jsx` carries its own `DEPRECATED / UNMOUNTED` header and
-  // is routed nowhere — `App.jsx:44` lazy-imports `components/landing/LandingPage`
-  // and `:590` routes that at `/`. Counting 41 sizes against a file nothing
-  // renders spends the ratchet on nothing (Requirement 14.2). Until then the
-  // entry holds, because the file is in the tree and the guard reports what is
-  // there. `names only files that still exist` is the assertion that fails if the
-  // file goes and this line stays.
-  'pages/Landing.jsx': 41,
+  // `pages/Landing.jsx` was here at 41 — 12×9, 11×6, 9×4, 13×4, 14×4, 32×4, 10×3,
+  // 15×2, 20×2, 18×1, 22×1, 36×1. **Task 9.2 (commit 23) DELETED the file, so the
+  // entry went with it rather than being lowered.** It is not a page that cleared;
+  // it is a page that stopped existing, which is why it is recorded in
+  // `absolute-font-sizes.test.js`'s `DELETED_BY_THIS_SPEC` and not in its
+  // `CLEARED_BY_THIS_SPEC` — `reproduces requirements §1.1 per-page counts exactly`
+  // measures a deleted file as `NOT SCANNED` rather than as 0, and those are two
+  // different facts. `Landing.jsx` carried its own `DEPRECATED / UNMOUNTED` header
+  // and was routed nowhere — `App.jsx:44` lazy-imports
+  // `components/landing/LandingPage` and `:590` routes that at `/` — so counting 41
+  // sizes against it spent this ratchet on nothing (Requirement 14.2). `names only
+  // files that still exist` is the assertion that failed while the file was gone
+  // and this line was not.
   // `pages/Billing.jsx` was here at 39 — 11×15, 12×10, 10×5, 9×2, 13×2, 18×1,
   // 20×1, 22×1, 24×1, 36×1, with 32 of the 39 at or below 12px. **Task 7.9 (commit
   // 15) took it to 0 and the entry is DELETED rather than set to 0** (Requirement

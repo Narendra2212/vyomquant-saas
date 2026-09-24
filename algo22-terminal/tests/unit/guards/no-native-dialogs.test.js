@@ -31,10 +31,12 @@
  * the rule is met, and the disagreement surfaces as a guard that reads clean
  * while a per-page suite fails, or the reverse.
  *
- * What that buys, in this tree, is measurable: three of the five files in the
- * allowlist call the **bare** global — `confirm(…)`, `alert(…)` with no
- * `window.` receiver. A guard written as a grep for `window.confirm` would have
- * found two of five and reported the tree 60% cleaner than it is.
+ * What that buys, in this tree, is measurable: two of the four files in the
+ * allowlist call the **bare** global — `confirm(…)` with no `window.` receiver.
+ * A guard written as a grep for `window.confirm` would find two of four and
+ * report the tree 50% cleaner than it is. It was three of five, and the grep
+ * would have read 60% clean, until retail-ui-simplification task 9.2 deleted the
+ * unmounted `pages/Landing.jsx` and its bare `alert(` with it.
  *
  * ===========================================================================
  * COMMENTS ARE STRIPPED AND STRINGS ARE MASKED, AND THAT IS LOAD-BEARING
@@ -172,10 +174,15 @@ const REPLACEMENT_PRIMITIVES = Object.freeze([
 const SCANNED_EXTENSIONS = Object.freeze(['.js', '.jsx', '.ts', '.tsx']);
 
 /**
- * The five deferred surfaces that really hold one dialog each, with the form the
+ * The four deferred surfaces that really hold one dialog each, with the form the
  * detector reports. Hard-coded rather than read from the budget: these are the
  * FIXED POINTS that prove the scan and the detector are both working, and a fixed
  * point taken from the thing under test proves nothing.
+ *
+ * There were five. `pages/Landing.jsx` and its bare `alert(` left with the file when
+ * retail-ui-simplification task 9.2 deleted it — the page was routed nowhere, so the
+ * dialog was unreachable. Two of the remaining four are bare calls rather than three,
+ * which still carries the claim below: a `window.`-only rule would miss half of them.
  *
  * `text` is the matched fragment with whitespace removed. The receiver form has no
  * trailing `(` because `NATIVE_DIALOG`'s first alternative also catches an alias
@@ -188,7 +195,6 @@ const SCANNED_EXTENSIONS = Object.freeze(['.js', '.jsx', '.ts', '.tsx']);
 const KNOWN_DIALOGS = Object.freeze([
   { relative: 'pages/TwoFA.jsx', texts: ['window.confirm'] },
   { relative: 'pages/ExchangeManager.jsx', texts: ['confirm('] },
-  { relative: 'pages/Landing.jsx', texts: ['alert('] },
   { relative: 'components/NotificationCenter.jsx', texts: ['window.confirm'] },
   { relative: 'components/admin/AdminDashboard.jsx', texts: ['confirm('] },
 ]);
@@ -276,8 +282,10 @@ describe('no-native-dialogs: what counts as a dialog', () => {
     expect(countNativeDialogs('globalThis.alert("x"); self.confirm("y");')).toBe(2);
   });
 
-  it('counts the bare global, which is how three of the five real ones are written', () => {
-    // A grep for `window.confirm` finds two of the five files in the allowlist.
+  it('counts the bare global, which is how two of the four real ones are written', () => {
+    // A grep for `window.confirm` finds two of the four files in the allowlist. The
+    // `alert(` case below is `pages/Landing.jsx`'s own string, kept as a synthetic sample
+    // after task 9.2 deleted that file: the detector still has to see the bare form.
     expect(countNativeDialogs('if (confirm(`Disconnect ${name}?`)) drop();')).toBe(1);
     expect(countNativeDialogs('alert("Demo request submitted!");')).toBe(1);
     expect(countNativeDialogs('prompt("Enter new strategy name:", current);')).toBe(1);
@@ -420,19 +428,21 @@ describe('no-native-dialogs: the guard is live, not vacuous', () => {
   });
 
   it('finds the dialogs that are really in the tree', () => {
-    // THE FIXED POINTS. Five deferred surfaces, one dialog each, asserted against
+    // THE FIXED POINTS. Four deferred surfaces, one dialog each, asserted against
     // hard-coded expectations rather than against the budget. If path resolution broke, or
     // the detector stopped matching, every count would be 0 and only the under-budget
     // direction would object — so real files that MUST measure non-zero are what prove
-    // the scan ran. Three of the five are bare calls, so this also pins the claim that
-    // a `window.`-only rule would miss most of them.
+    // the scan ran. Two of the four are bare calls, so this also pins the claim that
+    // a `window.`-only rule would miss half of them. It was three of five until
+    // retail-ui-simplification task 9.2 deleted `pages/Landing.jsx` and its bare `alert(`.
     for (const { relative, texts } of KNOWN_DIALOGS) {
       const found = SCANNED.find((f) => f.relative === relative);
       expect(found, `${relative} was not reached by the scan`).toBeDefined();
       expect(found.count, `${relative} no longer measures a dialog`).toBe(1);
       expect(found.found.map((d) => d.text)).toEqual(texts);
     }
-    expect(KNOWN_DIALOGS.filter(({ texts }) => !texts[0].startsWith('window.'))).toHaveLength(3);
+    expect(KNOWN_DIALOGS).toHaveLength(4);
+    expect(KNOWN_DIALOGS.filter(({ texts }) => !texts[0].startsWith('window.'))).toHaveLength(2);
   });
 
   it('strips the prose that documents a removal', () => {

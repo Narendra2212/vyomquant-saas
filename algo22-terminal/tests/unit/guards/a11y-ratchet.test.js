@@ -121,10 +121,14 @@ const WAIVER_FILE = 'eslint-rules/a11y-ratchet.js';
  * at `error` regardless, through the glob — the glob is what lints, this list is what
  * *holds*, and the distinction is the one §1.4 blurred.
  *
- * `pages/Landing.jsx` IS listed, though it carries a `DEPRECATED / UNMOUNTED` header and
- * `App.jsx:590` routes `components/landing/LandingPage` at `/` instead. It is in the tree
- * and the guard reports what is there; task 9.2 deletes the file, and `every file in this
- * list is actually linted` is what fails if that lands and this line stays.
+ * `pages/Landing.jsx` WAS listed, because it was in the tree and the guard reports what
+ * is there. **Task 9.2 deleted the file, so its line went with it and the count below is
+ * 36 rather than 37.** It carried a `DEPRECATED / UNMOUNTED` header and `App.jsx:590`
+ * routes `components/landing/LandingPage` at `/` instead, so holding it to a standard
+ * spent this list's teeth on markup no visitor reached — the same argument the eight
+ * unreferenced landing components are excluded on, two paragraphs up. `lints every file
+ * in the list, so a typo cannot exempt a page` is what failed while the file was gone and
+ * the line was not.
  */
 const IN_SCOPE_PAGES = Object.freeze([
   // The eleven `In_Scope_Pages` this list started as.
@@ -139,8 +143,11 @@ const IN_SCOPE_PAGES = Object.freeze([
   'src/pages/TradeHistory.jsx',
   'src/pages/PaperTrading.jsx',
   'src/pages/StrategyMarketplace.jsx',
-  // The eleven `Unmigrated_Pages`, in Requirement 4.5's migration order so the list
-  // reads as the work does: RiskSettings first, AuthPage last, Landing per Req 14.
+  // Ten of the eleven `Unmigrated_Pages`, in Requirement 4.5's migration order so the
+  // list reads as the work does: RiskSettings first, AuthPage last. The eleventh,
+  // `Landing.jsx`, was discharged by deletion rather than migration — Requirement 4.5's
+  // "(`Landing.jsx`, per Requirement 14)" parenthesis — at task 9.2, and its line left
+  // with the file.
   'src/pages/RiskSettings.jsx',
   'src/pages/TwoFA.jsx',
   'src/pages/SecurityLogs.jsx',
@@ -151,7 +158,6 @@ const IN_SCOPE_PAGES = Object.freeze([
   'src/pages/Billing.jsx',
   'src/pages/ExchangeManager.jsx',
   'src/pages/AuthPage.jsx',
-  'src/pages/Landing.jsx',
   // `Landing_Surface` — what `App.jsx:590` actually serves at `/`, in the order
   // `LandingPage.jsx` renders them.
   'src/components/landing/LandingPage.jsx',
@@ -388,8 +394,9 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
   it('lints every file in the list, so a typo cannot exempt a page', () => {
     // `holds every unwaived in-scope page at zero findings` filters on `f in PAGES`, so a
     // misspelled entry is skipped in silence. That was tolerable at eleven hand-written
-    // entries and is not at 37. Every file named above exists and is linted today; when
-    // task 9.2 deletes `pages/Landing.jsx`, this is what requires its line to go too.
+    // entries and is not at 36. Every file named above exists and is linted today; this is
+    // the assertion that required `pages/Landing.jsx`'s line to go when task 9.2 deleted
+    // the file, and it is what caught it.
     const unlinted = IN_SCOPE_PAGES.filter((f) => !(f in PAGES));
     expect(
       unlinted,
@@ -398,8 +405,9 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
         + `list exists to prevent. Fix the path or delete the line:\n${list(unlinted)}`,
     ).toEqual([]);
 
-    // Non-vacuity, and Requirement 6.1's scope as a number: 22 pages + 15 landing files.
-    expect(IN_SCOPE_PAGES).toHaveLength(37);
+    // Non-vacuity, and Requirement 6.1's scope as a number: 21 pages + 15 landing files.
+    // It was 22 pages until task 9.2 deleted the unmounted `pages/Landing.jsx`.
+    expect(IN_SCOPE_PAGES).toHaveLength(36);
     expect(new Set(IN_SCOPE_PAGES).size).toBe(IN_SCOPE_PAGES.length);
   });
 

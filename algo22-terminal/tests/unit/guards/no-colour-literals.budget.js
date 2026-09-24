@@ -1107,7 +1107,14 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // index.css's own header calls the landing `@utility` compositions out of
   // scope; these components are the same surface. Budgeted so they cannot
   // grow, with no task scheduled to lower them inside this spec.
-  'pages/Landing.jsx': 18,
+  //
+  // `pages/Landing.jsx` was here at 18. **Task 9.2 (commit 23) DELETED the file**, so the
+  // entry went with it rather than being lowered — it is not a page that cleared, it is a
+  // page that stopped existing. The file was routed nowhere (`App.jsx:44` lazy-imports
+  // `components/landing/LandingPage` and `:590` routes that at `/`), so counting 18
+  // literals against it spent this ratchet on nothing (Requirement 14.2). `names only
+  // files that still exist` is the assertion that failed while the file was gone and this
+  // line was not. Everything below is the LIVE landing surface and keeps its entry.
   'components/landing/Hero.jsx': 3,
   'components/landing/ScreenshotsSection.jsx': 3,
   // Retained deliberately, unlike the seven unreferenced landing components deleted
