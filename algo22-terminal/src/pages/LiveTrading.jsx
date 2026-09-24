@@ -133,6 +133,22 @@
  * which the explanation is the whole answer, and a closed disclosure there would reproduce, one
  * level up, the `ds/Panel`-`empty` trap {@link selectorState} already refuses.
  *
+ * THE ONE NEXT ACTION A FRESH ACCOUNT IS GIVEN (task 12.7, Requirements 8.1, 8.3, 8.4)
+ * -----------------------------------------------------------------------------------
+ * One element on this page — and only one — is marked as the next thing to do, on the one panel
+ * of the five that presents as empty. It is a navigation to the strategies page and it is NOT a
+ * deploy: this is the route that spends real money, so an emphasised action that deployed, or
+ * that walked a fresh account toward deploying with no strategy and no venue, would be the
+ * wrong first ask however convenient. See {@link selectorHasNoStrategyToAsk} for the condition
+ * and why it is Requirement 8.1's premise rather than "the list is short", and the `actions`
+ * comment on the Deployments panel for the placement.
+ *
+ * Nothing about task 12.3's split moved with it. Not one panel was collapsed, both disclosures
+ * still render EXPANDED on an empty list, and {@link REGISTRY_CAVEAT_SURFACE} still renders
+ * unconditionally as a plain paragraph inside the wrapper that carries
+ * `data-selector-caveat="in-process-registry"` — the emphasis went in the panel HEADER, outside
+ * that wrapper and outside the panel's children entirely.
+ *
  * ONE DEFECT IN A READ PATH, FIXED HERE BECAUSE THIS TASK ADOPTS THE FIELD
  * -----------------------------------------------------------------------
  * `latestOrder`'s declaration recorded that `GET /api/orders/open` requires an `exchange_id`
@@ -236,7 +252,7 @@
  */
 
 import { memo, useCallback, useId, useMemo, useState } from "react";
-import { RefreshCw, Server } from "lucide-react";
+import { Plus, RefreshCw, Server } from "lucide-react";
 
 import { dashboardApi } from "../api/modules/dashboard";
 // The third read, and the one that goes to a VENUE rather than to our own server. Its
@@ -2720,6 +2736,35 @@ export default function LiveTrading() {
    */
   const listIsIncomplete = deploymentRows.length === 0 || unreadStrategies.length > 0;
 
+  /**
+   * Requirement 8.1's own premise, on the one panel of this page's five that presents as empty.
+   *
+   * "WHEN a trader's account has no strategies, no deployments, no positions and no trades" —
+   * so the condition is the first case {@link emptySelectorCopy} answers, "there is no strategy
+   * to ask about", and not merely "the list is short". That narrowness is the point three times
+   * over:
+   *
+   *   * REQUIREMENT 8.3. The other two empty cases are a read FAILURE ("the deployment list
+   *     could not be read", every strategy unanswered) and a genuine absence with strategies
+   *     present ("no deployment is reported"). All three render inside the same
+   *     `deploymentRows.length === 0` branch, so a CTA gated on that alone would mark "go and
+   *     add a strategy" as the next thing to do on a panel whose reads had just failed — which
+   *     is presenting a failure as an absence, the one thing `empty` / `unavailable` / `error`
+   *     exist to keep apart. `strategyCount === 0` is the only gate that cannot reach it.
+   *   * THE LABEL IS TRUE IN EVERY STATE IT RENDERS IN. With strategies present but nothing
+   *     deployed, the honest next step is to deploy one, and deploying is what opens real
+   *     exposure on this route — so no element is marked as the next thing to do there, and the
+   *     empty state's own "Open Strategies" action still stands. This page does not tell a fresh
+   *     account to spend money.
+   *   * NO PANEL STATE CHECK IS NEEDED, AND NONE IS SMUGGLED IN. {@link selectorState} resolves
+   *     `PANEL_STATES.READY` unconditionally when there is no strategy to ask about, so this
+   *     cannot render over a loading skeleton, an error or an unavailable panel — which matters
+   *     because `ds/Panel` renders `actions` in every one of the eight states. The second clause
+   *     is what ties the control to the `ds/EmptyState` it emphasises: they render together or
+   *     not at all.
+   */
+  const selectorHasNoStrategyToAsk = strategyIds.length === 0 && deploymentRows.length === 0;
+
   return (
     <div className="flex min-w-0 flex-col gap-4 overflow-y-auto bg-surface-canvas p-5 text-content-primary">
 
@@ -2787,40 +2832,76 @@ export default function LiveTrading() {
           // and not page-wide, for part C's reason: a selector that cannot be read must not
           // erase figures about real money that were read successfully.
           error={{ error: deploymentsError, context: "live-trading", onRetry: retry }}
-          actions={selectedRow === null ? null : (
-            <div
-              className="flex min-w-0 items-center gap-2"
-              data-selected-deployment={deploymentLabel(selectedRow)}
-            >
-              <span className="text-micro uppercase tracking-wide text-content-secondary">
-                Tiers scoped to
-              </span>
-              <span className="font-mono text-micro font-bold uppercase tracking-wide text-content-primary">
-                {deploymentLabel(selectedRow)}
-              </span>
-              {/* Rendered only while something is selected, so it always has something to
-                  clear (Requirement 19.4). */}
-              <CommandButton intent="secondary" onClick={clearDeployment}>
-                Show all deployments
-              </CommandButton>
-              {/* ── STOP, on the SELECTED row (task 20.3) ────────────────────────────
-                  Rendered only for a row that REPORTS a deployment id: the path parameter
-                  `POST /api/deployments/{id}/stop` needs is the server's id, and a row that
-                  reported none carries only this page's synthetic union key, which addresses
-                  nothing. An absent control beats one that 404s on a live account.
+          actions={(
+            <>
+              {/* ── Requirement 8.1: the one next action a fresh account is given ──────
+                  Gated on {@link selectorHasNoStrategyToAsk}, which is Requirement 8.1's own
+                  premise and nothing wider — see that comment for why "the list is short" is
+                  not the same condition and must not be used as one.
 
-                  `onClick` opens the dialog and does nothing else — the request lives in
-                  `handleConfirmStop`, which the dialog alone calls (Property 13). */}
-              {selectedDeploymentId === null ? null : (
-                <CommandButton
-                  intent="destructive"
-                  onClick={requestStopDeployment}
-                  data-live-action="stop-deployment"
-                >
-                  Stop deployment
+                  WHY THIS ONE. The rule is the action a brand-new account can complete with
+                  (a) zero prior setup, (b) no real-money risk and (c) the largest unlock of
+                  the rest of the product, and on THIS page (b) is the live constraint: a CTA
+                  that deploys, or that walks a trader toward deploying with no strategy and no
+                  venue, fails it outright. {@link STRATEGIES_ROUTE} is a navigation, so it
+                  needs no API key and places no order; a deployment is a strategy that was
+                  deployed, so it is the upstream of this panel's absence; and it is the one
+                  page already carrying its own Requirement 8.1 primary action, one hop from
+                  where a strategy is built.
+
+                  IN THE HEADER, NOT IN THE BODY, and that placement is the task-12.3 trap.
+                  The caveat wrapper below carries
+                  `data-selector-caveat="in-process-registry"` and both disclosures render
+                  `defaultOpen` while {@link listIsIncomplete} — which an empty list always is.
+                  Nothing here is inside that wrapper, nothing here changes
+                  {@link listIsIncomplete}, and the operative sentence still renders
+                  unconditionally as a plain paragraph: a trader must never read "nothing is
+                  running" with the explanation of why that may be false one click away.
+
+                  `to` rather than an `onClick` navigate, so the control announces where it
+                  goes and honours a modifier-click. */}
+              {selectorHasNoStrategyToAsk ? (
+                <CommandButton intent="primary" icon={Plus} to={STRATEGIES_ROUTE}>
+                  Add a strategy
                 </CommandButton>
+              ) : null}
+              {selectedRow === null ? null : (
+                <div
+                  className="flex min-w-0 items-center gap-2"
+                  data-selected-deployment={deploymentLabel(selectedRow)}
+                >
+                  <span className="text-micro uppercase tracking-wide text-content-secondary">
+                    Tiers scoped to
+                  </span>
+                  <span className="font-mono text-micro font-bold uppercase tracking-wide text-content-primary">
+                    {deploymentLabel(selectedRow)}
+                  </span>
+                  {/* Rendered only while something is selected, so it always has something to
+                      clear (Requirement 19.4). */}
+                  <CommandButton intent="secondary" onClick={clearDeployment}>
+                    Show all deployments
+                  </CommandButton>
+                  {/* ── STOP, on the SELECTED row (task 20.3) ────────────────────────
+                      Rendered only for a row that REPORTS a deployment id: the path parameter
+                      `POST /api/deployments/{id}/stop` needs is the server's id, and a row
+                      that reported none carries only this page's synthetic union key, which
+                      addresses nothing. An absent control beats one that 404s on a live
+                      account.
+
+                      `onClick` opens the dialog and does nothing else — the request lives in
+                      `handleConfirmStop`, which the dialog alone calls (Property 13). */}
+                  {selectedDeploymentId === null ? null : (
+                    <CommandButton
+                      intent="destructive"
+                      onClick={requestStopDeployment}
+                      data-live-action="stop-deployment"
+                    >
+                      Stop deployment
+                    </CommandButton>
+                  )}
+                </div>
               )}
-            </div>
+            </>
           )}
           data-region={DEPLOYMENT_FIELD}
         >

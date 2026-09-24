@@ -37,10 +37,22 @@
  * one primary action and two empty panels, which is inside Requirement 8.2's cap,
  * so 12.7 verified it and left the file unedited.
  *
- * `pages/TradeHistory.jsx` and `pages/LiveTrading.jsx` are still at their task
- * 12.2 seeds. Both are already inside 8.2's cap and both are at zero primary
- * actions, so what is left is 8.1 alone. Task 12.7's second half is the commit
- * that moves them and this paragraph is how its diff is scoped.
+ * ---------------------------------------------------------------------------
+ * AND 12.7'S SECOND HALF MOVED THE LAST TWO, IN ONE NUMBER EACH
+ * ---------------------------------------------------------------------------
+ * `pages/TradeHistory.jsx` (2/1/1/0 → 2/1/1/1) and `pages/LiveTrading.jsx`
+ * (5/1/1/0 → 5/1/1/1), one commit each, both confirmed failing against the page
+ * as it stood. Both were ALREADY inside Requirement 8.2's cap, so neither
+ * collapsed anything: no `ds/Accordion` was added on either page, `emptyPanels`
+ * and `emptyActions` did not move, and there is no opened census below either row
+ * because there is no disclosure to open. Those two commits were Requirement 8.1
+ * alone, which is why the seeded numbers here move by one apiece.
+ *
+ * So all five pages now carry exactly one primary action and all five are inside
+ * the cap of 3. `holds Requirement 8.2's cap and Requirement 8.1's exactly-one on
+ * all five` is where that is asserted as the finished state rather than as a
+ * direction of travel, and the comment on it records how each of its two halves
+ * was discharged.
  *
  * ===========================================================================
  * THE FACTS THIS FILE VERIFIES RATHER THAN ASSUMES
@@ -475,9 +487,31 @@ const FRESH_ACCOUNT = Object.freeze({
    * So 8.2's cap is met here and 8.1's is not: five panels on screen, none of them marked as
    * the next thing to do. That is what task 12.7 changes on this page, and it is a different
    * change from Dashboard's.
+   *
+   * MOVED BY TASK 12.7's SECOND HALF, AND — as on `TradeHistory` — in one number only.
+   *
+   * Seeded at `panels: 5, emptyPanels: 1, emptyActions: 1, primaryActions: 0`. Requirement 8.2
+   * asked for nothing here either, so NOTHING was collapsed: no `ds/Accordion` was added, no
+   * panel moved behind a disclosure, and adding one would have walked into task 12.3's trap on
+   * the one panel this commit touches.
+   *
+   *   primaryActions 0 → 1   the deployments panel's `ds/CommandButton intent="primary"` to
+   *                          `/app/strategies`, rendered only while this account has no strategy
+   *                          to ask about, and it is the only one on the page. NOT a deploy:
+   *                          this is the route that spends real money. Requirement 8.1.
+   *   panels         5 → 5   unchanged.
+   *   emptyPanels    1 → 1   unchanged, and already inside 8.2's cap of 3.
+   *   emptyActions   1 → 1   unchanged. The selector's own `Open Strategies` action still
+   *                          stands beside the emphasised one (Requirement 19.4).
+   *
+   * The task-12.3 split is untouched and `liveTrading.test.jsx`'s four declarations are the
+   * assertion of that, not this file: the emphasis went in the panel HEADER, outside the wrapper
+   * carrying `data-selector-caveat="in-process-registry"` and outside the panel's children, so
+   * the operative caveat still renders unconditionally and both disclosures are still `open` on
+   * an empty list.
    */
   'pages/LiveTrading.jsx': Object.freeze({
-    panels: 5, emptyPanels: 1, emptyActions: 1, primaryActions: 0,
+    panels: 5, emptyPanels: 1, emptyActions: 1, primaryActions: 1,
   }),
 });
 
@@ -655,29 +689,39 @@ describe('a fresh account: the seeded counts', () => {
     });
   }
 
-  it('holds Requirement 8.2\'s cap on all five, and shows 8.1 is what the rest of 12.7 is for', () => {
+  it('holds Requirement 8.2\'s cap and Requirement 8.1\'s exactly-one on all five', () => {
     /*
-     * WHAT THIS CLAUSE ASSERTED BEFORE, AND WHY IT HAD TO CHANGE IN THIS COMMIT.
+     * WHAT THIS CLAUSE ASSERTED BEFORE, AND WHY EACH HALF OF IT HAD TO CHANGE.
      *
-     * It read `over.length > 0` over the pages with more than three empty panels: non-vacuity
-     * for the direction of travel, so that the closing commits could not be describing a
-     * finished state. `pages/Portfolio.jsx` at 4 was the last page over the cap, so the moment
-     * task 12.7's first half landed that premise stopped being true — and a clause whose premise
-     * is false is not a guard that was widened, it is a guard that has been DISCHARGED.
+     * Both halves were non-vacuity for the DIRECTION OF TRAVEL, so that the closing commits
+     * could not be describing a finished state. Both premises have now gone false, one per
+     * commit, and a clause whose premise is false is not a guard that was widened — it is a
+     * guard that has been DISCHARGED, and it is discharged by asserting the stronger thing:
      *
-     * So the 8.2 half is replaced by the stronger claim, asserted rather than assumed: all five
-     * pages are now inside the cap of 3, and `toBeLessThanOrEqual` on every row is what stops
-     * the count creeping back up on a page nobody is editing.
+     *   * `over.length > 0` over the pages above Requirement 8.2's cap of 3.
+     *     `pages/Portfolio.jsx` at 4 was the last one, so task 12.7's FIRST half ended it. Now
+     *     `toEqual([])`: all five are inside the cap, which is what stops the count creeping
+     *     back up on a page nobody is editing.
+     *   * `unmarked.length > 0` over the pages at anything other than exactly one primary
+     *     action. `pages/TradeHistory.jsx` and `pages/LiveTrading.jsx` at 0 were the last two,
+     *     so task 12.7's SECOND half ends it. Now `toEqual([])` as well: Requirement 8.1 is met
+     *     on all five, and this fails at 0 (nothing is the next thing to do) AND at 2 (two next
+     *     actions on a fresh account is the same defect as none).
      *
-     * The non-vacuity moves to the number that is still moving. Requirement 8.1 wants exactly
-     * one primary action per page and `pages/TradeHistory.jsx` and `pages/LiveTrading.jsx` are
-     * still at zero, which is the other half of task 12.7 and is why those two rows are
-     * untouched here. When that commit lands, THIS clause is the one that fails and the seeds
-     * below it are the ones that move.
+     * Read from the MEASURED census rather than from the seed table, which is the second half of
+     * the tightening: the clause now asserts the requirement of the rendered tree directly
+     * instead of asserting a property of the numbers this file declares, so it stands even if
+     * the per-page comparisons above were edited.
+     *
+     * The non-vacuity that is left is the one that is still true and always will be: both
+     * assertions have the `filter(...) → toEqual([])` shape, which passes trivially over an
+     * empty collection, so the collection being filtered is pinned at Requirement 8.4's five.
      */
-    const over = Object.entries(FRESH_ACCOUNT)
-      .filter(([, seed]) => seed.emptyPanels > 3)
-      .map(([file]) => `${file} (${FRESH_ACCOUNT[file].emptyPanels})`);
+    const rows = Object.keys(FRESH_ACCOUNT).map((file) => [file, measured(file)]);
+
+    const over = rows
+      .filter(([, census]) => census.emptyPanels > 3)
+      .map(([file, census]) => `${file} (${census.emptyPanels})`);
 
     expect(
       over,
@@ -686,17 +730,21 @@ describe('a fresh account: the seeded counts', () => {
         + `pending:\n${over.map((row) => `  ${row}`).join('\n')}`,
     ).toEqual([]);
 
-    const unmarked = Object.entries(FRESH_ACCOUNT)
-      .filter(([, seed]) => seed.primaryActions !== 1)
-      .map(([file]) => `${file} (${FRESH_ACCOUNT[file].primaryActions})`);
+    const unmarked = rows
+      .filter(([, census]) => census.primaryActions !== 1)
+      .map(([file, census]) => `${file} (${census.primaryActions})`);
 
     expect(
-      unmarked.length,
-      'Every page already marks exactly one next action, so Requirement 8.1 is met everywhere\n'
-        + 'and the rest of task 12.7 has nothing to do. Either that commit has landed — in which\n'
-        + 'case this clause is the one to discharge, the way the 8.2 half above was — or a seed\n'
-        + 'was written from the finished state rather than measured.',
-    ).toBeGreaterThan(0);
+      unmarked,
+      'Requirement 8.1 wants EXACTLY ONE element carrying a primary action on a fresh account.\n'
+        + 'These pages are not at one — at 0 nothing is marked as the next thing to do, and at 2\n'
+        + 'a fresh account has two next actions, which is the same defect as none:\n'
+        + `${unmarked.map((row) => `  ${row}`).join('\n')}`,
+    ).toEqual([]);
+
+    // Neither `toEqual([])` above may pass by having nothing to filter.
+    expect(rows).toHaveLength(5);
+    expect(Object.keys(FRESH_ACCOUNT)).toHaveLength(SUITES.length);
   });
 });
 
