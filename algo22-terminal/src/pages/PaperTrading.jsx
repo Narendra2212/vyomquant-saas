@@ -226,6 +226,32 @@
  *
  * Slice 3 holds what is left: the eight recharts axis props, the two remaining 10px chips and
  * seven 11px call sites, the 16px latency figure, `:707`'s conditional and the page `<h1>`.
+ *
+ * TASK 8.1, SLICE 3 OF 3 — THE PAGE REACHES ZERO
+ * ----------------------------------------------
+ * The last eighteen, plus the two constructs the ratchet's patterns cannot see:
+ *
+ * | cohort                                                  | was       | step             |
+ * |---------------------------------------------------------|-----------|------------------|
+ * | 8 recharts axis props, via {@link CHART_TICK_FONT_SIZE}  | `={9}`    | `--text-micro`   |
+ * | 2 reconnecting chips (Q5)                                | 10        | `--text-micro`   |
+ * | 6 panel-state sentences + the page subtitle (Q1)         | 11        | `--text-body`    |
+ * | the latency figure (Q7; §2.2's undefined tie, resolves up)| 16        | `--text-section` |
+ * | {@link Figure}'s value — ONE step, not two                | 13 / 18   | `--text-section` |
+ * | that value's unit `<span>` — one step below its figure    | 11        | `--text-title`   |
+ * | the page `<h1>` — invisible to the ratchet               | `1.25rem` | `--text-page`    |
+ *
+ * **The conditional is the case §2.6 promised.** `fontSize: missing ? 13 : 18` was one role
+ * wearing two numbers: both arms render the value this panel exists to report and differ only in
+ * which string. The 13 existed because the not-available marker overflowed at 18, and
+ * `wordBreak: 'break-all'` beneath it was the standing evidence it overflowed anyway. Requirement
+ * 19.3 forbids shrinking a reason to reduce clutter, and shredding one mid-word is the same defect
+ * in another form, so **both went**: one step at `--text-section`, no `break-all`, and §2.5's
+ * yield 3 pays for it — the figures grid moves from `gridColumns(200)` to `gridColumns(220)`,
+ * fitting one fewer track at the same width. No prose was truncated and nothing shrank.
+ *
+ * The `<h1>` changes no ratchet number — an off-scale rem matches no pattern — so it is recorded
+ * here. This page now measures **zero** and its budget entry is DELETED, not set to 0 (Req 1.5).
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -477,6 +503,22 @@ const toneColour = (tone) =>
  * between, so the padding and `--space-5` cannot drift apart.
  */
 const PAGE_PADDING = Math.round(parseFloat(token.space['5']) * 16);
+
+/**
+ * The axis tick size for this page's four charts — §2.4's **Q2, chart tick → `--text-micro`**.
+ *
+ * ONE declaration behind eight `fontSize={9}` props (retail-ui-simplification task 8.1). §2.4 says
+ * the edit for a chart tick "belongs in the primitive, not the page", and `ds/Chart.jsx`'s `TICK`
+ * and `AXIS_LABEL_STYLE` already read `token.text.micro` (task 3.2). These four charts cannot route
+ * through that primitive: `ds/Chart` takes `{ kind, data, xAxis, yAxis, series }` and exposes no
+ * children, so the price chart's `ReferenceLine` markers, the composed multi-series PnL and
+ * drawdown plots and this page's own `ChartTooltip` rows have nowhere to go — the same collection
+ * mismatch task 25.2 records above for `components/trading/*`. `TICK` itself is documented as
+ * "Exported for `Chart.test.jsx` only", so importing it here would contradict the primitive's own
+ * stated contract. What is left, and what §2.4's fallback asks for, is the token: the page names no
+ * size of its own, and the eight axes read one declaration that moves when `--text-micro` moves.
+ */
+const CHART_TICK_FONT_SIZE = token.text.micro;
 
 const panelStyle = {
   background: token.surface.raised,
@@ -787,13 +829,38 @@ const Figure = ({
           color: missing ? token.content.muted : (tone ? toneColour(tone) : token.content.primary),
           fontWeight: 900,
           fontFamily: 'monospace',
-          fontSize: missing ? 13 : 18,
+          // fontSize: missing ? 13 : 18 → --text-section (value, panel-level). ONE step, not two:
+          // both arms render the same element — the value this panel exists to report — and differ
+          // only in which string, the figure or the not-available marker plus its reason. §2.6: the
+          // 13 was a layout workaround wearing a typography mask, and it collapses to the VALUE's
+          // step rather than to 13 because Requirement 19.3 forbids shrinking a reason to reduce
+          // clutter. Q7's tie between `title` (14) and `section` (18) resolves up, as at `:3061`.
+          fontSize: token.text.section,
           lineHeight: 1.2,
-          wordBreak: 'break-all',
+          // `wordBreak: 'break-all'` REMOVED here. It was the standing evidence that the marker
+          // overflowed at 18 anyway, and breaking "No validated market event yet" mid-word is the
+          // same defect in another form — it shortens nothing and makes the reason harder to read
+          // than the clutter it was avoiding. The words wrap as prose now; the page root's
+          // inherited `overflowWrap: 'anywhere'` still breaks a genuinely unbreakable token, so
+          // nothing widens its panel. §2.5's yield is taken on the figures grid instead.
         }}
       >
         {missing ? absent : value}
-        {!missing && unit ? <span style={{ fontSize: 11, color: token.content.secondary, marginLeft: 4 }}>{unit}</span> : null}
+        {!missing && unit ? (
+          <span
+            style={{
+              // fontSize: 11 → --text-title (not a role — a unit takes ONE step below its figure's
+              // step and moves with it, §2.3). The figure above is `--text-section`, so this is
+              // `--text-title`; it was two steps below and is now one, because the pair expresses a
+              // relative contrast rather than an absolute size.
+              fontSize: token.text.title,
+              color: token.content.secondary,
+              marginLeft: 4,
+            }}
+          >
+            {unit}
+          </span>
+        ) : null}
       </div>
       {hint ? (
         <div
@@ -855,7 +922,19 @@ const PanelNotice = ({ tone, Icon, heading, testId, children, code = null, foote
         >
           {heading}
         </div>
-        <div style={{ color: token.content.secondary, fontSize: 11, fontFamily: 'monospace', lineHeight: 1.5, whiteSpace: 'normal' }}>
+        <div
+          style={{
+            color: token.content.secondary,
+            // fontSize: 11 → --text-body (sentence). This is the body of every one of Requirement
+            // 20.5's non-ready states — multi-clause prose that says what did not happen and what
+            // is not standing in for it. `whiteSpace: 'normal'` beside it already declared that it
+            // wraps, which is Q1's third test answered on the line itself.
+            fontSize: token.text.body,
+            fontFamily: 'monospace',
+            lineHeight: 1.5,
+            whiteSpace: 'normal',
+          }}
+        >
           {children}
         </div>
         {code ? (
@@ -914,7 +993,17 @@ const PanelBody = ({
 }) => {
   if (state === PANEL_IDLE) {
     return (
-      <div data-testid="panel-idle" style={{ padding: token.space['4'], color: token.content.muted, fontSize: 11, fontFamily: 'monospace' }}>
+      <div
+        data-testid="panel-idle"
+        style={{
+          padding: token.space['4'],
+          color: token.content.muted,
+          // fontSize: 11 → --text-body (sentence). Every `idleText` on this page is an instruction
+          // with a finite verb — "Select or start a session to populate this panel."
+          fontSize: token.text.body,
+          fontFamily: 'monospace',
+        }}
+      >
         {idleText}
       </div>
     );
@@ -927,7 +1016,17 @@ const PanelBody = ({
         aria-live="polite"
         data-testid="panel-loading"
         data-panel-state="panel-loading"
-        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: token.space['4'], color: token.content.secondary, fontSize: 11, fontFamily: 'monospace' }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: token.space['4'],
+          color: token.content.secondary,
+          // fontSize: 11 → --text-body (sentence). §2.6 groups this with the other panel state
+          // text: it is what the `aria-live` region announces, so it is read, not glanced at.
+          fontSize: token.text.body,
+          fontFamily: 'monospace',
+        }}
       >
         <Spinner size={14} />
         <span>Loading…</span>
@@ -937,7 +1036,19 @@ const PanelBody = ({
 
   if (state === PANEL_STATES.EMPTY) {
     return (
-      <div data-testid="panel-empty" data-panel-state="panel-empty" style={{ padding: token.space['4'], color: token.content.muted, fontSize: 11, fontFamily: 'monospace' }}>
+      <div
+        data-testid="panel-empty"
+        data-panel-state="panel-empty"
+        style={{
+          padding: token.space['4'],
+          color: token.content.muted,
+          // fontSize: 11 → --text-body (sentence). Every `emptyText` on this page names what has not
+          // been recorded yet and ends in a full stop — "No equity snapshot has been persisted for
+          // this session yet."
+          fontSize: token.text.body,
+          fontFamily: 'monospace',
+        }}
+      >
         {emptyText}
       </div>
     );
@@ -2462,11 +2573,32 @@ export default function PaperTrading() {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: token.space['3'], alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: token.space['4'] }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <h1 style={{ fontSize: '1.25rem', fontWeight: 900, color: token.content.primary, margin: 0, letterSpacing: '-0.02em' }}>
+            <h1
+              style={{
+                // fontSize: '1.25rem' → --text-page (heading, page `<h1>`). Q8, by nesting depth.
+                // This one is INVISIBLE to the ratchet — it is the tree's only off-scale rem and
+                // §3.6's first blind spot — so clearing it moves no number and is recorded here
+                // instead. It is also §2.2's recorded disagreement: nearest-step would have made the
+                // page title SHRINK to `--text-section`, and role governs.
+                fontSize: token.text.page,
+                fontWeight: 900,
+                color: token.content.primary,
+                margin: 0,
+                letterSpacing: '-0.02em',
+              }}
+            >
               Paper Trading
             </h1>
           </div>
-          <p style={{ fontSize: 11, color: token.content.muted, margin: '4px 0 0' }}>
+          <p
+            style={{
+              // fontSize: 11 → --text-body (sentence). Two sentences about what this page is and
+              // what it is not: "None of it reaches an exchange." is the one a trader must not miss.
+              fontSize: token.text.body,
+              color: token.content.muted,
+              margin: '4px 0 0',
+            }}
+          >
             Every figure on this page is produced by the paper simulator against validated market
             data. None of it reaches an exchange.
           </p>
@@ -2486,7 +2618,11 @@ export default function PaperTrading() {
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 6,
-                fontSize: 10,
+                // fontSize: 10 → --text-micro (chip). Q5: a bordered pill, one word, carrying a
+                // state rather than a measurement. `--text-micro` IS 10px, so nothing moves on
+                // screen — the value stops being a device-pixel number and starts scaling with the
+                // reader's browser font-size preference, which is Requirement 2.1's whole point.
+                fontSize: token.text.micro,
                 fontFamily: 'monospace',
                 fontWeight: 800,
                 letterSpacing: 0.6,
@@ -3058,7 +3194,17 @@ export default function PaperTrading() {
             emptyText="No market event has been recorded for this session yet."
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ color: token.content.primary, fontWeight: 900, fontSize: 16 }}>
+              <div
+                style={{
+                  color: token.content.primary,
+                  fontWeight: 900,
+                  // fontSize: 16 → --text-section (value, panel-level). Q7, and the ONE call site
+                  // §2.2 records as undefined under nearest-step: 16 is equidistant from `title`
+                  // (14) and `section` (18). The tie resolves UP, because Requirement 2.2 sets a
+                  // floor and no ceiling and Requirement 2.5 already decided that the layout yields.
+                  fontSize: token.text.section,
+                }}
+              >
                 {formatLatency(latestTick?.latencyMs) ?? NOT_REPORTED}
               </div>
               {/* fontSize: 9 → --text-body (sentence). §2.6 names this pair — this line and
@@ -3122,7 +3268,9 @@ export default function PaperTrading() {
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: 5,
-                    fontSize: 10,
+                    // fontSize: 10 → --text-micro (chip), as on the page-header indicator above and
+                    // for the same reason. The two say the same word and now read from one step.
+                    fontSize: token.text.micro,
                     fontFamily: 'monospace',
                     fontWeight: 800,
                     letterSpacing: 0.6,
@@ -3228,7 +3376,10 @@ export default function PaperTrading() {
             display: 'flex',
             alignItems: 'flex-start',
             gap: 8,
-            fontSize: 11,
+            // fontSize: 11 → --text-body (sentence). Three sentences drawing the distinction
+            // Requirements 18.10 and 28.5 exist for — that "not computed" is not "zero", and that a
+            // zero is not shown in its place. Not a word of it changed.
+            fontSize: token.text.body,
             color: statusToken('warning').fg,
           }}
         >
@@ -3247,7 +3398,15 @@ export default function PaperTrading() {
         data-single-column={String(singleColumn)}
         style={{
           display: 'grid',
-          gridTemplateColumns: gridColumns(200),
+          // §2.5 yield 3 — reduce the columns at this breakpoint. {@link Figure}'s value is now one
+          // step at `--text-section` for both arms, so the not-available marker and its reason
+          // render at 18px where they used to shrink to 13 and break mid-word. 200 → 220 fits one
+          // fewer track at the same width, which is the width the reason needs; it is the same floor
+          // the stop and reset report lists already take, and `responsiveGridColumns` still caps
+          // every track at `100%`, so no breakpoint gains an overflow. Yields 1 and 2 were not
+          // available here: nothing on that element declared `nowrap`, and the panel's padding is
+          // already `space['4']`.
+          gridTemplateColumns: gridColumns(220),
           gap: token.space['3'],
           marginBottom: token.space['3'],
           minWidth: 0,
@@ -3385,8 +3544,9 @@ export default function PaperTrading() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke={token.line.default} vertical={false} />
-              <XAxis dataKey="label" stroke={token.content.muted} fontSize={9} tickLine={false} minTickGap={chartAxis.tickGap} />
-              <YAxis stroke={token.content.muted} fontSize={9} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
+              {/* fontSize={9} ×2 → --text-micro (chart tick, Q2) — see {@link CHART_TICK_FONT_SIZE}. */}
+              <XAxis dataKey="label" stroke={token.content.muted} fontSize={CHART_TICK_FONT_SIZE} tickLine={false} minTickGap={chartAxis.tickGap} />
+              <YAxis stroke={token.content.muted} fontSize={CHART_TICK_FONT_SIZE} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
               <Tooltip
                 content={
                   <ChartTooltip
@@ -3459,8 +3619,9 @@ export default function PaperTrading() {
             <ResponsiveContainer width="100%" height={chartHeight}>
               <ComposedChart data={pnlChart}>
                 <CartesianGrid strokeDasharray="3 3" stroke={token.line.default} vertical={false} />
-                <XAxis dataKey="label" stroke={token.content.muted} fontSize={9} tickLine={false} minTickGap={chartAxis.tickGap} />
-                <YAxis stroke={token.content.muted} fontSize={9} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
+                {/* fontSize={9} ×2 → --text-micro (chart tick, Q2) — see {@link CHART_TICK_FONT_SIZE}. */}
+                <XAxis dataKey="label" stroke={token.content.muted} fontSize={CHART_TICK_FONT_SIZE} tickLine={false} minTickGap={chartAxis.tickGap} />
+                <YAxis stroke={token.content.muted} fontSize={CHART_TICK_FONT_SIZE} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
                 <Tooltip
                   content={
                     <ChartTooltip
@@ -3507,8 +3668,9 @@ export default function PaperTrading() {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke={token.line.default} vertical={false} />
-                <XAxis dataKey="label" stroke={token.content.muted} fontSize={9} tickLine={false} minTickGap={chartAxis.tickGap} />
-                <YAxis stroke={token.content.muted} fontSize={9} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
+                {/* fontSize={9} ×2 → --text-micro (chart tick, Q2) — see {@link CHART_TICK_FONT_SIZE}. */}
+                <XAxis dataKey="label" stroke={token.content.muted} fontSize={CHART_TICK_FONT_SIZE} tickLine={false} minTickGap={chartAxis.tickGap} />
+                <YAxis stroke={token.content.muted} fontSize={CHART_TICK_FONT_SIZE} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
                 <Tooltip
                   content={
                     <ChartTooltip
@@ -3545,8 +3707,9 @@ export default function PaperTrading() {
           <ResponsiveContainer width="100%" height={chartHeight + 40}>
             <ComposedChart data={priceChart}>
               <CartesianGrid strokeDasharray="3 3" stroke={token.line.default} vertical={false} />
-              <XAxis dataKey="label" stroke={token.content.muted} fontSize={9} tickLine={false} minTickGap={chartAxis.tickGap} />
-              <YAxis stroke={token.content.muted} fontSize={9} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
+              {/* fontSize={9} ×2 → --text-micro (chart tick, Q2) — see {@link CHART_TICK_FONT_SIZE}. */}
+              <XAxis dataKey="label" stroke={token.content.muted} fontSize={CHART_TICK_FONT_SIZE} tickLine={false} minTickGap={chartAxis.tickGap} />
+              <YAxis stroke={token.content.muted} fontSize={CHART_TICK_FONT_SIZE} tickLine={false} domain={['auto', 'auto']} width={chartAxis.axisWidth} />
               <Tooltip
                 content={
                   <ChartTooltip

@@ -239,6 +239,22 @@
  *                             whose genuine value on the free plan really is `0`, and an
  *                             invoice amount that put a dollar sign on every non-INR
  *                             invoice. The deleted entry below records all of it.
+ *   18 entries / 351 sizes  — `pages/ExchangeManager.jsx` (52) cleared by task 7.10.
+ *   17 entries / 322 sizes  — `pages/AuthPage.jsx` (29) cleared by task 7.11, the last
+ *                             of Requirement 4.5's ten page migrations.
+ *   16 entries / 271 sizes  — `pages/PaperTrading.jsx` (51) cleared by task 8.1, in
+ *                             THREE slices against one budget entry — 51 → 41 (the ten
+ *                             module-level style objects), → 18 (the twenty-three Q1
+ *                             sentence call sites), → 0 (the eight recharts axis props,
+ *                             the two chips, the seven 11px sentences and the 16px
+ *                             figure). The largest count in the tree after `Profile`,
+ *                             the only file carrying the `fontSize={9}` prop syntax,
+ *                             and the file every one of §2.6's worked examples is drawn
+ *                             from. Two constructs neither pattern can see were cleared
+ *                             with it and moved no number: `Figure`'s
+ *                             `missing ? 13 : 18` conditional, which collapsed to ONE
+ *                             step and took `wordBreak: 'break-all'` with it, and the
+ *                             `'1.25rem'` page `<h1>` of blind spot 1.
  *
  * **The "25 entries" figure in circulation is wrong; the number is 29.** It is
  * the arithmetic of 14 pages + §3.5's eleven `components/` additions, which
@@ -471,12 +487,16 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // the colour entry; the fifteen hand-mixed alphas, unusually, WERE counted, because
   // this page spells them as eight-digit hex rather than as a token with two digits
   // concatenated on.
-  // Seeded at 51 — 9×31, 11×10, 10×8, 8×1, 16×1 — **51, not Requirement 1.4's
+  // `pages/PaperTrading.jsx` was here, seeded at 51 — 9×31, 11×10, 10×8, 8×1, 16×1
+  // — **51, not Requirement 1.4's
   // 43**, §3.5's first correction. The eight extra are `fontSize={9}` recharts
   // axis props and this is the only file in `src/` carrying that syntax. 49 of
   // the 51 were at or below 11px and 31 were at 9px, which is Requirement
   // 2.3/2.4's subject: the page renders multi-sentence explanatory prose below
-  // the 11px floor.
+  // the 11px floor. **Task 8.1 took it to 0 across three slices and the entry is
+  // DELETED rather than set to 0** (Requirement 1.5) — held at zero from here by
+  // `accounts for every file that still carries an absolute size`, which fires on it
+  // as unbudgeted if a size comes back; re-adding this line is not the remedy.
   //
   // **Now 41 — 9×26, 10×7, 11×7, 16×1. Task 8.1 slice 1 of 3 took the TEN
   // module-level style objects, and only those.** `labelStyle`, `thStyle`,
@@ -510,12 +530,30 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // took yield 2, moving `gap: 6` onto `space['2']` now that their rows wrap inside a
   // 220px track. Columns were NOT reduced and nothing shrank.
   //
-  // **The entry stays**, because 18 is not zero. Slice 3 holds the rest: the eight
-  // `fontSize={9}` recharts axis props (all 8 of the remaining 9s), the two 10px and
-  // seven 11px call sites, `:2882`'s 16px latency figure, plus the two constructs the
-  // patterns cannot see — `:707`'s `missing ? 13 : 18` conditional and the
-  // `'1.25rem'` page `<h1>`, which blind spot 1 records.
-  'pages/PaperTrading.jsx': 18,
+  // **Now 0 — the entry is DELETED. Task 8.1 slice 3 of 3 took the last 18, plus the
+  // two constructs the patterns cannot see.** The eight `fontSize={9}` axis props are
+  // Q2 chart ticks at `--text-micro`, read from ONE page-level declaration
+  // (`CHART_TICK_FONT_SIZE`) because these four charts cannot consume `ds/Chart` — it
+  // exposes no children, so the price chart's markers and the composed plots have
+  // nowhere to go — and because `TICK` is documented as exported for its own test only.
+  // The two 10px reconnecting chips are Q5 at `--text-micro` (no visual change; the
+  // value stops being a device pixel). Six 11px panel-state sentences and the page
+  // subtitle are Q1 at `--text-body`. The 16px latency figure is §2.2's UNDEFINED case
+  // under nearest-step — equidistant from 14 and 18 — and resolves UP to
+  // `--text-section` as Q7 panel-level value.
+  //
+  // **`Figure`'s `missing ? 13 : 18` collapsed to ONE step, `--text-section`**, and
+  // `wordBreak: 'break-all'` went with it. Both arms render the same element and differ
+  // only in which string; the 13 existed because the not-available marker overflowed at
+  // 18, and the `break-all` was the standing evidence it overflowed anyway. Requirement
+  // 19.3 forbids shrinking a reason to reduce clutter and breaking one mid-word is the
+  // same defect in another form, so the layout yielded instead: §2.5 yield 3, the
+  // figures grid from `gridColumns(200)` to `gridColumns(220)`. The unit `<span>` beside
+  // that value moved to `--text-title` — one step below its figure, per §2.3, and it
+  // moved because the figure did. Neither the conditional nor the `'1.25rem'` page
+  // `<h1>` (Q8 → `--text-page`, blind spot 1) changed this count; both are cleared.
+  // No 11px table cell remained for slice 3 — `tdStyle` and `stackedValueStyle` were
+  // slice 1's, and Q6 → `--text-small` is recorded there.
   // 12×9, 11×6, 9×4, 13×4, 14×4, 32×4, 10×3, 15×2, 20×2, 18×1, 22×1, 36×1.
   // **This entry is deleted, not lowered, by task 9.2 (commit 23), which deletes
   // the file.** `Landing.jsx` carries its own `DEPRECATED / UNMOUNTED` header and
