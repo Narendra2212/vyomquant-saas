@@ -1158,7 +1158,11 @@ describe('dead-tailwind: THE_TWELVE_UTILITIES', () => {
     const used = THE_TWELVE_UTILITIES.filter((name) => USAGE.has(name));
     const missing = used.filter((name) => !RESOLVED.has(name));
 
-    expect(used.length).toBeGreaterThanOrEqual(7);
+    // Floor was 7 until the landing-component deletions removed
+    // `terminal-frame`'s last call site (it was used only by AICopilot,
+    // BacktestingDemo, PaperTradingDemo, PortfolioAnalytics and
+    // StrategyBuilderDemo, all deleted). Lowered by exactly one to match.
+    expect(used.length).toBeGreaterThanOrEqual(6);
     expect(
       missing,
       `These index.css @utility classes have call sites in src/ but produce no CSS:\n`
@@ -1172,10 +1176,19 @@ describe('dead-tailwind: THE_TWELVE_UTILITIES', () => {
     // drift unnoticed, and reported in the docblock: `scrollbar-hide` and
     // `badge-status` are dead definitions awaiting a call site or deletion, while
     // `glass-nav`, `btn-gold` and `card-elevated` are in the shipped bundle only
-    // because a test file's comment names them.
+    // because a test file's comment names them. `terminal-frame` joined them
+    // when the landing-component deletions removed its last call site; its
+    // @utility block in index.css is now a dead definition too.
     const unused = THE_TWELVE_UTILITIES.filter((name) => !USAGE.has(name));
     expect(unused.sort()).toEqual(
-      ['badge-status', 'btn-gold', 'card-elevated', 'glass-nav', 'scrollbar-hide'].sort(),
+      [
+        'badge-status',
+        'btn-gold',
+        'card-elevated',
+        'glass-nav',
+        'scrollbar-hide',
+        'terminal-frame',
+      ].sort(),
     );
     expect(RESOLVED.has('scrollbar-hide')).toBe(false);
     expect(RESOLVED.has('badge-status')).toBe(false);
