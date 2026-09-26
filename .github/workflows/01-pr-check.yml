@@ -123,13 +123,23 @@ jobs:
   frontend-tests:
     name: Frontend Build & Unit Tests
     runs-on: ubuntu-latest
-    # Budget: the suite runs its 53 files sequentially on purpose (vitest.config.js sets
-    # fileParallelism: false / maxWorkers: 1, because parallel forks workers fail their
-    # startup handshake on constrained hosts and whole files then silently never run), which
-    # costs roughly 14 minutes of wall clock. Add `npm ci` on a cold cache and `vite build`
-    # and an observed run is about 20 minutes. 40 gives ~2x headroom for a slow runner while
-    # still killing a genuine hang far short of the 360-minute default.
-    timeout-minutes: 40
+    # Budget: re-measured for task 4.7 against the suite as it exists today, not the 53-file
+    # baseline this comment used to cite. vitest.config.js's own include glob now matches 150
+    # files (145 under tests/unit/, 5 under src/**/__tests__/), still run sequentially on
+    # purpose (fileParallelism: false / maxWorkers: 1 -- parallel fork workers fail their
+    # startup handshake on constrained hosts and whole files then silently never run).
+    # Measured: the first 50 of those 150 files (`node node_modules/vitest/vitest.mjs run
+    # <paths>`, this pool config) took 409s per Vitest's own reported duration (~420s
+    # wall-clock including process start/stop). The other 100 files were not run in this
+    # measurement pass; linearly extrapolating the measured batch across all 150 puts the
+    # test step alone at roughly 20-25 minutes, before `npm ci`, ESLint, and `vite build`
+    # are added ahead of it. 40 minutes no longer carries the headroom the original 53-file/
+    # 14-minute estimate assumed. Raised to 60: comfortably above the ~20-25 minute
+    # extrapolated test-step floor plus the preceding install/lint/build steps, while
+    # remaining far short of the 360-minute default so a genuine hang still gets killed.
+    # This extrapolation is not a full 150-file timing; if the ceiling is tightened further,
+    # measure the remaining 100 files directly rather than tightening from this estimate.
+    timeout-minutes: 60
 
     steps:
       - name: Checkout code
