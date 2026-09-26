@@ -283,6 +283,38 @@ class ResourceSampler:
 
     ``psutil`` if it is installed, nothing if it is not — an absent sampler leaves
     ``cpu_percent_*`` and ``rss_*`` ``None`` rather than reporting a zero.
+
+    THIS IS *NOT* REQUIREMENT 1.42/2.42's "HEAP GROWTH" MEASUREMENT
+    -----------------------------------------------------------------
+    ``rss_start``/``rss_end`` are this **Python backend process's** resident set size,
+    read via ``psutil.Process(os.getpid()).memory_info().rss``. Requirement 1.42/2.42's
+    "heap growth" clause (task 12.12, production-launch-hardening) is about a different
+    process entirely: the **browser tab's JS heap**, growing or not growing over an
+    extended ``algo22-terminal`` session — a leaked WebSocket handler, an accumulating
+    subscription, a retained closure per poll. Nothing in this file, and nothing in
+    ``tests/perf/test_strategy_builder_budgets.py`` (task 12.12's other named file),
+    measures that, and nothing here should be read as a stand-in for it: this sampler's
+    number moving is a fact about a Python process that never runs a browser tab, one that
+    would report a flat, uninteresting line across a whole browser session regardless of
+    what the frontend's heap was doing.
+
+    **BLOCKED, gap named — Requirement 1.42/2.42's heap-growth measurement needs a real
+    browser and is recorded here as MANUAL rather than simulated.** jsdom (the DOM this
+    repository's vitest suite runs the frontend against) has no heap of its own to grow or
+    leak against: it does not model a browser process's memory retention, a real
+    WebSocket's buffered frames, or a real tab's garbage collector, so a number produced by
+    instrumenting jsdom would describe jsdom's own incidental allocation, not the
+    application's. Manufacturing a heap-growth figure from it would be exactly the kind of
+    fabricated measurement this file's own header (`observe_ingest_processing_cost`,
+    `refuse_if_mocked`) already refuses to do for a mocked feed, applied to a different
+    subject. **The method that DOES measure it, recorded rather than run**: open the built
+    ``algo22-terminal`` bundle in Chrome DevTools, take a heap snapshot at session start,
+    drive a long editing/monitoring session (the shape ``design.md``'s workflows describe —
+    open the builder, edit a graph repeatedly, leave a dashboard or live-trading page open
+    and polling for an extended period), take a second heap snapshot, and compare
+    retained-size deltas and detached-node counts between the two. That is a manual
+    measurement taken in a browser, per the task's own instruction, and it is recorded here
+    as the method rather than as a number this environment did not produce.
     """
 
     def __init__(self) -> None:

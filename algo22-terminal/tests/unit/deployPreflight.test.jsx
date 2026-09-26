@@ -626,6 +626,71 @@ describe('useDeployPreflight', () => {
   it('polls at Requirement 13.6’s interval by default', () => {
     expect(PREFLIGHT_POLL_INTERVAL_MS).toBe(2000);
   });
+
+  /*
+   * production-launch-hardening task 12.12 / Requirements 1.42, 2.42 — "polling intervals"
+   * measured, not merely asserted as a constant.
+   *
+   * The test directly above pins the NUMBER (2000). It does not prove the hook actually
+   * asks the server roughly once per that many milliseconds when time genuinely passes —
+   * a poll implementation that ignored `intervalMs` entirely and fired on every tick, or
+   * one that silently stopped rescheduling after the first answer, would still pass a test
+   * that only reads the constant off the module. The two tests above that DO exercise
+   * repeat polling (`disables again when a later poll reports...`) use a real clock with
+   * `FAST_POLL_MS = 10` and `waitFor`, which proves "it polls more than once" but not "it
+   * polls at roughly the configured rate" — `waitFor` resolves as soon as the assertion
+   * passes, at whatever cadence the real event loop happens to deliver, so it cannot
+   * distinguish 10 ms polling from 3 ms polling.
+   *
+   * This test closes that gap with a frozen, deterministic clock: `trading-lifecycle-
+   * integration/design.md`'s own words for this surface are "a 2-second poll of GET
+   * .../deploy/preflight while the modal is open" (§ Deployment configuration workflow),
+   * so what is measured is exactly that claim — advance simulated time by whole multiples
+   * of the design's 2 s and count how many times the fetcher was actually invoked, rather
+   * than trusting that the constant it is built from means what it says.
+   *
+   * `useDeployPreflight` reschedules with `setTimeout(ask, intervalMs)` inside `ask`'s own
+   * `finally` (see the hook's source) — a chain of one-shot timers armed only after the
+   * previous request resolves, not a single `setInterval` ticking independently of
+   * response time. So the fetcher's own promise has to be allowed to settle at each step
+   * (`await vi.advanceTimersByTimeAsync`, not the synchronous `advanceTimersByTime`) or the
+   * chain never re-arms and the count would read artificially low regardless of the clock.
+   */
+  it('asks the server roughly once per design.md’s 2-second poll, measured on a simulated clock', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = vi.fn().mockResolvedValue(allPassed());
+      renderHook(() =>
+        useDeployPreflight({
+          strategyId: 's-1',
+          version: '1.2',
+          intervalMs: PREFLIGHT_POLL_INTERVAL_MS,
+          fetcher,
+        }),
+      );
+
+      // The immediate ask on mount, before any simulated time has passed at all.
+      await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+
+      // Five whole poll windows at the design's own interval: 5 more requests, one per
+      // window, and not a sixth from any window's remainder.
+      const WINDOWS = 5;
+      for (let window = 1; window <= WINDOWS; window += 1) {
+        await vi.advanceTimersByTimeAsync(PREFLIGHT_POLL_INTERVAL_MS);
+        expect(fetcher).toHaveBeenCalledTimes(1 + window);
+      }
+
+      // The rate itself, not just the count: total simulated time divided by total
+      // requests reproduces the configured interval, which is what "polls at the
+      // interval" means as a measurement rather than as a restated constant.
+      const totalRequests = fetcher.mock.calls.length;
+      const totalSimulatedMs = WINDOWS * PREFLIGHT_POLL_INTERVAL_MS;
+      const measuredIntervalMs = totalSimulatedMs / (totalRequests - 1);
+      expect(measuredIntervalMs).toBe(PREFLIGHT_POLL_INTERVAL_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════

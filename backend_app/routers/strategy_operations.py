@@ -1727,6 +1727,11 @@ async def update_backtest_results(request: Request,
         backtest_service = await get_backtest_service()
         
         results = body.get("results", {})
+        if not isinstance(results, dict):
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "INVALID_RESULTS_SHAPE", "message": "results must be a JSON object"}
+            )
         updated_backtest = await backtest_service.update_backtest_results(
             user=user,
             backtest_id=backtest_id,
@@ -3531,6 +3536,8 @@ async def recover_deployment(request: Request,
         )
         
         return recovery_result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error recovering deployment for user {user['id']}: {e}")
         raise HTTPException(
@@ -3565,6 +3572,8 @@ async def recover_signals(request: Request,
         )
         
         return recovery_result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error recovering signals for user {user['id']}: {e}")
         raise HTTPException(

@@ -59,6 +59,58 @@ def _safe_stat(stats, key: str, default=None):
         return default
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  THE PAYLOAD'S DECLARED KEY SET  (task 7.1, Requirements 2.7, 2.8)
+#
+#  Every key `run_backtest_async` puts on its `results` dict, on EITHER engine
+#  path, hand-transcribed from the two `results = {...}` literals and the
+#  `results["<key>"] = ...` statements that follow them:
+#
+#    primary (vectorbt) path   - the dict literal at :503-523, plus the three
+#                                 keys added after it: :565 (`trades`),
+#                                 :601-602 (`winning_trades`, `losing_trades`),
+#                                 :632 (`equity_curve`)
+#    fallback (no-vectorbt)     - the dict literal at :242-260, plus the two
+#    path                        keys added after it: :262 (`equity_curve`),
+#                                 :263 (`trades`)
+#
+#  Both literals were re-read line by line against a live run of each path
+#  (see `tests/test_backtest_key_contract.py`'s `engine_run` fixture) rather
+#  than guessed, and the two paths turn out to emit the IDENTICAL 16 keys -
+#  task 7.6 gave the fallback path's `winning_trades`/`losing_trades` split a
+#  matching producer on the primary path too, so there is no longer a
+#  path-dependent gap here to declare separately. One frozenset covers both.
+#
+#  This is deliberately NOT derived by calling `.keys()` on a dict built at
+#  import time: building one would mean re-running the compute path (or
+#  faking one), which is a second implementation of the thing being
+#  declared. A hand-transcription is instead kept honest by
+#  `tests/test_backtest_key_contract.py`'s per-path `engine_run` fixture,
+#  which asserts a REAL run's key set equals this frozenset exactly (not a
+#  subset) - so a key added to, or removed from, either literal without a
+#  matching edit here fails that test immediately.
+BACKTEST_PAYLOAD_EMITTED_KEYS = frozenset(
+    {
+        "total_return_pct",
+        "final_equity",
+        "total_pnl",
+        "win_rate_pct",
+        "max_drawdown_pct",
+        "total_trades",
+        "winning_trades",
+        "losing_trades",
+        "profit_factor",
+        "sharpe_ratio",
+        "sortino_ratio",
+        "calmar_ratio",
+        "total_fees_paid",
+        "expectancy",
+        "equity_curve",
+        "trades",
+    }
+)
+
+
 class BacktestEngine:
 
     def __init__(

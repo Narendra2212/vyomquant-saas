@@ -624,6 +624,13 @@ UNREAD_TRANSPORT_SITES = {
         "the page's own `authedFetch` wrapper, `fetch(`${API_BASE}${path}`, …)`. Its "
         "callers are read as authedFetch(...) sites and carry the path."
     ),
+    "algo22-terminal/src/websocketClient.js|fetch": (
+        "task 8.2's ticket mint, `fetch(WS_TICKET_URL, …)` where `WS_TICKET_URL` is "
+        "`` `${CONFIG.apiBaseUrl}/api/auth/ws-ticket` `` (websocketClient.js:51) — a "
+        "template literal built from a config constant, not a literal path at the call "
+        "site. The route is real: `POST /api/auth/ws-ticket` in `backend_app/routers/"
+        "auth.py`, confirmed by direct read during task 8.2's implementation."
+    ),
 }
 
 # Floors on how much the sweep must still be reading. Floors rather than equalities:

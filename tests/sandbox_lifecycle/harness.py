@@ -217,6 +217,44 @@ OWNED_PAPER_SNAPSHOT_ID = "b1d4c8e0-1111-4a00-8000-000000000012"
 MISSING_PAPER_SESSION_ID = "f7a30b62-2222-4a00-8000-000000000006"
 MISSING_PAPER_ORDER_ID = "f7a30b62-2222-4a00-8000-000000000008"
 
+# ── task 12.4's ADDITIONS: the two new resource types that ARE sandbox-servable ──────────
+#
+# Requirement 20.4/1.14's ten-resource extension names credentials, billing, subscriptions,
+# listings, orders, positions, portfolios, traces, paper accounts and invoices. Of those,
+# only two add anything this harness can actually probe - see
+# ``test_cross_tenant_ownership_matrix.py``'s module docstring for the other eight's named
+# blockers. Both new identifiers follow :data:`OWNED_STRATEGY_ID`'s own convention: fixed,
+# never minted, and (where the field is echoed) the same length as its "missing" pair.
+#
+# ``exchange_keys`` is scoped by ``(user_id, exchange_id)`` rather than by a standalone row
+# id - ``routers/exchange.py``'s delete filters exactly that compound pair - so the
+# "identifier" a credentials probe needs is a VENUE LABEL, not a fourth UUID.
+#
+# NOT :data:`SANDBOX_VENUE` ("binance", 7 characters). ``test_no_probed_identifier_is_short_
+# enough_to_collide`` requires every identifier that differs between the owned and missing
+# mappings to be at least 16 characters, for exactly the collision hazard that test's own
+# docstring records: a short needle applied to a whole response body can match inside an
+# unrelated per-request token. "binance" is also load-bearing for the deterministic-sandbox
+# chain (Requirement 26) via ``seed_owner_rows``, seeded into every test that uses this
+# harness - changing its length is out of scope for this addition. So this credential is a
+# SECOND, dedicated ``exchange_keys`` row, naming a fictitious venue of the required length
+# that no other part of this harness reads.
+OWNED_EXCHANGE_ID = "sandbox-owned-venue-01"
+
+#: A venue label of the same length as :data:`OWNED_EXCHANGE_ID` that no ``exchange_keys``
+#: row anywhere names for anybody - the same discipline the five UUID pairs above follow,
+#: for the same reason: an answer that echoes the CALLER-SUPPLIED identifier back (neither
+#: probe does, but the discipline is applied uniformly rather than case-by-case) must not
+#: differ in ``Content-Length`` for a reason that has nothing to do with tenancy.
+MISSING_EXCHANGE_ID = "sandbox-missing-venu01"
+
+#: The owner's one ``billing_invoices`` row (migration 006's columns), for the ID-LESS
+#: collection pattern ``GET /api/billing/invoices`` needs: there is no ``{invoice_id}`` path
+#: in this surface at all (grepped: only the listing exists), so what Requirement 20.2 asks
+#: is the same question :data:`ID_LESS_COLLECTIONS` already asks of ``GET /api/strategies``
+#: - does a stranger's identical request change depending on whether this row exists.
+OWNED_INVOICE_ID = "b1d4c8e0-1111-4a00-8000-000000000013"
+
 #: Every table a Paper_Session owns rows in, as one list. The write-nothing assertion and the
 #: unobservable-collection assertion both read it, so "the Paper_Session's rows" has ONE
 #: definition in this package and a table added to 009 later is added in one place.
@@ -1181,6 +1219,43 @@ class SandboxWorld:
                     "idempotency_key": "cross-tenant-seeded-signal",
                     "generated_at": moment,
                     "created_at": moment,
+                }
+            ],
+        )
+
+        # A SECOND ``exchange_keys`` row, for the credentials probes (task 12.4). Additive to
+        # the one ``seed_owner_rows`` already writes at :data:`SANDBOX_EXCHANGE_ACCOUNT_ID`/
+        # :data:`SANDBOX_VENUE` - that row stays exactly as every other test already reads it.
+        # This one exists so ``exchange_id`` has a collision-safe (>=16 character) label to
+        # probe, per :data:`OWNED_EXCHANGE_ID`'s own docstring.
+        self.db.seed(
+            "exchange_keys",
+            [
+                {
+                    "id": "b1d4c8e0-1111-4a00-8000-000000000014",
+                    "user_id": owner,
+                    "exchange_id": OWNED_EXCHANGE_ID,
+                    "label": "sandbox credentials probe account",
+                    "is_active": True,
+                    "updated_at": moment,
+                }
+            ],
+        )
+        self.db.seed(
+            "billing_invoices",
+            [
+                {
+                    "id": OWNED_INVOICE_ID,
+                    "user_id": owner,
+                    "amount": 29.00,
+                    "currency": "USD",
+                    "status": "paid",
+                    "invoice_url": None,
+                    "invoice_pdf": None,
+                    "period_start": moment,
+                    "period_end": moment,
+                    "created_at": moment,
+                    "updated_at": moment,
                 }
             ],
         )

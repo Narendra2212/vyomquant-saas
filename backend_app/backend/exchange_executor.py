@@ -557,6 +557,21 @@ class BaseExchangeExecutor(ABC):
         self._current_execution_id = None
         self._current_validation_token = None
 
+    def _redact_credentials(self, text: str) -> str:
+        """Strip this instance's own key/secret/password values out of *text*.
+
+        STEP 6.10 says keys are "passed to CCXT, never logged" - true for every log
+        call that names ``self._api_key`` / ``self._api_secret`` / ``self._password``
+        directly. It does not cover a failure branch that logs ``str(exception)``: if
+        CCXT, a network library, or the venue itself ever echoes the credential it was
+        given back into an error message, that message reaches the log verbatim unless
+        it is redacted first. Call this on any exception text before it is logged.
+        """
+        for value in (self._api_key, self._api_secret, self._password):
+            if value:
+                text = text.replace(value, "[REDACTED]")
+        return text
+
     def verify_and_consume_token(self, symbol: str, size: Decimal):
         """Verify the validation token to prevent direct bypass of UnifiedExecutionEngine."""
         from backend_app.core.global_safety import verify_validation_token
@@ -627,28 +642,38 @@ class BaseExchangeExecutor(ABC):
     
     # STEP 6.6: Error handling wrapper
     def _handle_ccxt_error(self, error: Exception) -> ExchangeError:
-        """Convert CCXT error to our error type."""
-        error_str = str(error).lower()
+        """Convert CCXT error to our error type.
+
+        STEP 6.10: *error* originates from CCXT / the venue / an underlying network
+        library, none of which this code controls - if any of them ever echoes the
+        credential it was given back into an exception message (as an authentication
+        failure plausibly would), that message must not propagate into
+        ``ExchangeError.message`` unredacted, since every caller logs it and it can
+        reach an API response body. Redact this instance's own key/secret/password
+        values before classifying or storing the message anywhere below.
+        """
+        redacted = self._redact_credentials(str(error))
+        error_str = redacted.lower()
         
         # Classify error
         if "insufficient" in error_str or "balance" in error_str:
-            return InsufficientFundsError(str(error))
+            return InsufficientFundsError(redacted)
         
         if "rate limit" in error_str or "too many requests" in error_str:
-            return RateLimitError(str(error), retry_after=60)
+            return RateLimitError(redacted, retry_after=60)
         
         if "symbol" in error_str or "market" in error_str:
-            return InvalidSymbolError(str(error))
+            return InvalidSymbolError(redacted)
         
         if "network" in error_str or "timeout" in error_str or "connection" in error_str:
-            return NetworkError(str(error))
+            return NetworkError(redacted)
         
         if "authentication" in error_str or "apikey" in error_str or "key" in error_str:
-            return AuthenticationError(str(error))
+            return AuthenticationError(redacted)
         
         # Generic error - check if retryable
         retryable = any(word in error_str for word in ["timeout", "network", "temporarily", "busy"])
-        return ExchangeError(str(error), retryable=retryable)
+        return ExchangeError(redacted, retryable=retryable)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -696,8 +721,12 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             self._connected = True
             logger.info(f"Connected to {self.exchange_id} | Sandbox: {self.sandbox}")
         except Exception as e:
-            logger.error(f"Failed to connect to {self.exchange_id}: {e}")
-            raise self._handle_ccxt_error(e)
+            # STEP 6.10: redact before logging - see _redact_credentials. The keys are
+            # never logged directly, but the underlying library's exception text is not
+            # under this code's control and may echo a credential it was given.
+            classified = self._handle_ccxt_error(e)
+            logger.error(f"Failed to connect to {self.exchange_id}: {classified.message}")
+            raise classified
     
     async def disconnect(self):
         """Disconnect from exchange."""

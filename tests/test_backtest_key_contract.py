@@ -122,6 +122,7 @@ console default codec raises `UnicodeEncodeError` on them.
 
 import asyncio
 import contextlib
+import json
 import math
 import os
 import sys
@@ -135,7 +136,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from backend_app.backend import backtest_service as bs
 from backend_app.backend import backtest_runtime as rt
 from backend_app.backend.backtest_runtime import BacktestRuntime
-from backend_app.backend.backtesting_engine import BacktestEngine
+from backend_app.backend.backtesting_engine import (
+    BACKTEST_PAYLOAD_EMITTED_KEYS,
+    BacktestEngine,
+)
 
 # The harness this file reuses rather than re-standing-up. See HARNESS above.
 from tests.test_backtest_evidence_columns_regression import (  # noqa: E402
@@ -179,6 +183,14 @@ WRITER_COLUMN_SOURCE_KEYS = {
 #: the one engine key `total_return_pct`, and a repeated parametrisation would report the same
 #: key twice rather than reporting two columns.
 READ_KEYS = tuple(dict.fromkeys(WRITER_COLUMN_SOURCE_KEYS.values()))
+
+#: TASK 7.1. The shared fixture: one file, read by both pytest (here, directly) and vitest
+#: (`algo22-terminal/tests/unit/pages/backtesterNetPnl.test.jsx`, through `node:fs` at the same
+#: repo-relative path). Emitted from :data:`BACKTEST_PAYLOAD_EMITTED_KEYS` rather than
+#: hand-written - see section 8 below for the test that keeps the two from drifting apart.
+BACKTEST_PAYLOAD_KEYS_FIXTURE = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "fixtures", "backtest_payload_keys.json")
+)
 
 #: The four columns Requirements 1.7 and 1.8 name, each against the key task 7.8 declared as its
 #: producer. Section 1 asserts every member of :data:`READ_KEYS`; these four are parametrised by
@@ -1330,3 +1342,120 @@ async def test_preserved_non_owned_and_nonexistent_are_indistinguishable(backtes
         f"{why}: the foreign row was written to. This is the cross-tenant write Requirement "
         f"1.14 names as the precedent for the whole IDOR sweep."
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 8. THE SHARED FIXTURE - TASK 7.1's DECLARATION AND TASK 7.2's SUBSET CHECK
+#    (Requirements 2.7, 2.8)
+#
+#    Section 1 above asserts the contract per read-key, against a live run's payload. This
+#    section asserts the DECLARATION the fixture is built from is accurate (7.1) and that the
+#    writer's read-key set is a subset of that declaration (7.2) - the same shape as section
+#    1's instrument, but against the frozenset/JSON pair rather than a fresh run, so a reviewer
+#    can see the contract holds by inspecting a file instead of executing VectorBT.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def test_the_declared_key_set_matches_a_real_run_on_both_paths(engine_run):
+    """TASK 7.1. `BACKTEST_PAYLOAD_EMITTED_KEYS` is not a guess - it equals what a real run emits.
+
+    Asserted as EQUALITY, not subset, and on both engine paths via the `engine_run` fixture
+    (Requirement 2.7's "on both engine paths"). A subset check would let the declaration grow
+    stale by *listing more than the engine emits* without ever going red; equality catches a
+    key added to, or removed from, either `results = {...}` literal (or the `results["<key>"]
+    = ...` statements that follow it) without a matching edit to the frozenset beside it.
+    """
+    path, results, _curve = engine_run
+    assert set(results.keys()) == BACKTEST_PAYLOAD_EMITTED_KEYS, (
+        f"{path} path emitted {sorted(results.keys())}, but "
+        f"BACKTEST_PAYLOAD_EMITTED_KEYS declares {sorted(BACKTEST_PAYLOAD_EMITTED_KEYS)}. "
+        f"The frozenset beside the engine's results dict literals has drifted from what the "
+        f"engine actually emits."
+    )
+
+
+def test_the_json_fixture_matches_the_python_declaration():
+    """TASK 7.1. The JSON the frontend reads cannot go stale without this test noticing.
+
+    `tests/fixtures/backtest_payload_keys.json` is emitted FROM
+    `BACKTEST_PAYLOAD_EMITTED_KEYS` (a one-off dump, not hand-typed), so the Python frozenset
+    stays the single source of truth Requirement 2.7/2.8 asks for. This test is what makes that
+    true rather than merely asserted in a comment: if a future edit changes the frozenset and
+    forgets to re-emit the JSON, this goes red on the very next run, on either side of the
+    stack - vitest reads the same file and would otherwise render (or fail to render) against a
+    stale key list with nothing to say why.
+    """
+    with open(BACKTEST_PAYLOAD_KEYS_FIXTURE, "r", encoding="utf-8") as f:
+        fixture = json.load(f)
+
+    fixture_keys = set(fixture["emitted_keys"])
+    assert fixture_keys == BACKTEST_PAYLOAD_EMITTED_KEYS, (
+        f"tests/fixtures/backtest_payload_keys.json declares {sorted(fixture_keys)}; "
+        f"backtesting_engine.BACKTEST_PAYLOAD_EMITTED_KEYS declares "
+        f"{sorted(BACKTEST_PAYLOAD_EMITTED_KEYS)}. Re-emit the fixture from the Python "
+        f"declaration; it must not be hand-edited."
+    )
+
+
+def test_the_fixture_has_no_duplicate_or_malformed_keys():
+    """Guard on the fixture's own shape, so a hand-edit that corrupts it fails here first.
+
+    Not a defect-measurement - a harness sanity check on the artifact the frontend test in
+    task 7.3 trusts unconditionally.
+    """
+    with open(BACKTEST_PAYLOAD_KEYS_FIXTURE, "r", encoding="utf-8") as f:
+        fixture = json.load(f)
+
+    keys = fixture["emitted_keys"]
+    assert isinstance(keys, list) and keys, "emitted_keys must be a non-empty list"
+    assert len(keys) == len(set(keys)), f"emitted_keys has duplicates: {keys}"
+    assert all(isinstance(k, str) and k for k in keys), f"emitted_keys has a non-string entry: {keys}"
+
+
+@pytest.mark.parametrize("read_key", READ_KEYS)
+def test_the_writers_read_key_set_is_a_subset_of_the_fixtures_declared_key_set(read_key):
+    """TASK 7.2. The subset check the task asks for, against the FIXTURE rather than a fresh run.
+
+    Section 1's `test_every_key_the_writer_reads_is_a_key_the_engine_emits` already asserts
+    this against a live `engine_run` payload, per column, on both paths - that assertion is not
+    weakened, altered, or duplicated here. This is the SAME claim measured against the
+    declaration task 7.1 produced instead of against a fresh simulation, which is what the task
+    text asks for ("using the fixture from 7.1 rather than a re-derived list") and what proves
+    the fixture and section 1's live-run instrument agree: if this test and section 1's
+    disagreed, the fixture would be wrong even though a live run looked fine.
+
+    Read together with `test_the_declared_key_set_matches_a_real_run_on_both_paths` above,
+    this is transitively the same claim as section 1's - the fixture equals a real run's key
+    set, and the writer's read-key set is checked against the fixture - so nothing here is a
+    weaker restatement of an existing passing case; it is the missing link between "the
+    declaration is accurate" and "the declaration is what the writer's contract is checked
+    against". The same known-missing keys that make section 1 fail (`execution_time_seconds`,
+    `monthly_returns`, `daily_returns` - located at the runtime hop rather than the engine, per
+    section 1's own docstring) fail here for the identical reason and are not a new finding.
+    """
+    assert read_key in BACKTEST_PAYLOAD_EMITTED_KEYS, (
+        f"update_backtest_results reads results.get({read_key!r}), and the task 7.1 fixture "
+        f"(backtest_payload_keys.json / BACKTEST_PAYLOAD_EMITTED_KEYS) does not declare it as "
+        f"an emitted key. Declared keys: {sorted(BACKTEST_PAYLOAD_EMITTED_KEYS)}."
+    )
+
+
+def test_total_pnl_is_declared_in_the_fixture(runtime_payload):
+    """TASK 7.2's explicit callout (1.10): `total_pnl` is numeric on a completed backtest.
+
+    Section 4 above (`test_a_completed_backtest_yields_a_numeric_total_pnl`) already asserts
+    this against the live runtime payload; this restates it against the fixture, so 7.2's
+    explicit mention of `total_pnl` has a case here rather than being implied only by
+    membership in `READ_KEYS`.
+
+    Deliberately NOT asserted against the persisted row: `total_pnl` is not a key of
+    `RESULT_COLUMN_SOURCE_KEYS` / `RESULT_JSON_COLUMN_SOURCE_KEYS` (task 7.8's writer mapping,
+    out of this task's scope), so no `strategy_backtests` column currently holds it. That is a
+    fact about the writer's column mapping, not about the payload contract this section
+    measures, and asserting it here would be a false claim about a hop 7.1-7.3 do not touch.
+    """
+    assert "total_pnl" in BACKTEST_PAYLOAD_EMITTED_KEYS
+    payload, _sb = runtime_payload
+    assert isinstance(payload["total_pnl"], (int, float)) and not isinstance(
+        payload["total_pnl"], bool
+    ), f"total_pnl is {payload['total_pnl']!r} in the runtime payload"

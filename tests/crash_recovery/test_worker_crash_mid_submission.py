@@ -41,6 +41,70 @@ NOT TESTED HERE
     interruption. Submission routing, the transition gate's own rules and the
     idempotency key's determinism belong to tasks 10.2, 1.1 and 9.1 and are covered by
     their suites.
+
+TASK 12.7 - SCOPE RECORD (Requirements 1.17, 2.17)
+    Requirement 1.17 and Requirement 2.17 ask whether the platform can be shown to process
+    a signal exactly once across a worker restart that happens mid-signal, never moving a
+    signal's recorded state backwards, and never appending more than one reconciliation
+    marker no matter how many times the worker restarts. Task 12.7 does not add a test for
+    this: this module already is that test, and this record names which test functions,
+    already present above, establish each of the three claims - so a future reader
+    checking 1.17 against this tree finds the answer instead of re-deriving it.
+
+    (1) Exactly-once processing across a worker restart mid-signal.
+        The module-wide invariant is ``assert_crash_recovery_invariants`` from
+        ``harness.py`` - at most one order per signal, the persisted state matching the
+        exchange's own answer, no duplicate or orphaned record - and it is called from
+        nearly every test below. The claim's sharpest, most direct demonstrations are:
+          - ``test_recovery_reconciles_the_record_to_the_exchanges_own_answer`` - the
+            crash-then-restart-then-reconcile path itself, asserting the recovered order
+            state, that resubmission is refused, and that the venue was asked exactly once
+            by the signal's own idempotency key.
+          - ``test_the_venue_itself_refuses_a_second_order_under_the_same_key`` - the
+            outermost of the three defences behind "at most one order", exercised with the
+            inner two (the Redis lock, the durable unique index) deliberately removed.
+          - ``test_the_durable_unique_index_refuses_a_second_row_for_the_same_key`` - the
+            database-level backstop for the same guarantee, exercised directly against
+            ``uq_signals_idempotency_key``.
+          - ``test_a_resumed_worker_that_submits_anyway_still_creates_no_second_order`` -
+            defence in depth: even a caller that ignores the recovery outcome and
+            resubmits is stopped before the venue is reached a second time.
+          - ``test_the_permitted_resubmission_produces_exactly_one_order`` - the one case
+            where resubmission IS permitted (crash before the exchange call), showing that
+            "exactly once" also holds on that branch, not just the refusal branch.
+          - ``test_a_transient_outage_is_retried_and_then_reconciled`` and
+            ``test_the_sweep_reports_per_signal_and_one_failure_does_not_abort_the_rest``
+            extend the same claim across retried lookups and across a plural, per-signal
+            sweep.
+
+    (2) Recovery never moves a state backwards.
+        - ``test_recovery_never_moves_a_state_backwards`` is this claim by name: the
+          record is brought forward to ``EXECUTED``, the exchange is then made to answer
+          with a stale, earlier picture, and nothing is written - ``RECOVERY_ALREADY_CONSISTENT``
+          is returned and the transition count is unchanged, because ``lifecycle_path``
+          finds no forward route rather than the code remembering to compare timestamps.
+        - ``test_recovery_does_nothing_to_a_signal_already_in_a_terminal_state`` is the
+          same guarantee at its edge: a terminal signal is not queried, written to, or
+          resubmitted at all, so there is nothing for a stale read to move backwards.
+        - ``test_an_unreachable_exchange_stops_at_three_attempts_and_marks_the_signal``
+          confirms the same non-regression when the true state is unknowable rather than
+          merely stale: the persisted state is asserted to stay at ``PENDING`` - it is
+          never advanced on a guess - while a marker records the divergence.
+
+    (3) The marker is written once however many times a worker restarts.
+        - ``test_the_marker_is_written_once_however_many_times_a_worker_restarts`` is this
+          claim by name: three separate worker restarts each recover the same unreachable
+          signal, each reports ``marked is True``, and exactly one reconciliation marker
+          exists afterwards.
+        - ``test_an_unreachable_exchange_stops_at_three_attempts_and_marks_the_signal`` and
+          ``test_a_venue_with_no_lookup_leaves_the_persisted_state_authoritative`` each
+          confirm the single-marker-per-divergence shape on first write, for the two
+          distinct routes that produce a marker (attempts exhausted; no lookup capability
+          at all).
+
+    None of the above are new tests. All are cited from the suite as it already stands, per
+    Task 12.7's instruction to close Requirements 1.17 and 2.17 by citation rather than by a
+    second suite.
 """
 
 import pytest

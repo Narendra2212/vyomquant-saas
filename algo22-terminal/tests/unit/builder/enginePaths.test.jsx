@@ -539,6 +539,13 @@ describe('the three engine providers', () => {
           4595              <ValidationProvider>
           4596                <StrategyBuilderCanvas {...props} />
 
+      Re-measured during production-launch-hardening wave 4's verification pass: an
+      unrelated commit (retail-ui-simplification, typography/comment changes) shifted this
+      wrapper to :4728-4739. The bounds below were widened from a tight ~30-line window to
+      a ~300-line one for exactly this reason - the providers' correct nesting and order is
+      the property that matters, not their absolute line position, and a tight window
+      breaks on any edit anywhere earlier in this 4700+-line file.
+
       `StrategyBuilder.jsx` is the default export of the builder route, so every one of the
       three providers is instantiated on every visit to it. That is what makes 1.25-1.27 three
       live defects rather than three dead clauses, and it is checked here rather than asserted
@@ -570,8 +577,8 @@ describe('the three engine providers', () => {
         'this file mounts them in',
     ).toEqual([...linesInOrder].sort((a, b) => a - b));
 
-    expect(linesInOrder[0]).toBeGreaterThanOrEqual(4580);
-    expect(linesInOrder[3]).toBeLessThanOrEqual(4610);
+    expect(linesInOrder[0]).toBeGreaterThanOrEqual(4500);
+    expect(linesInOrder[3]).toBeLessThanOrEqual(4800);
   });
 });
 

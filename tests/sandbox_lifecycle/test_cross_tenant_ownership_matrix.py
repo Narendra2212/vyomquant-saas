@@ -114,6 +114,87 @@ model versions, exchange accounts) and asserts the weaker predicate "403, or 404
 empty collection". This file asserts the stronger one Requirement 20.2 actually states -
 that the two answers are the *same* answer - over the endpoints THIS specification adds or
 extends. Neither subsumes the other.
+
+TASK 12.4 (production-launch-hardening, Requirements 1.14/2.14): TEN NAMED RESOURCE TYPES,
+AND WHY EIGHT OF THEM ADDED NO PROBE
+-------------------------------------------------------------------------------------------
+Requirement 1.14/2.14 extends this sweep to ten more resource types: orders, positions,
+portfolios, traces, credentials, billing, subscriptions, listings, paper accounts and
+invoices. Each was investigated by reading the actual router that serves it, not assumed
+from its name. Two turned out to be sandbox-servable through the SAME machinery this file
+already has; eight did not, for THREE DIFFERENT reasons, not one:
+
+1. **Paper-backed (paper accounts, and the paper-mode reading of "orders"/"positions" on
+   ``routers/paper_trading.py``).** This module's own doubles section says so already:
+   ``SandboxDatabase`` implements the ``001``/``003``/``005b`` PostgREST surface, and
+   ``009_paper_trading.sql``'s tables are read through an ENTIRELY different seam -
+   ``PaperTradingService.persistence_client`` / ``paper_repository`` - that nothing in
+   ``conftest.py`` patches. Probing a paper route here would answer two 503s that never
+   reach the tenant boundary at all, which is a worse defect than no probe: it would look
+   like a pass. ``tests/test_tenant_isolation_library_paper.py`` is where that boundary is
+   actually proven, over a double that DOES implement 009's semantics - see this module's
+   existing "WHY THE /api/paper/sessions/* ENDPOINTS THEMSELVES ARE NOT PROBED HERE" note.
+
+2. **No seam for a live singleton (orders and positions/portfolios on ``routers/orders.py``
+   and ``routers/portfolio.py``).** These do not read ``exchange_keys`` through
+   ``get_request_supabase`` at all - they read live venue state and QuestDB telemetry
+   through ``get_vault`` / ``get_telemetry``, which resolve to ``core.state.app_state``'s
+   real singletons. That object is not one of this suite's four doubles (``SandboxDatabase``,
+   ``RecordingRedis``, ``SeededSyntheticFeed``, ``SandboxExchangeClient``), and
+   ``portfolio.close_all_positions`` / ``orders.execute_order_blocked`` /
+   ``orders.create_order_blocked`` additionally answer 403 to every caller by construction
+   (task 12.3's precedent for why that proves nothing about tenancy either way).
+
+3. **No seam for a service-role client (subscriptions and listings on ``routers/library.py``,
+   and "billing" beyond the one invoice listing below).** ``library.py``'s marketplace
+   routes read through a MODULE-LEVEL ``_get_service_client()`` singleton built from
+   ``SUPABASE_URL`` / ``SUPABASE_SERVICE_ROLE_KEY`` environment variables, called directly
+   rather than injected as a FastAPI dependency - so the ``get_request_supabase`` override
+   this harness relies on for every other probe never reaches it. Under this repository's
+   own test configuration (``tests/conftest.py`` sets ``DEV_MODE=true``, and no Supabase
+   credentials are configured for the test run), that client resolves to ``None`` and every
+   caller - owner and stranger alike - receives the SAME ``MARKETPLACE_READ_FAILED`` 503.
+   That satisfies the foreign-equals-absent equality VACUOUSLY - it is not measuring
+   tenancy, it is measuring an unconfigured client - and it fails the owner control
+   (``test_the_owner_is_answered_differently_so_the_refusal_was_not_vacuous``) outright,
+   because the owner gets no different an answer than a stranger does. Writing a probe
+   whose ``owner_control_note`` claimed otherwise would misstate what the equality actually
+   demonstrates, so none was written. ``billing.cancel_subscription`` and
+   ``billing.resume_subscription`` were checked too: both DECLARE ``supabase: Any =
+   Depends(get_request_supabase)`` and would pass the override, but neither USES it -
+   both call a second, separate ``_background_sb()`` client instead, which is the same
+   category of blocker as ``library.py``'s.
+
+WHAT WAS ADDED (both go through machinery already proven above)
+    * **credentials** - ``DELETE /api/exchanges/{exchange_id}`` (``credentials.delete``,
+      in :data:`ENDPOINT_MATRIX`) and ``GET /api/exchanges`` (``credentials.list``, in
+      :data:`ID_LESS_COLLECTIONS`). Both read/write ``exchange_keys`` through
+      ``get_request_supabase`` - the identical seam ``strategy.*`` already proves - and
+      neither touches the live vault ``get_vault`` resolves to a parameter of, even where
+      the handler declares it.
+    * **invoices** - ``GET /api/billing/invoices`` (``invoices.list``, in
+      :data:`ID_LESS_COLLECTIONS`). Reads ``billing_invoices`` through the SAME injected
+      ``supabase`` parameter ``billing.get_entitlements`` already uses elsewhere on this
+      router. There is no ``{invoice_id}`` detail route anywhere on ``routers/billing.py``
+      (checked directly against the source, not assumed), so this resource has no
+      "owned id vs. missing id" pair to contribute to :data:`ENDPOINT_MATRIX` - only the
+      id-less listing form.
+
+**traces** needed no addition. ``signal_trace.*`` already covers list, get, timeline and
+export (read and export both count as reads of the same resource) with six probes. Three
+further WRITE routes exist and were considered - ``PUT /signals/{id}/risk``,
+``PUT /signals/{id}/order``, ``PUT /signals/{id}/execution`` - and their DATABASE-scoped
+path is correctly filtered (``.eq("id", ...).eq("user_id", ...)``, unlike the
+``backtest_service`` finding this task generalises). But
+``SignalService.update_risk_decision`` (and its two siblings) fall back to a PROCESS-WIDE,
+identity-unscoped in-memory dict (``self._local_signals``) keyed only by ``signal_id`` when
+the scoped database write matches no row - and ``get_signal_service()`` hands out that
+dict as a SINGLETON that outlives any one test. A probe here would be exercising whichever
+prior test happened to run first in the same process, not tenancy, so none was added; the
+in-memory fallback is a real defect (a stranger's update could land on that dict for a
+signal the OWNER'S OWN prior process activity populated it with) but it is not one this
+sweep's deterministic-per-test design can assert without becoming order-dependent itself,
+and is recorded here rather than smuggled in as a flaky probe.
 """
 
 from __future__ import annotations
@@ -130,10 +211,13 @@ from backend_app.main import app
 from tests.sandbox_lifecycle.harness import (
     MISSING_BACKTEST_ID,
     MISSING_DEPLOYMENT_ID,
+    MISSING_EXCHANGE_ID,
     MISSING_SIGNAL_ID,
     MISSING_STRATEGY_ID,
     OWNED_BACKTEST_ID,
     OWNED_DEPLOYMENT_ID,
+    OWNED_EXCHANGE_ID,
+    OWNED_INVOICE_ID,
     OWNED_PAPER_ACCOUNT_ID,
     OWNED_PAPER_ORDER_ID,
     OWNED_PAPER_SESSION_ID,
@@ -145,10 +229,13 @@ from tests.sandbox_lifecycle.harness import (
     SandboxWorld,
 )
 
-#: The three routers this specification's endpoint surface lives in.
+#: The four routers this specification's endpoint surface lives in. ``_EXCHANGE`` is task
+#: 12.4's own addition (the credentials axis); the other three are task 22.1's original set.
 _STRATEGIES = "backend_app.routers.strategies"
 _OPS = "backend_app.routers.strategy_operations"
 _TRACE = "backend_app.routers.signal_trace"
+_EXCHANGE = "backend_app.routers.exchange"
+_BILLING = "backend_app.routers.billing"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -159,12 +246,17 @@ _TRACE = "backend_app.routers.signal_trace"
 # substitute from the same mapping and cannot disagree about which id they are naming.
 
 #: The owner's real rows (seeded by ``SandboxWorld.seed_cross_tenant_rows``).
+#:
+#: ``exchange_id`` is task 12.4's own addition (the credentials axis, ``credentials.delete``
+#: below) - a second, dedicated ``exchange_keys`` row, not :data:`SANDBOX_VENUE`, for the
+#: length-discipline reason ``harness.OWNED_EXCHANGE_ID`` documents.
 OWNED_IDS: Dict[str, str] = {
     "strategy_id": OWNED_STRATEGY_ID,
     "version": OWNED_VERSION_LABEL,
     "backtest_id": OWNED_BACKTEST_ID,
     "deployment_id": OWNED_DEPLOYMENT_ID,
     "signal_id": OWNED_SIGNAL_ID,
+    "exchange_id": OWNED_EXCHANGE_ID,
 }
 
 #: Identifiers that name nothing at all. ``version`` is the SAME label in both mappings on
@@ -177,6 +269,7 @@ MISSING_IDS: Dict[str, str] = {
     "backtest_id": MISSING_BACKTEST_ID,
     "deployment_id": MISSING_DEPLOYMENT_ID,
     "signal_id": MISSING_SIGNAL_ID,
+    "exchange_id": MISSING_EXCHANGE_ID,
 }
 
 
@@ -539,6 +632,38 @@ ENDPOINT_MATRIX: Tuple[Probe, ...] = (
         query={"strategy_id": "{strategy_id}", "format": "json"},
         scope="NEW in task 13.x - the export of whatever the filtered list is showing",
     ),
+    # ══════════════════ credentials (task 12.4) ══════════════════
+    #
+    # ``routers/exchange.py``'s vault surface. Most of it is NOT here - see this module's
+    # docstring, "WHAT THIS FILE STILL CANNOT PROVE" - because most of it needs the live
+    # ``get_vault`` singleton this harness has no double for. This one write is the
+    # exception: it never touches the vault, and it is scoped by ``(user_id, exchange_id)``
+    # through the SAME ``get_request_supabase`` seam ``strategy.*`` already proves.
+    Probe(
+        key="credentials.delete",
+        method="DELETE",
+        path="/api/exchanges/{exchange_id}",
+        handler=f"{_EXCHANGE}:delete_connection",
+        owner_control=False,
+        owner_control_note=(
+            "The handler answers {'status': 'ok', 'message': ...} unconditionally, for "
+            "the owner and for a stranger alike, exactly as backtests.archive does and "
+            "for the identical reason: it never reads the DELETE's own row count, so "
+            "there is no boolean here that could be forwarded and turned into a test "
+            "for whether the caller owns the named credential. The two answers cannot "
+            "differ, and no positive control can be drawn from them. What IS asserted "
+            "instead is the ROW: test_the_whole_stranger_matrix_leaves_the_owners_rows_"
+            "untouched watches exchange_keys, so a stranger's DELETE landing on the "
+            "owner's credential would be caught there, not here."
+        ),
+        scope=(
+            "the credentials axis Requirement 1.14/2.14's extension names explicitly. "
+            "exchange_id is a compound-key label, not a row id (harness.OWNED_EXCHANGE_ID "
+            "explains why it is not SANDBOX_VENUE) - the same shape backtests.results' "
+            "id-alone finding warns about, scoped here by BOTH user_id and exchange_id "
+            "in the DELETE's own .eq().eq() chain"
+        ),
+    ),
 )
 
 
@@ -635,8 +760,17 @@ def normalise(value: Any) -> Any:
         # an identifier substitution and then fail to match its own pattern.
         text = _CSP_NONCE.sub("nonce-<PER-REQUEST-NONCE>", value)
         text = _CORRELATION_ID.sub("<PER-REQUEST-CORRELATION-ID>", text)
+        # CASE-INSENSITIVE (task 12.4's finding): ``routers/exchange.py:delete_connection``
+        # echoes the caller-supplied identifier back UPPERCASED
+        # (``f"{exchange_id.upper()} disconnected successfully."``), which a literal
+        # ``str.replace`` never matches - it left ``SANDBOX-OWNED-VENUE-01`` unmasked while
+        # matching ``sandbox-owned-venue-01`` everywhere else, and the two answers then
+        # differed by exactly that echoed identifier's case. None of the ORIGINAL five
+        # identifiers were ever echoed case-transformed by any handler this file already
+        # probed, so this widening changes no existing probe's outcome - it only reaches a
+        # case no existing probe exercised.
         for identifier in _PROBED_IDS:
-            text = text.replace(identifier, "<PROBED-ID>")
+            text = re.sub(re.escape(identifier), "<PROBED-ID>", text, flags=re.IGNORECASE)
         text = _TIMESTAMP.sub("<TIMESTAMP>", text)
         text = _UUID.sub("<MINTED-UUID>", text)
         return text
@@ -860,6 +994,17 @@ ID_LESS_COLLECTIONS: Tuple[Tuple[str, str, Dict[str, str]], ...] = (
     ("backtests.list_all", "/api/backtests", {}),
     ("signal_trace.list_unfiltered", "/api/signal-trace/signals", {}),
     ("signal_trace.export_unfiltered", "/api/signal-trace/signals/export", {"format": "json"}),
+    # ── task 12.4's additions ────────────────────────────────────────────
+    # ``GET /api/exchanges`` names no identifier either: it lists every ``exchange_keys``
+    # row the caller's own ``user_id`` predicate selects. The credentials axis's WRITE
+    # (``credentials.delete``) is in ENDPOINT_MATRIX above; this is its READ half.
+    ("credentials.list", "/api/exchanges", {}),
+    # ``GET /api/billing/invoices`` - grepped: there is no ``{invoice_id}`` detail route
+    # anywhere on this router, so the invoices axis has no "owned id vs. missing id" form
+    # to join ENDPOINT_MATRIX with. This is the same shape ``strategy.list`` already has:
+    # does a stranger's identical request change depending on whether the owner's row
+    # exists.
+    ("invoices.list", "/api/billing/invoices", {}),
 )
 
 
@@ -885,8 +1030,16 @@ def test_another_tenants_rows_are_unobservable_on_the_unfiltered_collections(
     # Paper_Session and its six children, so "with the owner's rows" and "without them" have to
     # differ in those rows too, or a collection that reported somebody else's session count
     # would answer identically either way and pass.
+    #
+    # ``exchange_keys`` and ``billing_invoices`` are appended (task 12.4): the owner now
+    # holds a credentials row and an invoice row, and ``credentials.list`` /
+    # ``invoices.list`` need those SPECIFIC tables emptied - the loop above touches every
+    # OTHER new probe's rows already, but neither of these two id-less collections is
+    # filtered by any of them, so without this addition the "with vs. without" comparison
+    # would run against a database that never actually lost the owner's row.
     for table in ("strategies", "strategy_versions", "strategy_backtests",
-                  "strategy_deployments", "signals") + PAPER_SESSION_OWNED_TABLES:
+                  "strategy_deployments", "signals", "exchange_keys",
+                  "billing_invoices") + PAPER_SESSION_OWNED_TABLES:
         owned.db.tables[table] = []
     try:
         without_owner_rows = observable(stranger_client.get(path, params=params))
@@ -940,6 +1093,13 @@ def test_the_whole_stranger_matrix_leaves_the_owners_rows_untouched(
         byte-for-byte. The reach that adds is real: a strategy stop, a deployment stop or a
         signal export that cascaded into another tenant's simulated orders, fills or events would
         have been invisible here before, because the tables held no row to change.
+
+    ``billing_invoices`` IS WATCHED TOO (task 12.4)
+        Additive for the same reason: the owner now holds an invoice row, and no probe in
+        this matrix is meant to reach it, so watching it is what makes that claim a fact
+        rather than an assumption. ``exchange_keys`` was ALREADY watched, which is what
+        makes ``credentials.delete``'s write-nothing assertion a fact too - no addition was
+        needed there.
     """
     watched = (
         "strategies",
@@ -949,6 +1109,7 @@ def test_the_whole_stranger_matrix_leaves_the_owners_rows_untouched(
         "signals",
         "exchange_keys",
         "risk_settings",
+        "billing_invoices",
     ) + PAPER_SESSION_OWNED_TABLES
     before = {table: [dict(row) for row in owned.db.rows(table)] for table in watched}
 
@@ -1030,7 +1191,9 @@ def test_the_stranger_matrix_never_names_the_owners_paper_session_rows(
 # 9. THE MANDATED CELLS ARE ALL COVERED
 # ══════════════════════════════════════════════════════════════════════════
 
-#: Requirement 20.4's matrix as ``tasks.md`` states it, verbatim in structure.
+#: Requirement 20.4's matrix as ``tasks.md`` states it, verbatim in structure. UNCHANGED by
+#: task 12.4 - this dict's own claim is about the ORIGINAL four axes task 22.1 enumerated,
+#: and it stays a faithful transcription of them.
 MANDATED_CELLS: Dict[str, Tuple[str, ...]] = {
     "strategy": ("list", "get", "versions", "update", "archive", "duplicate"),
     "backtests": ("list", "create", "get", "archive"),
@@ -1038,12 +1201,34 @@ MANDATED_CELLS: Dict[str, Tuple[str, ...]] = {
     "signal_trace": ("list", "get"),
 }
 
+#: Task 12.4's extension: the two of Requirement 1.14/2.14's ten named resource types that
+#: turned out to have a real, sandbox-servable route (see this module's docstring, "TASK
+#: 12.4"). A SEPARATE dict from :data:`MANDATED_CELLS` rather than an addition to it, so that
+#: dict's own "verbatim" claim about the ORIGINAL requirement text stays true - this one is
+#: this suite's own bookkeeping for what it added, not a transcription of anything.
+TASK_12_4_MANDATED_CELLS: Dict[str, Tuple[str, ...]] = {
+    "credentials": ("delete", "list"),
+    "invoices": ("list",),
+}
+
 
 class TestTheMatrixCoversTheMandatedCells:
-    """The enumeration is maintained by hand, so something has to check it is complete."""
+    """The enumeration is maintained by hand, so something has to check it is complete.
+
+    Extended by task 12.4 to check :data:`TASK_12_4_MANDATED_CELLS` as well as the original
+    four axes, over the SAME two collections (``ENDPOINT_MATRIX`` and
+    ``ID_LESS_COLLECTIONS``) - a probe added anywhere in either one is found by this class
+    however many axes it now knows about.
+    """
+
+    #: The union this class actually checks against. Kept as one property rather than
+    #: inlined at each call site, so "every axis this suite knows about" has one definition.
+    @property
+    def _all_mandated_cells(self) -> Dict[str, Tuple[str, ...]]:
+        return {**MANDATED_CELLS, **TASK_12_4_MANDATED_CELLS}
 
     def _covered(self) -> Dict[str, set]:
-        covered: Dict[str, set] = {axis: set() for axis in MANDATED_CELLS}
+        covered: Dict[str, set] = {axis: set() for axis in self._all_mandated_cells}
         keys = [p.key for p in ENDPOINT_MATRIX] + [cell[0] for cell in ID_LESS_COLLECTIONS]
         for key in keys:
             axis, _, action = key.partition(".")
@@ -1053,20 +1238,22 @@ class TestTheMatrixCoversTheMandatedCells:
                 covered[axis].add(action.split("_")[0])
         return covered
 
-    @pytest.mark.parametrize("axis", sorted(MANDATED_CELLS))
+    @pytest.mark.parametrize("axis", sorted({**MANDATED_CELLS, **TASK_12_4_MANDATED_CELLS}))
     def test_every_action_on_this_axis_has_a_probe(self, axis: str):
-        missing = set(MANDATED_CELLS[axis]) - self._covered()[axis]
+        mandated = {**MANDATED_CELLS, **TASK_12_4_MANDATED_CELLS}
+        missing = set(mandated[axis]) - self._covered()[axis]
         assert not missing, (
-            f"Requirement 20.4's matrix names {sorted(missing)} on the '{axis}' axis and "
-            "no probe covers it. The enumeration is the deliverable - a missing cell is a "
-            "missing test, not a missing comment."
+            f"'{axis}' names {sorted(missing)} and no probe covers it. The enumeration is "
+            "the deliverable - a missing cell is a missing test, not a missing comment."
         )
 
     def test_every_probe_key_names_a_cell_of_the_matrix(self):
+        mandated = {**MANDATED_CELLS, **TASK_12_4_MANDATED_CELLS}
         for probe in ENDPOINT_MATRIX:
             axis = probe.key.partition(".")[0]
-            assert axis in MANDATED_CELLS, (
-                f"{probe.key}: '{axis}' is not one of Requirement 20.4's four axes."
+            assert axis in mandated, (
+                f"{probe.key}: '{axis}' is not one of Requirement 20.4's four axes, nor "
+                "one of task 12.4's extension axes."
             )
 
     def test_every_probe_states_why_it_is_in_scope(self):

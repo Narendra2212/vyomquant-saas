@@ -2322,7 +2322,68 @@ class StrategyService:
             await q_current
 
         return row
-    
+
+    async def _publish_strategy_status(
+        self,
+        user: dict,
+        strategy_id: str,
+        status: str,
+        *,
+        environment: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """Push one ``STRATEGY_STATUS`` frame over the user's private socket channel.
+
+        1.24/8.5: the frame shape is declared once, in
+        ``tests/fixtures/strategy_status_frame.json``, and read by both
+        ``tests/test_strategy_status_publish.py`` and
+        ``algo22-terminal/tests/unit/liveTrading/deploymentState.test.jsx`` so the three-way
+        mismatch that fixture documents (no publisher, the wrong envelope on the only
+        broadcaster that exists, and the subscriber's upper-case spelling) cannot reappear
+        with only one side of the contract changed. ``type`` is left un-nested for exactly
+        that reason: ``ws_manager.py``'s ``broadcast_user`` -> ``_broadcast`` sends
+        ``json.dumps(data)`` verbatim, never wrapping it the way
+        ``api_ws/ws_routes.py``'s dead ``broadcast_dashboard_update`` would.
+
+        Guarded rather than called bare: several existing tests of ``deploy_strategy``
+        (``tests/test_task_8_2_deployment_binding.py::TestLegacyStrategyDeploy``,
+        ``tests/test_task_4_3_deploy_prerequisite_gate.py``) patch
+        ``backend_app.core.state.app_state`` with a bare ``MagicMock`` and set only
+        ``.fleet`` on it. ``hasattr(mock, 'ws')`` is ``True`` on a ``MagicMock`` regardless -
+        it auto-vivifies any attribute - so the existing ``hasattr(app_state, 'fleet')``
+        style guard alone does not protect this call: ``await`` on the auto-vivified,
+        non-async ``.broadcast_user(...)`` would raise ``TypeError``. So the publish itself
+        is wrapped in the same ``try`` a broadcast to a websocket peer that may already be
+        gone would need anyway - a dropped status push must never fail the deploy/stop
+        request that is otherwise complete and already committed.
+        """
+        from backend_app.core.state import app_state
+
+        if not hasattr(app_state, "ws") or app_state.ws is None:
+            return
+
+        frame: Dict[str, Any] = {
+            "type": "STRATEGY_STATUS",
+            "strategy_id": strategy_id,
+            "status": status,
+        }
+        if environment is not None:
+            frame["environment"] = environment
+        if error is not None:
+            frame["error"] = error
+
+        try:
+            result = app_state.ws.broadcast_user(user["id"], frame)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # noqa: BLE001 - a dropped status push must not fail the request
+            logger.warning(
+                "Failed to publish STRATEGY_STATUS for strategy %s (status=%s)",
+                strategy_id,
+                status,
+                exc_info=True,
+            )
+
     async def deploy_strategy(
         self,
         user: dict,
@@ -2516,6 +2577,13 @@ class StrategyService:
                 q5 = sb.table("strategies").update({"status": StrategyStatus.RUNNING.value}).eq("id", strategy_id).execute()
                 if inspect.isawaitable(q5):
                     await q5
+
+                # 1.24/8.5: publish STRATEGY_STATUS over the single socket now that both
+                # writes above have committed, so the frontend's status contract (task 8.4's
+                # fixture) is no longer structurally satisfied and operationally dead.
+                await self._publish_strategy_status(
+                    user, strategy_id, "running", environment=environment
+                )
             elif sb:
                 # Deployment failed
                 q4 = sb.table("strategy_deployments").update({
@@ -2528,6 +2596,14 @@ class StrategyService:
                 q5 = sb.table("strategies").update({"status": StrategyStatus.FAILED.value}).eq("id", strategy_id).execute()
                 if inspect.isawaitable(q5):
                     await q5
+
+                # A failed start is still the terminal outcome of a start attempt, and the
+                # frontend needs to know the deployment did not come up rather than staying
+                # silent about it - see this task's judgement call in
+                # tests/test_strategy_status_publish.py's module docstring.
+                await self._publish_strategy_status(
+                    user, strategy_id, "failed", environment=environment, error=message
+                )
         
         logger.info(
             "Deployed strategy %s as deployment %s in %s mode (mode recorded: %s)",
@@ -2588,7 +2664,13 @@ class StrategyService:
         }).eq("id", deployment_id).execute()
         if inspect.isawaitable(q2):
             await q2
-        
+
+        # 1.24/8.5: publish STRATEGY_STATUS immediately after the write above commits.
+        await self._publish_strategy_status(
+            user, deployment["strategy_id"], "stopped",
+            environment=deployment.get("environment"),
+        )
+
         # Decrement quota if it was running
         if deployment.get("status") == "running":
             from backend_app.core.subscription_engine import SubscriptionEngine, Resource

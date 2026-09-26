@@ -1,0 +1,68 @@
+{
+  "contract": "strategy-status-frame",
+  "requirements": ["1.24", "2.24"],
+  "declared_by": "production-launch-hardening task 8.4",
+  "summary": "The flat top-level frame a STRATEGY_STATUS push carries end to end. Producing side: backend_app/backend/strategy_service.py's deploy_strategy (running/failed) and stop_deployment (stopped), each calling app_state.ws.broadcast_user(user_id, frame). Consuming side: algo22-terminal/src/websocketClient.js's wsClient.subscribeStrategyStatus, which subscribes to the exact event-type key 'STRATEGY_STATUS' (websocketClient.js:1202-1205), routed through processMessage's exact match on message.type. Read by algo22-terminal/src/design/pageFields.js's 'deploymentStopped' declaration (read: wsClient.subscribe('STRATEGY_STATUS'), path: 'status') and rendered by pages/LiveTrading.jsx.",
+  "one_file_note": "This file is the single copy. pytest (tests/test_strategy_status_publish.py) reads it directly at tests/fixtures/strategy_status_frame.json; vitest (algo22-terminal/tests/unit/liveTrading/deploymentState.test.jsx) reads the same path through node:fs, repo-relative. A per-side copy could drift on the one thing that matters most here - the exact spelling of `type` - which is precisely the three-way mismatch 1.24 names (no publisher, the wrong envelope on the only broadcaster that exists, and the subscriber's upper-case spelling). Declaring `type` once, read by both sides, is what makes that mismatch impossible to reintroduce silently.",
+  "producer": {
+    "module": "backend_app/backend/strategy_service.py",
+    "functions": ["deploy_strategy", "stop_deployment"],
+    "call": "app_state.ws.broadcast_user(user_id, frame)",
+    "note": "The frame passed to broadcast_user is not wrapped. ws_manager.py's _broadcast does json.dumps(data) and ws.send_text(...) directly on what broadcast_user is given, so the dict below is the literal top-level JSON the browser receives - never a `{\"type\": \"dashboard_update\", ...}` envelope. broadcast_dashboard_update (api_ws/ws_routes.py) is NOT used for this: it wraps every frame it is given as `{\"type\": \"dashboard_update\", \"update_type\": ...}`, which is a different, wrongly-enveloped frame this fixture's second example exists to name and rule out."
+  },
+  "key_order": ["type", "strategy_id", "status", "environment", "error"],
+  "keys": {
+    "type": {
+      "json_type": "string",
+      "nullable": false,
+      "const": "STRATEGY_STATUS",
+      "note": "Upper case, exactly. websocketClient.js's processMessage routes on an exact match of message.type against the event-type key a subscriber registered with (websocketClient.js:571-582); wsClient.subscribeStrategyStatus registers 'STRATEGY_STATUS' (websocketClient.js:1202-1205). A lower-case or wrapped type is silently dropped, not coerced."
+    },
+    "strategy_id": {
+      "json_type": "string",
+      "nullable": false,
+      "from": "strategy_service.py's strategy_id parameter (deploy_strategy) or deployment[\"strategy_id\"] (stop_deployment)",
+      "note": "liveFrame.js's isFreshFrame does not gate on this field itself; algo22-terminal/src/pages/LiveTrading.jsx compares it against the strategy the tier-1 leaf is showing before accepting the frame's `status`."
+    },
+    "status": {
+      "json_type": "string",
+      "nullable": false,
+      "enum": ["running", "stopped", "failed"],
+      "from": "the same literal strategy_service.py writes to strategy_deployments.status/strategies.status in the same call",
+      "note": "The only field pageFields.js's 'deploymentStopped' entry declares a path for (path: 'status'). deploymentState.test.jsx's existing cases also push 'error' and 'disconnected' as worker-run-state values the frontend already handles; this backend publish emits only the three values a deploy/stop transition actually produces today."
+    },
+    "environment": {
+      "json_type": "string",
+      "nullable": true,
+      "enum": ["paper", "live"],
+      "from": "deploy_strategy's environment parameter / the deployment row's environment column",
+      "note": "Optional. components/trading/liveFrame.js's isFreshFrame treats an absent environment as passing every ledger's gate (a frame naming no ledger is not evidence against any of them); a frame naming one is declined by a panel on a different or unconfirmed ledger. Included here because both publish call sites have it on hand at zero extra cost, and omitting it on a live-vs-paper mismatch is the exact confusion Requirement 14.5 exists to prevent."
+    },
+    "error": {
+      "json_type": "string",
+      "nullable": true,
+      "from": "the fleet call's failure message (deploy_strategy's `message` on the failed branch)",
+      "note": "Present only on status: \"failed\". deploymentState.test.jsx's existing 'error' case already renders this verbatim as the worker's own reason (task 20.5); this publish supplies it on the one transition that has a message to give - a failed deploy attempt. stop_deployment's stop never sets this field."
+    }
+  },
+  "not_included": {
+    "timestamp": "Read nowhere. pageFields.js declares only `path: 'status'` for this field and no consumer in algo22-terminal reads a time off a STRATEGY_STATUS frame - unlike the unrelated ccxt order `timestamp` in pages/LiveTrading.jsx, which is a different fact. Adding an unread field here would be exactly what this fixture's own convention (tests/fixtures/backtest_payload_keys.json's producer note) warns against: a key present because it seemed natural, not because a reader consumes it."
+  },
+  "example": {
+    "note": "One successful start. `strategy_id` and `status` are what the frontend's declared `path` reads; `environment` demonstrates the ledger-gate field being populated from the same call.",
+    "type": "STRATEGY_STATUS",
+    "strategy_id": "strategy_task_8_5",
+    "status": "running",
+    "environment": "paper"
+  },
+  "wrong_envelope_example": {
+    "note": "What broadcast_dashboard_update would have produced had 8.5 routed through it instead - task 8.4/8.6's explicit negative case. websocketClient.js's processMessage matches message.type exactly against 'STRATEGY_STATUS'; this object's type is 'dashboard_update', so no STRATEGY_STATUS subscriber is ever called for it. This is the shape tests/test_strategy_status_publish.py and deploymentState.test.jsx both assert must NOT be treated as a strategy status update.",
+    "type": "dashboard_update",
+    "update_type": "strategy_status",
+    "data": {
+      "strategy_id": "strategy_task_8_5",
+      "status": "running",
+      "environment": "paper"
+    }
+  }
+}

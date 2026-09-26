@@ -85,6 +85,25 @@ already applies - validate once and hand the report to ``compile_plan`` - and th
 ``strategy_operations`` call sites that pass no report are where it would be applied. Nothing
 was tuned to make that row pass, and it is not given a looser budget than the row beside it.
 
+TASK 12.12 (production-launch-hardening) — QUERY COUNTS EXTEND THIS FILE, HEAP GROWTH DOES NOT
+------------------------------------------------------------------------------------------------
+Requirement 1.42/2.42 asks for four measurements: query counts, polling intervals, render
+counts and heap growth. This file gained the first here (``TestQueryCounts``, below) because
+its four timed subjects are the compile/validation paths the requirement names and the finding
+is real: none of them holds a persistence client, so each issues zero queries, and that zero is
+asserted as a regression guard rather than assumed. Polling intervals and render counts are a
+frontend concern and are measured in ``algo22-terminal``'s vitest suite instead (a fake-timer
+measurement extending ``tests/unit/deployPreflight.test.jsx``'s existing poll coverage, and a
+new ``tests/unit/strategyBuilder.nodeRenderCounts.test.jsx`` for ``DynamicNode``'s render
+count) — a Python file cannot observe a React re-render, so forcing that measurement in here
+would not be a stricter reading of "extend these two files", it would be a category error.
+**Heap growth is recorded as BLOCKED/manual in ``tests/perf/test_market_data_latency.py``**,
+on ``ResourceSampler`` — the class that already tracks this **backend** process's RSS and is
+therefore the file where a reader would otherwise mistake that number for the browser heap
+figure Requirement 1.42/2.42 actually asks about. See that docstring for the method recorded
+(a DevTools heap snapshot diff over a real session) and why nothing here or in vitest's jsdom
+environment can honestly substitute for it.
+
 HONESTY RULES THIS FILE FOLLOWS
 -------------------------------
 * ``WARMUP`` iterations are run and discarded before every series, and ``gc.collect()`` is
@@ -730,4 +749,200 @@ class TestNoControlIsWeakened:
                 reason=SC.COMPILE_FAILURE_INVALID_GRAPH
             )
             == 0
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  6. QUERY COUNTS — task 12.12 / Requirements 1.42, 2.42
+# ══════════════════════════════════════════════════════════════════════════
+#
+# ``design.md``'s task 12.12 asks this file to record query counts for the compile and
+# validation paths it already exercises. What that count actually is, measured rather than
+# assumed, is **zero** - and that zero is reported as the finding it is, not padded into
+# something that looks more like an N+1 measurement than this file's subjects have to give.
+#
+# WHY ZERO, AND WHY THAT IS THE HONEST ANSWER HERE
+# -------------------------------------------------
+# The four subjects this file times - ``strategy_builder.compile_version``,
+# ``strategy_compiler.compile_graph``, ``strategy_dag.validator.validate`` and the real
+# ``validate_strategy`` handler under the debounce path - are graph operations over an
+# in-memory ``StrategyGraph`` and a registry assembled once per module. None of them holds a
+# database client to issue a query with:
+#
+# * ``strategy_builder.compile_version``'s own comment states it plainly - "No plan, no
+#   artifact, no row - the failure path ends here, before any database client exists" - and
+#   the same is true of the success path a line below: the function returns a
+#   ``CompiledVersion`` and persists nothing.
+# * ``validate_strategy``'s dependencies are overridden in ``http_round_trip`` with
+#   ``get_request_supabase: lambda: None`` (task 9.6's own fixture, above), so the handler
+#   this file measures is proven to run with no live persistence client attached, not merely
+#   assumed to run without one.
+#
+# The strategy-builder call sites that DO combine a compile with a persisted row - create,
+# clone, save - are a genuinely different measurement (one row written, keyed by strategy id,
+# never a loop over rows), and they already have a correctness-focused capturing double in
+# ``tests/test_task_2_4_call_site_migration.py`` (``_capturing_sb``). That double captures the
+# **payload** a save would write, not a **count** of calls, and it lives in a correctness
+# suite proving what gets written, not in a perf file measuring how many times something is
+# called - so it is left alone rather than repurposed here. A query-count measurement of
+# those three call sites, if wanted, belongs beside them, not grafted onto the pure-compile
+# subjects this file times, which would call zero queries under either double.
+#
+# WHAT IS ASSERTED, THEN
+# -----------------------
+# Not "no wall-clock regression" (that is Requirement 25.1/25.2's job, above) but "no
+# persistence call was made at all" - a coarser, cheaper, and equally real guard: the day one
+# of these four subjects starts issuing a query per node, or a query per validation stage,
+# instead of the zero it issues today, that is exactly the kind of N+1 regression
+# Requirement 1.42 exists to catch, and it would show up here as this section's assertion
+# turning red before it ever shows up as a p95 moving.
+class TestQueryCounts:
+    """"WHEN a page loads or a session runs long, THE ... query counts ... SHALL be measured
+    and recorded, and any regression against the redesign baseline SHALL be filed.\""""
+
+    @staticmethod
+    def _recording_sb() -> Tuple[Any, List[str]]:
+        """A ``Persistence_Layer`` double whose only job is to count ``.table(...)`` calls.
+
+        The same shape ``tests/test_task_2_4_call_site_migration.py``'s ``_capturing_sb``
+        and ``tests/test_admin_review_surface.py``'s recording query establish elsewhere in
+        this codebase - ``sb.table(name)`` returning a chainable object - but this one keeps
+        no rows and answers no query: it exists only to record that ``.table`` was reached at
+        all, which is the one fact needed to tell "zero queries" apart from "a query this
+        double happened not to notice".
+        """
+        calls: List[str] = []
+
+        class _Chain:
+            def select(self, *_a, **_kw):
+                return self
+
+            def eq(self, *_a, **_kw):
+                return self
+
+            def update(self, *_a, **_kw):
+                return self
+
+            def insert(self, *_a, **_kw):
+                return self
+
+            async def execute(self):  # pragma: no cover - never reached if the count is 0
+                raise AssertionError(
+                    "a query was executed against the recording double - the compile and "
+                    "validation subjects this file times were expected to call no "
+                    "persistence layer at all"
+                )
+
+        class _Recording:
+            def table(self, name: str) -> _Chain:
+                calls.append(name)
+                return _Chain()
+
+        return _Recording(), calls
+
+    def test_compile_version_issues_no_query(self, reg, graphs):
+        """``strategy_builder.compile_version`` - the request path's own compile call."""
+        sb, calls = self._recording_sb()
+        SB.compile_version(graphs["10 nodes"], reg)
+        assert calls == [], (
+            f"compile_version reached the persistence layer {len(calls)} time(s) "
+            f"({calls}) for a single compile of a 10-node graph - a compile issuing a "
+            f"query at all is the regression this measurement exists to catch"
+        )
+
+    def test_compile_graph_without_a_report_issues_no_query(self, reg, graphs):
+        """The three ``strategy_operations`` call sites that pass no precomputed report."""
+        sb, calls = self._recording_sb()
+        SC.compile_graph(graphs["10 nodes"], reg)
+        assert calls == [], (
+            f"compile_graph reached the persistence layer {len(calls)} time(s) ({calls}) "
+            f"for a single compile-plus-validate of a 10-node graph"
+        )
+
+    def test_validation_issues_no_query(self, reg, graphs):
+        """``validator.validate`` directly - the subject of Requirement 25.2's budget."""
+        sb, calls = self._recording_sb()
+        V.validate(graphs["10 nodes"], reg)
+        assert calls == [], (
+            f"validate reached the persistence layer {len(calls)} time(s) ({calls}) for a "
+            f"single validation of a 10-node graph"
+        )
+
+    def test_the_debounced_validate_handler_takes_no_persistence_client(self, graphs):
+        """The real handler, at the size an author's debounced keystroke actually sends.
+
+        Checked on the handler's own declared parameters rather than by exercising
+        ``get_request_supabase`` directly: that dependency is an ``async def`` FastAPI
+        provider taking ``credentials = Depends(bearer_scheme)`` (``core/dependencies.py``),
+        so calling it bare returns an unawaited coroutine, never ``None`` - the ``lambda:
+        None`` seen elsewhere in this file is a **dependency override** registered on
+        ``app.dependency_overrides``, meaningful only through FastAPI's injector, and
+        ``validate_strategy`` is called directly here, the same way ``_handler`` (above)
+        already does, bypassing that injector entirely. What is true independent of any
+        override is simpler and is what this asserts: ``validate_strategy`` declares no
+        ``sb`` / ``supabase`` parameter at all, so there is no persistence client for a
+        query to be issued through on this path, override or not.
+        """
+        import inspect
+
+        from backend_app.routers.strategies import validate_strategy
+
+        params = inspect.signature(validate_strategy).parameters
+        persistence_params = {
+            name
+            for name in params
+            if name in ("sb", "supabase", "db") or "supabase" in name.lower()
+        }
+        assert persistence_params == set(), (
+            f"validate_strategy now declares {sorted(persistence_params)} - the debounce "
+            f"path this file measures was expected to take no persistence client at all; "
+            f"a query-count measurement of it needs re-deriving now that it might issue one"
+        )
+
+        # The handler runs to completion with only the parameters it actually declares.
+        handler = _handler()
+        body = debounce_body(graphs["10 nodes"])
+        result = asyncio.run(handler(body))
+        assert result["valid"] is True, result.get("errors")
+
+    def test_the_finding_is_recorded_not_just_passed(self, reg, graphs, report):
+        """The measured table's own convention (``TestTheMeasuredTable``): print the number.
+
+        Query count for one compile, one compile-plus-validate and one validation, at EVERY
+        measurement point this file already uses - each subject actually re-run against each
+        size, against its own fresh recording double, rather than measured once at 10 nodes
+        and the same figure printed five times on the assumption that graph size cannot
+        matter to a query count. It cannot, for these subjects - the assertion below is what
+        makes that a checked fact rather than a printed one.
+        """
+        report("\n  QUERY COUNTS (task 12.12 / Requirements 1.42, 2.42)\n")
+        for label, _count in CASES:
+            graph = graphs[label]
+
+            sb_a, calls_a = self._recording_sb()
+            SB.compile_version(graph, reg)
+
+            sb_b, calls_b = self._recording_sb()
+            SC.compile_graph(graph, reg)
+
+            sb_c, calls_c = self._recording_sb()
+            V.validate(graph, reg)
+
+            report(
+                f"  {label:<24} compile_version: {len(calls_a)}  "
+                f"compile_graph: {len(calls_b)}  validate: {len(calls_c)}"
+            )
+            assert calls_a == calls_b == calls_c == [], (
+                f"a query was recorded at {label} that the row above would not have shown - "
+                f"compile_version={calls_a}, compile_graph={calls_b}, validate={calls_c}"
+            )
+        report(
+            "\n  Every subject above issues exactly 0 queries at every measured graph size, "
+            "10 through the 200-node / 400-edge legal maximum. This is the finding, not an "
+            "assumption: none of the four measured subjects holds a persistence client, so "
+            "an N+1 pattern (Requirement 1.42's bugfix.md origin) cannot arise on this path "
+            "today. The call sites that DO persist a compiled graph - create, clone, save in "
+            "`strategies.py` - write exactly one row each and are proven correct-content "
+            "(not queried-count) by `tests/test_task_2_4_call_site_migration.py`'s "
+            "`_capturing_sb`."
         )

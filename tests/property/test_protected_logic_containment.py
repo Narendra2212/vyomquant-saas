@@ -152,6 +152,7 @@ from unittest import mock
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
@@ -159,6 +160,7 @@ from backend_app.backend.marketplace import errors as marketplace_errors
 from backend_app.backend.marketplace import money
 from backend_app.backend.marketplace.errors import (
     MARKETPLACE_CLONING_DISABLED,
+    MARKETPLACE_OPERATION_NOT_PERMITTED,
     MarketplaceError,
 )
 from backend_app.backend.marketplace.listing_projection import (
@@ -171,10 +173,12 @@ from backend_app.backend.marketplace.listing_projection import (
     project_listing,
     protected_logic_tokens,
 )
+from backend_app.backend.marketplace import subscriber_operation_guard as _subscriber_guard
 from backend_app.backend.paper import COLUMN_CONTRACT
 from backend_app.backend.paper import errors as paper_errors
 from backend_app.core.audit_trail import StrategyAuditAction
 from backend_app.routers import library as lib
+from backend_app.routers import strategy_operations as strategy_ops
 from tests.strategies.marketplace_generators import (
     ProtectedLogicFixture,
     identifiers,
@@ -336,6 +340,9 @@ def _paper_event_bodies() -> Tuple[Dict[str, Any], ...]:
 #: The keys the two bodies this module builds by hand emit unconditionally, on top of the
 #: production vocabulary in ``listing_projection.STRUCTURAL_RESPONSE_KEYS``. The Paper_Channel
 #: half of this set moves into ``paper_events.py`` at task 26.1, where the envelope is declared.
+#: The trace and export surfaces below (task 12.9) raise the shared catalogue's own
+#: ``MarketplaceError``, whose ``to_error_object()`` and ``details`` keys are already covered by
+#: ``STRUCTURAL_RESPONSE_KEYS`` — no addition was needed for them.
 SURFACE_STRUCTURAL_KEYS: FrozenSet[str] = STRUCTURAL_RESPONSE_KEYS | frozenset(
     {
         # The detail route's authenticated enrichment.
@@ -357,6 +364,18 @@ SURFACE_STRUCTURAL_KEYS: FrozenSet[str] = STRUCTURAL_RESPONSE_KEYS | frozenset(
         "at",
     }
 )
+
+
+def _assert_surface_contains_no_protected_logic(response: Any, tokens: Any) -> None:
+    """:func:`assert_contains_no_protected_logic`, bound to this module's structural keys.
+
+    Every surface this file checks — the projection, the enriched view, an error body, a
+    Paper_Channel event, a trace response, a DAG export — is asserted with the same two
+    arguments: :data:`SURFACE_STRUCTURAL_KEYS` as the schema exemption. Factored out (task 12.9)
+    so the trace and export surfaces call the identical check the rest of this file already
+    uses, rather than a second copy of the argument list.
+    """
+    assert_contains_no_protected_logic(response, tokens, SURFACE_STRUCTURAL_KEYS)
 
 
 def _value_text(value: Any) -> Iterator[str]:
@@ -491,7 +510,7 @@ def test_p47_no_response_or_event_contains_protected_logic(strategy: Any) -> Non
     # a projection that dropped the columns for the wrong reason would still look correct.
     source_row = _listing_row(strategy, carrying_protected_logic=True)
     with pytest.raises(AssertionError):
-        assert_contains_no_protected_logic(source_row, tokens, SURFACE_STRUCTURAL_KEYS)
+        _assert_surface_contains_no_protected_logic(source_row, tokens)
 
     # ── The unauthenticated caller's view: the projection, and nothing else ──────
     projected = project_listing(
@@ -499,25 +518,25 @@ def test_p47_no_response_or_event_contains_protected_logic(strategy: Any) -> Non
         evidence_summaries=EVIDENCE_SUMMARIES,
         creator_alias=CREATOR_ALIAS,
     )
-    assert_contains_no_protected_logic(projected, tokens, SURFACE_STRUCTURAL_KEYS)
+    _assert_surface_contains_no_protected_logic(projected, tokens)
 
     # ── The authenticated non-owner's enriched view (Requirement 6.7's "same projection") ──
     enriched: Dict[str, Any] = {**projected, **ROUTE_ENRICHMENT}
-    assert_contains_no_protected_logic(enriched, tokens, SURFACE_STRUCTURAL_KEYS)
+    _assert_surface_contains_no_protected_logic(enriched, tokens)
 
     # ── Error and diagnostic bodies (Requirement 7.1) ───────────────────────────
     for code, details in ERROR_BODIES_UNDER_TEST:
         body = marketplace_errors.MarketplaceError(code, details=details).to_error_object()
-        assert_contains_no_protected_logic(body, tokens, SURFACE_STRUCTURAL_KEYS)
+        _assert_surface_contains_no_protected_logic(body, tokens)
         wrapped = marketplace_errors.structured_error_body(
             marketplace_errors.MarketplaceError(code, details=details),
             request_id=PUBLIC_REQUEST_ID,
         )
-        assert_contains_no_protected_logic(wrapped, tokens, SURFACE_STRUCTURAL_KEYS)
+        _assert_surface_contains_no_protected_logic(wrapped, tokens)
 
     # ── Paper_Channel events (Requirement 19.7); the rest is task 26.1 ──────────
     for event in _paper_event_bodies():
-        assert_contains_no_protected_logic(event, tokens, SURFACE_STRUCTURAL_KEYS)
+        _assert_surface_contains_no_protected_logic(event, tokens)
 
     # The buffer has no column a graph could be persisted in, so the ``payload`` the task-26.1
     # serialiser writes is the only place Requirement 19.7 can be broken.
@@ -548,6 +567,226 @@ def test_p47_no_response_or_event_contains_protected_logic(strategy: Any) -> Non
         "the projection changed when the row carried Protected_Logic, so it reads a "
         f"protected column: {differing}"
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#
+#  TASK 12.9 — THE TRACE AND EXPORT SURFACES  (production-launch-hardening, Requirements 1.19,
+#  2.19)
+#
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#
+# WHAT THIS EXTENDS
+# -----------------
+# P-47 above is quantified over "no response, error or diagnostic body" but was written against
+# the Marketplace listing surfaces that existed when task 16.4 landed. Two surfaces this
+# codebase has today were not among them:
+#
+#   * a **trace** surface: ``POST /api/strategy-operations/strategies/{id}/nodes/{node_id}/
+#     preview`` (``strategy_operations.py::preview_node``) computes a node's values through the
+#     same executors the DAG runtime trades with and reads the live *signal trace* store
+#     (``signal_trace_engine.trace_engine``) for that node's recorded executions — this is the
+#     DAG execution trace surface Requirement 1.19 names.
+#   * an **export** surface: ``POST /api/strategies/{id}/versions/compare``
+#     (``strategy_operations.py::compare_versions``) is documented, in
+#     ``subscriber_operation_guard.VERSION_COMPARE``'s own comment, as returning "two versions'
+#     blueprints in one response — an export of the definition in all but name."
+#
+# THE NON-ENTITLED CALLER, ON BOTH ROUTES
+# ----------------------------------------
+# Both handlers resolve ownership FIRST — ``StrategyService.get_strategy`` /
+# ``compare_versions`` filter ``.eq("user_id", user["id"])`` — so a caller who is not the owner
+# never reaches the graph, the compiler or the trace store; a stale ``strategy_id`` a caller
+# still holds (e.g. from a lapsed subscription) resolves to nothing and the handler was already
+# about to refuse. ``subscriber_operation_guard.refuse_if_entitled_subscriber`` then runs at
+# that exact point, per this module's own docstring, and answers one of two ways depending on
+# what "non-entitled" means for this caller:
+#
+#   * **still ``SUBSCRIBED`` but not the owner** (Requirement 12.4 forbids the action outright,
+#     even though the caller is entitled to *use* the strategy) — refused 403
+#     ``MARKETPLACE_OPERATION_NOT_PERMITTED``, via :func:`_refuse`;
+#   * **``NOT_SUBSCRIBED``, ``EXPIRED`` or otherwise non-entitled** (the "subscription lapsed"
+#     case Requirement 1.19 is written for) — the guard returns ``None`` and the handler's own
+#     pre-existing refusal stands: a plain 404 naming only the ``strategy_id`` the caller
+#     already supplied.
+#
+# Both are asserted below, against the SAME generated strategy and the SAME token set P-47
+# uses, through the SAME :func:`_assert_surface_contains_no_protected_logic` helper — "not in
+# the body, not in an error message, not in a trace, not in a DAG export" is one property
+# statement, so it is one call per surface rather than a bespoke check per route.
+#
+# WHAT IS REAL AND WHAT IS A DOUBLE
+# ----------------------------------
+# The two guarded routes' own decorated handlers (unwrapped from ``@limiter.limit`` exactly as
+# :data:`CLONE_HANDLER` is above) and the real ``subscriber_operation_guard`` module — the same
+# guard :class:`~backend_app.backend.marketplace.subscriber_operation_guard.RestrictedOperation``
+# instances the production routers import — run unmodified. Doubled: the Persistence_Layer reads
+# each handler makes before the refusal point (``StrategyService.get_strategy``,
+# ``StrategyService.compare_versions``), scripted to answer exactly as a real service-role read
+# does for a strategy id that is not this caller's — ``None`` / ``ValueError`` — which is what
+# puts each handler at its OWN pre-existing refusal without a database. The entitlement decision
+# itself is doubled at ``subscriber_operation_guard.refuse_if_entitled_subscriber`` — the same
+# seam :data:`CLONE_HANDLER`'s harness leaves real for P-48, patched here only to select which of
+# the two non-entitled answers above is exercised, deterministically and without a Subscription
+# row to construct.
+
+
+#: ``preview_node`` and ``compare_versions`` without their rate-limit decorators, exactly as
+#: :data:`CLONE_HANDLER` is unwrapped above and for the same reason: a genuine
+#: ``starlette.requests.Request`` and a 30- or 100-per-minute bucket would make this property
+#: about the limiter by the twentieth-odd example rather than about the containment.
+PREVIEW_NODE_HANDLER = inspect.unwrap(strategy_ops.preview_node)
+COMPARE_VERSIONS_HANDLER = inspect.unwrap(strategy_ops.compare_versions)
+
+for _handler, _name in (
+    (PREVIEW_NODE_HANDLER, "preview_node"),
+    (COMPARE_VERSIONS_HANDLER, "compare_versions"),
+):
+    assert inspect.iscoroutinefunction(_handler), (
+        f"strategy_operations.{_name} no longer unwraps to a coroutine function; the decorator "
+        "stack changed and this harness needs revisiting"
+    )
+del _handler, _name
+
+
+class _NonOwnedStrategyService:
+    """A ``StrategyService`` double that answers exactly as the real one does for a strategy id
+    that resolves to no row under ``.eq("user_id", caller)`` — the shape every non-owner caller
+    produces on both guarded routes, whether they are a stranger or a lapsed subscriber.
+
+    ``get_strategy`` returning ``None`` and ``compare_versions`` raising ``ValueError`` are not
+    approximations: they are ``StrategyService.get_strategy``'s and
+    ``StrategyService.compare_versions``'s own documented behaviour for exactly this case (see
+    the two functions in ``backend_app/backend/strategy_service.py``). Nothing about the graph,
+    the compiler or the trace store is reached, because neither handler reaches them before this
+    point — which is also why this double does not need to hold one.
+    """
+
+    async def get_strategy(self, *, user: Any, strategy_id: Any) -> None:
+        return None
+
+    async def compare_versions(
+        self, *, user: Any, strategy_id: Any, version_a: Any, version_b: Any
+    ) -> Any:
+        raise ValueError("One or both versions not found")
+
+
+async def _get_non_owned_strategy_service() -> _NonOwnedStrategyService:
+    return _NonOwnedStrategyService()
+
+
+@PROPERTY_SETTINGS
+@given(
+    strategy=protected_logic_strategies(),
+    strategy_id=identifiers(),
+    caller_id=identifiers(),
+    is_still_subscribed=st.booleans(),
+)
+def test_trace_and_export_surfaces_contain_no_protected_logic(
+    strategy: Any,
+    strategy_id: str,
+    caller_id: str,
+    is_still_subscribed: bool,
+) -> None:
+    """Task 12.9 (Requirements 1.19, 2.19): for a non-entitled, non-owner caller — whether they
+    are a stranger, ``NOT_SUBSCRIBED``, or their Subscription has ``EXPIRED`` — nor for an
+    entitled-but-not-owning ``SUBSCRIBED`` caller (Requirement 12.4), does the serialised
+    response of the DAG execution **trace** surface (``preview_node``) or the DAG **export**
+    surface (``compare_versions``) carry any substring of the strategy's Protected_Logic — not
+    in the body and not in the error message either, because for this caller the response IS
+    the refusal.
+
+    ``is_still_subscribed`` selects which of the two non-entitled answers
+    ``subscriber_operation_guard.refuse_if_entitled_subscriber`` gives (see the banner above):
+    ``True`` drives the 403 :func:`_refuse` writes for a ``SUBSCRIBED`` non-owner, ``False``
+    drives the plain 404 a stranger or a lapsed subscriber leaves standing. Both are searched.
+
+    **Validates: Requirements 1.19, 2.19**
+    """
+    # ── The tokens no trace or export response may contain, from the module's own oracle ────
+    tokens = protected_logic_tokens(
+        strategy.strategy_row,
+        strategy.version_row,
+        strategy.backtest_rows,
+    )
+    assert tokens, "the generator must produce Protected_Logic tokens to search for"
+    # Skip the example, not the token: see "WHY SOME EXAMPLES ARE SKIPPED" in the P-47 banner.
+    # `strategy_id` is drawn independently of `strategy` (it stands in for the caller's own,
+    # unrelated stale reference) and both refusal bodies below echo it VERBATIM — in
+    # `preview_node`'s message and in `_refuse`'s own `listing_id` detail — by design, per
+    # Requirement 21.4's caller-supplied-id-back semantics. A token that happens to be a
+    # substring of THIS example's `strategy_id` is therefore the same false positive the P-47
+    # banner describes for `avg_rating`/`details`, and is skipped the same way: declared text
+    # local to this example, never read from the response under test.
+    independent_text = STRATEGY_INDEPENDENT_TEXT + (str(strategy_id),)
+    assume(
+        not any(
+            any(token in text for text in independent_text) for token in tokens
+        )
+    )
+
+    async def _guard_stub(user: Any, *, strategy_id: Any, operation: Any) -> None:
+        if not is_still_subscribed:
+            # NOT_SUBSCRIBED / EXPIRED / a stranger: the guard is a no-op and the handler's own
+            # pre-existing refusal stands, exactly as `refuse_if_entitled_subscriber` documents
+            # for every caller who is not an entitling SUBSCRIBED or OWNED.
+            return None
+        # SUBSCRIBED but not the owner: the real 403 the guard raises for this caller, built
+        # from only the operation name and the caller's own strategy/listing id — never from
+        # anything read off the owner's row (see `_refuse`'s own docstring).
+        raise MarketplaceError(
+            MARKETPLACE_OPERATION_NOT_PERMITTED,
+            details={"operation": operation.name, "listing_id": str(strategy_id)},
+        )
+
+    with mock.patch.object(
+        strategy_ops, "get_strategy_service", _get_non_owned_strategy_service
+    ), mock.patch.object(
+        _subscriber_guard, "refuse_if_entitled_subscriber", _guard_stub
+    ):
+        # ── The trace surface: preview_node ──────────────────────────────────────
+        with pytest.raises((HTTPException, MarketplaceError)) as trace_caught:
+            asyncio.run(
+                PREVIEW_NODE_HANDLER(
+                    request=None,
+                    strategy_id=strategy_id,
+                    node_id="any-node",
+                    body=strategy_ops.NodePreviewRequest(),
+                    user={"id": caller_id},
+                )
+            )
+        trace_body = _error_body_of(trace_caught.value)
+        _assert_surface_contains_no_protected_logic(trace_body, tokens)
+
+        # ── The export surface: compare_versions ─────────────────────────────────
+        with pytest.raises((HTTPException, MarketplaceError)) as export_caught:
+            asyncio.run(
+                COMPARE_VERSIONS_HANDLER(
+                    request=None,
+                    strategy_id=strategy_id,
+                    version_a="v1",
+                    version_b="v2",
+                    user={"id": caller_id},
+                )
+            )
+        export_body = _error_body_of(export_caught.value)
+        _assert_surface_contains_no_protected_logic(export_body, tokens)
+
+
+def _error_body_of(exc: BaseException) -> Any:
+    """The serialised body a caller actually receives for ``exc``.
+
+    ``HTTPException.detail`` is what FastAPI's exception handler serialises for the plain
+    owner-scoped 404s both routes raise; ``MarketplaceError.to_error_object()`` is what the
+    shared marketplace exception handler serialises for the 403 :func:`_refuse` raises. Reading
+    both through one function is what lets the property call it uniformly for either answer.
+    """
+    if isinstance(exc, HTTPException):
+        return exc.detail
+    if isinstance(exc, MarketplaceError):
+        return exc.to_error_object()
+    raise AssertionError(f"unexpected exception type for a refusal: {type(exc)!r}")  # pragma: no cover
+
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
 #

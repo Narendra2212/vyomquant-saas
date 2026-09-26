@@ -62,21 +62,33 @@
  *
  * ═══ WHAT THE ENGINE DOES NOT PRODUCE (Requirement 19.3) ═══
  *
- *   * **Net P&L.** `pageFields` declares `results.total_pnl` and §7.4's table marks it ✅,
- *     but `backtesting_engine.py`'s result dict carries `final_equity` and no `total_pnl` at
- *     all — it computes `final_equity - initial_equity` for a log line and discards it. So
- *     tier 1's second slot is the declared not-available marker with the declared reason,
- *     and nothing here derives a substitute: a figure labelled "Net P&L" that this page
- *     subtracted for itself is not the engine's answer.
- *   * **Monthly returns.** `BacktestRuntime` publishes `monthly_returns` as bare numbers
- *     with no months attached (and resamples them off a positional index rather than the
- *     curve's own timestamps), so nothing in the payload can be dated to a month. The tab
- *     states that, and invents no chart.
- *   * **A dated x axis for the two curves.** `charts.equity_curve.timestamps` is
- *     `DatetimeIndex.astype('int64')` — nanoseconds — while the same curve's record form
- *     carries ISO strings, so a date axis would need this page to guess a unit. Both curves
- *     are plotted against the point's POSITION in the run, and the axis says so. The trade
- *     table carries the real entry and exit instants.
+ *   * **Net P&L.** `pageFields` declares `results.total_pnl` and §7.4's table marks it ✅.
+ *     THIS BULLET IS HISTORICAL (production-launch-hardening task 7.4): the engine's result
+ *     dict used to carry `final_equity` and no `total_pnl` at all — `final_equity -
+ *     initial_equity` was computed and spent entirely on a log line. Task 7.4 emits it as a
+ *     payload key on both engine paths, declared beside `final_equity` so the two cannot
+ *     disagree (`backtesting_engine.BACKTEST_PAYLOAD_EMITTED_KEYS`). Tier 1's second slot
+ *     therefore renders a real figure on a completed run. `pageFields.js`'s declared
+ *     `absence`/`reason` for `netPnl` is unchanged and still the correct behaviour for the
+ *     genuine remaining gap: a specific response that omits the key regardless — an older
+ *     persisted row written before this fix, or a run that failed before the engine produced
+ *     a payload at all — still renders the not-available marker rather than a fabricated
+ *     value.
+ *   * **Monthly returns.** THIS BULLET IS ALSO HISTORICAL. `_calculate_performance_metrics`
+ *     used to build the equity series on a default `RangeIndex` and re-read `0..n-1` as
+ *     epoch nanoseconds (DEFECT 49), which flattened every run's `monthly_returns` and
+ *     `daily_returns` to `[]` regardless of span. The equity series is now indexed from the
+ *     curve's own timestamps (or the executed bars' index as a fallback) before resampling,
+ *     so both columns carry real dated buckets when the run's window is long enough to
+ *     produce one — the Monthly returns tab's own `UNAVAILABLE` copy at
+ *     `DETAIL_TABS.MONTHLY` still describes the pre-fix behaviour and is a separate,
+ *     unresolved staleness this task does not correct (out of scope: it is rendered UI copy,
+ *     not this docblock).
+ *   * **A dated x axis for the two curves.** Still accurate, unchanged.
+ *     `charts.equity_curve.timestamps` is `DatetimeIndex.astype('int64')` — nanoseconds —
+ *     while the same curve's record form carries ISO strings, so a date axis would need this
+ *     page to guess a unit. Both curves are plotted against the point's POSITION in the run,
+ *     and the axis says so. The trade table carries the real entry and exit instants.
  *
  * ═══ THE SAVED RUNS TABLE ═══
  *
@@ -689,8 +701,12 @@ const reasonOf = (field) => fieldEntry(field)?.reason ?? undefined;
  * units (`Total Return [%]`, `Max Drawdown [%]`, `win_rate * 100`), and `ds/Metric` appends
  * the sign without multiplying. `precision` is presentational and applies only to the
  * rendering; nothing here rounds a value before it is read.
+ *
+ * Exported for the same reason {@link tierOneFigures} is (task 7.3's frontend key-set
+ * contract test): the read-key each figure reaches for has to be probed off the real
+ * declaration, not off a second copy of it typed into a test.
  */
-const TIER_ONE_FIGURE = Object.freeze({
+export const TIER_ONE_FIGURE = Object.freeze({
   totalReturn: Object.freeze({
     format: "percent",
     precision: 2,
@@ -701,9 +717,10 @@ const TIER_ONE_FIGURE = Object.freeze({
     format: "currency",
     precision: 2,
     read: (results) => results.total_pnl,
-    hint: "The run's net profit and loss. The engine reports a final equity and no net "
-      + "P&L, so this is the not-available marker rather than a figure this page subtracted "
-      + "for itself.",
+    hint: "The run's net profit and loss, as the engine reported it (final equity minus "
+      + "initial equity). The not-available marker appears only if a specific response "
+      + "omits the figure — an older persisted run from before the engine emitted it, or a "
+      + "run that failed before producing a result.",
   }),
   maxDrawdown: Object.freeze({
     format: "percent",

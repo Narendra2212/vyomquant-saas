@@ -64,6 +64,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import LiveTrading from '../../../src/pages/LiveTrading';
 import * as dashboardModule from '../../../src/api/modules/dashboard';
@@ -127,6 +129,19 @@ const declared = (field) => PAGE_FIELD_BY_KEY[pageFieldKey({ page: PAGES.LIVE_TR
 const STRATEGY_STATUS_CHANNEL = declared('deploymentStopped').read.match(/'([^']+)'/)[1];
 
 const STRATEGY_ID = 's1';
+
+/**
+ * production-launch-hardening task 8.6 - the one shared declaration of the frame's shape,
+ * read here rather than hand-typed a second time. pytest
+ * (tests/test_strategy_status_publish.py) reads the same file directly; this is the
+ * `node:fs` side of task 8.4's one-file convention.
+ */
+const STRATEGY_STATUS_FIXTURE = JSON.parse(
+  readFileSync(
+    resolve(process.cwd(), '..', 'tests', 'fixtures', 'strategy_status_frame.json'),
+    'utf8',
+  ),
+);
 
 /** One configured venue key, one open live position, one strategy. */
 const dashboardBody = () => ({
@@ -391,5 +406,80 @@ describe('LiveTrading — STRATEGY_STATUS reaches tier 1 with no clock advanced 
     // And they share ONE `wsClient.subscribe` (§13.2a). The double keeps a set per event
     // type, so a registry that subscribed per consumer would show up right here.
     expect(socket.handlers.get(STRATEGY_STATUS_CHANNEL).size).toBe(1);
+  });
+
+  /* ════════════════════════════════════════════════════════════════════════════════════
+   * production-launch-hardening task 8.6 - the shared fixture, and the wrong envelope
+   *
+   * 1.24 was a three-way mismatch: no backend service published a frame, the only
+   * broadcaster that existed wrapped everything as `{"type": "dashboard_update",
+   * "update_type": "strategy_status"}`, and the subscriber spells the channel in upper
+   * case. The cases above already pin the channel name and the reflected `status`; these
+   * two pin the other half - that the frame this task's backend half actually publishes
+   * (task 8.4's fixture) is accepted, and that the wrongly-enveloped shape 8.4's fixture
+   * also declares (`wrong_envelope_example`) is silently ignored rather than crashing or
+   * partially applying. Read off `STRATEGY_STATUS_FIXTURE` rather than typed here, so a
+   * change to the fixture's `type` spelling on either side surfaces as a red test instead
+   * of two files quietly agreeing with each other and disagreeing with production.
+   * ════════════════════════════════════════════════════════════════════════════════════ */
+
+  it('reflects the exact frame task 8.5 publishes, read from the shared fixture', async () => {
+    await mountAndSettle();
+
+    const example = STRATEGY_STATUS_FIXTURE.example;
+    expect(example.type).toBe(STRATEGY_STATUS_CHANNEL);
+
+    // `strategy_id` is this page's own; `environment` is overridden to the ledger
+    // `dashboardBody()` seeds (`'live'`) rather than the fixture's illustrative `'paper'` -
+    // `liveFrame.js`'s ledger gate (exercised on its own two lines up in "declines a frame
+    // for another strategy...") would otherwise decline this exact fixture example the
+    // same way it declines any other cross-ledger frame, which is a DIFFERENT case from
+    // the one this test exists to cover.
+    push({ ...example, strategy_id: STRATEGY_ID, environment: 'live' });
+
+    const reading = pushedReading();
+    expect(reading).not.toBeNull();
+    expect(connectionSlot().contains(reading)).toBe(true);
+    expect(reading.textContent).toContain(example.status);
+
+    // Requirement 14.5, same as every case above: the read connection figure is untouched.
+    expect(connectionFigure()).toContain('connected');
+  });
+
+  it('declines the dashboard_update-wrapped variant the fixture pins as the negative case', async () => {
+    await mountAndSettle();
+
+    // Establishes there IS a line to lose, so the assertion below is that the second push
+    // failed to arrive - not that no frame was ever going to render anything. `environment`
+    // is overridden to this page's own ledger for the same reason as the case above.
+    push({ ...STRATEGY_STATUS_FIXTURE.example, strategy_id: STRATEGY_ID, environment: 'live' });
+    expect(pushedReading().textContent).toContain(STRATEGY_STATUS_FIXTURE.example.status);
+
+    // The wrapped shape task 8.4's fixture names as what `broadcast_dashboard_update`
+    // would have produced. `websocketClient.js`'s real routing derives its event type as
+    // `message.type || message.event_type` (websocketClient.js:500) BEFORE handing a frame
+    // to `processMessage` - so a real `{"type": "dashboard_update", ...}` frame is fanned
+    // out under the key `'dashboard_update'`, never under `'STRATEGY_STATUS'`. This double
+    // keeps a callback set PER event type (see the module docblock), so delivering under
+    // that same derived key - rather than under `STRATEGY_STATUS_CHANNEL`, which would
+    // bypass the very dispatch this case exists to pin - is what makes the refusal the
+    // real `processMessage`'s exact `message.type` match, not an assumption this test
+    // makes on its behalf.
+    const wrongEnvelope = STRATEGY_STATUS_FIXTURE.wrong_envelope_example;
+    expect(wrongEnvelope.type).toBe('dashboard_update');
+    expect(wrongEnvelope.type).not.toBe(STRATEGY_STATUS_CHANNEL);
+    act(() => {
+      socket.emit(wrongEnvelope.type, {
+        ...wrongEnvelope,
+        data: { ...wrongEnvelope.data, strategy_id: STRATEGY_ID },
+      });
+    });
+
+    // Still the frame from the first push - unmoved, not blanked, not replaced. A wiring
+    // that matched loosely (on `update_type`, or on the presence of `data.status`) would
+    // fail this rather than the assertion above, because it would have SOMETHING to
+    // change now that a second, differently-shaped frame arrived.
+    expect(pushedReading().textContent).toContain(STRATEGY_STATUS_FIXTURE.example.status);
+    expect(connectionFigure()).toContain('connected');
   });
 });

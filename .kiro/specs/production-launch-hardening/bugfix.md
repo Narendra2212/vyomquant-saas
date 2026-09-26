@@ -332,6 +332,26 @@ open at tablet widths, THEN they contend for the same overlay registry slot.
 verification has been performed against it, so a green pipeline is the only evidence that the
 running service is correct.
 
+**Risk-limit enforcement gaps (task 12.3 follow-up)**
+
+1.48 **[P1][CONFIRMED]** WHEN a caller submits an order at any leverage, THEN no code path reachable
+without a live deployment worker enforces a leverage limit. The per-user `max_leverage` setting
+(default `3`) stored by `get_user_risk_settings_store` in `backend_app/routers/risk.py` is a pure
+display/configuration value — grep confirms it is never read by `PaperTradingService.place_order`,
+by `paper_simulator.submit_intent`, by `ExecutionEngine.open_position`, or by
+`RiskManager.can_open_position` (the latter two do not even accept a leverage parameter), so a
+caller can set `max_leverage` to any value with zero effect on what a paper order is allowed to do.
+The one enforcement point that does exist —
+`InstitutionalRiskManager.validate_trade_request`'s tiered `REJECT_LEVERAGE_SCALING` check — is
+called from exactly one place in the tree, `backend_app/backend/master_executor.py:381`, inside the
+live per-tick worker loop, which this environment cannot start and therefore cannot exercise either.
+This narrows, rather than closes, task 12.3's 1.13/2.13 finding: leverage specifically has no
+enforcement provable on the paper order path or on the internal execution service, and its one real
+enforcement point is unreachable here. Filed as **P1** rather than **P0** because the reachable gap
+is confined to paper trading, which carries no margin or real capital at risk — a P0 on this file's
+own scale requires the ability to place, duplicate, or lose a *real* order, or cross a tenant
+boundary, neither of which applies to a paper leverage value with no live path.
+
 ---
 
 ### Expected Behavior (Correct)
@@ -571,6 +591,34 @@ invalidation. *Proof:* the recorded command output. Baseline captured during req
 `ACTIVE 1/1` on `vyomquant-api:146`, CloudFront `200`. If any call is denied to the
 `github-actions` IAM principal, that specific call SHALL be recorded as **BLOCKED** with the denial,
 and the clause SHALL NOT be reported as passing.
+
+**Risk-limit enforcement gaps (task 12.3 follow-up)**
+
+2.48 **[P1]** WHEN a caller submits an order at any leverage, THEN the limit SHALL be enforced
+server-side on a path reachable without a live deployment worker. Two resolutions are possible and
+this clause does not decide between them:
+
+- Wire `max_leverage` enforcement into the paper order path
+  (`PaperTradingService.place_order` and/or `paper_simulator.submit_intent`) and/or into the
+  internal execution service (`ExecutionEngine.open_position` /
+  `RiskManager.can_open_position` in `backend_app/core/execution_engine.py` and
+  `backend_app/core/risk_manager.py` respectively — neither currently accepts a leverage
+  parameter, so this requires extending their signatures), so a paper order exceeding the
+  caller's stored `max_leverage` is refused with a distinct machine-readable code; or
+- Explicitly document that leverage is intentionally out of scope for paper trading because paper
+  trading has no margin concept, and rename or annotate the `max_leverage` setting in
+  `backend_app/routers/risk.py`'s `get_user_risk_settings_store` so it is not presented as an
+  enforced control when it is not.
+
+Whichever resolution is chosen, the live enforcement point at
+`InstitutionalRiskManager.validate_trade_request`'s `REJECT_LEVERAGE_SCALING` check
+(`backend_app/backend/master_executor.py:381`) SHALL be exercised by a test once a worker can be
+started in CI, rather than left provable only by code reading. *Proof:* if enforcement is wired in,
+a pytest submitting an order exceeding `max_leverage` directly to the paper order route and/or to
+`ExecutionEngine.open_position`, asserting refusal with a distinct code and asserting no order row
+is written — mirroring 2.13's proof shape. If leverage is instead declared out of scope, the proof
+is the documentation change itself plus a test asserting the setting's UI/API label no longer
+implies enforcement it does not perform.
 
 ---
 
