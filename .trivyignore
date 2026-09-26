@@ -1,0 +1,29 @@
+# .trivyignore - CRITICAL findings suppressed from the 05 Security workflow's
+# aquasecurity/trivy-action gate, each with the reachability analysis that justifies it.
+#
+# Trivy runs with `ignore-unfixed: true` and `exit-code: 1` on any CRITICAL finding
+# (.github/workflows/05-security.yml). An entry here does not mean the CVE is fixed -
+# it means this repository's own code cannot reach it, and the analysis proving that is
+# on record. This file is itself the repository owner's decision to suppress a real,
+# unfixed CRITICAL finding rather than an automated or unilateral action - see
+# .kiro/specs/production-launch-hardening/dependency-triage.md, "Option 2" of the torch
+# section, for the fuller writeup this entry summarises.
+#
+# Remove an entry the moment its real fix (a version bump, verified) lands - a stale
+# .trivyignore entry hides a regression the same way a stale test skip does.
+
+# torch 2.3.1+cpu - CVE-2025-32434 (RCE via torch.load, CWE-502 deserialization of
+# untrusted data; fixed in 2.6.0).
+#
+# No reachable call site: CVE-2025-32434 requires torch.load, torch.jit, or a .pt/.pth
+# checkpoint. A repo-wide search for all three returns zero matches. torch is imported at
+# exactly 3 lazy, optional sites in backend_app/core/ml_safety.py (seeding, CUDA
+# availability, device selection only) - none of them deserializes anything.
+#
+# The bump to 2.6.0 (3 minor versions) is the correct fix and is NOT abandoned by this
+# entry - it was attempted and blocked on disk space in this environment (0.19 GB free
+# vs a 206.5 MB wheel unpacking to ~1.5 GB), not on a torch problem. Three pin sites move
+# together when it lands: requirements-cpu.txt, requirements.txt,
+# backend_app/requirements.txt, and Dockerfile line 23 (a separate hardcoded pin outside
+# any manifest).
+CVE-2025-32434
