@@ -20,11 +20,16 @@ export default function FounderSection() {
           {/* Subtle decoration */}
           <div className="absolute top-0 right-0 w-64 h-64 bg-accent-cyan/5 rounded-full blur-[60px]" />
           
-          <div className="relative z-10 flex flex-col md:flex-row gap-10 items-center md:items-start">
+          <div className="relative z-10 flex flex-col md:flex-row gap-10 items-center md:items-stretch">
             
-            {/* Avatar Placeholder / Initial */}
-            <div className="w-32 h-32 rounded-2xl bg-bg-elevated border border-border-active flex items-center justify-center flex-shrink-0 shadow-xl">
-              <span className="text-4xl font-black text-text-muted">NT</span>
+            {/* Avatar Placeholder / Initial. The slot stretches to the content column height
+                (same items-stretch pattern as DownloadSection.jsx / Pricing.jsx for a shorter
+                column beside a taller one); the fixed 128px square is centred inside it, so the
+                glyph never distorts and the two columns end at the same line. */}
+            <div className="flex-shrink-0 flex items-center justify-center md:self-stretch">
+              <div className="w-32 h-32 rounded-2xl bg-bg-elevated border border-border-active flex items-center justify-center shadow-xl">
+                <span className="text-4xl font-black text-text-muted">NT</span>
+              </div>
             </div>
 
             {/* Content */}
