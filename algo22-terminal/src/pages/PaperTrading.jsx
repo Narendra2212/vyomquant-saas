@@ -308,6 +308,11 @@ import { Button } from '../components/ui/Button';
 // per-figure tag below now takes its hue, wash and border style from — so the indigo
 // treatment lives in `design/semantic.js` and not in two places on this page.
 import { TradingEnvironmentBadge } from '../components/ds/TradingEnvironmentBadge';
+// Pure layout/grouping change: the ~16 panels below are progressively disclosed under four
+// tabs (Overview, Positions & Orders, Charts, Activity) rather than all stacked at once. Every
+// panel keeps its own props, state and conditionals verbatim — `Tabs` mounts all four panels and
+// only toggles `hidden` on the inactive ones, so nothing here changes what a panel computes.
+import { Tabs } from '../components/ds/Tabs';
 // Task 25.1 part 2. `statusToken` is the ONE state → colour mapping (§4.1, Requirement 1.4):
 // the four tone words below name a group in it rather than a hue. `token` is read directly for
 // everything that is NOT a state — surfaces, rules, the three content greys, radii and spacing.
@@ -2683,8 +2688,22 @@ export default function PaperTrading() {
         className="mb-4 rounded-sm"
       />
 
-      {/* ── controls ───────────────────────────────────────────────────── */}
-      <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
+      {/* ── the sixteen panels below, grouped under four tabs for progressive disclosure ──
+          Pure layout change: every panel here is the same JSX that used to render stacked, moved
+          verbatim into one of four tab panels. `ds/Tabs` mounts all four and only toggles `hidden`
+          on the inactive ones, so no panel's state, data read or conditional changes because of
+          which tab it now lives under. */}
+      <Tabs
+        label="Paper trading sections"
+        defaultValue="overview"
+        items={[
+          {
+            id: 'overview',
+            label: 'Overview',
+            content: (
+              <>
+                {/* ── controls ───────────────────────────────────────────────────── */}
+                <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
         <PanelTitle title="Session controls" sub="Strategy, simulated capital, market, timeframe and the five session operations" />
 
         <PanelBody
@@ -3237,134 +3256,6 @@ export default function PaperTrading() {
         </div>
       </div>
 
-      {/* ── the live stream, its reconnection, and the bounds on what it retains ────────── */}
-      <Card className="mb-4" style={{ background: token.surface.raised, borderColor: channelRefusal ? `${statusToken('loss').fg}66` : token.line.default }}>
-        <PanelTitle
-          title="Live event stream"
-          sub={`paper.${sessionId ?? '{session}'} — one subscription, released when this route unmounts`}
-          right={<SimulatedTag />}
-        />
-        <PanelBody
-          state={liveStreamState}
-          message={
-            channelRefusal
-              ? channelRefusal.reason
-                || 'The server refused this session\u2019s live channel. Its own code is shown below.'
-              : gapCloseError?.message
-          }
-          code={channelRefusal ? channelRefusal.code || null : gapCloseError?.failure?.code ?? null}
-          onRetry={() => closeGap('manual')}
-          retryLabel="Replay from the last applied sequence"
-          idleText="No session is selected, so no channel is subscribed and no timer is running."
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-              {reconnecting ? (
-                <span
-                  role="status"
-                  aria-live="polite"
-                  data-testid="paper-stream-reconnecting"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    // fontSize: 10 → --text-micro (chip), as on the page-header indicator above and
-                    // for the same reason. The two say the same word and now read from one step.
-                    fontSize: token.text.micro,
-                    fontFamily: 'monospace',
-                    fontWeight: 800,
-                    letterSpacing: 0.6,
-                    textTransform: 'uppercase',
-                    color: statusToken('warning').fg,
-                    border: `1px solid ${statusToken('warning').fg}55`,
-                    borderRadius: token.radius.sm,
-                    padding: '2px 7px',
-                  }}
-                >
-                  <Spinner size={11} />
-                  Reconnecting…
-                </span>
-              ) : (
-                <StatusPill
-                  tone={socketConnected ? 'good' : 'warn'}
-                  Icon={socketConnected ? Wifi : Unplug}
-                  label={socketConnected ? 'Frames arriving' : `Socket ${socketStatus}`}
-                />
-              )}
-              <StatusPill tone="muted" label={`Applied through sequence ${formatCount(retained.lastSequence) ?? '0'}`} />
-              <StatusPill tone="muted" label={`Gap closes ${formatCount(gapCloseCount) ?? '0'}`} />
-              {retained.duplicatesDiscarded > 0 ? (
-                <StatusPill
-                  tone="muted"
-                  label={`Duplicates discarded ${formatCount(retained.duplicatesDiscarded)}`}
-                  title="Frames whose event_id had already been applied. Requirement 19.8."
-                />
-              ) : null}
-            </div>
-
-            {/* fontSize: 9 → --text-body (sentence). Three sentences on what a reconnect re-reads,
-                what it discards and how often the safety poll runs while the socket is down — the
-                explanation of why nothing here is presented as current when it is not. */}
-            <div style={{ color: token.content.muted, fontSize: token.text.body }}>
-              On reconnect the page asks{' '}
-              <code>events(sessionId, {formatCount(retained.lastSequence) ?? '0'})</code> for the
-              frames the drop swallowed, and discards any whose <code>event_id</code> it has already
-              applied. While the socket is down, the session and its metrics are re-read every{' '}
-              {formatCount(SAFETY_POLL_INTERVAL_MS / 1000)} seconds so nothing here is presented as
-              current when it is not.
-            </div>
-          </div>
-        </PanelBody>
-
-        {/* Requirement 27.5's bounds, disclosed rather than left as an invisible policy — a view
-            that silently drops the oldest half of its history is telling the reader something.
-
-            Outside `PanelBody` on purpose: this is a statement about THIS PAGE'S memory, not a
-            read of the server's, so it stays true and stays visible while the socket is refused,
-            reconnecting or down. */}
-        <div
-          data-testid="paper-retention"
-          data-retained-events={retained.events.length}
-          data-retained-ticks={retained.ticks.length}
-          data-retained-event-cap={MAX_RETAINED_EVENTS}
-          data-retained-tick-cap={MAX_RETAINED_TICKS}
-          data-chart-point-cap={MAX_CHART_POINTS_PER_SERIES}
-          data-price-chart-points={priceChart.length}
-          data-pnl-chart-points={pnlChart.length}
-          data-drawdown-chart-points={drawdownChart.length}
-          data-equity-chart-points={equityPoints.length}
-          data-events-discarded={retained.eventsDiscarded}
-          data-ticks-discarded={retained.ticksDiscarded}
-          style={{
-            color: token.content.secondary,
-            // fontSize: 10 → --text-body (sentence). Requirement 27.5's bounds, disclosed in prose
-            // rather than left as an invisible policy. A disclosure a retail reader cannot read has
-            // not disclosed anything, so it takes the default step.
-            fontSize: token.text.body,
-            fontFamily: 'monospace',
-            lineHeight: 1.6,
-            marginTop: token.space['3'],
-            borderTop: `1px solid ${token.line.default}`,
-            paddingTop: token.space['3'],
-          }}
-        >
-          Retained in memory:{' '}
-          <span style={{ color: token.content.primary }}>
-            {formatCount(retained.events.length)} / {formatCount(MAX_RETAINED_EVENTS)} events
-          </span>
-          ,{' '}
-          <span style={{ color: token.content.primary }}>
-            {formatCount(retained.ticks.length)} / {formatCount(MAX_RETAINED_TICKS)} ticks
-          </span>
-          , and at most <span style={{ color: token.content.primary }}>{formatCount(MAX_CHART_POINTS_PER_SERIES)}</span>{' '}
-          points per chart series. The oldest are discarded first, by position in the
-          session&rsquo;s sequence rather than by arrival order.
-          {retained.eventsDiscarded > 0 || retained.ticksDiscarded > 0
-            ? ` ${formatCount(retained.eventsDiscarded)} event(s) and ${formatCount(retained.ticksDiscarded)} tick(s) have been discarded by that bound — they remain readable from the session's event log.`
-            : ''}
-        </div>
-      </Card>
-
       {/* ── "not computed" is a statement the server makes, and it is shown ── */}
       {sessionId && reads.metrics.status === 'ready' && !metricsComputed ? (
         <div
@@ -3598,10 +3489,112 @@ export default function PaperTrading() {
           </div>
         </PanelBody>
       </Card>
+              </>
+            ),
+          },
+          {
+            id: 'positions-orders',
+            label: 'Positions & Orders',
+            content: (
+              <>
+                {/* ── open positions ─────────────────────────────────────────────────
+                     This region, `open orders` below it and `execution events` in the Activity
+                     tab are the three §7.8 (4) names as the shared `components/trading/*` panels'
+                     second consumer. They stay on {@link DataTable} + {@link PanelBody}: those
+                     panels render one row of figures and these three render a collection. See
+                     TASK 25.2 in the module docblock for the two requirements a conversion would
+                     cost. */}
+                <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
+                  <PanelTitle
+                    title={`Open positions (${formatCount(positions.length) ?? '0'})`}
+                    sub="Direction is an explicit side; a size is never negative"
+                    right={<SimulatedTag />}
+                  />
+                  <PanelBody
+                    state={panelState('positions', positions.length === 0)}
+                    {...failureProps('positions')}
+                    onRetry={() => runRead('positions', sessionId)}
+                    emptyText="This session holds no open position."
+                  >
+                    <DataTable
+                      caption="Simulated open positions"
+                      stacked={stackedTables}
+                      rows={positions}
+                      rowKey={(row) => row.id}
+                      columns={positionColumns}
+                    />
+                    {/* fontSize: 9 → --text-body (sentence). "no price is carried forward and none
+                        is synthesised" is one of the three statements
+                        `production-launch-hardening` required this page to make about its own
+                        honesty. It grows; it is not shortened. */}
+                    <div style={{ color: token.content.muted, fontSize: token.text.body, marginTop: 6 }}>
+                      A current price, an unrealized figure or a priced-at instant that the server did not
+                      report reads “{NOT_REPORTED}” — no price is carried forward and none is synthesised.
+                    </div>
+                  </PanelBody>
+                </Card>
 
-      {/* ── PnL and drawdown ───────────────────────────────────────────── */}
-      <div
-        data-responsive-grid="pnl-drawdown"
+                {/* ── open orders ────────────────────────────────────────────────── */}
+                <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
+                  <PanelTitle
+                    title={`Open orders (${formatCount(openOrders.length) ?? '0'})`}
+                    sub={`Non-terminal order states out of ${formatCount(allOrders.length) ?? '0'} order(s) recorded for this session`}
+                    right={<SimulatedTag />}
+                  />
+                  <PanelBody
+                    state={panelState('orders', openOrders.length === 0)}
+                    {...failureProps('orders')}
+                    onRetry={() => runRead('orders', sessionId)}
+                    emptyText={allOrders.length === 0 ? 'This session has placed no order.' : 'Every order this session placed has reached a terminal state.'}
+                  >
+                    <DataTable
+                      caption="Simulated open orders"
+                      stacked={stackedTables}
+                      rows={openOrders}
+                      rowKey={(row) => row.id}
+                      columns={orderColumns}
+                    />
+                    {/* fontSize: 9 → --text-body (sentence). It ends in a full stop and it is the
+                        page's one statement that no fee on this table is a float. */}
+                    <div style={{ color: token.content.muted, fontSize: token.text.body, marginTop: 6 }}>
+                      Fees are the integer Minor_Units the order recorded, decimal-shifted for display only.
+                    </div>
+                  </PanelBody>
+                </Card>
+
+                {/* ── completed trades ───────────────────────────────────────────── */}
+                <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
+                  <PanelTitle
+                    title={`Completed trades (${formatCount(trades.length) ?? '0'})`}
+                    sub="Closed round-trips — the set the win rate is computed over"
+                    right={<SimulatedTag />}
+                  />
+                  <PanelBody
+                    state={panelState('trades', trades.length === 0)}
+                    {...failureProps('trades')}
+                    onRetry={() => runRead('trades', sessionId)}
+                    emptyText="No position has reached size zero in this session yet."
+                  >
+                    <DataTable
+                      caption="Simulated completed trades"
+                      stacked={stackedTables}
+                      rows={trades}
+                      rowKey={(row) => row.id}
+                      columns={tradeColumns}
+                    />
+                  </PanelBody>
+                </Card>
+              </>
+            ),
+          },
+          {
+            id: 'charts',
+            label: 'Charts',
+            content: (
+              <>
+                {/* ── PnL and drawdown ───────────────────────────────────────────── */}
+                <div
+                  data-responsive-grid="pnl-drawdown"
         data-single-column={String(singleColumn)}
         style={{ display: 'grid', gridTemplateColumns: gridColumns(320), gap: token.space['3'], marginBottom: token.space['3'], minWidth: 0 }}
       >
@@ -3756,165 +3749,220 @@ export default function PaperTrading() {
         </PanelBody>
       </Card>
 
-      {/* ── open positions ─────────────────────────────────────────────────
-           This region, `open orders` below it and `execution events` at the foot of the page are
-           the three §7.8 (4) names as the shared `components/trading/*` panels' second consumer.
-           They stay on {@link DataTable} + {@link PanelBody}: those panels render one row of
-           figures and these three render a collection. See TASK 25.2 in the module docblock for
-           the two requirements a conversion would cost. */}
-      <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
-        <PanelTitle
-          title={`Open positions (${formatCount(positions.length) ?? '0'})`}
-          sub="Direction is an explicit side; a size is never negative"
-          right={<SimulatedTag />}
-        />
-        <PanelBody
-          state={panelState('positions', positions.length === 0)}
-          {...failureProps('positions')}
-          onRetry={() => runRead('positions', sessionId)}
-          emptyText="This session holds no open position."
-        >
-          <DataTable
-            caption="Simulated open positions"
-            stacked={stackedTables}
-            rows={positions}
-            rowKey={(row) => row.id}
-            columns={positionColumns}
-          />
-          {/* fontSize: 9 → --text-body (sentence). "no price is carried forward and none is
-              synthesised" is one of the three statements `production-launch-hardening` required
-              this page to make about its own honesty. It grows; it is not shortened. */}
-          <div style={{ color: token.content.muted, fontSize: token.text.body, marginTop: 6 }}>
-            A current price, an unrealized figure or a priced-at instant that the server did not
-            report reads “{NOT_REPORTED}” — no price is carried forward and none is synthesised.
-          </div>
-        </PanelBody>
-      </Card>
+              </>
+            ),
+          },
+          {
+            id: 'activity',
+            label: 'Activity',
+            content: (
+              <>
+                {/* ── the live stream, its reconnection, and the bounds on what it retains ────────── */}
+                <Card className="mb-4" style={{ background: token.surface.raised, borderColor: channelRefusal ? `${statusToken('loss').fg}66` : token.line.default }}>
+                  <PanelTitle
+                    title="Live event stream"
+                    sub={`paper.${sessionId ?? '{session}'} — one subscription, released when this route unmounts`}
+                    right={<SimulatedTag />}
+                  />
+                  <PanelBody
+                    state={liveStreamState}
+                    message={
+                      channelRefusal
+                        ? channelRefusal.reason
+                          || 'The server refused this session\u2019s live channel. Its own code is shown below.'
+                        : gapCloseError?.message
+                    }
+                    code={channelRefusal ? channelRefusal.code || null : gapCloseError?.failure?.code ?? null}
+                    onRetry={() => closeGap('manual')}
+                    retryLabel="Replay from the last applied sequence"
+                    idleText="No session is selected, so no channel is subscribed and no timer is running."
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                        {reconnecting ? (
+                          <span
+                            role="status"
+                            aria-live="polite"
+                            data-testid="paper-stream-reconnecting"
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              // fontSize: 10 → --text-micro (chip), as on the page-header indicator above and
+                              // for the same reason. The two say the same word and now read from one step.
+                              fontSize: token.text.micro,
+                              fontFamily: 'monospace',
+                              fontWeight: 800,
+                              letterSpacing: 0.6,
+                              textTransform: 'uppercase',
+                              color: statusToken('warning').fg,
+                              border: `1px solid ${statusToken('warning').fg}55`,
+                              borderRadius: token.radius.sm,
+                              padding: '2px 7px',
+                            }}
+                          >
+                            <Spinner size={11} />
+                            Reconnecting…
+                          </span>
+                        ) : (
+                          <StatusPill
+                            tone={socketConnected ? 'good' : 'warn'}
+                            Icon={socketConnected ? Wifi : Unplug}
+                            label={socketConnected ? 'Frames arriving' : `Socket ${socketStatus}`}
+                          />
+                        )}
+                        <StatusPill tone="muted" label={`Applied through sequence ${formatCount(retained.lastSequence) ?? '0'}`} />
+                        <StatusPill tone="muted" label={`Gap closes ${formatCount(gapCloseCount) ?? '0'}`} />
+                        {retained.duplicatesDiscarded > 0 ? (
+                          <StatusPill
+                            tone="muted"
+                            label={`Duplicates discarded ${formatCount(retained.duplicatesDiscarded)}`}
+                            title="Frames whose event_id had already been applied. Requirement 19.8."
+                          />
+                        ) : null}
+                      </div>
 
-      {/* ── open orders ────────────────────────────────────────────────── */}
-      <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
-        <PanelTitle
-          title={`Open orders (${formatCount(openOrders.length) ?? '0'})`}
-          sub={`Non-terminal order states out of ${formatCount(allOrders.length) ?? '0'} order(s) recorded for this session`}
-          right={<SimulatedTag />}
-        />
-        <PanelBody
-          state={panelState('orders', openOrders.length === 0)}
-          {...failureProps('orders')}
-          onRetry={() => runRead('orders', sessionId)}
-          emptyText={allOrders.length === 0 ? 'This session has placed no order.' : 'Every order this session placed has reached a terminal state.'}
-        >
-          <DataTable
-            caption="Simulated open orders"
-            stacked={stackedTables}
-            rows={openOrders}
-            rowKey={(row) => row.id}
-            columns={orderColumns}
-          />
-          {/* fontSize: 9 → --text-body (sentence). It ends in a full stop and it is the page's one
-              statement that no fee on this table is a float. */}
-          <div style={{ color: token.content.muted, fontSize: token.text.body, marginTop: 6 }}>
-            Fees are the integer Minor_Units the order recorded, decimal-shifted for display only.
-          </div>
-        </PanelBody>
-      </Card>
+                      {/* fontSize: 9 → --text-body (sentence). Three sentences on what a reconnect re-reads,
+                          what it discards and how often the safety poll runs while the socket is down — the
+                          explanation of why nothing here is presented as current when it is not. */}
+                      <div style={{ color: token.content.muted, fontSize: token.text.body }}>
+                        On reconnect the page asks{' '}
+                        <code>events(sessionId, {formatCount(retained.lastSequence) ?? '0'})</code> for the
+                        frames the drop swallowed, and discards any whose <code>event_id</code> it has already
+                        applied. While the socket is down, the session and its metrics are re-read every{' '}
+                        {formatCount(SAFETY_POLL_INTERVAL_MS / 1000)} seconds so nothing here is presented as
+                        current when it is not.
+                      </div>
+                    </div>
+                  </PanelBody>
 
-      {/* ── completed trades ───────────────────────────────────────────── */}
-      <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
-        <PanelTitle
-          title={`Completed trades (${formatCount(trades.length) ?? '0'})`}
-          sub="Closed round-trips — the set the win rate is computed over"
-          right={<SimulatedTag />}
-        />
-        <PanelBody
-          state={panelState('trades', trades.length === 0)}
-          {...failureProps('trades')}
-          onRetry={() => runRead('trades', sessionId)}
-          emptyText="No position has reached size zero in this session yet."
-        >
-          <DataTable
-            caption="Simulated completed trades"
-            stacked={stackedTables}
-            rows={trades}
-            rowKey={(row) => row.id}
-            columns={tradeColumns}
-          />
-        </PanelBody>
-      </Card>
+                  {/* Requirement 27.5's bounds, disclosed rather than left as an invisible policy — a view
+                      that silently drops the oldest half of its history is telling the reader something.
 
-      {/* ── signal stream and execution events ─────────────────────────── */}
-      <div
-        data-responsive-grid="streams"
-        data-single-column={String(singleColumn)}
-        style={{ display: 'grid', gridTemplateColumns: gridColumns(320), gap: token.space['3'], minWidth: 0 }}
-      >
-        <Card style={{ background: token.surface.raised, borderColor: token.line.default, minWidth: 0 }}>
-          <PanelTitle
-            title={`Signal stream (${formatCount(derived.signals.length) ?? '0'})`}
-            sub="The recorded signal_generated events — decision, side, quantity and price only"
-            right={<SimulatedTag />}
-          />
-          <PanelBody
-            state={panelState('events', derived.signals.length === 0)}
-            {...failureProps('events')}
-            onRetry={() => runRead('events', sessionId)}
-            emptyText="This session has generated no signal yet."
-          >
-            <DataTable
-              caption="Simulated signal stream"
-              stacked={stackedTables}
-              rows={signalRows}
-              rowKey={(signal) => signal.eventId ?? `${signal.sequence}`}
-              columns={signalColumns}
-            />
-            {/* fontSize: 9 → --text-body (sentence). The zero-versus-unavailable statement for this
-                table, which §6 is written about: an absent price reads as absent, never as 0.0. */}
-            <div style={{ color: token.content.muted, fontSize: token.text.body, marginTop: 6 }}>
-              A signal recorded without a validated price shows “{NOT_REPORTED}” for its price
-              rather than a zero.
-            </div>
-          </PanelBody>
-        </Card>
+                      Outside `PanelBody` on purpose: this is a statement about THIS PAGE'S memory, not a
+                      read of the server's, so it stays true and stays visible while the socket is refused,
+                      reconnecting or down. */}
+                  <div
+                    data-testid="paper-retention"
+                    data-retained-events={retained.events.length}
+                    data-retained-ticks={retained.ticks.length}
+                    data-retained-event-cap={MAX_RETAINED_EVENTS}
+                    data-retained-tick-cap={MAX_RETAINED_TICKS}
+                    data-chart-point-cap={MAX_CHART_POINTS_PER_SERIES}
+                    data-price-chart-points={priceChart.length}
+                    data-pnl-chart-points={pnlChart.length}
+                    data-drawdown-chart-points={drawdownChart.length}
+                    data-equity-chart-points={equityPoints.length}
+                    data-events-discarded={retained.eventsDiscarded}
+                    data-ticks-discarded={retained.ticksDiscarded}
+                    style={{
+                      color: token.content.secondary,
+                      // fontSize: 10 → --text-body (sentence). Requirement 27.5's bounds, disclosed in prose
+                      // rather than left as an invisible policy. A disclosure a retail reader cannot read has
+                      // not disclosed anything, so it takes the default step.
+                      fontSize: token.text.body,
+                      fontFamily: 'monospace',
+                      lineHeight: 1.6,
+                      marginTop: token.space['3'],
+                      borderTop: `1px solid ${token.line.default}`,
+                      paddingTop: token.space['3'],
+                    }}
+                  >
+                    Retained in memory:{' '}
+                    <span style={{ color: token.content.primary }}>
+                      {formatCount(retained.events.length)} / {formatCount(MAX_RETAINED_EVENTS)} events
+                    </span>
+                    ,{' '}
+                    <span style={{ color: token.content.primary }}>
+                      {formatCount(retained.ticks.length)} / {formatCount(MAX_RETAINED_TICKS)} ticks
+                    </span>
+                    , and at most <span style={{ color: token.content.primary }}>{formatCount(MAX_CHART_POINTS_PER_SERIES)}</span>{' '}
+                    points per chart series. The oldest are discarded first, by position in the
+                    session&rsquo;s sequence rather than by arrival order.
+                    {retained.eventsDiscarded > 0 || retained.ticksDiscarded > 0
+                      ? ` ${formatCount(retained.eventsDiscarded)} event(s) and ${formatCount(retained.ticksDiscarded)} tick(s) have been discarded by that bound — they remain readable from the session's event log.`
+                      : ''}
+                  </div>
+                </Card>
 
-        <Card style={{ background: token.surface.raised, borderColor: token.line.default, minWidth: 0 }}>
-          <PanelTitle
-            title={`Execution events (${formatCount(derived.executions.length) ?? '0'})`}
-            sub="Order and session lifecycle frames, newest first"
-            right={<SimulatedTag />}
-          />
-          <PanelBody
-            state={panelState('events', derived.executions.length === 0)}
-            {...failureProps('events')}
-            onRetry={() => runRead('events', sessionId)}
-            emptyText="No execution event has been recorded for this session yet."
-          >
-            <DataTable
-              caption="Simulated execution events"
-              stacked={stackedTables}
-              rows={executionRows}
-              rowKey={(event) => event.eventId ?? `${event.sequence}-${event.type}`}
-              columns={executionColumns}
-            />
-            {derived.errors.length ? (
-              <div
-                role="alert"
-                style={{
-                  marginTop: 8,
-                  color: statusToken('loss').fg,
-                  // fontSize: 10 → --text-body (sentence). The page's only `role="alert"`: it counts
-                  // the error frames recorded on the session and prints the most recent code and
-                  // message. An alert a reader has to squint at is an alert that does not arrive.
-                  fontSize: token.text.body,
-                }}
-              >
-                {formatCount(derived.errors.length)} error frame(s) recorded on this session. The most
-                recent: {derived.errors[derived.errors.length - 1].code ?? NOT_REPORTED} —{' '}
-                {derived.errors[derived.errors.length - 1].message ?? NOT_REPORTED}
-              </div>
-            ) : null}
-          </PanelBody>
-        </Card>
-      </div>
+                {/* ── signal stream and execution events ─────────────────────────── */}
+                <div
+                  data-responsive-grid="streams"
+                  data-single-column={String(singleColumn)}
+                  style={{ display: 'grid', gridTemplateColumns: gridColumns(320), gap: token.space['3'], minWidth: 0 }}
+                >
+                  <Card style={{ background: token.surface.raised, borderColor: token.line.default, minWidth: 0 }}>
+                    <PanelTitle
+                      title={`Signal stream (${formatCount(derived.signals.length) ?? '0'})`}
+                      sub="The recorded signal_generated events — decision, side, quantity and price only"
+                      right={<SimulatedTag />}
+                    />
+                    <PanelBody
+                      state={panelState('events', derived.signals.length === 0)}
+                      {...failureProps('events')}
+                      onRetry={() => runRead('events', sessionId)}
+                      emptyText="This session has generated no signal yet."
+                    >
+                      <DataTable
+                        caption="Simulated signal stream"
+                        stacked={stackedTables}
+                        rows={signalRows}
+                        rowKey={(signal) => signal.eventId ?? `${signal.sequence}`}
+                        columns={signalColumns}
+                      />
+                      {/* fontSize: 9 → --text-body (sentence). The zero-versus-unavailable statement for this
+                          table, which §6 is written about: an absent price reads as absent, never as 0.0. */}
+                      <div style={{ color: token.content.muted, fontSize: token.text.body, marginTop: 6 }}>
+                        A signal recorded without a validated price shows “{NOT_REPORTED}” for its price
+                        rather than a zero.
+                      </div>
+                    </PanelBody>
+                  </Card>
+
+                  <Card style={{ background: token.surface.raised, borderColor: token.line.default, minWidth: 0 }}>
+                    <PanelTitle
+                      title={`Execution events (${formatCount(derived.executions.length) ?? '0'})`}
+                      sub="Order and session lifecycle frames, newest first"
+                      right={<SimulatedTag />}
+                    />
+                    <PanelBody
+                      state={panelState('events', derived.executions.length === 0)}
+                      {...failureProps('events')}
+                      onRetry={() => runRead('events', sessionId)}
+                      emptyText="No execution event has been recorded for this session yet."
+                    >
+                      <DataTable
+                        caption="Simulated execution events"
+                        stacked={stackedTables}
+                        rows={executionRows}
+                        rowKey={(event) => event.eventId ?? `${event.sequence}-${event.type}`}
+                        columns={executionColumns}
+                      />
+                      {derived.errors.length ? (
+                        <div
+                          role="alert"
+                          style={{
+                            marginTop: 8,
+                            color: statusToken('loss').fg,
+                            // fontSize: 10 → --text-body (sentence). The page's only `role="alert"`: it counts
+                            // the error frames recorded on the session and prints the most recent code and
+                            // message. An alert a reader has to squint at is an alert that does not arrive.
+                            fontSize: token.text.body,
+                          }}
+                        >
+                          {formatCount(derived.errors.length)} error frame(s) recorded on this session. The most
+                          recent: {derived.errors[derived.errors.length - 1].code ?? NOT_REPORTED} —{' '}
+                          {derived.errors[derived.errors.length - 1].message ?? NOT_REPORTED}
+                        </div>
+                      ) : null}
+                    </PanelBody>
+                  </Card>
+                </div>
+              </>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }
