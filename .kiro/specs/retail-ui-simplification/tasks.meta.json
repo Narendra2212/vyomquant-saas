@@ -1,0 +1,450 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Write the detection and the self-tests": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240681693
+      }
+    ],
+    "1.2 **MUST LAND ALONE** — seed the budget and switch on the six assertions **[BLOCKED: OPEN DECISION O1]**": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240688192
+      }
+    ],
+    "1. Commit 1 — the font-size ratchet, seeded (Requirement 1.3, 1.4, 1.5)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240688642
+      }
+    ],
+    "2.1 Write `tests/unit/ds/TradingEnvironmentBadge.test.jsx` first, and observe it pass against the unedited primitive": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240696215
+      }
+    ],
+    "2. Commit 2 — the environment badge: four stacked treatments on 23 characters (Requirement 9)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240696681
+      }
+    ],
+    "2.2 **MUST LAND ALONE** — reduce the treatment, keep every distinction": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240705355
+      }
+    ],
+    "3.1 Add the size assertion to `tests/unit/ds/Chart.test.jsx` and observe it fail": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240713890
+      }
+    ],
+    "3.2 **MUST LAND ALONE** — read both sizes from the token": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240719638
+      }
+    ],
+    "3. Commit 3 — `ds/Chart.jsx`'s tick and axis-label sizes (Requirement 1.1, 1.2, 2.2)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240719996
+      }
+    ],
+    "4.1 **MUST LAND ALONE** — extend `IN_SCOPE_PAGES`, seed the new waivers, and derive the total": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240726070
+      }
+    ],
+    "4. Commit 4 — accessibility enforcement reaches every page a trader can open (Requirement 6)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240726331
+      }
+    ],
+    "5.1 Write `tests/unit/pages/strategyMarketplace.test.jsx` first, and observe it fail on the current file": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240732458
+      }
+    ],
+    "5.2 Commit 5 — the visual generation: 71 off-scale sizes, 69 `font-mono`, 25 `uppercase`, four decorations **[BLOCKED past axis 1: OPEN DECISION O1]**": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240738466
+      }
+    ],
+    "5.3 Commit 6 — the four a11y findings, and the waiver line deleted **[BLOCKED: O1, as 5.2]**": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240747659
+      }
+    ],
+    "5. Commits 5–6 — Marketplace: the product's shopfront, one generation behind (Requirements 10, 12, 3.4)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240748149
+      }
+    ],
+    "6.1 **MUST LAND ALONE** — the read path joins the convention **[BLOCKED: O1, per §7.6]**": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240761960
+      }
+    ],
+    "6. Commit 7 — Marketplace tells the trader which of four things went wrong (Requirement 11)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240762311
+      }
+    ],
+    "7.1 Write `tests/unit/pages/riskSettingsKillSwitch.test.jsx` before RiskSettings is touched": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240769056
+      }
+    ],
+    "7.2 Commit 8 — `RiskSettings.jsx` (438 lines, 16 sizes, 53 colour literals)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240774386
+      }
+    ],
+    "7.3 Commit 9 — `TwoFA.jsx` (397 lines, 12 sizes, 12 colour literals, 10 inline `monospace`)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240780419
+      }
+    ],
+    "7.4 Commit 10 — `SecurityLogs.jsx` (189 lines, 7 sizes, 3 colour literals)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240785555
+      }
+    ],
+    "7.5 Commit 11 — `UpdatePasswordPage.jsx` (79 lines, 3 sizes)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240792642
+      }
+    ],
+    "7.6 Commit 12 — `Wizard.jsx` (250 lines, 24 sizes, 5 colour literals)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240797821
+      }
+    ],
+    "7.7 Commit 13 — `LegalPage.jsx` (146 lines, 15 quoted `'Npx'` sizes, 3 colour literals, 12 `uppercase`)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240803240
+      }
+    ],
+    "7.8 Commit 14 — `Profile.jsx` (999 lines, 79 sizes, 7 colour literals, 51 inline `monospace`)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240808835
+      }
+    ],
+    "7.9 Commit 15 — `Billing.jsx` (840 lines, 39 sizes, 9 colour literals, 28 inline `monospace`)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240815153
+      }
+    ],
+    "7.10 Commit 16 — `ExchangeManager.jsx` (905 lines, 52 sizes, **128 colour literals**)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240820596
+      }
+    ],
+    "7.11 Commit 17 — `AuthPage.jsx` (1,181 lines, 29 sizes, 30 colour literals, 29 inline `monospace`, 3 gradients)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240830443
+      }
+    ],
+    "7. Commits 8–17 — the ten unmigrated pages adopt the convention, smallest first (Requirements 4, 5, 6)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240830835
+      }
+    ],
+    "8.1 Commit 19 — `PaperTrading.jsx` (3,527 lines, **51** sizes, 22 inline `monospace`)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240837252
+      }
+    ],
+    "8.3 Commit 21 — `StrategyDetail.jsx` (1,786 lines, **61** sizes, 28 inline `monospace`)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240842317
+      }
+    ],
+    "12.1 Write `tests/unit/guards/standing-prose.{budget,test}.js` before any prose moves": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240848655
+      }
+    ],
+    "12.2 Write `tests/unit/pages/freshAccount.test.jsx` before any panel's weight changes": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240853681
+      }
+    ],
+    "8.2 Commit 20 — `StrategyBuilder.jsx` (4,609 lines, 0 sizes, 14 inline `monospace`, 13 `uppercase`)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240887338
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240982792
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790242538235
+      }
+    ],
+    "10.1 Step 1 — repair the three assertions that cannot fail, then run the end-to-end test scoped": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240887657
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240967612
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790242532344
+      }
+    ],
+    "10.2 Step 2 — mount each of the 13 sections in isolation": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240887868
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790243223802
+      }
+    ],
+    "10.3 Step 3 — settle the standing hypothesis in `git`, record all three outcomes in the test files, and put the one specific question **[BLOCKED past here: the symptom]**": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240888207
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790243572229
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790244467641
+      }
+    ],
+    "12.6 One next action on a fresh Dashboard (Requirement 8.1, 8.2)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240888538
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790266660596
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790268614222
+      }
+    ],
+    "12.7 The same rule on `Strategies`, `Portfolio`, `TradeHistory` and `LiveTrading` (Requirement 8.4)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240889016
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790268615744
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790274323810
+      }
+    ],
+    "13.1 Re-run the named suites scoped and confirm the per-commit constraints": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240889321
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790274324773
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790340599552
+      }
+    ],
+    "13.2 Take the build-dependent checks in CI, and do not report them as verified locally": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790240889540
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790340637669
+      }
+    ],
+    "8. Commits 19–21 — the three in-scope pages a \"unmigrated pages\" scope would have skipped (Requirement 4.6)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790242538405
+      }
+    ],
+    "9.1 Commit 22 — delete seven unreferenced landing components, retain the eighth with a header": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790243579456
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790244475691
+      }
+    ],
+    "10. The landing investigation — cheapest-first, running alongside commit 1, producing no page diff (Requirement 13)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790244468135
+      }
+    ],
+    "9. Commits 22–23 — dead code, so the file you read is the file that renders (Requirement 14)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790244475896
+      }
+    ],
+    "9.2 Commit 23 — delete `src/pages/Landing.jsx` and its two budget entries": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790244487212
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790246458707
+      }
+    ],
+    "12.3 **Progressive disclosure on Live Trading** — 626 characters stop standing between a trader and \"what is running\"": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790246560553
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790248666567
+      }
+    ],
+    "12.4 Move `SignalTrace.jsx`'s standing prose behind disclosure (1351 characters in 14 constants)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790263087051
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790265292676
+      }
+    ],
+    "12.5 Move `Dashboard.jsx`'s standing prose behind disclosure (1225 characters in 13 constants)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790265313685
+      },
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790266651514
+      }
+    ],
+    "12. Last — standing prose and the fresh-account hierarchy (Requirements 7, 8)": [
+      {
+        "executionId": "0abde11f-c8fa-4aa6-bdd4-8208c742e257",
+        "chatSessionId": "sess_a2a75536-2d67-40b8-9ba9-1c8cfbfef083",
+        "timestamp": 1790274324122
+      }
+    ]
+  }
+}

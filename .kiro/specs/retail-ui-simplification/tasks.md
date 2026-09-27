@@ -153,7 +153,7 @@ reverting it reverts nothing else.
 
 ## Tasks
 
-- [ ] 1. Commit 1 — the font-size ratchet, seeded (Requirement 1.3, 1.4, 1.5)
+- [x] 1. Commit 1 — the font-size ratchet, seeded (Requirement 1.3, 1.4, 1.5)
 
   **Files:** `tests/unit/guards/absolute-font-sizes.test.js` (new),
   `tests/unit/guards/absolute-font-sizes.budget.js` (new). No source file.
@@ -164,7 +164,7 @@ reverting it reverts nothing else.
   reached 451. The mechanism that worked is the one to copy — §3 mirrors
   `no-colour-literals.{budget,test}.js` line for line, on the same `source-scan.js` helper.
 
-  - [ ] 1.1 Write the detection and the self-tests
+  - [x] 1.1 Write the detection and the self-tests
     - Create `tests/unit/guards/absolute-font-sizes.test.js` importing `SRC`, `collect`, `isTestFile`,
       `list`, `relToSrc`, `stripComments` from `./source-scan.js`. **Not `maskStrings`, not `codeOnly`**
       — `text-[10px]` lives inside a `className` string, so masking strings would blind the guard to
@@ -202,7 +202,7 @@ reverting it reverts nothing else.
       drift into fiction. **Passes after:** all five green against the real `source-scan.js`
     - _Requirements: 1.2, 1.3, 18.1_
 
-  - [ ] 1.2 **MUST LAND ALONE** — seed the budget and switch on the six assertions **[BLOCKED: OPEN DECISION O1]**
+  - [x] 1.2 **MUST LAND ALONE** — seed the budget and switch on the six assertions **[BLOCKED: OPEN DECISION O1]**
     - Create `tests/unit/guards/absolute-font-sizes.budget.js` by *running* 1.1's patterns over the
       three roots and writing down what they measure. Requirement 1.4's 18 seeded entries, **plus
       §3.5's two corrections**: `PaperTrading.jsx` is **51, not 43** (the eight axis props), and eleven
@@ -251,7 +251,7 @@ reverting it reverts nothing else.
       first commit, seeded at today's counts, having asserted the tree as it is (Requirement 22.4)
     - _Requirements: 1.3, 1.4, 1.5, 18.1, 22.2, 22.4_
 
-- [ ] 2. Commit 2 — the environment badge: four stacked treatments on 23 characters (Requirement 9)
+- [x] 2. Commit 2 — the environment badge: four stacked treatments on 23 characters (Requirement 9)
 
   **Files:** `tests/unit/ds/TradingEnvironmentBadge.test.jsx` (new),
   `src/components/ds/TradingEnvironmentBadge.jsx`, `src/components/ds/Panel.jsx`,
@@ -267,7 +267,7 @@ reverting it reverts nothing else.
   badge diff after eleven page diffs, at which point a badge regression and a page regression are
   indistinguishable.
 
-  - [ ] 2.1 Write `tests/unit/ds/TradingEnvironmentBadge.test.jsx` first, and observe it pass against the unedited primitive
+  - [x] 2.1 Write `tests/unit/ds/TradingEnvironmentBadge.test.jsx` first, and observe it pass against the unedited primitive
     - **There is no badge test today.** `tests/unit/ds/` holds 26 files and none of them is this one, so
       §4.2's stated precondition — "read the badge's test file first" — cannot be read. What covers the
       badge today is indirect: `dashboard-kill-switch.test.jsx:176` reads it through `data-environment`,
@@ -299,7 +299,7 @@ reverting it reverts nothing else.
       recording the treatment as it is
     - _Requirements: 9.1, 9.2, 18.2, 20.1_
 
-  - [ ]* 2.2 **MUST LAND ALONE** — reduce the treatment, keep every distinction
+  - [x]* 2.2 **MUST LAND ALONE** — reduce the treatment, keep every distinction
     - `TradingEnvironmentBadge.jsx:230`: stop stacking four axes on one string. Keep the axis that
       carries meaning for a server-supplied literal and drop the ones that only add weight — the
       variant's `text-micro` and its `data-*` attributes stay untouched
@@ -325,7 +325,7 @@ reverting it reverts nothing else.
       accessible names survived
     - _Requirements: 9.1, 9.2, 9.3, 18.2, 20.1, 20.5_
 
-- [ ] 3. Commit 3 — `ds/Chart.jsx`'s tick and axis-label sizes (Requirement 1.1, 1.2, 2.2)
+- [x] 3. Commit 3 — `ds/Chart.jsx`'s tick and axis-label sizes (Requirement 1.1, 1.2, 2.2)
 
   **Files:** `tests/unit/ds/Chart.test.jsx`, `src/components/ds/Chart.jsx`,
   `tests/unit/guards/absolute-font-sizes.budget.js`.
@@ -336,7 +336,7 @@ reverting it reverts nothing else.
   mean `PaperTrading.jsx`'s eight `fontSize={9}` axis props get resolved twice — once on the page, once
   when the primitive moves.
 
-  - [ ] 3.1 Add the size assertion to `tests/unit/ds/Chart.test.jsx` and observe it fail
+  - [x] 3.1 Add the size assertion to `tests/unit/ds/Chart.test.jsx` and observe it fail
     - `Chart.test.jsx` contains no `fontSize`, no `TICK` and no `AXIS_LABEL_STYLE` reference today; its
       strictest assertion in that region is `it('rejects a kind it does not understand')`
     - One `it`, over the **exported constants** rather than rendered SVG, because recharts is stubbed in
@@ -350,7 +350,7 @@ reverting it reverts nothing else.
       `10`. **Passes after:** task 3.2. Every other assertion in the file stays green in both states
     - _Requirements: 1.1, 1.2, 18.2_
 
-  - [ ] 3.2 **MUST LAND ALONE** — read both sizes from the token
+  - [x] 3.2 **MUST LAND ALONE** — read both sizes from the token
     - `Chart.jsx:722` and `:729`: `fontSize: 10` → `fontSize: token.text.micro`. `token.text.micro` is
       `'0.625rem'` — which is what `tokens.css:69`'s own annotation (`labels, chips`) says the axis tick
       treatment should read, and it means a trader who raised their browser default sees the axis move
@@ -367,9 +367,9 @@ reverting it reverts nothing else.
       the assertion that makes "cleared" mean "recorded as cleared"
     - _Requirements: 1.1, 1.2, 1.5, 2.1, 2.2, 18.2, 22.2_
 
-- [ ] 4. Commit 4 — accessibility enforcement reaches every page a trader can open (Requirement 6)
+- [x] 4. Commit 4 — accessibility enforcement reaches every page a trader can open (Requirement 6)
 
-  - [ ] 4.1 **MUST LAND ALONE** — extend `IN_SCOPE_PAGES`, seed the new waivers, and derive the total
+  - [x] 4.1 **MUST LAND ALONE** — extend `IN_SCOPE_PAGES`, seed the new waivers, and derive the total
     - **Files:** `tests/unit/guards/a11y-ratchet.test.js`, `eslint-rules/a11y-ratchet.js`
     - Extend `IN_SCOPE_PAGES` to every file under `src/pages/` plus the 14 rendered `Landing_Surface`
       sections, so `jsx-a11y` lints them at **error**. Today the eleven `Unmigrated_Pages` are not
@@ -406,7 +406,7 @@ reverting it reverts nothing else.
       measured count and `ds/**` is at zero
     - _Requirements: 6.1, 6.2, 6.3, 12.3, 18.1, 20.3, 20.4_
 
-- [ ] 5. Commits 5–6 — Marketplace: the product's shopfront, one generation behind (Requirements 10, 12, 3.4)
+- [x] 5. Commits 5–6 — Marketplace: the product's shopfront, one generation behind (Requirements 10, 12, 3.4)
 
   **Files:** `tests/unit/pages/strategyMarketplace.test.jsx` (new), `src/pages/StrategyMarketplace.jsx`,
   `eslint-rules/a11y-ratchet.js`, `tests/unit/guards/absolute-font-sizes.budget.js`.
@@ -422,7 +422,7 @@ reverting it reverts nothing else.
   longer describes the file. Requirement 11 is the separate axis (task 6) because it is the only
   Marketplace change with a behavioural surface.
 
-  - [ ] 5.1 Write `tests/unit/pages/strategyMarketplace.test.jsx` first, and observe it fail on the current file
+  - [x] 5.1 Write `tests/unit/pages/strategyMarketplace.test.jsx` first, and observe it fail on the current file
     - **No frontend test renders this page.** Searching `tests/` for it returns five source-scanning
       guards holding an entry for its path and nothing that mounts it. Its behavioural coverage is
       `tests/unit/design/subscriptionState.test.js`, which covers the *module* Requirement 10.6 forbids
@@ -444,7 +444,7 @@ reverting it reverts nothing else.
       5.2, 5.3 and 6.1 — blocks 1 and 4 after 5.2–5.3, blocks 2 and 3 after 6.1
     - _Requirements: 10.5, 11.2, 11.3, 11.4, 12.4, 18.1, 20.1_
 
-  - [ ] 5.2 Commit 5 — the visual generation: 71 off-scale sizes, 69 `font-mono`, 25 `uppercase`, four decorations **[BLOCKED past axis 1: OPEN DECISION O1]**
+  - [x] 5.2 Commit 5 — the visual generation: 71 off-scale sizes, 69 `font-mono`, 25 `uppercase`, four decorations **[BLOCKED past axis 1: OPEN DECISION O1]**
     - **Axis 1 — the 30 `text-[Npx]` classes** move onto the `Type_Scale` by §7.1's cohort table. The
       syntax differs from a page-level `fontSize`; the role question does not. Chips and labels →
       `micro`. **Two cohorts grow and they are the ones that matter:** `:628`'s historical-results
@@ -514,7 +514,7 @@ reverting it reverts nothing else.
       progress to be recorded, not banked` fails if the sizes go and the entry stays
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 16.3, 18.3, 20.5, 22.2_
 
-  - [ ] 5.3 Commit 6 — the four a11y findings, and the waiver line deleted **[BLOCKED: O1, as 5.2]**
+  - [x] 5.3 Commit 6 — the four a11y findings, and the waiver line deleted **[BLOCKED: O1, as 5.2]**
     - **Files:** `src/pages/StrategyMarketplace.jsx`, `eslint-rules/a11y-ratchet.js`
     - The four findings are two on each of two elements and both elements are the same mistake: `:664`'s
       featured card and `:729`'s catalogue card are `div`s with `onClick`, `cursor-pointer` (`:665`,
@@ -541,9 +541,9 @@ reverting it reverts nothing else.
       Requirement 12.3 asks for and task 4.1 made possible. Plus 5.1's block 1
     - _Requirements: 12.1, 12.2, 12.3, 12.4, 18.1, 20.1, 20.3, 20.4_
 
-- [ ] 6. Commit 7 — Marketplace tells the trader which of four things went wrong (Requirement 11)
+- [x] 6. Commit 7 — Marketplace tells the trader which of four things went wrong (Requirement 11)
 
-  - [ ] 6.1 **MUST LAND ALONE** — the read path joins the convention **[BLOCKED: O1, per §7.6]**
+  - [x] 6.1 **MUST LAND ALONE** — the read path joins the convention **[BLOCKED: O1, per §7.6]**
     - **Files:** `src/pages/StrategyMarketplace.jsx`
     - `:380`–`:382` is one `catch`, one `console.error(err)`, one string — *Failed to load marketplace
       data. Please try again.* — for every failure mode, rendered at `:1067` in a hand-styled
@@ -578,7 +578,7 @@ reverting it reverts nothing else.
       and 5.1 is what proves the page calls it
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 16.2, 18.1, 19.4_
 
-- [ ] 7. Commits 8–17 — the ten unmigrated pages adopt the convention, smallest first (Requirements 4, 5, 6)
+- [x] 7. Commits 8–17 — the ten unmigrated pages adopt the convention, smallest first (Requirements 4, 5, 6)
 
   Requirement 4.5's order exactly: `RiskSettings` → `TwoFA` → `SecurityLogs` → `UpdatePasswordPage` →
   `Wizard` → `LegalPage` → `Profile` → `Billing` → `ExchangeManager` → `AuthPage`. Smallest first, so
@@ -632,7 +632,7 @@ reverting it reverts nothing else.
   **passes after**. Six of these ten pages have no test file of their own today, which is exactly why
   the measured guards are the instrument rather than a claim.
 
-  - [ ] 7.1 Write `tests/unit/pages/riskSettingsKillSwitch.test.jsx` before RiskSettings is touched
+  - [x] 7.1 Write `tests/unit/pages/riskSettingsKillSwitch.test.jsx` before RiskSettings is touched
     - **Nothing renders `RiskSettings.jsx` today and it is not linted at all.**
       `tests/unit/dashboard-kill-switch.test.jsx` covers the *Dashboard's* halt confirmation, not Risk
       Settings' toggles. Requirement 6.5 asks for a test rather than a manual check and is right to: a
@@ -652,7 +652,7 @@ reverting it reverts nothing else.
       against the migrated one, with the *same* request asserted on both paths in both states
     - _Requirements: 6.5, 18.1, 20.1, 20.3_
 
-  - [ ] 7.2 Commit 8 — `RiskSettings.jsx` (438 lines, 16 sizes, 53 colour literals)
+  - [x] 7.2 Commit 8 — `RiskSettings.jsx` (438 lines, 16 sizes, 53 colour literals)
     - The five steps above. The 53 literals are the second-largest block in the tree and this is the
       smallest page carrying them, which is why Requirement 4.5 starts here
     - **Must not be lost:** the kill-switch controls' accessible names, keyboard paths and issued
@@ -671,7 +671,7 @@ reverting it reverts nothing else.
       migration, with the same request asserted on the pointer and keyboard paths in each
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 5.3, 6.2, 6.5, 19.1, 19.2, 19.3, 22.1, 22.2_
 
-  - [ ] 7.3 Commit 9 — `TwoFA.jsx` (397 lines, 12 sizes, 12 colour literals, 10 inline `monospace`)
+  - [x] 7.3 Commit 9 — `TwoFA.jsx` (397 lines, 12 sizes, 12 colour literals, 10 inline `monospace`)
     - The five steps. The 10 inline `monospace` declarations are resolved against Requirement 3.1: a
       TOTP code and a recovery code are **identifiers** and keep monospace; the instructions around them
       are prose and do not
@@ -692,7 +692,7 @@ reverting it reverts nothing else.
       fixed. All three **pass after**
     - _Requirements: 3.1, 3.2, 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 6.2, 16.1, 22.1, 22.2_
 
-  - [ ] 7.4 Commit 10 — `SecurityLogs.jsx` (189 lines, 7 sizes, 3 colour literals)
+  - [x] 7.4 Commit 10 — `SecurityLogs.jsx` (189 lines, 7 sizes, 3 colour literals)
     - The five steps. The log table is `ds/DataTable`'s shape — a value in a row, in a column with
       siblings, where vertical alignment across rows carries meaning — so its cells resolve to
       `--text-small` (Q6) and its headers to `--text-micro` (Q4, which catches a `<th>` first,
@@ -714,7 +714,7 @@ reverting it reverts nothing else.
       alignment semantics
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 6.2, 22.1, 22.2_
 
-  - [ ] 7.5 Commit 11 — `UpdatePasswordPage.jsx` (79 lines, 3 sizes)
+  - [x] 7.5 Commit 11 — `UpdatePasswordPage.jsx` (79 lines, 3 sizes)
     - The five steps. The smallest file in the tree and the cheapest test of the convention's fit
     - **Must not be lost:** every validation message the form can render, and the form's keyboard path
     - **Page test:** none exists for this page; the measured guards are the instrument
@@ -730,7 +730,7 @@ reverting it reverts nothing else.
       before** the task-4.1 waiver entry is deleted with its findings fixed
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 5.1, 6.2, 22.1, 22.2_
 
-  - [ ] 7.6 Commit 12 — `Wizard.jsx` (250 lines, 24 sizes, 5 colour literals)
+  - [x] 7.6 Commit 12 — `Wizard.jsx` (250 lines, 24 sizes, 5 colour literals)
     - The five steps. This is a first-run surface — one of the first screens a new retail account sees —
       so §2.4's Q1 matters here more than anywhere: a wizard is mostly sentences, and sentences go to
       `--text-body` or larger
@@ -750,7 +750,7 @@ reverting it reverts nothing else.
       fixed. All three **pass after**
     - _Requirements: 2.3, 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 6.2, 22.1, 22.2_
 
-  - [ ] 7.7 Commit 13 — `LegalPage.jsx` (146 lines, 15 quoted `'Npx'` sizes, 3 colour literals, 12 `uppercase`)
+  - [x] 7.7 Commit 13 — `LegalPage.jsx` (146 lines, 15 quoted `'Npx'` sizes, 3 colour literals, 12 `uppercase`)
     - The five steps. The only file in the tree whose sizes are **all** the quoted `fontSize: 'Npx'`
       syntax, so it is the one page that exercises `FONT_SIZE_QUOTED` end to end
     - The 12 `uppercase` occurrences go against Requirement 3.3's three-word rule — a legal heading
@@ -772,7 +772,7 @@ reverting it reverts nothing else.
       measure no change at all
     - _Requirements: 3.3, 4.1, 4.3, 4.4, 5.1, 5.2, 6.2, 19.6, 22.1, 22.2_
 
-  - [ ] 7.8 Commit 14 — `Profile.jsx` (999 lines, 79 sizes, 7 colour literals, 51 inline `monospace`)
+  - [x] 7.8 Commit 14 — `Profile.jsx` (999 lines, 79 sizes, 7 colour literals, 51 inline `monospace`)
     - The five steps. **79 sizes is the largest single-file count in the tree** and 51 inline
       `monospace` declarations is the second largest, so this is where §2.4's procedure and Requirement
       3.1's rule are both under the most load
@@ -791,7 +791,7 @@ reverting it reverts nothing else.
       fixed. All three **pass after**, with both `profile_phase5*` files green unchanged in both states
     - _Requirements: 3.1, 3.2, 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 6.2, 22.1, 22.2_
 
-  - [ ] 7.9 Commit 15 — `Billing.jsx` (840 lines, 39 sizes, 9 colour literals, 28 inline `monospace`)
+  - [x] 7.9 Commit 15 — `Billing.jsx` (840 lines, 39 sizes, 9 colour literals, 28 inline `monospace`)
     - The five steps. Money figures: every one gets a `pageFields.js` entry with a reason, and
       `design/reported.js` renders it — **a genuine `0.00` invoice renders `0.00`, and a figure that
       could not be read renders the marker with its reason.** This is the page where collapsing the two
@@ -815,7 +815,7 @@ reverting it reverts nothing else.
       edited to make this commit pass
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 6.2, 16.1, 19.1, 19.2, 19.3, 22.1, 22.2_
 
-  - [ ] 7.10 Commit 16 — `ExchangeManager.jsx` (905 lines, 52 sizes, **128 colour literals**)
+  - [x] 7.10 Commit 16 — `ExchangeManager.jsx` (905 lines, 52 sizes, **128 colour literals**)
     - The five steps. 128 literals is **48% of the tree's remaining 268** and
       `no-colour-literals.budget.js`'s own header names this entry as a ratchet's resting position, so
       this is the largest colour diff in the pass
@@ -839,7 +839,7 @@ reverting it reverts nothing else.
       that `0 ms` on the strength of a `null` "would be a fabricated reading a trader would act on"
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 5.3, 6.2, 19.1, 19.2, 19.3, 19.5, 22.1, 22.2_
 
-  - [ ] 7.11 Commit 17 — `AuthPage.jsx` (1,181 lines, 29 sizes, 30 colour literals, 29 inline `monospace`, 3 gradients)
+  - [x] 7.11 Commit 17 — `AuthPage.jsx` (1,181 lines, 29 sizes, 30 colour literals, 29 inline `monospace`, 3 gradients)
     - The five steps, plus the three gradients: `tokens.css` declares no gradient, so they resolve to
       the flat surfaces it does declare. The largest page in the group and therefore last
     - **Must not be lost:** every auth path — password, OAuth, OTP — every error the page can report,
@@ -858,7 +858,7 @@ reverting it reverts nothing else.
       condition moved (Requirement 16.3)
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 6.2, 10.1, 16.1, 16.3, 22.1, 22.2_
 
-- [ ] 8. Commits 19–21 — the three in-scope pages a "unmigrated pages" scope would have skipped (Requirement 4.6)
+- [x] 8. Commits 19–21 — the three in-scope pages a "unmigrated pages" scope would have skipped (Requirement 4.6)
 
   `PaperTrading.jsx` (1 convention reference), `StrategyBuilder.jsx` (0) and `StrategyDetail.jsx` (0)
   are inside `In_Scope_Pages`, are at **zero** colour literals, and hold **104 of the 401** unitless
@@ -866,7 +866,7 @@ reverting it reverts nothing else.
   keyed on a *measured property of the file* rather than on which list the file is on. The five steps
   from task 7 apply unchanged, and so do task 7's group verification and group regression assertion.
 
-  - [ ] 8.1 Commit 19 — `PaperTrading.jsx` (3,527 lines, **51** sizes, 22 inline `monospace`)
+  - [x] 8.1 Commit 19 — `PaperTrading.jsx` (3,527 lines, **51** sizes, 22 inline `monospace`)
     - Resolve the 51 by §2.6's cohort table, which is this plan's worked example and is not re-derived
       here: four 9px label styles + the `Explainer` eyebrow at `:751` → **`micro`**; **seventeen 9px
       hints, notes, footnotes and explanations → `body`** (+44%); `:3367`'s mixed-role container **loses
@@ -926,7 +926,7 @@ reverting it reverts nothing else.
       fails if a reason is shortened to a marker, deleted, or added to a never-absent field
     - _Requirements: 1.1, 1.2, 1.5, 2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 4.6, 18.2, 19.1, 19.2, 19.3, 19.5, 19.6, 22.1, 22.2_
 
-  - [ ] 8.2 Commit 20 — `StrategyBuilder.jsx` (4,609 lines, 0 sizes, 14 inline `monospace`, 13 `uppercase`)
+  - [x] 8.2 Commit 20 — `StrategyBuilder.jsx` (4,609 lines, 0 sizes, 14 inline `monospace`, 13 `uppercase`)
     - Task 7's five steps, minus step 4 — the file carries **no** absolute font size, which is why its
       debt is convention (0 references) and typography-by-family rather than typography-by-size
     - The 14 inline `monospace` declarations and 13 `uppercase` occurrences resolve against Requirements
@@ -951,7 +951,7 @@ reverting it reverts nothing else.
       4,609 lines is where a page-local `C` object is most tempting
     - _Requirements: 3.1, 3.2, 3.3, 4.1, 4.2, 4.3, 4.4, 4.6, 17.4, 18.1, 22.1_
 
-  - [ ] 8.3 Commit 21 — `StrategyDetail.jsx` (1,786 lines, **61** sizes, 28 inline `monospace`)
+  - [x] 8.3 Commit 21 — `StrategyDetail.jsx` (1,786 lines, **61** sizes, 28 inline `monospace`)
     - Task 7's five steps. 61 sizes is the second-largest count in the tree, and the page is at zero
       colour literals already, so this commit is almost entirely §2.4's procedure
     - **Must not be lost:** every performance figure's availability state. A strategy detail page is
@@ -971,13 +971,13 @@ reverting it reverts nothing else.
       `ds/Metric.test.jsx` green **unchanged** is what proves no figure's availability state moved
     - _Requirements: 1.1, 1.2, 1.5, 2.1, 2.2, 3.1, 4.1, 4.2, 4.3, 4.4, 4.6, 19.1, 19.2, 19.3, 22.1, 22.2_
 
-- [ ] 9. Commits 22–23 — dead code, so the file you read is the file that renders (Requirement 14)
+- [x] 9. Commits 22–23 — dead code, so the file you read is the file that renders (Requirement 14)
 
   Requirement 14.3 requires these to be their own commits, separate from any behavioural change, and to
   confirm by search that no import, test or route references the file first. §5.7 found the coupling
   that makes a careless deletion break two other files, and it is named entry by entry below.
 
-  - [ ]* 9.1 Commit 22 — delete seven unreferenced landing components, retain the eighth with a header
+  - [x]* 9.1 Commit 22 — delete seven unreferenced landing components, retain the eighth with a header
     - **Files:** `src/components/landing/{AICopilot,BacktestingDemo,Features,MetricsBar,PaperTradingDemo,PortfolioAnalytics,StrategyBuilderDemo}.jsx` (deleted),
       `src/components/landing/ScreenshotComingSoon.jsx` (retained, header added),
       `tests/unit/guards/no-colour-literals.budget.js`,
@@ -1008,7 +1008,7 @@ reverting it reverts nothing else.
       `PortfolioAnalytics` entry is removed and **passes after**
     - _Requirements: 14.1, 14.3, 14.4, 18.1, 18.3, 22.1, 22.2_
 
-  - [ ]* 9.2 Commit 23 — delete `src/pages/Landing.jsx` and its two budget entries
+  - [x]* 9.2 Commit 23 — delete `src/pages/Landing.jsx` and its two budget entries
     - **Files:** `src/pages/Landing.jsx` (deleted), `tests/unit/guards/no-colour-literals.budget.js`,
       `tests/unit/guards/absolute-font-sizes.budget.js`
     - The file carries its own `DEPRECATED / UNMOUNTED — LEGACY LANDING PAGE` header and is routed
@@ -1033,7 +1033,7 @@ reverting it reverts nothing else.
       referenced the file
     - _Requirements: 14.2, 14.3, 18.1, 18.3, 22.1, 22.2_
 
-- [ ] 10. The landing investigation — cheapest-first, running alongside commit 1, producing no page diff (Requirement 13)
+- [x] 10. The landing investigation — cheapest-first, running alongside commit 1, producing no page diff (Requirement 13)
 
   **[UNVERIFIED] throughout.** Requirement 13 asks for a reproduction and this task performs one. It
   asserts no defect and invents no defect list: static reading of all 14 rendered sections found no
@@ -1042,7 +1042,7 @@ reverting it reverts nothing else.
   only **[UNVERIFIED]** item in the spec, and an investigation that emits no commit has no ordering
   constraint. Requirement 13.5 makes "no symptom reproduces" a legitimate result.
 
-  - [ ] 10.1 Step 1 — repair the three assertions that cannot fail, then run the end-to-end test scoped
+  - [x] 10.1 Step 1 — repair the three assertions that cannot fail, then run the end-to-end test scoped
     - **Files:** `tests/unit/landing_page_pricing_crash_regression.test.jsx`
     - Three assertions in `renders entire LandingPage end-to-end without crashing` are
       `expect(container.querySelector('#pricing')).toBeDefined()` and the same for `#architecture` and
@@ -1067,7 +1067,7 @@ reverting it reverts nothing else.
       after:** the repaired assertions hold, or the outcome is filed
     - _Requirements: 13.1, 13.2, 13.3, 13.6, 15.5, 18.1_
 
-  - [ ] 10.2 Step 2 — mount each of the 13 sections in isolation
+  - [x] 10.2 Step 2 — mount each of the 13 sections in isolation
     - **Files:** `tests/unit/landing/landingSections.test.jsx` (new)
     - A throw-free tree does not mean a throw-free section: `LandingPage.jsx` may render a section inside
       a boundary, or a section may render nothing when a prop is absent — **and nothing is what a visitor
@@ -1089,7 +1089,7 @@ reverting it reverts nothing else.
       `it` as its regression test, which **fails before** the fix and **passes after**
     - _Requirements: 13.1, 13.2, 13.3, 13.6, 18.1_
 
-  - [ ] 10.3 Step 3 — settle the standing hypothesis in `git`, record all three outcomes in the test files, and put the one specific question **[BLOCKED past here: the symptom]**
+  - [x] 10.3 Step 3 — settle the standing hypothesis in `git`, record all three outcomes in the test files, and put the one specific question **[BLOCKED past here: the symptom]**
     - **Files:** `tests/unit/landing/landingSections.test.jsx` (header),
       `tests/unit/landing_page_pricing_crash_regression.test.jsx` (header)
     - Run and record: `git log --oneline -- algo22-terminal/src/pages/Landing.jsx` and
@@ -1207,7 +1207,7 @@ reverting it reverts nothing else.
       exactly this reason
     - _Requirements: 10.1, 15.3, 15.4, 18.4, 22.3_
 
-- [ ] 12. Last — standing prose and the fresh-account hierarchy (Requirements 7, 8)
+- [x] 12. Last — standing prose and the fresh-account hierarchy (Requirements 7, 8)
 
   These go last because they are the pass's only requirements whose target is explicitly a judgement —
   Requirement 7's 400 characters is "chosen, not derived" and Requirement 8's one-next-action target is
@@ -1220,7 +1220,7 @@ reverting it reverts nothing else.
   it in a way that changes what it asserts; Requirement 19.6 requires it to stay reachable and
   unchanged in substance. **Moving is permitted. Paraphrasing-away is not.**
 
-  - [ ]* 12.1 Write `tests/unit/guards/standing-prose.{budget,test}.js` before any prose moves
+  - [x]* 12.1 Write `tests/unit/guards/standing-prose.{budget,test}.js` before any prose moves
     - **Files:** `tests/unit/guards/standing-prose.budget.js` (new),
       `tests/unit/guards/standing-prose.test.js` (new)
     - Nothing measures this today. Requirement 7.5 requires the count to be taken on **rendered text
@@ -1253,7 +1253,7 @@ reverting it reverts nothing else.
       state it is meant to measure a change against has measured nothing
     - _Requirements: 7.1, 7.4, 7.5, 18.1_
 
-  - [ ] 12.2 Write `tests/unit/pages/freshAccount.test.jsx` before any panel's weight changes
+  - [x] 12.2 Write `tests/unit/pages/freshAccount.test.jsx` before any panel's weight changes
     - **Files:** `tests/unit/pages/freshAccount.test.jsx` (new)
     - Nothing counts visible empty panels today. `tests/unit/dashboard-tier1.test.jsx` already carries
       the zero-data fixture — its header says the fixtures hold an empty account "precisely so that tier
@@ -1277,7 +1277,7 @@ reverting it reverts nothing else.
       it lands and red only where the work has not happened yet
     - _Requirements: 8.1, 8.2, 8.3, 8.5, 18.1, 19.4_
 
-  - [ ]* 12.3 **Progressive disclosure on Live Trading** — 626 characters stop standing between a trader and "what is running"
+  - [x]* 12.3 **Progressive disclosure on Live Trading** — 626 characters stop standing between a trader and "what is running"
     - **Files:** `src/pages/LiveTrading.jsx`, `tests/unit/guards/standing-prose.budget.js`
     - `:1324`'s `REGISTRY_CAVEAT` is 384 characters across four sentences and `:1332`'s
       `SELECTION_CAVEAT` is 242, and both render unconditionally as `<p>` elements above the deployment
@@ -1323,7 +1323,7 @@ reverting it reverts nothing else.
       than being dropped, and it is the one assertion in this task that may not be edited
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 8.4, 17.3, 19.6, 20.1, 20.2, 22.1, 22.2_
 
-  - [ ]* 12.4 Move `SignalTrace.jsx`'s standing prose behind disclosure (1351 characters in 14 constants)
+  - [x]* 12.4 Move `SignalTrace.jsx`'s standing prose behind disclosure (1351 characters in 14 constants)
     - **Files:** `src/pages/SignalTrace.jsx`, `tests/unit/guards/standing-prose.budget.js`
     - Same mechanism and same constraints as 12.3. The longest constant is
       `REASON_NO_EXCHANGE_RESPONSE` at 253 characters
@@ -1342,7 +1342,7 @@ reverting it reverts nothing else.
       SignalTrace test files green unchanged is what proves no reason string lost its content
     - _Requirements: 7.1, 7.2, 7.4, 7.5, 19.6, 20.2, 22.1, 22.2_
 
-  - [ ]* 12.5 Move `Dashboard.jsx`'s standing prose behind disclosure (1225 characters in 13 constants)
+  - [x]* 12.5 Move `Dashboard.jsx`'s standing prose behind disclosure (1225 characters in 13 constants)
     - **Files:** `src/pages/Dashboard.jsx`, `tests/unit/guards/standing-prose.budget.js`
     - Same mechanism and same constraints as 12.3
     - **Must not be lost:** the halt confirmation's copy in full. `dashboard-kill-switch.test.jsx`
@@ -1363,7 +1363,7 @@ reverting it reverts nothing else.
       touching the first
     - _Requirements: 7.1, 7.2, 7.4, 7.5, 16.5, 19.1, 19.2, 19.5, 22.1, 22.2_
 
-  - [ ] 12.6 One next action on a fresh Dashboard (Requirement 8.1, 8.2)
+  - [x] 12.6 One next action on a fresh Dashboard (Requirement 8.1, 8.2)
     - **Files:** `src/pages/Dashboard.jsx`, `src/design/pageHierarchy.js` (ordering only, if needed)
     - `Dashboard.jsx` renders 7 `ds/Panel` instances, 6 with an empty branch, and on a fresh account all
       6 resolve to `empty` simultaneously at equal weight with nothing marked as the next thing to do.
@@ -1392,7 +1392,7 @@ reverting it reverts nothing else.
       what proves no state was collapsed
     - _Requirements: 8.1, 8.2, 8.3, 17.2, 19.4, 20.1, 20.5, 22.1_
 
-  - [ ] 12.7 The same rule on `Strategies`, `Portfolio`, `TradeHistory` and `LiveTrading` (Requirement 8.4)
+  - [x] 12.7 The same rule on `Strategies`, `Portfolio`, `TradeHistory` and `LiveTrading` (Requirement 8.4)
     - **Files:** `src/pages/Strategies.jsx`, `src/pages/Portfolio.jsx`, `src/pages/TradeHistory.jsx`,
       `src/pages/LiveTrading.jsx` — **one commit each** (Requirement 22.1)
     - Same hierarchy work as 12.6, page by page: exactly one primary action on a fresh account, no more
@@ -1415,7 +1415,7 @@ reverting it reverts nothing else.
 
 - [ ] 13. Checkpoint — every guard and design suite green, scoped, and the path checks on every commit
 
-  - [ ] 13.1 Re-run the named suites scoped and confirm the per-commit constraints
+  - [x] 13.1 Re-run the named suites scoped and confirm the per-commit constraints
     - **Verification:** `node node_modules/vitest/vitest.mjs --run <path> --fileParallelism=false` once
       per file, over every file under `tests/unit/guards/` (16 existing + the two new), every file under
       `tests/unit/design/`, and every file under `tests/unit/ds/`. **Never the bare suite** — it exceeds
@@ -1439,7 +1439,7 @@ reverting it reverts nothing else.
       or a zero was collapsed somewhere upstream
     - _Requirements: 16.2, 16.7, 17.1, 17.2, 17.3, 17.4, 18.1, 18.2, 18.3, 18.5, 18.6, 19.7, 21.1, 21.3_
 
-  - [ ] 13.2 Take the build-dependent checks in CI, and do not report them as verified locally
+  - [-] 13.2 Take the build-dependent checks in CI, and do not report them as verified locally
     - Five things genuinely need a build and none of them is verified by anything above.
       **1.** Class resolution — `dead-tailwind.test.js`. This pass rewrites class names on 14 files plus
       Marketplace plus the landing surface, the largest class-name churn since the redesign, and that
