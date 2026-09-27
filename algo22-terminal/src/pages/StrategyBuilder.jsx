@@ -1599,9 +1599,31 @@ const RefusedConnectionRow = ({ issue }) => {
  * outlive the transient callout that announced it.
  */
 const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEdge }) => {
+  /*
+    `useState` runs BEFORE the early-return guard below, on purpose: React's Rules of
+    Hooks require every hook to execute on every render of this component, and the guard
+    returns null on some renders (no issues, no refusals) and not others - a hook placed
+    after it would run a different number of times depending on the graph's state, which
+    is exactly what the rule forbids.
+
+    Collapsed by default so the report cannot cover the canvas the moment a graph has an
+    issue (which, mid-edit, is most of the time). The panel STAYS MOUNTED either way -
+    `data-testid="validation-issues"` and everything inside it are always in the DOM, so a
+    reader (this file's own tests included) that asks "what does the report say" gets the
+    same answer whether the author has looked at it or not. Only the BODY's visibility
+    changes, via `display: none`, which leaves `.textContent` intact on a hidden node -
+    collapsing must never look like the report going stale or disappearing.
+
+    The small always-visible piece is the header: the two counts and a chevron, so an
+    author who has not opened it can still see the total at a glance without the list
+    itself claiming any canvas space.
+  */
+  const [collapsed, setCollapsed] = useState(true);
+
   if (markers.issues.length === 0 && refusals.length === 0) return null;
   const nodeMarkers = Object.values(markers.nodes);
   const edgeMarkers = Object.values(markers.edges);
+
 
   return (
     <div
@@ -1612,12 +1634,68 @@ const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEd
       data-graph-issue-count={markers.graph.length}
       data-override-count={markers.overrides.length}
       data-refusal-count={refusals.length}
-      style={{ borderTop: `1px solid ${token.line.default}`, padding: '8px 12px', overflowY: 'auto', maxHeight: 260 }}
+      data-collapsed={collapsed ? 'true' : 'false'}
+      style={{ borderTop: `1px solid ${token.line.default}` }}
     >
-      {/* Requirement 3.3 — `uppercase` STAYS: two words, and it is the panels own title. */}
-      <h3 className="text-micro" style={{ color: token.content.secondary, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: 1 }}>
-        Validation issues
-      </h3>
+      <button
+        type="button"
+        data-testid="validation-issues-toggle"
+        onClick={() => setCollapsed((current) => !current)}
+        aria-expanded={!collapsed}
+        aria-controls="validation-issues-body"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          width: '100%',
+          padding: '8px 12px',
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        {collapsed ? (
+          <ChevronRight size={14} style={{ color: token.content.muted, flexShrink: 0 }} />
+        ) : (
+          <ChevronDown size={14} style={{ color: token.content.muted, flexShrink: 0 }} />
+        )}
+        <h3 className="text-micro" style={{ color: token.content.secondary, margin: 0, textTransform: 'uppercase', letterSpacing: 1 }}>
+          Validation issues
+        </h3>
+        {markers.errorCount > 0 && (
+          <span
+            data-testid="validation-issues-error-badge"
+            className="text-micro"
+            style={{ color: SEVERITY_COLOUR[SEVERITY_ERROR], fontWeight: 600 }}
+          >
+            {markers.errorCount} error{markers.errorCount === 1 ? '' : 's'}
+          </span>
+        )}
+        {markers.warningCount > 0 && (
+          <span
+            data-testid="validation-issues-warning-badge"
+            className="text-micro"
+            style={{ color: SEVERITY_COLOUR[SEVERITY_WARNING], fontWeight: 600 }}
+          >
+            {markers.warningCount} warning{markers.warningCount === 1 ? '' : 's'}
+          </span>
+        )}
+        {markers.errorCount === 0 && markers.warningCount === 0 && (
+          <span className="text-micro" style={{ color: token.content.muted }}>
+            No issues
+          </span>
+        )}
+      </button>
+      <div
+        id="validation-issues-body"
+        style={{
+          display: collapsed ? 'none' : 'block',
+          padding: '0 12px 8px',
+          overflowY: 'auto',
+          maxHeight: 260,
+        }}
+      >
       {/*
         Only when a report exists. With refusals alone there is no report for this sentence to
         be about, and telling an author their report is one edit old when they have never had
@@ -1730,6 +1808,7 @@ const ValidationIssuePanel = ({ markers, stale, refusals, onFocusNode, onFocusEd
           </ul>
         </section>
       ))}
+      </div>
     </div>
   );
 };
