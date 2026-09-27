@@ -68,9 +68,9 @@ export default function DownloadSection() {
           </p>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-7xl mx-auto">
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-7xl mx-auto items-stretch">
           {/* Web App */}
-          <div className="card-surface p-8 flex flex-col items-center text-center border-2 border-accent-cyan/20 bg-accent-cyan/5 hover:border-accent-cyan/50 hover:bg-accent-cyan/10 transition-all duration-300">
+          <div className="card-surface p-8 flex flex-col items-center text-center border-2 border-accent-cyan/20 bg-accent-cyan/5 hover:border-accent-cyan/50 hover:bg-accent-cyan/10 transition-all duration-300 h-full">
             <div className="w-14 h-14 rounded-2xl bg-accent-cyan flex items-center justify-center mb-5 shadow-[0_0_20px_rgba(0,212,255,0.3)]">
               <Globe className="w-7 h-7 text-text-inverse" />
             </div>
@@ -95,24 +95,28 @@ export default function DownloadSection() {
             platform="windows"
             level={3}
             actions={<WindowsIcon className="w-5 h-5 text-text-primary" />}
+            className="h-full"
           />
 
           <PlatformArtifact
             platform="macos"
             level={3}
             actions={<AppleIcon className="w-5 h-5 text-text-primary" />}
+            className="h-full"
           />
 
-          <div className="flex flex-col gap-6">
+          <div className="flex flex-col gap-6 h-full">
             <PlatformArtifact
               platform="linuxAppImage"
               level={3}
               actions={<LinuxIcon className="w-5 h-5 text-text-primary" />}
+              className="flex-1"
             />
             <PlatformArtifact
               platform="linuxDeb"
               level={3}
               actions={<LinuxIcon className="w-5 h-5 text-text-primary" />}
+              className="flex-1"
             />
           </div>
         </div>
