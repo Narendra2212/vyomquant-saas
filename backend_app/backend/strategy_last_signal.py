@@ -129,8 +129,49 @@ _column_absent_at: float = 0.0
 #: Strong references to in-flight fire-and-forget updates. ``asyncio`` keeps only a weak
 #: reference to a task, so without this a scheduled update can be garbage-collected before
 #: it runs — the write would then be silently dropped rather than merely late. Entries are
-#: discarded by a done-callback, so this set holds only what is actually in flight.
+#: discarded by a done-callback, and by :func:`_sweep_pending` for the entries a
+#: done-callback can never reach.
 _pending: Set["asyncio.Task[bool]"] = set()
+
+
+def _sweep_pending() -> None:
+    """Drop entries no done-callback will ever remove. Cheap, and never raises.
+
+    ``Task.add_done_callback`` does not run the callback inline — it hands it to
+    ``loop.call_soon``. A loop that is closed on the same pass that finished the update
+    therefore never gets round to the callback, and the finished task stays in
+    :data:`_pending` for the life of the process. Two consequences, both observed:
+
+    * **A leak.** Each such entry pins a finished task, the client it closed over and the
+      row it wrote, with nothing left that would ever release them.
+    * **An un-awaitable member.** ``asyncio.gather`` refuses a future from another loop
+      outright — ``ValueError``, raised while gather is being *constructed*, so
+      ``return_exceptions=True`` does not cover it. One orphan from an earlier loop would
+      make :func:`drain_last_signal_at_writes` raise on every later call, from a function
+      whose documented contract is that it does not.
+
+    A short-lived loop per unit of work is the ordinary shape for a synchronous caller and
+    for a test (``asyncio.run``, or ``new_event_loop`` / ``run_until_complete`` /
+    ``close``), so this is a normal condition rather than an edge case, and it is swept
+    here rather than guarded against at each call site.
+
+    Only entries that can no longer do anything are removed: a task that is done, and a
+    task whose loop is closed and so can never finish it. A task still in flight on a
+    *live* loop keeps its strong reference, which is the reason :data:`_pending` exists.
+    """
+    for task in tuple(_pending):
+        try:
+            if task.done():
+                _pending.discard(task)
+                continue
+            loop = task.get_loop()
+        except _MUST_PROPAGATE:
+            raise
+        except BaseException:  # noqa: BLE001 — an entry this cannot inspect is one it drops
+            _pending.discard(task)
+            continue
+        if loop is None or loop.is_closed():
+            _pending.discard(task)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -423,14 +464,39 @@ def schedule_last_signal_at(
     # collected before it ever runs.
     _pending.add(task)
     task.add_done_callback(_pending.discard)
+    # The done-callback is the fast path and covers the normal case. Sweeping here as well
+    # bounds the set in a process that never drains — see :func:`_sweep_pending` for the
+    # entries the callback cannot reach.
+    _sweep_pending()
     return task
 
 
 async def drain_last_signal_at_writes() -> None:
-    """Wait for every scheduled update to finish. For tests and for orderly shutdown.
+    """Wait for every scheduled update ON THIS LOOP to finish. NEVER RAISES.
 
-    Never raises: :func:`record_last_signal_at` returns a bool instead of raising, and
-    ``return_exceptions=True`` covers cancellation.
+    For tests and for orderly shutdown.
+
+    "On this loop" is not a narrowing of the promise — it is the whole of what is
+    awaitable from here. A task belonging to another loop cannot be awaited by this one at
+    any price, and handing it to ``asyncio.gather`` raises ``ValueError`` while gather is
+    being constructed rather than waiting. Such tasks are either finished or unfinishable
+    (their loop is closed), and :func:`_sweep_pending` removes both kinds, so no update
+    this loop is responsible for is skipped.
+
+    Never raises: :func:`record_last_signal_at` returns a bool instead of raising,
+    ``return_exceptions=True`` covers cancellation of the updates, and a caller with no
+    running loop has nothing to wait for rather than a ``RuntimeError``.
     """
-    while _pending:
-        await asyncio.gather(*tuple(_pending), return_exceptions=True)
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        # No loop, so nothing was ever scheduled from here and nothing can be awaited.
+        _sweep_pending()
+        return
+
+    while True:
+        _sweep_pending()
+        mine = tuple(task for task in _pending if task.get_loop() is running)
+        if not mine:
+            return
+        await asyncio.gather(*mine, return_exceptions=True)

@@ -5,6 +5,19 @@ Unit tests verifying durable Redis Streams publishing, retry logic, explicit Pub
 
 IMPORTANT: This test explicitly validates the SharedRedisManager implementation from
 backend_app/core/cache/redis_manager.py, not the old unreachable cache.py implementation.
+
+`RedisClient()` DOES NOT HAND BACK A FRESH OBJECT. `SharedRedisManager.__new__` caches
+`_instance`, so every `RedisClient()` below is the *same* object as the process-wide
+`backend_app.core.cache.redis_manager` singleton that the rest of the suite reads
+through. The injection seams these tests use — `_set_test_mode`, `_bypass_dev_mode` and
+the `_redis_manager` assignment — therefore mutate shared state, and before
+`_restore_shared_redis_manager_seams` existed they were never undone: the last test in
+this module left `_dev_mode_bypass=True` and `_redis_manager` bound to an `AsyncMock`,
+so from here to the end of the session `redis_manager.setex`/`getdel`/`incr` resolved
+to `AsyncMock().cache` instead of the in-memory `MockRedisClient`. Eleven assertions in
+tests/test_ws_ticket_redemption.py, three in tests/test_exchange_credential_log_redaction.py
+and one in tests/test_tenant_isolation_fixes.py failed on that leak and passed when their
+file ran alone.
 """
 
 import asyncio
@@ -12,6 +25,35 @@ import pytest
 from unittest.mock import AsyncMock
 from backend_app.core.cache import RedisClient, PublishError, TRADING_CRITICAL_STREAMS
 from backend_app.core.event_bus import publish, publish_command, COMMAND_STREAM, RISK_STREAM, EXECUTION_STREAM
+
+#: The singleton attributes every test below writes to. `_test_mode` and `_redis_manager`
+#: exist as class defaults; `_dev_mode_bypass` is created on first `_bypass_dev_mode`
+#: call, so "absent" is a state that has to be restorable too.
+_INJECTION_SEAMS = ("_test_mode", "_dev_mode_bypass", "_redis_manager")
+
+
+@pytest.fixture(autouse=True)
+def _restore_shared_redis_manager_seams():
+    """Put the shared Redis singleton back exactly as this module found it.
+
+    Snapshot-and-restore rather than "set the defaults back", so an attribute that did
+    not exist before a test is deleted afterwards instead of being invented with a
+    guessed value.
+    """
+    client = RedisClient()
+    before = {
+        name: client.__dict__[name]
+        for name in _INJECTION_SEAMS
+        if name in client.__dict__
+    }
+    try:
+        yield
+    finally:
+        for name in _INJECTION_SEAMS:
+            if name in before:
+                client.__dict__[name] = before[name]
+            else:
+                client.__dict__.pop(name, None)
 
 
 def test_implementation_identity():
