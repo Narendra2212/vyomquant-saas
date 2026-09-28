@@ -153,6 +153,43 @@ RAZORPAY_WEBHOOK_IPS = [
     "52.66.207.93",
 ]
 
+
+def _configured_webhook_ips(provider: str, defaults: List[str]) -> List[str]:
+    """The webhook source allowlist for ``provider``, overridable by environment.
+
+    WHY THIS IS CONFIGURABLE, AND WHY IT MATTERS MORE THAN IT LOOKS
+    ---------------------------------------------------------------
+    The lists above are four and six exact addresses, hardcoded, transcribed by hand from
+    provider documentation at some past date. ``_validate_webhook_ip`` forces enforcement on
+    whenever ``ENV=production`` with no override, so a provider egress address outside those
+    literals is refused with a 403.
+
+    That is the most expensive failure this module can have. The 403 happens AFTER the customer
+    has been charged: the payment is captured at the gateway, the webhook is rejected at the
+    door, ``_process_razorpay_entitlement`` never runs, and so no ``billing_invoices`` row, no
+    Subscription_Period, no referral commission and no marketplace Settlement_Record is ever
+    written. The provider retries, collects more 403s, and gives up. Money in, nothing
+    delivered, no error anywhere the customer or the operator would see.
+
+    Razorpay's own documentation (razorpay.com/docs/security/whitelists) publishes its egress
+    IPs and then recommends validating the webhook SIGNATURE regardless of whether those IPs
+    are allowlisted, precisely because the set changes. The signature check in
+    :func:`_validate_webhook_signature` is the authoritative control here - it is cryptographic
+    and keyed on a shared secret. The IP allowlist is defence in depth layered on top of it,
+    and defence in depth should not be able to cause a silent charge-without-delivery when it
+    falls out of date.
+
+    So the list becomes operational configuration rather than a source literal:
+    ``RAZORPAY_WEBHOOK_IPS`` / ``STRIPE_WEBHOOK_IPS``, comma-separated, accepting individual
+    addresses and CIDR blocks. Unset, the hardcoded defaults above apply unchanged, so no
+    deployment's behaviour changes until an operator sets one.
+    """
+    raw = os.environ.get(f"{provider.upper()}_WEBHOOK_IPS", "")
+    entries = [item.strip() for item in raw.split(",") if item.strip()]
+    if not entries:
+        return defaults
+    return entries
+
 # Razorpay refuses an order below 100 paise (₹1.00). Checked here rather than left to the
 # gateway so an under-minimum amount is a 400 naming the cause, not an opaque 500 from the
 # `except Exception` that wraps the provider call.
@@ -164,16 +201,37 @@ def _is_allowed_ip(client_ip: str, allowed_ips: List[str]) -> bool:
     BE-CRITICAL-006 FIX: Check if client IP is in allowlist.
     
     Returns True if IP is in the allowed list, False otherwise.
+
+    Each entry may be a single address (``52.66.201.93``) or a CIDR block
+    (``52.66.201.0/24``). Providers publish egress RANGES rather than individual addresses, and
+    the previous exact-equality comparison could not express one: a range had to be expanded by
+    hand into every address it contains, or it silently matched nothing.
+
+    A malformed entry is skipped and logged rather than aborting the scan. Previously one
+    unparseable value raised out of the loop and returned False for everything after it, so a
+    single typo in the list rejected every webhook the provider sent — with the
+    charge-without-delivery consequence described on :func:`_configured_webhook_ips`.
     """
     try:
         ip_obj = ipaddress.ip_address(client_ip)
-        for allowed in allowed_ips:
-            if ip_obj == ipaddress.ip_address(allowed):
-                return True
-        return False
     except Exception as e:
-        logger.error(f"IP validation error: {e}")
+        logger.error(f"IP validation error: unparseable client address {client_ip!r}: {e}")
         return False
+
+    for allowed in allowed_ips:
+        entry = str(allowed).strip()
+        if not entry:
+            continue
+        try:
+            if "/" in entry:
+                if ip_obj in ipaddress.ip_network(entry, strict=False):
+                    return True
+            elif ip_obj == ipaddress.ip_address(entry):
+                return True
+        except Exception as e:
+            logger.error(f"IP validation error: skipping malformed allowlist entry {entry!r}: {e}")
+            continue
+    return False
 
 
 def _validate_webhook_ip(request: Request, provider: str) -> None:
@@ -202,17 +260,30 @@ def _validate_webhook_ip(request: Request, provider: str) -> None:
     else:
         client_ip = request.client.host if request.client else "unknown"
     
-    # Select appropriate allowlist based on provider
+    # Select appropriate allowlist based on provider. Read through
+    # `_configured_webhook_ips` so an operator can supply the provider's CURRENT egress list
+    # (addresses and/or CIDR blocks) without a code change and a redeploy — see that function
+    # for why a stale list here is the most expensive failure in this module.
     if provider == "stripe":
-        allowed_ips = STRIPE_WEBHOOK_IPS
+        allowed_ips = _configured_webhook_ips("stripe", STRIPE_WEBHOOK_IPS)
     elif provider == "razorpay":
-        allowed_ips = RAZORPAY_WEBHOOK_IPS
+        allowed_ips = _configured_webhook_ips("razorpay", RAZORPAY_WEBHOOK_IPS)
     else:
         raise HTTPException(500, f"Unknown payment provider: {provider}")
-    
+
     # Check if IP is allowed
     if not _is_allowed_ip(client_ip, allowed_ips):
-        logger.warning(f"Webhook request from disallowed IP: {client_ip} for provider: {provider}")
+        # Logged at ERROR, not WARNING. This rejection happens after the customer's money has
+        # already moved at the gateway, so it is a delivery failure rather than a suspicious
+        # request, and it needs to be visible in whatever surfaces production errors. The
+        # allowlist size is included because "0 entries" and "the provider changed its egress
+        # range" are the two causes and they are indistinguishable from the address alone.
+        logger.error(
+            "Webhook REJECTED by IP allowlist: provider=%s client_ip=%s allowlist_entries=%d. "
+            "The payment may already be captured; no entitlement will be granted for it. "
+            "Set %s_WEBHOOK_IPS to the provider's current egress list.",
+            provider, client_ip, len(allowed_ips), provider.upper(),
+        )
         raise HTTPException(403, "Webhook request from unauthorized IP address")
 
 
