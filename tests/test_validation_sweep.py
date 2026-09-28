@@ -849,6 +849,27 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         body={"tier": "not-a-real-tier"},
     ),
     MutatingRoute(
+        key="billing.verify_razorpay_payment",
+        method="POST",
+        path="/api/billing/verify-payment",
+        handler="backend_app.routers.billing:verify_razorpay_payment",
+        # `RazorpayVerificationRequest` (backend_app/core/schemas.py) declares all THREE of
+        # `razorpay_order_id`/`razorpay_payment_id`/`razorpay_signature` as required
+        # `str`s with `min_length=1`, plus a `reject_blank` field validator. The
+        # malformation chosen here OMITS `razorpay_signature` entirely and sends the other
+        # two well-formed, because for a payment-verification endpoint that is the
+        # malformed shape whose mishandling would cost money: if an absent signature were
+        # allowed past the model, the handler's `hmac.compare_digest` would be comparing
+        # against the string `"None"` (or against nothing at all), and "no signature
+        # supplied" could read as "signature verified". It must be a 422 from the model,
+        # decided before the handler body runs - never a 200, and never a 500 from the
+        # missing-secret branch, which only exists further down the same function.
+        body={
+            "razorpay_order_id": "order_ValidationSweep",
+            "razorpay_payment_id": "pay_ValidationSweep",
+        },
+    ),
+    MutatingRoute(
         key="billing.add_payment_method",
         method="POST",
         path="/api/billing/payment-methods",
