@@ -142,7 +142,9 @@ class TestRiskSettingsAPI:
             "max_drawdown_pct": 0.05,
             "enabled": True
         }])
-        mock_sb.return_value = mock_sb_instance
+        # ``risk._sb`` is an async factory, so the patch has to hand back an awaitable —
+        # the same setup the settings tests above use.
+        mock_sb.side_effect = AsyncMock(return_value=mock_sb_instance)
 
         app.dependency_overrides[get_current_user] = mock_user
         try:

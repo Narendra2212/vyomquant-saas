@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -57,14 +58,26 @@ class FailureType(Enum):
     ISOLATED = "isolated"
 
 
-@dataclass
+@dataclass(kw_only=True)
 class OrphanResource:
-    """Base class for orphaned resources."""
-    orphan_id: str
-    resource_type: OrphanType
-    resource_id: str
-    orphan_type: str
-    detected_at: datetime
+    """Base class for orphaned resources.
+
+    ``kw_only`` is required across this hierarchy: the subclasses below add
+    mandatory fields (``task_id``, ``worker_id``, ...) after this base declares
+    defaulted ones, which a positional dataclass rejects at import time.
+
+    ``resource_type`` and ``resource_id`` are *derived* - every subclass
+    overwrites them in ``__post_init__`` - so they must not be mandatory
+    constructor arguments. ``orphan_id`` and ``detected_at`` are generated when
+    the caller does not supply them.
+    """
+    orphan_id: str = field(default_factory=lambda: f"orphan_{uuid.uuid4().hex}")
+    resource_type: OrphanType = OrphanType.RESOURCE
+    resource_id: str = ""
+    orphan_type: str = "unknown"
+    detected_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     details: Dict[str, Any] = field(default_factory=dict)
     status: OrphanStatus = OrphanStatus.DETECTED
     recovery_priority: int = 5
@@ -72,7 +85,7 @@ class OrphanResource:
     max_recovery_attempts: int = 3
 
 
-@dataclass
+@dataclass(kw_only=True)
 class TaskOrphan(OrphanResource):
     """Orphaned task."""
     task_id: str
@@ -85,7 +98,7 @@ class TaskOrphan(OrphanResource):
         self.resource_id = self.task_id
 
 
-@dataclass
+@dataclass(kw_only=True)
 class WorkerOrphan(OrphanResource):
     """Orphaned worker."""
     worker_id: str
@@ -98,7 +111,7 @@ class WorkerOrphan(OrphanResource):
         self.resource_id = self.worker_id
 
 
-@dataclass
+@dataclass(kw_only=True)
 class QueueOrphan(OrphanResource):
     """Orphaned queue."""
     queue_id: str
@@ -111,11 +124,10 @@ class QueueOrphan(OrphanResource):
         self.resource_id = self.queue_id
 
 
-@dataclass
+@dataclass(kw_only=True)
 class LeaseOrphan(OrphanResource):
     """Orphaned lease."""
     lease_id: str
-    resource_id: str
     owner_id: str
     lease_data: Dict[str, Any] = field(default_factory=dict)
     

@@ -13,6 +13,13 @@ set**: task 7.x cannot know which columns to repoint until this file has enumera
 here is a symptom patch, no source file is touched, and no assertion has been weakened to make a
 run green. Section 7 is the preservation half and PASSES on `F`.
 
+**AS OF TASK 7.10 THE WHOLE FILE PASSES, AND THAT IS THE FINISHED STATE, NOT A QUIETED ONE.**
+Tasks 7.1-7.9 repointed every column this file enumerated; 7.10 closed the last two gaps between
+what the tests claimed and what they could measure. Each section's docstring carries its own
+`TASK 7.x UPDATE` recording what changed and why the replacement assertion is stronger than the
+red one it replaced - read those rather than assuming a green run means the measurements were
+deleted. The counterexamples recorded throughout are the observations from `F` and are kept.
+
 THE DEFECT, IN ONE SENTENCE
 ---------------------------
 Three layers hand a results dict along, and **each layer spells the keys differently from the
@@ -42,6 +49,15 @@ THE THREE BOUNDARIES
     `backtest_service.RESULT_COLUMN_SOURCE_KEYS`, which this file now imports rather than
     mirrors (:data:`WRITER_COLUMN_SOURCE_KEYS`). The diagram above is the record of `F`.
 
+    TASK 7.10 has declared the SECOND layer's contribution the same way -
+    `backtest_runtime.RUNTIME_SUPPLIED_PAYLOAD_KEYS` - because the payload the writer reads
+    against is layer 1's keys UNION layer 2's, and until 7.10 only layer 1's half existed as a
+    declaration. Three of the writer's read keys (`execution_time_seconds`, `monthly_returns`,
+    `daily_returns`) are produced only at layer 2, which is why the subset check in section 1
+    reported them as missing while the runtime-hop check reported them present. Both halves are
+    declared now, each asserted as an equality against a live run, and asserted DISJOINT so no
+    key can quietly acquire two producers.
+
 THE PRIMARY INSTRUMENT (section 1)
 ----------------------------------
 Not "assert `win_rate` is 0.55". The **key-set contract**: the writer's read-key set is a SUBSET
@@ -66,11 +82,17 @@ THE BLAST RADIUS (section 5) - THIS DECIDES TASK 7.6's SCOPE
 mistake is made **ten times** in `_calculate_performance_metrics` and **twice more** in
 `run_backtest`'s own payload literal, and it fabricates **twelve columns**, not the nine
 `tasks.md` expects - `sqn`, `trades_count` and `final_capital` are the additions. Section 5
-enumerates both sets and asserts the narrow claim so that it fails and the wider count is on the
-record. See :data:`DISPLAY_NAME_READS` for the full list and the per-column verdict, and
+enumerated both sets and asserted the narrow claim so that it failed and the wider count went on
+the record. See :data:`DISPLAY_NAME_READS` for the full list and the per-column verdict, and
 section 5's closing note for a *third* distinct cause inside the same method (a RangeIndex read
 as nanoseconds, which empties `monthly_returns` and `daily_returns`) that the key-set instrument
 cannot see.
+
+Task 7.6 repointed all twelve and task 7.10 turned that measurement into a guard: section 5's
+first test now PARSES `backtest_runtime`'s source and asserts that none of the twelve display
+names - and no other display-name-shaped key - is read out of the engine payload anywhere. The
+old form compared two constants declared in this file, so no production change could satisfy it
+and a thirteenth display-name read would not have moved it.
 
 WHAT IS REAL AND WHAT IS SUPPLIED
 ---------------------------------
@@ -120,6 +142,7 @@ The encoding is not optional: `backtesting_engine` prints money emoji to stdout,
 console default codec raises `UnicodeEncodeError` on them.
 """
 
+import ast
 import asyncio
 import contextlib
 import json
@@ -211,6 +234,14 @@ REQUIREMENT_NAMED_COLUMNS = tuple(
 #:
 #: `tasks.md` names five of them. There are TEN in `_calculate_performance_metrics` and two more
 #: in `run_backtest`. That difference is the scope of task 7.6 and is asserted in section 5.
+#:
+#: TASK 7.10 UPDATE - this is now the RECORD OF `F` AND THE SCAN LIST, not an observation of the
+#: current tree. Task 7.6 repointed all twelve reads, so none of these display names is read out
+#: of the engine payload any more. Section 5's first test used to compare this dict's keys
+#: against :data:`DISPLAY_NAMES_TASKS_MD_NAMES` - two test-local constants, twelve against five,
+#: an assertion no production change could ever satisfy - and it now parses the runtime's source
+#: and asserts that not one of these twelve names is read from `stats` anywhere. The twelve are
+#: the thing being scanned FOR rather than the thing being counted.
 DISPLAY_NAME_READS = {
     # display name           (source line, columns fabricated when the read misses)
     "Max Drawdown [%]":      ("backtest_runtime.py:473", ("calmar_ratio", "recovery_factor")),
@@ -530,6 +561,52 @@ def _missing(read_keys, payload_keys):
     return tuple(k for k in read_keys if k not in payload_keys)
 
 
+#: Receivers whose `.get("…")` keys must be the engine's snake_case payload keys. `stats` is the
+#: name `run_backtest` and `_calculate_performance_metrics` both bind the engine's `results`
+#: payload to, and it is the only dict in `backtest_runtime` whose key space is another module's
+#: to decide - which is what made a second spelling of it invisible for as long as it was.
+ENGINE_PAYLOAD_RECEIVERS = ("stats",)
+
+#: `DISPLAY_NAME_READS` keys as they appear in source. One entry is disambiguated for the table
+#: (`Total Trades` is read at two sites), and the suffix is not part of the string to scan for.
+DISPLAY_NAMES_IN_SOURCE = frozenset(
+    name.replace(" (payload)", "") for name in DISPLAY_NAME_READS
+)
+
+
+def _constant_get_keys(module):
+    """Every `<receiver>.get("<literal>")` in `module`'s source, as `(receiver, key, lineno)`.
+
+    An `ast` parse rather than a text search, and that distinction is the whole point: this
+    module's docstrings and comments quote all twelve display names by name - `DEFECT 49`'s
+    explanation is written in terms of them - so a substring scan over the file would report
+    the documentation of the fix as the defect. Only the first positional argument of a real
+    `.get()` call is collected, so prose about `stats.get("Win Streak", 0)` is inert and a
+    reintroduced call is not.
+
+    Non-literal keys (`stats.get(key, default)` inside `_engine_metric`) are not collected:
+    there is no string to judge, and the constants reaching that function are read from its
+    call sites by the same walk.
+    """
+    with open(module.__file__, "r", encoding="utf-8") as handle:
+        tree = ast.parse(handle.read(), filename=module.__file__)
+
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr != "get" or not node.args:
+            continue
+        key = node.args[0]
+        if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+            continue
+        receiver = getattr(node.func.value, "id", None) or getattr(
+            node.func.value, "attr", "<expr>"
+        )
+        found.append((receiver, key.value, node.lineno))
+    return found
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # 1. THE KEY-SET CONTRACT - THE PRIMARY INSTRUMENT
 #    (Requirements 1.7, 1.8, 2.7, 2.8)
@@ -537,7 +614,7 @@ def _missing(read_keys, payload_keys):
 
 
 @pytest.mark.parametrize("read_key", READ_KEYS)
-def test_every_key_the_writer_reads_is_a_key_the_engine_emits(engine_run, read_key):
+def test_every_key_the_writer_reads_has_exactly_one_declared_producer(engine_run, read_key):
     """The whole contract, one column per case, on both engine paths.
 
     This is the instrument Requirement 2.7 asks for - "the writer's read-key set is a subset of
@@ -573,11 +650,33 @@ def test_every_key_the_writer_reads_is_a_key_the_engine_emits(engine_run, read_k
       rather than here:
         monthly_returns, daily_returns, execution_time_seconds
 
-    The three are deliberately left in :data:`READ_KEYS` and left failing at this boundary. The
-    alternative - curating them out - would encode today's division of labour between the two
-    modules into the instrument, and the point of the instrument is to survive a change to that
-    division. A red case here that the runtime-hop test clears is a *located* key, not a lost
-    one, and the two tests read together say which hop owns each column.
+    TASK 7.10 UPDATE - THE THREE ARE NOW ATTRIBUTED RATHER THAN LEFT RED.
+      Until 7.10 this test asserted `read_key in results` against the ENGINE's payload alone,
+      so those three failed here permanently, and the file's own reading of the failure was
+      "a *located* key, not a lost one - the runtime-hop test clears it". That reading was
+      right and the instrument was one declaration short of being able to say it: the writer
+      reads against the payload `run_backtest` assembles, which is the engine's keys UNION
+      this hop's own, and only the engine's half was declared anywhere.
+
+      Task 7.10 declared the other half - `backtest_runtime.RUNTIME_SUPPLIED_PAYLOAD_KEYS` -
+      and this test now asserts that every read key has EXACTLY ONE declared producer: it is
+      emitted by the engine, or supplied by the runtime, and **not both**. Nothing is curated
+      out of :data:`READ_KEYS`; all sixteen are still parametrised, so the rename this
+      instrument was built for (`sharpe_ratio` -> `sharpe` in the engine) still reds, because
+      `sharpe_ratio` would then be in neither producer's set. What is new is the second
+      assertion: a key that acquires a second producer - the exact shape of the
+      `expectancy`/`calmar_ratio` damage in section 6 - now reds too, which the single
+      membership check could never see. The declaration itself cannot go stale, because
+      `test_the_runtime_hops_declared_additions_are_what_a_real_run_adds` asserts it as an
+      EQUALITY against a live payload.
+
+      The alternative considered and rejected: making the engine emit the three. It cannot
+      honestly produce any of them - `execution_time_seconds` is the whole run's wall time,
+      including the data fetch and DAG execution the engine never sees, and the two return
+      series are resampled from the equity DatetimeIndex in the runtime's analytics phase -
+      and two of the three would have been shadowed on every run by the runtime's literal,
+      i.e. a second spelling of a key that already had a producer. See
+      `RUNTIME_SUPPLIED_PAYLOAD_KEYS`'s own note.
 
     `winning_trades` and `losing_trades` are this measurement's addition to the rename set, and
     they are not renames at all: no producer anywhere computes them, so repointing a key cannot
@@ -591,11 +690,23 @@ def test_every_key_the_writer_reads_is_a_key_the_engine_emits(engine_run, read_k
     emit (:243) - see section 3.
     """
     path, results, _curve = engine_run
-    assert read_key in results, (
+    emitted_by_the_engine = read_key in results
+    supplied_by_the_runtime = read_key in rt.RUNTIME_SUPPLIED_PAYLOAD_KEYS
+
+    assert emitted_by_the_engine or supplied_by_the_runtime, (
         f"{path} path: update_backtest_results reads results.get({read_key!r}) at "
-        f"backtest_service.py, and the engine's payload has no such key. Its 12 keys are "
-        f"{sorted(results)}. The writer persists its own default instead, and the column is "
-        f"rendered to the trader as a computed result."
+        f"backtest_service.py, and NO producer emits it. The engine's payload has "
+        f"{sorted(results)}; backtest_runtime.RUNTIME_SUPPLIED_PAYLOAD_KEYS declares "
+        f"{sorted(rt.RUNTIME_SUPPLIED_PAYLOAD_KEYS)}. The writer persists its own default "
+        f"instead, and the column is rendered to the trader as a computed result."
+    )
+    assert not (emitted_by_the_engine and supplied_by_the_runtime), (
+        f"{path} path: {read_key!r} has TWO producers - the engine emits it and "
+        f"backtest_runtime.RUNTIME_SUPPLIED_PAYLOAD_KEYS declares it too - so which value the "
+        f"trader sees is decided by the assembly order of a dict literal. That is exactly how "
+        f"`expectancy` and `calmar_ratio` came to persist 0.0 over real figures (section 6). A "
+        f"key genuinely computed by both belongs in ENGINE_OWNED_METRICS or "
+        f"RUNTIME_OWNED_METRICS, where the winner is declared by name."
     )
 
 
@@ -666,6 +777,48 @@ def test_the_read_key_set_and_the_payload_key_set_are_not_disjoint_where_it_matt
         f"{len(missing)} of the writer's {len(READ_KEYS)} read keys are absent from the "
         f"payload it is handed: {list(missing)}. Each one persists a default that is displayed "
         f"as a measured result."
+    )
+
+
+def test_the_runtime_hops_declared_additions_are_what_a_real_run_adds(
+    runtime_payload, vectorbt_engine_run
+):
+    """TASK 7.10. `RUNTIME_SUPPLIED_PAYLOAD_KEYS` is not a guess either - it is an EQUALITY.
+
+    The engine's half of the payload contract has been kept honest since task 7.1 by
+    `test_the_declared_key_set_matches_a_real_run_on_both_paths`, which asserts a real run's
+    key set EQUALS `BACKTEST_PAYLOAD_EMITTED_KEYS` rather than being contained in it. This is
+    the same assertion for the other half, and for the same reason: a subset check would let
+    the runtime's declaration grow stale by listing keys the runtime no longer supplies, and a
+    stale declaration is what makes
+    `test_every_key_the_writer_reads_has_exactly_one_declared_producer` above answer "some
+    producer has it" when nothing does.
+
+    Measured as *payload minus engine payload* rather than against a hand-listed expectation,
+    so the two declarations are checked against each other as well as against the run: a key
+    that moves from the engine to the runtime (or the reverse) reds here until both frozensets
+    agree with the code.
+
+    `sortino_ratio`, `calmar_ratio` and `expectancy` are deliberately NOT in the difference -
+    both producers compute them, the engine emits them, and which value wins is declared by
+    name in `ENGINE_OWNED_METRICS` / `RUNTIME_OWNED_METRICS` (section 6). They are the reason
+    this is a set difference and not `set(performance_metrics) | {the four literals}`.
+    """
+    payload, _sb = runtime_payload
+    engine_results, _curve = vectorbt_engine_run
+
+    added_by_the_runtime = set(payload) - set(engine_results)
+    assert added_by_the_runtime == rt.RUNTIME_SUPPLIED_PAYLOAD_KEYS, (
+        f"run_backtest adds {sorted(added_by_the_runtime)} to the engine's payload, but "
+        f"backtest_runtime.RUNTIME_SUPPLIED_PAYLOAD_KEYS declares "
+        f"{sorted(rt.RUNTIME_SUPPLIED_PAYLOAD_KEYS)}. Undeclared: "
+        f"{sorted(added_by_the_runtime - rt.RUNTIME_SUPPLIED_PAYLOAD_KEYS)}; declared but not "
+        f"supplied: {sorted(rt.RUNTIME_SUPPLIED_PAYLOAD_KEYS - added_by_the_runtime)}."
+    )
+    assert rt.RUNTIME_SUPPLIED_PAYLOAD_KEYS.isdisjoint(BACKTEST_PAYLOAD_EMITTED_KEYS), (
+        f"the two producers' declarations overlap on "
+        f"{sorted(rt.RUNTIME_SUPPLIED_PAYLOAD_KEYS & BACKTEST_PAYLOAD_EMITTED_KEYS)}, so those "
+        f"keys have two producers and no declared winner"
     )
 
 
@@ -888,10 +1041,10 @@ def test_a_completed_backtest_yields_a_numeric_total_pnl(runtime_payload):
 # ══════════════════════════════════════════════════════════════════════════
 
 
-def test_the_display_name_reads_in_the_runtime_are_the_five_tasks_md_names(runtime_payload):
+def test_no_vectorbt_display_name_is_read_out_of_the_engine_payload(runtime_payload):
     """THE MEASUREMENT `tasks.md` ASKS FOR: are those five the full extent, or only part of it?
 
-    **ANSWER: only part of it. They are five of twelve.**
+    **ANSWER: only part of it. They were five of twelve.**
 
     `_calculate_performance_metrics` makes **ten** `stats.get("<VectorBT display name>")` reads,
     and `run_backtest`'s own payload literal makes **two more**. `stats` at that point is the
@@ -906,21 +1059,82 @@ def test_the_display_name_reads_in_the_runtime_are_the_five_tasks_md_names(runti
         (* = the five `tasks.md` names)
 
     The seven `tasks.md` does not name are `Total Trades` (twice), `Worst Trade`, `Win Streak`,
-    `Loss Streak`, `Avg Losing Trade` and `Final Equity`. **Task 7.6 must repoint twelve reads,
-    not five.** `Final Equity` is the one that also has its own requirement clause (1.8), so
-    fixing it as part of 7.6 and as part of the rename set would be the same change made twice.
+    `Loss Streak`, `Avg Losing Trade` and `Final Equity`. **Task 7.6 had to repoint twelve
+    reads, not five.** `Final Equity` is the one that also has its own requirement clause (1.8),
+    so fixing it as part of 7.6 and as part of the rename set was the same change made twice.
 
-    This test asserts the narrow claim - that the five are the whole set - so that it FAILS and
-    the wider count is on the record. It is the measurement, not an expectation.
+    TASK 7.10 - WHAT THIS TEST NOW ASSERTS, AND WHY THE OLD FORM HAD TO GO.
+        The measurement above is finished. It was taken, `tasks.md`'s five was corrected to
+        twelve, and task 7.6 repointed all twelve - `_calculate_performance_metrics`' ten reads
+        are snake_case now, and `run_backtest`'s two literals read `total_trades` and
+        `final_equity`. The old assertion was `sorted(DISPLAY_NAME_READS) ==
+        sorted(DISPLAY_NAMES_TASKS_MD_NAMES)`: twelve against five, **both of them constants
+        declared in this file**, with nothing on either side of the comparison connected to
+        `backtest_runtime` at all. No change to any production file could turn it green, and
+        the two resolutions its own framing invited were a tautology (widen the expected tuple
+        to the observed one, so the file asserts a constant equals itself) or an arbitrary
+        deletion (narrow the recorded twelve). Neither detects anything.
+
+        So the scan became real. This parses `backtest_runtime`'s source and asserts that not
+        one of the twelve display names is read out of `stats` anywhere in the module, and that
+        no *other* display-name-shaped key is either. That is strictly more detection than the
+        old form had, not less: the old test could not have noticed a thirteenth display-name
+        read being added, and this fails on the next one - which is the property Requirement
+        2.7 asks for in "so the mismatch cannot silently return". The twelve-entry record stays
+        in :data:`DISPLAY_NAME_READS`, where it is now the scan list and the history of `F`.
+
+    A REGRESSION HERE LOOKS LIKE: someone adds `stats.get("Sharpe Ratio", 0)` to
+    `_calculate_performance_metrics` because VectorBT's own `portfolio.stats()` spells it that
+    way. `stats` is not `portfolio.stats()` - it is the engine's already-normalised payload -
+    so the read misses, the `, 0)` wins, and a column reads `0.0` for a run that had a Sharpe.
     """
     payload, _sb = runtime_payload
     del payload  # the claim is about the source, not the payload; the fixture pins the run
-    observed = tuple(sorted(DISPLAY_NAME_READS))
-    named = tuple(sorted(DISPLAY_NAMES_TASKS_MD_NAMES))
-    assert observed == named, (
-        f"tasks.md names {len(named)} display-name reads; there are {len(observed)}. "
-        f"The {len(observed) - len(named)} it does not name: "
-        f"{sorted(set(observed) - set(named))}. Task 7.6's scope is the larger set."
+
+    # The scan list may grow - a thirteenth display name found later belongs in it - but it may
+    # not be trimmed below the five `tasks.md` named, which is how this test would be quieted
+    # by deletion rather than by a fix.
+    assert set(DISPLAY_NAMES_TASKS_MD_NAMES) <= DISPLAY_NAMES_IN_SOURCE, (
+        f"names dropped from the scan list that tasks.md explicitly calls out: "
+        f"{sorted(set(DISPLAY_NAMES_TASKS_MD_NAMES) - DISPLAY_NAMES_IN_SOURCE)}"
+    )
+
+    engine_payload_reads = [
+        (receiver, key, lineno)
+        for receiver, key, lineno in _constant_get_keys(rt)
+        if receiver in ENGINE_PAYLOAD_RECEIVERS
+    ]
+    assert engine_payload_reads, (
+        "no `stats.get(\"<literal>\")` call was found in backtest_runtime at all, so this scan "
+        "is asserting nothing. Either the reads moved behind a helper this walk cannot see, or "
+        f"the receiver is no longer named one of {list(ENGINE_PAYLOAD_RECEIVERS)}; the scan has "
+        "to be pointed at the new shape before it can be trusted again."
+    )
+
+    historical = [
+        (key, lineno)
+        for _receiver, key, lineno in engine_payload_reads
+        if key in DISPLAY_NAMES_IN_SOURCE
+    ]
+    assert historical == [], (
+        f"backtest_runtime reads {len(historical)} VectorBT display name(s) out of the engine's "
+        f"payload again: {historical}. `stats` is the engine's own results dict, normalised to "
+        f"snake_case at backtesting_engine.py:483-494, so every such read misses on every run "
+        f"and the `, 0)` default is persisted as a measured result. This is the twelve-read "
+        f"defect task 7.6 repointed; see DISPLAY_NAME_READS for the columns each one fabricates."
+    )
+
+    shaped = [
+        (key, lineno)
+        for _receiver, key, lineno in engine_payload_reads
+        if " " in key or "[" in key
+    ]
+    assert shaped == [], (
+        f"backtest_runtime reads {shaped} out of the engine's payload. A key with a space or a "
+        f"bracket in it is a VectorBT *display* name, and the engine emits none of them - this "
+        f"is the same defect as the twelve in DISPLAY_NAME_READS under a name nobody has "
+        f"recorded yet. Read the snake_case key the engine actually emits "
+        f"(BACKTEST_PAYLOAD_EMITTED_KEYS), through `_engine_metric` if it needs coercing."
     )
 
 
@@ -1412,11 +1626,40 @@ def test_the_fixture_has_no_duplicate_or_malformed_keys():
     assert all(isinstance(k, str) and k for k in keys), f"emitted_keys has a non-string entry: {keys}"
 
 
+def test_the_json_fixture_matches_the_runtime_hops_declaration():
+    """TASK 7.10. The fixture's other half, kept from going stale the same way.
+
+    `backtest_payload_keys.json` declared only the engine's contribution, which is why the
+    subset check below could not be satisfied for the three keys the runtime supplies without
+    either weakening it or curating them out of the writer's read-key set. The file now carries
+    both producers, each named, and this asserts the second one against the Python declaration
+    exactly as `test_the_json_fixture_matches_the_python_declaration` asserts the first.
+
+    The frontend's `emitted_keys` read (`backtesterNetPnl.test.jsx`) is unaffected: that key is
+    unchanged and still means what it meant, "what the engine emits". The new member is
+    additive.
+    """
+    with open(BACKTEST_PAYLOAD_KEYS_FIXTURE, "r", encoding="utf-8") as f:
+        fixture = json.load(f)
+
+    fixture_keys = set(fixture["runtime_supplied_keys"])
+    assert fixture_keys == rt.RUNTIME_SUPPLIED_PAYLOAD_KEYS, (
+        f"tests/fixtures/backtest_payload_keys.json declares runtime_supplied_keys "
+        f"{sorted(fixture_keys)}; backtest_runtime.RUNTIME_SUPPLIED_PAYLOAD_KEYS declares "
+        f"{sorted(rt.RUNTIME_SUPPLIED_PAYLOAD_KEYS)}. Re-emit the fixture from the Python "
+        f"declaration; it must not be hand-edited."
+    )
+    assert fixture_keys.isdisjoint(set(fixture["emitted_keys"])), (
+        f"the fixture gives {sorted(fixture_keys & set(fixture['emitted_keys']))} two "
+        f"producers"
+    )
+
+
 @pytest.mark.parametrize("read_key", READ_KEYS)
 def test_the_writers_read_key_set_is_a_subset_of_the_fixtures_declared_key_set(read_key):
     """TASK 7.2. The subset check the task asks for, against the FIXTURE rather than a fresh run.
 
-    Section 1's `test_every_key_the_writer_reads_is_a_key_the_engine_emits` already asserts
+    Section 1's `test_every_key_the_writer_reads_has_exactly_one_declared_producer` already asserts
     this against a live `engine_run` payload, per column, on both paths - that assertion is not
     weakened, altered, or duplicated here. This is the SAME claim measured against the
     declaration task 7.1 produced instead of against a fresh simulation, which is what the task
@@ -1429,14 +1672,24 @@ def test_the_writers_read_key_set_is_a_subset_of_the_fixtures_declared_key_set(r
     set, and the writer's read-key set is checked against the fixture - so nothing here is a
     weaker restatement of an existing passing case; it is the missing link between "the
     declaration is accurate" and "the declaration is what the writer's contract is checked
-    against". The same known-missing keys that make section 1 fail (`execution_time_seconds`,
-    `monthly_returns`, `daily_returns` - located at the runtime hop rather than the engine, per
-    section 1's own docstring) fail here for the identical reason and are not a new finding.
+    against".
+
+    TASK 7.10 UPDATE. This asserted membership of `BACKTEST_PAYLOAD_EMITTED_KEYS` alone, and so
+    failed for `execution_time_seconds`, `monthly_returns` and `daily_returns` - the three the
+    runtime supplies - for the same reason section 1 did, which the docstring here recorded as
+    "not a new finding". Both halves of the payload are declared now, so the set this checks
+    against is the union, which is what the writer actually reads against. Not a weakening: the
+    union is still a *closed* declaration, every one of the writer's read keys is still
+    asserted individually, and `test_the_runtime_hops_declared_additions_are_what_a_real_run_
+    adds` pins the new half to a live run as an equality so membership of it cannot be bought
+    by adding a line to a frozenset.
     """
-    assert read_key in BACKTEST_PAYLOAD_EMITTED_KEYS, (
-        f"update_backtest_results reads results.get({read_key!r}), and the task 7.1 fixture "
-        f"(backtest_payload_keys.json / BACKTEST_PAYLOAD_EMITTED_KEYS) does not declare it as "
-        f"an emitted key. Declared keys: {sorted(BACKTEST_PAYLOAD_EMITTED_KEYS)}."
+    declared = BACKTEST_PAYLOAD_EMITTED_KEYS | rt.RUNTIME_SUPPLIED_PAYLOAD_KEYS
+    assert read_key in declared, (
+        f"update_backtest_results reads results.get({read_key!r}), and neither half of the "
+        f"task 7.1 fixture (backtest_payload_keys.json / BACKTEST_PAYLOAD_EMITTED_KEYS + "
+        f"RUNTIME_SUPPLIED_PAYLOAD_KEYS) declares it as produced. Declared keys: "
+        f"{sorted(declared)}."
     )
 
 

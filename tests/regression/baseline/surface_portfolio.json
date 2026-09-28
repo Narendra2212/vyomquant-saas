@@ -1,6 +1,7 @@
 {
   "_baseline_note_positions_read_repointed": "AUTHORISED RE-RECORD of the two `api.portfolio.getOpenPositions` and `api.portfolio.getPositions` entries \u2014 both REMOVED \u2014 together with the two figures that removal moves: `api_call_count` 8 \u2192 7, and the two `unresolved_usages` entries that now appear (vyomquant-ui-redesign task 13.1). SIX DIFFERENCES, ONE CHANGE: the surface stopped calling two methods that addressed routes the backend never registered, and started calling one that it does. BOTH REMOVED METHODS ADDRESSED ROUTES THAT DO NOT EXIST: `backend_app/routers/portfolio.py` registers only `/summary`, `/equity-curve`, `/allocation`, `/heatmap`, `/recent-transactions` and `/close-all`; the only other `GET /positions` in the backend sits behind `Depends(get_admin_user)` at a different prefix, so it was unreachable for a trader either way. THIS FILE IS THE EVIDENCE, NOT JUST THE CLAIM: the pre-change capture froze BOTH entries as `\"resolved\": false`, i.e. the capture tool had already recorded that neither path matched any backend route, and neither entry carried a `handlers` list or a `handler_count` because there was no handler to introspect. An entry that recorded nothing beyond a path is what is being removed here. CONSEQUENCE OF THE DEFECT: `Portfolio.jsx` called `getOpenPositions().catch(() => getPositions())`, so the chain 404'd twice and the live positions table was empty for every trader on every load, however many positions they actually held \u2014 and empty is indistinguishable from \"you hold nothing\", which is the worst possible way for a positions table to fail. WHAT REPLACED IT: the live positions read now points at `GET /api/dashboard`, which serves a real normalised `positions[]`, and it consumes BC-2's `degraded` marker so a read that cannot be served renders an error rather than an empty table. That entry is recorded at the head of `api_calls` with its own `_baseline_note_entry`. WHY THE TWO `unresolved_usages` ENTRIES ARE PART OF THE SAME CHANGE AND NOT A SURVIVING BROKEN CALL: task 13.1 deleted both methods from `api/modules/portfolio.js`, and the capture's usage scanner matches the strings `api.portfolio.getOpenPositions` and `api.portfolio.getPositions` wherever they appear in the surface's source. They now appear only inside the explanatory comment at `Portfolio.jsx:381` that records what the read used to be, so the scanner resolves them to \"no such method in module\". No live call site remains; the recorded `api_calls` list is the proof, since neither name appears in it. STRICTLY AN IMPROVEMENT IN THE CAPTURED CONTRACT: two entries that resolved to nothing are gone, and one entry that resolves to `backend_app.routers.dashboard.get_dashboard` and records its decorators, parameters, `raises` and `returns` is in. SCOPE: this note covers those two removals, the `api_call_count` figure and those two `unresolved_usages` entries. Every other call on this surface is unchanged in content and in order, and an unresolved-to-resolved or resolved-to-unresolved re-record anywhere else in this file is a failure in its own right, whether or not this note sits nearby.",
-  "api_call_count": 7,
+  "_baseline_note_summary_read_removed": "AUTHORISED RE-RECORD \u2014 ONE ENTRY REMOVED, `api.portfolio.getSummary` \u2192 GET /api/portfolio/summary, and `api_call_count` 7 to 6. Nothing was added, retyped or reordered. Authorised by vyomquant-ui-redesign task 16.1, whose reason is recorded at the call site itself (`pages/Portfolio.jsx:1072-1078`): tier 1 cannot be assembled from `/summary` because neither `available_balance` nor the drawdown is on that route, and reading `total_equity` from `/summary` with the other seven figures from the dashboard would put two readings of one account, taken at two instants, in one row \u2014 one read, one row (design.md \u00a77.6). The page now takes tier 1 and the positions ledger from the same settled `api.dashboard.getDashboard({environment})` read. The route and `api.portfolio.getSummary` are both untouched; this page simply has nothing left to ask them.",
+  "api_call_count": 6,
   "api_calls": [
     {
       "_baseline_note_entry": "AUTHORISED RE-RECORD \u2014 this WHOLE ENTRY IS NEW (vyomquant-ui-redesign task 13.1). `Portfolio.jsx` now reads the live positions table from `api.dashboard.getDashboard` \u2192 `GET /api/dashboard`, which resolves to `backend_app.routers.dashboard.get_dashboard` and serves a real normalised `positions[]`. It replaces `api.portfolio.getOpenPositions().catch(() => api.portfolio.getPositions())`, a chain against two routes the backend never registered \u2014 see `_baseline_note_positions_read_repointed` at the top of this file for that authorisation and its evidence. The read also consumes BC-2's `degraded` marker, so a read that cannot be served renders an error instead of an empty table. `api_call_count` moves 8 \u2192 7 because two entries went out and one came in. SCOPE: this note covers this one entry; any other addition to `api_calls` on this surface is a failure in its own right.",
@@ -76,7 +77,10 @@
           "returns": [
             {
               "count": "int",
-              "positions": "computed"
+              "execution_environment": "computed",
+              "is_simulated": "bool",
+              "positions": "computed",
+              "session_id": "null"
             }
           ],
           "route_path": "/api/paper/positions"
@@ -235,44 +239,6 @@
       "path_template": "/api/portfolio/heatmap?months={months}",
       "resolved": true,
       "via": "api.portfolio.getHeatmap"
-    },
-    {
-      "handler_count": 1,
-      "handlers": [
-        {
-          "decorators": [
-            "router.get('/summary')"
-          ],
-          "handler": "portfolio_summary",
-          "module": "backend_app.routers.portfolio",
-          "parameters": {
-            "telemetry": {
-              "annotation": "_empty",
-              "depends_on": "get_telemetry"
-            },
-            "user": {
-              "annotation": "dict",
-              "depends_on": "get_current_user"
-            }
-          },
-          "raises": [],
-          "returns": [
-            "dict",
-            {
-              "pnl_pct": "str",
-              "total_equity": "str",
-              "total_exposure": "str",
-              "total_pnl": "str"
-            }
-          ],
-          "route_path": "/api/portfolio/summary"
-        }
-      ],
-      "method": "GET",
-      "path": "/api/portfolio/summary",
-      "path_template": "/api/portfolio/summary",
-      "resolved": true,
-      "via": "api.portfolio.getSummary"
     }
   ],
   "capture": "surface_portfolio",

@@ -100,7 +100,13 @@ def test_update_risk_settings_and_validation(client):
     }
     res = client.put("/api/risk/settings", json=update_payload, headers=headers)
     assert res.status_code == 200
-    assert res.json()["status"] == "success"
+    # `"ok"`, not `"success"`. Two tests disagreed about this envelope and this was the wrong one:
+    # the handler has never returned `"success"` (before f0e4fc6 it returned the bare settings row
+    # with no `status` key at all, so this line could not have passed), `routers/risk.py` returns
+    # `"ok"` here and on its three other mutating handlers, and `tests/test_risk_settings_api.py`
+    # asserts `"ok"` and passes. No spec pins the value and `RiskSettings.jsx` reads `res.data`
+    # without looking at `status`, so the endpoint is right and the expectation was stale.
+    assert res.json()["status"] == "ok"
 
     # Verify saved settings
     get_res = client.get("/api/risk/settings", headers=headers)

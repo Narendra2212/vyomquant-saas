@@ -428,6 +428,55 @@ async def get_margin_health(user: dict = Depends(get_current_user)):
     }
 
 
+@router.get("/account-health")
+async def account_health(user: dict = Depends(get_current_user)):
+    """
+    Real-time account risk telemetry: drawdown, daily P&L and total exposure.
+
+    Reads the QuestDB ``account_health`` series that ``backend/dashboard_data_ingester.py``
+    writes and that ``RiskManager``'s kill switches are evaluated against. This is a
+    different reading from ``GET /margin-health``, which reports the paper account's margin
+    ratios out of the persistence layer; neither substitutes for the other.
+
+    ``total_exposure_usdt`` is the column the ingester writes while ``total_exposure`` is the
+    response key, so the SELECT aliases rather than renaming either side. Fix 409cb6f: the
+    bare column name made every call fail and burn ~3.2 s of retry/backoff before falling
+    back to hardcoded zeros. The route itself was then dropped in the f0e4fc6 rewrite of this
+    module, so every call 404'd and ``api/modules/risk.js`` repointed its caller at
+    ``/margin-health`` (recorded in that file) because the UI spec could not reach
+    ``backend_app/``. Restored here with the alias intact.
+    """
+    try:
+        safe_uid = _safe_uid(str(user.get("id") or user.get("sub")))
+
+        # Imported inside the handler: ``app_state.telemetry`` is bound at startup, so a
+        # module-level import would capture the pre-boot object.
+        from backend_app.core.state import app_state
+
+        # ``_safe_uid`` above admits only [A-Za-z0-9_-]{1,128}, so the id cannot close the
+        # quote; QuestDB's HTTP endpoint takes no bind parameters.
+        query = (
+            "SELECT current_drawdown_pct, daily_pnl_pct, total_exposure_usdt AS total_exposure "  # nosec: B608
+            "FROM account_health WHERE user_id = '" + safe_uid + "' LIMIT 1;"
+        )
+        result = await app_state.telemetry.execute_query(query)
+        if result and result.get("dataset"):
+            cols = [c["name"] for c in result["columns"]]
+            return dict(zip(cols, result["dataset"][0]))
+        # No series for this user yet — a new account, not a failed read.
+        return {"current_drawdown_pct": 0.0, "daily_pnl_pct": 0.0, "total_exposure": 0.0}
+    except Exception as e:
+        logger.error(
+            "[RISK_ACCOUNT_HEALTH] telemetry read failed: "
+            f"exception_type={type(e).__name__}, exception_message={e}, "
+            f"user_id_truncated={str(user.get('id'))[:8] if user.get('id') else 'missing'}..."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "RISK_ACCOUNT_HEALTH_FAILED", "message": "Failed to fetch account health"}
+        )
+
+
 @router.post("/kill-switch")
 async def activate_kill_switch(
     body: Optional[UserKillSwitchRequest] = None,
@@ -567,10 +616,41 @@ class StrategyLimitsPayload(BaseModel):
 async def get_strategy_limits(user: dict = Depends(get_current_user)):
     """
     Get per-strategy risk limits configured by the user.
+
+    Two stores hold one answer, exactly as ``GET /settings`` above: the ``strategy_limits``
+    table is the persisted record and the in-memory map is this process's copy (the one
+    ``paper_trading_service`` enforces against). This read used to consult the table and the
+    f0e4fc6 rewrite of this module left only the in-memory half, so a limit saved before a
+    restart — or saved against another worker — read back as no limit at all.
+
+    The table is read under the caller's own token, so RLS scopes it. They are merged by
+    ``strategy_id`` with the in-memory copy last, because a limit this process just wrote is
+    the fresher of the two.
     """
     uid = str(user.get("id") or user.get("sub"))
-    user_limits = _user_strategy_limits.get(uid, {})
-    limits_list = list(user_limits.values())
+    merged: Dict[str, Dict[str, Any]] = {}
+
+    sb = await _sb(user)
+    if sb:
+        try:
+            q = sb.table("strategy_limits").select("*").eq("user_id", uid).execute()
+            resp = await q if inspect.isawaitable(q) else q
+            for row in (getattr(resp, "data", None) or []):
+                merged[str(row.get("strategy_id"))] = {
+                    "strategy_id": row.get("strategy_id"),
+                    "max_position_size": row.get("max_position_size", 1000.0),
+                    "max_daily_trades": row.get("max_daily_trades", 100),
+                    "allowed_symbols": row.get("allowed_symbols", []),
+                    "max_drawdown_pct": row.get("max_drawdown_pct", 0.1),
+                    "enabled": row.get("enabled", True),
+                }
+        except Exception as e:
+            logger.debug(f"DB fetch fallback to memory store for strategy_limits user {uid}: {e}")
+
+    for sid, limit in _user_strategy_limits.get(uid, {}).items():
+        merged[str(sid)] = limit
+
+    limits_list = list(merged.values())
     return {
         "limits": limits_list,
         "count": len(limits_list),

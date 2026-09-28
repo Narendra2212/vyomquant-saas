@@ -66,6 +66,62 @@ ENGINE_OWNED_METRICS = ("expectancy", "calmar_ratio")
 RUNTIME_OWNED_METRICS = ("sortino_ratio",)
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  THIS HOP'S CONTRIBUTION TO THE PAYLOAD  (Requirements 2.7, 2.8)
+#
+#  ``backtesting_engine.BACKTEST_PAYLOAD_EMITTED_KEYS`` declares what the ENGINE emits.
+#  It is not the whole payload the writer receives: :meth:`BacktestRuntime.run_backtest`
+#  assembles ``{**engine payload, **its own performance metrics, four literals}`` and it is
+#  that union the writer reads against. Three of the writer's sixteen read keys -
+#  ``execution_time_seconds``, ``monthly_returns`` and ``daily_returns`` - are produced HERE
+#  and nowhere else, so a subset check against the engine's declaration alone reports them as
+#  missing when they are merely produced one hop later. This frozenset is the missing half.
+#
+#  WHY THE ENGINE IS NOT MADE TO EMIT THEM INSTEAD
+#    Each of the three is derived from something the engine does not have, and two of them
+#    would become a SECOND producer for a key that already has one - the defect class this
+#    whole contract exists to catch (see :data:`ENGINE_OWNED_METRICS`, where two producers
+#    silently racing on ``expectancy`` and ``calmar_ratio`` cost two persisted columns):
+#
+#      ``execution_time_seconds``  the wall time of the WHOLE run - data fetch, DAG
+#                                  execution, simulation, analytics, charts - measured from
+#                                  ``start_time`` in ``run_backtest``. The engine can only
+#                                  see its own ``to_thread`` slice of that, so an engine-side
+#                                  key of this name would be a different quantity under the
+#                                  same spelling, shadowed by the literal below on every run.
+#      ``monthly_returns``         resampled from the equity series' DatetimeIndex in
+#      ``daily_returns``           :meth:`_calculate_performance_metrics`, which is this
+#                                  module's analytics phase and the only place the run's
+#                                  instants and the curve are held together.
+#
+#  Hand-transcribed from the two producers below - the ``metrics[...]`` assignments in
+#  :meth:`_calculate_performance_metrics` minus the three contested keys the engine also
+#  emits, plus the four literals in ``run_backtest``'s ``results`` dict - and kept honest the
+#  same way the engine's declaration is: ``tests/test_backtest_key_contract.py`` asserts that
+#  a REAL run's payload minus the engine's payload equals this frozenset exactly, and that it
+#  is disjoint from the engine's, so no key can acquire a second producer in silence.
+RUNTIME_SUPPLIED_PAYLOAD_KEYS = frozenset(
+    {
+        # _calculate_performance_metrics
+        "recovery_factor",
+        "average_trade",
+        "largest_win",
+        "largest_loss",
+        "consecutive_wins",
+        "consecutive_losses",
+        "sqn",
+        "kelly",
+        "monthly_returns",
+        "daily_returns",
+        # run_backtest's own results literal
+        "charts",
+        "execution_time_seconds",
+        "trades_count",
+        "final_capital",
+    }
+)
+
+
 def _merge_contested_metrics(stats: Dict, performance_metrics: Dict) -> Dict:
     """``stats`` merged with ``performance_metrics``, with the contested keys decided by name.
 
@@ -727,7 +783,7 @@ class BacktestRuntime:
             metrics["sqn"] = 0.0
         
         # Kelly Criterion
-        if avg_loss != 0:
+        if avg_loss != 0 and avg_win != 0:
             metrics["kelly"] = win_rate - ((1 - win_rate) / (avg_win / abs(avg_loss)))
         else:
             metrics["kelly"] = 0.0

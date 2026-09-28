@@ -91,8 +91,19 @@ class TestGetDbDependency:
         
         # Mock redis_manager.get for quota usage tracking in subscription_engine
         # The rate limiter now uses in-memory storage (configured via conftest.py setting ENV=testing)
+        #
+        # Answer only the `quota:*` keys. `backend_app.core.subscription_engine.redis_manager`
+        # IS `backend_app.core.cache.redis_manager.redis_manager` — one shared
+        # SharedRedisManager — so a blanket `return_value="0"` also answered the
+        # entitlements handler's own response cache (`billing:entitlements:{id}`). That made
+        # it return `json.loads("0")`, i.e. the integer 0, as the whole response body, and
+        # every assertion below then ran against an int. Non-quota keys report a miss, which
+        # is the honest state of an empty cache.
+        async def _quota_only_cache_get(key, *args, **kwargs):
+            return "0" if str(key).startswith("quota:") else None
+
         try:
-            with patch('backend_app.core.subscription_engine.redis_manager.get', new_callable=AsyncMock, return_value="0"):
+            with patch('backend_app.core.subscription_engine.redis_manager.get', new=_quota_only_cache_get):
                 client = TestClient(app)
                 response = client.get("/api/billing/entitlements", headers={"Authorization": "Bearer mock-token"})
                 assert response.status_code == 200

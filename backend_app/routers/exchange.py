@@ -246,7 +246,21 @@ async def list_exchanges(
                             bot_counts[ex_id] = bot_counts.get(ex_id, 0) + 1
             except Exception as e:
                 logger.warning(f"Failed to fetch user strategies for exchange aggregation: {e}")
-        
+
+        # Resolve the caller's subscription tier ONCE, before the loop, through the
+        # injected APIKeyVault singleton. Reporting a hardcoded "free" here told every
+        # paying user their connections were on the free tier. Kept outside the loop so
+        # the row count does not turn this into an N+1 lookup.
+        try:
+            tier_info = vault.get_user_tier(user["id"]) if vault else None
+        except Exception as tier_err:
+            logger.warning(f"Failed to resolve subscription tier for {user['id']}: {tier_err}")
+            tier_info = None
+        if not isinstance(tier_info, dict):
+            # Fail open to the restricted tier rather than to no tier at all.
+            tier_info = {"subscription_tier": "free", "max_api_slots": 1}
+        subscription_tier = tier_info.get("subscription_tier") or "free"
+
         exchanges = []
         for row in keys:
             exchange_id = (row.get("exchange_id") or "unknown").lower()
@@ -264,7 +278,7 @@ async def list_exchanges(
                 "enabled_features": ["Trading", "Balance"],
                 "connected_at": row.get("updated_at"),
                 "last_sync": row.get("updated_at"),
-                "subscription_tier": "free",
+                "subscription_tier": subscription_tier,
                 "health": "healthy"
             })
         return exchanges

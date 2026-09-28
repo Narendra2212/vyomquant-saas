@@ -737,7 +737,18 @@ class StateService:
         return None
     
     async def get_user_positions(self, user_id: str) -> List[Position]:
-        """BUG-FIX ORD-04: Get all positions for a user from database or cache."""
+        """BUG-FIX ORD-04: Get all positions for a user from database or cache.
+
+        Fails closed, like `get_user_orders` and every other read on this class. This was
+        the one that did not: with no Redis it returned `[]`, and a failed query was logged
+        and then also returned as `[]`. An empty list is a positive statement that the user
+        holds no positions, and the only caller
+        (`reconciliation_worker._fetch_local_positions`) compares it against live exchange
+        state with auto-correction available - so an unreadable local store presented as a
+        flat book, not as an outage.
+        """
+        if not self._redis:
+            raise RuntimeError("Redis connection is required but not connected. StateService cannot proceed.")
         positions = []
         if self._session_factory:
             try:
@@ -767,6 +778,7 @@ class StateService:
                         ))
             except Exception as e:
                 logger.error(f"[StateService] Failed to get user positions for {user_id}: {e}")
+                raise
         return positions
     
     async def update_position(

@@ -2,13 +2,20 @@
   "contract": "backtest-payload-emitted-keys",
   "requirements": ["2.7", "2.8"],
   "declared_by": "production-launch-hardening task 7.1",
-  "summary": "The set of keys backend_app/backend/backtesting_engine.py's run_backtest_async puts on its results dict, on EITHER engine path (vectorbt and the no-vectorbt fallback). The writer (backtest_service.py) and the results screen (algo22-terminal/src/pages/Backtester.jsx) each read a subset of this set; anything either of them reads that is absent here is read against a key the engine never emits.",
+  "summary": "The keys the backtest results payload carries, declared per producing hop. `emitted_keys` is what backend_app/backend/backtesting_engine.py's run_backtest_async puts on its results dict, on EITHER engine path (vectorbt and the no-vectorbt fallback). `runtime_supplied_keys` is what backend_app/backend/backtest_runtime.py's run_backtest adds on top of it before the writer sees the payload. The writer (backtest_service.py) and the results screen (algo22-terminal/src/pages/Backtester.jsx) each read a subset of the UNION; anything either of them reads that is absent from both is read against a key no producer emits.",
   "one_file_note": "This file is the single copy. pytest (tests/test_backtest_key_contract.py) reads it directly at tests/fixtures/backtest_payload_keys.json; vitest (algo22-terminal/tests/unit/pages/backtesterNetPnl.test.jsx) reads the same path through node:fs, repo-relative. A per-side copy could drift, which is the failure mode this fixture exists to remove.",
   "producer": {
     "module": "backend_app/backend/backtesting_engine.py",
     "function": "run_backtest_async",
     "declared_constant": "BACKTEST_PAYLOAD_EMITTED_KEYS",
     "note": "The Python frozenset beside the two engine paths' results dict literals. This file is emitted FROM that declaration (a one-off dump, not hand-typed); tests/test_backtest_key_contract.py asserts a real run's key set on each path equals the declaration exactly, and a separate assertion asserts this JSON equals the declaration, so neither side of this file can go stale without a red test."
+  },
+  "second_producer": {
+    "module": "backend_app/backend/backtest_runtime.py",
+    "function": "run_backtest",
+    "declared_constant": "RUNTIME_SUPPLIED_PAYLOAD_KEYS",
+    "declared_by": "production-launch-hardening task 7.10",
+    "note": "The engine's payload is not the whole payload the writer reads. run_backtest assembles {**engine payload, **its own performance metrics, four literals}, and three of the writer's sixteen read keys - execution_time_seconds, monthly_returns, daily_returns - are produced only there. Until task 7.10 only the engine's half was declared, so the subset contract reported those three as missing when they were merely produced one hop later. The runtime's half is declared now and asserted as an EQUALITY against a live payload (a real run's keys minus the engine's keys), and the two sets are asserted disjoint so no key can acquire a second producer in silence. The engine is deliberately NOT made to emit the three: execution_time_seconds is the whole run's wall time including the data fetch and DAG execution the engine cannot see, and the two return series are resampled from the equity DatetimeIndex in the runtime's analytics phase."
   },
   "both_paths_emit_the_same_set": {
     "note": "The primary (vectorbt) and fallback (no-vectorbt) engine paths were expected to differ - the fallback derives a winning_trades/losing_trades split the primary path once lacked - but task 7.6 (already landed) gave the primary path a matching producer, so both paths now emit the identical 16 keys below. Verified against a real run of each path, not assumed.",
@@ -32,5 +39,21 @@
     "trades",
     "win_rate_pct",
     "winning_trades"
+  ],
+  "runtime_supplied_keys": [
+    "average_trade",
+    "charts",
+    "consecutive_losses",
+    "consecutive_wins",
+    "daily_returns",
+    "execution_time_seconds",
+    "final_capital",
+    "kelly",
+    "largest_loss",
+    "largest_win",
+    "monthly_returns",
+    "recovery_factor",
+    "sqn",
+    "trades_count"
   ]
 }

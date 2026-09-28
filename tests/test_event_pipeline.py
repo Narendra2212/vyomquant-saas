@@ -8,6 +8,8 @@ import sys
 import os
 import asyncio
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from backend_app.core.event_pipeline import (
@@ -115,6 +117,7 @@ def test_sequence_number_extraction():
     print("[PASS] Sequence number extraction working")
 
 
+@pytest.mark.asyncio
 async def test_producer_initialization():
     """Test event producer initialization."""
     producer = EventProducer()
@@ -127,6 +130,7 @@ async def test_producer_initialization():
         print(f"[PASS] Producer init (Redis unavailable: {e})")
 
 
+@pytest.mark.asyncio
 async def test_consumer_initialization():
     """Test event consumer initialization."""
     consumer = EventConsumer(
@@ -142,6 +146,7 @@ async def test_consumer_initialization():
     print("[PASS] Consumer initialized")
 
 
+@pytest.mark.asyncio
 async def test_pipeline_initialization():
     """Test event pipeline initialization."""
     pipeline = EventPipeline()

@@ -94,9 +94,26 @@ def test_execution_engine_fee_precision():
     
     This test ensures that the ExecutionEngine calculates fees with proper
     precision using the fixed implementation.
+
+    Three harness corrections, none of which touch what is asserted:
+
+    * Equity is $1,000,000, not $100,000. ``open_position`` refuses any notional above
+      10% of equity *before* it prices anything, so a $50,000 BTC order against $100,000
+      was blocked by the position-size guardrail and no fee was ever computed. That
+      guardrail is correct and is covered on its own terms by
+      ``tests/test_risk_limits_server_side.py``; raising the equity leaves it armed (the
+      cap is now $100,000) while letting this order reach the fee arithmetic.
+    * ``slippage=0.0``, so the execution price is the quoted $50,000. Slippage is drawn
+      from ``random.uniform`` on every call, so at the 0.05% default the fee is a
+      different number each run and "exactly 50.00" would say nothing about precision.
+    * The fee is read off the engine. ``open_position`` returns ``(bool, str)`` — a human
+      readable message, not a mapping — so ``result['fee']`` raised TypeError even when
+      the order went through. The engine subtracts exactly the entry fee from equity, so
+      the equity delta *is* the fee, and reading it that way also proves the computed
+      figure is the one actually charged.
     """
-    portfolio_state = {"total_equity": Decimal("100000.0"), "available_balance": Decimal("100000.0")}
-    engine = ExecutionEngine(fee_rate=0.001, portfolio_state=portfolio_state)
+    portfolio_state = {"total_equity": Decimal("1000000.0"), "available_balance": Decimal("1000000.0")}
+    engine = ExecutionEngine(fee_rate=0.001, slippage=0.0, portfolio_state=portfolio_state)
     
     # Verify fee_rate is Decimal
     assert isinstance(engine.fee_rate, Decimal), "fee_rate should be Decimal"
@@ -106,13 +123,15 @@ def test_execution_engine_fee_precision():
     price = Decimal("50000.00")
     size = Decimal("1.0")
     
+    equity_before = engine.current_equity
+    
     # Open position
     success, result = engine.open_position(symbol, price, size, side='long')
     
     if success:
         # Verify fee is calculated with high precision
         assert 'fee' in result, "Result should contain fee"
-        fee = Decimal(result['fee'])
+        fee = equity_before - engine.current_equity
         
         # Expected fee: 50000 * 1.0 * 0.001 = 50.00
         expected_fee = Decimal("50.00")

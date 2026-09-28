@@ -105,6 +105,7 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` on THIS handler only (`backend_app.routers.support.get_tickets`, GET /api/support/tickets) \u2014 ONE ADDED entry, `503 / TICKETS_FETCH_FAILED`, and nothing removed or retyped. Authorised by the committed guard that requires it: `tests/test_exception_swallow_regression.py::TestGetTicketsExceptionSwallow::test_db_error_returns_503_not_empty_200`, whose own docstring records the before and after \u2014 the handler used to answer `{\"tickets\": [], \"count\": 0}` with HTTP 200 when the Supabase read raised, so a trader whose database was unreachable was told they had no tickets. It now fails closed (`routers/support.py:358-369`); the in-memory store below that branch remains the substitute for a deliberately unconfigured backend, never for a broken one. The baseline recorded the empty-200 behaviour, so this entry's absence was a record of the defect.",
           "decorators": [
             "router.get('/tickets')"
           ],
@@ -148,6 +149,14 @@
             {
               "detail_type": "str",
               "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "TICKETS_FETCH_FAILED",
+              "status_code": 503
             }
           ],
           "returns": [

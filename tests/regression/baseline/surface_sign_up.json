@@ -104,6 +104,7 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_returns": "AUTHORISED RE-RECORD of `returns[1]` on THIS handler only (`backend_app.routers.billing.create_checkout_session`, POST /api/billing/checkout) \u2014 TWO ADDED response keys, `key_id` and `razorpay_key`, and nothing removed or retyped. Authorised by commit b5a5ed3 `feat(billing): Razorpay Standard Web Checkout modal and signature verification`, which landed the change and did not re-record the three baselines that read this handler (billing_plan_checkout, surface_billing, surface_sign_up \u2014 all three carry this same note). The Razorpay arm used to answer a hosted-link URL only, so a failed link creation left the browser with nothing to open; it now also returns the public key id the Standard Checkout widget needs in `options.key` (`routers/billing.py:1376-1391`). Both spellings are sent deliberately: `key_id` for this endpoint and `razorpay_key` to match the shape `checkout_service.ProviderSession.extra` already puts on the marketplace response, so one frontend helper reads either without a per-endpoint branch. `_validate_keys` returns the key id and never the secret (`:101-106`), and RAZORPAY_KEY_SECRET is read only inside the process \u2014 so this addition does not put a secret on a response.",
           "decorators": [
             "router.post('/checkout')",
             "limiter.limit('10/minute')"
@@ -143,8 +144,10 @@
               "checkoutUrl": "computed",
               "checkout_url": "computed",
               "currency": "str",
+              "key_id": "computed",
               "order_id": "computed",
-              "provider": "str"
+              "provider": "str",
+              "razorpay_key": "computed"
             }
           ],
           "route_path": "/api/billing/checkout"

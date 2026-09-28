@@ -3,6 +3,7 @@
   "api_call_count": 2,
   "api_calls": [
     {
+      "_baseline_note_entry": "AUTHORISED RE-RECORD of `path`/`path_template` \u2014 `/api/signal-trace/signals/{signalId}` to `/api/signal-trace/signals/{detailId}`. THE REQUEST IS UNCHANGED. The braced token in a recorded template is the name of the JavaScript expression interpolated at the call site, not a path parameter's name: the method, the route and the resolved handler (`backend_app.routers.signal_trace.get_signal`, `router.get('/signals/{signal_id}')`) are byte-identical either side of this re-record, and the handler's own parameter is still `signal_id`. The local was renamed when the page shell was rebuilt on the nine-stage projection (commits 990f8d6, 08f74de, adbd4b5 \u2014 spec tasks 21.4a, 21.4b, 21.5), which did not re-record this baseline. Because `path_template` is part of an entry's identity, a rename reads as one removal plus one addition rather than as a field change.",
       "handler_count": 1,
       "handlers": [
         {
@@ -57,12 +58,13 @@
         }
       ],
       "method": "GET",
-      "path": "/api/signal-trace/signals/{signalId}",
-      "path_template": "/api/signal-trace/signals/{signalId}",
+      "path": "/api/signal-trace/signals/{detailId}",
+      "path_template": "/api/signal-trace/signals/{detailId}",
       "resolved": true,
       "via": "apiClient direct"
     },
     {
+      "_baseline_note_entry": "AUTHORISED RE-RECORD of `path`/`path_template` \u2014 `/api/signal-trace/signals?{params}` to `/api/signal-trace/signals?{query}`. Same cause and same reasoning as the `{detailId}` entry above: the interpolated local was renamed by the nine-stage page rebuild, and the method, route, resolved handler (`backend_app.routers.signal_trace.list_signals`) and its nineteen declared parameters are byte-identical.",
       "handler_count": 1,
       "handlers": [
         {
@@ -170,8 +172,8 @@
         }
       ],
       "method": "GET",
-      "path": "/api/signal-trace/signals?{params}",
-      "path_template": "/api/signal-trace/signals?{params}",
+      "path": "/api/signal-trace/signals?{query}",
+      "path_template": "/api/signal-trace/signals?{query}",
       "resolved": true,
       "via": "apiClient direct"
     }

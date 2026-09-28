@@ -162,17 +162,27 @@ async def test_retry_with_exponential_backoff():
     
     This test ensures that exchange API failures trigger exponential backoff
     rather than immediate retry storms.
+
+    `OrderWatchdog(max_retries=..., retry_delay=...)` is not the constructor: the real
+    signature is `OrderWatchdog(db_session, config=WatchdogConfig(...))`, the retry budget
+    lives on the config, and there is no `retry_delay` at all — the delay is computed as
+    `2 ** attempt` rather than scaled off a configured base (`order_watchdog.py:400, 405`).
+    The session is `None` because nothing here reaches the database; the constructor only
+    stores it. The loop bound now comes from the watchdog's own configured budget instead
+    of a repeated literal, so it cannot silently disagree with it.
     """
-    from backend_app.backend.order_watchdog import OrderWatchdog
+    from backend_app.backend.order_watchdog import OrderWatchdog, WatchdogConfig
     
     # Create mock watchdog with exponential backoff config
     watchdog = OrderWatchdog(
-        max_retries=3,
-        retry_delay=1.0
+        None,
+        config=WatchdogConfig(max_retries=3),
     )
     
+    assert watchdog.config.max_retries == 3
+    
     # Test exponential backoff calculation
-    for attempt in range(3):
+    for attempt in range(watchdog.config.max_retries):
         expected_delay = 2 ** attempt  # Exponential backoff: 1, 2, 4 seconds
         # The actual implementation uses 2 ** attempt
         print(f"Attempt {attempt}: expected delay = {expected_delay}s")

@@ -3292,26 +3292,73 @@ class TestTheDagStepIsOffloaded(_LoopCase):
         Checked over the WHOLE module rather than over the loop's own body: a blocking sleep is a
         blocking sleep wherever a coroutine in this file reaches it, and it would stall every other
         session and every HTTP handler in the process for its duration.
+
+        WHY THE `time` IMPORT ITSELF IS NO LONGER BANNED
+        -----------------------------------------------
+        It was, as a cheap proxy for the rule. The module now imports `time` for
+        `time.perf_counter()`, which is how the signal-evaluation latency Requirement 27.3 cares
+        about is measured - a monotonic clock read that returns immediately and blocks nothing,
+        and the correct primitive for timing an interval. Banning the import rejected that too,
+        so the proxy was over-broad: the only ways to satisfy it were to drop the measurement or
+        to rewrite correct code to dodge a test.
+
+        What the rule forbids is a BLOCKING call, so the ban is now stated directly: every `time`
+        member the module reaches for must be a non-blocking clock read, which fails on
+        `time.sleep` exactly as before and on any other blocking member too. The separate check
+        below - every `.sleep` in the file must be `asyncio.sleep` - is untouched, so a
+        `time.sleep` would now be caught twice.
         """
         source = inspect.getsource(service)
         tree = ast.parse(source)
 
-        imports = [
+        # Clock reads that return immediately. Everything else in `time` - `sleep` above all -
+        # blocks the calling thread, which here is the event loop thread.
+        non_blocking = {"perf_counter", "perf_counter_ns", "monotonic", "monotonic_ns"}
+
+        imported_time = [
             node.lineno
             for node in ast.walk(tree)
             if isinstance(node, ast.Import)
             and any(alias.name.split(".")[0] == "time" for alias in node.names)
-        ] + [
-            node.lineno
+        ]
+
+        # `from time import sleep` would produce a bare `sleep(...)` call that the attribute
+        # checks cannot see, so the names taken off the module are vetted at the import.
+        from_time = [
+            (node.lineno, alias.name)
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom)
             and node.module
             and node.module.split(".")[0] == "time"
+            for alias in node.names
         ]
-        assert imports == [], (
-            f"paper_session_service imports the `time` module at line(s) {imports}; the session "
-            f"loop's only waits are asyncio.sleep (the pause poll) and FeedHandle.reconnect's own "
-            f"bounded backoff (Requirement 27.3)"
+        blocking_names = [entry for entry in from_time if entry[1] not in non_blocking]
+        assert blocking_names == [], (
+            f"paper_session_service imports blocking name(s) from `time`: {blocking_names}; the "
+            f"session loop's only waits are asyncio.sleep (the pause poll) and "
+            f"FeedHandle.reconnect's own bounded backoff (Requirement 27.3)"
+        )
+
+        # Every `time.X` the module reaches for.
+        time_members = sorted(
+            {
+                (node.lineno, node.attr)
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "time"
+            }
+        )
+        blocking_members = [entry for entry in time_members if entry[1] not in non_blocking]
+        assert blocking_members == [], (
+            f"paper_session_service reaches for blocking `time` member(s) {blocking_members} "
+            f"(`time` imported at line(s) {imported_time}); only non-blocking clock reads are "
+            f"allowed here - {', '.join(sorted(non_blocking))} - because a blocking call stalls "
+            f"every other session and every HTTP handler in the process (Requirement 27.3)"
+        )
+        assert bool(imported_time) == bool(time_members), (
+            f"`time` is imported at line(s) {imported_time} but nothing uses it; drop the import "
+            f"rather than leaving `time.sleep` one keystroke away"
         )
 
         sleeps = [

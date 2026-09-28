@@ -2,10 +2,37 @@
   "api_call_count": 5,
   "api_calls": [
     {
+      "_baseline_note_entry": "AUTHORISED RE-RECORD \u2014 this entry REPLACES the baseline's `GET /api/risk/account-health` entry for the same caller (`api.risk.getMarginHealth`), which was recorded with `resolved: false`. That is the point: the baseline recorded a call NO ROUTER DECLARED, i.e. a 404 on every mount, and `pages/RiskSettings.jsx` rendered nothing for `margin_ratio`, `free_margin` and `risk_score` as a result. `api/modules/risk.js:64-76` carries the correction in the source \u2014 the read is repointed at `GET /api/risk/margin-health`, which `routers/risk.py:395` declares and which answers exactly those three figures, and the caller-less sibling `getAccountHealth` was deleted rather than repointed. So the entry is now `resolved: true` against `backend_app.routers.risk.get_margin_health`. A broken call becoming a working one is the only kind of api_calls change this file should ever accept without a matching frontend requirement.",
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/margin-health')"
+          ],
+          "handler": "get_margin_health",
+          "module": "backend_app.routers.risk",
+          "parameters": {
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "currency": "str",
+              "free_margin": "computed",
+              "margin_ratio": "computed",
+              "risk_score": "computed"
+            }
+          ],
+          "route_path": "/api/risk/margin-health"
+        }
+      ],
       "method": "GET",
-      "path": "/api/risk/account-health",
-      "path_template": "/api/risk/account-health",
-      "resolved": false,
+      "path": "/api/risk/margin-health",
+      "path_template": "/api/risk/margin-health",
+      "resolved": true,
       "via": "api.risk.getMarginHealth"
     },
     {

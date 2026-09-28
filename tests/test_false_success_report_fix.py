@@ -149,16 +149,27 @@ class TestExchangeStatus:
         """
         Before fix: returned "status": "active" unconditionally
         After fix:  returns "status": "available" (supported by CCXT)
+
+        `GET /api/exchanges/supported` gained `Depends(get_current_user)` and a
+        60/minute limit (BE-CRITICAL-004) after this test was written, so an
+        unauthenticated call now answers 401 and never reaches the status field this
+        test is about. The caller is authenticated here rather than the auth
+        requirement being relaxed - the 200 and the "available" assertions below are
+        untouched.
         """
-        client = TestClient(app, raise_server_exceptions=False)
-        r = client.get("/api/exchanges/supported")  # Fixed: plural "exchanges"
-        assert r.status_code == 200
-        data = r.json()
-        
-        # Check that exchanges have "available" status, not "active"
-        if data.get("exchanges"):
-            for ex in data["exchanges"][:5]:  # Check first 5
-                assert ex.get("status") == "available", f"Exchange {ex['id']} has status {ex.get('status')}, expected 'available'"
+        app.dependency_overrides[get_current_user] = lambda: _user()
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            r = client.get("/api/exchanges/supported")  # Fixed: plural "exchanges"
+            assert r.status_code == 200
+            data = r.json()
+
+            # Check that exchanges have "available" status, not "active"
+            if data.get("exchanges"):
+                for ex in data["exchanges"][:5]:  # Check first 5
+                    assert ex.get("status") == "available", f"Exchange {ex['id']} has status {ex.get('status')}, expected 'available'"
+        finally:
+            app.dependency_overrides.clear()
 
 
 # ---------------------------------------------------------------------------

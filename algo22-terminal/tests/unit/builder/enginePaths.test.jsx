@@ -577,8 +577,37 @@ describe('the three engine providers', () => {
         'this file mounts them in',
     ).toEqual([...linesInOrder].sort((a, b) => a - b));
 
-    expect(linesInOrder[0]).toBeGreaterThanOrEqual(4500);
-    expect(linesInOrder[3]).toBeLessThanOrEqual(4800);
+    /*
+      THE BOUND IS READ OFF THE WRAPPER, NOT WRITTEN DOWN AS A LINE NUMBER.
+
+      What the two bounds here were ever for is one fact: the four providers are inside
+      `StrategyBuilderWrapper` — the default export, so every visit to the builder route
+      mounts them — and not scattered somewhere else in this 4800-line file. Spelled as the
+      literals 4500 and 4800 that fact expired twice. Once at production-launch-hardening
+      wave 4 (the comment above records the widening). Again at `920c6b7`, which added 84
+      lines above the wrapper and pushed `StrategyEngineProvider` from :4739 to :4810 — ten
+      lines past a ceiling that had nothing to do with the property under test.
+
+      Anchoring it to the wrapper's own line makes it survive any edit earlier in the file,
+      and makes it STRICTER than the 300-line window it replaces: a provider that drifted out
+      of `StrategyBuilderWrapper` into some other component further down would have sat
+      comfortably inside 4500..4800 and passed. It fails here.
+    */
+    const wrapperLine = lineOf('function StrategyBuilderWrapper');
+    expect(
+      wrapperLine,
+      'StrategyBuilderWrapper is not declared in StrategyBuilder.jsx',
+    ).toBeGreaterThan(0);
+    expect(
+      lines.some((line) => line.includes('export default StrategyBuilderWrapper')),
+      'StrategyBuilderWrapper is no longer the default export, so mounting the builder route '
+        + 'no longer necessarily mounts these providers',
+    ).toBe(true);
+
+    // All four open after the wrapper's own declaration…
+    expect(linesInOrder[0]).toBeGreaterThan(wrapperLine);
+    // …and as one contiguous nesting within it, rather than four separate mount points.
+    expect(linesInOrder[3] - linesInOrder[0]).toBeLessThanOrEqual(10);
   });
 });
 

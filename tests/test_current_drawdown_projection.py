@@ -24,6 +24,7 @@ only rose is at its peak (`0`), and a series too short to contain a decline repo
 
 import ast
 import inspect
+import textwrap
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -286,22 +287,91 @@ async def test_risk_projection_reports_null_when_no_equity_series_was_gathered(
 # claims BC-1 is accountable for, so they are asserted from source here and hold on every run.
 
 
-def test_the_deprecated_field_is_still_published_from_its_original_expression():
+def _published_field_expression(method, field_name: str) -> ast.expr:
+    """The value expression `method` publishes `field_name` from, as an AST node.
+
+    Fails the calling test if the field is not published exactly once, which is what "dropped" or
+    "renamed" looks like from here. Read from the bound method's source, so it is the definition
+    that actually runs (this class declares `get_risk_data` twice and the later one wins).
+    """
+    tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
+
+    entries = [
+        value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Dict)
+        for key, value in zip(node.keys, node.values)
+        if isinstance(key, ast.Constant) and key.value == field_name
+    ]
+
+    assert len(entries) == 1, (
+        f"`{field_name}` is published {len(entries)} times by "
+        f"{method.__qualname__}; expected exactly one entry (0 means the field was removed or "
+        f"renamed)"
+    )
+    return entries[0]
+
+
+def _names_read_by(expression: ast.expr) -> set:
+    """Every identifier and string constant the expression touches."""
+    return {
+        node.id if isinstance(node, ast.Name) else node.value
+        for node in ast.walk(expression)
+        if isinstance(node, ast.Name)
+        or (isinstance(node, ast.Constant) and isinstance(node.value, str))
+    }
+
+
+def test_the_deprecated_field_is_still_published_from_its_original_source():
     """Requirement 19.1: BC-1 is additive. `current_drawdown_pct` must not have been repointed.
 
-    Read from the bound method's source, so it is the definition that actually runs (this class
-    declares `get_risk_data` twice and the later one wins).
-    """
-    source = inspect.getsource(DashboardAggregationService.get_risk_data)
+    WHAT THIS ASSERTS, AND WHY IT IS NOT THE SOURCE TEXT ANY MORE
+    ------------------------------------------------------------
+    This used to assert the literal text `get("today_return_pct", 0.0)`. That default was
+    deliberately removed by tasks 6.1-6.3, and `tests/test_dashboard_absent_figures.py` section 6
+    exists to hold it removed: once `today_return_pct` became present-and-`None`, the `, 0.0`
+    default no longer fired (it only fires for an ABSENT key), so `float(None)` raised `TypeError`
+    out through `get_dashboard_data` and turned all of `GET /api/dashboard` into a 503 over one
+    deprecated field. Putting it back would re-break the dashboard AND fabricate `0.0` for an
+    absent portfolio, which Requirement 19.2 forbids outright.
 
-    assert '"current_drawdown_pct":' in source, "the deprecated field was removed or renamed"
-    assert '"current_drawdown_pct_v2":' in source, "the new field is absent"
-    assert 'get("today_return_pct", 0.0)' in source, (
-        "the deprecated field's expression changed; BC-1 must leave its value exactly as it was "
-        "for the deprecation window"
+    So this asserts what BC-1 is actually accountable for - the field is still PUBLISHED, and
+    still published FROM `today_return_pct` - rather than pinning one spelling of the expression.
+    It still fails if the field is dropped, renamed, or repointed: at the equity series (the new
+    field's source), at a literal, or at any other input.
+    """
+    deprecated = _published_field_expression(
+        DashboardAggregationService.get_risk_data, "current_drawdown_pct"
     )
-    assert "current_drawdown_pct_from_equity_curve(equity_curve)" in source, (
+    new_field = _published_field_expression(
+        DashboardAggregationService.get_risk_data, "current_drawdown_pct_v2"
+    )
+
+    deprecated_reads = _names_read_by(deprecated)
+
+    # Not repointed: still the same input it published before BC-1.
+    assert "today_return_pct" in deprecated_reads, (
+        "the deprecated field no longer reads `today_return_pct`; BC-1 is additive and must leave "
+        f"existing consumers of this field on their original source (reads: {deprecated_reads})"
+    )
+
+    # Not repointed AT THE NEW FIGURE either - silently upgrading the old field would change the
+    # number every existing consumer sees, which is the migration BC-1 exists to avoid.
+    assert "current_drawdown_pct_from_equity_curve" not in deprecated_reads, (
+        "the deprecated field was repointed at the computed drawdown; consumers must move to "
+        "`current_drawdown_pct_v2` explicitly"
+    )
+    assert "equity_curve" not in deprecated_reads, (
+        "the deprecated field now reads the equity series; it must keep reporting the "
+        "today-return figure it always reported"
+    )
+
+    # And the new field is the computed figure, not another literal.
+    assert "current_drawdown_pct_from_equity_curve" in _names_read_by(new_field), (
         "the new field must be the computed figure, not another literal"
+    )
+    assert "equity_curve" in _names_read_by(new_field), (
+        "the new field must be computed from the equity series this request already read"
     )
 
 

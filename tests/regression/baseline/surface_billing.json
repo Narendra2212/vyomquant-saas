@@ -1,6 +1,40 @@
 {
-  "api_call_count": 10,
+  "_baseline_note_api_call_count": "AUTHORISED RE-RECORD of `api_call_count` \u2014 10 to 11, one ADDED call and nothing removed. See `_baseline_note_entry` on the GET /api/auth/me entry. `supabase_auth_calls` stays `[]`: the `supabase.auth` user lookup this page mentions is named in a comment explaining why it is NOT used, and the prose was reworded so the capture's `_SUPABASE_AUTH_CALL` scan of raw source no longer reads that sentence as a call site. Recording `getUser` here would have asserted that the billing surface authenticates through Supabase Auth, which it deliberately does not, and would have spent the guard that can still catch a real one being added.",
+  "api_call_count": 11,
   "api_calls": [
+    {
+      "_baseline_note_entry": "AUTHORISED RE-RECORD \u2014 this WHOLE ENTRY IS NEW. Authorised by commit d831013 `task 8.3: one token store for one session` (defect 67), which landed the change and did not re-record this baseline. `Billing.jsx` resolved the socket subject from two `localStorage` reads that nothing in `src/` ever wrote, so the effect never ran in a real session; it now asks `apiClient.isAuthenticated()` and `GET /api/auth/me` (`api.auth.getMe`, `routers/auth.py`), whose `id` is the JWT `sub` the websocket route compares the path segment against. One read, authenticated by the same token the ticket is minted from.",
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/me')"
+          ],
+          "handler": "get_current_user_profile",
+          "module": "backend_app.routers.auth",
+          "parameters": {
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "email": "computed",
+              "id": "computed",
+              "role": "computed"
+            }
+          ],
+          "route_path": "/api/auth/me"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/auth/me",
+      "path_template": "/api/auth/me",
+      "resolved": true,
+      "via": "api.auth.getMe"
+    },
     {
       "handler_count": 1,
       "handlers": [
@@ -229,6 +263,7 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_returns": "AUTHORISED RE-RECORD of `returns[1]` on THIS handler only (`backend_app.routers.billing.create_checkout_session`, POST /api/billing/checkout) \u2014 TWO ADDED response keys, `key_id` and `razorpay_key`, and nothing removed or retyped. Authorised by commit b5a5ed3 `feat(billing): Razorpay Standard Web Checkout modal and signature verification`, which landed the change and did not re-record the three baselines that read this handler (billing_plan_checkout, surface_billing, surface_sign_up \u2014 all three carry this same note). The Razorpay arm used to answer a hosted-link URL only, so a failed link creation left the browser with nothing to open; it now also returns the public key id the Standard Checkout widget needs in `options.key` (`routers/billing.py:1376-1391`). Both spellings are sent deliberately: `key_id` for this endpoint and `razorpay_key` to match the shape `checkout_service.ProviderSession.extra` already puts on the marketplace response, so one frontend helper reads either without a per-endpoint branch. `_validate_keys` returns the key id and never the secret (`:101-106`), and RAZORPAY_KEY_SECRET is read only inside the process \u2014 so this addition does not put a secret on a response.",
           "decorators": [
             "router.post('/checkout')",
             "limiter.limit('10/minute')"
@@ -268,8 +303,10 @@
               "checkoutUrl": "computed",
               "checkout_url": "computed",
               "currency": "str",
+              "key_id": "computed",
               "order_id": "computed",
-              "provider": "str"
+              "provider": "str",
+              "razorpay_key": "computed"
             }
           ],
           "route_path": "/api/billing/checkout"

@@ -46,10 +46,16 @@ class LeaseStatus(Enum):
 
 @dataclass
 class LeaseRequest:
-    """Lease acquisition request."""
-    lease_id: Optional[str] = None
+    """Lease acquisition request.
+
+    ``resource_id`` and ``requester_id`` are mandatory and must therefore be
+    declared before any defaulted field, otherwise the dataclass decorator
+    raises TypeError at import time. All call sites pass these by keyword, so
+    the ordering is not part of the public contract.
+    """
     resource_id: str
     requester_id: str
+    lease_id: Optional[str] = None
     lease_type: LeaseType = LeaseType.EXCLUSIVE
     ttl_seconds: int = 3600
     auto_renew: bool = True

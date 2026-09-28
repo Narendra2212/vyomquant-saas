@@ -545,8 +545,13 @@ class ReconciliationWorker(WorkerBase):
                 return {pos.symbol: pos for pos in positions}
             return {}
         except Exception as e:
+            # Fail closed, as `_fetch_local_orders` above already does. An empty dict here
+            # is a positive claim that the user holds no positions locally, and the
+            # comparison downstream cannot tell it apart from a real read: every position
+            # actually open on the exchange becomes a POSITION_MISSING_LOCAL mismatch, and
+            # with auto-correction on, the worker acts on a picture it never read.
             logger.error(f"Failed to fetch local positions: {e}")
-            return {}
+            raise RuntimeError(f"Local position reconciliation is unavailable: {e}") from e
     def _compare_orders(
         self,
         user_id: str,

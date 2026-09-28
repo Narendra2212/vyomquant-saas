@@ -356,8 +356,16 @@ async def get_tickets(
                         "order_id": row.get("order_id"),
                     })
             except Exception as sb_err:
-                logger.warning(f"[SUPPORT] Supabase fetch fallback for {user_id}: {sb_err}")
-                supabase = None
+                # Fail closed. Falling back to the in-memory store here would answer
+                # HTTP 200 with an empty (or stale) ticket list while the database is
+                # actually unreachable, telling the user they have no tickets when the
+                # truth is unknown. The in-memory store below is only a substitute for
+                # a *deliberately unconfigured* backend, never for a broken one.
+                logger.error(f"[SUPPORT] Ticket fetch failed for {user_id}: {sb_err}")
+                raise HTTPException(
+                    status_code=503,
+                    detail={"error": "TICKETS_FETCH_FAILED", "message": str(sb_err)},
+                )
 
         if not supabase:
             with _support_lock:

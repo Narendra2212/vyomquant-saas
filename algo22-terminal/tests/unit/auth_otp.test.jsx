@@ -1,9 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import AuthPage, { maskEmail, evaluatePasswordStrength, AUTH_STATES } from '../../src/pages/AuthPage';
 import { supabase } from '../../src/supabase';
+// The redirect the page hands Supabase on every call that can put a link in a mailbox. Read
+// from the one helper `src/config.js` exports rather than spelled as a literal here, so this
+// file pins the SAME derivation `tests/unit/pages/authRedirectOrigin.test.jsx` guards and
+// cannot drift from it (or from the jsdom origin) on either side of the assertion.
+import { getAuthRedirectUrl } from '../../src/config';
 
 // Mock useNavigate
 const mockNavigate = vi.fn();
@@ -20,6 +25,17 @@ describe('Phase Auth — Password + Email OTP Authentication', () => {
     vi.restoreAllMocks();
     mockNavigate.mockClear();
     sessionStorage.clear();
+  });
+
+  // The cooldown test installs a fake clock. `vi.restoreAllMocks()` above does NOT uninstall
+  // one, and the `vi.useRealTimers()` at the end of that test is unreachable if an assertion
+  // before it throws -- which left the fake clock installed for every test after it in the
+  // file, so `findBy*`/`waitFor` never resolved and the four security invariants below failed
+  // as 15s TIMEOUTS rather than on their own merits. Restoring here runs regardless of how a
+  // test exits, so a failure can no longer cascade into the invariants and disguise itself as
+  // one. Nothing about what any test asserts changes.
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('Password Strength & Masking Helpers', () => {
@@ -173,9 +189,14 @@ describe('Phase Auth — Password + Email OTP Authentication', () => {
       fireEvent.click(submitBtn);
 
       await waitFor(() => {
+        // `options.emailRedirectTo` is part of the call and is asserted, not tolerated: a
+        // sign-up with no redirect sends its confirmation link to the Supabase project's Site
+        // URL instead of the running origin. The email and password are pinned exactly as
+        // before; this expectation is strictly narrower than the two-key one it replaces.
         expect(signUpSpy).toHaveBeenCalledWith({
           email: 'newuser@vyomquant.io',
           password: 'StrongAuth!2026',
+          options: { emailRedirectTo: getAuthRedirectUrl() },
         });
       });
 
@@ -322,9 +343,12 @@ describe('Phase Auth — Password + Email OTP Authentication', () => {
         fireEvent.click(resendButton);
       });
 
+      // `shouldCreateUser: false` stays pinned -- a resend must never be able to bring an
+      // account into existence -- and `emailRedirectTo` is now pinned beside it for the same
+      // reason the sign-up call is: the resent code's magic link has to land on this origin.
       expect(signInWithOtpSpy).toHaveBeenCalledWith({
         email: 'trader@vyomquant.io',
-        options: { shouldCreateUser: false },
+        options: { shouldCreateUser: false, emailRedirectTo: getAuthRedirectUrl() },
       });
 
       vi.useRealTimers();
