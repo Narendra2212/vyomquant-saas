@@ -121,17 +121,17 @@ export default function LegalPage({ type = 'privacy' }) {
   const content = legalContent[type] || legalContent.privacy
 
   return (
-    <div className="relative min-h-screen bg-bg-primary">
+    <div className="relative min-h-screen bg-surface-canvas">
       {/* Background */}
       <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-accent-cyan/5 rounded-full blur-[120px]" />
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-brand/5 rounded-full blur-[120px]" />
       </div>
 
       <div className="relative z-10 max-w-3xl mx-auto px-6 py-24">
         {/* Back link */}
         <Link
           to="/"
-          className="inline-flex items-center gap-2 text-sm text-text-muted hover:text-text-primary transition-colors mb-10"
+          className="inline-flex items-center gap-2 text-sm text-content-secondary hover:text-content-primary transition-colors mb-10"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Home
@@ -140,34 +140,34 @@ export default function LegalPage({ type = 'privacy' }) {
         {/* Header */}
         <div className="mb-10">
           <div className="flex items-center gap-2 mb-2">
-            <div className="w-8 h-8 rounded-lg bg-accent-cyan flex items-center justify-center shadow-[0_0_15px_rgba(0,212,255,0.2)]">
-              <span className="text-text-inverse font-bold text-xs font-mono">VQ</span>
+            <div className="w-8 h-8 rounded-lg bg-brand flex items-center justify-center shadow-[0_0_15px_rgba(0,212,255,0.2)]">
+              <span className="text-content-inverse font-bold text-xs font-mono">VQ</span>
             </div>
-            <span className="text-sm font-mono text-text-muted">VyomQuant Legal</span>
+            <span className="text-sm font-mono text-content-secondary">VyomQuant Legal</span>
           </div>
-          <h1 className="text-3xl sm:text-4xl font-black text-text-primary mt-4 mb-2">{content.title}</h1>
-          <p className="text-xs font-mono text-text-muted">Last updated: {content.updated}</p>
+          <h1 className="text-3xl sm:text-4xl font-black text-content-primary mt-4 mb-2">{content.title}</h1>
+          <p className="text-xs font-mono text-content-secondary">Last updated: {content.updated}</p>
         </div>
 
         {/* Legal content */}
         <div className="space-y-8">
           {content.sections.map((section, i) => (
             <div key={i} className="card-surface p-6">
-              <h2 className="text-base font-bold text-text-primary mb-3">{section.heading}</h2>
-              <p className="text-sm text-text-secondary leading-relaxed">{section.body}</p>
+              <h2 className="text-base font-bold text-content-primary mb-3">{section.heading}</h2>
+              <p className="text-sm text-content-secondary leading-relaxed">{section.body}</p>
             </div>
           ))}
         </div>
 
         {/* Footer nav */}
-        <div className="mt-12 pt-8 border-t border-border-default">
-          <div className="flex flex-wrap gap-4 text-xs font-mono text-text-muted">
-            <Link to="/legal/privacy" className="hover:text-text-primary transition-colors">Privacy Policy</Link>
-            <Link to="/legal/terms" className="hover:text-text-primary transition-colors">Terms of Service</Link>
-            <Link to="/legal/risk" className="hover:text-text-primary transition-colors">Risk Disclosure</Link>
-            <Link to="/legal/refund" className="hover:text-text-primary transition-colors">Refund Policy</Link>
+        <div className="mt-12 pt-8 border-t border-line-default">
+          <div className="flex flex-wrap gap-4 text-xs font-mono text-content-secondary">
+            <Link to="/legal/privacy" className="hover:text-content-primary transition-colors">Privacy Policy</Link>
+            <Link to="/legal/terms" className="hover:text-content-primary transition-colors">Terms of Service</Link>
+            <Link to="/legal/risk" className="hover:text-content-primary transition-colors">Risk Disclosure</Link>
+            <Link to="/legal/refund" className="hover:text-content-primary transition-colors">Refund Policy</Link>
           </div>
-          <p className="text-xs text-text-muted mt-4">© {new Date().getFullYear()} VyomQuant. Not financial advice.</p>
+          <p className="text-xs text-content-secondary mt-4">© {new Date().getFullYear()} VyomQuant. Not financial advice.</p>
         </div>
       </div>
     </div>

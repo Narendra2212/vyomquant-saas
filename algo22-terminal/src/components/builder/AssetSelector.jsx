@@ -47,18 +47,18 @@ import { useAssetSearch } from '../../hooks/useAssetSearch';
 import { describeAsset, marketTypeOptionsFrom } from '../../lib/assetUniverse';
 
 const INPUT_CLASS =
-  'w-full rounded border bg-bg-elevated px-2 py-1 font-mono text-body text-text-primary ' +
-  'placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent-cyan ' +
+  'w-full rounded-sm border bg-surface-raised px-2 py-1 font-mono text-body text-content-primary ' +
+  'placeholder:text-content-secondary focus:outline-none focus:ring-2 focus:ring-brand ' +
   'disabled:opacity-50';
 
 const FILTER_CLASS =
-  'w-full rounded border border-border-default bg-bg-elevated px-1.5 py-0.5 font-mono ' +
-  'text-micro text-text-primary focus:outline-none focus:ring-2 focus:ring-accent-cyan ' +
+  'w-full rounded-sm border border-line-default bg-surface-raised px-1.5 py-0.5 font-mono ' +
+  'text-micro text-content-primary focus:outline-none focus:ring-2 focus:ring-brand ' +
   'disabled:opacity-50';
 
 const LINK_CLASS =
-  'font-mono text-micro text-text-muted underline focus:outline-none focus:ring-2 ' +
-  'focus:ring-accent-cyan';
+  'font-mono text-micro text-content-secondary underline focus:outline-none focus:ring-2 ' +
+  'focus:ring-brand';
 
 /** `aria-describedby` composes rather than replaces: the form's wiring stays intact. */
 const describedBy = (...ids) => {
@@ -269,7 +269,7 @@ export function AssetSelector({
         {...controlProps}
         ref={inputRef}
         type="text"
-        className={INPUT_CLASS + (controlProps['aria-invalid'] ? ' border-accent-loss' : ' border-border-default')}
+        className={INPUT_CLASS + (controlProps['aria-invalid'] ? ' border-status-loss' : ' border-line-default')}
         role="combobox"
         autoComplete="off"
         // The HTML `required` attribute is dropped and `aria-required` kept, the same
@@ -301,10 +301,10 @@ export function AssetSelector({
 
       {/* The chosen market restated in text. A combobox whose input holds a search string
           must say what is actually set, or the author cannot tell a search from a choice. */}
-      <p className="mt-1 font-mono text-micro text-text-secondary" data-testid="asset-selected">
+      <p className="mt-1 font-mono text-micro text-content-secondary" data-testid="asset-selected">
         {selected ? (
           <>
-            <span className="text-text-primary">{selected}</span>
+            <span className="text-content-primary">{selected}</span>
             {!disabled ? (
               <>
                 {' · '}
@@ -323,7 +323,7 @@ export function AssetSelector({
           quote, and these narrow it further. */}
       <button
         type="button"
-        className="mt-1 flex items-center gap-1 font-mono text-micro uppercase tracking-wider text-text-secondary focus:outline-none focus:ring-2 focus:ring-accent-cyan"
+        className="mt-1 flex items-center gap-1 font-mono text-micro uppercase tracking-wider text-content-secondary focus:outline-none focus:ring-2 focus:ring-brand"
         aria-expanded={filtersOpen}
         aria-controls={filtersId}
         onClick={() => setFiltersOpen((value_) => !value_)}
@@ -336,7 +336,7 @@ export function AssetSelector({
       <div id={filtersId} hidden={!filtersOpen} data-testid="asset-filters">
         {filtersOpen ? (
           <div className="mt-1 grid grid-cols-2 gap-1.5">
-            <label className="font-mono text-micro text-text-muted" htmlFor={`${controlId}-base`}>
+            <label className="font-mono text-micro text-content-secondary" htmlFor={`${controlId}-base`}>
               Base
               <input
                 id={`${controlId}-base`}
@@ -354,7 +354,7 @@ export function AssetSelector({
               />
             </label>
 
-            <label className="font-mono text-micro text-text-muted" htmlFor={`${controlId}-quote`}>
+            <label className="font-mono text-micro text-content-secondary" htmlFor={`${controlId}-quote`}>
               Quote
               <input
                 id={`${controlId}-quote`}
@@ -369,7 +369,7 @@ export function AssetSelector({
               />
             </label>
 
-            <label className="font-mono text-micro text-text-muted" htmlFor={`${controlId}-market-type`}>
+            <label className="font-mono text-micro text-content-secondary" htmlFor={`${controlId}-market-type`}>
               Market type
               <select
                 id={`${controlId}-market-type`}
@@ -389,11 +389,11 @@ export function AssetSelector({
               </select>
             </label>
 
-            <label className="flex items-end gap-1 font-mono text-micro text-text-muted" htmlFor={`${controlId}-active-only`}>
+            <label className="flex items-end gap-1 font-mono text-micro text-content-secondary" htmlFor={`${controlId}-active-only`}>
               <input
                 id={`${controlId}-active-only`}
                 type="checkbox"
-                className="h-3.5 w-3.5 rounded border-border-default bg-bg-elevated accent-accent-cyan focus:outline-none focus:ring-2 focus:ring-accent-cyan"
+                className="h-3.5 w-3.5 rounded-sm border-line-default bg-surface-raised accent-brand focus:outline-none focus:ring-2 focus:ring-brand"
                 disabled={disabled}
                 checked={filters.activeOnly !== false}
                 onChange={(event) => setFilter('activeOnly', event.target.checked)}
@@ -411,7 +411,7 @@ export function AssetSelector({
         id={statusId}
         role="status"
         aria-live="polite"
-        className="mt-1 font-mono text-micro text-text-muted"
+        className="mt-1 font-mono text-micro text-content-secondary"
         data-testid="asset-selector-status"
       >
         {statusText()}
@@ -421,7 +421,7 @@ export function AssetSelector({
       {search.universeChanged ? (
         <p
           role="status"
-          className="mt-1 font-mono text-micro text-accent-gold"
+          className="mt-1 font-mono text-micro text-status-warning"
           data-testid="asset-universe-changed"
         >
           The market list was refreshed while these pages were being loaded, so this list was
@@ -433,13 +433,13 @@ export function AssetSelector({
       ) : null}
 
       {search.cursorRestarted ? (
-        <p role="status" className="mt-1 font-mono text-micro text-accent-gold" data-testid="asset-cursor-restarted">
+        <p role="status" className="mt-1 font-mono text-micro text-status-warning" data-testid="asset-cursor-restarted">
           The page position expired, so the list restarted from the first page.
         </p>
       ) : null}
 
       {search.stale ? (
-        <p className="mt-1 font-mono text-micro text-text-muted" data-testid="asset-universe-stale">
+        <p className="mt-1 font-mono text-micro text-content-secondary" data-testid="asset-universe-stale">
           {/* Real markets with their age stated, per task 7.1's reading of Requirement 11.6. */}
           These markets are from a cached list past its refresh interval
           {search.sourceMeta && Number.isFinite(search.sourceMeta.age_seconds)
@@ -458,16 +458,16 @@ export function AssetSelector({
           data-testid="asset-selector-error"
           data-code={search.error.code}
           data-status={search.error.status ?? undefined}
-          className="mt-1 rounded border border-accent-loss bg-bg-elevated p-1.5"
+          className="mt-1 rounded-sm border border-status-loss bg-surface-raised p-1.5"
         >
-          <p className="font-mono text-micro text-accent-loss">{search.error.message}</p>
+          <p className="font-mono text-micro text-status-loss">{search.error.message}</p>
           {search.error.retryAfterSeconds !== null ? (
-            <p className="font-mono text-micro text-text-muted" data-testid="asset-retry-after">
+            <p className="font-mono text-micro text-content-secondary" data-testid="asset-retry-after">
               {`The server asked for ${search.error.retryAfterSeconds}s before the next attempt.`}
             </p>
           ) : null}
           {search.error.authExpired ? (
-            <p className="font-mono text-micro text-text-muted">
+            <p className="font-mono text-micro text-content-secondary">
               Sign in again — retrying will not help.
             </p>
           ) : (
@@ -489,7 +489,7 @@ export function AssetSelector({
         role="listbox"
         aria-label={`Markets matching ${spec.label || 'symbol'}`}
         hidden={!open || assets.length === 0}
-        className="mt-1 max-h-56 overflow-y-auto rounded border border-border-default bg-bg-elevated"
+        className="mt-1 max-h-56 overflow-y-auto rounded-sm border border-line-default bg-surface-raised"
         data-testid="asset-listbox"
       >
         {assets.map((asset, index) => (
@@ -508,28 +508,28 @@ export function AssetSelector({
             data-market-type={asset.marketType || undefined}
             data-active={asset.active === null ? undefined : String(asset.active)}
             data-index={index}
-            // `bg-bg-3`, not `bg-bg-elevated`: the listbox below is itself
-            // `bg-bg-elevated` (`--color-surface-raised`, #151821), so the elevated alias
+            // `bg-surface-inset`, not `bg-surface-raised`: the listbox below is itself
+            // `bg-surface-raised` (`--color-surface-raised`, #151821), so the elevated alias
             // would paint the active row the same colour as the list it sits in and the
             // keyboard position would stay invisible — the same defect under a name that
             // resolves. `--color-surface-inset` (#1A202C) is the only surface alias lighter
             // than the listbox, so the highlight reads as raised, the direction the rest of
-            // the tree uses for hover (`hover:bg-bg-elevated` over a `bg-bg-surface` panel).
-            className={`cursor-pointer border-b border-border-subtle px-2 py-1 last:border-b-0 ${
-              index === activeIndex ? 'bg-bg-3' : ''
+            // the tree uses for hover (`hover:bg-surface-raised` over a `bg-surface-panel` panel).
+            className={`cursor-pointer border-b border-line-subtle px-2 py-1 last:border-b-0 ${
+              index === activeIndex ? 'bg-surface-inset' : ''
             }`}
             // A pointer path in addition to the keyboard one, not instead of it.
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => commit(asset)}
             onMouseEnter={() => setActiveIndex(index)}
           >
-            <span className="font-mono text-body text-text-primary">{asset.symbol}</span>
+            <span className="font-mono text-body text-content-primary">{asset.symbol}</span>
             {asset.symbol === selected ? (
-              <span className="ml-1 font-mono text-micro text-accent-cyan">chosen</span>
+              <span className="ml-1 font-mono text-micro text-brand">chosen</span>
             ) : null}
             {/* The endpoint's own figures. An unpublished minimum reads "not published",
                 never 0 (Requirement 11.4). */}
-            <span className="block font-mono text-micro text-text-muted">
+            <span className="block font-mono text-micro text-content-secondary">
               {describeAsset(asset)}
             </span>
           </li>
@@ -553,7 +553,7 @@ export function AssetSelector({
       {/* Provenance: which venues the list was assembled from, and any that failed. A market
           list quietly missing an exchange is how a universe silently narrows. */}
       {search.sourceMeta ? (
-        <p id={metaId} className="mt-1 font-mono text-micro text-text-muted" data-testid="asset-source-meta">
+        <p id={metaId} className="mt-1 font-mono text-micro text-content-secondary" data-testid="asset-source-meta">
           {`Assembled from ${(search.sourceMeta.exchanges || []).join(', ') || 'no exchange'}`}
           {(search.sourceMeta.exchanges_failed || []).length > 0
             ? ` · unavailable: ${search.sourceMeta.exchanges_failed.join(', ')}`

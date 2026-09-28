@@ -86,14 +86,14 @@ export default function WaitlistForm() {
 
   if (submitted || existingEntry) {
     return (
-      <div className="card-surface p-8 text-center border-accent-profit/20 bg-accent-profit/5">
-        <div className="w-16 h-16 rounded-full bg-accent-profit/20 flex items-center justify-center mx-auto mb-6">
-          <CheckCircle className="w-8 h-8 text-accent-profit" />
+      <div className="card-surface p-8 text-center border-status-profit/20 bg-status-profit/5">
+        <div className="w-16 h-16 rounded-full bg-status-profit/20 flex items-center justify-center mx-auto mb-6">
+          <CheckCircle className="w-8 h-8 text-status-profit" />
         </div>
-        <h3 className="text-2xl font-bold text-text-primary mb-3">
+        <h3 className="text-2xl font-bold text-content-primary mb-3">
           {existingEntry ? "You're already on the list!" : "You're on the waitlist!"}
         </h3>
-        <p className="text-text-secondary leading-relaxed mb-8 max-w-md mx-auto">
+        <p className="text-content-secondary leading-relaxed mb-8 max-w-md mx-auto">
           {existingEntry 
             ? `We've already saved a spot for ${formData.email}. We'll notify you as soon as your access is ready.`
             : `Thank you for requesting early access. We review applications daily and will send an invitation link to ${formData.email} soon.`}
@@ -105,7 +105,7 @@ export default function WaitlistForm() {
             setExistingEntry(false)
             clear()
           }}
-          className="text-sm font-semibold text-accent-cyan hover:text-accent-cyan/80 transition-colors"
+          className="text-sm font-semibold text-brand hover:text-brand/80 transition-colors"
         >
           Submit another application
         </button>
@@ -114,21 +114,21 @@ export default function WaitlistForm() {
   }
 
   return (
-    <div className="card-surface p-8 border border-border-default shadow-xl">
+    <div className="card-surface p-8 border border-line-default shadow-xl">
       <form onSubmit={handleSubmit} className="space-y-5">
         
         {submitError && (
-          <div className="p-4 rounded-lg bg-accent-loss/10 border border-accent-loss/20 flex items-start gap-3 text-sm text-text-primary">
-            <AlertCircle className="w-5 h-5 text-accent-loss flex-shrink-0 mt-0.5" />
+          <div className="p-4 rounded-lg bg-status-loss/10 border border-status-loss/20 flex items-start gap-3 text-sm text-content-primary">
+            <AlertCircle className="w-5 h-5 text-status-loss flex-shrink-0 mt-0.5" />
             <p>{submitError}</p>
           </div>
         )}
 
         <div className="grid grid-cols-2 gap-5">
           <div className="space-y-1.5 col-span-2 sm:col-span-1">
-            <label htmlFor="waitlist-name" className="text-xs font-semibold text-text-secondary ml-1">Full Name <span className="text-accent-loss">*</span></label>
+            <label htmlFor="waitlist-name" className="text-xs font-semibold text-content-secondary ml-1">Full Name <span className="text-status-loss">*</span></label>
             <div className="relative">
-              <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+              <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-content-secondary" />
               <input
                 id="waitlist-name"
                 type="text"
@@ -136,16 +136,16 @@ export default function WaitlistForm() {
                 onChange={e => handleChange('name', e.target.value)}
                 onBlur={() => handleBlur('name')}
                 placeholder="Narendra Tripathi"
-                className={`w-full bg-bg-primary border ${errors.name ? 'border-accent-loss' : 'border-border-active'} rounded-xl py-2.5 pl-10 pr-4 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-cyan transition-colors`}
+                className={`w-full bg-surface-canvas border ${errors.name ? 'border-status-loss' : 'border-line-strong'} rounded-lg py-2.5 pl-10 pr-4 text-sm text-content-primary placeholder:text-content-secondary focus:outline-none focus:border-brand transition-colors`}
               />
             </div>
-            {errors.name && <p className="text-[10px] text-accent-loss ml-1">{errors.name}</p>}
+            {errors.name && <p className="text-[10px] text-status-loss ml-1">{errors.name}</p>}
           </div>
 
           <div className="space-y-1.5 col-span-2 sm:col-span-1">
-            <label htmlFor="waitlist-email" className="text-xs font-semibold text-text-secondary ml-1">Email Address <span className="text-accent-loss">*</span></label>
+            <label htmlFor="waitlist-email" className="text-xs font-semibold text-content-secondary ml-1">Email Address <span className="text-status-loss">*</span></label>
             <div className="relative">
-              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-content-secondary" />
               <input
                 id="waitlist-email"
                 type="email"
@@ -153,77 +153,77 @@ export default function WaitlistForm() {
                 onChange={e => handleChange('email', e.target.value)}
                 onBlur={() => handleBlur('email')}
                 placeholder="you@example.com"
-                className={`w-full bg-bg-primary border ${errors.email ? 'border-accent-loss' : 'border-border-active'} rounded-xl py-2.5 pl-10 pr-4 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-cyan transition-colors`}
+                className={`w-full bg-surface-canvas border ${errors.email ? 'border-status-loss' : 'border-line-strong'} rounded-lg py-2.5 pl-10 pr-4 text-sm text-content-primary placeholder:text-content-secondary focus:outline-none focus:border-brand transition-colors`}
               />
             </div>
-            {errors.email && <p className="text-[10px] text-accent-loss ml-1">{errors.email}</p>}
+            {errors.email && <p className="text-[10px] text-status-loss ml-1">{errors.email}</p>}
           </div>
         </div>
 
         <div className="space-y-1.5">
-          <label htmlFor="waitlist-trader-type" className="text-xs font-semibold text-text-secondary ml-1">Trader Type <span className="text-accent-loss">*</span></label>
+          <label htmlFor="waitlist-trader-type" className="text-xs font-semibold text-content-secondary ml-1">Trader Type <span className="text-status-loss">*</span></label>
           <div className="relative">
-            <Briefcase className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+            <Briefcase className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-content-secondary" />
             <select
               id="waitlist-trader-type"
               value={formData.trader_type}
               onChange={e => handleChange('trader_type', e.target.value)}
               onBlur={() => handleBlur('trader_type')}
-              className={`w-full bg-bg-primary border ${errors.trader_type ? 'border-accent-loss' : 'border-border-active'} rounded-xl py-2.5 pl-10 pr-4 text-sm ${formData.trader_type ? 'text-text-primary' : 'text-text-muted'} focus:outline-none focus:border-accent-cyan transition-colors appearance-none`}
+              className={`w-full bg-surface-canvas border ${errors.trader_type ? 'border-status-loss' : 'border-line-strong'} rounded-lg py-2.5 pl-10 pr-4 text-sm ${formData.trader_type ? 'text-content-primary' : 'text-content-secondary'} focus:outline-none focus:border-brand transition-colors appearance-none`}
             >
               <option value="" disabled>Select Trader Type</option>
               {TRADER_TYPE_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value} className="text-text-primary">{opt.label}</option>
+                <option key={opt.value} value={opt.value} className="text-content-primary">{opt.label}</option>
               ))}
             </select>
           </div>
-          {errors.trader_type && <p className="text-[10px] text-accent-loss ml-1">{errors.trader_type}</p>}
+          {errors.trader_type && <p className="text-[10px] text-status-loss ml-1">{errors.trader_type}</p>}
         </div>
 
         <div className="space-y-1.5">
-          <label htmlFor="waitlist-experience-level" className="text-xs font-semibold text-text-secondary ml-1">Experience Level <span className="text-accent-loss">*</span></label>
+          <label htmlFor="waitlist-experience-level" className="text-xs font-semibold text-content-secondary ml-1">Experience Level <span className="text-status-loss">*</span></label>
           <div className="relative">
-            <BarChart3 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+            <BarChart3 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-content-secondary" />
             <select
               id="waitlist-experience-level"
               value={formData.experience_level}
               onChange={e => handleChange('experience_level', e.target.value)}
               onBlur={() => handleBlur('experience_level')}
-              className={`w-full bg-bg-primary border ${errors.experience_level ? 'border-accent-loss' : 'border-border-active'} rounded-xl py-2.5 pl-10 pr-4 text-sm ${formData.experience_level ? 'text-text-primary' : 'text-text-muted'} focus:outline-none focus:border-accent-cyan transition-colors appearance-none`}
+              className={`w-full bg-surface-canvas border ${errors.experience_level ? 'border-status-loss' : 'border-line-strong'} rounded-lg py-2.5 pl-10 pr-4 text-sm ${formData.experience_level ? 'text-content-primary' : 'text-content-secondary'} focus:outline-none focus:border-brand transition-colors appearance-none`}
             >
               <option value="" disabled>Select your experience level</option>
               {EXPERIENCE_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value} className="text-text-primary">{opt.label}</option>
+                <option key={opt.value} value={opt.value} className="text-content-primary">{opt.label}</option>
               ))}
             </select>
           </div>
-          {errors.experience_level && <p className="text-[10px] text-accent-loss ml-1">{errors.experience_level}</p>}
+          {errors.experience_level && <p className="text-[10px] text-status-loss ml-1">{errors.experience_level}</p>}
         </div>
 
         <div className="space-y-1.5">
-          <label htmlFor="waitlist-monthly-volume" className="text-xs font-semibold text-text-secondary ml-1">Expected Monthly Volume <span className="text-accent-loss">*</span></label>
+          <label htmlFor="waitlist-monthly-volume" className="text-xs font-semibold text-content-secondary ml-1">Expected Monthly Volume <span className="text-status-loss">*</span></label>
           <div className="relative">
-            <TrendingUp className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+            <TrendingUp className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-content-secondary" />
             <select
               id="waitlist-monthly-volume"
               value={formData.monthly_volume}
               onChange={e => handleChange('monthly_volume', e.target.value)}
               onBlur={() => handleBlur('monthly_volume')}
-              className={`w-full bg-bg-primary border ${errors.monthly_volume ? 'border-accent-loss' : 'border-border-active'} rounded-xl py-2.5 pl-10 pr-4 text-sm ${formData.monthly_volume ? 'text-text-primary' : 'text-text-muted'} focus:outline-none focus:border-accent-cyan transition-colors appearance-none`}
+              className={`w-full bg-surface-canvas border ${errors.monthly_volume ? 'border-status-loss' : 'border-line-strong'} rounded-lg py-2.5 pl-10 pr-4 text-sm ${formData.monthly_volume ? 'text-content-primary' : 'text-content-secondary'} focus:outline-none focus:border-brand transition-colors appearance-none`}
             >
               <option value="" disabled>Select Expected Volume</option>
               {VOLUME_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value} className="text-text-primary">{opt.label}</option>
+                <option key={opt.value} value={opt.value} className="text-content-primary">{opt.label}</option>
               ))}
             </select>
           </div>
-          {errors.monthly_volume && <p className="text-[10px] text-accent-loss ml-1">{errors.monthly_volume}</p>}
+          {errors.monthly_volume && <p className="text-[10px] text-status-loss ml-1">{errors.monthly_volume}</p>}
         </div>
 
         <button
           type="submit"
           disabled={submitting}
-          className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 mt-2 rounded-xl bg-text-primary text-bg-primary font-bold text-sm hover:bg-text-secondary transition-all disabled:opacity-70 disabled:cursor-not-allowed group"
+          className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 mt-2 rounded-lg bg-content-primary text-bg-primary font-bold text-sm hover:bg-text-secondary transition-all disabled:opacity-70 disabled:cursor-not-allowed group"
         >
           {submitting ? (
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -235,8 +235,8 @@ export default function WaitlistForm() {
           )}
         </button>
 
-        <p className="text-center text-xs text-text-muted font-mono mt-4">
-          By requesting access, you agree to our <Link to="/legal/privacy" className="underline hover:text-text-primary">Privacy Policy</Link>.
+        <p className="text-center text-xs text-content-secondary font-mono mt-4">
+          By requesting access, you agree to our <Link to="/legal/privacy" className="underline hover:text-content-primary">Privacy Policy</Link>.
         </p>
       </form>
     </div>

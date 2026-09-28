@@ -1337,7 +1337,7 @@ export default function Billing() {
 
           {isCurrencyDropdownOpen ? (
             <div
-              className="absolute right-0 top-full z-50 mt-1.5 max-h-72 w-56 overflow-y-auto rounded-xl border border-line-default bg-surface-raised p-1.5"
+              className="absolute right-0 top-full z-50 mt-1.5 max-h-72 w-56 overflow-y-auto rounded-lg border border-line-default bg-surface-raised p-1.5"
               // `#00000088` was a 53% black at a depth the token layer does not declare.
               // `shadow.overlay` is the declared elevation for a floating layer.
               style={{ boxShadow: token.shadow.overlay }}
@@ -1413,7 +1413,7 @@ export default function Billing() {
       >
         <div className="flex flex-col gap-5">
           <div className="flex items-start gap-3">
-            <div className="flex shrink-0 items-center justify-center rounded-xl bg-brand-wash p-3 text-brand">
+            <div className="flex shrink-0 items-center justify-center rounded-lg bg-brand-wash p-3 text-brand">
               <PlanIcon size={24} aria-hidden="true" />
             </div>
             <div className="min-w-0">
@@ -1505,7 +1505,7 @@ export default function Billing() {
               return (
                 <div
                   key={allowance.key}
-                  className="rounded-xl border border-line-default bg-surface-inset p-4"
+                  className="rounded-lg border border-line-default bg-surface-inset p-4"
                 >
                   <div className="mb-2 flex items-center gap-2">
                     <AllowanceIcon size={16} aria-hidden="true" className="text-content-muted" />
@@ -1628,7 +1628,7 @@ export default function Billing() {
             return (
               <div
                 key={plan.id}
-                className={`relative flex flex-col rounded-xl border-2 bg-surface-raised p-5 ${
+                className={`relative flex flex-col rounded-lg border-2 bg-surface-raised p-5 ${
                   plan.recommended || isCurrent ? 'border-brand' : 'border-line-default'
                 }`}
               >
@@ -1785,7 +1785,7 @@ export default function Billing() {
             </CommandButton>
           }
         >
-          <div className="flex items-center gap-3 rounded-xl border border-line-default bg-surface-inset p-4">
+          <div className="flex items-center gap-3 rounded-lg border border-line-default bg-surface-inset p-4">
             {/* The Visa-blue gradient is gone rather than retokened: it painted one company's
                 brand colours behind every stored card, whatever the brand actually was. The
                 brand is stated in words beside it, which is the channel that cannot be wrong. */}

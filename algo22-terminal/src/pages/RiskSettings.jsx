@@ -717,7 +717,7 @@ export default function RiskSettings() {
             {killSwitches.map((ks) => (
               <div
                 key={ks.key}
-                className="flex items-center justify-between gap-3 rounded-lg border border-line-default bg-surface-canvas px-3 py-2.5"
+                className="flex items-center justify-between gap-3 rounded-lg border border-line-default bg-surface-inset px-3 py-2.5"
               >
                 <div className="flex items-start gap-2.5">
                   <ks.icon
@@ -772,7 +772,7 @@ export default function RiskSettings() {
             format="percent"
             precision={2}
             tier={2}
-            className="rounded-lg border border-line-default bg-surface-canvas p-3"
+            className="rounded-lg border border-line-default bg-surface-inset p-3"
           />
           <Metric
             label={FIELD.freeMargin.label}
@@ -780,14 +780,14 @@ export default function RiskSettings() {
             format="percent"
             precision={2}
             tier={2}
-            className="rounded-lg border border-line-default bg-surface-canvas p-3"
+            className="rounded-lg border border-line-default bg-surface-inset p-3"
           />
           <Metric
             label={FIELD.riskScore.label}
             value={reported(marginBody, FIELD.riskScore)}
             format="integer"
             tier={2}
-            className="rounded-lg border border-line-default bg-surface-canvas p-3"
+            className="rounded-lg border border-line-default bg-surface-inset p-3"
           />
         </div>
       </Panel>
@@ -811,7 +811,7 @@ export default function RiskSettings() {
           {strategyLimits.map((s) => (
             <div
               key={s.id}
-              className="rounded-lg border border-line-default bg-surface-canvas p-3"
+              className="rounded-lg border border-line-default bg-surface-inset p-3"
             >
               <div className="mb-2 flex items-baseline justify-between gap-3">
                 {/* fontSize: 12 → --text-title (heading — Q8: it names the card, which holds

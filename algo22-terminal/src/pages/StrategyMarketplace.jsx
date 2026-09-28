@@ -841,7 +841,7 @@ const StrategyMarketplace = () => {
       <section
         key={environment}
         data-environment={environment}
-        className="bg-surface-canvas border border-line-default rounded-xl p-5 flex flex-col gap-4"
+        className="bg-surface-raised border border-line-default rounded-lg p-5 flex flex-col gap-4"
       >
         {/* The per-environment treatment `design/semantic.js` declares — its own hue, its
             own icon and its own border style for each of the three — reached through the
@@ -950,7 +950,7 @@ const StrategyMarketplace = () => {
     if (sections.length === 0) {
       return (
         // Another account of an absence, in prose rather than in monospace.
-        <div className="bg-surface-canvas border border-dashed border-line-default rounded-xl p-5 text-body text-content-secondary">
+        <div className="bg-surface-inset border border-dashed border-line-default rounded-lg p-5 text-body text-content-secondary">
           No performance figures have been recorded for this listing.
         </div>
       );
@@ -1052,7 +1052,7 @@ const StrategyMarketplace = () => {
             {/* The icon tile is the card's anchor and the one decoration that stayed:
                 it carries the listing's identity at a glance and the token layer
                 declares every value in it. */}
-            <span className="w-10 h-10 rounded-lg bg-surface-canvas border border-line-default flex items-center justify-center shrink-0">
+            <span className="w-10 h-10 rounded-lg bg-surface-inset border border-line-default flex items-center justify-center shrink-0">
               <Cpu className="text-brand" size={20} />
             </span>
             {strat.creator_alias && (
@@ -1152,7 +1152,7 @@ const StrategyMarketplace = () => {
     if (!subscriptionView) return null;
     const expires = subscriptionView.showsExpiry ? formatDate(subscriptionView.periodExpiry) : null;
     return (
-      <div className="bg-surface-canvas border border-line-default rounded-xl px-4 py-3 flex flex-wrap items-center gap-3 text-body">
+      <div className="bg-surface-raised border border-line-default rounded-lg px-4 py-3 flex flex-wrap items-center gap-3 text-body">
         <Clock size={14} className="text-brand" />
         {/* Two words and a section name, so the transform goes (Requirement 3.3). */}
         <span className="text-content-secondary">Your subscription</span>
@@ -1210,17 +1210,17 @@ const StrategyMarketplace = () => {
                   {/* Three server-supplied literals. Monospace and the transform both
                       stay: this is the word the server chose, not a restyling of one. */}
                   {strat.category && (
-                    <span className="bg-surface-canvas border border-line-default px-3 py-1 rounded-sm text-micro font-mono text-content-secondary uppercase">
+                    <span className="bg-surface-inset border border-line-default px-3 py-1 rounded-sm text-micro font-mono text-content-secondary uppercase">
                       {strat.category}
                     </span>
                   )}
                   {strat.difficulty && (
-                    <span className="bg-surface-canvas border border-line-default px-3 py-1 rounded-sm text-micro font-mono text-content-secondary uppercase">
+                    <span className="bg-surface-inset border border-line-default px-3 py-1 rounded-sm text-micro font-mono text-content-secondary uppercase">
                       {strat.difficulty}
                     </span>
                   )}
                   {strat.validation_status && (
-                    <span className="bg-surface-canvas border border-line-default px-3 py-1 rounded-sm text-micro font-mono text-content-secondary uppercase">
+                    <span className="bg-surface-inset border border-line-default px-3 py-1 rounded-sm text-micro font-mono text-content-secondary uppercase">
                       {strat.validation_status}
                     </span>
                   )}
@@ -1350,7 +1350,7 @@ const StrategyMarketplace = () => {
                   return (
                     <div
                       key={`${review?.created_at || 'review'}-${index}`}
-                      className="bg-surface-canvas border border-line-default rounded-xl p-4 flex flex-col gap-2"
+                      className="bg-surface-raised border border-line-default rounded-lg p-4 flex flex-col gap-2"
                     >
                       <div className="flex items-center gap-3 text-small text-content-secondary">
                         {reviewRating !== null && (
@@ -1438,8 +1438,8 @@ const StrategyMarketplace = () => {
         )}
 
         {/* Search & Filter Bar */}
-        <div className="bg-surface-panel border border-line-default rounded-xl p-4 flex flex-wrap gap-4 items-center">
-          <div className="flex items-center gap-2 px-4 bg-surface-canvas border border-line-default rounded-lg flex-1 min-w-[250px]">
+        <div className="bg-surface-panel border border-line-default rounded-lg p-4 flex flex-wrap gap-4 items-center">
+          <div className="flex items-center gap-2 px-4 bg-surface-inset border border-line-default rounded-lg flex-1 min-w-[250px]">
             <Search size={16} className="text-content-secondary" />
             <input
               type="text"
@@ -1461,7 +1461,7 @@ const StrategyMarketplace = () => {
               className={`px-3 py-1.5 rounded-full text-small transition-colors ${
                 selectedCategory === null
                   ? 'bg-brand text-content-inverse'
-                  : 'bg-surface-canvas border border-line-default text-content-secondary hover:text-content-primary'
+                  : 'bg-surface-inset border border-line-default text-content-secondary hover:text-content-primary'
               }`}
             >
               All
@@ -1477,7 +1477,7 @@ const StrategyMarketplace = () => {
                   className={`px-3 py-1.5 rounded-full text-small transition-colors ${
                     selectedCategory === cat.name
                       ? 'bg-brand text-content-inverse'
-                      : 'bg-surface-canvas border border-line-default text-content-secondary hover:text-content-primary'
+                      : 'bg-surface-inset border border-line-default text-content-secondary hover:text-content-primary'
                   }`}
                 >
                   {/* The category is the server's own word, so it keeps monospace; the
@@ -1491,7 +1491,7 @@ const StrategyMarketplace = () => {
           </div>
 
           <select
-            className="bg-surface-canvas border border-line-default text-content-secondary text-body rounded-lg px-4 py-2 outline-none"
+            className="bg-surface-inset border border-line-default text-content-secondary text-body rounded-sm px-4 py-2 outline-none"
             value={sort}
             aria-label="Sort listings"
             onChange={(e) => { setSort(e.target.value); setPage(1); }}

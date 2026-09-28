@@ -48,7 +48,7 @@
  *     a keyboard user would tab into invisible advanced fields.
  *   * It is multi-open (a `Set` of open indices) where advanced settings are one
  *     region with one boolean.
- *   * Its palette is hardcoded (`border-accent-cyan/40`, `bg-bg-surface`) and it
+ *   * Its palette is hardcoded (`border-brand/40`, `bg-surface-panel`) and it
  *     animates `max-height`/`opacity` over 300ms on every open.
  *
  * Wrapping it would mean adopting all four and then working around them. It has ~one

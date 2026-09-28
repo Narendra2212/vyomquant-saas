@@ -34,12 +34,12 @@ import React, { useId } from 'react';
 import { useTimeframeSet } from '../../hooks/useTimeframeSet';
 
 const SELECT_CLASS =
-  'w-full rounded border bg-bg-elevated px-2 py-1 font-mono text-body text-text-primary ' +
-  'focus:outline-none focus:ring-2 focus:ring-accent-cyan disabled:opacity-50';
+  'w-full rounded-sm border bg-surface-raised px-2 py-1 font-mono text-body text-content-primary ' +
+  'focus:outline-none focus:ring-2 focus:ring-brand disabled:opacity-50';
 
 const LINK_CLASS =
-  'font-mono text-micro text-text-muted underline focus:outline-none focus:ring-2 ' +
-  'focus:ring-accent-cyan';
+  'font-mono text-micro text-content-secondary underline focus:outline-none focus:ring-2 ' +
+  'focus:ring-brand';
 
 const describedBy = (...ids) => {
   const joined = ids.filter(Boolean).join(' ');
@@ -114,7 +114,7 @@ export function TimeframeSelector({
         {...controlProps}
         className={
           SELECT_CLASS +
-          (controlProps['aria-invalid'] ? ' border-accent-loss' : ' border-border-default')
+          (controlProps['aria-invalid'] ? ' border-status-loss' : ' border-line-default')
         }
         aria-describedby={describedBy(
           controlProps['aria-describedby'],
@@ -150,14 +150,14 @@ export function TimeframeSelector({
         id={statusId}
         role="status"
         aria-live="polite"
-        className="mt-1 font-mono text-micro text-text-muted"
+        className="mt-1 font-mono text-micro text-content-secondary"
         data-testid="timeframe-selector-status"
       >
         {statusText()}
       </p>
 
       {unsupportedSelection ? (
-        <p role="alert" className="mt-1 font-mono text-micro text-accent-loss" data-testid="timeframe-unsupported">
+        <p role="alert" className="mt-1 font-mono text-micro text-status-loss" data-testid="timeframe-unsupported">
           {`This block holds “${selected}”, which the data pipeline no longer publishes. Choose a supported interval.`}
         </p>
       ) : null}
@@ -169,14 +169,14 @@ export function TimeframeSelector({
           data-testid="timeframe-selector-error"
           data-code={error.code}
           data-status={error.status ?? undefined}
-          className="mt-1 rounded border border-accent-loss bg-bg-elevated p-1.5"
+          className="mt-1 rounded-sm border border-status-loss bg-surface-raised p-1.5"
         >
           {/* The client's own sentence here, because this failure is a transport outcome the
               registry endpoint did not author a body for; the code is carried so the cause is
               still machine-readable. */}
-          <p className="font-mono text-micro text-accent-loss">{error.message}</p>
+          <p className="font-mono text-micro text-status-loss">{error.message}</p>
           {error.authExpired ? (
-            <p className="font-mono text-micro text-text-muted">
+            <p className="font-mono text-micro text-content-secondary">
               Sign in again — retrying will not help.
             </p>
           ) : (

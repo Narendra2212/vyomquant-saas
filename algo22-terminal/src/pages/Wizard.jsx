@@ -517,7 +517,7 @@ export default function Wizard() {
       </ol>
 
       <div
-        className="w-full rounded-xl border border-line-default bg-surface-raised p-8"
+        className="w-full rounded-lg border border-line-default bg-surface-raised p-8"
         style={{ maxWidth: step === 3 ? 720 : 480 }}
       >
         {/* ══ Step 1 — Secure Account ═══════════════════════════════════════ */}
@@ -786,7 +786,7 @@ export default function Wizard() {
                 {planRows.map((plan) => (
                   <div
                     key={plan.key}
-                    className={`relative flex flex-col rounded-xl border p-5 ${
+                    className={`relative flex flex-col rounded-lg border p-5 ${
                       // `rgba(0,212,255,0.05)` → the declared `bg-brand-wash`, which is the
                       // same wash the current progress step reads, spelled once.
                       plan.recommended

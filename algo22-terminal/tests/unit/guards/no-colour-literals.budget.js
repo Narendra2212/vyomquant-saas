@@ -981,15 +981,37 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
  */
 export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // -- Shared primitives, retokened in M3 -----------------------------------
-  // 40 of these 68 are #10B981 (24) and #EF4444 (16), across the
-  // profit/green/success/running/deployed/active and loss/red/danger/failed
-  // entries of `variants` and `dotColors`, written as arbitrary-value utilities
-  // (`bg-[#10B981]/10`). Task 6.6 moves them to #26A69A/#EF5350 (§13.2). They
-  // are budgeted, not excluded, precisely because they are scheduled.
-  // (Task 1.4's audit recorded 25 for this file; 40 is the measured occurrence
+  // BOTH ARE NOW `0`, and this is the change the two entries were waiting for.
+  //
+  // `Badge.jsx` stood at 68. 40 of them were #10B981 (24) and #EF4444 (16) across the
+  // profit/green/success/running/deployed/active and loss/red/danger/failed entries of
+  // `variants` and `dotColors`, written as arbitrary-value utilities (`bg-[#10B981]/10`).
+  // The note here said "Task 6.6 moves them to #26A69A/#EF5350 (§13.2). They are budgeted,
+  // not excluded, precisely because they are scheduled." That move has landed, driven by a
+  // different requirement than 6.6 — the app-wide visual-consistency pass — but to the same
+  // destination. (Task 1.4's audit recorded 25 for this file; 40 was the measured occurrence
   // count. See the FINDINGS note in the test file.)
-  'components/ui/Badge.jsx': 68,
-  'components/ui/Button.jsx': 5,
+  //
+  // WHY IT MATTERED MORE THAN A NUMBER. This component renders on most pages, and #10B981 is
+  // NOT the app's profit green — `tokens.css` converged profit to #26A69A and loss to
+  // #EF5350, and every `components/ds/` status surface reads those through
+  // `design/semantic.js`. So a `ds/StrategyStatus` reading RUNNING and a `ui/Badge` reading
+  // RUNNING rendered two different greens in the same table. Two of the 68 were not in the
+  // palette at all: #94A3B8 (`draft`) and #64748B (`stopped`) are Tailwind's slate ramp, and
+  // both collapse onto `content-secondary`.
+  //
+  // `Button.jsx` stood at 5: `text-[#080A0E]` twice — which this file's own task 7.6 note
+  // already identified as reaching for `content.inverse` — plus `hover:bg-[#33E0FF]`
+  // (`brand-hover`), `ring-offset-[#080A0E]`, and `hover:bg-[#FCD34D]`, an amber with no
+  // token behind it. Its off-palette `hover:border-cyan-500/50` went at the same time; that
+  // one was never a literal, so this guard never saw it.
+  //
+  // Kept at `0` rather than deleted, per this group's header: a `0` records that a live file
+  // is clean and holds it there. These two are rendered by nearly every page through
+  // `ds/CommandButton`, so they are the highest-leverage place in the tree for a hand-mixed
+  // hue to reappear.
+  'components/ui/Badge.jsx': 0,
+  'components/ui/Button.jsx': 0,
   // `components/ui-legacy/primitives.jsx: 18` stood here until task 27.2's FINAL STAGE B
   // deleted the shim. Removed rather than lowered to `0`, per this header and per the
   // precedent `DashboardUpgrades.jsx` and `DesktopOnlyOverlay.jsx` set below: a `0` records

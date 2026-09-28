@@ -2584,7 +2584,7 @@ export default function Dashboard() {
               {strategies.map((strategy) => (
                 <li
                   key={strategy.id}
-                  className="flex min-w-0 flex-col gap-1 rounded-sm border border-line-subtle bg-surface-canvas px-3 py-2"
+                  className="flex min-w-0 flex-col gap-1 rounded-sm border border-line-subtle bg-surface-inset px-3 py-2"
                 >
                   <div className="flex min-w-0 items-baseline justify-between gap-2">
                     <span className="truncate text-body font-semibold text-content-primary">
@@ -2782,7 +2782,7 @@ export default function Dashboard() {
                   {venues.map((venue) => (
                     <li
                       key={venue.id}
-                      className="flex min-w-0 flex-col gap-1 rounded-sm border border-line-subtle bg-surface-canvas px-3 py-2"
+                      className="flex min-w-0 flex-col gap-1 rounded-sm border border-line-subtle bg-surface-inset px-3 py-2"
                     >
                       {/* The venue's own leaf, subscribing to `exchange_health` filtered to
                           this `exchange_id` (task 19.3). Neither `connectionState` nor

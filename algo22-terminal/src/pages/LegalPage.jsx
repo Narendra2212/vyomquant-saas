@@ -345,7 +345,7 @@ export const LegalPage = ({ onBack, go }) => {
 
   return (
     <div
-      className="mx-auto my-10 w-full rounded-xl border border-line-default bg-surface-raised p-6 shadow-raised"
+      className="mx-auto my-10 w-full rounded-lg border border-line-default bg-surface-raised p-6 shadow-raised"
       style={{ maxWidth: 800 }}
     >
       {/* fontSize: 16 → `ds/PageHeader`'s `--text-page` (heading — Q8, the page's own

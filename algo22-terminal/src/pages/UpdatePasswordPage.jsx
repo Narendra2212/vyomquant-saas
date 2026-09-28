@@ -118,7 +118,7 @@ export default function UpdatePasswordPage() {
   return (
     <div style={{ background: token.surface.canvas, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div
-        className="w-full max-w-md rounded-xl border border-line-default p-9"
+        className="w-full max-w-md rounded-lg border border-line-default p-9"
         style={{ background: token.surface.raised }}
       >
         {/* fontSize: 22 → --text-page (heading — Q8, the page's own <h1>). */}

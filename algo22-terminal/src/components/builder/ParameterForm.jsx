@@ -250,13 +250,13 @@ const constraintText = (spec) => {
 };
 
 const CONTROL_CLASS =
-  'w-full rounded border bg-bg-elevated px-2 py-1 font-mono text-body text-text-primary ' +
-  'placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent-cyan ' +
+  'w-full rounded-sm border bg-surface-raised px-2 py-1 font-mono text-body text-content-primary ' +
+  'placeholder:text-content-secondary focus:outline-none focus:ring-2 focus:ring-brand ' +
   'disabled:opacity-50';
 
 const controlClassName = (field) =>
   `${CONTROL_CLASS} ${
-    field.hasError || field.blocking ? 'border-accent-loss' : 'border-border-default'
+    field.hasError || field.blocking ? 'border-status-loss' : 'border-line-default'
   }`;
 
 /**
@@ -494,7 +494,7 @@ function ParameterField({
             // boolean parameter means. `aria-required` still announces it.
             required={undefined}
             type="checkbox"
-            className="h-4 w-4 rounded border-border-default bg-bg-elevated accent-accent-cyan focus:outline-none focus:ring-2 focus:ring-accent-cyan disabled:opacity-50"
+            className="h-4 w-4 rounded-sm border-line-default bg-surface-raised accent-brand focus:outline-none focus:ring-2 focus:ring-brand disabled:opacity-50"
             checked={field.value === true}
             onChange={(event) => emit(event.target.checked)}
           />
@@ -508,7 +508,7 @@ function ParameterField({
             <input {...commonProps} {...textProps('text')} />
             <p
               role="status"
-              className="mt-1 font-mono text-micro text-accent-gold"
+              className="mt-1 font-mono text-micro text-status-warning"
               data-testid={`unsupported-${spec.key}`}
               data-unsupported-param-type={String(spec.type)}
             >
@@ -527,25 +527,25 @@ function ParameterField({
 
   return (
     <div
-      className="border-b border-border-subtle py-2 last:border-b-0"
+      className="border-b border-line-subtle py-2 last:border-b-0"
       data-testid={`param-${spec.key}`}
       data-blocking={field.blocking ? 'true' : 'false'}
     >
       <div className="mb-1 flex items-baseline gap-1.5">
         <label
           htmlFor={controlId}
-          className="font-mono text-micro uppercase tracking-wider text-text-secondary"
+          className="font-mono text-micro uppercase tracking-wider text-content-secondary"
         >
           {spec.label}
         </label>
         {spec.required ? (
-          <span className="font-mono text-micro text-accent-cyan" data-testid={`required-${spec.key}`}>
+          <span className="font-mono text-micro text-brand" data-testid={`required-${spec.key}`}>
             required
           </span>
         ) : null}
         {field.showingDefault ? (
           <span
-            className="rounded border border-border-default bg-bg-elevated px-1 font-mono text-micro text-text-muted"
+            className="rounded-sm border border-line-default bg-surface-raised px-1 font-mono text-micro text-content-secondary"
             data-testid={`default-badge-${spec.key}`}
             title={`Block default: ${formatScalar(spec.default)}`}
           >
@@ -555,7 +555,7 @@ function ParameterField({
         {hasHelp ? (
           <button
             type="button"
-            className="ml-auto rounded border border-border-default px-1 font-mono text-micro text-text-muted focus:outline-none focus:ring-2 focus:ring-accent-cyan"
+            className="ml-auto rounded-sm border border-line-default px-1 font-mono text-micro text-content-secondary focus:outline-none focus:ring-2 focus:ring-brand"
             aria-expanded={helpOpen}
             aria-controls={helpId}
             aria-label={`Help for ${spec.label}`}
@@ -577,7 +577,7 @@ function ParameterField({
           data-open={helpOpen ? 'true' : 'false'}
           className={
             helpOpen
-              ? 'mt-1 rounded border border-border-default bg-bg-elevated p-1.5 text-micro text-text-secondary'
+              ? 'mt-1 rounded-sm border border-line-default bg-surface-raised p-1.5 text-micro text-content-secondary'
               : 'sr-only'
           }
         >
@@ -586,13 +586,13 @@ function ParameterField({
       ) : null}
 
       {constraints ? (
-        <p id={constraintsId} className="mt-1 font-mono text-micro text-text-muted">
+        <p id={constraintsId} className="mt-1 font-mono text-micro text-content-secondary">
           {constraints}
         </p>
       ) : null}
 
       {optionSetPending ? (
-        <p className="mt-1 font-mono text-micro text-text-muted">
+        <p className="mt-1 font-mono text-micro text-content-secondary">
           Options resolved from the graph ({spec.options_source}).
         </p>
       ) : null}
@@ -605,8 +605,8 @@ function ParameterField({
               role={normaliseSeverity(issue.severity) === SEVERITY_ERROR ? 'alert' : 'status'}
               className={`mt-1 text-micro ${
                 normaliseSeverity(issue.severity) === SEVERITY_ERROR
-                  ? 'text-accent-loss'
-                  : 'text-accent-gold'
+                  ? 'text-status-loss'
+                  : 'text-status-warning'
               }`}
               data-severity={normaliseSeverity(issue.severity)}
               data-code={issue.code || undefined}
@@ -617,13 +617,13 @@ function ParameterField({
               </span>{' '}
               {issue.fix_hint ? issue.fix_hint : issue.message}
               {issue.fix_hint && issue.message && issue.message !== issue.fix_hint ? (
-                <span className="block text-text-secondary">{issue.message}</span>
+                <span className="block text-content-secondary">{issue.message}</span>
               ) : null}
             </p>
           ))}
         </div>
       ) : field.blocking ? (
-        <p id={statusId} className="mt-1 font-mono text-micro text-accent-loss">
+        <p id={statusId} className="mt-1 font-mono text-micro text-status-loss">
           Required · not set
           {field.behaviourChanging
             ? ' — this parameter changes how the strategy trades, so it has no default.'
@@ -634,7 +634,7 @@ function ParameterField({
       {field.canResetToDefault && !disabled ? (
         <button
           type="button"
-          className="mt-1 font-mono text-micro text-text-muted underline focus:outline-none focus:ring-2 focus:ring-accent-cyan"
+          className="mt-1 font-mono text-micro text-content-secondary underline focus:outline-none focus:ring-2 focus:ring-brand"
           data-testid={`reset-default-${spec.key}`}
           onClick={() => onChange && onChange(spec.key, spec.default, spec)}
         >
@@ -744,7 +744,7 @@ export function ParameterForm({
 
   if (!specs.length) {
     return (
-      <div className="p-2 font-mono text-micro text-text-muted" data-testid="parameter-form-empty">
+      <div className="p-2 font-mono text-micro text-content-secondary" data-testid="parameter-form-empty">
         This block declares no parameters.
       </div>
     );
@@ -769,7 +769,7 @@ export function ParameterForm({
       {blocking.length ? (
         <p
           role="status"
-          className="mb-1 rounded border border-accent-loss bg-bg-elevated p-1.5 font-mono text-micro text-accent-loss"
+          className="mb-1 rounded-sm border border-status-loss bg-surface-raised p-1.5 font-mono text-micro text-status-loss"
           data-testid="parameter-form-blocking"
           data-blocking-keys={blocking.join(',')}
         >
@@ -826,7 +826,7 @@ export function ParameterForm({
             <p
               key={`${issue.code || 'issue'}-${index}`}
               role="alert"
-              className="font-mono text-micro text-accent-gold"
+              className="font-mono text-micro text-status-warning"
               data-field={issue.field}
             >
               {issue.field}: {issue.fix_hint ? issue.fix_hint : issue.message}

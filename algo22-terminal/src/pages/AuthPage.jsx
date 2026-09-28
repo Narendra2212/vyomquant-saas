@@ -884,14 +884,14 @@ export default function AuthPage({ mode = "signin" }) {
           positioned element. What replaces them is the canvas above — see the header's
           gradient table (Requirement 10.1, design.md D5). */}
 
-      {/* Main Terminal Card. `borderRadius: 18` → `rounded-xl` (12px, where the declared
+      {/* Main Terminal Card. `borderRadius: 18` → `rounded-lg` (12px, where the declared
           radius scale stops) and the hand-mixed `0 40px 80px rgba(0,0,0,0.7)` →
           `token.shadow.overlay`, the largest elevation the token layer declares. */}
       {/* `width: 520, maxWidth: "100%"` is carried across unchanged: no declared `max-w-*`
           step is this card's width, and §2.5's proxy is about not ADDING a px dimension to a
           text container rather than about removing one that was already load-bearing. */}
       <div
-        className="relative w-full rounded-xl border border-line-default p-8"
+        className="relative w-full rounded-lg border border-line-default p-8"
         style={{
           background: token.surface.raised,
           boxShadow: token.shadow.overlay,

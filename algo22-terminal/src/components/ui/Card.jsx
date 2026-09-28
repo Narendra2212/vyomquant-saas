@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 
 export function Card({ 
   children, 
@@ -10,9 +10,9 @@ export function Card({
   ...props 
 }) {
   const combinedClass = `
-    ${elevated ? 'bg-bg-elevated shadow-md' : 'bg-bg-surface'}
-    border border-border-default
-    rounded-xl
+    ${elevated ? 'bg-surface-raised shadow-md' : 'bg-surface-panel'}
+    border border-line-default
+    rounded-lg
     transition-all duration-300
     ${hover ? 'hover:border-cyan-500/40 hover:-translate-y-0.5 cursor-pointer' : ''}
     ${onClick ? 'cursor-pointer' : ''}
