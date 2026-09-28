@@ -56,62 +56,52 @@ router = APIRouter()
 logger = logging.getLogger("BillingRouter")
 
 
-# Environments in which a test-mode gateway credential is a misconfiguration rather than a
-# choice. The same four names ``core/config.py`` and ``core/state.py`` already treat as
-# production-like, spelled once here so a deployment those modules consider production cannot
-# be considered a sandbox by this one.
-_PRODUCTION_LIKE_ENVS = {"production", "prod", "live", "staging"}
-
-
-def _sandbox_payments_allowed() -> bool:
-    """Whether test-mode (``rzp_test_*`` / ``sk_test_*``) gateway credentials may be used.
-
-    Two independent conditions, both required:
-
-    1. ``ALLOW_TEST_PAYMENT_KEYS`` is explicitly truthy, and
-    2. ``ENV`` is not one of :data:`_PRODUCTION_LIKE_ENVS`.
-
-    The opt-in alone is deliberately not sufficient. A stray ``true`` left in a production
-    environment file would otherwise point real customer traffic at a sandbox gateway, which
-    is precisely the failure the ``sk_live_`` / ``rzp_live_`` prefix checks were added to
-    prevent — money that appears to be collected and never arrives. Both conditions default
-    to the safe answer, so a deployment that sets neither behaves exactly as it did before
-    this function existed: live prefixes only.
-    """
-    opt_in = os.environ.get("ALLOW_TEST_PAYMENT_KEYS", "false").strip().lower()
-    if opt_in not in ("true", "1", "yes"):
-        return False
-    if os.environ.get("ENV", "").strip().lower() in _PRODUCTION_LIKE_ENVS:
-        logger.error(
-            "ALLOW_TEST_PAYMENT_KEYS is set in a production-like ENV and is being ignored. "
-            "Remove it and configure live gateway credentials."
-        )
-        return False
-    return True
-
-
 def _validate_keys(provider: str) -> str:
-    sandbox = _sandbox_payments_allowed()
+    """The provider's key id, or a 500 naming WHICH condition failed.
+
+    Live prefixes only, in every environment. There is no test-credential bypass: a
+    ``sk_test_``/``rzp_test_`` credential collects no money, so honouring one on a path whose
+    success grants a paid entitlement would hand out plans for free and book revenue that
+    never arrived.
+
+    THE THREE REFUSALS ARE WORDED SEPARATELY, AND THAT IS THE POINT
+    ---------------------------------------------------------------
+    They used to share one sentence — "missing, invalid, or test credentials are used in
+    production path" — which named every possible cause and so identified none. That sentence
+    reached a trader verbatim on the live billing page while the actual fault was that the ECS
+    task definition injected no ``RAZORPAY_KEY_ID`` at all. "Missing" and "test key deployed"
+    need opposite fixes: one is an absent secret, the other is the wrong secret. A single
+    string cannot tell an operator which one they have.
+
+    No credential VALUE is interpolated into any message here. The condition is named, and the
+    required prefix is named; the value itself never enters a response body or a log line.
+    """
     if provider == "stripe":
         key = os.environ.get("STRIPE_SECRET_KEY")
-        allowed = ("sk_live_", "sk_test_") if sandbox else ("sk_live_",)
-        if not key or key == "sk_test_dummy" or not key.startswith(allowed):
-            raise HTTPException(500, "Stripe production secret key is missing, invalid, or test credentials are used in production path.")
+        if not key:
+            raise HTTPException(500, "Stripe is not configured: STRIPE_SECRET_KEY is not set.")
+        if key == "sk_test_dummy":
+            raise HTTPException(500, "Stripe is configured with the placeholder key 'sk_test_dummy'.")
+        if key.startswith("sk_test_"):
+            raise HTTPException(500, "Stripe is configured with a TEST secret key. Live credentials are required: a test key collects no money.")
+        if not key.startswith("sk_live_"):
+            raise HTTPException(500, "Stripe secret key is invalid: it must begin with 'sk_live_'.")
         return key
     elif provider == "razorpay":
         key = os.environ.get("RAZORPAY_KEY_ID")
         secret = os.environ.get("RAZORPAY_KEY_SECRET")
-        allowed = ("rzp_live_", "rzp_test_") if sandbox else ("rzp_live_",)
-        if not key or key == "rzp_test_dummy" or not key.startswith(allowed):
-            raise HTTPException(500, "Razorpay production key ID is missing, invalid, or test credentials are used in production path.")
-        if not secret or secret == "dummy_secret":
-            raise HTTPException(500, "Razorpay production key secret is missing or invalid.")
+        if not key:
+            raise HTTPException(500, "Razorpay is not configured: RAZORPAY_KEY_ID is not set.")
+        if key == "rzp_test_dummy":
+            raise HTTPException(500, "Razorpay is configured with the placeholder key 'rzp_test_dummy'.")
         if key.startswith("rzp_test_"):
-            logger.warning(
-                "Razorpay is using TEST credentials (ALLOW_TEST_PAYMENT_KEYS enabled, ENV=%r). "
-                "No real money will move on this path.",
-                os.environ.get("ENV", ""),
-            )
+            raise HTTPException(500, "Razorpay is configured with a TEST key id. Live credentials are required: a test key collects no money.")
+        if not key.startswith("rzp_live_"):
+            raise HTTPException(500, "Razorpay key ID is invalid: it must begin with 'rzp_live_'.")
+        if not secret:
+            raise HTTPException(500, "Razorpay is not configured: RAZORPAY_KEY_SECRET is not set.")
+        if secret == "dummy_secret":
+            raise HTTPException(500, "Razorpay is configured with the placeholder key secret 'dummy_secret'.")
         return key
 
 

@@ -504,9 +504,11 @@ const isUnlimited = (value) => value === -1 || value === Infinity;
  * `err?.response?.data?.detail` was `undefined` on every rejection this client produces, and
  * this helper always returned the caller's generic fallback.
  *
- * That is not cosmetic. It is why a production checkout failing with "Razorpay production key
- * ID is missing, invalid, or test credentials are used in production path." displayed as
- * "Checkout initialization failed." — the server named the cause and the page discarded it.
+ * That is not cosmetic. It is why a production checkout failing because the container had no
+ * Razorpay key configured displayed as "Checkout initialization failed." — the server named
+ * the cause and the page discarded it. (`billing._validate_keys` now answers "Razorpay is not
+ * configured: RAZORPAY_KEY_ID is not set." for that case specifically, rather than one
+ * sentence covering every possible cause.)
  * `ds/Alert` renders whatever is returned here, so the server's own sentence reaches the
  * trader instead of a message that could mean anything.
  *
@@ -730,7 +732,7 @@ export default function Billing() {
     **Whose** comes from `GET /api/auth/me` (`api.auth.getMe`, `routers/auth.py:123`), not
     from storage. `localStorage.getItem('userId')` was the second dead guard: nothing in
     `src/` writes `userId`, anywhere, so it was always null. `/api/auth/me` is the right
-    replacement rather than `supabase.auth.getUser()` for two reasons — it is authenticated
+    replacement rather than a `supabase.auth` user lookup for two reasons — it is authenticated
     by the very token the socket ticket will be minted from, so a resolvable id and a usable
     session are one fact rather than two; and supabase-js persists its own session in
     `localStorage` (`sb-<ref>-auth-token`, which `AccountMenu.jsx:535` clears by hand), so
