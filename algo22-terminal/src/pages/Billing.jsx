@@ -495,10 +495,35 @@ const ALLOWANCES = Object.freeze([
 /** `-1` and `Infinity` are the server's unlimited sentinels, and both are readings. */
 const isUnlimited = (value) => value === -1 || value === Infinity;
 
-/** A safe, client-facing sentence for a failed WRITE. The page's own `detail` read. */
+/**
+ * A safe, client-facing sentence for a failed WRITE. The page's own `detail` read.
+ *
+ * `err.data` is read FIRST because that is where this app's errors actually carry the body:
+ * `apiClient`'s response interceptor rejects with an `ApiError` whose constructor assigns
+ * `this.data = config?.data` and which has no `response` property at all. So the original
+ * `err?.response?.data?.detail` was `undefined` on every rejection this client produces, and
+ * this helper always returned the caller's generic fallback.
+ *
+ * That is not cosmetic. It is why a production checkout failing with "Razorpay production key
+ * ID is missing, invalid, or test credentials are used in production path." displayed as
+ * "Checkout initialization failed." — the server named the cause and the page discarded it.
+ * `ds/Alert` renders whatever is returned here, so the server's own sentence reaches the
+ * trader instead of a message that could mean anything.
+ *
+ * The axios-native `err.response.data.detail` shape is still read second, since a caller that
+ * bypasses the interceptor (or a future transport) can still produce it.
+ */
 const writeFailureMessage = (err, fallback) => {
-  const detail = err?.response?.data?.detail;
-  return typeof detail === 'string' && detail.trim() !== '' ? detail : fallback;
+  const candidates = [err?.data?.detail, err?.response?.data?.detail];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim() !== '') return candidate;
+  }
+  // The structured marketplace envelope, `{ error: { code, message } }`, which the shared
+  // error handler in `main.py` renders for `MarketplaceError`. Read the same way
+  // `StrategyMarketplace.jsx` reads it, so the two pages agree on one envelope.
+  const structured = err?.data?.error?.message;
+  if (typeof structured === 'string' && structured.trim() !== '') return structured;
+  return fallback;
 };
 
 /**
