@@ -68,13 +68,13 @@ export default function SecuritySection() {
       <div className="section-container">
         <div className="section-inner">
           <div className="mx-auto max-w-2xl text-center">
-            <p className="mb-3 font-mono text-micro font-semibold uppercase tracking-[0.2em] text-brand">
+            <p className="mb-4 text-xs font-bold uppercase tracking-[0.16em] text-brand">
               Security
             </p>
-            <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl">
+            <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl lg:text-5xl">
               Controls that are implemented, described plainly
             </h2>
-            <p className="mt-4 text-lg text-content-secondary">
+            <p className="mt-5 text-lg leading-relaxed text-content-secondary">
               Four mechanisms, named so you can ask us about them. We hold no third-party security
               certification yet, and we would rather say that than imply one.
             </p>
@@ -84,7 +84,7 @@ export default function SecuritySection() {
             {CONTROLS.map(({ icon: Icon, title, body }) => (
               <article
                 key={title}
-                className="rounded-xl border border-line-default bg-surface-panel p-7 transition-colors duration-150 hover:border-brand/40"
+                className="rounded-2xl border border-line-default bg-surface-raised p-7 sm:p-8 transition-colors duration-150 hover:border-brand/40"
               >
                 <span className="mb-5 inline-flex h-10 w-10 items-center justify-center rounded-lg border border-line-strong bg-surface-raised">
                   <Icon className="h-4.5 w-4.5 text-brand" aria-hidden="true" />

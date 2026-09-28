@@ -66,8 +66,8 @@ const FOR_AUTHORS = [
 
 function Column({ eyebrow, heading, items }) {
   return (
-    <div className="rounded-xl border border-line-default bg-surface-panel p-7">
-      <p className="font-mono text-micro font-semibold uppercase tracking-[0.2em] text-brand">
+    <div className="rounded-2xl border border-line-default bg-surface-raised p-7 sm:p-8">
+      <p className="text-xs font-bold uppercase tracking-[0.16em] text-brand">
         {eyebrow}
       </p>
       <h3 className="mt-3 text-section font-bold text-content-primary">{heading}</h3>
@@ -98,13 +98,13 @@ export default function MarketplaceSection() {
       <div className="section-container">
         <div className="section-inner">
           <div className="mx-auto max-w-2xl text-center">
-            <p className="mb-3 font-mono text-micro font-semibold uppercase tracking-[0.2em] text-brand">
+            <p className="mb-4 text-xs font-bold uppercase tracking-[0.16em] text-brand">
               Strategy library
             </p>
-            <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl">
+            <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl lg:text-5xl">
               Start from someone else&rsquo;s work
             </h2>
-            <p className="mt-4 text-lg text-content-secondary">
+            <p className="mt-5 text-lg leading-relaxed text-content-secondary">
               Published strategies are browsable without an account. Open one, read what it does,
               and clone it into your own workspace to study or adapt.
             </p>

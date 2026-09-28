@@ -173,7 +173,12 @@ describe('Landing_Surface — each rendered section carries its own content', ()
 
       // The frame is the hero's whole lower half. If it rendered nothing the headline above
       // would still be here, which is the half-empty case this file exists for.
-      ['Market feed', 'Indicator', 'Logic gate', 'Risk gate', 'Order intent'].forEach((stage) =>
+      //
+      // `Order` and not `Order intent`: the five stage labels were shortened in the design
+      // pass because three of them ("Crossover AND threshold", "Position cap · drawdown stop",
+      // "Limit buy · trailing stop") wrapped to two lines in a 184px column and left the row
+      // visibly ragged. The detail each one lost moved to the line beneath it.
+      ['Market feed', 'Indicator', 'Logic gate', 'Risk gate', 'Order'].forEach((stage) =>
         expect(screen.getByText(stage)).toBeTruthy(),
       );
 
@@ -220,9 +225,30 @@ describe('Landing_Surface — each rendered section carries its own content', ()
         'Go live when ready',
       ].forEach((title) => expect(screen.getByText(title)).toBeTruthy());
 
-      ['STEP 1', 'STEP 2', 'STEP 3', 'STEP 4'].forEach((step) =>
+      // Zero-padded ordinals rather than the `STEP 1` labels this asserted before. The word
+      // was redundant beside a heading that already says "Four steps", and the design pass
+      // reclaimed the room for the stage icon.
+      ['01', '02', '03', '04'].forEach((step) =>
         expect(screen.getByText(step)).toBeTruthy(),
       );
+    });
+
+    it('gives each step its own hue, so the stage language is not one flat cyan', () => {
+      // The four hues repeat on `TrustSection`'s four pillars in the same order, which is what
+      // makes them a language rather than decoration: cyan build, amber research, indigo paper,
+      // teal live. The indigo is `--color-env-paper`, the app's own environment colour for
+      // simulated execution, so the hue a visitor meets here is the hue on their first paper
+      // deployment.
+      //
+      // Asserted on the class, because that is where the decision lives — Tailwind v4 scans
+      // source as text, so an interpolated `text-${hue}` would emit no CSS and every icon would
+      // silently fall back to inherit. This is the assertion that would catch that.
+      const { container } = mountRouted(<HowItWorks />);
+      const hues = ['text-brand', 'text-status-warning', 'text-env-paper', 'text-status-profit'];
+
+      for (const hue of hues) {
+        expect(container.querySelector(`.${hue}`), `${hue} is not on the page`).not.toBeNull();
+      }
     });
   });
 

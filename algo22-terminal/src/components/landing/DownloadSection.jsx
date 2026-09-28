@@ -71,13 +71,13 @@ export default function DownloadSection() {
       <div className="section-container">
         <div className="section-inner">
           <div className="mx-auto max-w-2xl text-center">
-            <p className="mb-3 font-mono text-micro font-semibold uppercase tracking-[0.2em] text-brand">
+            <p className="mb-4 text-xs font-bold uppercase tracking-[0.16em] text-brand">
               Platforms
             </p>
-            <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl">
+            <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl lg:text-5xl">
               Trade in the browser today, on your desktop shortly
             </h2>
-            <p className="mt-4 text-lg text-content-secondary">
+            <p className="mt-5 text-lg leading-relaxed text-content-secondary">
               The web platform is live and complete — nothing to install, nothing to configure.
               Native terminals for Windows, macOS and Linux are built on Tauri and in final
               testing. Each one below reports its own status, so you always know what you can

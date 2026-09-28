@@ -95,26 +95,26 @@ export default function FAQ() {
       <div className="section-container">
         <div className="section-inner">
           <div className="mx-auto max-w-2xl text-center">
-            <p className="mb-3 font-mono text-micro font-semibold uppercase tracking-[0.2em] text-brand">
+            <p className="mb-4 text-xs font-bold uppercase tracking-[0.16em] text-brand">
               FAQ
             </p>
-            <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl">
+            <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl lg:text-5xl">
               Questions worth asking first
             </h2>
-            <p className="mt-4 text-lg text-content-secondary">
+            <p className="mt-5 text-lg leading-relaxed text-content-secondary">
               Including the ones where the answer is no.
             </p>
           </div>
 
           <div className="mx-auto mt-14 max-w-3xl space-y-10">
             <div>
-              <h3 className="mb-4 font-mono text-micro font-semibold uppercase tracking-[0.2em] text-content-secondary">
+              <h3 className="mb-4 text-xs font-bold uppercase tracking-[0.16em] text-content-secondary">
                 Getting started
               </h3>
               <Accordion items={gettingStarted} defaultOpen={[0]} />
             </div>
             <div>
-              <h3 className="mb-4 font-mono text-micro font-semibold uppercase tracking-[0.2em] text-content-secondary">
+              <h3 className="mb-4 text-xs font-bold uppercase tracking-[0.16em] text-content-secondary">
                 Platform, risk and billing
               </h3>
               <Accordion items={platformAndRisk} defaultOpen={[0]} />

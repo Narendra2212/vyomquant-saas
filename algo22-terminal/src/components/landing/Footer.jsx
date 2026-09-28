@@ -173,7 +173,7 @@ export default function Footer() {
 
             {COLUMNS.map(({ heading, links }) => (
               <nav key={heading} aria-label={heading}>
-                <h2 className="mb-4 font-mono text-micro font-bold uppercase tracking-[0.2em] text-content-secondary">
+                <h2 className="mb-4 text-xs font-bold uppercase tracking-[0.16em] text-content-secondary">
                   {heading}
                 </h2>
                 <ul className="space-y-3">
@@ -222,13 +222,13 @@ export default function Footer() {
 
           {/* Verbatim. See the header. */}
           <div className="mt-8 flex flex-col items-start justify-between gap-6 border-t border-line-subtle pt-8 md:flex-row md:items-center">
-            <p className="max-w-4xl font-mono text-micro leading-relaxed text-content-secondary">
+            <p className="max-w-4xl text-xs leading-relaxed text-content-secondary">
               Algorithmic trading involves substantial risk of loss. Past performance of backtests
               does not guarantee future results. VyomQuant provides software infrastructure only;
               all execution decisions are made by the user. Paper trading mode is enabled by
               default. VyomQuant is not a registered investment adviser. Not financial advice.
             </p>
-            <p className="whitespace-nowrap font-mono text-micro text-content-secondary">
+            <p className="whitespace-nowrap text-xs text-content-secondary">
               © {new Date().getFullYear()} VyomQuant. All rights reserved.
             </p>
           </div>

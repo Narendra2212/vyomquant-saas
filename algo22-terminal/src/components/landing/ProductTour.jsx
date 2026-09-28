@@ -139,7 +139,7 @@ function Frame({ caption, badge, children }) {
         </div>
         <span className="font-mono text-micro text-content-secondary">{caption}</span>
         {badge && (
-          <span className="ml-auto rounded-md border border-brand/30 bg-brand-wash px-2 py-0.5 font-mono text-micro font-semibold uppercase tracking-wider text-brand">
+          <span className="ml-auto rounded-md border border-brand/30 bg-brand-wash px-2 py-0.5 text-micro font-semibold uppercase tracking-wider text-brand">
             {badge}
           </span>
         )}
@@ -153,14 +153,14 @@ function Frame({ caption, badge, children }) {
 function Aside({ eyebrow, title, body, cta }) {
   return (
     <div>
-      <p className="font-mono text-micro font-semibold uppercase tracking-[0.2em] text-brand">
+      <p className="text-xs font-bold uppercase tracking-[0.16em] text-brand">
         {eyebrow}
       </p>
       <h3 className="mt-3 text-2xl font-bold tracking-tight text-content-primary">{title}</h3>
       <p className="mt-3 text-body leading-relaxed text-content-secondary">{body}</p>
       <Link
         to="/signup"
-        className="mt-5 inline-flex items-center gap-1.5 font-mono text-small font-bold text-brand hover:underline"
+        className="mt-5 inline-flex items-center gap-1.5 text-sm font-bold text-brand hover:underline"
       >
         {cta}
         <ChevronRight className="h-3.5 w-3.5" />
@@ -197,13 +197,13 @@ export default function ProductTour() {
       <div className="section-container">
         <div className="section-inner max-w-6xl">
           <div className="mx-auto max-w-2xl text-center">
-            <p className="mb-3 font-mono text-micro font-semibold uppercase tracking-[0.2em] text-brand">
+            <p className="mb-4 text-xs font-bold uppercase tracking-[0.16em] text-brand">
               Product tour
             </p>
-            <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl">
+            <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl lg:text-5xl">
               What you actually work in
             </h2>
-            <p className="mt-4 text-lg text-content-secondary">
+            <p className="mt-5 text-lg leading-relaxed text-content-secondary">
               The blocks you get, the tests that run, the states an order passes through, and the
               limits you can arm.
             </p>
@@ -254,7 +254,7 @@ export default function ProductTour() {
             >
               <div className="lg:col-span-3">
                 <Frame caption="vyomquant · builder" badge="Typed graph">
-                  <p className="mb-3 font-mono text-micro uppercase tracking-wider text-content-secondary">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-content-secondary">
                     Block palette
                   </p>
                   <ul className="grid gap-2 sm:grid-cols-2">
@@ -269,7 +269,7 @@ export default function ProductTour() {
                     ))}
                   </ul>
 
-                  <p className="mb-2.5 mt-5 font-mono text-micro uppercase tracking-wider text-content-secondary">
+                  <p className="mb-2.5 mt-5 text-xs font-semibold uppercase tracking-wider text-content-secondary">
                     Port types — connections are checked against these
                   </p>
                   <ul className="flex flex-wrap gap-1.5">
@@ -318,13 +318,13 @@ export default function ProductTour() {
                           </span>
                           <span className="text-body font-bold text-content-primary">{name}</span>
                         </div>
-                        <p className="mt-1 pl-7 font-mono text-micro leading-relaxed text-content-secondary">
+                        <p className="mt-1 pl-7 text-sm leading-relaxed text-content-secondary">
                           {detail}
                         </p>
                       </li>
                     ))}
                   </ol>
-                  <p className="mt-4 rounded-lg border border-line-default bg-surface-panel p-3 font-mono text-micro leading-relaxed text-content-secondary">
+                  <p className="mt-4 rounded-lg border border-line-default bg-surface-panel p-3 text-sm leading-relaxed text-content-secondary">
                     Results are recorded with the graph hash, dataset checksum and engine version,
                     so a backtest can be reproduced rather than taken on trust.
                   </p>
@@ -352,7 +352,7 @@ export default function ProductTour() {
             >
               <div className="lg:col-span-3">
                 <Frame caption="vyomquant · paper" badge="Simulated capital">
-                  <p className="mb-3 font-mono text-micro uppercase tracking-wider text-content-secondary">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-content-secondary">
                     Order lifecycle
                   </p>
                   <ol className="space-y-1.5">
@@ -371,7 +371,7 @@ export default function ProductTour() {
                       </li>
                     ))}
                   </ol>
-                  <p className="mt-4 rounded-lg border border-env-paper/25 bg-env-paper-wash p-3 font-mono text-micro leading-relaxed text-env-paper">
+                  <p className="mt-4 rounded-lg border border-env-paper/25 bg-env-paper-wash p-3 text-sm leading-relaxed text-env-paper">
                     Paper balances, positions and trades are held separately from live state and
                     persisted, so a restart does not reset your forward test.
                   </p>
@@ -406,13 +406,13 @@ export default function ProductTour() {
                         className="rounded-lg border border-line-default bg-surface-raised p-3.5"
                       >
                         <p className="text-body font-bold text-content-primary">{control}</p>
-                        <p className="mt-1 font-mono text-micro leading-relaxed text-content-secondary">
+                        <p className="mt-1 text-sm leading-relaxed text-content-secondary">
                           {effect}
                         </p>
                       </li>
                     ))}
                   </ul>
-                  <p className="mt-4 rounded-lg border border-status-warning/25 bg-status-warning-wash p-3 font-mono text-micro leading-relaxed text-status-warning">
+                  <p className="mt-4 rounded-lg border border-status-warning/25 bg-status-warning-wash p-3 text-sm leading-relaxed text-status-warning">
                     Limits are evaluated in the execution path. A breach stops the strategy rather
                     than appearing in a report afterwards.
                   </p>

@@ -38,26 +38,81 @@
 
 /* -- Base resets ---------------------------------------------------------- */
 
-/* Moved out of the inline `<style>` that `AppShell` rendered in src/App.jsx
-   (design.md §6.6). An inline `<style>` inside a rendered component is
-   re-evaluated on every render of that component, and a global reset has no
-   reason to be render-coupled. */
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-  -webkit-tap-highlight-color: transparent;
-}
+/* ===========================================================================
+   `@layer base` IS LOAD-BEARING. DO NOT UNWRAP IT.
+   ===========================================================================
+   These rules were UNLAYERED, and that silently disabled every spacing utility
+   in the application.
 
-html {
-  scroll-behavior: smooth;
-  -webkit-font-smoothing: auto;
-  -moz-osx-font-smoothing: auto;
-}
+   CSS cascade layers rank BELOW unlayered CSS, always, regardless of
+   specificity. Tailwind v4 emits its utilities into `@layer utilities`, so a
+   plain top-level `* { margin: 0; padding: 0 }` — specificity (0,0,0) — beat
+   `.py-20`, `.p-7`, `.mt-8`, `.mx-auto` and every other margin or padding
+   utility in the bundle. Measured on the production build: the reset compiled
+   at offset 67210, outside all five layers, while `@layer utilities` opened at
+   10567.
 
-::selection {
-  background-color: rgba(0, 212, 255, 0.2);
-  color: #F0F2F5;
+   WHAT IT LOOKED LIKE. Every `<section>` computed `padding-top: 0` and
+   `padding-bottom: 0`; `.section-inner` kept its `max-width: 80rem` but
+   computed `margin-inline: 0px` instead of `auto`, so every section pinned to
+   the left edge; the hero's `pt-32` collapsed and the `<h1>` rendered
+   underneath the fixed navbar. Colour, border, `max-width`, `display` and
+   `gap` were all unaffected — none of them is a margin or a padding — which is
+   exactly why the page looked like a styled design with the air sucked out of
+   it rather than like a stylesheet that had failed to load.
+
+   `gap` surviving is the detail that makes this diagnosable: grids kept their
+   column gaps while the cards inside them had no internal padding.
+
+   The same defect reached `scrollbar-hide`, whose `scrollbar-width: none` was
+   overridden by the unlayered `* { scrollbar-width: thin }` at the foot of this
+   file. That block is layered now too.
+
+   HISTORY. This arrived with `cf6318c` (M4 application shell), which moved the
+   reset out of the inline `<style>` that `AppShell` rendered in `src/App.jsx`
+   (design.md §6.6) — correctly, since a global reset has no reason to be
+   re-evaluated on every render of a component. What the move did not carry was
+   the scoping: as an inline `<style>` the reset was only in the DOM while
+   `AppShell` was mounted, which is `/app/*` only. Hoisting it here made it
+   global, so it began applying to the public routes — the landing page,
+   `/download`, `/legal/*`, `/signin` — which had never seen it.
+   =========================================================================== */
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
+  }
+
+  ::selection {
+    background-color: rgba(0, 212, 255, 0.2);
+    color: #F0F2F5;
+  }
+
+  /* The landing page's navbar is `position: fixed`, so a `scrollIntoView` to an
+     in-page anchor puts the top of the target section UNDERNEATH it — the section's
+     eyebrow and heading land in the 64px the navbar occupies and the reader arrives
+     at a decapitated section. Every `Navbar` and `Footer` link is one of these
+     jumps, so it affected all eight of them.
+
+     `scroll-margin-top` is the fix rather than padding: it moves the scroll
+     RESTING POSITION without adding layout box, so the section's own rhythm is
+     untouched. 5.5rem is the 4rem navbar plus 1.5rem of air, which stops the
+     heading sitting flush against the navbar's lower border.
+
+     Scoped to `section[id]` because an id is what makes a section a scroll target.
+     `html { scroll-behavior: smooth }` above is what animates the jump; this is
+     what decides where it stops. */
+  section[id] {
+    scroll-margin-top: 5.5rem;
+  }
 }
 
 /* The `prefers-reduced-motion` block that used to sit here is now in
@@ -183,27 +238,32 @@ html {
 }
 
 /* -- Scrollbar ------------------------------------------------------------ */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
+/* Layered for the reason given at the top of this file. The `*` rule here is the
+   second half of the same defect: unlayered, it outranked `scrollbar-hide`'s
+   `scrollbar-width: none` and that utility could never take effect. */
+@layer base {
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
 
-::-webkit-scrollbar-track {
-  background: #080A0E;
-}
+  ::-webkit-scrollbar-track {
+    background: #080A0E;
+  }
 
-::-webkit-scrollbar-thumb {
-  background: #1E2530;
-  border-radius: 3px;
-}
+  ::-webkit-scrollbar-thumb {
+    background: #1E2530;
+    border-radius: 3px;
+  }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #2A3441;
-}
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2A3441;
+  }
 
-* {
-  scrollbar-width: thin;
-  scrollbar-color: #1E2530 #080A0E;
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #1E2530 #080A0E;
+  }
 }
 
 @utility scrollbar-hide {
