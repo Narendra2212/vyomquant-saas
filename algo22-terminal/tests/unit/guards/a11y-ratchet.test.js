@@ -85,21 +85,42 @@ const WAIVER_FILE = 'eslint-rules/a11y-ratchet.js';
  * A keyboard-only trader can reach Risk Settings, so a kill switch they cannot operate
  * there is the same defect as one on Dashboard.
  *
- * It is now **every file under `src/pages/` plus the fifteen `Landing_Surface` files**
- * — `LandingPage.jsx` and the fourteen sections it renders — which is Requirement 6.1's
- * scope, measured.
+ * It is now **every file under `src/pages/` plus the `Landing_Surface` files** —
+ * `LandingPage.jsx` and the sections it renders — which is Requirement 6.1's scope,
+ * measured. That was fifteen files when this list was written and is THIRTEEN after the
+ * landing-page redesign; the count is stated once, beside the assertion that holds it, rather
+ * than repeated in prose here where it would drift.
  *
  * ═══ A CORRECTION TO REQUIREMENT 6.1, AND ONE TO §1.4 ═══
  *
  * **Requirement 6.1 says "the 14 rendered `Landing_Surface` sections"; with
  * `LandingPage.jsx` itself that is fifteen files, and the definition's "13 sections"
- * undercounts its own list.** `LandingPage.jsx:2`–`:15` imports fourteen: `Navbar`,
- * `Hero`, `TrustSection`, `ScreenshotsSection`, `HowItWorks`, `ModernTradingSection`,
- * `SecuritySection`, `FounderSection`, `DownloadSection`, `Pricing`, `FAQ`, `Waitlist`,
- * `FinalCTA`, `Footer`. 23 files sit in `src/components/landing/`; the eight requirements
- * §1.6 records as imported by nothing are deliberately absent here, because a guard that
- * held dead files to a standard would spend its teeth on markup no visitor reaches
- * (Requirement 14.2's argument, applied to this list instead of to a budget).
+ * undercounts its own list.** That was the shape of the surface when this list was written:
+ * `Navbar`, `Hero`, `TrustSection`, `ScreenshotsSection`, `HowItWorks`,
+ * `ModernTradingSection`, `SecuritySection`, `FounderSection`, `DownloadSection`, `Pricing`,
+ * `FAQ`, `Waitlist`, `FinalCTA`, `Footer`. The eight files requirements §1.6 records as
+ * imported by nothing were deliberately absent, because a guard that held dead files to a
+ * standard would spend its teeth on markup no visitor reaches (Requirement 14.2's argument,
+ * applied to this list instead of to a budget).
+ *
+ * **THE LANDING-PAGE REDESIGN CHANGED THAT SET: it is now twelve sections plus
+ * `LandingPage.jsx`, so thirteen files.** Three were deleted and two were added, and this
+ * list moved with the tree rather than being left to drift:
+ *
+ *   gone   `ModernTradingSection` — two of its four claims were false against the backend
+ *          (no TWAP and no Iceberg exist in `backend_app/`; the only VWAP is an indicator
+ *          block, not an execution algorithm; there is no FIX implementation), and its
+ *          heading duplicated `TrustSection`'s.
+ *   gone   `Waitlist` — it competed with a signup that works.
+ *   gone   `FounderSection` — a founder bio belongs on an About page, not mid-funnel.
+ *   new    `ProofStrip` — the credibility band under the hero.
+ *   new    `MarketplaceSection` — `/marketplace` is a public route the old page never
+ *          linked to once.
+ *
+ * The two new files are held here from their first commit rather than being left to the
+ * glob alone. The glob is what LINTS; this list is what HOLDS, and a new section that is
+ * linted but unheld is exactly the gap task 4.1 existed to close — reopened by the redesign
+ * if the list had not grown with it.
  *
  * **§1.4's table says the eleven `Unmigrated_Pages` are "not linted at all". They are.**
  * `A11Y_ENFORCED_GLOBS` has carried `src/pages/**` at `error` since task 6.27, so every
@@ -163,16 +184,15 @@ const IN_SCOPE_PAGES = Object.freeze([
   'src/components/landing/LandingPage.jsx',
   'src/components/landing/Navbar.jsx',
   'src/components/landing/Hero.jsx',
-  'src/components/landing/TrustSection.jsx',
-  'src/components/landing/ScreenshotsSection.jsx',
+  'src/components/landing/ProofStrip.jsx',
   'src/components/landing/HowItWorks.jsx',
-  'src/components/landing/ModernTradingSection.jsx',
+  'src/components/landing/TrustSection.jsx',
+  'src/components/landing/ProductTour.jsx',
+  'src/components/landing/MarketplaceSection.jsx',
   'src/components/landing/SecuritySection.jsx',
-  'src/components/landing/FounderSection.jsx',
   'src/components/landing/DownloadSection.jsx',
   'src/components/landing/Pricing.jsx',
   'src/components/landing/FAQ.jsx',
-  'src/components/landing/Waitlist.jsx',
   'src/components/landing/FinalCTA.jsx',
   'src/components/landing/Footer.jsx',
 ]);
@@ -405,9 +425,12 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
         + `list exists to prevent. Fix the path or delete the line:\n${list(unlinted)}`,
     ).toEqual([]);
 
-    // Non-vacuity, and Requirement 6.1's scope as a number: 21 pages + 15 landing files.
-    // It was 22 pages until task 9.2 deleted the unmounted `pages/Landing.jsx`.
-    expect(IN_SCOPE_PAGES).toHaveLength(36);
+    // Non-vacuity, and Requirement 6.1's scope as a number: 21 pages + 14 landing files.
+    // It was 22 pages until task 9.2 deleted the unmounted `pages/Landing.jsx`, and 15
+    // landing files until the redesign deleted three sections and added two — see the
+    // IN_SCOPE_PAGES docblock for which, and why the two new ones are listed here rather
+    // than left to the enforced glob.
+    expect(IN_SCOPE_PAGES).toHaveLength(35);
     expect(new Set(IN_SCOPE_PAGES).size).toBe(IN_SCOPE_PAGES.length);
   });
 

@@ -902,20 +902,26 @@ export const ABSOLUTE_FONT_SIZE_BUDGET = Object.freeze({
   // matched it), and `borderRadius: 18`, which is off the declared radius scale
   // entirely — `--radius-xl` stops at 12.
 
-  // -- src/components/landing/ — 4 files, 16 sizes. Requirement 1.4's seed,
-  //    unchanged. All 16 are `text-[Npx]`. Task 11.1 takes them one commit per
-  //    file and **deletes** each entry at zero. Requirement 15 is P2, so these
-  //    four may rest for a while; the entry is what holds them meanwhile. ------
-
-  // 10×6, 11×6. Blind spot 2 also counts 43 built-in `text-*` classes here —
-  // the second-largest concentration in `src/` — and those are out of scope.
-  'components/landing/ScreenshotsSection.jsx': 12,
-  // 9×1, 10×1. Plus 33 built-ins, out of scope per O1.
-  'components/landing/Hero.jsx': 2,
-  // 11×1. Its unavailable-download cards keep their declared reasons.
-  'components/landing/DownloadSection.jsx': 1,
-  // 11×1.
-  'components/landing/HowItWorks.jsx': 1,
+  // -- src/components/landing/ — CLEARED. Four entries totalling 16 stood here:
+  //    `ScreenshotsSection` 12 (10×6, 11×6), `Hero` 2, `DownloadSection` 1 and
+  //    `HowItWorks` 1, all sixteen written as `text-[Npx]`. Requirement 1.4
+  //    seeded them and task 11.1 was to take them one commit per file.
+  //
+  //    The landing-page redesign discharged all four at once instead. It was a
+  //    rewrite rather than a migration — three sections deleted, two added, four
+  //    rewritten — and the sizes went with the markup: every one of the sixteen
+  //    became a declared step from `tokens.css` (`text-micro` for the 10px chips
+  //    and `text-small` for the 11px labels, which is what they were approximating).
+  //
+  //    All four entries are DELETED rather than set to 0, per THE INVERSION: a
+  //    file with no entry is held at zero by default, and `accounts for every file
+  //    that still carries an absolute size` is what fails if one comes back. The
+  //    43 built-in `text-*` classes this guard's blind spot 2 counted in
+  //    `ScreenshotsSection` are gone with the same rewrite, though those were never
+  //    in scope and are not what this deletion records.
+  //
+  //    `components/landing/` now contributes nothing to this budget. Its two
+  //    surviving named files are still scanned — they are simply clean.
 
   // -- src/components/ — seeded at 11 files / 155 sizes, now **10 files / 153**:
   //    `ds/Chart.jsx` was the only one of the eleven a task owned and task 3.2

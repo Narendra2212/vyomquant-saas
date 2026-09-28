@@ -1,71 +1,93 @@
+/**
+ * FinalCTA — the closing ask.
+ *
+ * THREE CTAs BECAME ONE
+ * ---------------------
+ * It previously offered "Get Started Free" plus "Download Windows" and "Download macOS", the
+ * latter two pointing at `/download#windows` and `/download#macos` where every artifact renders
+ * an `unavailable` panel. A closing section that splits attention three ways, and sends two of
+ * those three to a dead end, is the worst possible last impression. `DownloadSection` handles
+ * desktop properly, per-artifact, further up the page.
+ *
+ * `animate-pulse-glow` IS GONE
+ * ----------------------------
+ * The primary button carried it. The class has no definition anywhere — `tokens.css` records
+ * that `--animate-pulse-glow` was deliberately not carried forward, because Requirement 1.5
+ * retires coloured glows. It rendered nothing at all, and was the sole entry in
+ * `dead-tailwind.test.js`'s `KNOWN_DEAD_CLASSES`. That entry is removed with it, which returns
+ * the guard to zero known-dead classes.
+ *
+ * The badge no longer reads "Early Access — Apply Now". There is nothing to apply for: signup is
+ * open and immediate. "Apply" invents a gate and suppresses the click it is asking for.
+ */
+
 import React from 'react'
 import { Link } from 'react-router-dom'
-import { Globe, ArrowRight } from 'lucide-react'
+import { ArrowRight, Check } from 'lucide-react'
 
-function WindowsIcon({ className }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801" />
-    </svg>
-  )
-}
-
-function AppleIcon({ className }) {
-  return (
-    <svg className={className} viewBox="0 0 814 1000" fill="currentColor">
-      <path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76 0-103.7 40.8-165.9 40.8s-105-36.8-162.8-108.8L274 737.7c-55.9-37.8-116.1-85.2-116.1-170.9 0-10.3.7-21.2 2-32.2 14.1-97.3 76.2-148.6 149-148.6 52.8 0 84.7 35.9 135.2 35.9 48.4 0 88.4-38.5 143.2-38.5 36 0 92.3 14.9 134.4 55.4zM535.2 10.1c25.1 27.6 44.4 67.6 44.4 107.9 0 7.1-.6 14.3-1.7 21.4-30.6 4.5-68.7 27.2-93.2 55.4-23.2 26.1-41.9 63.5-41.9 99.3 0 6.4.7 12.7 1.7 18.9 37.9 6.3 77.2-15.3 103.7-43.9 26.5-28.7 47.8-72.4 47.8-116.2z" />
-    </svg>
-  )
-}
+const REASSURANCES = [
+  'No card required',
+  'Paper trading by default',
+  'Your keys stay encrypted',
+]
 
 export default function FinalCTA() {
   return (
-    <section className="relative py-24 lg:py-32 border-t border-border-default overflow-hidden">
-      <div className="absolute inset-0 bg-gradient-to-b from-accent-cyan/5 via-transparent to-transparent" />
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[400px] bg-accent-cyan/10 rounded-full blur-[100px] opacity-40" />
+    <section
+      className="relative isolate overflow-hidden border-t border-line-default bg-surface-canvas py-20 lg:py-28"
+      aria-label="Get started"
+    >
+      <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+        <div className="absolute left-1/2 top-0 h-[26rem] w-[46rem] -translate-x-1/2 rounded-full bg-brand/8 blur-3xl" />
+      </div>
 
-      <div className="section-container relative z-10">
-        <div className="section-inner text-center">
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-accent-cyan/25 bg-accent-cyan-dim mb-6">
-            <span className="w-1.5 h-1.5 rounded-full bg-accent-cyan animate-pulse" />
-            <span className="text-xs font-mono text-accent-cyan uppercase tracking-wider">Early Access — Apply Now</span>
-          </div>
+      <div className="section-container">
+        <div className="section-inner">
+          <div className="mx-auto max-w-2xl text-center">
+            <span className="mb-6 inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand-wash px-4 py-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-brand" />
+              <span className="font-mono text-micro font-semibold uppercase tracking-[0.18em] text-brand">
+                Early access is open
+              </span>
+            </span>
 
-          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black text-text-primary mb-4">
-            Deploy Your First System
-          </h2>
-          <p className="text-text-secondary max-w-xl mx-auto mb-10 text-sm leading-relaxed">
-            VyomQuant is in early access. Sign up in your browser or download the native desktop terminal.
-            Paper trading enabled by default — zero capital required to start.
-          </p>
+            <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl lg:text-5xl">
+              Build your first strategy today
+            </h2>
+            <p className="mt-5 text-lg leading-relaxed text-content-secondary">
+              Start on the free tier, build a strategy on the canvas, backtest it, and run it on
+              paper against live market data. Connect an exchange whenever you are ready — or
+              never.
+            </p>
 
-          {/* 3 CTAs matching hero */}
-          <div className="flex flex-col items-center gap-4 max-w-sm mx-auto sm:max-w-none">
-            <Link
-              to="/signup"
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-3 px-8 py-4 rounded-xl font-semibold text-sm bg-accent-cyan text-text-inverse hover:bg-accent-cyan/90 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_0_32px_rgba(0,212,255,0.3)] animate-pulse-glow"
-            >
-              <Globe className="w-4 h-4" />
-              Get Started Free
-              <ArrowRight className="w-4 h-4" />
-            </Link>
-
-            <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+            <div className="mt-10">
               <Link
-                to="/download#windows"
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-6 py-3.5 rounded-xl border border-border-default bg-bg-surface/80 text-sm font-medium text-text-primary transition-all duration-200 hover:border-accent-cyan/40 hover:bg-bg-elevated hover:-translate-y-0.5"
+                to="/signup"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand px-9 py-4 text-base font-bold text-content-inverse shadow-raised transition-colors duration-150 hover:bg-brand-hover sm:w-auto"
               >
-                <WindowsIcon className="w-4 h-4" />
-                Download Windows
-              </Link>
-              <Link
-                to="/download#macos"
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-6 py-3.5 rounded-xl border border-border-default bg-bg-surface/80 text-sm font-medium text-text-primary transition-all duration-200 hover:border-accent-cyan/40 hover:bg-bg-elevated hover:-translate-y-0.5"
-              >
-                <AppleIcon className="w-4 h-4" />
-                Download macOS
+                Start free
+                <ArrowRight className="h-4 w-4" />
               </Link>
             </div>
+
+            <ul className="mt-7 flex flex-wrap items-center justify-center gap-x-6 gap-y-2.5">
+              {REASSURANCES.map((item) => (
+                <li key={item} className="flex items-center gap-2 text-body text-content-secondary">
+                  <Check className="h-4 w-4 shrink-0 text-status-profit" aria-hidden="true" />
+                  {item}
+                </li>
+              ))}
+            </ul>
+
+            <p className="mt-8 font-mono text-micro leading-relaxed text-content-secondary">
+              Already have an account?{' '}
+              <Link
+                to="/signin"
+                className="font-semibold text-brand underline underline-offset-2 hover:text-brand-hover"
+              >
+                Sign in
+              </Link>
+            </p>
           </div>
         </div>
       </div>

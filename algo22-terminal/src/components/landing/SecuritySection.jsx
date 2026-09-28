@@ -1,79 +1,110 @@
+/**
+ * SecuritySection — the controls that protect keys and capital. Anchor `#security`.
+ *
+ * THE BADGE IS GONE
+ * -----------------
+ * This section used to open with a pill reading "Enterprise Security". There is no SOC 2, no
+ * ISO 27001 and no penetration-test report anywhere in this repository, and "enterprise
+ * security" as a standalone badge is read as an attestation. The six controls it listed are
+ * real — that was never the problem. The problem was framing implemented behaviour as if a
+ * third party had signed off on it.
+ *
+ * So the heading now says what these are: controls that are implemented, described by their
+ * mechanism, with nothing implying external certification.
+ *
+ * SIX CARDS BECAME FOUR
+ * ---------------------
+ * "Authenticated Encryption at Rest" and "Secure API Key Storage" were the same control
+ * described twice, and "Secure Authentication" (password hashing, cookie policy) is table
+ * stakes that earns no space on a landing page. Merged and dropped respectively.
+ *
+ * "Protected Trading Infrastructure — execution engines run in isolated, protected VPC
+ * environments" is held back to the Institutional tier in `Pricing.jsx`, where an isolated VPC
+ * is an actual line item. Stating it as a universal property here contradicted that tier.
+ *
+ * Sources: `backend_app/routers/security.py`, `core/tenant.py`, `core/tenant_middleware.py`,
+ * `backend/tenant_rls_validator.py`, the RLS policies in
+ * `migrations/006_reconcile_production_database.sql`, and `core/audit_trail.py`.
+ */
+
 import React from 'react'
-import { Check, ShieldCheck, Key, Users, FileSearch, Lock, Server } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { FileSearch, KeyRound, Layers, Users } from 'lucide-react'
+
+const CONTROLS = [
+  {
+    icon: KeyRound,
+    title: 'Exchange keys are encrypted, never plaintext',
+    body:
+      'Credentials are encrypted before storage with an integrity check on every record, so tampering is detectable. They are injected into the execution environment at runtime and never travel to the browser.',
+  },
+  {
+    icon: Layers,
+    title: 'Per-tenant isolation at the database',
+    body:
+      'Row-level security policies scope your strategies, orders and credentials to your account in the database itself, rather than relying on application code to remember to filter.',
+  },
+  {
+    icon: Users,
+    title: 'Role-based access control',
+    body:
+      'Roles determine what a caller can reach. Administrative review and moderation actions require an explicitly granted role, checked server-side on every request.',
+  },
+  {
+    icon: FileSearch,
+    title: 'Audit trail on orders and strategy edits',
+    body:
+      'Order lifecycle events and strategy modifications are written to an audit log, so a fill or a configuration change can be reconstructed after the fact.',
+  },
+]
 
 export default function SecuritySection() {
-  const securityFeatures = [
-    {
-      icon: ShieldCheck,
-      title: 'Authenticated Encryption at Rest',
-      desc: 'Your API keys are encrypted before they are stored, with an integrity check on every record so tampering is detectable.'
-    },
-    {
-      icon: Key,
-      title: 'Secure API Key Storage',
-      desc: 'Exchange credentials are never stored in plaintext and are injected directly into the execution environment at runtime.'
-    },
-    {
-      icon: Users,
-      title: 'Role-Based Access Control',
-      desc: 'Granular RBAC ensures users and organizations only have access to authorized strategies and sub-accounts.'
-    },
-    {
-      icon: FileSearch,
-      title: 'Audit Logging',
-      desc: 'Comprehensive audit trails for all critical actions including logins, strategy modifications, and order routing.'
-    },
-    {
-      icon: Lock,
-      title: 'Secure Authentication',
-      desc: 'Industry-standard password hashing and strict secure cookie policies for all authentication tokens.'
-    },
-    {
-      icon: Server,
-      title: 'Protected Trading Infrastructure',
-      desc: 'Execution engines run in isolated, protected VPC environments securely bridged to exchange networks.'
-    }
-  ]
-
   return (
-    <section id="security" className="py-24 lg:py-32 border-t border-border-default relative overflow-hidden bg-bg-surface/30">
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[500px] bg-accent-cyan/3 rounded-full blur-[120px]" />
-      </div>
-
-      <div className="section-container relative z-10">
+    <section
+      id="security"
+      className="border-t border-line-default bg-surface-canvas py-20 lg:py-28"
+      aria-label="Security controls"
+    >
+      <div className="section-container">
         <div className="section-inner">
-          <div className="text-center mb-16">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-border-active bg-bg-elevated mb-6">
-              <ShieldCheck className="w-3.5 h-3.5 text-accent-cyan" />
-              <span className="text-xs font-mono text-text-secondary uppercase tracking-wider">Enterprise Security</span>
-            </div>
-            <h2 className="text-3xl sm:text-4xl font-black text-text-primary mb-4">
-              Security & Infrastructure
+          <div className="mx-auto max-w-2xl text-center">
+            <p className="mb-3 font-mono text-micro font-semibold uppercase tracking-[0.2em] text-brand">
+              Security
+            </p>
+            <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl">
+              Controls that are implemented, described plainly
             </h2>
-            <p className="text-text-secondary max-w-2xl mx-auto text-base">
-              VyomQuant employs defense-in-depth architecture to ensure your proprietary trading strategies and exchange API keys remain fundamentally secure.
+            <p className="mt-4 text-lg text-content-secondary">
+              Four mechanisms, named so you can ask us about them. We hold no third-party security
+              certification yet, and we would rather say that than imply one.
             </p>
           </div>
 
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {securityFeatures.map((feat, i) => {
-              const Icon = feat.icon
-              return (
-                <div key={i} className="card-surface p-6 group hover:border-accent-cyan/30 transition-colors duration-300">
-                  <div className="w-10 h-10 rounded-lg bg-bg-elevated border border-border-default flex items-center justify-center mb-5 group-hover:border-accent-cyan/40 group-hover:bg-accent-cyan/10 transition-colors">
-                    <Icon className="w-5 h-5 text-accent-cyan" />
-                  </div>
-                  <h3 className="text-base font-bold text-text-primary mb-2 flex items-center gap-2">
-                    {feat.title}
-                  </h3>
-                  <p className="text-sm text-text-secondary leading-relaxed">
-                    {feat.desc}
-                  </p>
-                </div>
-              )
-            })}
+          <div className="mt-14 grid gap-5 sm:grid-cols-2">
+            {CONTROLS.map(({ icon: Icon, title, body }) => (
+              <article
+                key={title}
+                className="rounded-xl border border-line-default bg-surface-panel p-7 transition-colors duration-150 hover:border-brand/40"
+              >
+                <span className="mb-5 inline-flex h-10 w-10 items-center justify-center rounded-lg border border-line-strong bg-surface-raised">
+                  <Icon className="h-4.5 w-4.5 text-brand" aria-hidden="true" />
+                </span>
+                <h3 className="text-title font-bold text-content-primary">{title}</h3>
+                <p className="mt-2 text-body leading-relaxed text-content-secondary">{body}</p>
+              </article>
+            ))}
           </div>
+
+          <p className="mt-8 text-center text-body text-content-secondary">
+            Read the full{' '}
+            <Link
+              to="/legal/risk"
+              className="font-semibold text-brand underline underline-offset-2 hover:text-brand-hover"
+            >
+              risk disclosure
+            </Link>{' '}
+            before connecting an exchange.
+          </p>
         </div>
       </div>
     </section>

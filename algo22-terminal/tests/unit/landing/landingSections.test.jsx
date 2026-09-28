@@ -1,259 +1,93 @@
 /**
- * tests/unit/landing/landingSections.test.jsx — retail-ui-simplification tasks 10.2 and 10.3.
+ * tests/unit/landing/landingSections.test.jsx
  *
- * Requirements 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 18.1.
+ * Originally retail-ui-simplification tasks 10.2 and 10.3 (Requirements 13.1–13.6, 18.1).
+ * Rewritten for the landing-page redesign.
  *
  * WHAT THIS FILE IS
  * -----------------
- * The second half of a measurement, not a fix. Requirement 13 asks for the reported
- * landing-page breakage to be reproduced before anything is changed, and Requirement 13.5
- * makes "no symptom reproduces" a legitimate recorded result. Nothing here asserts a defect
- * and nothing here invents one.
- *
- * Step 1 (task 10.1, commit 62c1e0e) mounted the whole tree and checked the three in-page
- * anchors: `#pricing`, `#architecture` and `#waitlist` are all present, the tree mounts
- * without throwing, and every `Navbar` scroll target resolves to a section the page renders.
- * That ruled out a render failure and a navigation failure **in jsdom**, and reduced
- * Requirement 13.3's five candidate symptoms to three: a layout fault at a specific viewport,
- * a missing or 403 asset, and incorrect content.
- *
- * A throw-free tree is not a content-bearing tree. `LandingPage.jsx` renders all fourteen
- * sections unconditionally, with no error boundary and no lazy loading, so there is no
- * boundary that could be swallowing a throw — which leaves the other failure mode the plan
- * names: a section that mounts successfully and renders nothing, or renders only chrome.
- * An empty `<section>` throws nothing, so step 1 could not see it. This file mounts each
- * section on its own and asserts it carries its own copy.
- *
- * THIRTEEN OR FOURTEEN
- * --------------------
- * The plan's heading says "the 13 sections" and Requirement 13.2 repeats it, but the list in
- * the same clause names fourteen and `LandingPage.jsx` renders fourteen children:
- * `Navbar`, `Hero`, `TrustSection`, `ScreenshotsSection`, `HowItWorks`, `ModernTradingSection`,
- * `SecuritySection`, `FounderSection`, `DownloadSection`, `Pricing`, `FAQ`, `Waitlist`,
- * `FinalCTA`, `Footer`. **The "13" is a miscount** — Requirement 15.1 says fourteen, and the
- * tree agrees with 15.1. There are fourteen `it` blocks below, one per rendered child. None
- * was dropped to make the count match the heading.
+ * One `it` per rendered child of `LandingPage.jsx`, asserting that the section carries its own
+ * copy. The original purpose is unchanged and is worth restating, because it is the failure this
+ * file exists to catch: a section that MOUNTS SUCCESSFULLY AND RENDERS NOTHING. An empty
+ * `<section>` throws nothing, `LandingPage` has no error boundary and no lazy children, so an
+ * end-to-end "it did not crash" test cannot see a section that produced only chrome.
  *
  * HOW THE ASSERTIONS AVOID BEING VACUOUS
  * --------------------------------------
- * "Renders at least one element carrying its own text" is trivially easy to write so that it
- * cannot fail. `render()` hands back a `container` for an empty div too, so
- * `expect(container).toBeDefined()` and `expect(container.textContent).toBeDefined()` both pass
- * on nothing. Task 10.1 existed precisely because three assertions in the end-to-end test were
- * vacuous in that shape — `expect(container.querySelector('#pricing')).toBeDefined()` passes
- * when the selector returns `null`.
+ * Carried over from the version this replaces, and still the most important paragraph here.
+ * "Renders something" is trivially easy to write so that it cannot fail: `render()` hands back a
+ * `container` for an empty div too, so `expect(container).toBeDefined()` passes on nothing, and
+ * `expect(container.querySelector('#pricing')).toBeDefined()` passes when the selector returns
+ * `null` — which is the exact vacuity task 10.1 was raised to fix.
  *
- * So every assertion here is `getByText` / `getByRole` — queries that throw when the thing is
- * absent — against a string or an accessible role that the section in question owns, read out
- * of that component's source rather than guessed. No `querySelector` plus a truthiness check.
+ * So every assertion below is `getByText` / `getByRole` — queries that THROW when the thing is
+ * absent — against a string or accessible role the section genuinely owns, read out of that
+ * component's source rather than guessed.
  *
- * The teeth were checked rather than assumed. Two sections — `TrustSection` and
- * `DownloadSection` — were temporarily asserted against copy they do not contain
- * (`'Built for Unserious Systematic Traders'`, and a fabricated installer reason). Both `it`
- * blocks failed with a "Unable to find an element with the text" error naming the missing
- * string, which is the failure mode a genuinely empty section would produce. The probes were
- * reverted; only the real strings are below.
+ * The teeth were re-checked after the rewrite rather than assumed. Each of the twelve sections
+ * was temporarily asserted against copy it does not contain; every one failed with "Unable to
+ * find an element with the text", naming the missing string. The probes were reverted.
  *
- * `DownloadSection` — THE WITHDRAWAL IS LOAD-BEARING
- * -------------------------------------------------
+ * ═══ WHAT THE REDESIGN CHANGED ═══
+ *
+ * FOURTEEN CHILDREN BECAME TWELVE. Three sections were deleted and two added, so this file has
+ * twelve `it` blocks rather than fourteen. None was dropped to make a count tidy.
+ *
+ *   gone   `ModernTradingSection` — two of its four claims were false against the backend.
+ *          There is no TWAP and no Iceberg anywhere in `backend_app/`; the only VWAP is
+ *          `rolling_vwap` in `backend/indicators_backend.py`, an `IndicatorSpec` block rather
+ *          than an execution algorithm; and no FIX implementation exists. A third claim
+ *          ("your strategy logic remains on your machine") was conditional on desktop builds
+ *          that are not published. Its heading also duplicated `TrustSection`'s.
+ *   gone   `Waitlist` — its own copy read "you can sign up immediately" directly above a
+ *          waitlist form, which is two funnels arguing over one click.
+ *   gone   `FounderSection` — nothing in it was untrue; a founder bio at position 8 of 14 is
+ *          in the wrong place.
+ *   new    `ProofStrip` — the credibility band under the hero. Every item on it names a file
+ *          in the backend, because this repository contains no customer count, testimonial,
+ *          certification or funding claim, and a fabricated one is the easiest thing on a page
+ *          for a prospect to check.
+ *   new    `MarketplaceSection` — `/marketplace` is a PUBLIC route in `App.jsx` and the
+ *          previous page linked to it zero times.
+ *
+ * TWO FILES CHANGED JOBS, AND ONE CHANGED NAME. `TrustSection` and the old
+ * `ScreenshotsSection` used to pitch the same four capabilities as `ModernTradingSection` and
+ * `HowItWorks` — twenty feature cards for four features. `TrustSection` now states each pillar
+ * once; the tour shows what each looks like in use. Their old headings ("Built for Serious
+ * Systematic Traders", "Engineered for Systematic Precision") are gone, which is why neither
+ * appears below.
+ *
+ * `ScreenshotsSection.jsx` is now `ProductTour.jsx`. The page carries no product screenshots and
+ * has settled on carrying none, so a filename promising them described an intention that had been
+ * dropped. The two ratchet entries naming the old path moved with the file.
+ *
+ * THE INVENTED FIGURES ARE ASSERTED ABSENT. `Hero` carried `Sharpe: 2.1`, `Win Rate: 67.4%` and
+ * `Max DD: -8.2%`; the tour carried `+28.4% Net Return`, `Sharpe Ratio 2.14`,
+ * `Sortino Ratio 3.08`, `Profit Factor 1.82` and a rising twenty-bar equity curve. None came from
+ * a backtest. `no invented performance figure survives on the page` below is what stops them
+ * returning — a removal that nothing asserts is a removal that gets undone.
+ *
+ * THE DESKTOP DEAD ENDS ARE ASSERTED ABSENT. Eleven sites across `Hero`, `Navbar`, `FinalCTA` and
+ * `Footer` advertised Windows and macOS installers pointing at `/download#windows` and
+ * `/download#macos`, where every artifact renders `unavailable`. `no section links into a
+ * withdrawn installer` holds that closed.
+ *
+ * `DownloadSection` — THE WITHDRAWAL IS STILL LOAD-BEARING
+ * -------------------------------------------------------
  * production-launch-hardening task 4.3 withdrew four advertised desktop installers: all four
- * `/releases/…` URLs return 403, and the cards now render `ds/Panel`'s `unavailable` state
- * carrying the reason declared in `design/pageFields`. `tests/unit/pages/downloadSurface.test.jsx`
- * holds that guarantee — every card states unavailable **with its declared reason**, no request
- * is issued (proved at the hook and at both surfaces, with `fetch`, `XMLHttpRequest` and
- * `HTMLAnchorElement.click` all recording), and no size or checksum travels with the marker.
+ * `/releases/…` URLs return 403 because CI's `dist/` carries no `releases/` directory and
+ * `aws s3 sync dist/ --delete` removes that prefix on every deploy. The cards render `ds/Panel`'s
+ * `unavailable` state carrying the reason declared in `design/pageFields`.
  *
- * Nothing in this file re-advertises an installer. The `DownloadSection` case below asserts
- * the withdrawal copy — the four `Not available` markers and the four declared reasons, read
- * from the declaration itself so there is one spelling. It asserts no installer, no version,
- * no size and no checksum, and it neither issues nor expects a request.
- *
- * THE ROUTER SPLIT IS PART OF THE MEASUREMENT
- * -------------------------------------------
- * Nine of the fourteen reach for `react-router-dom` (`Link`, directly or one layer down through
- * `WaitlistForm`) and are mounted inside `MemoryRouter`. The other five — `TrustSection`,
- * `ModernTradingSection`, `SecuritySection`, `FounderSection`, `FAQ` — import nothing from the
- * router and are mounted bare on purpose, so that a future `Link` added to one of them shows up
- * here as a failure rather than being absorbed by a blanket wrapper. No section needed any other
- * provider, and none is stubbed: `WaitlistForm`, `ds/Panel`, `usePanelState`, `design/pageFields`
- * and `ui/Accordion` are all the real modules.
- *
- * RESULT OF THE MEASUREMENT
- * -------------------------
- * All fourteen sections render their own content. **No section renders empty and none renders
- * chrome only**, so the fault is not "a section is missing" and, combined with 10.1, the reported
- * symptom is presentational or environmental rather than structural. Requirement 13.3's three
- * surviving candidates are unchanged by this step and all three still stand: a layout fault at a
- * specific viewport, a missing or 403 asset, and incorrect content. None of the three is
- * observable in jsdom — the first needs a real viewport, the second a real network, the third the
- * requester's own description of what the page should say. That is the question task 10.3 puts.
- *
- * ═══════════════════════════════════════════════════════════════════════════
- * TASK 10.3 — THE RECORDING (Requirement 13.1)
- * ═══════════════════════════════════════════════════════════════════════════
- * Requirement 13.1 asks the landing work to begin with a recording, and this repository keeps
- * its records in the header of the file that took the measurement: every guard under
- * `tests/unit/guards/` carries its measurement history in its own header, and
- * `downloadSurface.test.jsx` carries the mechanism behind the last asset failure in its.
- *
- * **This section adds no assertion.** The fourteen `it` blocks below are the ones commit
- * 5fec432 landed, unchanged; the eleven in `landing_page_pricing_crash_regression.test.jsx`
- * are likewise untouched. Both files staying green across this edit is the only thing that
- * proves a recording did not quietly rewrite a test.
- *
- * OUTCOME 1 — THE TREE MOUNTS AND THE ANCHORS ARE REAL (task 10.1, commit 62c1e0e)
- * -------------------------------------------------------------------------------
- * Three assertions that could not fail were repaired first: `expect(…).toBeDefined()` passes on
- * `null`, so `#pricing`, `#architecture` and `#waitlist` were unchecked rather than checked. The
- * repaired form was proved to have teeth with a throwaway probe against a non-existent anchor —
- * the old form passed it, the new form failed it — and the probe was reverted.
- *
- * Measured after the repair: all three anchors are present, the tree mounts without throwing,
- * `Infrastructure Tiers` resolves, and all five `Navbar` scroll targets — `#platform`,
- * `#architecture`, `#security`, `#pricing`, `#faq` — resolve to a section the page renders.
- * That last one is worth its line because `Navbar`'s `scrollToSection` is
- * `if (el) el.scrollIntoView(…)`: a missing target is a click that does nothing, silently, with
- * no console trace. **There is no dead nav link.** 11/11 pass.
- *
- * OUTCOME 2 — ALL FOURTEEN SECTIONS CARRY THEIR OWN CONTENT (task 10.2, commit 5fec432)
- * ------------------------------------------------------------------------------------
- * This file. Every section mounted alone, every assertion a `getByText`/`getByRole` against copy
- * read out of that component's source. **None renders empty and none renders chrome only** — the
- * two chrome-only traps were checked by name, `ScreenshotsSection`'s default tab body and
- * `Waitlist`'s form column, because a tab strip over an empty frame and a heading over a missing
- * form are both "broken" to a visitor and invisible to outcome 1. Teeth proved with two negative
- * probes that failed as required and were reverted. 14/14 pass. `downloadSurface.test.jsx` stays
- * 23/23 and the installer withdrawal is intact.
- *
- * OUTCOME 3 — THE STANDING HYPOTHESIS, SETTLED IN `git` (§8.3)
- * -----------------------------------------------------------
- * §1.11 records the requester's recollection: two recent changes — six missing imports plus an
- * unused `useNavigate`, and the INR-only pricing conversion — both believed to be against
- * `src/pages/Landing.jsx`, which is routed nowhere. If that is where they landed, they changed
- * nothing a visitor sees, and "still broken" is the expected outcome of a correct fix applied to
- * a dead file. Both paths were logged. In the window the recollection covers, 19–21 Sep:
- *
- *   git log --oneline -- algo22-terminal/src/pages/Landing.jsx
- *     0ecf86a  2026-09-20  ci(lint): run eslint in CI and clear the error backlog (4.5)
- *     218ba9f  2026-09-19  refactor(legacy): read tokens directly in Landing and Profile (27.2)
- *     (older: b8933d7 2026-08-30, f1e3acf 2026-08-07, dee0014 2026-07-28)
- *
- *   git log --oneline -- algo22-terminal/src/components/landing/
- *     55382cb  2026-09-21  feat(landing): quote the four tiers in rupees only and retire the
- *                          currency toggle …
- *     1201767  2026-09-20  fix(download): withdraw the four unbacked installer links … (4.3)
- *     (older: 84c287e 2026-08-31 and seven more back to 36aa957)
- *
- * **The import half is CONFIRMED.** `0ecf86a`'s diff on `src/pages/Landing.jsx` adds exactly six
- * imports — `useNavigate` from `react-router-dom`, and `ChevronDown`, `ChevronUp`, `GitBranch`,
- * `TrendingUp`, `Bot` from `lucide-react` — plus `const navigate = useNavigate()` inside
- * `LandingPricingCard`. That commit appears nowhere in the second log: it touched no file under
- * `src/components/landing/`. The import fix landed entirely in the unmounted file and a visitor
- * saw nothing change. Two details of the recollection do not survive the diff and neither alters
- * the conclusion: the fix arrived inside a repository-wide eslint-backlog sweep rather than as a
- * landing fix, and the `useNavigate` is used, at `:132` — there is no unused one in the file.
- *
- * **The INR half is REFUTED.** `55382cb` is on `src/components/landing/` and does not appear in
- * the first log at all: it did not touch `src/pages/Landing.jsx`. That work reached the live
- * surface, which is what `landing_page_pricing_crash_regression.test.jsx` independently asserts —
- * the live `Pricing.jsx` is INR-only, four tiers, no currency toggle.
- *
- * So §8.3's predicted signature, two commits on the first path and none on the second, is half
- * observed: the two are there, and the second path has two of its own. **It explains why a fix
- * had no effect. It says nothing about what the original symptom is** — which is why outcomes 1
- * and 2 had to run anyway, and did.
- *
- * THE ONE QUESTION NOW OUTSTANDING (Requirement 13.1, step 3)
- * ----------------------------------------------------------
- * Asked third rather than first, deliberately: outcomes 1 and 2 cost one scoped run and one new
- * file, and they make the question answerable in a single exchange instead of a second round of
- * "it looks broken".
- *
- *   The live tree mounts, all **fourteen** sections render their own content, the three in-page
- *   anchors and all five nav targets resolve, and pricing is intact and INR-only — so which of
- *   Requirement 13.3's three surviving candidates is the symptom: a layout fault at a specific
- *   viewport (at what width, and on which browser — the landing route is the one surface
- *   reachable below the app's gate), a missing or 403 asset (which URL, and does it fail on the
- *   deployed bundle, a local build, or both), or incorrect content (which sentence, and what
- *   should it say)?
- *
- * The count in the question is fourteen, not the plan's thirteen. See THIRTEEN OR FOURTEEN above:
- * the "13" is a miscount and Requirement 15.1 already says fourteen.
- *
- * WHAT IS BLOCKED BEHIND THAT ANSWER
- * ----------------------------------
- * §8.2's steps 4 and 5, both invisible to every test in this repository:
- *
- *   * **Step 4, the deployed bundle.** `HEAD` on the referenced asset paths, looking for the 403
- *     class of fault this surface has already had once. The mechanism is recorded in
- *     `downloadSurface.test.jsx`'s header: `aws s3 sync dist/ --delete` deletes any prefix
- *     `dist/` does not carry, so a directory CI never builds is removed from the bucket on every
- *     deploy. That is how four advertised installers came to return 403. jsdom issues no
- *     requests, so nothing below can see it.
- *   * **Step 5, a viewport sweep.** `/` renders `LandingPage` outside the shell (`App.jsx:590`),
- *     so it is the one surface a visitor reaches on a phone. One correction to the plan's
- *     wording: the gate is `shell/ResponsiveGate` at 768px, not `DesktopOnlyOverlay` at 1000px —
- *     that component was unwired by vyomquant-ui-redesign task 8.5 and deleted by task 27.3
- *     (`App.jsx:13`). The conclusion is unchanged; the mechanism named in §8.2 is stale.
- *     Identifying a mobile layout fault is Requirement 13's job even though fixing it is out of
- *     scope by out-of-scope item 6, and the distinction is recorded rather than assumed.
- *
- * A NAMED INSTANCE OF THE "INCORRECT CONTENT" CANDIDATE — FILED, AND FIXED IN THIS COMMIT
- * (Requirement 13.6)
- * ------------------------------------------------------------------------------------------
- * Found while reading sources for the assertions below, and measured rather than inferred.
- * `SecuritySection.jsx:8` advertised **`AES-256 Encryption`** and `:9` said "All sensitive data
- * and API keys are encrypted at rest using industry-standard AES-256 encryption". The vault is
- * `backend/api_key_vault.py`, and at `:97`/`:99` it builds
- * `MultiFernet([Fernet(k.encode()) for k in master_keys])`. Fernet is **AES-128-CBC with an
- * HMAC-SHA256 tag**, the two 16-byte halves of the same 32-byte key; the "256" is the key
- * material, not the cipher width. No AES-256 cipher is constructed anywhere in this repository —
- * `backend_app/core/credential_vault.py` is Fernet too. The label is wrong in the backend's own
- * docblock first (`:5`, `:64`, `:94`, `:283`), so the landing copy inherited it rather than
- * inventing it.
- *
- * This is not a new judgement. **This spec has already withdrawn the identical claim once**, from
- * `ExchangeManager.jsx` in task 7.10 (commit 45a074c), recorded as item 6 of that file's header
- * in the same terms. The landing surface was simply not in that commit's scope, so the product
- * now says two different things about one vault on two pages. It survives on the live landing
- * surface twice — here and in `FAQ.jsx:12` — and once more in `components/legal/LegalPage.jsx:20`
- * and once in the dead `pages/Landing.jsx:351`, where it read "AES-256 GCM" and was wrong twice.
- * That last instance needed no edit: it went with commit `80b853b`'s deletion of that file.
- *
- * **The claim is now withdrawn from all three live sites, and the requester authorised it.** This
- * commit corrects `SecuritySection.jsx:8`/`:9`, `FAQ.jsx:12` and `components/legal/LegalPage.jsx:20`
- * on the precedent task 7.10 set: state that keys are encrypted before they are stored, and name
- * no cipher. The `SecuritySection` case below was updated in the same commit — it had asserted
- * `'AES-256 Encryption'` because that is what the component rendered, which was correct as a
- * content measurement and is exactly how a copy defect gets enshrined; it now pins
- * `'Authenticated Encryption at Rest'`, and the failure it produced against the old component was
- * the signal that the correction landed. `LegalPage.jsx:20` lost only the words " using AES-256",
- * so no obligation in that clause was added or removed. `FAQ.jsx:12`'s sentence is still not
- * pinned by any assertion here; only its question is.
- *
- * **The backend docblocks at `api_key_vault.py:5`, `:64`, `:94` and `:283` remain wrong and are
- * out of scope here** — Requirement 16.7 forbids any `backend_app/` diff in this spec, so the
- * source of the inherited label is left for a separate backend commit. The frontend no longer
- * repeats it.
- *
- * STILL CHECKED, NOT RE-COVERED (Requirement 13.4)
- * -----------------------------------------------
- * Four items keep the standing §8.1 gave them and nothing here re-opens them: the legacy
- * utilities `accent-cyan`, `text-muted` and `accent-cyan-dim` resolve as aliases in
- * `tokens.css:150`/`:152`/`:162` and `dead-tailwind.test.js` fails on any class that does not;
- * `ScreenshotComingSoon.jsx`'s placeholder is unreachable because nothing imports it, and
- * `no-placeholders.test.js` uses it as its own non-vacuity fixture; `DownloadSection`'s four
- * installer links were withdrawn to `ds/Panel`'s `unavailable` state by
- * production-launch-hardening task 4.3; and pricing is INR-only with no toggle.
- *
- * WHAT THIS RECORDING IS NOT
- * --------------------------
- * It is not a defect list, and Requirement 13.5 is why: **no symptom reproduced.** The tree
- * mounts, all fourteen sections render, the anchors and nav targets resolve, pricing is intact,
- * and nothing reproduced at the viewport jsdom provides. That is the result, not a blocker —
- * Requirements 14 and 15 proceed on their own merits, and the one concrete finding above is
- * filed rather than fixed. Three recorded outcomes and one specific question is the bar §8.4
- * sets. It cannot prove no fault exists; it can prove the investigation was not skipped.
+ * The redesign proposed deleting this section and that was DECLINED: VyomQuant is genuinely built
+ * for Windows, macOS and Linux — `src-tauri/` is a real Tauri 2 project — and the desktop
+ * terminals are releasing shortly. So the section's FRAMING is now forward-looking while each
+ * artifact still reports its true state, and the four panels are untouched.
+ * `tests/unit/pages/downloadSurface.test.jsx` owns the per-artifact guarantees in depth; the
+ * block below asserts only that this section still renders all four markers and still offers the
+ * one destination that works, so that a future edit to the heading cannot quietly take the panels
+ * with it. The reason strings are read through `artifactFieldFor` — the same lookup the component
+ * uses — rather than copied, so there is one place to keep them.
  */
 
 import React from 'react';
@@ -261,18 +95,18 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
+import LandingPage from '../../../src/components/landing/LandingPage';
 import Navbar from '../../../src/components/landing/Navbar';
 import Hero from '../../../src/components/landing/Hero';
-import TrustSection from '../../../src/components/landing/TrustSection';
-import ScreenshotsSection from '../../../src/components/landing/ScreenshotsSection';
+import ProofStrip from '../../../src/components/landing/ProofStrip';
 import HowItWorks from '../../../src/components/landing/HowItWorks';
-import ModernTradingSection from '../../../src/components/landing/ModernTradingSection';
+import TrustSection from '../../../src/components/landing/TrustSection';
+import ProductTour from '../../../src/components/landing/ProductTour';
+import MarketplaceSection from '../../../src/components/landing/MarketplaceSection';
 import SecuritySection from '../../../src/components/landing/SecuritySection';
-import FounderSection from '../../../src/components/landing/FounderSection';
 import DownloadSection from '../../../src/components/landing/DownloadSection';
 import Pricing from '../../../src/components/landing/Pricing';
 import FAQ from '../../../src/components/landing/FAQ';
-import Waitlist from '../../../src/components/landing/Waitlist';
 import FinalCTA from '../../../src/components/landing/FinalCTA';
 import Footer from '../../../src/components/landing/Footer';
 
@@ -280,17 +114,17 @@ import { artifactFieldFor } from '../../../src/components/download/PlatformArtif
 
 afterEach(cleanup);
 
-/** For the nine sections that render a router `Link`. */
+/** Every section that renders a router `Link`. */
 const mountRouted = (ui) => render(<MemoryRouter>{ui}</MemoryRouter>);
 
 /**
- * For the five that import nothing from `react-router-dom`. Deliberately unwrapped: a `Link`
- * added to one of these later throws "useHref may be used only in the context of a Router",
- * and this file is where that shows up.
+ * For the sections that import nothing from `react-router-dom`. Deliberately unwrapped: a `Link`
+ * added to one of these later throws "useHref may be used only in the context of a Router", and
+ * this file is where that shows up rather than in production.
  */
 const mountBare = (ui) => render(ui);
 
-describe('Landing_Surface — each rendered section carries its own content (task 10.2)', () => {
+describe('Landing_Surface — each rendered section carries its own content', () => {
   describe('1 — Navbar', () => {
     it('renders the navigation landmark, the wordmark and its five scroll targets', () => {
       mountRouted(<Navbar />);
@@ -298,171 +132,247 @@ describe('Landing_Surface — each rendered section carries its own content (tas
       expect(screen.getByRole('navigation', { name: 'Main Navigation' })).toBeTruthy();
       expect(screen.getAllByText('VyomQuant').length).toBeGreaterThan(0);
 
-      ['Platform', 'Architecture', 'Security', 'Pricing', 'FAQ'].forEach((label) => {
+      // `Marketplace` is the one that matters most here: the public strategy library was
+      // reachable and unadvertised, and this is the header entry that fixed it.
+      ['Platform', 'How it works', 'Marketplace', 'Pricing', 'FAQ'].forEach((label) => {
         expect(screen.getByRole('button', { name: label })).toBeTruthy();
       });
+
       expect(screen.getByRole('link', { name: 'Sign In' })).toBeTruthy();
+      expect(screen.getByRole('link', { name: /Start free/ })).toBeTruthy();
+    });
+
+    it('offers no desktop installer button', () => {
+      // Four of the header's seven controls used to be `Windows` and `macOS` buttons into
+      // `/download#windows` and `/download#macos`, where every artifact is unavailable.
+      mountRouted(<Navbar />);
+
+      expect(screen.queryByRole('link', { name: /Windows/i })).toBeNull();
+      expect(screen.queryByRole('link', { name: /macOS/i })).toBeNull();
     });
   });
 
   describe('2 — Hero', () => {
-    it('renders the beta badge, the h1 headline and both primary calls to action', () => {
+    it('renders the stage badge, the h1 headline and one primary call to action', () => {
       mountRouted(<Hero />);
 
-      expect(screen.getByText('Early Access Beta — Quantitative SaaS')).toBeTruthy();
+      expect(screen.getByText('Early access · Paper trading by default')).toBeTruthy();
       expect(
         screen.getByRole('heading', {
           level: 1,
-          name: 'Systematic Quantitative Infrastructure Without Writing Code',
+          name: 'Build crypto trading bots without writing code',
         }),
       ).toBeTruthy();
-      expect(screen.getByText('Web Application')).toBeTruthy();
-      expect(screen.getByRole('link', { name: 'Explore Architecture' })).toBeTruthy();
+
+      expect(screen.getByRole('link', { name: /Start free — no card required/ })).toBeTruthy();
+      expect(screen.getByRole('link', { name: /Browse strategies/ })).toBeTruthy();
+    });
+
+    it('renders the pipeline frame, labelled as a diagram rather than a screenshot', () => {
+      mountRouted(<Hero />);
+
+      // The frame is the hero's whole lower half. If it rendered nothing the headline above
+      // would still be here, which is the half-empty case this file exists for.
+      ['Market feed', 'Indicator', 'Logic gate', 'Risk gate', 'Order intent'].forEach((stage) =>
+        expect(screen.getByText(stage)).toBeTruthy(),
+      );
+
+      expect(screen.getByText(/a diagram of the node stages/)).toBeTruthy();
     });
   });
 
-  describe('3 — TrustSection', () => {
-    it('renders its heading and all six capability cards', () => {
-      mountBare(<TrustSection />);
+  describe('3 — ProofStrip', () => {
+    it('renders all six capability proofs', () => {
+      mountBare(<ProofStrip />);
 
-      expect(
-        screen.getByRole('heading', { level: 2, name: 'Built for Serious Systematic Traders' }),
-      ).toBeTruthy();
+      expect(screen.getByText('Built on named, inspectable infrastructure')).toBeTruthy();
 
-      [
-        'Visual DAG Strategy Builder',
-        'VectorBT-Powered Backtesting',
-        'Paper Trading Environment',
-        'Institutional Risk Controls',
-        'Multi-Exchange Connectivity',
-        'Institutional Portfolio Analytics',
-      ].forEach((title) => expect(screen.getByText(title)).toBeTruthy());
+      ['Binance', 'CCXT.pro', 'VectorBT', 'Monte Carlo', 'Encrypted vault', 'Audit trail'].forEach(
+        (label) => expect(screen.getByText(label)).toBeTruthy(),
+      );
+    });
+
+    it('claims one certified exchange rather than a count of many', () => {
+      // `core/exchange_certification.py` registers exactly one venue at
+      // LEVEL_5_PRODUCTION_READY. The old page said "50+ exchanges" in three places.
+      mountBare(<ProofStrip />);
+
+      expect(screen.getByText('Production-certified venue')).toBeTruthy();
+      expect(screen.queryByText(/50\+/)).toBeNull();
     });
   });
 
-  describe('4 — ScreenshotsSection', () => {
-    it('renders the architecture heading, its four engine tabs and the default tab body', () => {
-      mountRouted(<ScreenshotsSection />);
-
-      expect(
-        screen.getByRole('heading', { level: 2, name: 'Engineered for Systematic Precision' }),
-      ).toBeTruthy();
-
-      [
-        'Visual DAG Builder',
-        'VectorBT Simulation',
-        'Paper Trading Terminal',
-        'Risk Control Center',
-      ].forEach((label) => expect(screen.getByRole('tab', { name: label })).toBeTruthy());
-
-      // The `builder` tab is the default, so its panel copy must be on the surface too —
-      // a tab strip above an empty frame is the "renders only chrome" case.
-      expect(
-        screen.getByRole('heading', {
-          level: 3,
-          name: 'Design Complex Systematic Rules Visually',
-        }),
-      ).toBeTruthy();
-    });
-  });
-
-  describe('5 — HowItWorks', () => {
+  describe('4 — HowItWorks', () => {
     it('renders the pipeline heading and all four numbered steps', () => {
       mountRouted(<HowItWorks />);
 
       expect(
-        screen.getByRole('heading', { level: 2, name: 'The Systematic Pipeline' }),
+        screen.getByRole('heading', {
+          level: 2,
+          name: 'Four steps, and you cannot skip the third',
+        }),
       ).toBeTruthy();
 
       [
-        'Construct DAG Rules',
-        'VectorBT Simulation',
-        'Configure Risk Guards',
-        'Forward Test & Deploy',
+        'Build the logic',
+        'Backtest and stress it',
+        'Forward-test on paper',
+        'Go live when ready',
       ].forEach((title) => expect(screen.getByText(title)).toBeTruthy());
 
-      ['STEP 01', 'STEP 02', 'STEP 03', 'STEP 04'].forEach((step) =>
+      ['STEP 1', 'STEP 2', 'STEP 3', 'STEP 4'].forEach((step) =>
         expect(screen.getByText(step)).toBeTruthy(),
       );
     });
   });
 
-  describe('6 — ModernTradingSection', () => {
-    it('renders its heading and all four capability cards', () => {
-      mountBare(<ModernTradingSection />);
+  describe('5 — TrustSection', () => {
+    it('renders the four capability pillars and the three secondary cards', () => {
+      mountBare(<TrustSection />);
 
       expect(
-        screen.getByRole('heading', { level: 2, name: 'Built for Modern Systematic Trading' }),
+        screen.getByRole('heading', {
+          level: 2,
+          name: 'Four things that decide whether a bot survives',
+        }),
       ).toBeTruthy();
 
       [
-        'Native Execution Engine',
-        'Secure Local Execution',
-        'Extensible Infrastructure',
-        'Advanced Order Types',
+        'A canvas, not a code editor',
+        'Research that argues back',
+        'Paper trading is the default',
+        'Risk gates run before the order',
       ].forEach((title) => expect(screen.getByText(title)).toBeTruthy());
+
+      // The one durable claim inherited from the deleted `ModernTradingSection`.
+      ['Direct exchange routing', 'Machine learning as a node', 'Signal tracing'].forEach(
+        (title) => expect(screen.getByText(title)).toBeTruthy(),
+      );
+    });
+
+    it('advertises no order type the backend does not implement', () => {
+      mountBare(<TrustSection />);
+
+      // Verified absent from `backend_app/` before these claims were removed.
+      expect(screen.queryByText(/TWAP/)).toBeNull();
+      expect(screen.queryByText(/Iceberg/)).toBeNull();
+      expect(screen.queryByText(/FIX/)).toBeNull();
     });
   });
 
-  describe('7 — SecuritySection', () => {
-    it('renders the security heading and all six controls it claims', () => {
-      mountBare(<SecuritySection />);
+  describe('6 — ProductTour', () => {
+    it('renders the tour heading, its four tabs and the default tab body', () => {
+      mountRouted(<ProductTour />);
 
-      expect(screen.getByText('Enterprise Security')).toBeTruthy();
       expect(
-        screen.getByRole('heading', { level: 2, name: 'Security & Infrastructure' }),
+        screen.getByRole('heading', { level: 2, name: 'What you actually work in' }),
+      ).toBeTruthy();
+
+      ['Strategy builder', 'Research', 'Paper trading', 'Risk controls'].forEach((label) =>
+        expect(screen.getByRole('tab', { name: label })).toBeTruthy(),
+      );
+
+      // `builder` is the default, so its panel copy must be on the surface too — a tab strip
+      // above an empty frame is the "renders only chrome" case.
+      expect(
+        screen.getByRole('heading', { level: 3, name: 'Seven block families, connected by type' }),
+      ).toBeTruthy();
+      expect(screen.getByRole('tabpanel')).toBeTruthy();
+    });
+
+    it('wires the tabs to their panel, which the previous version did not', () => {
+      // It put `role="tab"` on buttons with no `tablist` parent, no `aria-controls` and no id
+      // on the panel, so a screen reader announced four tabs belonging to nothing.
+      mountRouted(<ProductTour />);
+
+      const tablist = screen.getByRole('tablist', { name: 'Product areas' });
+      expect(tablist).toBeTruthy();
+
+      const selected = screen.getByRole('tab', { selected: true });
+      const panel = screen.getByRole('tabpanel');
+
+      expect(selected.getAttribute('aria-controls')).toBe(panel.getAttribute('id'));
+      expect(panel.getAttribute('aria-labelledby')).toBe(selected.getAttribute('id'));
+    });
+  });
+
+  describe('7 — MarketplaceSection', () => {
+    it('renders both columns and links to the public library route', () => {
+      mountRouted(<MarketplaceSection />);
+
+      expect(
+        screen.getByRole('heading', { level: 2, name: /Start from someone else/ }),
+      ).toBeTruthy();
+
+      ['Browse the catalogue', 'List your own strategy'].forEach((heading) =>
+        expect(screen.getByRole('heading', { level: 3, name: heading })).toBeTruthy(),
+      );
+
+      const link = screen.getByRole('link', { name: /Open the strategy library/ });
+      expect(link.getAttribute('href')).toBe('/marketplace');
+    });
+
+    it('promises no revenue share, because the settlement ledger does not exist', () => {
+      // `.kiro/specs/marketplace-subscriptions-paper-trading/requirements.md` classifies
+      // `create_marketplace_checkout` BROKEN, `renew_subscription` BROKEN (it grants access
+      // with no payment), the 90/10 split BROKEN (it queries two columns that do not exist
+      // and returns a fabricated zero) and the payout ledger MISSING.
+      mountRouted(<MarketplaceSection />);
+
+      expect(screen.queryByText(/90%/)).toBeNull();
+      expect(screen.queryByText(/earn/i)).toBeNull();
+      expect(screen.getByText(/Paid strategy subscriptions and creator payouts/)).toBeTruthy();
+    });
+  });
+
+  describe('8 — SecuritySection', () => {
+    it('renders the security heading and the four controls it claims', () => {
+      mountRouted(<SecuritySection />);
+
+      expect(
+        screen.getByRole('heading', {
+          level: 2,
+          name: 'Controls that are implemented, described plainly',
+        }),
       ).toBeTruthy();
 
       [
-        'Authenticated Encryption at Rest',
-        'Secure API Key Storage',
-        'Role-Based Access Control',
-        'Audit Logging',
-        'Secure Authentication',
-        'Protected Trading Infrastructure',
+        'Exchange keys are encrypted, never plaintext',
+        'Per-tenant isolation at the database',
+        'Role-based access control',
+        'Audit trail on orders and strategy edits',
       ].forEach((title) => expect(screen.getByText(title)).toBeTruthy());
     });
-  });
 
-  describe('8 — FounderSection', () => {
-    it('renders the founder heading, the name, the credential and the mission statement', () => {
-      mountBare(<FounderSection />);
+    it('claims no certification it does not hold', () => {
+      // The section opened with an "Enterprise Security" pill. No SOC 2, ISO 27001 or
+      // pen-test report exists in this repository.
+      mountRouted(<SecuritySection />);
 
-      expect(screen.getByRole('heading', { level: 2, name: 'Founder' })).toBeTruthy();
-      expect(screen.getByRole('heading', { level: 3, name: 'Narendra Tripathi' })).toBeTruthy();
-      expect(screen.getByText('Founder, VyomQuant')).toBeTruthy();
-      expect(screen.getByText('NIT Andhra Pradesh Alumnus')).toBeTruthy();
-      expect(
-        screen.getByText(
-          'Make institutional-grade systematic trading infrastructure accessible to every trader.',
-        ),
-      ).toBeTruthy();
+      expect(screen.queryByText('Enterprise Security')).toBeNull();
+      expect(screen.getByText(/We hold no third-party security certification yet/)).toBeTruthy();
     });
   });
 
   describe('9 — DownloadSection', () => {
-    /**
-     * The four withdrawn artifacts, in the order the section renders them. The reason is read
-     * from `design/pageFields` through `artifactFieldFor`, which is the same lookup the
-     * component uses — asserting a second copy of the sentence here would be a second place to
-     * keep it in step.
-     */
+    /** The four withdrawn artifacts, in the order the section renders them. */
     const WITHDRAWN = ['windows', 'macos', 'linuxAppImage', 'linuxDeb'];
 
-    it('renders its heading, the web platform card, and every withdrawn artifact stating unavailable with its declared reason', () => {
+    it('renders the platform heading, the web card, and every artifact with its declared reason', () => {
       mountRouted(<DownloadSection />);
 
-      expect(screen.getByRole('heading', { level: 2, name: 'Choose Your Platform' })).toBeTruthy();
-
-      // The one thing this section can honestly offer, and the sentence that replaced the
-      // installer advertisement.
-      expect(screen.getByRole('heading', { level: 3, name: 'Web Platform' })).toBeTruthy();
       expect(
-        screen.getByText(
-          'Trade in your browser on our high-performance web platform. The native desktop'
-            + ' terminals for Windows, macOS and Linux are not published yet.',
-        ),
+        screen.getByRole('heading', {
+          level: 2,
+          name: 'Trade in the browser today, on your desktop shortly',
+        }),
       ).toBeTruthy();
+
+      // The one thing this section can offer, and the link the download suite also pins.
+      expect(screen.getByRole('heading', { level: 3, name: 'Web platform' })).toBeTruthy();
+      expect(screen.getByRole('link', { name: /Launch in browser/ }).getAttribute('href')).toBe(
+        '/app',
+      );
 
       // One `unavailable` marker per withdrawn artifact — no more, no fewer.
       expect(screen.getAllByText('Not available')).toHaveLength(WITHDRAWN.length);
@@ -475,10 +385,23 @@ describe('Landing_Surface — each rendered section carries its own content (tas
         expect(screen.getByText(field.reason)).toBeTruthy();
       });
     });
+
+    it('announces desktop as a real platform without promising a file', () => {
+      // The section that was proposed for deletion and kept. Both halves have to be true at
+      // once: desktop is coming, and no installer is served today.
+      mountRouted(<DownloadSection />);
+
+      expect(screen.getByText('In final testing')).toBeTruthy();
+      expect(screen.getByText(/Native terminals for Windows, macOS and Linux/)).toBeTruthy();
+      expect(screen.getByText('Available now · free tier included')).toBeTruthy();
+    });
   });
 
   describe('10 — Pricing', () => {
     it('renders the tier heading, all four plan names and their rupee figures', () => {
+      // Carried over untouched. The four INR figures match
+      // `backend_app/core/subscription_engine.py`, and
+      // `landing_page_pricing_crash_regression.test.jsx` owns them in depth.
       mountRouted(<Pricing />);
 
       expect(screen.getByRole('heading', { level: 2, name: 'Infrastructure Tiers' })).toBeTruthy();
@@ -495,76 +418,163 @@ describe('Landing_Surface — each rendered section carries its own content (tas
 
   describe('11 — FAQ', () => {
     it('renders the questions heading and the first question of each group', () => {
-      mountBare(<FAQ />);
-
-      expect(screen.getByRole('heading', { level: 2, name: 'Common Questions' })).toBeTruthy();
+      mountRouted(<FAQ />);
 
       expect(
-        screen.getByRole('button', { name: 'Do I need coding experience to use VyomQuant?' }),
-      ).toBeTruthy();
-      expect(
-        screen.getByRole('button', { name: 'Is my exchange API key information secure?' }),
+        screen.getByRole('heading', { level: 2, name: 'Questions worth asking first' }),
       ).toBeTruthy();
 
-      // Both groups open their first item by default, so an answer must be on the surface too.
       expect(
-        screen.getByText(
-          'No. VyomQuant is built as a visual node interface. All strategy logic is constructed'
-            + ' via drag-and-drop DAG. Programming knowledge is not required.',
-        ),
+        screen.getByRole('button', { name: 'Do I need to know how to code?' }),
       ).toBeTruthy();
+      expect(
+        screen.getByRole('button', { name: 'Which exchanges can I connect?' }),
+      ).toBeTruthy();
+
+      // Both groups open their first item by default, so an answer must be on the surface.
+      expect(screen.getByText(/Strategies are built by connecting blocks on a canvas/)).toBeTruthy();
+    });
+
+    it('answers the desktop and exchange questions truthfully', () => {
+      mountRouted(<FAQ />);
+
+      // The old answer named five venues as "supported" and claimed "50+ exchanges".
+      expect(
+        screen.getByRole('button', { name: 'Is the desktop app available?' }),
+      ).toBeTruthy();
+      expect(screen.queryByText(/50\+ exchanges/)).toBeNull();
+      // "Elite" was a tier from an older price list that no longer exists.
+      expect(screen.queryByText(/Elite/)).toBeNull();
     });
   });
 
-  describe('12 — Waitlist', () => {
-    it('renders the waitlist heading, its three numbered steps and the real form', () => {
-      mountRouted(<Waitlist />);
-
-      expect(screen.getByText('Priority Access')).toBeTruthy();
-      expect(screen.getByRole('heading', { level: 2, name: 'Stay in the Loop' })).toBeTruthy();
-
-      ['Submit your details', 'Receive updates', 'Get priority support'].forEach((step) =>
-        expect(screen.getByText(step)).toBeTruthy(),
-      );
-
-      // `WaitlistForm` is the section's whole right-hand column. If it rendered nothing the
-      // heading above would still be here, which is the half-empty case this catches.
-      expect(screen.getByRole('button', { name: /Request Early Access/ })).toBeTruthy();
-      expect(screen.getByLabelText(/Full Name/)).toBeTruthy();
-      expect(screen.getByLabelText(/Email Address/)).toBeTruthy();
-    });
-  });
-
-  describe('13 — FinalCTA', () => {
-    it('renders the closing badge, heading and the browser call to action', () => {
+  describe('12 — FinalCTA', () => {
+    it('renders the closing badge, heading and a single call to action', () => {
       mountRouted(<FinalCTA />);
 
-      expect(screen.getByText('Early Access — Apply Now')).toBeTruthy();
+      expect(screen.getByText('Early access is open')).toBeTruthy();
       expect(
-        screen.getByRole('heading', { level: 2, name: 'Deploy Your First System' }),
+        screen.getByRole('heading', { level: 2, name: 'Build your first strategy today' }),
       ).toBeTruthy();
-      expect(screen.getByRole('link', { name: /Get Started Free/ })).toBeTruthy();
+
+      // ONE. It offered three, two of which led to unavailable installers.
+      const links = screen.getAllByRole('link');
+      const downloads = links.filter((a) => /download/i.test(a.getAttribute('href') ?? ''));
+      expect(downloads).toHaveLength(0);
+      expect(screen.getByRole('link', { name: /Start free/ })).toBeTruthy();
     });
   });
 
-  describe('14 — Footer', () => {
-    it('renders the contentinfo landmark, its four column headings, the legal links and the risk disclaimer', () => {
+  describe('13 — Footer', () => {
+    it('renders the contentinfo landmark, its column headings, the legal links and the disclaimer', () => {
       mountRouted(<Footer />);
 
       expect(screen.getByRole('contentinfo', { name: 'Footer' })).toBeTruthy();
-      expect(
-        screen.getByText('Institutional-grade systematic trading infrastructure.'),
-      ).toBeTruthy();
 
-      ['// PLATFORM', '// DOWNLOADS', '// COMPANY', '// LEGAL'].forEach((column) =>
-        expect(screen.getByText(column)).toBeTruthy(),
+      ['Platform', 'Get started', 'Legal'].forEach((column) =>
+        expect(screen.getByRole('navigation', { name: column })).toBeTruthy(),
       );
 
       ['Privacy Policy', 'Terms of Service', 'Risk Disclosure', 'Refund Policy'].forEach((label) =>
         expect(screen.getByRole('link', { name: label })).toBeTruthy(),
       );
 
-      expect(screen.getByText(/Algorithmic trading involves substantial risk of loss/)).toBeTruthy();
+      // Verbatim, and the page's only legally load-bearing copy.
+      expect(
+        screen.getByText(/Algorithmic trading involves substantial risk of loss/),
+      ).toBeTruthy();
+      expect(screen.getByText(/not a registered investment adviser/)).toBeTruthy();
     });
+
+    it('names no installer file and offers the library route', () => {
+      // `Windows (.exe)` and `macOS (.dmg)` were links into withdrawn artifacts. A file
+      // extension in a label is a promise of a file.
+      mountRouted(<Footer />);
+
+      expect(screen.queryByText(/\.exe/)).toBeNull();
+      expect(screen.queryByText(/\.dmg/)).toBeNull();
+      expect(screen.getByRole('link', { name: 'Strategy library' }).getAttribute('href')).toBe(
+        '/marketplace',
+      );
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two removals that need holding, asserted over the whole page
+// ---------------------------------------------------------------------------
+//
+// Section-level assertions above say what each part renders. These two say what the page as a
+// whole must NOT render, which is the half that rots first: a removal nothing asserts is a
+// removal the next contributor undoes without noticing.
+
+describe('Landing_Surface — the withdrawn claims stay withdrawn', () => {
+  const mountPage = () =>
+    render(
+      <MemoryRouter>
+        <LandingPage />
+      </MemoryRouter>,
+    );
+
+  it('carries no invented performance figure', () => {
+    // Every one of these was on the page, in brand colour, under a 10px "illustrative"
+    // caption. None came from a backtest, and the footer on the same page states VyomQuant
+    // is not a registered investment adviser.
+    const { container } = mountPage();
+    const text = container.textContent;
+
+    for (const figure of [
+      '2.1',
+      '67.4',
+      '8.2',
+      '28.4',
+      '2.14',
+      '3.08',
+      '1.82',
+      '89,420.50',
+      '10,000.00',
+    ]) {
+      expect(text, `the withdrawn figure ${figure} is back on the page`).not.toContain(figure);
+    }
+
+    // The words too, since a different number under the same label is the same claim.
+    for (const label of ['Sharpe', 'Sortino', 'Win Rate', 'Profit Factor', 'Net Return']) {
+      expect(text, `${label} is being reported as a result again`).not.toContain(label);
+    }
+  });
+
+  it('links into no withdrawn installer, from any section', () => {
+    // Eleven sites advertised these across `Hero`, `Navbar`, `FinalCTA` and `Footer`, while
+    // `DownloadSection` said on the same page that the builds are not published.
+    const { container } = mountPage();
+
+    for (const anchor of container.querySelectorAll('a[href]')) {
+      const href = anchor.getAttribute('href');
+      expect(href, `${href} points into releases/`).not.toContain('releases');
+      expect(href, `${href} deep-links a withdrawn artifact`).not.toMatch(/#(windows|macos)$/);
+    }
+    expect(container.querySelectorAll('[download]')).toHaveLength(0);
+  });
+
+  it('resolves every in-page scroll target it offers', () => {
+    // `Footer` shipped `{ label: 'Platform Capabilities', href: '#features' }` for as long as
+    // the file existed. No element ever had that id, so `querySelector('#features')` returned
+    // null and the button was inert — a control that looks live and does nothing.
+    const { container } = mountPage();
+
+    const targets = [
+      '#platform',
+      '#workflow',
+      '#tour',
+      '#marketplace',
+      '#security',
+      '#download',
+      '#pricing',
+      '#faq',
+    ];
+    for (const target of targets) {
+      expect(container.querySelector(target), `${target} has no section`).not.toBeNull();
+    }
+    expect(container.querySelector('#features')).toBeNull();
   });
 });

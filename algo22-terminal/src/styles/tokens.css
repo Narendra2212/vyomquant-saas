@@ -176,10 +176,14 @@
      would be inventing consumers. `--font-sans` and `--font-mono` need no alias:
      they are declared canonically above under the same names, so `font-mono`'s
      284 call sites keep resolving. Two names have a call site but no canonical
-     counterpart and are therefore NOT aliased here: `--spacing-18` (`h-18`,
-     components/landing/Navbar.jsx — Tailwind v4's `--spacing` multiplier still
-     generates it) and `--animate-pulse-glow` (components/landing/FinalCTA.jsx —
-     a coloured glow, which Requirement 1.5 retires rather than preserves). */
+     counterpart and were therefore NOT aliased here: `--spacing-18` (`h-18`) and
+     `--animate-pulse-glow` (a coloured glow, which Requirement 1.5 retires rather
+     than preserves). Both call sites were in `components/landing/` and BOTH ARE
+     NOW GONE, removed by the landing-page redesign: the navbar is `h-16` on the
+     declared 4px grid, and `FinalCTA`'s primary button carries `shadow-raised`
+     instead of a glow class that resolved to nothing. Neither name needs an alias
+     and neither has a consumer — recorded here because the reasoning for refusing
+     them is what stops either being added back. */
 }
 
 /* Requirement 18.2, applied once, so no control can omit it. */

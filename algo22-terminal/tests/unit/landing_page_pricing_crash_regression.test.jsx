@@ -213,9 +213,26 @@ describe('Landing Page & Pricing — INR-only tier contract', () => {
       await waitFor(() => {
         // `null` is defined, so `toBeDefined()` here passed whether or not the
         // anchor existed. `not.toBeNull()` is what asks the question.
-        expect(container.querySelector('#pricing')).not.toBeNull();
-        expect(container.querySelector('#architecture')).not.toBeNull();
-        expect(container.querySelector('#waitlist')).not.toBeNull();
+        //
+        // THE ANCHOR SET CHANGED WITH THE LANDING-PAGE REDESIGN. `#architecture` was
+        // renamed `#tour` — the section stopped being a claim about architecture and became
+        // a tour of what a user works in — and `#waitlist` went with `Waitlist.jsx`, which
+        // was removed because it competed with a signup that already works. Asserting the
+        // full current set rather than the two that happened to be named before: every one
+        // of these is a scroll target `Navbar` or `Footer` offers, so a missing id is a
+        // navigation control that silently does nothing.
+        for (const anchor of [
+          '#platform',
+          '#workflow',
+          '#tour',
+          '#marketplace',
+          '#security',
+          '#download',
+          '#pricing',
+          '#faq',
+        ]) {
+          expect(container.querySelector(anchor), `${anchor} is missing`).not.toBeNull();
+        }
         expect(screen.getByText('Infrastructure Tiers')).toBeDefined();
       });
     });

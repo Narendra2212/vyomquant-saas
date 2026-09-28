@@ -193,15 +193,19 @@
  *     `bg-bg-3` — the listbox itself is `bg-bg-elevated`, so that alias would
  *     have been a second invisible highlight; see `KNOWN_DEAD_CLASSES` for the
  *     measured contrast and what it still leaves for the design pass.
- *   * `animate-pulse-glow` in `components/landing/FinalCTA.jsx` is dead *on
+ *   * `animate-pulse-glow` in `components/landing/FinalCTA.jsx` was dead *on
  *     purpose*: `tokens.css` records that `--animate-pulse-glow` was not carried
- *     forward because Requirement 1.5 retires coloured glows. The animation is
- *     correctly gone; only the class name was left behind. It stays quarantined
- *     until a landing-page pass, which is out of scope here (§17.2).
+ *     forward because Requirement 1.5 retires coloured glows. The animation was
+ *     correctly gone; only the class name was left behind, on the primary button.
+ *     This note used to say it stayed quarantined until a landing-page pass, out
+ *     of scope here (§17.2). THAT PASS HAS LANDED. The landing-page redesign
+ *     rewrote that button — one call to action instead of three, `shadow-raised`
+ *     in place of the glow — and the class went with it.
  *
  * The quarantine is pinned by value and asserted non-stale in both directions, so
  * it cannot grow quietly and cannot outlive the fixes — which is why shrinking it
- * to one was part of the same change that fixed the eight, not a follow-up.
+ * to one was part of the same change that fixed the eight, not a follow-up. It is
+ * now EMPTY: nine, then one, then none. See `KNOWN_DEAD_CLASSES`.
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -745,17 +749,23 @@ const THE_TWELVE_UTILITIES = Object.freeze([
  *    indicator. It is the best any of the four aliases does on this ramp — the
  *    other three are darker than the listbox — so raising it means adding a
  *    highlight token rather than choosing a different alias.
- * 3. `components/landing/FinalCTA.jsx` — `animate-pulse-glow`. Deliberately dead
- *    and deliberately still here: `tokens.css` records that `--animate-pulse-glow`
- *    was NOT carried over because it is a coloured glow and Requirement 1.5
- *    retires those. The animation is gone as intended; the class name was left on
- *    the element. Cleared by deleting the token from that `className` — the
- *    landing page is out of scope for redesign (§17.2), so it waits for a
- *    landing-page pass.
+ * 3. `animate-pulse-glow` in `components/landing/FinalCTA.jsx` WAS the third entry,
+ *    and the note here said it was waiting for a landing-page pass. That pass has
+ *    happened. `tokens.css` records that `--animate-pulse-glow` was not carried
+ *    forward because it is a coloured glow and Requirement 1.5 retires those, so
+ *    the animation had already gone and only the class name was left sitting on the
+ *    primary button, resolving to nothing. The landing-page redesign rewrote that
+ *    button — one call to action instead of three, and `shadow-raised` in place of
+ *    the glow — and the class went with it.
+ *
+ *    `KNOWN_DEAD_CLASSES` is therefore EMPTY, which is the state this guard wants
+ *    and the state it is allowed to be in: `names only classes src/ still asks for`
+ *    fails on an entry whose class is no longer in the tree, so leaving the line
+ *    behind as a memento would have broken the suite. The map's remaining job is
+ *    structural — it is the documented escape hatch, and the two assertions that
+ *    read it both handle the empty case.
  */
-const KNOWN_DEAD_CLASSES = Object.freeze({
-  'animate-pulse-glow': 'components/landing/FinalCTA.jsx — retired by Requirement 1.5',
-});
+const KNOWN_DEAD_CLASSES = Object.freeze({});
 
 /** Four classes that must be in any honest harvest of the current build. */
 const KNOWN_LIVE = Object.freeze(['font-mono', 'text-micro', 'flex', 'section-container']);
@@ -1094,16 +1104,27 @@ describe('dead-tailwind: every class src/ asks for exists', () => {
 // ---------------------------------------------------------------------------
 
 describe('dead-tailwind: the known dead classes', () => {
-  it('is exactly the one deliberate case left, and cannot grow unnoticed', () => {
+  it('is empty, and cannot grow unnoticed', () => {
     // Widening this is the easy way to make the guard stop complaining, so it is
     // pinned by value. Adding one means editing this assertion, which means
     // saying so in the diff.
     //
-    // This landed with nine. Eight were source defects and have been fixed — the
-    // seven marketplace opacity-slash typos and `AssetSelector.jsx`'s
-    // `bg-bg-base` — leaving only the class that is dead on purpose. See the
-    // FINDING block above for what each of the eight was.
-    expect(Object.keys(KNOWN_DEAD_CLASSES).sort()).toEqual(['animate-pulse-glow']);
+    // This landed with nine, and is now at ZERO.
+    //
+    // Eight were source defects: the seven marketplace opacity-slash typos and
+    // `AssetSelector.jsx`'s `bg-bg-base`. The ninth, `animate-pulse-glow`, was the
+    // one that was dead on purpose — `tokens.css` declined to carry
+    // `--animate-pulse-glow` forward because Requirement 1.5 retires coloured
+    // glows, so the class sat on `FinalCTA.jsx`'s primary button resolving to
+    // nothing. Its note said it was waiting for a landing-page pass; the
+    // landing-page redesign rewrote that button and took the class with it.
+    //
+    // An EMPTY map is the honest end state, not a gap in the guard. The two
+    // assertions below read it and both pass vacuously over nothing — which is
+    // sound here, because their job is to police entries and there are none. The
+    // teeth are elsewhere: `no className in src/ is dead` is what would fail if a
+    // class stopped resolving, and it no longer has any exception to grant.
+    expect(Object.keys(KNOWN_DEAD_CLASSES).sort()).toEqual([]);
   });
 
   it('names only classes src/ still asks for', () => {

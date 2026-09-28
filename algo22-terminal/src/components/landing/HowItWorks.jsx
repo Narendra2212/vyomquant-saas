@@ -1,75 +1,120 @@
+/**
+ * HowItWorks — the four-step path from idea to live execution.
+ *
+ * Retained from the previous page, which got this section right: it was the one place that
+ * described a sequence rather than listing adjectives. Three changes.
+ *
+ * 1. The order now matches what the product actually enforces. `Deployment_Gate` in
+ *    `.kiro/specs/trading-lifecycle-integration/` makes paper the default mode and live an
+ *    explicit promotion, so paper trading is its own step rather than a clause tacked onto
+ *    "Forward Test & Deploy".
+ * 2. "Execute tick-level backtests across multi-year historical datasets in seconds" lost the
+ *    speed claim. Nothing in this repository measures backtest throughput, so "in seconds" was
+ *    an unmeasured number. What replaces it is the thing that IS implemented and is rarer:
+ *    the Monte Carlo, walk-forward and sensitivity passes in
+ *    `backend_app/backend/optimization_engine.py`.
+ * 3. Its one `text-[11px]` is now the `text-small` token, taking this file's
+ *    `absolute-font-sizes.budget.js` entry from 1 to zero.
+ *
+ * The connector rules are `aria-hidden`: the ordered list already carries the sequence for a
+ * screen reader, and a decorative line announcing itself would be noise.
+ */
+
 import React from 'react'
 import { Link } from 'react-router-dom'
-import { GitBranch, Activity, ShieldCheck, Rocket, ArrowRight } from 'lucide-react'
+import { ArrowRight, GitBranch, LineChart, Rocket, ShieldCheck } from 'lucide-react'
 
-const steps = [
-  { 
-    icon: GitBranch, 
-    title: 'Construct DAG Rules', 
-    description: 'Map data feeds, technical indicators, logic gates, and execution parameters visually without coding.' 
+const STEPS = [
+  {
+    icon: GitBranch,
+    title: 'Build the logic',
+    description:
+      'Drag market feeds, indicators, conditions and order blocks onto a canvas. Ports are typed, so an invalid connection is refused as you draw it.',
   },
-  { 
-    icon: Activity, 
-    title: 'VectorBT Simulation', 
-    description: 'Execute tick-level backtests across multi-year historical datasets in seconds with Monte Carlo analysis.' 
+  {
+    icon: LineChart,
+    title: 'Backtest and stress it',
+    description:
+      'Run the strategy over real historical data with VectorBT, then put it through Monte Carlo, walk-forward and sensitivity passes to see where it breaks.',
   },
-  { 
-    icon: ShieldCheck, 
-    title: 'Configure Risk Guards', 
-    description: 'Enforce account drawdown ceilings, margin limits, and volatility circuit breakers before execution.' 
+  {
+    icon: ShieldCheck,
+    title: 'Forward-test on paper',
+    description:
+      'Deploy against live market data with simulated capital. Real prices, real order flow, no money at risk — and this is the default, not an opt-in.',
   },
-  { 
-    icon: Rocket, 
-    title: 'Forward Test & Deploy', 
-    description: 'Validate live market behavior in paper mode with simulated capital, then route orders to connected exchanges.' 
+  {
+    icon: Rocket,
+    title: 'Go live when ready',
+    description:
+      'Connect your own exchange keys and promote the strategy. Position caps and drawdown stops stay armed the whole time.',
   },
 ]
 
 export default function HowItWorks() {
   return (
-    <section id="workflow" className="py-24 lg:py-32 border-t border-border-default bg-bg-surface/30" aria-label="Systematic Workflow">
+    <section
+      id="workflow"
+      className="border-t border-line-default bg-surface-canvas py-20 lg:py-28"
+      aria-label="How VyomQuant works"
+    >
       <div className="section-container">
         <div className="section-inner">
-          <div className="text-center mb-16">
-            <div className="text-xs font-mono text-accent-cyan uppercase tracking-wider mb-3 font-semibold">Workflow</div>
-            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black text-text-primary mb-4 tracking-tight">
-              The Systematic Pipeline
+          <div className="mx-auto max-w-2xl text-center">
+            <p className="mb-3 font-mono text-micro font-semibold uppercase tracking-[0.2em] text-brand">
+              Workflow
+            </p>
+            <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl">
+              Four steps, and you cannot skip the third
             </h2>
-            <p className="text-text-secondary max-w-xl mx-auto text-base sm:text-lg">
-              From raw market data to disciplined execution in four rigorous steps.
+            <p className="mt-4 text-lg text-content-secondary">
+              Most losses in automated trading come from deploying an untested idea. The platform
+              is ordered so that paper trading sits between your backtest and your capital.
             </p>
           </div>
-          
-          <div className="max-w-5xl mx-auto">
-            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6 relative">
-              {steps.map((step, i) => {
-                const Icon = step.icon
-                return (
-                  <div key={i} className="card-surface p-6 flex flex-col items-center text-center relative group hover:border-accent-cyan/40 transition-all duration-300">
-                    <div className="w-16 h-16 rounded-2xl bg-bg-elevated border border-border-default flex items-center justify-center mb-5 group-hover:bg-accent-cyan/10 group-hover:border-accent-cyan/30 transition-colors">
-                      <Icon className="w-7 h-7 text-accent-cyan" />
-                    </div>
-                    <div className="text-[11px] font-mono text-accent-cyan font-bold tracking-wider mb-2">STEP 0{i + 1}</div>
-                    <h3 className="text-base font-bold text-text-primary mb-2">{step.title}</h3>
-                    <p className="text-xs text-text-secondary leading-relaxed">{step.description}</p>
-                  </div>
-                )
-              })}
-            </div>
 
-            <div className="text-center mt-12">
-              <Link 
-                to="/signup" 
-                className="inline-flex items-center gap-2.5 px-8 py-4 rounded-xl font-bold text-sm bg-accent-cyan text-text-inverse hover:bg-accent-cyan/90 transition-all shadow-[0_0_30px_rgba(0,212,255,0.3)] hover:-translate-y-0.5"
+          <ol className="relative mx-auto mt-14 grid max-w-6xl gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            {STEPS.map(({ icon: Icon, title, description }, index) => (
+              <li
+                key={title}
+                className="group relative rounded-xl border border-line-default bg-surface-panel p-6 transition-colors duration-150 hover:border-brand/40"
               >
-                Get Started Free
-                <ArrowRight className="w-4 h-4" />
-              </Link>
-            </div>
+                {/* Connector between cards on the widest layout only. */}
+                {index < STEPS.length - 1 && (
+                  <span
+                    className="absolute right-0 top-11 hidden h-px w-5 translate-x-full bg-line-strong lg:block"
+                    aria-hidden="true"
+                  />
+                )}
+
+                <div className="mb-5 flex items-center justify-between">
+                  <span className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-line-strong bg-surface-raised transition-colors duration-150 group-hover:border-brand/40">
+                    <Icon className="h-5 w-5 text-brand" aria-hidden="true" />
+                  </span>
+                  <span className="font-mono text-small font-bold tracking-wider text-content-muted">
+                    STEP {index + 1}
+                  </span>
+                </div>
+
+                <h3 className="text-section font-bold text-content-primary">{title}</h3>
+                <p className="mt-2 text-body leading-relaxed text-content-secondary">
+                  {description}
+                </p>
+              </li>
+            ))}
+          </ol>
+
+          <div className="mt-12 text-center">
+            <Link
+              to="/signup"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-8 py-4 text-sm font-bold text-content-inverse shadow-raised transition-colors duration-150 hover:bg-brand-hover"
+            >
+              Start at step one
+              <ArrowRight className="h-4 w-4" />
+            </Link>
           </div>
         </div>
       </div>
     </section>
   )
 }
-

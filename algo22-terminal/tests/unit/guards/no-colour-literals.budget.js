@@ -1115,8 +1115,25 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // literals against it spent this ratchet on nothing (Requirement 14.2). `names only
   // files that still exist` is the assertion that failed while the file was gone and this
   // line was not. Everything below is the LIVE landing surface and keeps its entry.
-  'components/landing/Hero.jsx': 3,
-  'components/landing/ScreenshotsSection.jsx': 3,
+  //
+  // BOTH ARE NOW `0`, lowered from 3 apiece by the landing-page redesign. Unlike the
+  // sibling `absolute-font-sizes` budget — whose THE INVERSION requires an entry at zero to
+  // be deleted — this file keeps a cleared live file at `0`, per this group's header: a `0`
+  // records that a live file is clean and holds it there, and a file with no entry is a file
+  // whose cleanliness nothing is watching. These two are the most likely place on the whole
+  // surface for a hand-mixed neon glow to reappear, so the entries stay.
+  //
+  // Hero's three were `bg-[#0a0e17]` and two `shadow-[0_0_Npx_rgba(0,212,255,α)]` glows;
+  // ScreenshotsSection's were `bg-[#0d121d]` and two more of the same. All six are now
+  // token utilities — `bg-surface-canvas`, `bg-surface-panel` and the `shadow-raised` /
+  // `shadow-overlay` steps, which is what Requirement 1.5's "no coloured glows" asks for.
+  'components/landing/Hero.jsx': 0,
+  // Was `components/landing/ScreenshotsSection.jsx`. The file was RENAMED to `ProductTour.jsx`
+  // in the same change — the page carries no product screenshots and has settled on carrying
+  // none, so the old name promised something deliberately absent. The entry follows the path:
+  // `names only files that still exist` fails on the old spelling and `accounts for every file
+  // that still carries a colour literal` would not notice the new one.
+  'components/landing/ProductTour.jsx': 0,
   // Retained deliberately, unlike the seven unreferenced landing components deleted
   // alongside this entry's removal: this file is `no-placeholders.test.js`'s non-vacuity
   // fixture. See the header on the file itself.

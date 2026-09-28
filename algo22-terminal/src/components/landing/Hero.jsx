@@ -1,219 +1,211 @@
+/**
+ * Hero — the landing page's first screen.
+ *
+ * WHAT THIS REPLACED, AND WHY
+ * ---------------------------
+ * The previous hero carried SIX competing calls to action (a primary signup, an anchor, and
+ * three platform cards) and a floating metric cluster reading `Sharpe: 2.1`, `Win Rate: 67.4%`,
+ * `Max DD: -8.2%`.
+ *
+ * Both are gone.
+ *
+ * 1. THE FIGURES WERE INVENTED. Nothing in this repository produced them. They sat under a
+ *    9px "Illustrative demo values" caption, which is not a defence: a performance figure on a
+ *    trading product's first screen is read as a claim about the product, and `Footer.jsx`
+ *    states in the same page that VyomQuant is not a registered investment adviser. The
+ *    product's real differentiator is that it REFUSES to flatter a strategy — VectorBT plus
+ *    the Monte Carlo / walk-forward / sensitivity passes in
+ *    `backend_app/backend/optimization_engine.py` — so advertising a fabricated Sharpe
+ *    undercut the exact thing worth selling.
+ *
+ * 2. THREE OF THE SIX CTAs LED NOWHERE. The Windows and macOS cards pointed at
+ *    `/download#windows` and `/download#macos`, where `PlatformArtifact` renders an
+ *    `unavailable` panel — the installers are not published. `DownloadSection.jsx` says so
+ *    in plain language further down the same page, so the hero was contradicting its own page.
+ *    Desktop is a real roadmap item and is announced in `DownloadSection`, which is the one
+ *    place on this page that can state its status accurately.
+ *
+ * WHAT THE FRAME SHOWS INSTEAD
+ * ----------------------------
+ * The strategy pipeline's STRUCTURE — feed, indicator, logic, risk gate, order — which is a
+ * true statement about `backend_app/backend/strategy_dag/schema.py`'s node categories and
+ * typed ports. Structure can be shown honestly without a backtest result; a P&L curve cannot.
+ * No figure in this file is a performance number.
+ *
+ * TOKENS, NOT LITERALS
+ * --------------------
+ * Canonical `styles/tokens.css` names throughout (`surface-*`, `content-*`, `brand`,
+ * `status-*`), not the deprecated compat aliases the old landing surface used. That block is
+ * scheduled for removal once these components stop reading it, so a rewrite is the moment to
+ * stop. This file declares zero colour literals and zero absolute font sizes; its entries in
+ * `no-colour-literals.budget.js` (3) and `absolute-font-sizes.budget.js` (2) go to zero.
+ */
+
 import React from 'react'
 import { Link } from 'react-router-dom'
-import { Check, Globe, ArrowDown, ArrowRight, ChevronRight, Shield, Activity, Sliders, Play } from 'lucide-react'
+import { ArrowRight, Check, ShieldCheck, Store } from 'lucide-react'
 
-function WindowsIcon({ className }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801" />
-    </svg>
-  )
-}
-
-function AppleIcon({ className }) {
-  return (
-    <svg className={className} viewBox="0 0 814 1000" fill="currentColor" aria-hidden="true">
-      <path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76 0-103.7 40.8-165.9 40.8s-105-36.8-162.8-108.8L274 737.7c-55.9-37.8-116.1-85.2-116.1-170.9 0-10.3.7-21.2 2-32.2 14.1-97.3 76.2-148.6 149-148.6 52.8 0 84.7 35.9 135.2 35.9 48.4 0 88.4-38.5 143.2-38.5 36 0 92.3 14.9 134.4 55.4zM535.2 10.1c25.1 27.6 44.4 67.6 44.4 107.9 0 7.1-.6 14.3-1.7 21.4-30.6 4.5-68.7 27.2-93.2 55.4-23.2 26.1-41.9 63.5-41.9 99.3 0 6.4.7 12.7 1.7 18.9 37.9 6.3 77.2-15.3 103.7-43.9 26.5-28.7 47.8-72.4 47.8-116.2z" />
-    </svg>
-  )
-}
+/** One node in the illustrative pipeline frame. Structure only — never a result. */
+const PIPELINE = [
+  {
+    kind: 'Market feed',
+    name: 'BTC/USDT · 15m',
+    detail: 'CCXT.pro websocket',
+    accent: 'border-l-brand',
+  },
+  {
+    kind: 'Indicator',
+    name: 'RSI(14) · EMA(200)',
+    detail: 'Typed scalar series',
+    accent: 'border-l-status-warning',
+  },
+  {
+    kind: 'Logic gate',
+    name: 'Crossover AND threshold',
+    detail: 'Boolean series out',
+    accent: 'border-l-brand',
+  },
+  {
+    kind: 'Risk gate',
+    name: 'Position cap · drawdown stop',
+    detail: 'Blocks before sizing',
+    accent: 'border-l-status-warning',
+  },
+  {
+    kind: 'Order intent',
+    name: 'Limit buy · trailing stop',
+    detail: 'Paper by default',
+    accent: 'border-l-env-paper',
+  },
+]
 
 export default function Hero() {
   return (
-    <section className="relative min-h-[94vh] flex items-center pt-28 pb-20 sm:pt-36 sm:pb-24 lg:pt-40 lg:pb-32 overflow-hidden" aria-label="Hero">
-      {/* Layered Background Glows & Grid */}
-      <div className="absolute inset-0 bg-[#0a0e17] pointer-events-none">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1100px] h-[750px] bg-accent-cyan/8 rounded-full blur-[170px] opacity-70" />
-        <div className="absolute bottom-0 right-0 w-[600px] h-[450px] bg-accent-profit/5 rounded-full blur-[140px] opacity-60" />
-        <div 
-          className="absolute inset-0 opacity-30" 
-          style={{
-            backgroundImage: 'linear-gradient(rgba(0, 212, 255, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 212, 255, 0.05) 1px, transparent 1px)',
-            backgroundSize: '64px 64px'
-          }} 
-        />
+    <section
+      className="relative isolate overflow-hidden bg-surface-canvas pt-32 pb-20 sm:pt-40 sm:pb-24 lg:pt-44 lg:pb-28"
+      aria-label="VyomQuant overview"
+    >
+      {/* Ambient depth. Two washes built from the brand token's own opacity modifiers, so
+          there is no hand-mixed colour anywhere in this file. */}
+      <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+        <div className="absolute -top-40 left-1/2 h-[42rem] w-[72rem] -translate-x-1/2 rounded-full bg-brand/8 blur-3xl" />
+        <div className="absolute bottom-0 right-0 h-[28rem] w-[36rem] rounded-full bg-status-profit/5 blur-3xl" />
+        <div className="absolute inset-x-0 bottom-0 h-px bg-line-default" />
       </div>
 
-      <div className="section-container relative z-10">
-        <div className="section-inner flex flex-col items-center text-center">
+      <div className="section-container">
+        <div className="section-inner">
+          <div className="mx-auto flex max-w-3xl flex-col items-center text-center">
+            {/* Stage badge. `Early access` is a fact — there is a `/admin/waitlist` surface
+                and version 0.1.1 — not a growth claim. */}
+            <span className="mb-8 inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand-wash px-4 py-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-brand" />
+              <span className="font-mono text-micro font-semibold uppercase tracking-[0.18em] text-brand">
+                Early access · Paper trading by default
+              </span>
+            </span>
 
-          {/* Status badge */}
-          <div className="inline-flex items-center gap-2.5 px-4.5 py-1.5 rounded-full border border-accent-cyan/30 bg-accent-cyan/10 backdrop-blur-md mb-8 shadow-[0_0_20px_rgba(0,212,255,0.15)]">
-            <span className="w-2 h-2 rounded-full bg-accent-cyan animate-pulse" />
-            <span className="text-xs font-mono text-accent-cyan font-semibold uppercase tracking-wider">Early Access Beta — Quantitative SaaS</span>
+            <h1 className="text-4xl font-black leading-[1.05] tracking-tight text-content-primary sm:text-5xl lg:text-6xl">
+              Build crypto trading bots
+              <br className="hidden sm:block" />{' '}
+              <span className="text-gradient-cyan">without writing code</span>
+            </h1>
+
+            <p className="mt-6 max-w-2xl text-lg leading-relaxed text-content-secondary sm:text-xl">
+              Design a strategy on a visual canvas, backtest it against real historical data,
+              then stress-test it with Monte Carlo and walk-forward passes before a single rupee
+              is at stake. Connect an exchange only once you are convinced.
+            </p>
+
+            {/* ONE primary action. The secondary is a read-only route that needs no account,
+                which is the lowest-friction way to let a visitor judge the product. */}
+            <div className="mt-10 flex w-full flex-col items-center gap-3 sm:w-auto sm:flex-row">
+              <Link
+                to="/signup"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand px-8 py-4 text-sm font-bold text-content-inverse shadow-raised transition-colors duration-150 hover:bg-brand-hover sm:w-auto"
+              >
+                Start free — no card required
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+              <Link
+                to="/marketplace"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-line-strong bg-surface-panel px-6 py-4 text-sm font-semibold text-content-primary transition-colors duration-150 hover:border-brand/40 hover:bg-surface-raised sm:w-auto"
+              >
+                <Store className="h-4 w-4 text-brand" />
+                Browse strategies
+              </Link>
+            </div>
+
+            <ul className="mt-8 flex flex-wrap items-center justify-center gap-x-7 gap-y-2.5">
+              {[
+                'Paper trading is the default mode',
+                'Your exchange keys, encrypted',
+                'Cancel any time',
+              ].map((item) => (
+                <li key={item} className="flex items-center gap-2 text-body text-content-secondary">
+                  <Check className="h-4 w-4 shrink-0 text-status-profit" />
+                  {item}
+                </li>
+              ))}
+            </ul>
           </div>
 
-          {/* Dominant Headline */}
-          <h1 className="text-4xl sm:text-5xl lg:text-[clamp(2.75rem,5.5vw,5.2rem)] font-black tracking-tight leading-[1.05] max-w-4xl mb-6 text-text-primary">
-            Systematic Quantitative Infrastructure{' '}
-            <span className="text-gradient-cyan drop-shadow-[0_0_35px_rgba(0,212,255,0.3)]">Without Writing Code</span>
-          </h1>
-
-          {/* Subheadline */}
-          <p className="text-text-secondary text-lg sm:text-xl max-w-2xl leading-relaxed mb-10 font-normal">
-            Construct complex algorithmic logic visually via DAGs, validate against historical tick data with VectorBT, and forward-test with real exchange order books.
-          </p>
-
-          {/* Dual Action CTAs */}
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 w-full max-w-md mb-14">
-            <Link
-              to="/signup"
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-8 py-4 rounded-xl font-bold text-sm bg-accent-cyan text-text-inverse hover:bg-accent-cyan/90 transition-all duration-200 hover:-translate-y-0.5 shadow-[0_0_35px_rgba(0,212,255,0.35)]"
-            >
-              Get Started Free
-              <ArrowRight className="w-4 h-4" />
-            </Link>
-            <a
-              href="#architecture"
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-4 rounded-xl border border-border-default bg-bg-surface/80 text-sm font-semibold text-text-primary hover:border-accent-cyan/40 hover:bg-bg-elevated transition-all duration-200"
-            >
-              Explore Architecture
-              <ChevronRight className="w-4 h-4 text-accent-cyan" />
-            </a>
-          </div>
-
-          {/* ── Platform Availability Cards ── */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 w-full max-w-4xl mb-10">
-            {/* Web App Card */}
-            <Link
-              to="/signup"
-              className="group relative flex flex-col items-center gap-3.5 p-7 rounded-2xl border-2 border-accent-cyan/40 bg-accent-cyan/5 hover:bg-accent-cyan/10 hover:border-accent-cyan transition-all duration-300 hover:-translate-y-1.5 shadow-[0_0_30px_rgba(0,212,255,0.15)] hover:shadow-[0_0_45px_rgba(0,212,255,0.3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
-              aria-label="Start Free with Web Application"
-            >
-              <div className="w-13 h-13 rounded-xl bg-accent-cyan flex items-center justify-center shadow-[0_0_25px_rgba(0,212,255,0.4)] group-hover:scale-105 transition-transform duration-300">
-                <Globe className="w-6.5 h-6.5 text-text-inverse" />
-              </div>
-              <div className="text-center">
-                <div className="text-base font-bold text-text-primary mb-0.5">Web Application</div>
-                <div className="text-xs text-text-secondary font-mono">Immediate Browser Access</div>
-              </div>
-              <div className="mt-auto inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-accent-cyan text-text-inverse text-xs font-bold group-hover:bg-accent-cyan/90 transition-colors shadow-md">
-                Start in Browser
-              </div>
-            </Link>
-
-            {/* Windows Card */}
-            <Link
-              to="/download#windows"
-              className="group relative flex flex-col items-center gap-3.5 p-7 rounded-2xl border-2 border-border-default bg-bg-surface/70 hover:border-accent-cyan/50 hover:bg-bg-elevated/80 transition-all duration-300 hover:-translate-y-1.5 shadow-lg hover:shadow-2xl hover:shadow-accent-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
-              aria-label="Download Windows Desktop App"
-            >
-              <div className="w-13 h-13 rounded-xl bg-bg-elevated border border-border-default flex items-center justify-center group-hover:border-accent-cyan/40 transition-colors group-hover:scale-105 duration-300">
-                <WindowsIcon className="w-6.5 h-6.5 text-text-primary" />
-              </div>
-              <div className="text-center">
-                <div className="text-base font-bold text-text-primary mb-0.5">Windows Desktop</div>
-                <div className="text-xs text-text-secondary font-mono">64-bit Installer (.exe)</div>
-              </div>
-              <div className="mt-auto inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-border-default text-xs font-semibold text-text-secondary group-hover:text-text-primary group-hover:border-accent-cyan/50 transition-colors">
-                <ArrowDown className="w-3.5 h-3.5" />
-                Windows Download
-              </div>
-            </Link>
-
-            {/* macOS Card */}
-            <Link
-              to="/download#macos"
-              className="group relative flex flex-col items-center gap-3.5 p-7 rounded-2xl border-2 border-border-default bg-bg-surface/70 hover:border-accent-cyan/50 hover:bg-bg-elevated/80 transition-all duration-300 hover:-translate-y-1.5 shadow-lg hover:shadow-2xl hover:shadow-accent-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
-              aria-label="Download macOS Desktop App"
-            >
-              <div className="w-13 h-13 rounded-xl bg-bg-elevated border border-border-default flex items-center justify-center group-hover:border-accent-cyan/40 transition-colors group-hover:scale-105 duration-300">
-                <AppleIcon className="w-6.5 h-6.5 text-text-primary" />
-              </div>
-              <div className="text-center">
-                <div className="text-base font-bold text-text-primary mb-0.5">macOS Desktop</div>
-                <div className="text-xs text-text-secondary font-mono">Apple Silicon & Intel (.dmg)</div>
-              </div>
-              <div className="mt-auto inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-border-default text-xs font-semibold text-text-secondary group-hover:text-text-primary group-hover:border-accent-cyan/50 transition-colors">
-                <ArrowDown className="w-3.5 h-3.5" />
-                macOS Download
-              </div>
-            </Link>
-          </div>
-
-          {/* Platform availability checkmarks */}
-          <div className="flex flex-wrap justify-center items-center gap-x-8 gap-y-3 text-text-muted text-sm font-medium mb-16">
-            <span className="flex items-center gap-2.5"><Check className="w-4.5 h-4.5 text-accent-profit" /> Web SaaS Terminal</span>
-            <span className="flex items-center gap-2.5"><Check className="w-4.5 h-4.5 text-accent-profit" /> Windows 64-bit Desktop</span>
-            <span className="flex items-center gap-2.5"><Check className="w-4.5 h-4.5 text-accent-profit" /> macOS Universal Desktop</span>
-          </div>
-
-          {/* DAG terminal mockup */}
-          <div className="w-full max-w-5xl">
-            <div className="relative rounded-2xl border border-border-default/80 bg-bg-surface/90 backdrop-blur-md overflow-hidden shadow-[0_20px_60px_rgba(0,0,0,0.6)] group hover:border-accent-cyan/30 transition-all duration-300">
-              {/* Title bar */}
-              <div className="flex items-center gap-2 px-5 py-3.5 border-b border-border-default bg-bg-elevated/80">
-                <div className="flex gap-2">
-                  <div className="w-3 h-3 rounded-full bg-accent-loss/80" />
-                  <div className="w-3 h-3 rounded-full bg-accent-gold/80" />
-                  <div className="w-3 h-3 rounded-full bg-accent-profit/80" />
+          {/* ── Pipeline frame ──────────────────────────────────────────────
+              Deliberately NOT captioned as a screenshot. It is a diagram of the
+              node graph a strategy compiles to, and it says so in its own chrome. */}
+          <div className="mx-auto mt-16 max-w-5xl lg:mt-20">
+            <div className="overflow-hidden rounded-2xl border border-line-default bg-surface-panel shadow-overlay">
+              <div className="flex items-center gap-3 border-b border-line-default bg-surface-raised px-5 py-3">
+                <div className="flex gap-1.5" aria-hidden="true">
+                  <span className="h-2.5 w-2.5 rounded-full bg-status-loss/70" />
+                  <span className="h-2.5 w-2.5 rounded-full bg-status-warning/70" />
+                  <span className="h-2.5 w-2.5 rounded-full bg-status-profit/70" />
                 </div>
-                <div className="flex-1 text-center">
-                  <span className="text-xs font-mono text-text-muted tracking-wide">vyomquant — strategy-builder-dag</span>
-                </div>
-                <div className="flex items-center gap-2 px-2.5 py-1 rounded-md bg-bg-elevated/80 border border-border-default/60">
-                  <span className="text-[10px] font-mono font-semibold text-text-muted uppercase tracking-wider">Strategy Builder DAG</span>
-                </div>
+                <span className="font-mono text-micro text-content-secondary">
+                  vyomquant · strategy graph
+                </span>
+                <span className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-env-paper/30 bg-env-paper-wash px-2 py-0.5">
+                  <ShieldCheck className="h-3 w-3 text-env-paper" />
+                  <span className="font-mono text-micro font-semibold uppercase tracking-wider text-env-paper">
+                    Paper
+                  </span>
+                </span>
               </div>
 
-              {/* DAG nodes */}
-              <div className="p-6 sm:p-10 min-h-[280px] sm:min-h-[340px] relative">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-                  <div className="card-surface p-5 border-l-4 border-l-accent-cyan shadow-md">
-                    <div className="text-xs font-mono text-text-muted mb-1">Data Feed</div>
-                    <div className="text-base font-bold text-text-primary">BTC/USDT Tick</div>
-                    <div className="text-xs font-mono text-accent-profit mt-1.5 flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-accent-profit animate-ping" />
-                      WebSocket: Connected
-                    </div>
-                  </div>
-                  <div className="hidden sm:flex items-center justify-center">
-                    <div className="w-full h-px bg-border-default relative">
-                      <div className="absolute right-0 -top-1 w-2 h-2 border-t border-r border-text-muted rotate-45" />
-                    </div>
-                  </div>
-                  <div className="card-surface p-5 border-l-4 border-l-accent-gold shadow-md">
-                    <div className="text-xs font-mono text-text-muted mb-1">Indicator Node</div>
-                    <div className="text-base font-bold text-text-primary">RSI(14) + EMA(50)</div>
-                    <div className="text-xs font-mono text-text-secondary mt-1.5">Period: 1h</div>
-                  </div>
-                  <div className="card-surface p-5 border-l-4 border-l-accent-cyan sm:col-start-1 shadow-md">
-                    <div className="text-xs font-mono text-text-muted mb-1">Logic Gate</div>
-                    <div className="text-base font-bold text-text-primary">Crossover + Threshold</div>
-                    <div className="text-xs font-mono text-text-secondary mt-1.5">AND condition</div>
-                  </div>
-                  <div className="hidden sm:flex items-center justify-center">
-                    <div className="w-full h-px bg-border-default relative">
-                      <div className="absolute right-0 -top-1 w-2 h-2 border-t border-r border-text-muted rotate-45" />
-                    </div>
-                  </div>
-                  <div className="card-surface p-5 border-l-4 border-l-accent-profit shadow-md">
-                    <div className="text-xs font-mono text-text-muted mb-1">Execution Node</div>
-                    <div className="text-base font-bold text-text-primary">Limit Buy + Stop</div>
-                    <div className="text-xs font-mono text-accent-profit mt-1.5">Order Routed to Binance</div>
-                  </div>
-                </div>
+              <div className="p-5 sm:p-7">
+                <p className="mb-5 font-mono text-micro uppercase tracking-[0.18em] text-content-secondary">
+                  Every strategy compiles to a typed graph — each stage validated before it runs
+                </p>
 
-                {/* Illustrative backtest stats — demo values only */}
-                <div className="absolute top-4 right-4 flex flex-col gap-2">
-                  <div className="bg-bg-elevated/95 border border-border-default rounded-lg px-3.5 py-1.5 text-xs font-mono shadow-md backdrop-blur-sm">
-                    <span className="text-text-muted">Sharpe:</span>{' '}<span className="text-accent-cyan font-bold">2.1</span>
-                  </div>
-                  <div className="bg-bg-elevated/95 border border-border-default rounded-lg px-3.5 py-1.5 text-xs font-mono shadow-md backdrop-blur-sm">
-                    <span className="text-text-muted">Win Rate:</span>{' '}<span className="text-accent-profit font-bold">67.4%</span>
-                  </div>
-                  <div className="bg-bg-elevated/95 border border-border-default rounded-lg px-3.5 py-1.5 text-xs font-mono shadow-md backdrop-blur-sm">
-                    <span className="text-text-muted">Max DD:</span>{' '}<span className="text-accent-loss font-bold">-8.2%</span>
-                  </div>
-                  <div className="text-[9px] font-mono text-text-muted text-right opacity-60">Illustrative demo values</div>
-                </div>
+                <ol className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                  {PIPELINE.map((node, index) => (
+                    <li
+                      key={node.kind}
+                      className={`rounded-lg border border-line-default bg-surface-raised p-4 border-l-2 ${node.accent}`}
+                    >
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="font-mono text-micro uppercase tracking-wider text-content-secondary">
+                          {node.kind}
+                        </span>
+                        <span className="font-mono text-micro text-content-muted" aria-hidden="true">
+                          0{index + 1}
+                        </span>
+                      </div>
+                      <p className="mt-1.5 text-title font-bold text-content-primary">{node.name}</p>
+                      <p className="mt-1 font-mono text-micro text-content-secondary">{node.detail}</p>
+                    </li>
+                  ))}
+                </ol>
+
+                <p className="mt-5 border-t border-line-subtle pt-4 font-mono text-micro text-content-secondary">
+                  Illustrative graph · a diagram of the node stages, not a screenshot and not a
+                  backtest result
+                </p>
               </div>
             </div>
           </div>
-
         </div>
       </div>
     </section>
   )
 }
-
