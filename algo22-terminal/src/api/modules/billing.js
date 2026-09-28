@@ -47,9 +47,22 @@ import { get, post, del } from '../../apiClient';
 
 /**
  * @typedef {Object} CheckoutResponse
- * @property {string} checkoutUrl
+ * @property {string|null} checkoutUrl - Razorpay hosted link, or null when only the modal is available
  * @property {string} provider - "stripe" or "razorpay"
- * @property {string} [order_id]
+ * @property {string} [order_id] - Razorpay order id, for Standard Checkout
+ * @property {string} [key_id] - Razorpay PUBLISHABLE key id. Never the key secret.
+ * @property {string} [razorpay_key] - Same value as key_id, the spelling the marketplace endpoint uses
+ * @property {number} [amount] - Minor units (paise for INR)
+ * @property {string} [currency]
+ */
+
+/**
+ * @typedef {Object} VerificationResult
+ * @property {boolean} verified - True only when the server recomputed a matching signature
+ * @property {string} order_id
+ * @property {string} payment_id
+ * @property {boolean} entitlement_pending - Always true: the plan activates on the gateway webhook, not here
+ * @property {string} detail - Human-readable sentence safe to show the trader
  */
 
 export const billingApi = {
@@ -97,6 +110,22 @@ export const billingApi = {
    * @returns {Promise<CheckoutResponse>}
    */
   createCheckout: (request) => post('/api/billing/checkout', request),
+
+  /**
+   * Ask the server to confirm a Razorpay Standard Checkout callback is authentic.
+   *
+   * The server recomputes HMAC-SHA256 over `order_id|payment_id` with the key SECRET, which
+   * never reaches this bundle. A rejected signature is a 400 and nothing is recorded as paid.
+   *
+   * A `verified: true` answer does NOT mean the plan is active — `entitlement_pending` is
+   * always true. The gateway's `payment.captured` webhook is what moves the subscription, so
+   * the UI should say "activating shortly" and refetch entitlements rather than assuming the
+   * new tier. Anything that reads this as "access granted" is reading it wrong.
+   *
+   * @param {{razorpay_order_id: string, razorpay_payment_id: string, razorpay_signature: string}} payload
+   * @returns {Promise<VerificationResult>}
+   */
+  verifyPayment: (payload) => post('/api/billing/verify-payment', payload),
 
   /**
    * Cancel subscription at period end.

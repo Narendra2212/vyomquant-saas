@@ -303,8 +303,17 @@ class TestPaymentSucceededNotification:
         )
         with open(path, encoding="utf-8") as f:
             source = f.read()
-        razorpay_section_start = source.find("payment.captured")
-        razorpay_section = source[razorpay_section_start:razorpay_section_start + 2500]
+        # Anchored on the handler, then on `payment.captured` WITHIN it — not on the first
+        # occurrence in the file. That string is also written in `verify_razorpay_payment`'s
+        # docstring, which records that entitlement is granted by this webhook and not by
+        # signature verification, so a file-wide `find` locates that documentation instead of
+        # this branch. The window and the assertions are unchanged.
+        handler_start = source.find("async def razorpay_webhook")
+        assert handler_start != -1, "razorpay_webhook handler not found in billing.py"
+        handler = source[handler_start:]
+        captured_at = handler.find("payment.captured")
+        assert captured_at != -1, "razorpay_webhook must handle payment.captured"
+        razorpay_section = handler[captured_at:captured_at + 2500]
         assert "payment_succeeded" in razorpay_section
         assert "Payment Successful" in razorpay_section
 
@@ -434,8 +443,14 @@ class TestBillingInvoiceInserts:
         )
         with open(path, encoding="utf-8") as f:
             source = f.read()
-        rz_idx = source.find("payment.captured")
-        rz_section = source[rz_idx:rz_idx + 2500]
+        # Anchored on the handler first — see the note in
+        # TestPaymentSucceededNotification.test_razorpay_payment_succeeded_notification.
+        handler_start = source.find("async def razorpay_webhook")
+        assert handler_start != -1, "razorpay_webhook handler not found in billing.py"
+        handler = source[handler_start:]
+        rz_idx = handler.find("payment.captured")
+        assert rz_idx != -1, "razorpay_webhook must handle payment.captured"
+        rz_section = handler[rz_idx:rz_idx + 2500]
         assert 'billing_invoices' in rz_section
         assert '"provider": "razorpay"' in rz_section or "'provider': 'razorpay'" in rz_section
 

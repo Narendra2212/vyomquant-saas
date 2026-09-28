@@ -50,25 +50,68 @@ from backend_app.core.dependencies import (create_request_supabase_async,
 from backend_app.core.database import get_db
 from backend_app.core.realtime_sync import RealtimeSync
 from backend_app.core.models import AddPaymentMethodRequest, PaymentMethodModel
-from backend_app.core.schemas import CheckoutRequest
+from backend_app.core.schemas import CheckoutRequest, RazorpayVerificationRequest
 
 router = APIRouter()
 logger = logging.getLogger("BillingRouter")
 
 
+# Environments in which a test-mode gateway credential is a misconfiguration rather than a
+# choice. The same four names ``core/config.py`` and ``core/state.py`` already treat as
+# production-like, spelled once here so a deployment those modules consider production cannot
+# be considered a sandbox by this one.
+_PRODUCTION_LIKE_ENVS = {"production", "prod", "live", "staging"}
+
+
+def _sandbox_payments_allowed() -> bool:
+    """Whether test-mode (``rzp_test_*`` / ``sk_test_*``) gateway credentials may be used.
+
+    Two independent conditions, both required:
+
+    1. ``ALLOW_TEST_PAYMENT_KEYS`` is explicitly truthy, and
+    2. ``ENV`` is not one of :data:`_PRODUCTION_LIKE_ENVS`.
+
+    The opt-in alone is deliberately not sufficient. A stray ``true`` left in a production
+    environment file would otherwise point real customer traffic at a sandbox gateway, which
+    is precisely the failure the ``sk_live_`` / ``rzp_live_`` prefix checks were added to
+    prevent — money that appears to be collected and never arrives. Both conditions default
+    to the safe answer, so a deployment that sets neither behaves exactly as it did before
+    this function existed: live prefixes only.
+    """
+    opt_in = os.environ.get("ALLOW_TEST_PAYMENT_KEYS", "false").strip().lower()
+    if opt_in not in ("true", "1", "yes"):
+        return False
+    if os.environ.get("ENV", "").strip().lower() in _PRODUCTION_LIKE_ENVS:
+        logger.error(
+            "ALLOW_TEST_PAYMENT_KEYS is set in a production-like ENV and is being ignored. "
+            "Remove it and configure live gateway credentials."
+        )
+        return False
+    return True
+
+
 def _validate_keys(provider: str) -> str:
+    sandbox = _sandbox_payments_allowed()
     if provider == "stripe":
         key = os.environ.get("STRIPE_SECRET_KEY")
-        if not key or key == "sk_test_dummy" or not key.startswith("sk_live_"):
+        allowed = ("sk_live_", "sk_test_") if sandbox else ("sk_live_",)
+        if not key or key == "sk_test_dummy" or not key.startswith(allowed):
             raise HTTPException(500, "Stripe production secret key is missing, invalid, or test credentials are used in production path.")
         return key
     elif provider == "razorpay":
         key = os.environ.get("RAZORPAY_KEY_ID")
         secret = os.environ.get("RAZORPAY_KEY_SECRET")
-        if not key or key == "rzp_test_dummy" or not key.startswith("rzp_live_"):
+        allowed = ("rzp_live_", "rzp_test_") if sandbox else ("rzp_live_",)
+        if not key or key == "rzp_test_dummy" or not key.startswith(allowed):
             raise HTTPException(500, "Razorpay production key ID is missing, invalid, or test credentials are used in production path.")
         if not secret or secret == "dummy_secret":
             raise HTTPException(500, "Razorpay production key secret is missing or invalid.")
+        if key.startswith("rzp_test_"):
+            logger.warning(
+                "Razorpay is using TEST credentials (ALLOW_TEST_PAYMENT_KEYS enabled, ENV=%r). "
+                "No real money will move on this path.",
+                os.environ.get("ENV", ""),
+            )
         return key
 
 
@@ -119,6 +162,11 @@ RAZORPAY_WEBHOOK_IPS = [
     "52.66.201.93",
     "52.66.207.93",
 ]
+
+# Razorpay refuses an order below 100 paise (₹1.00). Checked here rather than left to the
+# gateway so an under-minimum amount is a 400 naming the cause, not an opaque 500 from the
+# `except Exception` that wraps the provider call.
+RAZORPAY_MIN_AMOUNT_MINOR = 100
 
 
 def _is_allowed_ip(client_ip: str, allowed_ips: List[str]) -> bool:
@@ -1258,6 +1306,15 @@ async def create_checkout_session(
             }
 
         elif provider == "razorpay":
+            if amount < RAZORPAY_MIN_AMOUNT_MINOR:
+                # Raised before the client is constructed so the gateway is never asked for an
+                # order it is guaranteed to refuse. Outside the try/except below it would be
+                # reported as "Failed to initialize payment gateway."; see the re-raise there.
+                raise HTTPException(
+                    400,
+                    f"Razorpay requires at least {RAZORPAY_MIN_AMOUNT_MINOR} paise "
+                    f"(₹{RAZORPAY_MIN_AMOUNT_MINOR / 100:.2f}); this checkout computed {amount}.",
+                )
             rzp_key = _validate_keys("razorpay")
             import razorpay
             rzp = razorpay.Client(
@@ -1303,13 +1360,32 @@ async def create_checkout_session(
                 })
                 checkout_url = link["short_url"]
             except Exception as le:
-                logger.warning(f"Failed to create Razorpay hosted payment link: {le}. Falling back to default success URL.")
-                checkout_url = f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/app/billing?payment=success"
+                # Previously this fell back to `/app/billing?payment=success` — a URL that tells
+                # the trader the payment succeeded when no payment was attempted, on a path
+                # reached precisely when the gateway call FAILED. The order itself was created
+                # successfully above, so the honest fallback is no URL at all: the browser opens
+                # Standard Checkout with `order_id` + `key_id` instead, and a client that cannot
+                # do that reports a failure rather than a fabricated success.
+                logger.warning(
+                    "Failed to create Razorpay hosted payment link: %s. "
+                    "Returning order for Standard Checkout without a hosted URL.", le,
+                )
+                checkout_url = None
 
             return {
+                # `None` when the hosted link could not be created. The browser prefers
+                # Standard Checkout (`order_id` + `key_id`) and only follows this if present.
                 "checkoutUrl": checkout_url,
                 "checkout_url": checkout_url,
                 "order_id": order["id"],
+                # The PUBLISHABLE half of the credential pair, which is what Standard Checkout
+                # needs in `options.key`. `_validate_keys` returns the key id, never the secret,
+                # and the secret is read only inside this process. Both spellings are sent:
+                # `key_id` for this endpoint and `razorpay_key` to match the shape
+                # `checkout_service.ProviderSession.extra` already puts on the marketplace
+                # response, so one frontend helper reads either without a per-endpoint branch.
+                "key_id": rzp_key,
+                "razorpay_key": rzp_key,
                 "provider": "razorpay",
                 "currency": "INR",
                 "amount": amount,
@@ -1317,9 +1393,113 @@ async def create_checkout_session(
         else:
             raise HTTPException(500, f"Unsupported payment provider for currency: {checkout_currency}")
 
+    except HTTPException:
+        # A refusal this handler already shaped: the Razorpay amount floor above, the credential
+        # gate inside `_validate_keys`, the unsupported-provider branch. Re-raised unchanged so
+        # its status and its cause both survive. Collapsing these into the generic 500 below is
+        # what previously made an under-minimum amount, a missing key and an unroutable currency
+        # indistinguishable to the caller and to the logs.
+        raise
     except Exception as e:
         logger.error(f"Checkout creation failed for {user['id']}: {e}")
         raise HTTPException(500, "Failed to initialize payment gateway.")
+
+
+# ── POST /api/billing/verify-payment ──────────────────────────────────────────
+@router.post("/verify-payment")
+@limiter.limit("20/minute")
+async def verify_razorpay_payment(
+    request: Request,
+    body: RazorpayVerificationRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Confirm that a Razorpay Standard Checkout callback is authentic.
+
+    THIS ENDPOINT GRANTS NO ENTITLEMENT, AND MUST NOT BE CHANGED TO
+    ---------------------------------------------------------------
+    A valid checkout signature proves one thing: whoever produced it holds
+    ``RAZORPAY_KEY_SECRET``, so the callback came from Razorpay and its ``order_id`` and
+    ``payment_id`` were not edited in the browser. It does **not** prove the payment was
+    captured, that it was not subsequently refunded, or that the amount matches what the
+    order asked for. Razorpay signs the callback at authorisation; capture is a separate,
+    later fact.
+
+    Entitlement therefore stays where it already is — ``payment.captured`` in
+    :func:`razorpay_webhook`, which is the only path that holds the pieces that must move
+    together: the ``billing_invoices`` row, the referral commission RPC, the marketplace
+    Settlement_Record via ``_apply_marketplace_entitlement``, and the two-phase Redis lock on
+    ``webhook:razorpay:{event_id}`` that makes a redelivery idempotent. Granting access here
+    as well would mean two writers with no shared lock: the trader who calls this endpoint
+    twice, or calls it while the webhook is in flight, would extend one Subscription_Period
+    twice and credit the owner's 90% share twice. That is the concrete double-grant the
+    single-funnel design in the marketplace spec exists to prevent.
+
+    So this endpoint answers exactly one question — *is this callback genuine?* — and the UI
+    uses the answer to decide between "payment received, activating shortly" and "that did not
+    verify". ``entitlement_pending`` is returned to make that division explicit to the client.
+
+    Failure modes, all of which leave no trace of a payment:
+      * missing or blank field  → 422 from :class:`RazorpayVerificationRequest`
+      * signature mismatch      → 400, logged as a possible forgery, nothing marked paid
+      * secret not configured   → 500, logged; never treated as a pass
+    """
+    secret = os.environ.get("RAZORPAY_KEY_SECRET")
+    if not secret or secret == "dummy_secret":
+        # A 500 rather than a 400: the caller did nothing wrong and retrying the same request
+        # cannot help. Never falls through to a comparison against a placeholder secret, which
+        # would make every signature "invalid" and read as widespread fraud.
+        logger.error(
+            "[BILLING] Razorpay verification requested but RAZORPAY_KEY_SECRET is not configured."
+        )
+        raise HTTPException(500, "Payment verification is not configured.")
+
+    # Razorpay's documented Standard Checkout payload: HMAC-SHA256 over
+    # "<order_id>|<payment_id>" keyed with the API key SECRET. Deliberately NOT
+    # RAZORPAY_WEBHOOK_SECRET — that one signs the raw webhook body and is a different
+    # credential; using it here would reject every genuine callback.
+    expected_signature = hmac.new(
+        secret.encode(),
+        f"{body.razorpay_order_id}|{body.razorpay_payment_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+    # Both sides encoded to bytes: `compare_digest` raises TypeError on a `str` containing any
+    # non-ASCII character, and the signature arrives from the network. Constant-time, so a
+    # caller cannot recover the expected digest byte by byte from response timing.
+    if not hmac.compare_digest(expected_signature.encode(), body.razorpay_signature.encode()):
+        logger.warning(
+            "[BILLING] Razorpay signature mismatch for order %s payment %s (user %s). "
+            "Nothing recorded as paid.",
+            body.razorpay_order_id,
+            body.razorpay_payment_id,
+            user["id"],
+        )
+        raise HTTPException(
+            400,
+            "Payment signature verification failed. This payment has not been recorded — "
+            "do not retry; contact support if you were charged.",
+        )
+
+    logger.info(
+        "[BILLING] Razorpay signature verified for order %s payment %s (user %s). "
+        "Entitlement awaits the payment.captured webhook.",
+        body.razorpay_order_id,
+        body.razorpay_payment_id,
+        user["id"],
+    )
+    return {
+        "status": "ok",
+        "verified": True,
+        "order_id": body.razorpay_order_id,
+        "payment_id": body.razorpay_payment_id,
+        # The client must not read `verified` as "access granted" — see the docstring. The
+        # webhook is what moves the plan.
+        "entitlement_pending": True,
+        "detail": (
+            "Payment verified. Your plan will activate once the payment is confirmed by the "
+            "gateway, usually within a few seconds."
+        ),
+    }
 
 
 # ── POST /api/billing/webhook/stripe ────────────────────────────────────

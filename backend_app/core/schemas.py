@@ -40,6 +40,31 @@ class CheckoutRequest(BaseModel):
         return code
 
 
+class RazorpayVerificationRequest(BaseModel):
+    """The three values Razorpay Standard Checkout hands to its success handler.
+
+    The field names are Razorpay's own, so the browser forwards the checkout response
+    without renaming anything — one fewer place a field can be dropped in transit.
+
+    A missing or blank member is a 422 from this model rather than a signature computed over
+    the string ``"None"``, which would fail comparison and be reported as a mismatch. The
+    distinction matters: a mismatch is a possible forgery worth logging as such, a missing
+    field is a client bug.
+    """
+
+    razorpay_order_id: str = Field(..., min_length=1, max_length=64)
+    razorpay_payment_id: str = Field(..., min_length=1, max_length=64)
+    razorpay_signature: str = Field(..., min_length=1, max_length=256)
+
+    @field_validator("razorpay_order_id", "razorpay_payment_id", "razorpay_signature")
+    @classmethod
+    def reject_blank(cls, v: str) -> str:
+        text = (v or "").strip()
+        if not text:
+            raise ValueError("must not be blank")
+        return text
+
+
 class UserLimits(BaseModel):
     tier: SubscriptionTier
     deployed_bots_count: int

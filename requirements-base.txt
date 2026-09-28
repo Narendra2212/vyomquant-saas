@@ -38,6 +38,12 @@ redis==5.0.8
 # --- Payment Gateways ----------------------------------------------------
 stripe==10.8.0
 razorpay==1.4.1
+# razorpay 1.4.1 does `import pkg_resources` at razorpay/client.py:4. setuptools 81
+# deprecated pkg_resources and 83.0.0 removed it outright, so an unpinned setuptools
+# makes `import razorpay` raise ModuleNotFoundError and every checkout path answer
+# HTTPException(500, "Failed to initialize payment gateway."). Pinned below the removal
+# until razorpay ships a release that no longer imports it.
+setuptools==75.6.0
 
 # --- Exchange Connectivity -----------------------------------------------
 ccxt[async]==4.3.92

@@ -218,6 +218,11 @@ import { TradingEnvironmentBadge } from '../components/ds/TradingEnvironmentBadg
 import { translateError } from '../design/errorCopy';
 import { BADGE_SUBSCRIBED, resolveSubscriptionView } from '../design/subscriptionState';
 import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
+import {
+  CheckoutOutcome,
+  canOpenRazorpayCheckout,
+  runRazorpayCheckout,
+} from '../utils/razorpayCheckout';
 // The classifier `usePanelState` itself reads, used here for ONE field: the server's own
 // error code. Reading it from the module that already parses both envelope shapes is what
 // stops this page from growing a second envelope parser (see `catalogueState`).
@@ -762,6 +767,43 @@ const StrategyMarketplace = () => {
     setSubscribeLoading(true);
     try {
       const session = await api.library.checkout(listingId, currency || 'USD');
+
+      /*
+        Razorpay Standard Checkout. This is the branch that fixes the defect recorded below:
+        `checkout_service._razorpay_order` returns NO `checkout_url` — Razorpay has no hosted
+        session URL in this flow, only an order id and the publishable key, both of which
+        `library.py` already folds into this response as `order_id` and `razorpay_key`. So
+        every Razorpay subscription fell through to the "cannot present its checkout" report
+        below, which was accurate about nothing being charged and wrong about the cause: the
+        browser could always have presented it, there was simply no code here that did.
+      */
+      if (session?.provider === 'razorpay' && canOpenRazorpayCheckout(session)) {
+        const outcome = await runRazorpayCheckout({
+          session,
+          // The same server-side signature check the subscription path uses. It verifies an
+          // `order_id|payment_id` pair against the key secret and is not specific to what was
+          // bought, so there is one verification endpoint rather than one per product.
+          verify: api.billing.verifyPayment,
+          description: typeof strat?.name === 'string' && strat.name.trim()
+            ? `Subscription — ${strat.name.trim()}`
+            : 'Marketplace strategy subscription',
+        });
+
+        if (outcome.status === CheckoutOutcome.VERIFIED) {
+          // Not `success`: the signature proves the callback was genuine, not that the
+          // Subscription is active. `library_subscriptions.status` moves to `active` only in
+          // `settlement_service.settle` off the gateway's `payment.captured` webhook, so the
+          // badge is re-read rather than assumed.
+          notify('info', outcome.message);
+          if (selectedListingId) loadSubscription(selectedListingId);
+        } else if (outcome.status === CheckoutOutcome.DISMISSED) {
+          notify('info', outcome.message);
+        } else {
+          notify('error', outcome.message);
+        }
+        return;
+      }
+
       if (typeof session?.checkout_url === 'string' && session.checkout_url) {
         // The provider's hosted checkout. The URL comes from the server; the page composes none.
         window.location.href = session.checkout_url;

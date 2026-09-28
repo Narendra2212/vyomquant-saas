@@ -266,7 +266,14 @@ const openDetail = async (detail, { subscription = null } = {}) => {
   const view = renderPage();
   const cardHeading = await screen.findByRole('heading', { level: 3, name: detail.name });
   await user.click(cardHeading);
-  await screen.findByRole('heading', { level: 1, name: detail.name });
+  // `level: 2`, not `level: 1`. retail-ui-simplification task 5.2 (commit b9bee71) moved this
+  // page's chrome onto `ds/PageHeader`, which owns the page's only `<h1>` — *Strategy
+  // Marketplace* — for the whole of its lifetime, browse view and detail view alike. The
+  // listing's name is therefore the heading of a region INSIDE that page, at `h2`, carrying
+  // `--text-page` so it is still the largest title on screen. Asserting `level: 1` here would
+  // be asserting two `<h1>`s on one document, which is the thing that change removed.
+  // The name match is unchanged and still exact.
+  await screen.findByRole('heading', { level: 2, name: detail.name });
   return { ...view, user };
 };
 
@@ -374,18 +381,66 @@ describe('StrategyMarketplace transport (Requirements 20.2, 20.10)', () => {
 
     expect(forbiddenConstructsIn(source)).toEqual([]);
 
-    // And the only module it reaches the network through is `../api`. The other two arrived
-    // with task 26.1 and are presentation, not transport: `design/subscriptionState` is §7.9's
-    // subscription-state → badge mapping and `ds/StatusBadge` is the chip that renders it.
-    // Still an EXACT set and not a subset — a fourth relative import, or `../apiClient` in
-    // place of `../api`, fails here exactly as it did before.
+    // And the only module it reaches the network through is `../api`. Everything else on this
+    // list is presentation or classification, and every one of them is named so that a reader
+    // can see at a glance that none of it is a second client:
+    //
+    //   * `components/ds/*` — the design-system primitives task 5.2 (b9bee71) and task 5.3
+    //     (dd2df92) moved this page onto. `Panel` is the card and the panel-state renderer,
+    //     `Metric` every figure, `PageHeader`/`SectionHeader` the heading outline,
+    //     `CommandButton` every action, `StatusBadge` the subscription chip and
+    //     `TradingEnvironmentBadge` the BACKTEST/PAPER/LIVE chip. None of them fetches.
+    //   * `design/errorCopy` — task 6.1 (ac423b1): the server's error CODE → an authored
+    //     sentence. It reads an error that has already arrived; it issues nothing.
+    //   * `design/subscriptionState` — task 26.1: §7.9's subscription-state → badge mapping.
+    //   * `hooks/usePanelState` — task 6.1: the §11.1 state machine that WRAPS a reader this
+    //     page supplies. The reader it is given is `api.library.detail` / `detailPublic`, so
+    //     the transport is still `../api`'s and the hook only sequences it. That is exactly
+    //     what the `calledPaths(mockApi)` assertion in every other test in this file proves
+    //     independently of this source scan.
+    //   * `./paperTradingFormat` — `classifyReadFailure`, pure, no React and no `api`. Read
+    //     for ONE field, the server's own error code, rather than growing a second envelope
+    //     parser on this page.
+    //
+    //   * `../utils/razorpayCheckout` — Razorpay Standard Web Checkout. ADDED DELIBERATELY,
+    //     and the one entry on this list that touches the network, so it is justified rather
+    //     than merely recorded:
+    //
+    //     `checkout_service._razorpay_order` returns no `checkout_url` — Razorpay has no
+    //     hosted session URL in this flow, only an order id and a publishable key. So the
+    //     `checkout_url` branch below was unreachable for every Razorpay subscription and the
+    //     page reported "this browser cannot present its checkout" to every INR subscriber.
+    //     Presenting it requires `checkout.razorpay.com/v1/checkout.js`, which is a payment
+    //     gateway's own modal and cannot be proxied through `../api`.
+    //
+    //     What Requirement 20.2 actually forbids is a SECOND CLIENT FOR THIS APP'S API, and
+    //     that still does not exist: the module issues no request to this backend. The
+    //     signature check it performs is `api.billing.verifyPayment`, INJECTED by the page as
+    //     its `verify` argument, so the only path to our server is still `../api`'s. The
+    //     `https://` literal and the `<script>` injection live in that module, which is why
+    //     `FORBIDDEN_IN_PAGE` below is unchanged and still passes against this page's source.
+    //
+    // Still an EXACT set and not a subset — a fourteenth relative import, or `../apiClient`
+    // in place of `../api`, fails here exactly as it did before. `FORBIDDEN_IN_PAGE` above is
+    // the other half of the same guard and still bans `fetch`, `axios`, `XMLHttpRequest` and
+    // an absolute URL anywhere in the file.
     const specifiers = [...stripComments(source).matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)]
       .map((m) => m[1])
       .filter((s) => s.startsWith('.'));
     expect(specifiers).toEqual([
       '../api',
+      '../components/ds/CommandButton',
+      '../components/ds/Metric',
+      '../components/ds/PageHeader',
+      '../components/ds/Panel',
+      '../components/ds/SectionHeader',
       '../components/ds/StatusBadge',
+      '../components/ds/TradingEnvironmentBadge',
+      '../design/errorCopy',
       '../design/subscriptionState',
+      '../hooks/usePanelState',
+      '../utils/razorpayCheckout',
+      './paperTradingFormat',
     ]);
   });
 });
@@ -549,8 +604,24 @@ describe('owner-supplied text is rendered as text (Requirement 22.8)', () => {
 // 4. The three environment sections (Requirement 6.6)
 // ═════════════════════════════════════════════════════════════════════════════════════════
 
+/**
+ * The environment SECTIONS — `<section data-environment="…">`.
+ *
+ * `[data-environment]` on its own no longer names one thing. `ds/TradingEnvironmentBadge`
+ * publishes the same attribute on its own `<span>` ("published for Property 22 and for
+ * anything asserting on the rendered output", `TradingEnvironmentBadge.jsx:224`), and task
+ * 5.2 put one of those chips in each section's `ds/SectionHeader`. So the bare attribute
+ * selector matches two elements per environment — the section and the chip nested inside it
+ * — and `sectionsIn` would report six sections for three, with the chip counted as a section
+ * that its own section contains.
+ *
+ * The element type is the discriminator, and it is the page's own: the sections are
+ * `<section>`s (`StrategyMarketplace.jsx:800`), the chip is a `<span>`. Nothing about what is
+ * asserted below changes — one section when one environment is measured, three when three
+ * are, in `BACKTEST, PAPER, LIVE` order, disjoint and sibling.
+ */
 const sectionsIn = (container) => [
-  ...container.querySelectorAll('[data-environment]'),
+  ...container.querySelectorAll('section[data-environment]'),
 ];
 
 describe('BACKTEST / PAPER / LIVE sections (Requirements 6.6, 28.5)', () => {
@@ -613,15 +684,33 @@ describe('BACKTEST / PAPER / LIVE sections (Requirements 6.6, 28.5)', () => {
         if (a !== b) expect(a.contains(b)).toBe(false);
       }
     }
-    // Each figure inside a section carries that section's environment label.
+    // Each figure inside a section carries that section's environment label (Req 6.6).
+    //
+    // Asserted per figure, not as a count of bare-text matches. The environment now rides
+    // INSIDE each figure's label — `Total return · BACKTEST` (`StrategyMarketplace.jsx:827`,
+    // "so the figure and the environment it was measured in cannot be separated") — so an
+    // exact-text query for the bare word reaches none of the figures at all. It finds only
+    // the `ds/TradingEnvironmentBadge` chip in the section header, and not even that for
+    // PAPER, whose chip reads `PAPER TRADING` (`design/semantic.js:213`).
+    //
+    // `[data-metric-tier]` is `ds/Metric`'s own published hook, one per rendered figure. The
+    // `> 1` count it replaces is kept, and the label check is now per figure rather than in
+    // aggregate: ONE figure that dropped its environment fails here, where before any two
+    // labelled elements in the section were enough to pass.
     for (const section of sections) {
       const env = section.getAttribute('data-environment');
-      expect(within(section).getAllByText(env).length).toBeGreaterThan(1);
+      const figures = [...section.querySelectorAll('[data-metric-tier]')];
+      expect(figures.length).toBeGreaterThan(1);
+      for (const figure of figures) {
+        expect(figure.textContent, `a figure in ${env} does not name its environment`)
+          .toContain(env);
+      }
     }
-    // Nothing crosses over: the LIVE loss is in LIVE and nowhere else.
-    const live = container.querySelector('[data-environment="LIVE"]');
+    // Nothing crosses over: the LIVE loss is in LIVE and nowhere else. `section[…]` for the
+    // same reason `sectionsIn` uses it — the bare attribute also matches the chip inside.
+    const live = container.querySelector('section[data-environment="LIVE"]');
     expect(live.textContent).toContain('-1.25%');
-    expect(container.querySelector('[data-environment="BACKTEST"]').textContent)
+    expect(container.querySelector('section[data-environment="BACKTEST"]').textContent)
       .not.toContain('-1.25%');
   });
 
@@ -640,12 +729,12 @@ describe('BACKTEST / PAPER / LIVE sections (Requirements 6.6, 28.5)', () => {
     const statements = container.querySelectorAll('[data-testid="historical-results-statement"]');
     expect(statements.length).toBe(1);
 
-    const backtest = container.querySelector('[data-environment="BACKTEST"]');
+    const backtest = container.querySelector('section[data-environment="BACKTEST"]');
     expect(within(backtest).getByTestId('historical-results-statement').textContent)
       .toMatch(/past performance does not indicate future results/i);
-    expect(within(container.querySelector('[data-environment="PAPER"]'))
+    expect(within(container.querySelector('section[data-environment="PAPER"]'))
       .queryByTestId('historical-results-statement')).toBeNull();
-    expect(within(container.querySelector('[data-environment="LIVE"]'))
+    expect(within(container.querySelector('section[data-environment="LIVE"]'))
       .queryByTestId('historical-results-statement')).toBeNull();
   });
 

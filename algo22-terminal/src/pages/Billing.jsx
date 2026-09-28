@@ -373,6 +373,11 @@ import { PAGES, PAGE_FIELDS_BY_PAGE, VERDICT } from '../design/pageFields';
 import { available, fromNullable, unavailable } from '../design/reported';
 import { token } from '../design/tokens';
 import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
+import {
+  CheckoutOutcome,
+  canOpenRazorpayCheckout,
+  runRazorpayCheckout,
+} from '../utils/razorpayCheckout';
 import wsClient from '../websocketClient';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -832,11 +837,60 @@ export default function Billing() {
         tier: planId,
         currency: planCurrency ?? plansCurrencyRef.current ?? undefined,
       });
-      if (data && data.checkoutUrl) {
-        window.location.href = data.checkoutUrl;
-      } else {
-        throw new Error('Payment gateway URL not provided by backend.');
+
+      /*
+        Razorpay Standard Checkout, taken whenever the server sent both an `order_id` and the
+        publishable `key_id`. Preferred over the hosted link for two reasons: it keeps the
+        trader on this page, and the hosted link is the weaker path — when Razorpay's
+        payment-link call failed, `billing.py` used to answer with
+        `/app/billing?payment=success`, a URL that states a payment succeeded on exactly the
+        branch where the gateway call did not. That fallback is gone server-side and
+        `checkoutUrl` is now null there, so this branch is what serves those checkouts.
+
+        `amount` and `currency` are not read from `data` for anything but display inside the
+        modal: the charge is whatever the order says, and the order was priced server-side
+        from `SubscriptionEngine` + `FXService`. Nothing here can alter it.
+      */
+      if (data?.provider === 'razorpay' && canOpenRazorpayCheckout(data)) {
+        const outcome = await runRazorpayCheckout({
+          session: data,
+          verify: api.billing.verifyPayment,
+          description: `Aerora Dynamics — ${String(planId).toUpperCase()}`,
+        });
+
+        if (outcome.status === CheckoutOutcome.VERIFIED) {
+          /*
+            `info`, not a success banner claiming the plan is live. The signature only proves
+            the callback was genuine; the subscription moves when the gateway's
+            `payment.captured` webhook reaches `_process_razorpay_entitlement`. So the page
+            re-reads its own state instead of assuming the new tier — if the webhook has
+            already landed, this refresh shows it, and if it has not, the trader sees the
+            plan they still have rather than one the server has not granted.
+          */
+          setNotice({ severity: 'info', message: outcome.message });
+          refreshSubscription();
+        } else if (outcome.status === CheckoutOutcome.DISMISSED) {
+          // A deliberate close is not a failure. Reporting it as one is what produces
+          // "payment failed" banners for traders who simply changed their mind.
+          setNotice({ severity: 'info', message: outcome.message });
+        } else {
+          // FAILED (declined instrument), UNVERIFIED (signature did not check out) and
+          // UNAVAILABLE (SDK could not load) each carry their own sentence, and each of them
+          // already says that nothing was charged where that is true.
+          setNotice({ severity: 'error', message: outcome.message });
+        }
+        return;
       }
+
+      if (data && data.checkoutUrl) {
+        // Stripe, and any Razorpay checkout that did produce a hosted link.
+        window.location.href = data.checkoutUrl;
+        return;
+      }
+
+      throw new Error(
+        'The payment gateway returned no way to complete this checkout. Nothing has been charged.',
+      );
     } catch (err) {
       console.error('Checkout error:', err);
       setNotice({
