@@ -162,6 +162,18 @@
         {
           "name": "JWT_SECRET",
           "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/jwt_secret"
+        },
+        {
+          "name": "RAZORPAY_KEY_ID",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/razorpay_key_id"
+        },
+        {
+          "name": "RAZORPAY_KEY_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/razorpay_key_secret"
+        },
+        {
+          "name": "RAZORPAY_WEBHOOK_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:273709947018:secret:vyomquant/production/razorpay_webhook_secret"
         }
       ],
       "logConfiguration": {
