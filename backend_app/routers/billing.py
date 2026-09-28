@@ -234,12 +234,87 @@ def _is_allowed_ip(client_ip: str, allowed_ips: List[str]) -> bool:
     return False
 
 
+#: How many proxies in front of this process append to ``X-Forwarded-For``. With ALB alone the
+#: answer is 1; with CloudFront in front of ALB it is 2. Configurable because the answer is a
+#: property of the deployment topology, not of this code.
+_TRUSTED_PROXY_HOPS_DEFAULT = 1
+
+
+def _client_ip_behind_proxies(request: Request) -> str:
+    """The caller's address as attested by a TRUSTED proxy, not as claimed by the caller.
+
+    THIS FUNCTION EXISTS BECAUSE THE IP ALLOWLIST WAS BYPASSABLE WITH ONE HEADER
+    ---------------------------------------------------------------------------
+    The previous read was ``request.headers["X-Forwarded-For"].split(",")[0]`` — the LEFTMOST
+    entry. ``X-Forwarded-For`` is built left to right as a request traverses proxies, each one
+    APPENDING the address it received the connection from. The leftmost entry is therefore
+    whatever the original client put there, which for a direct caller is an arbitrary string of
+    their choosing. Sending ``X-Forwarded-For: 13.232.22.250`` was sufficient to satisfy
+    :func:`_validate_webhook_ip` from any address on the internet.
+
+    Demonstrated against production: a bare POST to ``/api/billing/webhook/razorpay`` answered
+    403 (refused by the allowlist); the identical POST carrying that one header answered 500,
+    having passed the allowlist and failed later on absent credentials.
+
+    That mattered because the allowlist is the outer gate on the entitlement path. Behind it,
+    a request bearing a valid signature reaches ``_process_razorpay_entitlement``, which grants
+    a plan, writes a ``billing_invoices`` row and triggers ``process_referral_commission``. With
+    the allowlist bypassable, the webhook SECRET was the only remaining control on free access
+    to every paid tier — so that secret must be random, and this gate must actually hold.
+
+    The fix reads from the RIGHT. The rightmost entry was appended by the nearest proxy and is
+    the only one an external caller cannot author; each further step left is one more hop back
+    and one more degree of trust required. ``TRUSTED_PROXY_HOPS`` says how many appending
+    proxies sit in front of this process, so the entry ``hops`` from the right is the first
+    address a trusted component vouched for.
+
+    A chain shorter than the configured hop count answers ``"unknown"`` rather than falling back
+    to a position the caller controls: a request that cannot be attributed is refused by the
+    allowlist, which is the safe direction. ``"unknown"`` is never parseable as an address, so
+    :func:`_is_allowed_ip` rejects it.
+    """
+    try:
+        hops = int(os.environ.get("TRUSTED_PROXY_HOPS", _TRUSTED_PROXY_HOPS_DEFAULT))
+    except (TypeError, ValueError):
+        logger.error(
+            "TRUSTED_PROXY_HOPS is not an integer; falling back to %d.",
+            _TRUSTED_PROXY_HOPS_DEFAULT,
+        )
+        hops = _TRUSTED_PROXY_HOPS_DEFAULT
+    if hops < 1:
+        hops = 1
+
+    direct_ip = request.client.host if request.client else "unknown"
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if not forwarded_for:
+        # No proxy header at all: the socket peer is the caller.
+        return direct_ip
+
+    entries = [part.strip() for part in forwarded_for.split(",") if part.strip()]
+    if not entries:
+        return direct_ip
+
+    index = len(entries) - hops
+    if index < 0:
+        logger.error(
+            "X-Forwarded-For carries %d entr%s but TRUSTED_PROXY_HOPS is %d, so no entry is "
+            "attributable to a trusted proxy. Refusing to attribute this request.",
+            len(entries), "y" if len(entries) == 1 else "ies", hops,
+        )
+        return "unknown"
+    return entries[index]
+
+
 def _validate_webhook_ip(request: Request, provider: str) -> None:
     """
     BE-CRITICAL-006 FIX: Validate webhook request comes from allowed payment provider IP.
-    
+
     Raises HTTPException if IP is not in allowlist.
     Can be disabled in development mode via ENABLE_WEBHOOK_IP_VALIDATION env var.
+
+    The address is resolved by :func:`_client_ip_behind_proxies`, which reads
+    ``X-Forwarded-For`` from the right. Reading it from the left made this entire check
+    bypassable by sending one header — see that function.
     """
     # SECURITY: Always require IP validation in production
     env = os.environ.get("ENV", "development").lower()
@@ -252,13 +327,7 @@ def _validate_webhook_ip(request: Request, provider: str) -> None:
         logger.warning("Webhook IP validation disabled - development mode")
         return
     
-    # Get client IP from request
-    # Check X-Forwarded-For header first (for proxies/load balancers)
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        client_ip = forwarded_for.split(",")[0].strip()
-    else:
-        client_ip = request.client.host if request.client else "unknown"
+    client_ip = _client_ip_behind_proxies(request)
     
     # Select appropriate allowlist based on provider. Read through
     # `_configured_webhook_ips` so an operator can supply the provider's CURRENT egress list
