@@ -1275,6 +1275,61 @@ exists to remove.
       re-uploaded after a rollback**
     - _Requirements: 2.47, 3.17_
 
+  - [ ] 13.8 Cut auth email over to custom SMTP — new defect 1.49, found after wave 5
+    - **The built-in Supabase sender will not deliver to anyone outside the project's team.** Every
+      signup and signin in `AuthPage.jsx` depends on a delivered email, so on the current
+      configuration **no customer can register or log in**. The flow looks healthy only because it was
+      tested from the project owner's address, which is on the team
+    - **A second, independent limit: 2 messages per hour, project-wide rather than per user.** With
+      password + OTP mandatory on every signin, one login costs one email, so the product supports two
+      logins an hour across all tenants. This is the defect reported as "signin OTP takes very much
+      time to reach" — a cap, not latency
+    - **Provider: Amazon SES in `ap-southeast-1`**, matching the ECS region. DNS is **GoDaddy**, not
+      Route53 — `vyomquant.in` NS records are `ns53`/`ns54.domaincontrol.com` and this account has zero
+      Route53 hosted zones, so the DKIM CNAMEs are added at the registrar
+    - **Order matters and only the first step is slow.** Request production access first: until it is
+      granted, SES is in sandbox and can send only to individually verified addresses, which reproduces
+      the team-only restriction this task exists to remove
+      1. SES → Account dashboard → request production access. Transactional auth mail only: signup
+         confirmation and login one-time codes, recipients are the project's own registered users
+      2. SES → Identities → verify domain `vyomquant.in` with Easy DKIM, then add the three
+         `<selector>._domainkey` CNAMEs in GoDaddy. **Enter the host without the apex suffix**, or
+         GoDaddy appends the domain twice
+      3. SES → SMTP settings → create SMTP credentials. **These are not the AWS access keys** — the
+         console mints a separate IAM user and shows the password once
+      4. Supabase → Authentication → Emails → SMTP Settings: host
+         `email-smtp.ap-southeast-1.amazonaws.com`, port 587, sender `no-reply@vyomquant.in`
+      5. **Supabase → Authentication → Rate Limits.** Enabling custom SMTP applies a fresh 30/hour cap
+         to protect the new sender. Leaving it swaps a 2/hour blocker for a 30/hour one
+    - **Not executable from this workspace, and that is a permission fact rather than an omission.** The
+      session principal `arn:aws:iam::273709947018:user/github-actions` is denied `ses:GetAccount` and
+      `ses:ListEmailIdentities`; the Supabase SMTP fields need dashboard access or a `sbp_` PAT, which
+      this session does not hold. **Record the console output; do not mark 1.49 closed by assertion**
+    - **Verification that distinguishes a fix from a hope:** sign up with an address on **no** team and
+      **not** on SES's verified list, and require the OTP to arrive and be accepted. A test from the
+      owner's mailbox passes against the unfixed configuration and proves nothing
+    - **What is already correct and must not be re-opened.** The signin OTP is six digits and
+      `POST /auth/v1/verify` with `type: "email"` accepts it, returning a one-hour session — probed this
+      session against a throwaway user. The `redirect_to` allow-list preserves the full
+      `/app/dashboard` path. And `dispatched = !dispatch?.error` already makes the OTP step say the code
+      could not be sent instead of claiming an email was sent, so the UI is honest about the refusal
+      **this task removes the cause of**
+    - _Requirements: 1.49, 2.49_
+
+  - [ ] 13.9* Protect the new sender's reputation once 13.8 lands
+    - **Only after 13.8.** There is no reputation to protect while Supabase's shared sender is in use
+    - **DMARC**, starting at observe-only so nothing is rejected during rollout: TXT at
+      `_dmarc.vyomquant.in` = `v=DMARC1; p=none; rua=mailto:<mailbox>`. Tighten to `p=quarantine` only
+      after SES reports clean DKIM alignment
+    - **CAPTCHA on the auth routes.** Supabase's SMTP guide names bot signup floods as the common abuse
+      of an auth sender and CAPTCHA as the effective control. This design is unusually exposed: every
+      signin sends an email, so anyone hammering signup or signin spends the SES quota and the sending
+      reputation directly, and a sustained flood locks real users out of their own accounts
+    - **Optional for launch: P2** on this file's scale — latent until the app has public traffic, and
+      it degrades availability rather than harming a trader holding a position. Tracked, not blocking
+    - _Requirements: 1.49, 2.49_
+
+
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
   - Every P0 and P1 clause carries a named regression test that failed against `F` and passes against `F'`

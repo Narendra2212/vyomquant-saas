@@ -352,6 +352,25 @@ is confined to paper trading, which carries no margin or real capital at risk �
 own scale requires the ability to place, duplicate, or lose a *real* order, or cross a tenant
 boundary, neither of which applies to a paper leverage value with no live path.
 
+1.49 **[P1][CONFIRMED]** WHEN a user whose address is not a member of the Supabase project's
+organization signs up or signs in, THEN no authentication email is delivered, so account creation and
+login are dead for every real customer. Supabase's custom-SMTP guide states that without a custom SMTP
+server Auth refuses addresses outside the project's team and fails them with `Email address not
+authorized`, and documents the default sender's second limit as 2 messages per hour project-wide.
+`AuthPage.jsx` makes both limits load-bearing: `handleAuth` dispatches `supabase.auth.signInWithOtp`
+after `signInWithPassword` on every signin, and `handleVerifyOtp` gates entry on a six-digit code that
+arrives only by email — so one login costs one email, and the product as configured supports two logins
+per hour across all tenants. The reported symptom, "signin OTP takes very much time to reach", is that
+cap rather than latency. **Evidence, stated precisely.** The 2/hour cap is confirmed by the vendor doc
+and by the reporter's observed behaviour. The team-only restriction is confirmed by the vendor doc but
+was **not** reproduced from this session, because every probe in this tree was sent from the project
+owner's address — which is exactly the configuration under which this defect is invisible. Filed as
+**P1** rather than **P0** because nothing is fabricated and no order or tenant boundary is involved:
+the release cannot ship correctly, which is this file's P1 condition. **Why the pass missed it.** A
+refused email is not a fabricated fact, so `§Bug condition` never selected it, and grep for `email`,
+`OTP`, `SMTP` and `magic link` across all 48 existing clauses returns nothing.
+
+
 ---
 
 ### Expected Behavior (Correct)
@@ -619,6 +638,24 @@ a pytest submitting an order exceeding `max_leverage` directly to the paper orde
 is written — mirroring 2.13's proof shape. If leverage is instead declared out of scope, the proof
 is the documentation change itself plus a test asserting the setting's UI/API label no longer
 implies enforcement it does not perform.
+
+2.49 **[P1]** WHEN a user outside the project's organization signs up or signs in, THEN the
+authentication email SHALL be delivered by a custom SMTP sender on a domain this project controls, and
+the per-hour send limit SHALL be set high enough that one email per login does not lock users out.
+Provider selected: **Amazon SES in `ap-southeast-1`**, matching the ECS region. DNS is **GoDaddy** —
+`vyomquant.in` delegates to `ns53`/`ns54.domaincontrol.com` and this AWS account holds zero Route53
+hosted zones — so the DKIM CNAMEs are added at the registrar, not in Route53. *Proof:* a signup from an
+address that is a member of **no** Supabase team and is **not** on SES's verified-identity list,
+followed by that OTP being received and accepted by `handleVerifyOtp`. A test from the project owner's
+mailbox passes against the unfixed configuration and is therefore not proof. **BLOCKED in this
+environment, with the gap named:** the session principal `arn:aws:iam::273709947018:user/github-actions`
+is denied `ses:GetAccount` and `ses:ListEmailIdentities`, and writing Supabase SMTP configuration needs
+dashboard access or a `sbp_` personal access token, neither of which this session holds. The console
+output is the deliverable; this clause is not closed by assertion. Note also that enabling custom SMTP
+applies a fresh 30-messages-per-hour cap to protect the new sender's reputation, so the cutover is
+incomplete until Authentication → Rate Limits is raised — otherwise a 2/hour blocker is traded for a
+30/hour one.
+
 
 ---
 
