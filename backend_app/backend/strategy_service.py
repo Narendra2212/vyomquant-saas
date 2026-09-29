@@ -715,6 +715,7 @@ class StrategyService:
         available_bars: Optional[int] = None,
         feature_columns: Optional[int] = None,
         ml_dataset_stats: Optional[Any] = None,
+        compiled: Optional["CompiledVersion"] = None,
     ) -> Dict[str, Any]:
         """Compile ``graph`` and persist it as one immutable version row.
 
@@ -776,6 +777,29 @@ class StrategyService:
             what makes the persisted ``validation_report`` record stage 11 as ``PASSED``
             rather than ``SKIPPED``; every other caller leaves this ``None`` and the
             report honestly says the ML readiness stage could not judge the graph.
+        compiled
+            A :class:`CompiledVersion` this ``graph`` has ALREADY been compiled to, for a
+            caller that had to compile it to answer the request anyway.
+            ``routers/strategies.py``'s save path is the one: it compiles before it writes
+            the ``strategies`` row so an invalid graph is refused with the full report and
+            nothing at all is persisted (Requirements 3.5, 3.6), and then creates the
+            version from that same artifact. Passing it makes the two steps share ONE
+            compile instead of running the compiler twice over the same nodes.
+
+            This cannot be used to smuggle an unvalidated graph past the gate.
+            ``CompiledVersion`` is only constructible by
+            :func:`~backend_app.backend.strategy_builder.compile_version`, which raises
+            rather than returns for an invalid graph, and its ``validation_state`` is read
+            off ``report.validation_state`` — the report's verdict, never a caller's claim.
+            So a ``CompiledVersion`` in hand IS the evidence the compile passed, and
+            re-running the compiler over the same graph with the same registry would only
+            reproduce it.
+
+            ``None`` (the default) compiles ``graph`` here, exactly as before. When it is
+            supplied, ``available_bars``, ``feature_columns`` and ``ml_dataset_stats`` are
+            not consulted: they are inputs to the compile that already happened, and
+            honouring them would mean recompiling, which is the thing this parameter
+            exists to avoid. Nothing in the repository passes both.
 
         Returns
             ``{"version": row, "dag_hash": ..., "validation_state": ..., "lifecycle_state":
@@ -797,13 +821,19 @@ class StrategyService:
         """
         # ── 1. Compile before anything else. An invalid graph stops here, with no
         #       database client open and therefore nothing to roll back (Requirement 3.6).
-        compiled: CompiledVersion = compile_version(
-            graph,
-            registry,
-            available_bars=available_bars,
-            feature_columns=feature_columns,
-            ml_dataset_stats=ml_dataset_stats,
-        )
+        #
+        #       A caller that already holds the CompiledVersion for this graph hands it in
+        #       and the compiler is not run a second time. The ordering guarantee above is
+        #       unchanged either way: that caller compiled before it opened a client too,
+        #       so the failure path still ends with nothing written.
+        if compiled is None:
+            compiled = compile_version(
+                graph,
+                registry,
+                available_bars=available_bars,
+                feature_columns=feature_columns,
+                ml_dataset_stats=ml_dataset_stats,
+            )
 
         # ── 2. Build and check every column value while still doing no I/O. A value
         #       outside chk_validation_state / chk_lifecycle_state raises here rather than

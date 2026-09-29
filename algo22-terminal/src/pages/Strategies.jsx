@@ -828,6 +828,13 @@ export default function Strategies() {
           owned_total: payload?.owned_total,
           subscribed_total: payload?.subscribed_total,
           running_paper_sessions_available: payload?.running_paper_sessions_available,
+          // The server states whether the SUBSCRIBED half of the list was read at all. `false`
+          // means `subscribed_total` is "not counted" rather than "none", so it must not be
+          // rendered beside the owned count as though the two were equally known. Read the same
+          // way `running_paper_sessions_available` is — passed through, never inferred from the
+          // entries, because a caller who genuinely holds no Subscriptions produces the same
+          // empty subscribed half as a caller whose subscription read was refused.
+          subscriptions_available: payload?.subscriptions_available,
           as_of: payload?.as_of,
         });
       } catch (err) {
@@ -1058,7 +1065,15 @@ export default function Strategies() {
       : !Array.isArray(ownershipEntries)
         ? PANEL_STATES.IDLE
         : ownershipEntries.length === 0
-          ? PANEL_STATES.EMPTY
+          // An empty list is only an EMPTY state when the whole list was actually read. When
+          // the server reports the subscribed half unavailable, "no entries" means "you own
+          // none, and what you are subscribed to is unknown" — and `NO_OWNERSHIP_STATE` says
+          // the account holds nothing and points at the marketplace, which is a claim about
+          // subscriptions this response cannot support. READY renders the warning instead, and
+          // the entry grid below it is empty because there is genuinely nothing owned.
+          ? (ownershipMeta?.subscriptions_available === false
+            ? PANEL_STATES.READY
+            : PANEL_STATES.EMPTY)
           : PANEL_STATES.READY;
 
   const API_BASE = CONFIG.apiBaseUrl;
@@ -1890,7 +1905,13 @@ export default function Strategies() {
             className="text-right font-mono text-micro text-content-secondary"
           >
             {ownershipMeta.owned_total !== undefined && <div>Owned: {ownershipMeta.owned_total}</div>}
-            {ownershipMeta.subscribed_total !== undefined && <div>Subscribed: {ownershipMeta.subscribed_total}</div>}
+            {/* Withheld, not zeroed, when the server says the subscribed half was not read.
+                `subscribed_total` is computed from entries that do not exist in that case, so
+                rendering it would put a measured-looking `0` beside a real `Owned` count. The
+                warning inside the panel says why it is missing. */}
+            {ownershipMeta.subscribed_total !== undefined
+              && ownershipMeta.subscriptions_available !== false
+              && <div>Subscribed: {ownershipMeta.subscribed_total}</div>}
             {ownershipMeta.as_of && <div>As of {formatInstant(ownershipMeta.as_of)}</div>}
           </div>
         ) : null}
@@ -1961,6 +1982,34 @@ export default function Strategies() {
                 >
                   The running paper-session count could not be read, so it is not shown. It is
                   unavailable, not zero.
+                </Alert>
+              )}
+              {/* The owned half arrived and is rendered below; the subscribed half did not.
+                  Said out loud rather than left to the empty space: a subscriber looking at a
+                  list with none of their subscriptions in it would otherwise conclude the
+                  subscriptions were gone. `=== false` and not falsy — an older server that
+                  does not send the field at all makes no claim either way, and inventing a
+                  warning from its silence would be the same fabrication in the other
+                  direction. */}
+              {ownershipMeta?.subscriptions_available === false && (
+                <Alert
+                  severity="warning"
+                  data-testid="ownership-subscriptions-unavailable"
+                  title="Subscribed strategies not read"
+                  action={(
+                    <CommandButton
+                      intent="secondary"
+                      icon={RefreshCw}
+                      onClick={reloadOwnership}
+                      data-testid="ownership-subscriptions-retry"
+                    >
+                      Retry
+                    </CommandButton>
+                  )}
+                >
+                  Only the strategies you own are listed below. Your subscriptions could not be
+                  read, so they are unknown rather than absent, and the subscribed count is not
+                  shown.
                 </Alert>
               )}
               <div className="grid gap-3" style={OWNERSHIP_GRID_COLUMNS}>

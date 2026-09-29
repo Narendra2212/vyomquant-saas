@@ -1262,6 +1262,203 @@ async def my_library(request: Request, user: dict = Depends(get_current_user)):
 #   database. This handler owns the three queries and the error surface, nothing else.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# THE TWO TIERED READS, AND WHY THEY ARE TIERED
+#
+# `strategies.is_active`, `strategies.archived_at`, `library_subscriptions.period_expiry`
+# and `library_subscriptions.renewal_enabled` are all added by migrations that are applied
+# BY HAND — `.github/workflows/03-deploy.yml` has no migration step — so this code can and
+# does reach an environment where any of them is still absent. PostgREST answers a `select`
+# naming an absent column with an error on the WHOLE statement, and the handler below
+# answers a failed round trip with MARKETPLACE_READ_FAILED, so ONE such column took the
+# entire ownership panel down for every user, on every call. That is the production defect
+# `library_entries.OWNED_STRATEGY_SELECT`'s docstring records for `strategies.description`,
+# and it is the same class of defect the ambiguous `library_strategies` embed produces
+# (migration 006 gives `library_subscriptions` two foreign keys to that one table, so the
+# unhinted embed answers PGRST201 — see `library_entries._SUBSCRIPTION_SELECT_HINTED`).
+#
+# WHAT CHANGED, AND WHAT DELIBERATELY DID NOT
+#   Each read now attempts the narrow, correct projection FIRST — so a correctly-migrated
+#   environment issues exactly the query it issued before, one round trip, same columns,
+#   same order — and falls back to a narrower one ONLY for an error
+#   `library_entries.is_degradable_projection_error` recognises as "that projection is
+#   unreadable" rather than "the read failed". Everything else propagates untouched: a
+#   timeout, a refused connection, an RLS denial or a missing TABLE still answers
+#   MARKETPLACE_READ_FAILED, because Requirements 1.5 and 1.7 are about a read that did not
+#   complete and none of those is a question the database answered.
+#
+#   Nothing is substituted for a value that was not read. A degraded round trip 1 OMITS the
+#   keys it did not request (`build_my_strategies_entries(omitted_owned_fields=…)`), a
+#   degraded round trip 2 leaves `subscription_view`'s expiry and renewal state `None` —
+#   which that function already documents as "unavailable, never a default" — and an
+#   exhausted round trip 2 reports `subscriptions_available: false` rather than an empty
+#   subscribed half, exactly as round trip 3 already reports its count unavailable rather
+#   than as zero (Requirement 28.5).
+#
+# Requirement 27.2 (round trips independent of the entry count) still holds: the fallbacks
+# are per-READ, not per-entry, and they run only after a failure. A healthy environment
+# issues three requests; the worst case is bounded by the ladder's length, not by how many
+# strategies or Subscriptions the caller has.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _read_owned_strategies(svc, user_id: str) -> tuple:
+    """Round trip 1's rows, and the names its projection could not ask for.
+
+    Returns
+        ``(rows, fields_unavailable)``. ``fields_unavailable`` is empty on the normal path and
+        :data:`~backend_app.backend.marketplace.library_entries.OPTIONAL_OWNED_COLUMNS` when the
+        fallback projection was used, in which case the archived filter is applied in Python
+        instead of server-side.
+
+    Raises
+        :class:`MarketplaceError` ``MARKETPLACE_READ_FAILED`` when the read did not complete,
+        including when the fallback projection fails too. The caller's own strategies are this
+        panel's whole content, so there is no rung below this one: a short list presented as
+        complete would be the fabricated answer Requirements 1.5 and 1.7 forbid.
+    """
+    try:
+        resp = (
+            svc.table("strategies")
+            .select(_library_entries.OWNED_STRATEGY_SELECT)
+            .eq("user_id", user_id)
+            .is_(_library_entries.ARCHIVED_AT_COLUMN, "null")
+            .order("updated_at", desc=True)
+            .execute()
+        )
+        return list(getattr(resp, "data", None) or []), ()
+    except Exception as exc:
+        if not _library_entries.is_degradable_projection_error(exc):
+            logger.error("my_strategies owned-read failed for user %s: %s", user_id, exc)
+            raise MarketplaceError(MARKETPLACE_READ_FAILED)
+        logger.warning(
+            "my_strategies owned-read could not use its full projection for user %s, so "
+            "%s %s not requested and the entries will not carry them. Apply "
+            "migrations/006_reconcile_production_database.sql (is_active) and "
+            "backend_app/migrations/005a_strategy_archive.sql (archived_at) to restore them. "
+            "Retrying with %s. Detail: %s",
+            user_id,
+            ", ".join(_library_entries.OPTIONAL_OWNED_COLUMNS),
+            "is" if len(_library_entries.OPTIONAL_OWNED_COLUMNS) == 1 else "are",
+            _library_entries.OWNED_STRATEGY_SELECT_MINIMAL,
+            exc,
+        )
+
+    # The fallback drops `archived_at` from the projection AND from the filter. Filtering
+    # server-side on a column that does not exist is the same 42703 the `select` was, so the
+    # predicate moves into Python — where a row with no `archived_at` key reads as active,
+    # which is the disposition 005a's header prescribes and the same one
+    # `routers/strategies.py::list_strategies` already implements for this table.
+    try:
+        resp = (
+            svc.table("strategies")
+            .select(_library_entries.OWNED_STRATEGY_SELECT_MINIMAL)
+            .eq("user_id", user_id)
+            .order("updated_at", desc=True)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(
+            "my_strategies owned-read failed for user %s even with the minimal projection "
+            "%s, so nothing is known about the caller's own strategies: %s",
+            user_id,
+            _library_entries.OWNED_STRATEGY_SELECT_MINIMAL,
+            exc,
+        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+    rows = [
+        row
+        for row in (getattr(resp, "data", None) or [])
+        if (row or {}).get(_library_entries.ARCHIVED_AT_COLUMN) is None
+    ]
+    return rows, tuple(_library_entries.OPTIONAL_OWNED_COLUMNS)
+
+
+def _read_subscriptions(svc, user_id: str) -> tuple:
+    """Round trip 2's rows, and the names its projection could not ask for.
+
+    Returns
+        ``(rows, fields_unavailable)``. ``rows`` is ``None`` — never ``[]`` — when every rung of
+        :data:`~backend_app.backend.marketplace.library_entries.SUBSCRIPTION_SELECT_LADDER`
+        found its projection unreadable, which the handler publishes as
+        ``subscriptions_available: false``. ``None`` and ``[]`` must stay distinguishable here
+        for the same reason they do for the running-session count: one means "not read", the
+        other means "read, and you hold no Subscriptions", and a purchaser shown the second
+        when the first is true would conclude their purchase was lost.
+
+    Raises
+        :class:`MarketplaceError` ``MARKETPLACE_READ_FAILED`` when the FIRST rung fails for a
+        reason that is not a projection problem — a timeout, a refused connection, an RLS
+        denial, a missing table. Those are reads that did not complete, and no narrower
+        projection answers them.
+    """
+    ladder = _library_entries.SUBSCRIPTION_SELECT_LADDER
+    last_rung = len(ladder) - 1
+
+    for index, (select, order_column) in enumerate(ladder):
+        try:
+            query = (
+                svc.table("library_subscriptions")
+                .select(select)
+                .eq("user_id", user_id)
+            )
+            if order_column is not None:
+                query = query.order(order_column, desc=True)
+            resp = query.execute()
+        except Exception as exc:
+            if index == 0 and not _library_entries.is_degradable_projection_error(exc):
+                logger.error(
+                    "my_strategies subscription-read failed for user %s: %s", user_id, exc
+                )
+                raise MarketplaceError(MARKETPLACE_READ_FAILED)
+            if index == last_rung:
+                # Every projection this handler knows how to ask for was refused. The owned
+                # half is unaffected and is still returned; the subscribed half is reported
+                # unavailable rather than as an empty list (Requirement 28.5's rule, applied
+                # to a collection instead of a count).
+                logger.error(
+                    "my_strategies subscription-read exhausted every projection for user "
+                    "%s, so the SUBSCRIBED half of the list is reported unavailable rather "
+                    "than as empty. Apply backend_app/migrations/008_marketplace_settlement"
+                    ".sql (period_expiry, renewal_enabled); if the failure names the "
+                    "library_strategies embed, public.library_subscriptions carries more "
+                    "than one foreign key to it and the hinted rung should have resolved "
+                    "it. Last detail: %s",
+                    user_id,
+                    exc,
+                )
+                return None, tuple(_library_entries.OPTIONAL_SUBSCRIPTION_COLUMNS)
+            logger.warning(
+                "my_strategies subscription-read rung %d of %d is unusable for user %s; "
+                "falling back to a narrower projection. Detail: %s",
+                index + 1,
+                len(ladder),
+                user_id,
+                exc,
+            )
+            continue
+
+        rows = list(getattr(resp, "data", None) or [])
+        if index == 0:
+            return rows, ()
+        logger.warning(
+            "my_strategies subscription-read succeeded on rung %d of %d for user %s, so %s "
+            "%s not requested: every entry's period_expiry and renewal_state are reported "
+            "unavailable rather than defaulted, and the list is not ordered by expiry. "
+            "Apply backend_app/migrations/008_marketplace_settlement.sql to restore them.",
+            index + 1,
+            len(ladder),
+            user_id,
+            ", ".join(_library_entries.OPTIONAL_SUBSCRIPTION_COLUMNS),
+            "is" if len(_library_entries.OPTIONAL_SUBSCRIPTION_COLUMNS) == 1 else "are",
+        )
+        return rows, tuple(_library_entries.OPTIONAL_SUBSCRIPTION_COLUMNS)
+
+    # Unreachable: the loop either returns or raises on every path.
+    raise MarketplaceError(MARKETPLACE_READ_FAILED)  # pragma: no cover
+
+
 @literal_router.get("/my-strategies")
 @limiter.limit("120/60second", key_func=caller_or_address)
 @limiter.limit("120/60second")
@@ -1283,6 +1480,24 @@ async def my_strategies(
     entitlement input, so when it fails the figure is OMITTED from every entry and reported
     unavailable rather than substituted with a zero the server did not measure
     (Requirement 28.5).
+
+    A read that COMPLETED and said "there is no such column" is a different fact, and is not
+    a failure of this endpoint. :func:`_read_owned_strategies` and :func:`_read_subscriptions`
+    answer it by asking a narrower question and then STATING what they could not ask for —
+    see the block comment above them for the full argument. Three fields on this response
+    carry that statement, and all three are always present:
+
+    ``subscriptions_available``
+        ``false`` when round trip 2 found every projection unreadable. The owned half is
+        still returned; ``subscribed_total: 0`` then means "not counted", not "none".
+    ``owned_fields_unavailable`` / ``subscription_fields_unavailable``
+        The column names the successful projection did not request. An owned entry omits each
+        name it lists (never ``null``), and a subscribed entry's ``period_expiry`` and
+        ``renewal_state`` read ``null``, which :func:`~backend_app.backend.marketplace
+        .library_entries.subscription_view` already defines as "unavailable, never a default".
+
+    Nothing else about the response changed, and a correctly-migrated environment issues the
+    same three queries with the same columns and produces two empty arrays and a ``true``.
     """
     user_id = _safe_uuid(user["id"], "user_id")
     svc = _build_service_client()
@@ -1292,34 +1507,13 @@ async def my_strategies(
     # `archived_at IS NULL` is 005a's active-rows predicate and its partial index
     # (idx_strategies_archived_at). The column list is explicit — no `select("*")`, and no
     # Protected_Logic column, even though these rows are the caller's own.
-    try:
-        owned_resp = (
-            svc.table("strategies")
-            .select(_library_entries.OWNED_STRATEGY_SELECT)
-            .eq("user_id", user_id)
-            .is_(_library_entries.ARCHIVED_AT_COLUMN, "null")
-            .order("updated_at", desc=True)
-            .execute()
-        )
-    except Exception as exc:
-        logger.error("my_strategies owned-read failed for user %s: %s", user_id, exc)
-        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    owned_rows, owned_fields_unavailable = _read_owned_strategies(svc, user_id)
 
     # ── Round trip 2: the caller's Subscriptions + embedded Listing ──────
     # The embed is filtered to this caller server-side; a Subscription belonging to another
     # user is simply not in the result set, so it is indistinguishable from absent and can
     # never reach this response (Requirement 21.1).
-    try:
-        subs_resp = (
-            svc.table("library_subscriptions")
-            .select(_library_entries.SUBSCRIPTION_SELECT)
-            .eq("user_id", user_id)
-            .order("period_expiry", desc=True)
-            .execute()
-        )
-    except Exception as exc:
-        logger.error("my_strategies subscription-read failed for user %s: %s", user_id, exc)
-        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    subscription_rows, subscription_fields_unavailable = _read_subscriptions(svc, user_id)
 
     # ── Round trip 3: the caller's RUNNING Paper_Sessions ────────────────
     session_rows = None
@@ -1344,10 +1538,11 @@ async def my_strategies(
 
     entries = _library_entries.build_my_strategies_entries(
         caller_id=user_id,
-        owned_rows=getattr(owned_resp, "data", None) or [],
-        subscription_rows=getattr(subs_resp, "data", None) or [],
+        owned_rows=owned_rows,
+        subscription_rows=subscription_rows or [],
         session_rows=session_rows,
         now=now,
+        omitted_owned_fields=owned_fields_unavailable,
     )
 
     owned_total = sum(
@@ -1363,6 +1558,15 @@ async def my_strategies(
         # Requirement 28.5: the client is told the figure is unavailable rather than being
         # handed a zero it cannot tell apart from a real count.
         "running_paper_sessions_available": session_rows is not None,
+        # The same rule, applied to the two tiered reads above. `False` means the SUBSCRIBED
+        # half of this list was not read at all — so `subscribed_total: 0` is "not counted",
+        # not "you are subscribed to nothing" — and each `*_fields_unavailable` array names
+        # the keys the entries therefore do not carry. All three are always present, for the
+        # reason `is_archived` always is: a reader that has to infer availability from a
+        # missing key cannot tell it from a build that does not report availability.
+        "subscriptions_available": subscription_rows is not None,
+        "owned_fields_unavailable": list(owned_fields_unavailable),
+        "subscription_fields_unavailable": list(subscription_fields_unavailable),
         "as_of": now.isoformat(),
     }
 

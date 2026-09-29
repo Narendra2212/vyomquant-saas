@@ -160,10 +160,16 @@ __all__ = [
     "BACKTEST_CONSENT_COLUMN",
     "ENTITLING_SUBMISSION_STATES",
     "OWNED_STRATEGY_SELECT",
+    "OWNED_STRATEGY_SELECT_MINIMAL",
+    "OPTIONAL_OWNED_COLUMNS",
     "SUBSCRIPTION_SELECT",
+    "SUBSCRIPTION_SELECT_LADDER",
+    "OPTIONAL_SUBSCRIPTION_COLUMNS",
+    "SUBSCRIPTION_ORDER_COLUMN",
     "RUNNING_PAPER_SESSION_SELECT",
     "RUNNING_SESSION_STATE",
     "SUBSCRIBED_LISTING_FIELDS",
+    "is_degradable_projection_error",
     "allowed_actions_for_owned",
     "allowed_actions_for_subscribed",
     "subscription_view",
@@ -356,6 +362,41 @@ OWNED_STRATEGY_SELECT: str = (
 #: docstring cannot disagree about which state is listed.
 ARCHIVED_AT_COLUMN: str = "archived_at"
 
+#: The two names in :data:`OWNED_STRATEGY_SELECT` that a MIGRATION adds rather than the base
+#: table carrying them. ``is_active`` comes from ``migrations/006_reconcile_production_database
+#: .sql`` and ``archived_at`` from ``backend_app/migrations/005a_strategy_archive.sql``; both of
+#: those files are applied BY HAND (``.github/workflows/03-deploy.yml`` has no migration step),
+#: so this code can reach an environment where either one is still absent. Every other name in
+#: the list is written by ``routers/strategies.py::create_strategy`` on every save and therefore
+#: exists wherever a strategy does.
+OPTIONAL_OWNED_COLUMNS: Tuple[str, ...] = ("is_active", ARCHIVED_AT_COLUMN)
+
+#: Round trip 1's FALLBACK projection: :data:`OWNED_STRATEGY_SELECT` less
+#: :data:`OPTIONAL_OWNED_COLUMNS`.
+#:
+#: WHY A SECOND PROJECTION EXISTS AT ALL
+#: ------------------------------------
+#: The ``description`` incident recorded above was not a one-off; it was the first instance of a
+#: class. PostgREST answers a ``select`` naming an absent column with an error on the WHOLE
+#: statement, and ``routers/library.py::my_strategies`` turns a failed round trip 1 into
+#: ``MARKETPLACE_READ_FAILED`` — so ONE optional column that a hand-applied migration has not
+#: added yet takes the entire ownership list down for every user, on every call. That is the
+#: wrong trade: ``is_active`` is a decoration on this list and ``archived_at`` is a filter that
+#: excludes nothing when no strategy has ever been archived, while the list itself is the panel's
+#: whole content.
+#:
+#: So the read is TIERED rather than widened-and-hoped: the explicit narrow projection above is
+#: attempted first and is what every correctly-migrated environment uses, and only a
+#: definitively-missing-column error (:func:`is_degradable_projection_error`) falls back to this
+#: one. ``select("*")`` is deliberately NOT the fallback — it would pull ``buy_logic``,
+#: ``sell_logic``, ``risk``, ``indicators`` and ``ml_model_path`` across the wire on a list page
+#: for no reader, which is the thing the explicit list exists to prevent.
+#:
+#: A field this projection does not request is OMITTED from the entry, never emitted as ``null``:
+#: see :func:`build_my_strategies_entries`'s ``omitted_owned_fields``. "Not read" and "read, and
+#: empty" are different facts and the response says which one it has.
+OWNED_STRATEGY_SELECT_MINIMAL: str = "id,name,symbol,timeframe,status,created_at,updated_at"
+
 #: Round trip 2: the caller's Subscriptions, with the Listing and its submission state arriving
 #: as PostgREST embedded resources in the *same* request - which is what makes the entry count
 #: irrelevant to the round-trip count (Requirement 27.2). ``!inner`` drops a Subscription whose
@@ -371,6 +412,155 @@ SUBSCRIPTION_SELECT: str = (
     + ",marketplace_submissions(submission_state)"
     ")"
 )
+
+#: The column round trip 2 orders by, and the one name in :data:`SUBSCRIPTION_SELECT` that is
+#: BOTH projected and used in an ``ORDER BY``. Named once so the fallback ladder below can drop
+#: the projection and the ordering together — a ``.order()`` on an absent column is the same
+#: ``42703`` the ``select`` is, and dropping only one of the two fixes nothing.
+SUBSCRIPTION_ORDER_COLUMN: str = "period_expiry"
+
+#: The two names in :data:`SUBSCRIPTION_SELECT` that ``008_marketplace_settlement.sql`` adds.
+#: That file's own header (section 4, "NOTE ON auto_renew") records that
+#: ``public.library_subscriptions`` has two shapes in the wild and that both ``period_expiry``
+#: and ``renewal_enabled`` are 008's additions — so in an environment where 008 is unapplied,
+#: neither exists and round trip 2 fails on the ``select`` and on the ``order`` alike.
+OPTIONAL_SUBSCRIPTION_COLUMNS: Tuple[str, ...] = (
+    SUBSCRIPTION_ORDER_COLUMN,
+    RENEWAL_COLUMN,
+)
+
+#: Round trip 2's FALLBACK projection: :data:`SUBSCRIPTION_SELECT` less 008's two columns.
+#: :func:`subscription_view` already documents ``None`` for each of the three values it reports
+#: as "unavailable, never a default", so an entry built from this projection states that its
+#: expiry and its renewal state were not read rather than claiming a renewing, never-expiring
+#: Subscription. :func:`allowed_actions_for_subscribed` withholds ``cancel_renewal`` for a
+#: ``None`` renewal state, so nothing is offered on the strength of a fact that was not read.
+_SUBSCRIPTION_SELECT_NO_SETTLEMENT: str = (
+    "id,library_id,status,"
+    "library_strategies!inner("
+    + _listing_projection.LISTING_SELECT
+    + ",marketplace_submissions(submission_state)"
+    ")"
+)
+
+#: PostgREST's foreign-key disambiguation hint for the embed, as ``library_strategies!<fk>``.
+#:
+#: WHY THE EMBED NEEDS A HINT IN AT LEAST ONE LIVE SHAPE
+#: ----------------------------------------------------
+#: ``migrations/006_reconcile_production_database.sql`` creates
+#: ``public.library_subscriptions`` with TWO foreign keys to the SAME table::
+#:
+#:     library_id  UUID NOT NULL REFERENCES public.library_strategies(id) ON DELETE CASCADE,
+#:     strategy_id UUID          REFERENCES public.library_strategies(id) ON DELETE CASCADE,
+#:
+#: An unhinted ``library_strategies!inner(...)`` against that shape is ambiguous, and PostgREST
+#: answers ``PGRST201`` ("could not embed because more than one relationship was found") with a
+#: hint telling the caller to name the foreign key. That is a 300, the ``except Exception``
+#: turns it into ``MARKETPLACE_READ_FAILED``, and the panel reports the ownership list
+#: unavailable — for every user, on every call, exactly as the ``description`` column did.
+#:
+#: ``library_id`` is the correct one of the two: it is the ``NOT NULL`` column every writer in
+#: this module's callers sets, and it is what ``build_my_strategies_entries`` falls back to for
+#: ``listing_id``. The hint is applied only as a LATER RUNG of the ladder, never as the first
+#: attempt, so an environment whose table has a single foreign key keeps using the plain embed
+#: it already resolves.
+_SUBSCRIPTION_SELECT_HINTED: str = (
+    "id,library_id,status,"
+    "library_strategies!library_id!inner("
+    + _listing_projection.LISTING_SELECT
+    + ",marketplace_submissions(submission_state)"
+    ")"
+)
+
+#: Round trip 2's attempt ladder, as ``(select, order_column)`` pairs tried in order. Each rung
+#: is attempted ONLY after the previous one failed with a
+#: :func:`is_degradable_projection_error`; any other failure propagates from the first rung
+#: untouched, so a connection failure, an RLS refusal or a missing TABLE still fails loudly
+#: instead of being retried into a quieter answer.
+#:
+#: ``order_column`` is ``None`` on the degraded rungs: 008's ``period_expiry`` is the only
+#: ordering this read has, and an ``ORDER BY`` is a presentation nicety where the entry list is
+#: the content. The route reports the ordering as unavailable rather than substituting
+#: ``created_at``, which would look like an expiry ordering while being a purchase ordering.
+SUBSCRIPTION_SELECT_LADDER: Tuple[Tuple[str, Optional[str]], ...] = (
+    (SUBSCRIPTION_SELECT, SUBSCRIPTION_ORDER_COLUMN),
+    (_SUBSCRIPTION_SELECT_NO_SETTLEMENT, None),
+    (_SUBSCRIPTION_SELECT_HINTED, None),
+)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# THE ONE ERROR CLASS THE TIERED READS DEGRADE AROUND
+# ══════════════════════════════════════════════════════════════════════════
+
+#: PostgreSQL's ``undefined_column`` and PostgREST's schema-cache equivalent. The same tuple
+#: ``strategy_archive``, ``backtest_service``, ``deployment_binding`` and ``signal_service``
+#: each keep for their own degradable read; copied rather than shared for the reason
+#: ``strategy_last_signal`` records — each one is tied to its own caller's error contract and
+#: must not acquire another's.
+_MISSING_COLUMN_CODES: Tuple[str, ...] = ("42703", "undefined_column", "pgrst204")
+
+#: PostgREST's two "this embed cannot be resolved" answers. ``PGRST200`` is no relationship
+#: found, ``PGRST201`` is more than one found (the ambiguity :data:`_SUBSCRIPTION_SELECT_HINTED`
+#: exists for). Both are answered by trying a DIFFERENT projection, which is what makes them
+#: degradable in the same sense a missing column is.
+_UNRESOLVABLE_EMBED_CODES: Tuple[str, ...] = ("pgrst200", "pgrst201")
+
+#: The codes that must NEVER be degraded around. ``42P01``/``PGRST205`` is a missing TABLE:
+#: no narrower projection can help, and masking it would turn "the marketplace schema was never
+#: applied" into a quietly short list. ``42501`` is an RLS/permission refusal — degrading that
+#: would hide a tenancy misconfiguration, which is the one failure that must be loudest.
+_NEVER_DEGRADE_CODES: Tuple[str, ...] = ("42p01", "pgrst205", "42501", "insufficient_privilege")
+
+
+def is_degradable_projection_error(exc: BaseException) -> bool:
+    """True only when ``exc`` says a PROJECTION is unreadable, not that the READ failed.
+
+    The distinction is the whole point. ``routers/library.py::my_strategies`` answers a failed
+    read with ``MARKETPLACE_READ_FAILED`` (a 503) because Requirements 1.5 and 1.7 forbid
+    answering an incomplete read with a zero-filled 200 — and that is right for a database that
+    could not be reached. It is wrong for a database that answered perfectly well and said "there
+    is no such column", because the remedy for that is a narrower question, not a 503 on the
+    whole page.
+
+    Narrow on purpose, and the same shape as
+    :func:`~backend_app.backend.strategy_archive.is_missing_archived_at_error`: anything this
+    returns ``False`` for is re-raised by the caller, because the one outcome worse than a panel
+    that fails loudly is a panel that reports a short list as if it were complete.
+
+    Args:
+        exc: The exception a ``.execute()`` raised.
+
+    Returns:
+        ``True`` for PostgreSQL ``42703`` / PostgREST ``PGRST204`` (undefined column) and for
+        PostgREST ``PGRST200`` / ``PGRST201`` (an embed that resolves to no relationship or to
+        more than one). ``False`` for everything else, and explicitly for a missing table or a
+        permission refusal.
+    """
+    text = str(exc).lower()
+    if not text:
+        return False
+    if any(code in text for code in _NEVER_DEGRADE_CODES):
+        return False
+    if any(code in text for code in _MISSING_COLUMN_CODES):
+        return True
+    if any(code in text for code in _UNRESOLVABLE_EMBED_CODES):
+        return True
+    # PostgreSQL's prose for a missing TABLE is `relation "x" does not exist`, which shares the
+    # "does not exist" phrase with a missing column. Checked before the prose branch below so a
+    # code-less missing-table error cannot be degraded around by the phrase it has in common.
+    if "relation" in text and "does not exist" in text:
+        return False
+    # No structured code reached us. Accept only the unambiguous prose PostgreSQL and PostgREST
+    # use for these two conditions, so a timeout or a network error whose message happens to
+    # mention a table name is not mistaken for a schema fact.
+    names_a_column = "column" in text
+    return (
+        (names_a_column and ("does not exist" in text or "unknown" in text))
+        or "could not find a relationship" in text
+        or "more than one relationship" in text
+        or "schema cache" in text
+    )
 
 #: Round trip 3: the caller's running Paper_Sessions. Counted per strategy in Python from one
 #: read (PostgREST has no ``GROUP BY``), which is one round trip whatever the entry count. The
@@ -752,6 +942,7 @@ def build_my_strategies_entries(
     subscription_rows: Optional[Sequence[Any]],
     session_rows: Optional[Sequence[Any]],
     now: datetime,
+    omitted_owned_fields: Optional[Sequence[str]] = None,
 ) -> List[Dict[str, Any]]:
     """The Strategies_Page's combined owned-and-subscribed list, from the three read results.
 
@@ -773,6 +964,14 @@ def build_my_strategies_entries(
         session_rows: Round trip 3's running ``paper_sessions`` rows, or ``None`` when that read
             did not complete.
         now: The instant to decide entitlement at, UTC.
+        omitted_owned_fields: Names the OWNED entry must not carry because round trip 1's
+            projection did not request them — :data:`OPTIONAL_OWNED_COLUMNS` when the route fell
+            back to :data:`OWNED_STRATEGY_SELECT_MINIMAL`. Such a key is left OFF the entry
+            rather than emitted as ``null``, for the reason ``description``'s absence is: a
+            reader cannot tell a field that was read and is empty from one that was never read,
+            so the response must not offer it the choice. Names outside the entry's own key set
+            are ignored, so this can be handed the whole projection-difference without the caller
+            filtering it first.
 
     Returns:
         The list of entries. Each carries ``ownership``, ``allowed_actions`` and - for a
@@ -780,6 +979,11 @@ def build_my_strategies_entries(
     """
     by_strategy, by_listing = running_session_counts(session_rows)
     counts_known = session_rows is not None
+    # Intersected with the optional set rather than trusted: this argument decides which keys
+    # leave the response, and a caller that passed "id" or "allowed_actions" would produce an
+    # entry the page cannot render or, worse, one with no action list at all. Only the columns
+    # that are genuinely optional on the read are omittable on the write.
+    omitted = frozenset(omitted_owned_fields or ()) & frozenset(OPTIONAL_OWNED_COLUMNS)
 
     entries: List[Dict[str, Any]] = []
 
@@ -806,6 +1010,11 @@ def build_my_strategies_entries(
             "unavailable_reason": None,
             "allowed_actions": allowed_actions_for_owned(),
         }
+        # A field round trip 1's projection did not request is removed, not nulled. Done here
+        # rather than by not assigning it above so the dict literal stays one readable statement
+        # and the omission is visibly driven by the argument.
+        for field in omitted:
+            entry.pop(field, None)
         if counts_known:
             entry["running_paper_sessions"] = by_strategy.get(strategy_id or "", 0)
         entries.append(entry)

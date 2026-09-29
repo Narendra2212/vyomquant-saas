@@ -349,6 +349,140 @@ def _lift_dag_fields(item: Dict[str, Any]) -> Dict[str, Any]:
     return item
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# THE IMMUTABLE VERSION ROW A SAVE CREATES
+#
+# WHAT WAS BROKEN
+# ---------------
+# This router's save path wrote ONE row — into ``strategies`` — and stashed the compiled
+# plan inside the ``buy_logic`` JSONB (:func:`_dag_fields`). It never created a
+# ``strategy_versions`` row, and no other HTTP route did either: a repository-wide search
+# for ``is_current`` finds it in migrations 001/003 and in ``StrategyService``, and no
+# router calls any of the service methods that write it. So the version machinery existed
+# and was unreachable from the product.
+#
+# Everything downstream of a save reads that table:
+#
+#   * ``StrategyService.get_strategy`` sets ``owned["version"]`` from
+#     ``strategy_versions WHERE is_current = TRUE``.
+#   * ``strategy_operations.py::_load_backtest_version`` refuses a run with **422
+#     BACKTEST_VERSION_UNAVAILABLE** — "This strategy has no saved version, so there is
+#     nothing to backtest. Save a version first." — when that is empty.
+#   * ``GET /api/strategies/{id}/versions`` answers an empty ``versions`` array, so
+#     ``Backtester.jsx``'s ``rows.find(row => row.is_current)`` is ``null`` and the page
+#     says the strategy has no version marked current.
+#   * ``StrategyService._assert_deploy_prerequisites`` requires a version row carrying
+#     ``validation_state = 'VALID'``, a ``dag_hash`` and a ``compiled_plan``.
+#
+# The result was a strategy that saved successfully, appeared in the Strategies list, and
+# could not be backtested or deployed by any route. The save was the half that was wrong,
+# not the four readers.
+#
+# WHY THE FIX GOES THROUGH ``StrategyService.create_version``
+# ----------------------------------------------------------
+# Writing the row inline here would be a fifth place that knows the shape of
+# ``strategy_versions``, and it would have to re-implement, correctly, every part the
+# service already gets right: the canonical column values from
+# ``CompiledVersion.canonical_columns`` (Requirement 9.1), the INSERT that degrades to the
+# legacy ``execution_graph`` column when migration 004 is unapplied, clearing the previous
+# ``is_current`` row so ``check_single_current_version`` holds, repointing
+# ``strategies.current_version``, the registry-provenance snapshot (Requirement 4.16) and
+# the ``VERSION_CREATED`` audit record (Requirement 9.8). It is called with the
+# ``CompiledVersion`` this request already produced, so the compiler runs once per save.
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: The label the first version of a strategy gets. ``strategy_service``'s own default for a
+#: brand-new strategy, and the value ``003_signal_trace_restoration.sql`` gives
+#: ``strategies.current_version``, so a first save does not make the two disagree.
+#: Subsequent saves pass ``None`` and let ``_next_version_string`` count from the rows that
+#: exist — versioning is the service's, never this router's (Requirement 19.1).
+INITIAL_VERSION_LABEL = "v1.0"
+
+
+async def _persist_current_version(
+    user: dict,
+    strategy_id: str,
+    compiled: Any,
+    *,
+    version: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Persist ``compiled`` as this strategy's current ``strategy_versions`` row.
+
+    Returns
+        ``{"version_saved": True, "version": <label>, "version_id": <uuid>}`` on success,
+        or ``{"version_saved": False, "version_error": <code>, "version_message": <text>}``.
+        The keys are shaped for merging straight into a save response.
+
+    WHY THIS NEVER RAISES, AND WHY THAT IS NOT THE USUAL SWALLOW
+        It is called AFTER the ``strategies`` row has been written. Raising would answer a
+        save that genuinely succeeded with a 500, and the author would be told their
+        strategy was not saved while it sits in their Strategies list — the "reports a
+        failure for work that happened" mirror of the defect Requirement 9.4 is about.
+
+        So the outcome is REPORTED instead of thrown, and it is reported in the response
+        body rather than only in a log: ``version_saved`` is on every save response, always,
+        and ``False`` carries the code and the sentence explaining what the author cannot
+        do yet. Nothing is invented on the failure path — no ``version`` key, so
+        ``StrategyBuilder.jsx``'s ``serverVersionLabel`` finds no label and its confirmation
+        says "Saved" rather than naming a version that does not exist.
+    """
+    from backend_app.backend.strategy_service import get_strategy_service
+
+    try:
+        service = await get_strategy_service()
+        result = await service.create_version(
+            user,
+            strategy_id,
+            compiled.graph,
+            # The compile this request already ran. `create_version` re-derives every
+            # persisted column from it, so the stored plan and the stored graph are the
+            # same artifact the author's save was validated against.
+            compiled=compiled,
+            version=version,
+            make_current=True,
+            # A save produces an editable version, which is what `is_draft` means here:
+            # migration 004c's immutability trigger freezes a version once it is deployed,
+            # not once it is written, and `strategy_lifecycle.canvas_state` reads this to
+            # decide whether the Builder may open it for editing.
+            is_draft=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - reported on the response, never swallowed
+        logger.error(
+            "[STRATEGIES] Strategy %s was saved but its version row was not written, so it "
+            "cannot be backtested or deployed until a save succeeds: %s",
+            strategy_id,
+            exc,
+        )
+        return {
+            "version_saved": False,
+            "version_error": "STRATEGY_VERSION_NOT_SAVED",
+            "version_message": (
+                "The strategy was saved, but no version record could be created for it. "
+                "Backtesting and deployment both run a saved version, so both are "
+                "unavailable for it until a save succeeds. Try saving again."
+            ),
+        }
+
+    row = (result or {}).get("version") or {}
+    label = row.get("version") or version or INITIAL_VERSION_LABEL
+    logger.info(
+        "[STRATEGIES] Strategy %s version %s persisted (id=%s, dag_hash=%s, "
+        "canonical_columns=%s)",
+        strategy_id,
+        label,
+        row.get("id"),
+        (result or {}).get("dag_hash"),
+        (result or {}).get("canonical_persisted"),
+    )
+    persisted: Dict[str, Any] = {"version_saved": True, "version": label}
+    # Only when the driver actually returned one. A version id this router made up would be
+    # a handle the client could send back to `POST .../backtests/execute`, where it would
+    # resolve to nothing.
+    if row.get("id"):
+        persisted["version_id"] = str(row["id"])
+    return persisted
+
+
 def _market_identity(graph: Any) -> Dict[str, Any]:
     """``symbol`` and ``timeframe`` as the graph's DATA nodes declare them (SB-06).
 
@@ -1071,6 +1205,35 @@ async def create_strategy(
                 created["warmup_bars"] = compiled.plan.warmup_bars
                 created["warnings"] = compiled.warnings
 
+                # The immutable version this save creates. Without it the strategy is
+                # saved but not runnable: see the block comment above
+                # `_persist_current_version` for the four readers that require a
+                # `strategy_versions` row with `is_current = TRUE`, and for why the
+                # outcome is reported on this response instead of raised.
+                version_result = await _persist_current_version(
+                    user, strategy_id, compiled, version=INITIAL_VERSION_LABEL
+                )
+                created.update(version_result)
+                if not version_result["version_saved"]:
+                    # Surfaced where the author already reads non-blocking issues, so a
+                    # client that renders `warnings` and knows nothing about
+                    # `version_saved` still says something true.
+                    created["warnings"] = list(created["warnings"]) + [
+                        version_result["version_message"]
+                    ]
+            else:
+                # A metadata-only shell: no graph was submitted, so there is no compiled
+                # plan and nothing a version row could carry. Stated rather than left
+                # absent, because "this save created no version" and "this build does not
+                # report versions" must not look the same to a client.
+                created["version_saved"] = False
+                created["version_error"] = "STRATEGY_HAS_NO_GRAPH"
+                created["version_message"] = (
+                    "This strategy was saved without a graph, so it has no version to "
+                    "backtest or deploy. Save it from the Strategy Builder with at least "
+                    "one data source and one action block."
+                )
+
             try:
                 from backend_app.core.notification_dispatcher import dispatch_user_notification
                 await dispatch_user_notification(
@@ -1359,18 +1522,62 @@ async def rename_strategy(
 
 
 # ── PUT /api/strategies/{id} ─────────────────────────────────────────────
+#
+# The keys ``StrategyBuilder.jsx::buildSavePayload`` sends that are NOT columns of
+# ``strategies``. The table's whole column set comes from the migrations that ``ALTER`` it
+# (``current_version``, ``environment``, ``is_published``, ``marketplace_listing_id``,
+# ``is_subscribed``, ``is_read_only``, ``cloned_from``, ``status``, ``is_active``,
+# ``dag_config``) plus the pre-existing base columns; ``graph_json``, ``nodes`` and ``edges``
+# are none of them.
+#
+# Passing them straight into ``.update(body)`` — which is what this handler used to do —
+# makes PostgREST answer ``42703``/``PGRST204`` on the whole statement, so EVERY re-save
+# from the Builder failed with this route's 503 while the first save (``POST``, which folds
+# the graph into ``buy_logic``) succeeded. The graph now takes the same route on both verbs:
+# compiled, then stored inside ``buy_logic`` by :func:`_dag_fields`, and these three keys are
+# dropped from the column payload rather than sent to a column that does not exist.
+_GRAPH_PAYLOAD_KEYS = ("graph_json", "nodes", "edges")
+
+
 @router.put("/{strategy_id}")
 async def update_strategy(
     strategy_id: str,
     body: Dict[str, Any],
     user: dict = Depends(get_current_user),
 ):
+    """Update a strategy, and — when the body carries a graph — save it as a new version.
+
+    THE GRAPH HALF (the second-save defect)
+        A body carrying ``nodes``/``edges``/``graph_json`` is compiled through the SAME
+        seam ``POST /api/strategies`` uses, so a graph accepted by one verb is accepted by
+        the other and an invalid one answers 422 with the complete report having persisted
+        nothing (Requirements 3.2, 3.5, 3.6). The server's canonical graph and the compiled
+        plan are then stored in ``buy_logic`` exactly as the create path stores them, and
+        ``symbol``/``timeframe`` are taken from the graph's DATA nodes rather than from the
+        client (SB-06).
+
+        After the row is written, the compiled graph is persisted as a NEW immutable
+        version with ``is_current = TRUE`` — see the block comment above
+        :func:`_persist_current_version`. Without that, an edited strategy kept whatever
+        version its first save produced, and a backtest would have executed the plan the
+        author had already replaced: a run reporting on a graph that is no longer on the
+        canvas, which is worse than refusing the run.
+
+        The version LABEL is not supplied: ``StrategyService`` counts the next one from the
+        rows that exist, because versioning is the backend's (Requirement 19.1).
+
+    A body with no graph is unchanged by all of this — it updates the columns it names and
+    creates no version, because there is nothing new to version.
+    """
     from backend_app.backend.strategy_archive import (
         OPERATION_EDIT,
         ArchiveRejected,
         assert_strategy_not_archived,
         load_owned_strategy,
     )
+    from backend_app.backend.strategy_compiler import ValidationError as CompileValidationError
+    from backend_app.backend.strategy_compiler import CompilerError
+    from backend_app.backend.strategy_dag.schema import GraphParseError
 
     sb = await _sb(user)
     if not sb:
@@ -1401,12 +1608,62 @@ async def update_strategy(
                          "which includes ML validation and other safety checks."
             }
         )
-    
+
+    # ── The graph half ───────────────────────────────────────────────────────
+    # Compiled BEFORE the update is issued, so an invalid graph is refused having changed
+    # nothing at all — the same ordering `create_strategy` relies on (Requirements 3.5, 3.6).
+    compiled = None
+    update_payload = dict(body)
+    if any(key in body for key in _GRAPH_PAYLOAD_KEYS):
+        try:
+            compiled = _compile_payload(body)
+        except CompileValidationError as e:
+            logger.info(
+                "[STRATEGIES] Update refused for strategy %s, user %s: %s",
+                strategy_id,
+                user["id"],
+                (e.codes() if hasattr(e, "codes") else e),
+            )
+            raise HTTPException(
+                status_code=DAG_INVALID_STATUS, detail=_invalid_graph_detail(e)
+            )
+        except (GraphParseError, CompilerError) as e:
+            logger.info("[STRATEGIES] Update payload is not a readable graph: %s", e)
+            raise HTTPException(
+                status_code=DAG_INVALID_STATUS, detail=_unreadable_graph_detail(e)
+            )
+
+        # The three keys that are not columns leave the payload; the graph they carried goes
+        # into `buy_logic`, which is where this router has always kept it and where
+        # `_lift_dag_fields` reads it back out on every GET.
+        for key in _GRAPH_PAYLOAD_KEYS:
+            update_payload.pop(key, None)
+
+        buy_logic = update_payload.get("buy_logic")
+        if not isinstance(buy_logic, dict):
+            buy_logic = {}
+        else:
+            buy_logic = dict(buy_logic)
+        stored_graph = compiled.graph.to_dict()
+        buy_logic["_nodes"] = stored_graph["nodes"]
+        buy_logic["_edges"] = stored_graph["edges"]
+        buy_logic["_dag_version"] = 1
+        buy_logic.update(_dag_fields(compiled.plan))
+        update_payload["buy_logic"] = buy_logic
+
+        # SB-06: market identity is the graph's, not the client's. Only written when the
+        # graph declares it — a column is never overwritten with a substituted literal.
+        market = _market_identity(compiled.graph)
+        for column in ("symbol", "timeframe"):
+            value = market.get(column) or body.get(column)
+            if value:
+                update_payload[column] = value
+
     try:
         resp = await (
             sb
             .table("strategies")
-            .update(body)
+            .update(update_payload)
             .eq("id", strategy_id)
             .eq("user_id", user["id"])
             .execute()
@@ -1428,7 +1685,21 @@ async def update_strategy(
             operation=_subscriber_guard.STRATEGY_UPDATE,
         )
         raise HTTPException(404, "Strategy not found.")
-    return resp.data[0]
+
+    updated = dict(resp.data[0])
+    if compiled is not None:
+        # A new graph is a new version. The label is the service's to choose.
+        updated["dag_hash"] = compiled.dag_hash
+        updated["warmup_bars"] = compiled.plan.warmup_bars
+        updated["warnings"] = list(compiled.warnings)
+        version_result = await _persist_current_version(user, strategy_id, compiled)
+        # `version` from the new row wins over the `strategies.version` column this row may
+        # also carry: the version the author just saved is the one the confirmation names,
+        # and it is the one `is_current` now points at.
+        updated.update(version_result)
+        if not version_result["version_saved"]:
+            updated["warnings"] = updated["warnings"] + [version_result["version_message"]]
+    return updated
 
 
 # ── DELETE /api/strategies/{id} ──────────────────────────────────────────
