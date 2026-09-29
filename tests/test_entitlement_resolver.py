@@ -602,3 +602,316 @@ def test_wire_codes_match_error_catalogue():
 def test_every_reason_has_a_wire_mapping():
     for reason in EntitlementReason:
         assert reason in WIRE_CODE_FOR_REASON
+
+# ══════════════════════════════════════════════════════════════════════════
+# THE AMBIGUOUS ``library_subscriptions`` EMBED (the PGRST201 production defect)
+#
+# ``public.library_subscriptions`` has two live shapes. ``archived_migrations/root_migrations/
+# 007_create_library_subscriptions.sql`` gives it ONE foreign key to ``library_strategies``
+# (``library_id``); ``migrations/006_reconcile_production_database.sql`` gives it TWO
+# (``library_id NOT NULL`` and ``strategy_id``). Against the two-key shape the resolver's
+# unhinted ``library_subscriptions(...)`` embed is ambiguous, and PostgREST answers PGRST201 -
+# "Could not embed because more than one relationship was found" - rather than rows.
+#
+# That answer reached ``_read_admission_row`` as a driver error, became EntitlementReadFailed,
+# and ``paper_session_service.start_session`` turned it into 503 PAPER_READ_FAILED: the
+# Paper_Trading page reported PAPER_READ_FAILED and no session could start for anybody. The
+# admission read now tries the same read a second way, with the embed pinned to the
+# ``library_id`` foreign key PostgREST's own hint names - the disambiguation
+# ``library_entries._SUBSCRIPTION_SELECT_HINTED`` already applies to the same two-key shape.
+#
+# What these tests hold the fix to:
+#   * a PGRST201 on the unhinted embed no longer raises: the decision COMPLETES, and it is the
+#     same decision a healthy single-key environment reaches;
+#   * the retry is a spelling change only - same columns, same filter, same ``library_id`` key;
+#   * a read that genuinely did not complete STILL raises EntitlementReadFailed, is NOT retried,
+#     and never becomes NOT_SUBSCRIBED or LISTING_UNAVAILABLE. Answering "not entitled" for a
+#     failed read would deny a paying subscriber their own session (Requirements 17.2, 28.3).
+# ══════════════════════════════════════════════════════════════════════════
+
+#: The PGRST201 body PostgREST answered in production, verbatim from the CloudWatch record. The
+#: driver surfaces it as the ``str()`` of this mapping, which is how the resolver's message read
+#: "... did not complete: {'code': 'PGRST201', ...}".
+PGRST201_BODY = {
+    "code": "PGRST201",
+    "hint": (
+        "Try changing 'library_subscriptions' to one of the following: "
+        "'library_subscriptions!library_subscriptions_library_id_fkey', "
+        "'library_subscriptions!library_subscriptions_strategy_id_fkey'."
+    ),
+    "message": (
+        "Could not embed because more than one relationship was found for "
+        "'library_strategies' and 'library_subscriptions'"
+    ),
+}
+
+#: An RLS / grant refusal. A tenancy misconfiguration must stay the loudest failure there is, so
+#: this is never retried into a quieter answer and never becomes a verdict.
+RLS_REFUSAL_BODY = {
+    "code": "42501",
+    "message": 'permission denied for table library_subscriptions',
+}
+
+#: A read that did not complete at all, with no schema fact in it.
+CONNECTION_FAILURE_MESSAGE = "connection to server at db.supabase.co failed: timeout expired"
+
+
+class EmbedShapeSupabase:
+    """A double that answers the admission read according to the EMBED SPELLING it was asked for.
+
+    This is how PostgREST itself behaves against the two-foreign-key shape: the unhinted embed is
+    refused with PGRST201 and the hinted one is served. ``unhinted`` and ``hinted`` script each
+    answer independently, so a rung can be made to fail with an ambiguity, with a permission
+    refusal, with an error ENVELOPE rather than a raise, or to succeed.
+
+    Every executed query is recorded, so the tests can assert how many attempts a decision cost
+    and what each one asked for.
+    """
+
+    #: The spelling the hinted rung must use. Asserted against the module's own constant below,
+    #: so this string cannot drift from the code under test without a test naming the drift.
+    HINT_MARKER = "library_subscriptions!library_subscriptions_library_id_fkey"
+
+    def __init__(
+        self,
+        *,
+        listing_rows,
+        version_rows=None,
+        unhinted="pgrst201",
+        hinted="rows",
+    ):
+        self._listing_rows = list(listing_rows)
+        self._version_rows = list(version_rows or [])
+        self.unhinted = unhinted
+        self.hinted = hinted
+        self.calls: List[_Query] = []
+
+    def table(self, name):
+        return _Query(name, self)
+
+    def _execute(self, query: _Query):
+        self.calls.append(query)
+        if query.table_name == "strategy_versions":
+            return _Resp(list(self._version_rows))
+        if query.table_name != "library_strategies":
+            return _Resp([])
+        requested = str(query.cols or "")
+        scripted = self.hinted if self.HINT_MARKER in requested else self.unhinted
+        return self._answer(scripted)
+
+    def _answer(self, scripted: str):
+        if scripted == "rows":
+            return _Resp(list(self._listing_rows))
+        if scripted == "pgrst201":
+            raise RuntimeError(str(PGRST201_BODY))
+        if scripted == "pgrst201_envelope":
+            return {"data": None, "error": dict(PGRST201_BODY)}
+        if scripted == "rls":
+            raise RuntimeError(str(RLS_REFUSAL_BODY))
+        if scripted == "connection":
+            raise RuntimeError(CONNECTION_FAILURE_MESSAGE)
+        raise AssertionError(f"unscripted answer {scripted!r}")
+
+    def admission_projections(self) -> List[str]:
+        """Every projection the ``library_strategies`` read asked for, in order."""
+        return [
+            str(call.cols or "")
+            for call in self.calls
+            if call.table_name == "library_strategies"
+        ]
+
+
+# ── The embed spelling itself ────────────────────────────────────────────
+
+
+def test_the_hinted_rung_pins_the_library_id_foreign_key_and_nothing_else_changes():
+    """The retry is a DISAMBIGUATION, not a different question.
+
+    ``library_id`` is the right one of the two foreign keys - it is the ``NOT NULL`` column every
+    writer sets and the one ``uq_library_subscriptions_user_lib`` makes unique per caller per
+    Listing - and it is the choice ``library_entries._SUBSCRIPTION_SELECT_HINTED`` already made
+    for the same shape. Pinning ``strategy_id`` instead would embed a nullable column's
+    relationship and could read a different row.
+    """
+    assert er._SUBSCRIPTION_EMBED_FK == "library_subscriptions_library_id_fkey"
+    assert EmbedShapeSupabase.HINT_MARKER in er._ENTITLEMENT_SELECT_HINTED
+    assert "library_subscriptions_strategy_id_fkey" not in er._ENTITLEMENT_SELECT_HINTED
+    # Same columns, same embeds: the hinted projection is the unhinted one with the hint spliced
+    # into the subscription embed, so neither rung reads a fact the other does not.
+    assert (
+        er._ENTITLEMENT_SELECT_HINTED.replace(f"!{er._SUBSCRIPTION_EMBED_FK}", "")
+        == er._ENTITLEMENT_SELECT
+    )
+    # The plain embed is still attempted FIRST, so a single-foreign-key environment keeps issuing
+    # exactly the query it issued before, once.
+    assert er._ENTITLEMENT_SELECT_LADDER[0] == er._ENTITLEMENT_SELECT
+    assert er._ENTITLEMENT_SELECT_HINTED in er._ENTITLEMENT_SELECT_LADDER
+
+
+# ── The defect: a PGRST201 must not end the decision ─────────────────────
+
+
+def test_ambiguous_embed_completes_the_admission_read_instead_of_failing_it():
+    """The production symptom, reproduced and fixed.
+
+    Before the fix this raised ``EntitlementReadFailed``, which
+    ``paper_session_service.start_session`` answers with 503 PAPER_READ_FAILED - the
+    "Reported by the server as PAPER_READ_FAILED" the Paper_Trading page showed.
+    """
+    fake = EmbedShapeSupabase(
+        listing_rows=[_listing_row(subscription=_subscription())],
+        version_rows=_version_rows(1),
+        unhinted="pgrst201",
+        hinted="rows",
+    )
+    ent = _run(resolve(CALLER, LISTING_ID, fake, NOW))
+
+    assert ent.entitling is True
+    assert ent.reason is EntitlementReason.SUBSCRIBED
+    assert ent.subscription_id == "sub-1"
+    assert ent.version_id == "ver-0"
+
+    # Two attempts at the one read: the plain embed, then the disambiguated one. Bounded by the
+    # ladder, not by the row count.
+    projections = fake.admission_projections()
+    assert len(projections) == 2
+    assert EmbedShapeSupabase.HINT_MARKER not in projections[0]
+    assert EmbedShapeSupabase.HINT_MARKER in projections[1]
+
+
+def test_ambiguous_embed_answered_as_an_error_envelope_also_completes():
+    """Some drivers hand back ``{"data": None, "error": {...}}`` instead of raising.
+
+    The same PGRST201 fact in the other shape must reach the same retry, or the defect survives
+    for whichever client returns an envelope.
+    """
+    fake = EmbedShapeSupabase(
+        listing_rows=[_listing_row(subscription=_subscription())],
+        version_rows=_version_rows(1),
+        unhinted="pgrst201_envelope",
+        hinted="rows",
+    )
+    ent = _run(resolve(CALLER, LISTING_ID, fake, NOW))
+    assert ent.reason is EntitlementReason.SUBSCRIBED
+    assert len(fake.admission_projections()) == 2
+
+
+@pytest.mark.parametrize(
+    "listing_rows,expected_reason",
+    [
+        ([], EntitlementReason.LISTING_UNAVAILABLE),
+        ([_listing_row(author_id=CALLER["id"])], EntitlementReason.OWNED),
+        ([_listing_row(subscription=None)], EntitlementReason.NOT_SUBSCRIBED),
+        ([_listing_row(subscription=_subscription())], EntitlementReason.SUBSCRIBED),
+        (
+            [_listing_row(subscription=_subscription(period_expiry=PAST))],
+            EntitlementReason.EXPIRED,
+        ),
+        (
+            [_listing_row(subscription=_subscription(status="suspended"))],
+            EntitlementReason.SUBSCRIPTION_SUSPENDED,
+        ),
+        (
+            [_listing_row(subscription=_subscription(user_id="somebody-else"))],
+            EntitlementReason.NOT_SUBSCRIBED,
+        ),
+    ],
+)
+def test_the_decision_is_the_same_whichever_embed_spelling_answered(
+    listing_rows, expected_reason
+):
+    """The disambiguation changes the QUERY, never the verdict.
+
+    Each fixture is decided twice - once against a single-foreign-key environment that serves
+    the plain embed, once against the two-key shape that refuses it with PGRST201 - and the two
+    Entitlements must be equal. That is what makes the fix a fix rather than a second, quieter
+    admission path (property P-16: there is one decision).
+    """
+    healthy = EmbedShapeSupabase(
+        listing_rows=listing_rows, version_rows=_version_rows(1), unhinted="rows"
+    )
+    ambiguous = EmbedShapeSupabase(
+        listing_rows=listing_rows, version_rows=_version_rows(1), unhinted="pgrst201"
+    )
+
+    healthy_result = _run(resolve(CALLER, LISTING_ID, healthy, NOW))
+    ambiguous_result = _run(resolve(CALLER, LISTING_ID, ambiguous, NOW))
+
+    assert healthy_result.reason is expected_reason
+    assert ambiguous_result == healthy_result
+    # The healthy shape still costs ONE attempt at the admission read.
+    assert len(healthy.admission_projections()) == 1
+
+
+# ── The fix must not turn an outage into a silent denial ─────────────────
+
+
+def test_ambiguity_on_every_rung_still_raises_read_failed():
+    """When no spelling resolves, there IS no decision - and no verdict is invented.
+
+    The ladder's last rung failing is still a read that did not complete. Answering
+    NOT_SUBSCRIBED here would tell a paying subscriber they never subscribed, and
+    LISTING_UNAVAILABLE would tell them the Listing is gone (Requirements 17.2, 28.3, 30.5).
+    """
+    fake = EmbedShapeSupabase(
+        listing_rows=[_listing_row(subscription=_subscription())],
+        version_rows=_version_rows(1),
+        unhinted="pgrst201",
+        hinted="pgrst201",
+    )
+    with pytest.raises(EntitlementReadFailed) as excinfo:
+        _run(resolve(CALLER, LISTING_ID, fake, NOW))
+    assert excinfo.value.wire_code == "MARKETPLACE_READ_FAILED"
+    # Every rung was tried, and the failure was not swallowed on the way.
+    assert len(fake.admission_projections()) == len(er._ENTITLEMENT_SELECT_LADDER)
+
+
+def test_a_genuine_read_failure_still_raises_and_is_not_retried():
+    """A connection failure is not an embed problem, so no second projection is attempted.
+
+    This is the half of the behaviour the fix had to PRESERVE: the existing
+    ``test_failed_admission_read_raises_rather_than_answering_not_subscribed`` asserts the raise;
+    this additionally pins that the ladder does not walk past a failure no projection answers,
+    and that the driver error stays chained for the operator.
+    """
+    fake = EmbedShapeSupabase(
+        listing_rows=[_listing_row(subscription=_subscription())],
+        version_rows=_version_rows(1),
+        unhinted="connection",
+    )
+    with pytest.raises(EntitlementReadFailed) as excinfo:
+        _run(resolve(CALLER, LISTING_ID, fake, NOW))
+    assert excinfo.value.wire_code == "MARKETPLACE_READ_FAILED"
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert len(fake.admission_projections()) == 1
+
+
+def test_a_permission_refusal_is_never_retried_into_a_quieter_answer():
+    """An RLS / grant refusal must stay the loudest failure, never a narrower question.
+
+    Degrading a 42501 would hide a tenancy misconfiguration behind a differently-spelled embed,
+    which is the one failure that must not be softened.
+    """
+    fake = EmbedShapeSupabase(
+        listing_rows=[_listing_row(subscription=_subscription())],
+        version_rows=_version_rows(1),
+        unhinted="rls",
+    )
+    with pytest.raises(EntitlementReadFailed):
+        _run(resolve(CALLER, LISTING_ID, fake, NOW))
+    assert len(fake.admission_projections()) == 1
+
+
+def test_the_embed_error_classifier_is_narrow():
+    """Only PostgREST's two "this embed cannot be resolved" answers are retryable."""
+    assert er._is_unresolvable_embed_error(RuntimeError(str(PGRST201_BODY))) is True
+    assert er._is_unresolvable_embed_error(
+        RuntimeError("PGRST200: Could not find a relationship in the schema cache")
+    ) is True
+    # A refusal, a missing table, a timeout and an empty message are all read failures.
+    assert er._is_unresolvable_embed_error(RuntimeError(str(RLS_REFUSAL_BODY))) is False
+    assert er._is_unresolvable_embed_error(
+        RuntimeError('42P01: relation "library_subscriptions" does not exist')
+    ) is False
+    assert er._is_unresolvable_embed_error(RuntimeError(CONNECTION_FAILURE_MESSAGE)) is False
+    assert er._is_unresolvable_embed_error(RuntimeError("")) is False

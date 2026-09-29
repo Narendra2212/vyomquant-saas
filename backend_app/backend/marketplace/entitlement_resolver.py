@@ -55,6 +55,17 @@ subscription both come back as an empty embedded collection rather than a missin
 The subscription embed is filtered server-side to ``user_id = caller.id`` so the round trip
 carries only the caller's own row.
 
+The ``library_subscriptions`` embed is spelled two ways, tried in order
+(:data:`_ENTITLEMENT_SELECT_LADDER`), because ``public.library_subscriptions`` has two live
+shapes: one foreign key to ``library_strategies``, or two (migration 006 adds ``library_id`` AND
+``strategy_id``). The unhinted embed is attempted first and is the only query a single-key
+environment issues; against the two-key shape PostgREST answers ``PGRST201`` instead of rows, and
+the second rung repeats the identical read with the embed pinned to
+``library_subscriptions!library_subscriptions_library_id_fkey``. Both rungs ask for the same
+columns under the same filter, so the decision does not depend on which one answered. A failure
+that is not an unresolvable embed is never retried and never becomes a verdict - see "A READ THAT
+DOES NOT COMPLETE IS NOT AN ANSWER" below and :func:`_is_unresolvable_embed_error`.
+
 The one further read is :func:`_resolve_current_version`, which resolves the *current live
 Strategy_Version* behind ``source_strategy_id``. It serves two purposes at once:
 
@@ -110,11 +121,17 @@ call this function and refuse on ``not entitling`` with the reason's wire code.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, FrozenSet, List, Mapping, Optional, Sequence
+from typing import Any, FrozenSet, List, Mapping, Optional, Sequence, Tuple
+
+# Stdlib only, for the same reason ``checkout_service``, ``expiry_sweep`` and
+# ``submission_service`` each keep one: the ambiguous-embed retry below is an operational fact an
+# operator must be able to see in the log, and a logger is not framework I/O.
+logger = logging.getLogger(__name__)
 
 # The wire-code catalogue strings are referenced by name only. errors.py imports FastAPI, so it
 # is NOT imported here; these constants mirror its spellings and are asserted equal to it by the
@@ -280,10 +297,96 @@ class Entitlement:
 #: the caller server-side (see :func:`_read_admission_row`). The column set is bound by the
 #: ``entitlement_resolver`` entry in this package's ``COLUMN_CONTRACT`` and asserted a subset of
 #: it by ``tests/test_marketplace_paper_schema_contract.py``.
+#:
+#: This is the FIRST rung of :data:`_ENTITLEMENT_SELECT_LADDER`; it is unhinted, so it is the
+#: projection an environment with a single ``library_subscriptions -> library_strategies``
+#: foreign key resolves, and the one such an environment keeps issuing unchanged.
 _ENTITLEMENT_SELECT = (
     "id,author_id,source_strategy_id,source_cloning_enabled,"
     "marketplace_submissions(submission_state),"
     "library_subscriptions(id,user_id,status,period_expiry)"
+)
+
+#: The embedded columns of the subscription half, written once so both rungs of the ladder ask
+#: for exactly the same facts. A rung that read a narrower subscription row would be a different
+#: decision, not the same decision reached differently.
+_SUBSCRIPTION_EMBED_COLUMNS = "id,user_id,status,period_expiry"
+
+#: The foreign key the subscription embed means, as PostgREST names it.
+#:
+#: WHY THE EMBED NEEDS A HINT IN THE LIVE SHAPE
+#: --------------------------------------------
+#: ``migrations/006_reconcile_production_database.sql`` creates ``public.library_subscriptions``
+#: with TWO foreign keys to the SAME table::
+#:
+#:     library_id  UUID NOT NULL REFERENCES public.library_strategies(id) ON DELETE CASCADE,
+#:     strategy_id UUID          REFERENCES public.library_strategies(id) ON DELETE CASCADE,
+#:
+#: An unhinted ``library_subscriptions(...)`` embed off ``library_strategies`` is ambiguous
+#: against that shape, and PostgREST answers ``PGRST201`` ("Could not embed because more than
+#: one relationship was found for 'library_strategies' and 'library_subscriptions'") with a hint
+#: naming the two constraints. That answer reached :func:`_read_admission_row` as a driver error,
+#: became :class:`EntitlementReadFailed`, and ``paper_session_service.start_session`` turned it
+#: into 503 ``PAPER_READ_FAILED`` - so no Paper_Session could start and no deployment could be
+#: admitted, for every caller, on every call.
+#:
+#: ``library_id`` is the correct one of the two, for the same reason
+#: ``library_entries._SUBSCRIPTION_SELECT_HINTED`` picks it: it is the ``NOT NULL`` column every
+#: writer of this table sets, and it is the column ``uq_library_subscriptions_user_lib``
+#: (``UNIQUE (library_id, user_id)``) makes one-per-caller-per-Listing. The constraint spelling
+#: is PostgreSQL's default name for that inline ``REFERENCES``, which is the name PostgREST's own
+#: ``PGRST201`` hint offers, and it is the same in both live shapes of this table (migration 006
+#: and ``archived_migrations/root_migrations/007_create_library_subscriptions.sql``).
+_SUBSCRIPTION_EMBED_FK = "library_subscriptions_library_id_fkey"
+
+#: The SAME read with the subscription embed disambiguated by :data:`_SUBSCRIPTION_EMBED_FK`.
+#: Identical columns, identical filter, identical response keys - PostgREST names an embedded
+#: resource after its table, not after the hint, which is the same assumption
+#: ``library_entries`` already relies on when it reads the ``library_strategies`` key off a row
+#: fetched by its own hinted rung.
+_ENTITLEMENT_SELECT_HINTED = (
+    "id,author_id,source_strategy_id,source_cloning_enabled,"
+    "marketplace_submissions(submission_state),"
+    f"library_subscriptions!{_SUBSCRIPTION_EMBED_FK}({_SUBSCRIPTION_EMBED_COLUMNS})"
+)
+
+#: The admission read's attempt ladder, tried in order, the shape
+#: ``library_entries.SUBSCRIPTION_SELECT_LADDER`` already established for this same defect class.
+#:
+#: The second rung is attempted ONLY when the first failed with an answer
+#: :func:`_is_unresolvable_embed_error` recognises as "this EMBED cannot be resolved" - never for
+#: a read that did not complete. A timeout, a refused connection, an RLS denial or a missing
+#: table raises :class:`EntitlementReadFailed` from the first rung, untouched and unretried,
+#: because no different projection answers any of those and because Requirements 17.2 and 28.3
+#: forbid substituting an absence for a failure. When the LAST rung is also unresolvable the
+#: outcome is still :class:`EntitlementReadFailed`: there is no rung that answers "not
+#: entitled", so an ambiguity can never become a refusal of a paying subscriber.
+#:
+#: The ladder is per-READ and bounded by its own length, so Requirement 27.2 still holds: the
+#: attempt count is a property of the schema shape, never of the row count.
+_ENTITLEMENT_SELECT_LADDER: Tuple[str, ...] = (
+    _ENTITLEMENT_SELECT,
+    _ENTITLEMENT_SELECT_HINTED,
+)
+
+#: PostgREST's two "this embed cannot be resolved" answers: ``PGRST200`` is no relationship
+#: found, ``PGRST201`` is more than one found (the ambiguity the hinted rung exists for). Both
+#: are answered by asking with a DIFFERENT embed spelling, which is what makes them retryable
+#: here. Kept local rather than imported from ``library_entries`` - that module imports THIS one,
+#: so the dependency cannot run the other way, and the repo's convention is that each degradable
+#: read owns the error contract of its own caller rather than inheriting another's.
+_UNRESOLVABLE_EMBED_CODES: Tuple[str, ...] = ("pgrst200", "pgrst201")
+
+#: The answers that must NEVER be retried into a quieter one. ``42501`` /
+#: ``insufficient_privilege`` is an RLS or grant refusal - degrading that would hide a tenancy
+#: misconfiguration, the one failure that must stay loudest. ``42P01`` / ``PGRST205`` is a
+#: missing TABLE: no embed spelling helps, and masking it would turn "the marketplace schema was
+#: never applied" into a verdict about someone's subscription.
+_NEVER_DEGRADE_CODES: Tuple[str, ...] = (
+    "42501",
+    "insufficient_privilege",
+    "42p01",
+    "pgrst205",
 )
 
 #: The current-version resolution read. ``strategy_versions`` scoped to ``strategy_id`` and to
@@ -460,34 +563,115 @@ async def resolve(
 # ══════════════════════════════════════════════════════════════════════════
 
 
+def _is_unresolvable_embed_error(exc: BaseException) -> bool:
+    """True only when ``exc`` says the EMBED cannot be resolved, not that the READ failed.
+
+    The distinction is the whole point, and it is the one
+    :func:`~backend_app.backend.marketplace.library_entries.is_degradable_projection_error`
+    already draws for the same defect class. A database that answered perfectly well and said
+    "that embed names more than one relationship" has not failed; the remedy is a differently
+    spelled embed, not a 503. A database that could not be reached, or that refused the read, HAS
+    failed, and the only honest outcome is :class:`EntitlementReadFailed`.
+
+    Narrow on purpose. Anything this returns ``False`` for is raised by
+    :func:`_read_admission_row` as a read that did not complete, because the one outcome worse
+    than an admission decision that fails loudly is an admission decision that refuses a paying
+    subscriber on the strength of a read nobody completed (Requirements 17.2, 28.3, 30.5).
+
+    Args:
+        exc: the exception (or :class:`EntitlementReadFailed` carrying a PostgREST error
+            envelope) a rung of :data:`_ENTITLEMENT_SELECT_LADDER` produced.
+
+    Returns:
+        ``True`` for PostgREST ``PGRST200`` / ``PGRST201`` and for the unambiguous prose of
+        those two answers. ``False`` for everything else, and explicitly for a permission
+        refusal or a missing table.
+    """
+    text = str(exc).lower()
+    if not text:
+        return False
+    if any(code in text for code in _NEVER_DEGRADE_CODES):
+        return False
+    if any(code in text for code in _UNRESOLVABLE_EMBED_CODES):
+        return True
+    # No structured code reached us. Accept only the prose PostgREST uses for these two answers,
+    # so a timeout or a connection error whose message happens to mention a table name is never
+    # mistaken for a schema fact.
+    return (
+        "more than one relationship" in text
+        or "could not find a relationship" in text
+        or "could not embed because" in text
+    )
+
+
 def _read_admission_row(supabase: Any, listing_id: str) -> Optional[Mapping[str, Any]]:
-    """The one round trip: the Listing, its submission state and the caller's Subscription.
+    """The one read: the Listing, its submission state and the caller's Subscription.
 
     ``library_subscriptions`` is embedded and can be pre-filtered to the caller by PostgREST;
     when the client double does not support the embedded filter, :func:`_caller_subscription`
     re-scopes to ``user_id = caller.id`` in memory, so a foreign subscription can never leak
     into the decision either way.
 
+    ONE read, and in a schema whose ``library_subscriptions`` carries a single foreign key to
+    ``library_strategies`` also one ATTEMPT: :data:`_ENTITLEMENT_SELECT` is tried first and is
+    the only query such an environment ever issues. Where that table carries two foreign keys to
+    that one table (migration 006's shape, the shape production runs), PostgREST answers
+    ``PGRST201`` instead of rows, and the second rung - the same read with the embed
+    disambiguated by :data:`_SUBSCRIPTION_EMBED_FK` - is issued. Both rungs request the same
+    columns and the same filter, so the DECISION is identical either way; only the embed's
+    spelling differs.
+
+    Nothing else is retried. A rung that fails for any reason
+    :func:`_is_unresolvable_embed_error` does not recognise raises immediately, from the rung
+    that failed, with the driver error chained - and an ambiguity that survives the last rung
+    raises too. No path here returns ``None`` or an empty subscription collection for a read that
+    did not complete, so neither ``LISTING_UNAVAILABLE`` nor ``NOT_SUBSCRIBED`` can be
+    manufactured out of a broken read.
+
     Raises:
         EntitlementReadFailed: the read did not complete. NOT ``None``, and not one of the six
             reasons: a broken read that returned ``LISTING_UNAVAILABLE`` or ``NOT_SUBSCRIBED``
             would be a fabricated fact about the caller's subscription (Requirement 30.5).
     """
-    try:
-        response = (
-            supabase.table("library_strategies")
-            .select(_ENTITLEMENT_SELECT)
-            .eq("id", listing_id)
-            .execute()
-        )
-        rows = _rows(response)
-    except EntitlementReadFailed:
-        raise
-    except Exception as exc:  # noqa: BLE001 - re-raised as the defined outcome, never swallowed
-        raise EntitlementReadFailed(
-            f"the admission read for listing {listing_id} did not complete: {exc}"
-        ) from exc
-    return rows[0] if rows else None
+    last_rung = len(_ENTITLEMENT_SELECT_LADDER) - 1
+
+    for index, select in enumerate(_ENTITLEMENT_SELECT_LADDER):
+        try:
+            response = (
+                supabase.table("library_strategies")
+                .select(select)
+                .eq("id", listing_id)
+                .execute()
+            )
+            rows = _rows(response)
+        except Exception as exc:  # noqa: BLE001 - every path below raises or retries the embed
+            if index < last_rung and _is_unresolvable_embed_error(exc):
+                logger.warning(
+                    "the admission read for listing %s could not resolve its "
+                    "library_subscriptions embed with projection %s, so public."
+                    "library_subscriptions carries more than one foreign key to public."
+                    "library_strategies (migration 006 adds both library_id and strategy_id). "
+                    "Retrying once with the %s hint. Detail: %s",
+                    listing_id,
+                    _ENTITLEMENT_SELECT,
+                    _SUBSCRIPTION_EMBED_FK,
+                    exc,
+                )
+                continue
+            if isinstance(exc, EntitlementReadFailed):
+                # Already the defined outcome (a response carrying an ``error`` envelope, via
+                # :func:`_rows`). Re-raised unchanged rather than re-wrapped.
+                raise
+            raise EntitlementReadFailed(
+                f"the admission read for listing {listing_id} did not complete: {exc}"
+            ) from exc
+        return rows[0] if rows else None
+
+    # Unreachable: every rung either returns, retries or raises.
+    raise EntitlementReadFailed(  # pragma: no cover
+        f"the admission read for listing {listing_id} did not complete: "
+        "no projection was attempted"
+    )
 
 
 def _resolve_current_version(supabase: Any, source_strategy_id: Optional[str]) -> Optional[str]:

@@ -983,6 +983,7 @@ GUARDED_LOGGER_NAMES: Tuple[str, ...] = (
     "MarketplaceSettlement",
     "MarketplaceSubmissionService",
     "MarketplaceSubscriptionReinstatement",
+    "backend_app.backend.marketplace.entitlement_resolver",
     "backend_app.backend.marketplace.subscriber_operation_guard",
     # backend_app/backend/paper/
     "PaperChannel",

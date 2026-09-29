@@ -1817,18 +1817,32 @@ async def validate_historical_data(request: Request,
     - Timestamp ordering
     - Sufficient warmup period
     - OHLCV consistency
+
+    The feed is this module's one seam, :func:`_backtest_exchange_instance` — the same
+    connection ``backtests/execute`` hands to the run. The check has to read the venue the
+    backtest will actually read, and ``DataEngine`` requires that connection be given to
+    it; the service used to build its engine with no arguments at all, which raised
+    ``TypeError`` before any data was fetched and surfaced as "Error during data
+    validation" on every window the Backtester asked about.
     """
     try:
         backtest_service = await get_backtest_service()
+        exchange_instance = await _backtest_exchange_instance()
         
         validation_result = await backtest_service.validate_historical_data(
             symbol=body.get("symbol", "BTC/USDT"),
             timeframe=body.get("timeframe", "1h"),
             start_date=body.get("start_date"),
-            end_date=body.get("end_date")
+            end_date=body.get("end_date"),
+            exchange_instance=exchange_instance
         )
         
         return validation_result
+    except HTTPException:
+        # `_backtest_exchange_instance` answers an unconfigured feed with 503. That is
+        # the accurate answer to "is this window available" when the platform has no
+        # venue to read, and must not be relabelled as a 500 validation failure.
+        raise
     except Exception as e:
         logger.error(f"Error validating historical data for user {user['id']}: {e}")
         raise HTTPException(

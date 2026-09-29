@@ -340,7 +340,9 @@ class BacktestService:
         self,
         user: dict,
         strategy_id: str,
-        version: int,
+        # A LABEL, not an ordinal: ``"v1.0"``. Annotated ``int`` until migration 016, which
+        # was the same false claim the ``"version"`` key's comment below used to make.
+        version: str,
         blueprint: dict,
         dataset: str,
         start_date: str,
@@ -391,10 +393,28 @@ class BacktestService:
             "id": backtest_id,
             "strategy_id": strategy_id,
             "user_id": user["id"],
-            # ``strategy_backtests.version`` is VARCHAR(20) NOT NULL
-            # (001_strategy_architecture.sql), and the caller's own label is what makes the
-            # row say which version ran. This used to be a hardcoded ``1``, which discarded
-            # the argument and recorded every backtest against "version 1".
+            # The caller's own label - a string like ``"v1.0"``, produced by
+            # ``routers/strategy_operations.py`` from ``strategy_versions.version`` - is what
+            # makes the row say which version ran. This used to be a hardcoded ``1``, which
+            # discarded the argument and recorded every backtest against "version 1".
+            #
+            # ``strategy_backtests.version`` HAS TWO DIVERGENT DECLARATIONS, and this comment
+            # used to name only the first: ``001_strategy_architecture.sql`` line 125 declares
+            # it ``VARCHAR(20) NOT NULL``, but
+            # ``migrations/006_reconcile_production_database.sql`` line 449 redeclares the same
+            # column ``INTEGER DEFAULT 1``. Both use ``CREATE TABLE IF NOT EXISTS``, so
+            # whichever ran first won - and PRODUCTION TOOK 006's INTEGER. Every insert from
+            # here was therefore refused outright:
+            #     {'code': '22P02',
+            #      'message': 'invalid input syntax for type integer: "v1.0"'}
+            # which CloudWatch logged as the StrategyOperationsRouter "Error executing
+            # backtest" line. ``backend_app/migrations/016_strategy_backtests_version_label.sql``
+            # reconciles the column to ``VARCHAR(20)`` (and drops 006's ``DEFAULT 1``, which
+            # would record a label naming no version). Until 016 is applied to a database
+            # carrying 006's shape, this insert fails with 22P02 - the value below is right and
+            # the column's type is what was wrong, since "v1.0" has no integer spelling and
+            # collapsing "v1.0"/"v1.1"/"v1.9" onto 1 would reinstate the "version 1" defect
+            # described above.
             "version": version,
             "blueprint": blueprint,
             "dataset": dataset,
@@ -845,7 +865,9 @@ class BacktestService:
         symbol: str,
         timeframe: str,
         start_date: str,
-        end_date: str
+        end_date: str,
+        *,
+        exchange_instance
     ) -> Dict:
         """
         Validate historical data availability and quality before backtest.
@@ -855,9 +877,23 @@ class BacktestService:
             timeframe: Timeframe (e.g., 1h, 4h, 1d)
             start_date: Start date (ISO format)
             end_date: End date (ISO format)
+            exchange_instance: The connected CCXT feed the history is read through.
+                ``DataEngine`` is "injected with a live CCXT exchange instance from
+                ConnectionEngine" (its own docstring) and takes it as a required
+                argument, so the validation cannot build its engine without one. This
+                is the caller's to supply because the caller is the one that knows
+                which venue the backtest will read — the same instance the run itself
+                is given (``BacktestRuntime.run_backtest`` →
+                ``set_data_engine(exchange_instance)``). Keyword-only so it cannot be
+                filled positionally by a date.
             
         Returns:
             Validation result with issues if any
+        
+        A note on the absent feed: when ``exchange_instance`` is None there is no
+        market data connection to validate against, and the honest answer is to say
+        the check could not run. Constructing a stand-in exchange here would report
+        one venue's data quality as though it were another's.
         """
         from backend_app.backend.data_seeking_engine import DataEngine
         import pandas as pd
@@ -870,17 +906,34 @@ class BacktestService:
             "data_info": {}
         }
         
+        if exchange_instance is None:
+            validation_result["valid"] = False
+            validation_result["issues"].append({
+                "code": "NO_MARKET_DATA_FEED",
+                "message": (
+                    "No market data connection was supplied, so historical data for "
+                    f"{symbol} {timeframe} could not be validated."
+                ),
+                "severity": "critical"
+            })
+            return validation_result
+        
         try:
-            # Initialize data engine
-            data_engine = DataEngine()
+            # Initialize data engine on the caller's feed
+            data_engine = DataEngine(exchange_instance)
             
-            # Fetch sample data to validate
-            df = await data_engine.fetch_ohlcv(
+            # Fetch the window's bars to validate. `fetch_historical_ohlcv` is the
+            # engine's REST history reader (there is no `fetch_ohlcv` on DataEngine)
+            # and it is counted in bars, not dated, so the count comes from the
+            # requested window measured in this timeframe's own bars — the same
+            # conversion `_timeframe_to_minutes` already does for the gap check.
+            bars = await data_engine.fetch_historical_ohlcv(
                 symbol=symbol,
                 timeframe=timeframe,
-                start_date=start_date,
-                end_date=end_date
+                limit=self._window_bar_count(timeframe, start_date, end_date)
             )
+            
+            df = self._bars_to_frame(bars)
             
             if df is None or df.empty:
                 validation_result["valid"] = False
@@ -890,6 +943,26 @@ class BacktestService:
                     "severity": "critical"
                 })
                 return validation_result
+            
+            # Report on the requested window, not on whatever the feed happened to
+            # return. A feed that reaches back only part of the way is a different
+            # answer from a feed with no data at all, and is named as such.
+            available_range = f"{df.index[0]} to {df.index[-1]}"
+            in_window = self._clip_to_window(df, start_date, end_date)
+            
+            if in_window.empty:
+                validation_result["valid"] = False
+                validation_result["issues"].append({
+                    "code": "WINDOW_NOT_AVAILABLE",
+                    "message": (
+                        f"The feed returned no {symbol} {timeframe} data inside "
+                        f"{start_date} to {end_date}; it covers {available_range}."
+                    ),
+                    "severity": "critical"
+                })
+                return validation_result
+            
+            df = in_window
             
             # Basic data quality checks
             validation_result["data_info"] = {
@@ -982,6 +1055,63 @@ class BacktestService:
         
         return validation_result
     
+    def _window_bar_count(self, timeframe: str, start_date: str, end_date: str) -> int:
+        """How many bars of `timeframe` the requested window spans.
+
+        `DataEngine.fetch_historical_ohlcv` is counted in bars, so a dated window has
+        to be converted before it can be asked for. Capped at the same 10,000 the run
+        path uses (`BacktestRuntime.run_backtest`), so validation never asks for more
+        history than the backtest itself would read. Falls back to that cap when
+        either bound is missing or unparseable rather than guessing a narrower window.
+        """
+        import pandas as pd
+
+        cap = 10_000
+        try:
+            start = pd.to_datetime(start_date, utc=True)
+            end = pd.to_datetime(end_date, utc=True)
+        except (TypeError, ValueError):
+            return cap
+        if pd.isna(start) or pd.isna(end) or end <= start:
+            return cap
+
+        minutes = (end - start).total_seconds() / 60.0
+        bars = int(minutes // self._timeframe_to_minutes(timeframe)) + 1
+        return max(1, min(bars, cap))
+
+    def _bars_to_frame(self, bars):
+        """The engine's OHLCV bar lists as a UTC-indexed frame.
+
+        Same shape the run path builds (`BacktestRuntime.run_backtest`), so the checks
+        below inspect exactly the frame a backtest would execute over.
+        """
+        import pandas as pd
+
+        if not bars:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(
+            bars,
+            columns=["timestamp", "open", "high", "low", "close", "volume"]
+        )
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+        return df.set_index("timestamp").sort_index()
+
+    def _clip_to_window(self, df, start_date: str, end_date: str):
+        """The rows inside the requested window. Unparseable bounds clip nothing."""
+        import pandas as pd
+
+        clipped = df
+        for bound, side in ((start_date, "start"), (end_date, "end")):
+            try:
+                edge = pd.to_datetime(bound, utc=True)
+            except (TypeError, ValueError):
+                continue
+            if pd.isna(edge):
+                continue
+            clipped = clipped[clipped.index >= edge] if side == "start" else clipped[clipped.index <= edge]
+        return clipped
+
     def _timeframe_to_minutes(self, timeframe: str) -> int:
         """Convert timeframe string to minutes."""
         timeframe_map = {
