@@ -467,17 +467,14 @@ describe('TopBar: the bar holds §6.1’s four regions and nothing else', () => 
     expect(within(barRow()).queryAllByRole('button')).toHaveLength(0);
   });
 
-  it('renders a UTC clock that ticks', () => {
-    vi.useFakeTimers({ now: new Date('2024-05-01T09:15:30Z') });
+  it('has no clock — the wall-clock readout was removed on request', () => {
     renderTopBar();
 
-    const clock = document.querySelector('[data-shell="topbar-clock"]');
-    expect(clock.textContent).toBe('09:15:30 UTC');
-
-    act(() => vi.advanceTimersByTime(1000));
-    expect(clock.textContent).toBe('09:15:31 UTC');
-    // The machine-readable value and the visible one come from one `toISOString()`.
-    expect(clock.getAttribute('datetime')).toBe('2024-05-01T09:15:31.000Z');
+    // The element AND the ticking timer that drove it: a clock that re-rendered the bar
+    // every second is the thing being removed, not just its eight characters.
+    expect(document.querySelector('[data-shell="topbar-clock"]')).toBeNull();
+    expect(barRow().querySelector('time')).toBeNull();
+    expect(barRow().textContent).not.toMatch(/UTC/);
   });
 });
 

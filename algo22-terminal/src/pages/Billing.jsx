@@ -140,8 +140,20 @@
  *
  *    7 commands — *Update Payment Method* (:448), *Manage Billing* (:612), *Resume
  *      Subscription* (:658), *Cancel Subscription* (:668), *Refresh* (:677),
- *      *Subscribe* / *Current Plan* (:767), *Manage via Stripe Portal* (:803). All seven are
- *      `ds/CommandButton`s now
+ *      *Subscribe* / *Current Plan* (:767), and the payment-methods panel's own portal
+ *      command (:803). All seven were `ds/CommandButton`s.
+ *
+ *      **The seventh is GONE, and its old name here was wrong twice over.** It was recorded
+ *      in this list as *Manage via Stripe Portal*, and it named a provider this platform does
+ *      not bill through: Razorpay is the configured one. It later read *Manage via provider
+ *      portal*, which was no truer — Razorpay publishes no hosted self-serve portal, so the
+ *      control had nothing to open. `POST /api/billing/portal` opened with
+ *      `_validate_keys("stripe")`, which raises on a deployment with no live Stripe secret,
+ *      so pressing it answered 500 every single time. It is removed rather than relabelled,
+ *      because no label makes a button that cannot succeed into one that can. The counts
+ *      below are left as the task-7.9 measurement of the file AS IT WAS THEN — they are a
+ *      historical record of that migration, and editing them to match today's file would
+ *      misstate what the scan measured.
  *    6 sentences — *Updating pricing…* (:691), *Loading plans…* (:698), the plan description
  *      (:738), the *Billed as …* line (:746), each capability line (:755) and *No payment
  *      methods on file.* (:787)
@@ -320,6 +332,15 @@
  * the same `window.location.href` redirect, `setCurrency`, `cancelSubscription`,
  * `resumeSubscription` and `openPortal` with the same `window.open(url, '_blank',
  * 'noopener,noreferrer')`. Every `detail`-string failure message is the page's own, verbatim.
+ *
+ * `openPortal` is the one exception, and it is a REMOVAL of a broken control rather than of a
+ * capability: there was no capability behind it. `POST /api/billing/portal` is Stripe-only and
+ * Razorpay — the provider this platform actually bills through — publishes no hosted portal at
+ * all, so the payment-methods panel's *Manage via provider portal* button could only ever
+ * answer 500. It is gone. `handleOpenPortal` stays for the two call sites outside that panel
+ * (the `past_due` alert's *Update payment method* and the current-plan panel's *Manage
+ * billing*), which now surface the server's own structured refusal — the provider is named,
+ * and so is where the payment instrument is really changed. No URL is invented anywhere.
  *
  * Three behaviours DID change, each because the old one lost information:
  *
@@ -518,6 +539,20 @@ const isUnlimited = (value) => value === -1 || value === Infinity;
 const writeFailureMessage = (err, fallback) => {
   const candidates = [err?.data?.detail, err?.response?.data?.detail];
   for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim() !== '') return candidate;
+  }
+  // `detail` as the CODED OBJECT this repo's routers raise —
+  // `HTTPException(status_code=…, detail={"error": "STABLE_CODE", "message": "…"})`, the shape
+  // `routers/strategy_operations.py` uses throughout and the shape `POST /api/billing/portal`
+  // and `POST /api/billing/payment-methods` now refuse with. Read for the same reason `detail`
+  // is read before `response.data.detail` above: without this arm the object fails the
+  // `typeof === 'string'` test, falls past the marketplace envelope, and the server's named
+  // reason ("Razorpay … publishes no hosted self-serve billing portal") is discarded in favour
+  // of the caller's generic fallback — the precise defect the comment above this function was
+  // written about, one envelope later. The `error` CODE is deliberately not shown to the
+  // trader: it is for a client to branch on, and the `message` is the sentence for a person.
+  const coded = [err?.data?.detail?.message, err?.response?.data?.detail?.message];
+  for (const candidate of coded) {
     if (typeof candidate === 'string' && candidate.trim() !== '') return candidate;
   }
   // The structured marketplace envelope, `{ error: { code, message } }`, which the shared
@@ -1761,29 +1796,33 @@ export default function Billing() {
           title="Payment methods"
           state={methods.state}
           loading={{ kind: 'skeleton-cards', rows: 1, label: 'Reading your payment methods' }}
+          // The empty body is the WHOLE honest answer for this panel, so it states the fact
+          // rather than pointing at somewhere else to go. It used to end "…or in the payment
+          // provider's own portal", and that half was false: Razorpay collects the instrument
+          // inside Razorpay Checkout and publishes no portal of its own for a subscriber to
+          // manage it in. Nothing is stored here, and there is nowhere else to look.
           empty={{
             headline: 'No payment methods on file',
-            body: 'Nothing is stored against this account. A card is added during checkout, '
-              + 'or in the payment provider\'s own portal.',
+            body: 'Nothing is stored against this account, and nothing ever is: the card or '
+              + 'UPI instrument is collected by Razorpay Checkout at the moment of purchase '
+              + 'and is never held by VyomQuant. To pay with a different instrument, choose it '
+              + 'at your next checkout.',
             action: { label: 'Read again', onClick: refetchMethods },
           }}
           error={{ error: methods.error, onRetry: refetchMethods }}
           unavailable={{ reason: 'Your stored payment methods cannot be read right now.' }}
           unauthorised={{ error: methods.error }}
-          // In `actions` rather than in the body, so the portal stays reachable in the empty
-          // and error states — which is where a trader most needs it. fontSize: 11 →
-          // `ds/CommandButton`'s own step.
-          actions={
-            <CommandButton
-              intent="secondary"
-              icon={ExternalLink}
-              onClick={handleOpenPortal}
-              loading={isPortalLoading}
-              loadingLabel="Opening the billing portal"
-            >
-              Manage via provider portal
-            </CommandButton>
-          }
+          // NO `actions`. A *Manage via provider portal* `ds/CommandButton` stood here and
+          // called `POST /api/billing/portal`, which opens with `_validate_keys("stripe")` and
+          // therefore raised a 500 on every press of it: this deployment has no live Stripe
+          // secret, and Razorpay — the provider it does bill through — has no hosted portal to
+          // send anyone to, so there was never a URL for the handler to return. The old comment
+          // here argued the control belonged in `actions` "so the portal stays reachable in the
+          // empty and error states — which is where a trader most needs it". That is exactly
+          // the case it failed in, and a reachable button that always 500s is worse in that
+          // state than no button: it reads as "this can be fixed from here" when it cannot.
+          // Removing it removes no capability, because there was none behind it. The panel's
+          // `empty` body above carries the one true instruction instead.
         >
           <div className="flex items-center gap-3 rounded-lg border border-line-default bg-surface-inset p-4">
             {/* The Visa-blue gradient is gone rather than retokened: it painted one company's

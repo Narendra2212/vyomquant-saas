@@ -1462,6 +1462,24 @@ def test_malformed_input_never_answers_500(route: MutatingRoute, client):
 #: pattern-matched, but the failure is the same class - a downstream service call this
 #: sandbox cannot complete - confirmed by the same reasoning already verified for its
 #: sibling `strategy_operations.pause_deployment`/`resume_deployment`/`stop_deployment`.
+#:
+#: `billing.create_portal_session` NO LONGER TRIPS THIS ESCAPE HATCH, and the record of why
+#: matters more than the entry does. It used to: the handler opened with
+#: `_validate_keys("stripe")` unconditionally, which raises `HTTPException(500, "Stripe is not
+#: configured: STRIPE_SECRET_KEY is not set.")` on a deployment that bills through Razorpay, so
+#: this sweep SKIPPED the route on every run and its never-500 assertion was never actually
+#: evaluated - visible in `pytest tests/test_validation_sweep.py -rs` output as
+#: "billing.create_portal_session: 500 caused by this SANDBOX's own missing network". The
+#: handler is now provider-aware and answers a coded 501/503 refusal when the live provider has
+#: no hosted portal, so the assertion below RUNS and PASSES for real (the sweep's skip count
+#: went 12 -> 11 and its pass count 381 -> 382 in that one change).
+#:
+#: The key is KEPT rather than deleted, and not to preserve any slack: the Stripe branch still
+#: reaches `stripe.Customer.list` over the network, so a host that genuinely holds a live
+#: `sk_live_` secret would 500 here for the sandbox's own reason, exactly as this set exists to
+#: describe. Deleting the key would turn that host's environment gap into a false Requirement
+#: 1.39 finding. Nothing about the assertion is relaxed either way - this comment only stops
+#: the set from documenting a cause that no longer applies on a Razorpay deployment.
 _ENVIRONMENT_GAP_ROUTE_KEYS = frozenset(
     {
         "copilot.delete_copilot_session",

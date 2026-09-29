@@ -6,8 +6,13 @@
  * vyomquant-ui-redesign task 8.7. design.md §6.1, §6.5, §6.6, §1.3.
  * Requirements 2.5, 2.6, 14.5, 16.2, 18.1, 19.4.
  *
- * §6.1 gives this bar four regions and no others: page context on the left; connection
- * indicator, notification bell and UTC clock on the right.
+ * §6.1 gives this bar three regions and no others: page context on the left; connection
+ * indicator and notification bell on the right.
+ *
+ * The UTC clock §6.1 also listed was REMOVED on request. It reported the browser's own
+ * clock, which is a fact the operating system already shows in the system tray, and its
+ * one-second `setInterval` was the only always-running timer in the shell. Nothing read
+ * it, so nothing downstream changes; `data-shell="topbar-clock"` no longer exists.
  *
  * ---------------------------------------------------------------------------
  * 1. THE HARDCODED STATUS LIGHT IS GONE (Requirement 14.5, §1.3)
@@ -97,9 +102,9 @@
  *   * ALL 14 `C.*` REFERENCES AND THE ONE COLOUR LITERAL (`#000` on the badge). Both
  *     guard budgets for this file drop to 0.
  *
- * KEPT, because each is wired to something real: the UTC clock (the browser's own
- * clock), and the notification bell (`api.notifications.getUnreadCount()` for the count,
- * the `notification` socket frame for increments, `/app/notifications` for the
+ * KEPT, because it is wired to something real: the notification bell
+ * (`api.notifications.getUnreadCount()` for the count, the `notification` socket frame
+ * for increments, `/app/notifications` for the
  * destination). The bell is now an `<a>` rather than a `<button>` calling `navigate()`,
  * for the reason §6.3 gives for the sidebar: middle-click, Ctrl-click and "copy link
  * address" work on a link and cannot be made to work on a button.
@@ -139,7 +144,7 @@
  * trail; that block carries the heading. One table, two surfaces.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Bell } from 'lucide-react';
 
@@ -197,41 +202,6 @@ const BAR_GEOMETRY = Object.freeze({
 
 /** Declared in `shell/navigation.js`'s `SECONDARY_ROUTE_TITLES`, which titles this route. */
 const NOTIFICATIONS_PATH = '/app/notifications';
-
-/**
- * The UTC clock.
- *
- * Its own component so the one-second tick re-renders eight characters rather than the
- * whole bar — with the clock inlined in `TopBar`, every second would re-render the
- * connection indicator and the bell too.
- *
- * `toISOString()` is UTC by definition, so the displayed time and the `dateTime`
- * attribute come from one call and cannot disagree. This is the BROWSER's clock, which
- * is what the label claims; it is not the exchange's server time, and nothing here
- * implies it is.
- */
-function UtcClock() {
-  const [now, setNow] = useState(() => new Date());
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  const iso = now.toISOString();
-
-  return (
-    <time
-      dateTime={iso}
-      data-shell="topbar-clock"
-      // Mono with `tabular-nums` so the digits are the same width from second to second
-      // and the bar's right edge does not jitter (§6.6).
-      className="shrink-0 font-mono text-micro tabular-nums text-content-secondary"
-    >
-      {`${iso.slice(11, 19)} UTC`}
-    </time>
-  );
-}
 
 /**
  * The notification bell.
@@ -354,7 +324,6 @@ export default function TopBar({ className = '', style, ...rest }) {
         <div className="flex shrink-0 items-center gap-3">
           <ConnectionStatusIndicator />
           <NotificationBell />
-          <UtcClock />
         </div>
       </div>
 

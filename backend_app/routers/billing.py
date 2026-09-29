@@ -105,6 +105,53 @@ def _validate_keys(provider: str) -> str:
         return key
 
 
+#: The providers this module can route money through, in the order
+#: :func:`_providers_with_live_credentials` probes them. Same two names ``_validate_keys`` and
+#: ``FXService.resolve_checkout_provider_and_currency`` use, spelt once.
+_SUPPORTED_PROVIDERS = ("stripe", "razorpay")
+
+#: The providers that publish a HOSTED, self-serve billing portal a subscriber can be sent to.
+#:
+#: Stripe has one (``stripe.billing_portal.Session``). **Razorpay does not** - it publishes no
+#: equivalent customer-facing portal at all, so for a Razorpay-billed account there is no URL
+#: to hand out and no session to create. That absence is a product fact about the provider, not
+#: a gap in this deployment's configuration, and the two are answered separately below because
+#: they need opposite fixes: one cannot be fixed at all, the other is an environment variable.
+_PROVIDERS_WITH_HOSTED_PORTAL = frozenset({"stripe"})
+
+
+def _providers_with_live_credentials() -> List[str]:
+    """Which of :data:`_SUPPORTED_PROVIDERS` this process actually holds LIVE credentials for.
+
+    WHY THIS EXISTS RATHER THAN A SECOND CREDENTIAL CHECK
+    ----------------------------------------------------
+    ``_validate_keys`` is the single credential gate and it answers by RAISING - which is
+    exactly right on a path whose next step is to charge somebody, and exactly wrong on a path
+    that needs to ask "which provider is this deployment on?" before deciding what to do. So
+    this probes through ``_validate_keys`` rather than re-reading the environment: the live-prefix
+    rule, the placeholder rejections and the "a test key collects no money" refusal stay in one
+    place, and a provider only counts as available here if it would have been allowed to take a
+    payment there.
+
+    ``HTTPException`` is caught deliberately and nothing else is: a raise from
+    ``_validate_keys`` means "not configured for live money", which is the question being asked.
+    No credential value is returned, logged or interpolated anywhere - only the provider names.
+
+    The checkout path picks its provider from the CURRENCY
+    (``FXService.resolve_checkout_provider_and_currency``: INR -> Razorpay, everything else ->
+    Stripe), because a checkout has an amount and a currency to route. A request with no money
+    attached has neither, so it can only ask what this deployment is wired for, which is this.
+    """
+    live: List[str] = []
+    for provider in _SUPPORTED_PROVIDERS:
+        try:
+            _validate_keys(provider)
+        except HTTPException:
+            continue
+        live.append(provider)
+    return live
+
+
 async def _sb(user: dict):
     token = user.get("access_token")
     if not token:
@@ -2149,59 +2196,54 @@ async def add_payment_method(
     request: Request,
     body: AddPaymentMethodRequest,
     user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
 ):
-    # Require real card metadata from the request — never fabricate it.
-    # The frontend must pass brand/last4/expiry from the Stripe.js confirmCardSetup
-    # response (PaymentMethod object) before calling this endpoint.
-    card_brand = getattr(body, "brand", None)
-    card_last4 = getattr(body, "last4", None)
-    card_expiry_month = getattr(body, "expiry_month", None)
-    card_expiry_year = getattr(body, "expiry_year", None)
+    """Refuse, with the reason named: this platform has no way to store an instrument.
 
-    missing = [f for f, v in [
-        ("brand", card_brand),
-        ("last4", card_last4),
-        ("expiry_month", card_expiry_month),
-        ("expiry_year", card_expiry_year),
-    ] if not v]
-    if missing:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Missing required card metadata fields: {', '.join(missing)}. "
-                   "Supply real card attributes from the Stripe PaymentMethod response."
-        )
+    WHAT THIS USED TO DO, AND WHY IT COULD NEVER DO IT
+    --------------------------------------------------
+    It wrote a ``PaymentMethodModel`` row from ``brand``/``last4``/``expiry_month``/
+    ``expiry_year`` supplied BY THE CALLER, and refused with 422 - "Supply real card attributes
+    from the Stripe PaymentMethod response." - when any were absent. There is no Stripe.js on
+    the billing page and no Stripe Elements anywhere in ``algo22-terminal``, so no caller has
+    ever had a Stripe ``PaymentMethod`` response to copy those four values out of. Every call
+    from the product's own UI was that 422.
 
-    if body.set_as_default:
-        db.query(PaymentMethodModel).filter(PaymentMethodModel.user_id == user["id"]).update({"is_default": False})
+    THE WRITE WAS NOT MERELY DEAD, IT WAS A FABRICATION VECTOR
+    ----------------------------------------------------------
+    The four card attributes arrived in the request body and were stored verbatim. Nothing
+    verified them against a provider, because nothing could: no gateway was contacted on this
+    path. A caller that sent ``brand="visa", last4="4242"`` got a stored "card" that no
+    processor had ever seen, and ``GET /api/billing/payment-methods`` would then present it to
+    the account holder as their payment instrument. Deleting the write removes that.
 
-    import uuid
-    new_method = PaymentMethodModel(
-        id=str(uuid.uuid4()),
-        user_id=user["id"],
-        payment_method_id=body.payment_method_id,
-        brand=card_brand,
-        last4=card_last4,
-        expiry_month=card_expiry_month,
-        expiry_year=card_expiry_year,
-        is_default=body.set_as_default,
-        created_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    WHY THERE IS NO HONEST IMPLEMENTATION TO PUT HERE INSTEAD
+    ---------------------------------------------------------
+    Razorpay is this platform's provider. It collects the instrument INSIDE Razorpay Checkout
+    at purchase time; the instrument never reaches this server, and this server holds nothing
+    it could turn into a stored method. Saving one for reuse is Razorpay TOKENISATION, which
+    needs a registered token flow, a customer object at the gateway and the card networks'
+    mandate handling - none of which exists in this codebase. Inventing a token id here, or
+    storing caller-supplied digits under one, would be the same fabrication in a new costume.
+
+    So the answer is a refusal that names the reason, with a stable code a client can branch
+    on, instead of a 422 that blames the caller for not having a Stripe response that no part
+    of this product produces. The body is still declared and still validated by
+    ``AddPaymentMethodRequest`` first, so a malformed request is answered by the platform's own
+    422 rather than by this refusal - a malformed body and an unavailable capability are two
+    different facts and each keeps its own answer.
+    """
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "error": "PAYMENT_METHOD_STORAGE_UNSUPPORTED",
+            "message": (
+                "VyomQuant does not store payment instruments. Razorpay collects the card or "
+                "UPI instrument inside Razorpay Checkout at the moment of purchase, and saving "
+                "one for later reuse requires Razorpay tokenisation, which this platform has "
+                "not implemented. Nothing was stored."
+            ),
+        },
     )
-    db.add(new_method)
-    db.commit()
-    db.refresh(new_method)
-    return {
-        "status": "ok",
-        "payment_method": {
-            "id": new_method.id,
-            "type": "card",
-            "brand": new_method.brand,
-            "last4": new_method.last4,
-            "expiry_month": new_method.expiry_month,
-            "expiry_year": new_method.expiry_year,
-            "is_default": new_method.is_default
-        }
-    }
 
 
 @router.delete("/payment-methods/{method_id}")
@@ -2210,13 +2252,34 @@ async def delete_payment_method(
     user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Delete a stored instrument. The lookup stays; its miss now names why the table is empty.
+
+    Kept rather than removed, and kept ROW-DRIVEN: the ``PaymentMethodModel`` query is the only
+    thing that decides this outcome, so a row that does exist is still deleted for the account
+    that owns it. What changed is the miss. ``add_payment_method`` is now an explicit refusal
+    (above) and was unreachable from any client before that, so the table this reads has no
+    writer - which makes "not found" the only answer this route can give, and a bare
+    "Payment method not found." leaves a trader looking for a delete button they mislaid. The
+    404 is unchanged (nothing with that id belongs to this account, which is true); it gains the
+    stable code and the reason the table is empty in the first place.
+    """
     method = db.query(PaymentMethodModel).filter(
         PaymentMethodModel.user_id == user["id"],
         PaymentMethodModel.id == method_id
     ).first()
     if not method:
-        raise HTTPException(404, "Payment method not found.")
-    
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "PAYMENT_METHOD_NOT_FOUND",
+                "message": (
+                    "No stored payment instrument with that id belongs to this account. "
+                    "VyomQuant stores none: Razorpay collects the instrument inside Checkout "
+                    "at the moment of purchase, and this platform has no way to save one."
+                ),
+            },
+        )
+
     db.delete(method)
     db.commit()
     return {"status": "ok", "deleted": method_id}
@@ -2228,7 +2291,73 @@ async def create_portal_session(
     request: Request,
     user: dict = Depends(get_current_user)
 ):
-    """Create Stripe Billing Portal session for payment management."""
+    """A hosted provider portal session, or a refusal naming why this provider has none.
+
+    WHAT THIS USED TO DO
+    --------------------
+    It opened with ``_validate_keys("stripe")`` unconditionally. On a Razorpay deployment that
+    raises ``HTTPException(500, "Stripe is not configured: STRIPE_SECRET_KEY is not set.")``, so
+    the ONE action the billing page's payment-methods panel offered answered 500 every single
+    time it was pressed - naming a provider this platform does not bill through, from a button
+    labelled "Manage via provider portal".
+
+    WHY THE ANSWER FOR RAZORPAY IS A REFUSAL AND NOT A REDIRECT
+    -----------------------------------------------------------
+    Razorpay publishes no hosted self-serve billing portal. There is no Razorpay equivalent of
+    ``stripe.billing_portal.Session`` to call and no customer-facing URL to send a subscriber
+    to, so any URL returned here would be one this handler made up. A fabricated URL is worse
+    than the 500 it replaces: the 500 at least failed visibly. The refusal instead names the
+    provider, says there is no portal, and says where the payment instrument is actually
+    changed - at the next Razorpay Checkout, which is the only place it is ever collected.
+
+    THE STRIPE BRANCH IS UNTOUCHED AND STILL REACHED
+    ------------------------------------------------
+    This is additive: if ``STRIPE_SECRET_KEY`` genuinely holds a live Stripe secret then Stripe
+    IS a provider this deployment can bill through, its portal exists, and the original
+    customer-lookup-then-``billing_portal.Session.create`` path below runs exactly as it did.
+    The gate is only that Stripe has to be real before a Stripe API call is made in its name.
+
+    THE TWO REFUSALS ARE SEPARATE, FOR THE REASON ``_validate_keys`` SEPARATES ITS THREE
+    -----------------------------------------------------------------------------------
+    "Razorpay has no portal" is a permanent fact about the provider that no configuration can
+    change. "This deployment has no live credentials for any provider" is an operator fault
+    that an environment variable fixes. One sentence covering both would tell whoever reads it
+    which of those they have - which is to say, neither.
+    """
+    live_providers = _providers_with_live_credentials()
+    portal_providers = [p for p in live_providers if p in _PROVIDERS_WITH_HOSTED_PORTAL]
+
+    if not portal_providers:
+        if live_providers:
+            # A real provider, which genuinely has no portal. Permanent, and not a fault.
+            raise HTTPException(
+                status_code=501,
+                detail={
+                    "error": "PROVIDER_HAS_NO_BILLING_PORTAL",
+                    "message": (
+                        f"{', '.join(p.capitalize() for p in live_providers)} is the payment "
+                        "provider configured for this platform, and it publishes no hosted "
+                        "self-serve billing portal, so there is no portal session to open. The "
+                        "payment instrument is supplied directly to the provider's checkout "
+                        "each time a subscription is bought or renewed, and is not stored by "
+                        "VyomQuant — so a different instrument is used by choosing it at the "
+                        "next checkout."
+                    ),
+                },
+            )
+        # No provider at all: a deployment fault, and a different sentence for it.
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "PAYMENT_PROVIDER_NOT_CONFIGURED",
+                "message": (
+                    "No payment provider on this deployment holds live credentials, so no "
+                    "billing portal can be opened and none is invented here. This is a server "
+                    "configuration fault, not a problem with your subscription."
+                ),
+            },
+        )
+
     stripe_key = _validate_keys("stripe")
     import stripe
     stripe.api_key = stripe_key

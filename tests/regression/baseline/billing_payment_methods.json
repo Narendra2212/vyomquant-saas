@@ -61,13 +61,11 @@
           ],
           "handler": "add_payment_method",
           "module": "backend_app.routers.billing",
+          "_baseline_note_parameters": "RE-RECORDED: the `db` Session dependency is REMOVED because the handler no longer touches a database at all (see _baseline_note_returns). Keeping Depends(get_db) on a handler that always refuses would open a real session per request for nothing. `body: AddPaymentMethodRequest` is deliberately KEPT so FastAPI still validates the shape before the handler runs: a malformed body is still answered by the platform's own 422, and only a well-formed one reaches the capability refusal.",
+          "_baseline_note_returns": "RE-RECORDED: the success return is REMOVED and the 422 became a coded 501, because the recorded success was unreachable from any client AND was a fabrication vector. The 422 read 'Supply real card attributes from the Stripe PaymentMethod response.' - there is no Stripe.js or Stripe Elements anywhere in algo22-terminal (grep: no `@stripe/` dependency, no `confirmCardSetup` call site), so no caller ever had a Stripe PaymentMethod response to copy brand/last4/expiry out of, and every call from the product's own UI was that 422. Worse, when those four values WERE supplied they were stored verbatim with nothing verifying them against any gateway - so a caller could mint a 'visa ****4242' that no processor had ever seen and GET /api/billing/payment-methods would show it to the account holder as their instrument. Razorpay collects the instrument inside Razorpay Checkout and saving one for reuse needs Razorpay tokenisation, which this codebase does not implement, so there is no honest success to record here: the handler now answers 501 PAYMENT_METHOD_STORAGE_UNSUPPORTED. No assertion elsewhere covered the deleted write - tests/test_validation_sweep.py sends this route no body and so is answered by validation, and no test exercised the stored-card path.",
           "parameters": {
             "body": {
               "annotation": "AddPaymentMethodRequest"
-            },
-            "db": {
-              "annotation": "Session",
-              "depends_on": "get_db"
             },
             "request": {
               "annotation": "Request"
@@ -79,24 +77,15 @@
           },
           "raises": [
             {
-              "detail_type": "str",
-              "status_code": 422
-            }
-          ],
-          "returns": [
-            {
-              "payment_method": {
-                "brand": "computed",
-                "expiry_month": "computed",
-                "expiry_year": "computed",
-                "id": "computed",
-                "is_default": "computed",
-                "last4": "computed",
-                "type": "str"
+              "detail_type": {
+                "error": "str",
+                "message": "str"
               },
-              "status": "str"
+              "error_code": "PAYMENT_METHOD_STORAGE_UNSUPPORTED",
+              "status_code": 501
             }
           ],
+          "returns": [],
           "route_path": "/api/billing/payment-methods"
         }
       ],
@@ -126,7 +115,17 @@
               "depends_on": "get_current_user"
             }
           },
-          "raises": [],
+          "_baseline_note_raises": "RE-RECORDED: one refusal ADDED, nothing removed and nothing re-statused. The recorded [] did not mean this handler refused nothing - the 404 was written positionally (HTTPException(404, 'Payment method not found.')), which capture_baseline._raised_status_codes reads by KEYWORD and so never saw. The status is still 404 and the row lookup is unchanged, so a stored row is still deleted for the account that owns it; the 404 gains a stable error code and states WHY the table it reads is empty - its only writer, POST /api/billing/payment-methods, could never be satisfied by any client (see this file's add_payment_method notes) and now refuses explicitly.",
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "PAYMENT_METHOD_NOT_FOUND",
+              "status_code": 404
+            }
+          ],
           "returns": [
             {
               "deleted": "computed",

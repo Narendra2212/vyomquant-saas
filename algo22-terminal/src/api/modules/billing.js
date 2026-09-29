@@ -142,14 +142,33 @@ export const billingApi = {
   resumeSubscription: () => post('/api/billing/resume', {}),
 
   /**
-   * Open Stripe Billing Portal for payment method management.
-   * Returns a redirect URL to Stripe's hosted portal.
-   * @returns {Promise<{url: string}>}
+   * Ask the server for a hosted provider billing-portal session.
+   *
+   * PROVIDER-DEPENDENT, AND ON RAZORPAY THERE IS NO PORTAL AT ALL. This used to be documented
+   * as "Open Stripe Billing Portal… Returns a redirect URL to Stripe's hosted portal", which
+   * described a provider this platform does not bill through: Razorpay is the configured one
+   * and it publishes no hosted self-serve portal. The server answers accordingly —
+   * `501 PROVIDER_HAS_NO_BILLING_PORTAL` when the live provider has no portal, and
+   * `503 PAYMENT_PROVIDER_NOT_CONFIGURED` when no provider holds live credentials. Neither
+   * returns a URL, because there is none to return. A `{ url }` comes back only from a
+   * genuinely Stripe-configured deployment.
+   *
+   * So a caller must treat a rejection as the NORMAL answer and render the server's own
+   * `detail.message`, not assume a URL and not present this as a working control. No caller
+   * may synthesise a portal URL of its own.
+   *
+   * @returns {Promise<{url: string}>} on a Stripe deployment only; rejects otherwise
    */
   openPortal: () => post('/api/billing/portal', {}),
 
   /**
-   * Delete a payment method by ID
+   * Delete a stored payment method by ID.
+   *
+   * VyomQuant stores no payment instrument (Razorpay collects it inside Checkout), so this
+   * answers `404 PAYMENT_METHOD_NOT_FOUND` for any id on a Razorpay deployment. There is no
+   * `addPaymentMethod` counterpart here because the server has no honest one:
+   * `POST /api/billing/payment-methods` answers `501 PAYMENT_METHOD_STORAGE_UNSUPPORTED`.
+   *
    * @param {string} methodId
    */
   deletePaymentMethod: (methodId) => del(`/api/billing/payment-methods/${methodId}`),

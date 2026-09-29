@@ -392,7 +392,25 @@
               "depends_on": "get_current_user"
             }
           },
-          "raises": [],
+          "_baseline_note_raises": "RE-RECORDED: two refusals ADDED, nothing removed. The recorded [] did not mean this handler refused nothing - it meant its only refusals were written positionally (HTTPException(500, '...')), which capture_baseline._raised_status_codes reads by KEYWORD and so never saw. The handler opened with _validate_keys('stripe') unconditionally, so on this Razorpay platform every call answered 500 'Stripe is not configured: STRIPE_SECRET_KEY is not set.' - evidence: tests/test_validation_sweep.py listed billing.create_portal_session in _ENVIRONMENT_GAP_ROUTE_KEYS and the sweep SKIPPED it on a 500 (reproducible with `pytest tests/test_validation_sweep.py -rs`); it now passes that route's never-500 assertion for real, so this re-record STRENGTHENS the sweep rather than relaxing it. Razorpay publishes no hosted self-serve billing portal, so the honest answer is a coded refusal, not a fabricated URL. The Stripe branch is untouched: returns still records {'url': 'computed'} and is reached whenever STRIPE_SECRET_KEY holds a live secret.",
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "PAYMENT_PROVIDER_NOT_CONFIGURED",
+              "status_code": 503
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "PROVIDER_HAS_NO_BILLING_PORTAL",
+              "status_code": 501
+            }
+          ],
           "returns": [
             {
               "url": "computed"
