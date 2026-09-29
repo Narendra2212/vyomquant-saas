@@ -8,6 +8,20 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# Only ONE deployment may touch the ECS service at a time.
+#
+# Without this, two runs (e.g. commits 429fa5c and 68b0185, pushed 99s apart on
+# 2026-09-29) deploy concurrently. Each `ecs update-service` resets the other's
+# in-flight rollout, so neither can ever reach steady state, both time out, and
+# both fire a rollback that clobbers the other — reported as
+# "DEPLOYMENT FAILED + ROLLBACK FAILED" even though every task was HEALTHY.
+#
+# cancel-in-progress is deliberately FALSE: a half-finished ECS rollout must be
+# allowed to settle. Runs queue and deploy in order instead of racing.
+concurrency:
+  group: ecs-deploy-vyomquant-api-service-cjema2sl
+  cancel-in-progress: false
+
 env:
   AWS_REGION: ap-southeast-1
   ECS_CLUSTER: vyomquant-cluster

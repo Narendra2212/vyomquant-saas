@@ -13,6 +13,13 @@ on:
   push:
     branches: [main, master]
 
+# Serialise builds per ref so the downstream deploy workflows are also serialised.
+# cancel-in-progress is FALSE on purpose: 03-deploy.yml fails closed if no ECR
+# image exists for a commit SHA, so every pushed SHA must still get built.
+concurrency:
+  group: ecr-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   AWS_REGION: ap-southeast-1
   ECR_REPOSITORY: vyomquant-api

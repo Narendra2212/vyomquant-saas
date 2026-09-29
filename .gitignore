@@ -353,3 +353,8 @@ htmlcov/
 ruff_*.json
 ruff_*.txt
 deleted_files*.md
+
+# Transient task definition rendered by scripts/ecs_deploy_and_diagnose.py on every
+# deploy. It is a snapshot of live ECS state, never a source of truth — committing it
+# is how stale configuration gets replayed over production.
+task-def-rendered.json
