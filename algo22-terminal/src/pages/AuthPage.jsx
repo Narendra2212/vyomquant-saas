@@ -611,15 +611,26 @@ export default function AuthPage({ mode = "signin" }) {
           email: targetEmail,
           password: password,
           options: {
-            // The confirmation email carries a link as well as the 6-digit code.
+// The email Supabase actually sends here is the CONFIRM SIGNUP template, and what that
+            // template contains is a project setting, not something this call decides. Two facts
+            // the next reader needs: (1) the 6-digit code only appears if that template includes
+            // `{{ .Token }}` - the stock template carries `{{ .ConfirmationURL }}` alone, so the
+            // OTP screen below then asks for a code that was never printed; (2) the code length is
+            // the project`s Email OTP Length setting, which MUST equal the six boxes this page
+            // renders and the /^\d{6}$/ in handleVerifyOtp - it was set to 8 once, and an 8-digit
+            // code cannot be typed into six boxes, which made the OTP path unusable and left the
+            // confirmation link as the only way in. `emailRedirectTo` is still required so that
+            // link, when the template carries one, lands on this origin rather than the Site URL.
             emailRedirectTo: getAuthRedirectUrl(),
           },
         });
 
         if (signUpError) throw signUpError;
 
-        // Account registered, dispatch email verification OTP. The call above throws on a
-        // refusal, so reaching this line means the send was accepted.
+        // Account registered. NOTHING IS DISPATCHED HERE - the only email is the confirm-signup
+        // one `signUp` above already sent. This line used to claim it dispatched an OTP, which it
+        // never did; the code the screen below asks for comes from that template`s `{{ .Token }}`
+        // (see the note on the signUp options), not from a call here.
         setPasswordVerified(true);
         setAuthState(AUTH_STATES.OTP_REQUIRED);
         setCooldown(RESEND_COOLDOWN_SECONDS);
