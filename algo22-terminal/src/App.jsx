@@ -257,15 +257,45 @@ function UpdatePasswordPage() {
   );
 }
 
+// Whether a token is DEMONSTRABLY past its own `exp`.
+//
+// Only a token this can PROVE is dead returns true. A non-JWT, a malformed one, or a JWT
+// carrying no `exp` returns false and is left exactly as it was: the job here is to stop
+// presenting a credential that is certainly spent, not to invent a policy for shapes it
+// cannot read. The SIGNATURE is deliberately not checked - the server holds the secret and
+// rejects a forgery on every request. What only the client can notice is that the token it
+// is about to present has already expired.
+function isDemonstrablyExpiredJwt(token) {
+  if (typeof token !== "string") return false;
+  const segments = token.split(".");
+  if (segments.length !== 3) return false;
+  try {
+    const b64 = segments[1].replace(/-/g, "+").replace(/_/g, "/");
+    const payload = JSON.parse(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)));
+    if (typeof payload?.exp !== "number") return false;
+    return payload.exp * 1000 <= Date.now();
+  } catch {
+    return false;
+  }
+}
+
 // Synchronously extracts auth token from sessionStorage or URL hash
 function getEffectiveToken() {
   let token = sessionStorage.getItem("token");
+  // An expired token is not a session. Both guards read this one function, so discarding it
+  // here is what stops `AuthGuard` admitting a dead credential to the shell - every read
+  // behind it would 401 - and what stops `GuestGuard` bouncing a signed-out user off
+  // `/signin` forever because a spent token was still sitting in storage.
+  if (isDemonstrablyExpiredJwt(token)) {
+    sessionStorage.removeItem("token");
+    token = null;
+  }
   if (!token && typeof window !== "undefined" && window.location.hash) {
     const hash = window.location.hash;
     if (hash.includes("access_token=")) {
       const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
       const hashToken = params.get("access_token");
-      if (hashToken) {
+      if (hashToken && !isDemonstrablyExpiredJwt(hashToken)) {
         sessionStorage.setItem("token", hashToken);
         token = hashToken;
       }
