@@ -2426,11 +2426,53 @@ _portfolio_manager: Optional[PortfolioManager] = None
 
 
 def get_portfolio_manager() -> PortfolioManager:
-    """Get or create portfolio manager singleton."""
+    """The initialised portfolio manager, or a refusal. It does NOT create one.
+
+    IT USED TO INVENT CAPITAL. When no portfolio had been initialised this built
+    ``PortfolioManager(total_capital=Decimal(100000))`` and returned it, so fifteen
+    endpoints answered with figures derived from 100k that nobody established.
+
+    WHY THAT IS NOT A DISPLAY BUG. ``total_capital`` is not merely reported. Inside
+    ``PortfolioManager`` it is the denominator and the ceiling for:
+
+      * ``register_strategy`` - allocated_capital and available_capital per strategy;
+      * ``check_position_limits`` - max_symbol_exposure_pct, max_total_exposure_pct and
+        the gross-leverage check;
+      * ``get_margin_metrics`` - margin_available, margin_utilization_pct, margin_level;
+      * ``get_pnl_summary`` - every percentage;
+      * equity, as total_capital + unrealised pnl.
+
+    So an invented 100k widened real risk limits, it did not just print a wrong number.
+    That is the same defect class as the ExecutionEngine one, and it is why this raises
+    rather than falling back to a smaller invented figure: zero would be no less made up,
+    and collapsing not-initialised into zero is the failure mode the launch-hardening
+    bugfix names.
+
+    ONE RAISE COVERS FIFTEEN ENDPOINTS. Every caller is an endpoint in this module, and
+    ``main.py`` already installs a global HTTPException handler that normalises the body,
+    so the refusal reaches the client in the platform standard shape without editing
+    fifteen handlers. ``POST /initialize`` is the way to supply real capital.
+
+    Raises:
+        HTTPException: 503 PORTFOLIO_NOT_INITIALISED when no portfolio exists yet.
+    """
     global _portfolio_manager
     if _portfolio_manager is None:
-        _portfolio_manager = PortfolioManager(
-            total_capital=Decimal("100000"),  # Default
+        logger.error(
+            "A portfolio read or write was attempted before any portfolio was "
+            "initialised. No capital figure is being substituted."
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "PORTFOLIO_NOT_INITIALISED",
+                "message": (
+                    "No portfolio has been initialised, so there is no capital, no "
+                    "exposure and no margin to report. Nothing is being shown in "
+                    "place of them. Initialise the portfolio with its real capital "
+                    "first."
+                ),
+            },
         )
     return _portfolio_manager
 
@@ -2468,9 +2510,13 @@ class PriceUpdateRequest(BaseModel):
 
 
 @router.post("/initialize")
-async def initialize_portfolio(total_capital: Decimal = Decimal('100000.0')):
+async def initialize_portfolio(total_capital: Decimal):
     """
     Initialize portfolio with capital.
+
+    total_capital is REQUIRED. It defaulted to Decimal(100000.0), so the one endpoint
+    whose whole job is to establish real capital would invent it when called with no
+    argument - and that figure then became every risk ceiling in check_position_limits.
     
     STEP 5.2: Uses Decimal for financial precision.
     """
