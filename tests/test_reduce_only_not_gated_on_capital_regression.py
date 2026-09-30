@@ -179,11 +179,62 @@ class TestTheThreeRiskReducingRoutesOptIn:
          ("backend_app/routers/portfolio.py", 1)],
     )
     def test_every_guard_call_on_these_routes_is_reduce_only(self, rel, count):
-        """cancel, cancel-all and close-all: three call sites, all opted in."""
-        text = io.open(os.path.join(REPO, rel), encoding="utf-8").read()
+        """
+        cancel, cancel-all and close-all: three call sites, all opted in.
 
-        assert text.count("reduce_only=True") == count, (
-            "%s has %d reduce_only=True, expected %d - a risk-reducing route that "
-            "still runs the capital checks is blocked whenever equity cannot be read"
-            % (rel, text.count("reduce_only=True"), count)
+        Counts CODE, not prose. The fix left comments on these routes that name
+        ``reduce_only=True`` while explaining why the portfolio fallback can now answer
+        honestly, and an earlier version of this test counted those too - it went red on
+        a change that was correct.
+        """
+        text = io.open(os.path.join(REPO, rel), encoding="utf-8").read()
+        code = chr(10).join([line.split("#")[0] for line in text.split(chr(10))])
+        found = code.count("reduce_only=True")
+
+        assert found == count, (
+            "%s has %d executable reduce_only=True, expected %d - a risk-reducing "
+            "route that still runs the capital checks is blocked whenever equity "
+            "cannot be read" % (rel, found, count)
+        )
+
+class TestTheColdCacheNoLongerInventsABalance:
+    """
+    The companion half of reduce_only: the portfolio read stopped fabricating.
+
+    Both ``orders.get_portfolio_state`` and ``portfolio._get_portfolio_state`` fell back to
+    ``get_portfolio_manager()``, which lazily builds a PortfolioManager with
+    ``total_capital=Decimal(100000)``, and orders.py stamped the result
+    ``cached_at = time.time()`` - an invented balance presented as a fresh exchange read.
+    Redis is cold on every request today because nothing registers users, so this was the
+    branch that always ran.
+
+    Fixing this REQUIRED reduce_only first: an honest absence makes
+    _validate_portfolio_concentration refuse total_equity <= 0, which would have blocked
+    every cancel. The two changes only make sense together.
+    """
+
+    @pytest.mark.parametrize(
+        "rel",
+        ["backend_app/routers/orders.py", "backend_app/routers/portfolio.py"],
+    )
+    def test_neither_read_routes_through_the_100k_manager(self, rel):
+        text = io.open(os.path.join(REPO, rel), encoding="utf-8").read()
+        code = chr(10).join([line.split("#")[0] for line in text.split(chr(10))])
+
+        assert "get_portfolio_manager" not in code, (
+            "%s still falls back to get_portfolio_manager(), which invents "
+            "total_capital of 100000 when nobody initialised one" % rel
+        )
+
+    @pytest.mark.parametrize(
+        "rel",
+        ["backend_app/routers/orders.py", "backend_app/routers/portfolio.py"],
+    )
+    def test_the_cold_cache_branch_reports_the_absence(self, rel):
+        text = io.open(os.path.join(REPO, rel), encoding="utf-8").read()
+        code = chr(10).join([line.split("#")[0] for line in text.split(chr(10))])
+
+        assert "portfolio_state_established" in code, (
+            "%s no longer marks an unestablished portfolio read, so a consumer cannot "
+            "tell a real balance from one that was never fetched" % rel
         )

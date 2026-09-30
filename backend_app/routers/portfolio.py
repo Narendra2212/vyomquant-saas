@@ -94,28 +94,33 @@ async def _get_portfolio_state(user_id: str, exchange_id: str, vault) -> dict:
         cached_positions_raw = await redis_client.get(position_key)
         
         if not cached_balance:
-            # Fallback to calculating from position manager (still cached in memory)
-            from backend_app.backend.portfolio_management import \
-                get_portfolio_manager
-            pm = get_portfolio_manager()
-            
-            # Get snapshot from portfolio manager (in-memory cached state)
-            snapshot = pm.get_portfolio_snapshot()
-            
+            # THE READ DID NOT ESTABLISH ANYTHING, AND THAT IS WHAT IS RETURNED.
+            #
+            # This branch used to call get_portfolio_manager(), which lazily builds a
+            # PortfolioManager with total_capital of 100000 when nobody has initialised
+            # one, and returned its snapshot as though it were the account balance. The
+            # Redis cache is cold on every request today, because nothing calls
+            # register_user_for_portfolio_updates, so this was the branch that always ran.
+            #
+            # total_equity and available_balance are OMITTED rather than zeroed: a zero is
+            # a real balance a real account can have, and collapsing not-read into zero is
+            # the failure mode the launch-hardening bugfix names.
+            #
+            # Safe to be honest here only because the one caller of this function -
+            # close_all_positions - now passes reduce_only=True, so the six capital checks
+            # that refuse an unestablished equity are skipped. Before that, returning this
+            # would have blocked every close-all.
+            logger.warning(
+                "Portfolio state for %s on %s is UNESTABLISHED: the Redis cache holds "
+                "no balance and no figure is being substituted for it.",
+                user_id,
+                exchange_id,
+            )
             return {
-                "available_balance": str(Decimal(str(snapshot.available_margin))),
-                "total_equity": str(Decimal(str(snapshot.total_equity))),
-                "total_exposure": str(Decimal(str(snapshot.total_exposure))),
-                "positions": {
-                    p.symbol: {
-                        "contracts": str(Decimal(str(p.quantity))),
-                        "notional": str(Decimal(str(p.notional_value))),
-                    }
-                    for p in pm.positions.values()
-                },
-                "daily_pnl": str(Decimal(str(snapshot.daily_pnl))),
+                "portfolio_state_established": False,
+                "positions": {},
             }
-        
+
         # Parse cached positions
         position_dict = {}
         if cached_positions_raw:
