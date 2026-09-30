@@ -84,6 +84,24 @@ class PortfolioCacheUpdater:
         self._user_exchanges[user_id] = exchange_id
         logger.info(f"👤 Registered user {user_id} for {exchange_id} portfolio updates")
         
+    def registered_users(self) -> Dict[str, str]:
+        """A SNAPSHOT of the registered ``user_id -> exchange_id`` map.
+
+        Returns a COPY, deliberately. ``_user_exchanges`` is mutated by
+        :meth:`register_user` and :meth:`unregister_user` from request handlers while
+        two background loops iterate it - this class own ``_update_all_portfolios`` and
+        ``DashboardDataIngester._ingest_all_users``. Handing out the live dict makes a
+        registration landing mid-iteration raise RuntimeError: dictionary changed size
+        during iteration inside whichever loop happened to be running.
+
+        This is the public accessor for that map. Reaching for ``_user_exchanges``
+        across a module boundary is what DashboardDataIngester used to do.
+
+        An EMPTY dict means no user is registered, which is a different fact from
+        this service being unreachable - see the note in ``dashboard_data_ingester``.
+        """
+        return dict(self._user_exchanges)
+
     def unregister_user(self, user_id: str):
         """Unregister a user from portfolio cache updates."""
         if user_id in self._user_exchanges:

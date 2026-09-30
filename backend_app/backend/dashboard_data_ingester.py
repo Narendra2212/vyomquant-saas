@@ -75,17 +75,46 @@ class DashboardDataIngester:
                 await asyncio.sleep(5)  # Brief pause on error
     
     async def _ingest_all_users(self):
-        """Ingest data for all registered users."""
-        from backend_app.core.state import app_state
-        
-        # Get list of users from PortfolioCacheUpdater
-        # For now, we'll iterate through registered users in the cache updater
-        if hasattr(app_state, 'portfolio_cache_updater'):
-            user_exchanges = app_state.portfolio_cache_updater._user_exchanges
-        else:
-            logger.warning("PortfolioCacheUpdater not available for user list")
+        """Ingest data for every user registered for portfolio updates.
+
+        WHERE THE USER LIST COMES FROM, AND WHY IT IS NOT app_state
+        ------------------------------------------------------------
+        This read used to be ``app_state.portfolio_cache_updater._user_exchanges``,
+        guarded by ``hasattr``. Nothing ever assigns that attribute: the updater is a
+        MODULE-LEVEL SINGLETON in ``backend_app.backend.portfolio_cache_updater`` and
+        ``main.py`` starts it through ``start_portfolio_cache_updater()``, which touches
+        no app_state. So the ``hasattr`` was False on every pass, this method returned
+        before ingesting anything, and it logged PortfolioCacheUpdater not available for
+        user list once per interval - 588 times in a twelve-hour production window -
+        while the service it claimed was unavailable was running and logging ACTIVE.
+        The singleton is imported directly here, the way every other caller reaches it.
+
+        AN EMPTY LIST IS NOT A FAULT, AND IS NOT LOGGED AS ONE
+        -------------------------------------------------------
+        ``registered_users()`` returns a snapshot copy, so a registration landing
+        mid-iteration cannot raise dictionary changed size during iteration here.
+        It being empty means no user is registered, which is the CURRENT state of this
+        deployment: grep finds no caller of ``register_user_for_portfolio_updates`` or
+        ``PortfolioCacheUpdater.register_user`` anywhere in the tree, so both this
+        ingester and the cache updater are idle by construction and no amount of
+        repointing this lookup changes that. That WIRING GAP is not fixed here and is
+        not papered over either - it is reported at debug level rather than as a
+        warning, because a warning every three seconds about a state nobody can act on
+        is what buried the real defect above for as long as it did.
+        """
+        from backend_app.backend.portfolio_cache_updater import (
+            portfolio_cache_updater,
+        )
+
+        user_exchanges = portfolio_cache_updater.registered_users()
+
+        if not user_exchanges:
+            logger.debug(
+                "No user is registered for portfolio updates, so there is nothing "
+                "to ingest. This is not a read failure."
+            )
             return
-        
+
         for user_id, exchange_id in user_exchanges.items():
             try:
                 await self._ingest_user_data(user_id, exchange_id)
