@@ -1330,6 +1330,50 @@ exists to remove.
     - _Requirements: 1.49, 2.49_
 
 
+  - [ ] 13.10 Keep the container's dependency posture honest — CI was red on this, not on a deploy
+    - **`05 Security` had been failing on every push, and on its scheduled run too.** The scheduled
+      failure is the tell: it was not caused by any commit. `02 Build` and `03 Deploy` were green
+      throughout, so nothing was blocking the rollout — the red was Trivy's container scan
+    - **Trivy's finding was exactly one package.** `PyJWT 2.13.0`, `CVE-2026-102268`, CRITICAL,
+      fixed in `2.14.0` — a key-confusion bug (`GHSA-p4g4-x82p-q773`) reported upstream as a
+      signature bypass that lets an attacker forge valid tokens. **Bumped.** 1077 auth, jwt, token
+      and tenant tests pass on 2.14.0, so the stricter release needed no call-site change
+    - **Exposure was limited rather than absent, and the distinction is worth keeping.** Every
+      verification path in `core/auth_middleware.py` pins `algorithms=` explicitly — `ES256`
+      against the JWKS signing key on the primary path, `HS256` against a secret on the two
+      fallbacks. Pinning one algorithm per `decode` call is what mitigates the classic confusion
+      shape. The library still validates every token this service accepts, so it was fixed anyway
+    - **THERE IS ONE SOURCE OF TRUTH, AND IT IS NOT THE FILE THE ALERTS NAME.** `requirements.txt`,
+      `backend_app/requirements.txt` and `requirements-cpu.txt` are each two lines: an `-r` include
+      of `requirements-base.txt` plus a `torch` pin. The image installs `requirements-cpu.txt`
+      (`Dockerfile` line 26-27). So a `requirements-base.txt` bump fixes all four manifests at once,
+      and a Dependabot alert attributed to `backend_app/requirements.txt` for `PyJWT` or
+      `python-jose` is the SAME pin seen through the include — not a second stale copy to chase
+    - **The six open CRITICAL Dependabot alerts triage to four distinct packages, and only one was
+      real.** Recorded so the triage is not repeated:
+      1. `PyJWT <= 2.13.0` — **REAL and now fixed.** Trivy proved it was in the built image
+      2. `python-jose < 3.4.0` — **already satisfied.** `requirements-base.txt` pins exactly
+         `3.4.0`, which is the patched version; the alert has not auto-closed
+      3. `torch < 2.6.0` (RCE via `torch.load` with `weights_only=True`) — **present in the image,
+         NOT reachable.** `torch.load`, `torch.jit.load` and `load_state_dict` appear nowhere in
+         the tree; models are read through `joblib` by `core/ml_safety.SafeModelLoader`, and
+         `backend/model_readiness.py` already documents why it does not deserialize on the deploy
+         path. Schedule the bump; it is not an emergency, and `2.3.1 -> 2.6.0` is a large ML jump
+         on a path this environment cannot exercise
+      4. `shell-quote` — `docs/package-lock.json` only. Not in the runtime image and not in the
+         app bundle
+    - **`05 Security` does not gate `03 Deploy`, and that is a decision to make rather than a bug.**
+      `03 Deploy` chains off `02 Build` via `workflow_run`, so a known-CRITICAL image ships while
+      the scan is red — which is what happened until `PyJWT` was bumped. Either gate the deploy on
+      the scan or record that the scan is advisory; leaving it ambiguous is what let this sit
+    - **Not verified here:** GitHub reports 166 Dependabot alerts in total (5 critical at the time
+      of writing). Only the CRITICAL set was triaged. Trivy scans the image and Dependabot scans the
+      manifests, so the two lists are not the same set and neither is a superset of the other
+    - _Requirements: none — this is CI and supply-chain posture, outside the numbered clauses. Filed
+      here because task 14 requires every launch blocker to be recorded as proven, BLOCKED, or_
+      _closed by citation, and a red security gate is none of those until someone writes down why_
+
+
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
   - Every P0 and P1 clause carries a named regression test that failed against `F` and passes against `F'`
