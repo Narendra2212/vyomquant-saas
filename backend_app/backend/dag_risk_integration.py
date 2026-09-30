@@ -578,7 +578,35 @@ class RiskIntegratedEventLoop(DAGEventLoop):
         raw_tenant = (metadata or {}).get("tenant_id", "00000000-0000-0000-0000-000000000001")
         tenant_id = UUID(str(raw_tenant)) if isinstance(raw_tenant, (str, UUID)) else raw_tenant
         strategy_id = (metadata or {}).get("strategy_id", "dag_strategy")
-        portfolio_state = (metadata or {}).get("portfolio_state", {"total_equity": Decimal("100000.0")})
+        # The caller portfolio state is REQUIRED. It used to default to
+        #     {total_equity: Decimal(100000.0)}
+        # which fed ExecutionEngine, which fed RiskManager(initial_equity=), so every
+        # guardrail on this gateway was measured against 100k nobody established.
+        # Real state does arrive here - callers put it in metadata - so the fix is
+        # to require it rather than paper over its absence.
+        portfolio_state = (metadata or {}).get("portfolio_state")
+        if not portfolio_state or "total_equity" not in portfolio_state:
+            logger.error(
+                "Refusing to execute %s %s: metadata carried no portfolio_state "
+                "with total_equity, and this gateway does not invent capital to "
+                "size a position against.",
+                side,
+                symbol,
+            )
+            return {
+                "order_id": None,
+                "symbol": symbol,
+                "side": side,
+                "size": size,
+                "price": price,
+                "status": "refused",
+                "filled_size": 0.0,
+                "filled_price": 0.0,
+                "realized_pnl": 0.0,
+                "metadata": metadata or {},
+                "executed_at": datetime.now().isoformat(),
+                "details": {"error": "PORTFOLIO_STATE_REQUIRED"},
+            }
 
         engine = getattr(self, "execution_engine", None)
         if not engine:

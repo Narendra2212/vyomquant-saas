@@ -75,7 +75,26 @@ class ExchangeGateway:
         
         tenant_id = UUID(str(job.tenant_id)) if isinstance(job.tenant_id, (str, UUID)) else job.tenant_id
         strategy_id = job.strategy_id or "worker_strategy"
-        portfolio_state = {"total_equity": Decimal("100000.0")}
+        # The job own portfolio state, never an invented one. This line used to be
+        #     portfolio_state = {total_equity: Decimal(100000.0)}
+        # a hardcoded figure that became ExecutionEngine.initial_capital and the
+        # RiskManager equity, so the position-size, exposure and drawdown limits on
+        # this worker were all measured against 100k the account may not hold.
+        # Read from the job so a producer can supply real capital; refuse when it
+        # does not, because the alternative is sizing a real order against a
+        # balance nobody established.
+        portfolio_state = getattr(job, "portfolio_state", None)
+        if not portfolio_state or "total_equity" not in portfolio_state:
+            logger.error(
+                "Refusing execution job %s: it carries no portfolio_state with "
+                "total_equity, and this worker does not invent capital.",
+                getattr(job, "job_id", "<unknown>"),
+            )
+            return {
+                "order_id": None,
+                "status": "refused",
+                "error": "PORTFOLIO_STATE_REQUIRED",
+            }
         
         engine = getattr(self, "execution_engine", None)
         if not engine:

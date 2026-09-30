@@ -115,13 +115,45 @@ class ExecutionEngine:
         Raises:
             ValueError: If portfolio_state is not provided or missing required fields
         """
-        # Step 1: Validate or initialize portfolio state
+        # Step 1: The portfolio state is REQUIRED, exactly as this method docstring says.
+        #
+        # IT USED TO INVENT CAPITAL. An absent portfolio_state became
+        #     {total_equity: 100000.0, available_balance: 100000.0}
+        # and a present-but-incomplete one had total_equity set to 100000.0, both
+        # silently (the first at INFO). That contradicted the docstring above, which
+        # promises ValueError, and it is the fabrication class the launch-hardening
+        # bugfix defines: asked for a figure it does not have, the system answered with
+        # an invented one instead of an absence.
+        #
+        # WHY IT MATTERS MORE HERE THAN ON A DASHBOARD. total_equity becomes
+        # initial_capital, current_equity, peak_equity AND RiskManager(initial_equity=),
+        # so every guardrail below - position size, exposure ceiling, drawdown - was
+        # computed against 100k the account may not hold. A trader with 2k of real
+        # capital would be authorised positions sized for fifty times that.
+        #
+        # A SYNTHETIC BALANCE IS STILL ALLOWED, BUT IT MUST BE PASSED. master_executor
+        # deliberately passes {total_equity: 10000.0} for its paper branch and says so;
+        # that keeps working. What is refused is arriving with NOTHING and being handed
+        # a number nobody chose.
         if not portfolio_state:
-            logger.info("No portfolio_state provided to ExecutionEngine, initializing with paper trading default balance.")
-            portfolio_state = {"total_equity": Decimal("100000.0"), "available_balance": Decimal("100000.0")}
-        
+            raise ValueError(
+                "ExecutionEngine requires portfolio_state: it sets initial_capital, "
+                "current_equity, peak_equity and the RiskManager equity that every "
+                "guardrail is measured against. There is no default, because a "
+                "default would size real positions against capital nobody "
+                "established. Pass the caller own portfolio state - a synthetic "
+                "paper balance is fine, but it has to be chosen explicitly."
+            )
+
         if 'total_equity' not in portfolio_state:
-            portfolio_state['total_equity'] = Decimal("100000.0")
+            raise ValueError(
+                "ExecutionEngine requires portfolio_state['total_equity']; the state "
+                "supplied carries only %r. total_equity is the denominator of the "
+                "exposure, concentration and drawdown checks, so substituting a "
+                "figure here would make every one of them report on capital that "
+                "was never read."
+                % (sorted(portfolio_state),)
+            )
         
         # Use REAL capital from portfolio state
         total_equity = Decimal(str(portfolio_state['total_equity']))

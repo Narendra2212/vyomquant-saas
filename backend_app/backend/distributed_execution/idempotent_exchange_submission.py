@@ -217,7 +217,31 @@ class IdempotentExchangeSubmission:
                 from uuid import UUID
 
                 parsed_tenant = UUID(str(tenant_id)) if isinstance(tenant_id, (str, UUID)) else tenant_id
-                portfolio_state = {"total_equity": Decimal("100000.0")}
+                # The submitter portfolio state, never an invented one. This used to
+                # be a hardcoded {total_equity: Decimal(100000.0)} on the path the
+                # comment above calls Submit to exchange, so the RiskManager equity
+                # every guardrail is measured against was 100k that nobody read.
+                # Refusing is the safe direction here: an order recorded for
+                # idempotency but never submitted is recoverable, whereas one sized
+                # against imaginary capital is not.
+                portfolio_state = order_data.get("portfolio_state")
+                if not portfolio_state or "total_equity" not in portfolio_state:
+                    logger.error(
+                        "Refusing submission %s: order_data carries no "
+                        "portfolio_state with total_equity, and this gateway does "
+                        "not invent capital to size against.",
+                        client_order_id,
+                    )
+                    return {
+                        "success": False,
+                        "error": "PORTFOLIO_STATE_REQUIRED",
+                        "client_order_id": client_order_id,
+                        "message": (
+                            "No portfolio state with total_equity was supplied, so "
+                            "the order was not submitted. Nothing was sent to the "
+                            "exchange."
+                        ),
+                    }
                 engine = ExecutionEngine(portfolio_state=portfolio_state)
 
                 res = await engine.execute_trade(
