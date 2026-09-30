@@ -177,6 +177,16 @@ class ConnectionEngine:
             except ccxt_base.AuthenticationError as e:
                 # Auth errors will not resolve on retry — fail immediately
                 logger.error(f"[{self.exchange_id.upper()}] Invalid API keys.")
+                # A FAILED connect() never hands the caller a reference, so the caller
+                # cannot close what it never received. get_or_create_exchange does
+                #     engine = ConnectionEngine(...); exchange = await engine.connect()
+                # and pools the result on the NEXT line, so when connect() raises the
+                # engine goes out of scope still holding a live ccxt client with an open
+                # aiohttp session, and release_exchange cannot reach it because it was
+                # never pooled. That is the ERROR:asyncio:Unclosed client session and
+                # the ccxt okx requires to release all resources warning in production.
+                # disconnect() closes the session and nulls the reference (FIX CE-3).
+                await self.disconnect()
                 raise e
             except (TypeError, AttributeError, KeyError, IndexError) as e:
                 # A DETERMINISTIC error will not resolve on retry either, for the same
@@ -215,6 +225,7 @@ class ConnectionEngine:
                     )
                     self._apply_mock_interface()
                     return self.exchange
+                await self.disconnect()
                 raise ConnectionError(f"Exchange connection failed: {e}")
 
             except Exception as e:
@@ -239,6 +250,7 @@ class ConnectionEngine:
                             f"{max_retries} attempts: {type(e).__name__}: {e}",
                             exc_info=True,
                         )
+                        await self.disconnect()
                         raise ConnectionError(f"Exchange connection failed: {e}")
                 wait = 2**attempt
                 logger.warning(

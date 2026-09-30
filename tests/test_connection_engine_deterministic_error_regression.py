@@ -47,6 +47,7 @@ class FakeExchange:
     def __init__(self, raises, config=None):
         self._raises = raises
         self.attempts = 0
+        self.closed = 0
         self.symbols = ["BTC/USDT"]
         self.markets = {"BTC/USDT": {}}
         self.options = {}
@@ -59,7 +60,7 @@ class FakeExchange:
         return self.markets
 
     async def close(self):
-        pass
+        self.closed += 1
 
     def set_sandbox_mode(self, flag):
         pass
@@ -192,3 +193,59 @@ def test_the_upstream_defect_is_still_present_on_the_pinned_ccxt():
         "the pinned ccxt now carries the upstream pre-open-market guard; OKX should load, "
         "so re-read the comment on the deterministic-error branch in connection_engine.py"
     )
+
+
+class TestAFailedConnectDoesNotLeakItsSession:
+    """A connect() that raises must close the client it built.
+
+    THE LEAK. On failure the caller never receives a reference, so it cannot close what
+    it never got. ``get_or_create_exchange`` does::
+
+        engine = ConnectionEngine(...)
+        exchange = await engine.connect()      # raises here
+        _exchange_pool[pool_key] = exchange    # never reached
+
+    so the engine goes out of scope holding a live ccxt client with an open aiohttp
+    session, and ``release_exchange`` cannot reach it because it was never pooled. In
+    production this surfaced as ``ERROR:asyncio:Unclosed client session`` and ccxt own
+    ``okx requires to release all resources with an explicit call to the .close()``.
+
+    The AssetUniverse path escaped it only because that caller keeps the engine and calls
+    ``disconnect()`` itself - the contract leaked regardless.
+    """
+
+    def test_a_deterministic_failure_closes_the_session(self, venue):
+        built = venue(TypeError("NoneType and str"))
+
+        with pytest.raises(ConnectionError):
+            _connect()
+
+        assert built["ex"].closed == 1, "the failed client was never closed"
+
+    def test_an_auth_failure_closes_the_session(self, venue):
+        built = venue(ccxt_base.AuthenticationError("Invalid Api-Key ID"))
+
+        with pytest.raises(ccxt_base.AuthenticationError):
+            _connect()
+
+        assert built["ex"].closed == 1
+
+    def test_retry_exhaustion_closes_the_session(self, venue):
+        built = venue(ccxt_base.NetworkError("connection reset"))
+
+        with pytest.raises(ConnectionError):
+            _connect()
+
+        assert built["ex"].attempts == 3
+        assert built["ex"].closed == 1, (
+            "the client was left open after every retry was exhausted"
+        )
+
+    def test_a_successful_connect_does_not_close(self, venue):
+        """The obvious guard: closing on success would hand back a dead client."""
+        built = venue(None)
+
+        ex = _connect()
+
+        assert built["ex"].closed == 0
+        assert ex.symbols == ["BTC/USDT"]
