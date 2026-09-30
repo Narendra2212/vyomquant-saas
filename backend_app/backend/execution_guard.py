@@ -166,7 +166,8 @@ class ExecutionGuard:
         tenant_id: str,
         signal: Dict[str, Any],
         portfolio_state: Dict[str, Any],
-        market_state: Dict[str, Any]
+        market_state: Dict[str, Any],
+        reduce_only: bool = False,
     ) -> TradeValidationReport:
         """
         STEP 7.1: Main validation entry point.
@@ -204,25 +205,61 @@ class ExecutionGuard:
             size=size,
         )
         
-        # Run all validation checks
+        # WHICH CHECKS A RISK-REDUCING OPERATION GETS (reduce_only)
+        # ----------------------------------------------------------
+        # Six of the checks below answer one question: CAN THIS ACCOUNT AFFORD TO TAKE
+        # ON THIS POSITION. For a cancel, a cancel-all or a close-all that question is
+        # meaningless, and answering it either way is wrong:
+        #
+        #   * against the fabricated equity the portfolio fallback used to supply, they
+        #     PASS - a rubber stamp on a figure nobody read;
+        #   * against an honest absence they BLOCK, because _validate_portfolio_
+        #     concentration refuses total_equity <= 0 outright and
+        #     _validate_sufficient_balance reads available_balance as 0. That blocks a
+        #     trader from cancelling an order or closing a position - the one outcome
+        #     worse than not checking, since it leaves them exposed in a moving market.
+        #
+        # So they are SKIPPED for a reduce-only operation, and nothing else is. The
+        # checks that matter on a cancel are kept in full: duplicate-order idempotency
+        # (submitting the same cancel twice), the tenant symbol allow-list, the circuit
+        # breakers that are the kill switch, signal shape, latency, order size, market
+        # conditions and risk-engine status. None of those is a function of capital.
+        #
+        # Default False, so every existing caller and every opening trade is unchanged.
+        capital_dependent = [
+            self._validate_sufficient_balance(portfolio_state, signal),  # STEP 7.4
+            self._validate_position_and_exposure_limits(portfolio_state, signal),  # 7.5
+            self._validate_portfolio_concentration(portfolio_state, signal),
+            self._validate_exposure_limits(portfolio_state, signal),
+            self._validate_daily_drawdown(portfolio_state),
+            self._validate_composite_risk_score(portfolio_state, market_state, signal),  # 7.13
+        ]
+
         checks = [
             self._validate_signal_basic(signal),  # STEP 7.2
             self._validate_signal_latency(signal),  # STEP 7.8
             self._validate_no_duplicate_order(tenant_id, signal),  # STEP 7.3
-            self._validate_sufficient_balance(portfolio_state, signal),  # STEP 7.4
-            self._validate_position_and_exposure_limits(portfolio_state, signal),  # STEP 7.5
             self._validate_strategy_conflict(portfolio_state, signal),  # STEP 7.6
             self._validate_order_size(signal),
             self._validate_symbol_allowed(tenant_id, symbol),
-            self._validate_portfolio_concentration(portfolio_state, signal),
-            self._validate_exposure_limits(portfolio_state, signal),
-            self._validate_daily_drawdown(portfolio_state),
             self._validate_market_conditions_detailed(market_state, signal),  # STEP 7.7
-            self._validate_composite_risk_score(portfolio_state, market_state, signal),  # STEP 7.13
             self._validate_circuit_breakers(tenant_id, symbol),
             self._validate_system_health(tenant_id, symbol, portfolio_state),  # STEP 7.9
             self._validate_risk_engine_status(),
         ]
+
+        if not reduce_only:
+            checks.extend(capital_dependent)
+        else:
+            for coro in capital_dependent:
+                coro.close()  # never awaited, so close them rather than leak warnings
+            logger.info(
+                "Reduce-only operation on %s: the six capital checks were skipped "
+                "because they answer whether the account can AFFORD a position, "
+                "which a cancel or close does not ask. Idempotency, symbol "
+                "allow-list and circuit breakers still applied.",
+                symbol,
+            )
         
         # Execute all checks concurrently
         results = await asyncio.gather(*checks, return_exceptions=True)

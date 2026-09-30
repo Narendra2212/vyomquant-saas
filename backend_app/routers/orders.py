@@ -853,7 +853,13 @@ async def cancel_order(
                 "spread_bps": "10",
                 "volatility": "0.02",
                 "status": "open",
-            }
+            },
+                # reduce_only: a cancel does not ask whether the account can AFFORD a
+                # position, so the six capital checks are skipped. Idempotency, the
+                # symbol allow-list and the circuit breakers still apply. Without this,
+                # an honest portfolio read blocks the cancel (concentration refuses
+                # equity <= 0) and a fabricated one rubber-stamps it.
+                reduce_only=True,
         )
         
         if not validation_report.execution_allowed:
@@ -968,7 +974,13 @@ async def cancel_all(
                 "spread_bps": "10",
                 "volatility": "0.02",
                 "status": "open",
-            }
+            },
+                # reduce_only: a cancel does not ask whether the account can AFFORD a
+                # position, so the six capital checks are skipped. Idempotency, the
+                # symbol allow-list and the circuit breakers still apply. Without this,
+                # an honest portfolio read blocks the cancel (concentration refuses
+                # equity <= 0) and a fabricated one rubber-stamps it.
+                reduce_only=True,
         )
         
         if not validation_report.execution_allowed:

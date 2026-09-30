@@ -354,7 +354,13 @@ async def close_all_positions(
                 "spread_bps": "10",
                 "volatility": "0.02",
                 "status": "open",
-            }
+            },
+            # reduce_only: closing positions REDUCES risk, so the six capital checks
+            # are skipped - they answer whether the account can afford to OPEN a
+            # position. Blocking a close-all because equity could not be read would
+            # leave the trader exposed, which is worse than not checking. Idempotency,
+            # the symbol allow-list and the circuit breakers still apply.
+            reduce_only=True,
         )
         
         if not validation_report.execution_allowed:
