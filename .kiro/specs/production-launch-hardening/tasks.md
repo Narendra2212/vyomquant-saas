@@ -1374,6 +1374,59 @@ exists to remove.
       _closed by citation, and a red security gate is none of those until someone writes down why_
 
 
+  - [ ] 13.11 Order-cancellation atomicity — proven on real PostgreSQL, the test file still cannot run
+    - **The four `tests/test_atomic_order_cancellation_fix.py` tests fail in this environment for a
+      reason that is not a defect.** They call `SessionLocal` from `core/database.py`, which falls
+      back to `sqlite:///./algo22.db` with no `DATABASE_URL`, so the failure is
+      `sqlite3.OperationalError: no such table: orders`. The SQL under test is PostgreSQL-only
+      anyway: `NOW()` and the `data->>'status'` JSON operator. They fail identically on a clean
+      tree — confirmed by stash — so they were never a regression from any wave
+    - **The PROPERTY they exist to assert is now proven, against the production PostgreSQL, in a
+      scratch schema created and dropped inside one run.** Every statement was fully qualified as
+      `vq_atomicity_probe.orders`, so `public.orders` could not be reached even by a `search_path`
+      accident; `public.orders` was re-counted afterwards and still holds 0 rows. Result:
+      1. first cancel — **1 row affected**
+      2. second cancel of the same order — **0 rows affected**, so the UPDATE is idempotent
+      3. **two genuinely concurrent sessions**, released together off a `threading.Barrier`, racing
+         the same cancel — rowcounts `[1, 0]`, **exactly one winner**
+      4. final stored status `cancelled`
+    - **Why that is load-bearing rather than a toy.** `backend/transactional_execution_manager.py`
+      line 863 issues the SAME statement — `UPDATE orders SET data = :data, updated_at = NOW()
+      WHERE id = :order_id AND tenant_id = :tenant_id AND (data->>'status') IS DISTINCT FROM
+      'cancelled'` — and raises on `update_result.rowcount == 0` with "concurrent cancellation
+      detected". The losing session in the race above is exactly that branch firing, so the
+      production code's race detection is doing what it claims
+    - **What is NOT proven, said plainly.** The Python around the SQL was not executed:
+      `ReplaySafeTransaction.cancel_order` itself never ran, only the statement it issues. And the
+      four tests remain unrunnable in CI — closing that needs a PostgreSQL in the test
+      environment, which is the same gap task 12.6 records for the lifecycle race. Docker is not
+      installed on this machine and there is no local PostgreSQL
+    - **Do not "fix" these four by pointing `DATABASE_URL` at production.** They INSERT and UPDATE
+      `orders` rows; a CI run against the live database would write test orders into it. The scratch
+      schema above is the safe shape if anyone repeats this by hand
+    - _Requirements: relates to 1.16 / 12.6's database-level serialisation gap. Recorded as PROVEN
+      for the property and BLOCKED for the test file, per task 14's rule that a clause is proven,_
+      _BLOCKED with its gap named, or closed by citation — never a silent pass_
+
+  - [ ] 13.12* Dependency posture beyond CRITICAL — 29 HIGH alerts, three of them in the image
+    - **Only the CRITICAL set was triaged in 13.10.** The full open set is 100+ alerts: 3 critical,
+      29 high, 46 medium, 22 low; 94 `pip`, 5 `npm`, 1 `rust`
+    - **Three HIGH findings are in files the image actually installs** (`requirements-base.txt`,
+      which `requirements-cpu.txt` includes — see 13.10 for why the other manifests are aliases):
+      - `setuptools` → fixed **78.1.1**
+      - `cryptography` → fixed **49.0.0**
+      - `starlette` → fixed **1.3.1**, and this one deserves attention: it is the ASGI layer FastAPI
+        sits on, so it is web-facing. The pin is `0.41.0`, and note the numbering moved `0.4x → 1.x`,
+        so this is a major upgrade rather than a patch
+    - **Not in the image:** the `PyJWT`/`pyjwt` HIGH alerts are the already-fixed `2.14.0` pin seen
+      through `backend_app/requirements.txt`'s `-r` include, and `browserslist` is in
+      `algo22-terminal/package-lock.json` (build tooling, not shipped bundle)
+    - **Optional for launch: P2.** None is a known-exploited auth bypass like the PyJWT CRITICAL was.
+      But `starlette` and `cryptography` are both large upgrades on load-bearing paths and want their
+      own test pass, which is why this is its own task rather than a line in 13.10
+    - _Requirements: none — supply-chain posture, outside the numbered clauses_
+
+
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
   - Every P0 and P1 clause carries a named regression test that failed against `F` and passes against `F'`
