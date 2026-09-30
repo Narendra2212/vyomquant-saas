@@ -3739,7 +3739,17 @@ const BILLING_FIELDS = [
  * `status`, `health` and `subscription_tier` UNAVAILABLE rather than pointing a page at a
  * literal. A constant rendered as a reading is worse on this page than on the dashboard,
  * because this is the page a trader opens to decide whether a venue can be trusted with an
- * order. `bot_count`, `strategy_count`, `connected_at` and `last_sync` are real.
+ * order. `bot_count`, `strategy_count` and `connected_at` are real.
+ *
+ * `last_sync` IS NO LONGER ON THIS RESPONSE AT ALL
+ * ----------------------------------------------
+ * It was filled from the SAME column as `connected_at`, so a row-creation time was reported as
+ * a synchronisation time — the fabrication class this file exists to catch, one level below a
+ * constant. Nothing records when a venue was last synchronised, so `routers/exchange.py` sends
+ * no such field and `src/api/modules/exchange.js` no longer declares one. No entry is declared
+ * for it here, by the same rule the closing paragraph states for `permissions`. The `last_sync`
+ * the `dashboard` `exchangeHealth` entry names is a different read
+ * (`dashboard_aggregation_service.get_exchange_health`) and is untouched by this.
  *
  * `masked_key` CARRIES A TOOLTIP RATHER THAN A REASON
  * -------------------------------------------------
@@ -3988,7 +3998,11 @@ const EXCHANGE_MANAGER_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     documentedIn: EXCHANGE_API_MODULE,
     reason: 'No timestamp is recorded for when this connection was stored, so none is shown.',
-    note: '`exchange_keys.updated_at`, genuinely null for a row that has none. The page '
+    note: '`exchange_keys.created_at` — the moment the credential row was written, which is '
+      + 'when the connection was established — and genuinely null for a row that carries none. '
+      + 'It was `updated_at` until the 42703 fix: that column exists in '
+      + '`migrations/003_create_exchange_keys_table.sql` and NOT in the production table, so '
+      + 'the whole read failed and every account rendered as having no connections. The page '
       + 'rendered the literal word "Recently" instead — a claim about when the credential was '
       + 'stored, from a field that was not there. `pages/SecurityLogs.jsx` carried the same '
       + 'substitution stamped with the moment the page was opened; a word is harder to spot.',

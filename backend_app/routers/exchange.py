@@ -29,6 +29,38 @@ router = APIRouter()
 logger = logging.getLogger("ExchangeRouter")
 
 
+#: The projection ``list_exchanges`` may use against ``exchange_keys``.
+#:
+#: ``public.exchange_keys`` in production carries EXACTLY ``user_id``, ``exchange_id``,
+#: ``encrypted_api_key``, ``encrypted_secret_key``, ``encrypted_password`` and ``created_at``
+#: — queried against the live database. It has no ``updated_at`` and no ``id``.
+#: ``migrations/003_create_exchange_keys_table.sql`` declares both (plus a
+#: ``trg_exchange_keys_updated_at`` trigger), so production's table was never created by that
+#: migration and the repo's SQL does not describe it. The projection here follows the LIVE
+#: shape, not the migration.
+#:
+#: The previous projection named ``updated_at``, which PostgreSQL rejected with ``42703``
+#: ("column exchange_keys.updated_at does not exist") on every call — four occurrences in a
+#: twelve-hour CloudWatch window — and the handler swallowed into an empty list, so an account
+#: holding stored credentials was told it had none.
+_EXCHANGE_KEYS_PROJECTION = "exchange_id, created_at"
+
+#: The machine-readable code a connections read that DID NOT COMPLETE answers with, alongside
+#: HTTP 503. The same never-swallow rule ``routers/paper_trading.py`` (``PAPER_READ_FAILED``)
+#: and ``backend/marketplace/entitlement_resolver.py`` (``MARKETPLACE_READ_FAILED``) apply: a
+#: failed read may not be reported as an absence, because "you have no connected exchanges" is
+#: a statement about the account that nothing established.
+EXCHANGE_CONNECTIONS_READ_FAILED = "EXCHANGE_CONNECTIONS_READ_FAILED"
+
+#: The sentence the client renders for that refusal. It matches the reason
+#: ``algo22-terminal/src/design/pageFields.js`` already declares for every figure off this read
+#: (``CONNECTIONS_UNREAD``), so the page says the same thing whichever side reports it.
+_CONNECTIONS_READ_FAILED_MESSAGE = (
+    "Your exchange connections could not be read, so none are listed rather than "
+    "reported as absent. Try again in a moment."
+)
+
+
 _CACHED_SUPPORTED_EXCHANGES = None
 
 @router.get("/supported")
@@ -220,32 +252,83 @@ async def list_exchanges(
     """
     List user's connected exchanges with full metadata.
     Returns exchange status, permissions, bot count, strategy count, health metrics.
+
+    THE CONNECTIONS READ MAY NOT BE SWALLOWED
+    -----------------------------------------
+    An empty array here is a statement about the ACCOUNT: "you have no exchange credentials
+    stored". A read that did not complete establishes nothing of the kind, so it answers 503
+    ``EXCHANGE_CONNECTIONS_READ_FAILED`` instead — the rule ``routers/paper_trading.py`` and
+    ``backend/marketplace/entitlement_resolver.py`` already follow for their own reads. The
+    previous ``except Exception: keys = []`` is what kept a real, four-times-in-twelve-hours
+    production ``42703`` invisible: a trader holding credentials saw "no connected exchanges"
+    and no error at all.
+
+    ``connected_at`` IS ``created_at``; THERE IS NO ``last_sync``
+    ------------------------------------------------------------
+    ``created_at`` is when the credential row was written, which is when the connection was
+    established — so it answers ``connected_at`` faithfully. It does NOT answer ``last_sync``:
+    a row-creation time is not a synchronisation time, and nothing in this system records when
+    a venue was last synchronised. ``last_sync`` is therefore not in the response at all rather
+    than carrying a timestamp that would assert a sync that never happened.
     """
     try:
-        keys = []
+        keys: List[Dict[str, Any]] = []
         bot_counts = {}
         strat_counts = {}
-        if supabase:
-            try:
-                q1_res = supabase.table("exchange_keys").select("exchange_id, updated_at").eq("user_id", user["id"]).execute()
-                q1 = await q1_res if inspect.isawaitable(q1_res) else q1_res
-                keys = q1.data if q1 and hasattr(q1, "data") and isinstance(q1.data, list) else []
-            except Exception as e:
-                logger.warning(f"Failed to fetch exchange keys: {e}")
-                keys = []
+        if not supabase:
+            # No client means no read was attempted. Answering `[]` would report an absence
+            # nothing looked for.
+            logger.error(
+                "[EXCHANGE] no Persistence_Layer client for the connections read of %s",
+                user["id"],
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": EXCHANGE_CONNECTIONS_READ_FAILED,
+                    "message": _CONNECTIONS_READ_FAILED_MESSAGE,
+                },
+            )
 
-            try:
-                res_strat = supabase.table("strategies").select("id, exchange_id, status").eq("user_id", user["id"]).execute()
-                strat_resp = await res_strat if inspect.isawaitable(res_strat) else res_strat
-                strat_data = strat_resp.data if strat_resp and hasattr(strat_resp, "data") and isinstance(strat_resp.data, list) else []
-                for s in strat_data:
-                    ex_id = (s.get("exchange_id") or "").lower()
-                    if ex_id:
-                        strat_counts[ex_id] = strat_counts.get(ex_id, 0) + 1
-                        if s.get("status") in ("running", "deployed", "active"):
-                            bot_counts[ex_id] = bot_counts.get(ex_id, 0) + 1
-            except Exception as e:
-                logger.warning(f"Failed to fetch user strategies for exchange aggregation: {e}")
+        try:
+            q1_res = (
+                supabase.table("exchange_keys")
+                .select(_EXCHANGE_KEYS_PROJECTION)
+                .eq("user_id", user["id"])
+                .execute()
+            )
+            q1 = await q1_res if inspect.isawaitable(q1_res) else q1_res
+            read_error = getattr(q1, "error", None)
+            rows = getattr(q1, "data", None)
+            if read_error or not isinstance(rows, list):
+                # A response carrying an error, or one with no readable rows, is a read that
+                # did not complete - not an account with nothing stored.
+                raise RuntimeError(
+                    f"the exchange_keys read returned no readable rows (error={read_error!r})"
+                )
+            keys = [row for row in rows if isinstance(row, dict)]
+        except Exception as e:
+            logger.error(f"Failed to fetch exchange keys: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": EXCHANGE_CONNECTIONS_READ_FAILED,
+                    "message": _CONNECTIONS_READ_FAILED_MESSAGE,
+                },
+            ) from e
+
+        try:
+            res_strat = supabase.table("strategies").select("id, exchange_id, status").eq("user_id", user["id"]).execute()
+            strat_resp = await res_strat if inspect.isawaitable(res_strat) else res_strat
+            strat_data = strat_resp.data if strat_resp and hasattr(strat_resp, "data") and isinstance(strat_resp.data, list) else []
+            for s in strat_data:
+                ex_id = (s.get("exchange_id") or "").lower()
+                if ex_id:
+                    strat_counts[ex_id] = strat_counts.get(ex_id, 0) + 1
+                    if s.get("status") in ("running", "deployed", "active"):
+                        bot_counts[ex_id] = bot_counts.get(ex_id, 0) + 1
+        except Exception as e:
+            logger.warning(f"Failed to fetch user strategies for exchange aggregation: {e}")
 
         # Resolve the caller's subscription tier ONCE, before the loop, through the
         # injected APIKeyVault singleton. Reporting a hardcoded "free" here told every
@@ -276,15 +359,22 @@ async def list_exchanges(
                 "strategy_count": strat_counts.get(exchange_id, 0),
                 "account_type": "Spot",
                 "enabled_features": ["Trading", "Balance"],
-                "connected_at": row.get("updated_at"),
-                "last_sync": row.get("updated_at"),
+                # When the credential row was written, which is when this connection was
+                # established. `last_sync` is deliberately absent: see the docstring.
+                "connected_at": row.get("created_at"),
                 "subscription_tier": subscription_tier,
                 "health": "healthy"
             })
         return exchanges
+    except HTTPException:
+        # Already a structured refusal carrying its own code and status. The blanket
+        # `return []` this replaced turned that refusal back into a fabricated absence.
+        raise
     except Exception as e:
-        logger.warning(f"list_exchanges fallback: {e}")
-        return []
+        # Logged for an operator and re-raised. An unexpected failure assembling the response
+        # is not evidence that the account has no connections, so it may not answer as one.
+        logger.error(f"[EXCHANGE] the connections response could not be assembled: {e}")
+        raise
 
 
 @router.delete("/{exchange_id}")

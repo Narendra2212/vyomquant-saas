@@ -14,14 +14,15 @@ from unittest.mock import MagicMock, Mock, patch
 from fastapi.testclient import TestClient
 
 from backend_app.main import app
-from backend_app.core.dependencies import get_current_user, get_vault
+from backend_app.backend.redis_manager import get_redis_manager
+from backend_app.core.dependencies import get_current_user, get_request_supabase, get_vault
 from backend_app.backend.api_key_vault import APIKeyVault
 
 
 def _mock_supabase_for_exchanges():
     mock_sb = Mock()
-    mock_sb.table.return_value.select.return_value.eq.return_value.execute.return_value = Mock(data=[])
-    mock_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value = Mock(data=[])
+    mock_sb.table.return_value.select.return_value.eq.return_value.execute.return_value = Mock(data=[], error=None)
+    mock_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value = Mock(data=[], error=None)
     return mock_sb
 
 
@@ -35,24 +36,30 @@ def test_list_exchanges_response_shape_and_no_per_request_vault_init():
 
     app.dependency_overrides[get_current_user] = mock_user
     app.dependency_overrides[get_vault] = lambda: mock_vault
+    # The doubles are injected through `dependency_overrides`, NOT by patching
+    # `backend_app.routers.exchange.get_request_supabase`: `Depends(get_request_supabase)`
+    # captured the callable at import time, so a patch on the router module is resolved by
+    # nothing and the handler reaches the REAL database. That read failed, `list_exchanges`
+    # swallowed the failure into `[]`, and this test's `== 200` passed on a fabricated absence
+    # rather than on the double below. See tests/test_exchange_connections_read_regression.py.
+    app.dependency_overrides[get_request_supabase] = _mock_supabase_for_exchanges
+    app.dependency_overrides[get_redis_manager] = lambda: None
 
     client = TestClient(app)
 
-    with patch("backend_app.routers.exchange.get_redis_manager", return_value=None):
-        with patch("backend_app.routers.exchange.get_request_supabase", return_value=_mock_supabase_for_exchanges()):
-            with patch.object(APIKeyVault, "__init__", return_value=None) as mock_init:
-                res = client.get("/api/exchanges/", headers={"Authorization": "Bearer token_123"})
-                assert res.status_code == 200
-                data = res.json()
+    with patch.object(APIKeyVault, "__init__", return_value=None) as mock_init:
+        res = client.get("/api/exchanges/", headers={"Authorization": "Bearer token_123"})
+        assert res.status_code == 200
+        data = res.json()
 
-                # Verify response shape keys
-                assert isinstance(data, list)
+        # Verify response shape keys
+        assert isinstance(data, list)
 
-                # Verify APIKeyVault.__init__ was NEVER called during request handling
-                mock_init.assert_not_called()
+        # Verify APIKeyVault.__init__ was NEVER called during request handling
+        mock_init.assert_not_called()
 
-                # Verify mock_vault.get_user_tier was called with the user's ID
-                mock_vault.get_user_tier.assert_called_once_with("user_singleton_test_123")
+        # Verify mock_vault.get_user_tier was called with the user's ID
+        mock_vault.get_user_tier.assert_called_once_with("user_singleton_test_123")
 
     app.dependency_overrides.clear()
 
@@ -73,15 +80,17 @@ def test_concurrent_tenant_isolation_subscription_tiers():
     mock_vault.get_user_tier.side_effect = side_effect_tier
 
     app.dependency_overrides[get_vault] = lambda: mock_vault
+    # Same reasoning as above: overrides, not module patches, or the handler reads the real
+    # database and this assertion rides on a swallowed failure instead of on the double.
+    app.dependency_overrides[get_request_supabase] = _mock_supabase_for_exchanges
+    app.dependency_overrides[get_redis_manager] = lambda: None
 
     def fetch_user(user_dict):
         app.dependency_overrides[get_current_user] = lambda: user_dict
         client = TestClient(app)
-        with patch("backend_app.routers.exchange.get_redis_manager", return_value=None):
-            with patch("backend_app.routers.exchange.get_request_supabase", return_value=_mock_supabase_for_exchanges()):
-                res = client.get("/api/exchanges/", headers={"Authorization": f"Bearer {user_dict['access_token']}"})
-                assert res.status_code == 200
-                return user_dict["id"]
+        res = client.get("/api/exchanges/", headers={"Authorization": f"Bearer {user_dict['access_token']}"})
+        assert res.status_code == 200
+        return user_dict["id"]
 
     # Run 10 sequential calls alternating between users
     for _ in range(5):

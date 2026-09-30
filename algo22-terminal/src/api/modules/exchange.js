@@ -35,10 +35,21 @@ import { get, post, del } from '../../apiClient';
  * @property {number} strategy_count
  * @property {string} account_type
  * @property {string[]} enabled_features
- * @property {string} connected_at
- * @property {string} last_sync
+ * @property {?string} connected_at
+ *   When the credential row was written — `exchange_keys.created_at`, which is when the
+ *   connection was established. Nullable: a row that carries no timestamp reports none, and
+ *   `design/pageFields.js`'s `connectedAt` entry renders the marker rather than a word.
  * @property {string} subscription_tier
  * @property {string} health
+ *
+ * NO `last_sync` ON THIS RESPONSE
+ * ------------------------------
+ * It used to be declared here, and `routers/exchange.py` used to fill it from the same column
+ * as `connected_at` — so a row-creation time was presented as a synchronisation time. Nothing
+ * in the system records when a venue was last synchronised, so the field is gone from both
+ * sides rather than carrying a value that asserts a sync that never happened. The `last_sync`
+ * the dashboard renders is a DIFFERENT read (`dashboard_aggregation_service.get_exchange_health`)
+ * and is unaffected by this.
  */
 
 export const exchangeApi = {
