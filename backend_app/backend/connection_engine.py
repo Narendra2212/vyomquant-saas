@@ -178,6 +178,45 @@ class ConnectionEngine:
                 # Auth errors will not resolve on retry — fail immediately
                 logger.error(f"[{self.exchange_id.upper()}] Invalid API keys.")
                 raise e
+            except (TypeError, AttributeError, KeyError, IndexError) as e:
+                # A DETERMINISTIC error will not resolve on retry either, for the same
+                # reason the AuthenticationError above does not: nothing about waiting
+                # two seconds changes it. These are parsing faults raised INSIDE the
+                # client library while it reads the venue response, not transient
+                # network conditions.
+                #
+                # The case that motivated this: ccxt 4.3.92 okx.parse_market computes
+                # symbol = base + / + quote, and OKX lists a pre-open SPOT instrument
+                # (CT-USDT) whose baseCcy, quoteCcy, settleCcy and uly are all empty
+                # strings. safe_currency_code() maps an empty string to None, so that
+                # concatenation raises TypeError: unsupported operand type(s) for +:
+                # NoneType and str. Every OKX startup burned three attempts and six
+                # seconds of backoff on an error identical each time, then failed
+                # anyway. Upstream ccxt fixed it later by deriving base and quote from
+                # instId; 4.4.1 and 4.4.50 do not carry that fix.
+                #
+                # Failing fast does NOT make the venue load - OKX markets still do not
+                # load on this ccxt. It stops reporting a deterministic library defect
+                # as a flaky connection, and stops charging every container start for
+                # retries that cannot help. The raised type is unchanged, so callers
+                # (AssetUniverse among them) see exactly what they saw before.
+                from backend_app.core.dependencies import DEV_MODE
+
+                logger.error(
+                    f"[{self.exchange_id.upper()}] load_markets raised a deterministic "
+                    f"{type(e).__name__} while parsing the venue response, so it was "
+                    f"not retried: {e}",
+                    exc_info=True,
+                )
+                if DEV_MODE:
+                    logger.warning(
+                        f"[{self.exchange_id.upper()}] DEV_MODE is active, injecting "
+                        f"mock interface."
+                    )
+                    self._apply_mock_interface()
+                    return self.exchange
+                raise ConnectionError(f"Exchange connection failed: {e}")
+
             except Exception as e:
                 if attempt == max_retries - 1:
                     from backend_app.core.dependencies import DEV_MODE
