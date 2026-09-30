@@ -62,7 +62,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.method != "POST":
             return await call_next(request)
         
-        path = request.url.path
+        # CVE-2026-48710 (BadHost): scope[path] is not rebuilt from the Host header.
+        path = request.scope["path"]
         
         # Check if this is a rate-limited endpoint
         if not any(path.startswith(p) for p in self.RATE_LIMITED_PATHS):

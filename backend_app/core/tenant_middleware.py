@@ -51,7 +51,12 @@ class TenantMiddleware(BaseHTTPMiddleware):
         """Process request with tenant context."""
         
         # Skip auth for certain paths
-        if any(request.url.path.startswith(path) for path in self.skip_paths):
+        # CVE-2026-48710 (BadHost). This WAS request.url.path, which starlette 0.41.0
+        # rebuilds from the Host header: a request carrying Host: anything/health makes
+        # url.path return /health/<real path>, so this startswith would match and SKIP
+        # AUTHENTICATION for any route. scope[path] comes from the request line and
+        # cannot be influenced by a header. Reproduced against the pinned starlette.
+        if any(request.scope["path"].startswith(path) for path in self.skip_paths):
             return await call_next(request)
         
         try:
@@ -63,7 +68,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
             
             # Log request
             logger.debug(
-                f"Request: {request.method} {request.url.path} "
+                f"Request: {request.method} {request.scope['path']} "
                 f"(tenant: {tenant.user_id})"
             )
             

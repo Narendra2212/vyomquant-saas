@@ -202,12 +202,12 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
             duration = time.time() - start_time
             HTTP_REQUESTS_TOTAL.labels(
                 method=request.method,
-                endpoint=request.url.path,
+                endpoint=request.scope["path"],
                 status_code=status_code
             ).inc()
             HTTP_REQUEST_DURATION.labels(
                 method=request.method,
-                endpoint=request.url.path
+                endpoint=request.scope["path"]
             ).observe(duration)
 
 
@@ -710,6 +710,25 @@ app.include_router(ws_router)
 
 
 
+# CVE-2026-48710 (BadHost), and why every path below reads scope[path] rather than
+# request.url.path.
+#
+# starlette 0.41.0 - the version fastapi 0.115.3 pins, via starlette<0.42.0,>=0.40.0 - builds
+# request.url by joining the Host header to the path and RE-PARSING the result. A Host of
+# app.vyomquant.in/health therefore makes request.url.path return /health/<real path>.
+# Verified against the pinned version, not assumed.
+#
+# Consequences that were live here: the Prometheus endpoint label became attacker-controlled
+# (unbounded label cardinality from one client), and these error bodies reflected the poisoned
+# value back to the caller. The more dangerous shape - core/tenant_middleware.py skipping
+# AUTHENTICATION on a startswith over skip_paths - is NOT currently installed on this app, but
+# it is fixed too, because leaving it would be a loaded gun for whoever mounts it next.
+#
+# TrustedHostMiddleware was considered and NOT added: the ALB health check addresses the task
+# by IP, so a Host allow-list would answer 400, the target would fail its health check and ECS
+# would kill the task. scope[path] comes from the request line, cannot be influenced by any
+# header, and needs no allow-list to maintain. The real remedy is starlette >= 1.0, which
+# cannot land until fastapi is upgraded - recorded as task 13.12*.
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     """
@@ -726,7 +745,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     body = create_api_error_response(
         status_code=exc.status_code,
         detail_or_msg=exc.detail,
-        path=str(request.url.path),
+        path=str(request.scope["path"]),
     )
     return JSONResponse(
         status_code=exc.status_code,
@@ -746,7 +765,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     body = create_api_error_response(
         status_code=422,
         detail_or_msg=exc.errors(),  # list of {loc, msg, type} dicts
-        path=str(request.url.path),
+        path=str(request.scope["path"]),
     )
     return JSONResponse(status_code=422, content=body)
 
@@ -762,7 +781,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
     body = create_api_error_response(
         status_code=500,
         detail_or_msg="Internal server error",
-        path=str(request.url.path),
+        path=str(request.scope["path"]),
     )
     return JSONResponse(status_code=500, content=body)
 

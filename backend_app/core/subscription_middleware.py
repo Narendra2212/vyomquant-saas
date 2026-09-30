@@ -41,7 +41,8 @@ class SubscriptionMiddleware(BaseHTTPMiddleware):
         """
         Process request through subscription middleware.
         """
-        path = request.url.path
+        # CVE-2026-48710 (BadHost): scope[path] is not rebuilt from the Host header.
+        path = request.scope["path"]
         
         # Bypass subscription checks for public paths
         if any(path.startswith(bypass) for bypass in self.BYPASS_PATHS):
@@ -169,7 +170,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """
         Process request through rate limit middleware.
         """
-        path = request.url.path
+        # CVE-2026-48710 (BadHost): scope[path] is not rebuilt from the Host header.
+        path = request.scope["path"]
         
         # Bypass rate limiting for webhooks and health checks
         if any(bypass in path for bypass in ["/webhook", "/health", "/docs"]):
