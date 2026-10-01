@@ -2456,7 +2456,11 @@ def get_portfolio_manager() -> PortfolioManager:
     Raises:
         HTTPException: 503 PORTFOLIO_NOT_INITIALISED when no portfolio exists yet.
     """
-    global _portfolio_manager
+    # No `global` here: this function only READS the singleton now. It used to assign it,
+    # lazily constructing a PortfolioManager with invented capital, and the declaration was
+    # needed for that assignment. Leaving it behind made flake8 F824 fire - the same
+    # --select=E9,F63,F7,F82 run that 01-pr-check.yml gates on - so it would have failed PR
+    # checks. POST /initialize still declares it, because that is the one place that assigns.
     if _portfolio_manager is None:
         logger.error(
             "A portfolio read or write was attempted before any portfolio was "
