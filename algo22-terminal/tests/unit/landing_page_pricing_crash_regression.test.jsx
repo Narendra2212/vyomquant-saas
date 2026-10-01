@@ -1,56 +1,59 @@
 /**
- * tests/unit/landing_page_pricing_crash_regression.test.jsx — the INR plan contract.
+ * tests/unit/landing_page_pricing_crash_regression.test.jsx — the published plan contract, in
+ * every currency the page can show it in.
  *
  * WHAT THIS FILE GUARDS
  * ---------------------
- * The published price list, asserted against the rendered landing section. It began as a
- * `toLocaleString` crash regression suite — the section formatted whatever
- * `GET /api/billing/plans` returned and a null price threw on format — and the figures are now
- * declared in the component, so what is guarded is the contract that replaced the crash: five
- * plans, rupees only, published annual figures, and arithmetic that still cannot throw.
+ * The published price list, asserted against the rendered landing section: five plans, the rupee
+ * figures ₹0 / ₹499 / ₹999 / ₹2,499 and a quoted fifth tier, published annual prices rather than
+ * derived ones, and arithmetic that still cannot throw. It began as a `toLocaleString` crash
+ * regression suite — the section formatted whatever `GET /api/billing/plans` returned and a null
+ * price threw on format — and that is why the no-throw assertions are here.
  *
- * WHAT CHANGED WITH THE FIVE-PLAN LADDER, AND WHY EVERY MOVED ASSERTION MOVED
- * -------------------------------------------------------------------------
- * This file previously pinned FOUR tiers — `Free / Sandbox`, `Trader`, `Pro Quant`,
- * `Institutional` — under the heading `Infrastructure Tiers`, with a `Recommended` chip and an
- * annual toggle that applied a 20% reduction computed in the browser. Six of those facts are now
- * different, and none of the changes is cosmetic:
+ * WHAT CHANGED WITH THE SINGLE-BASE-CURRENCY FIX, AND WHY EACH ASSERTION MOVED
+ * ---------------------------------------------------------------------------
+ * This file previously pinned the section as INR-ONLY: no currency selector, no network read, and
+ * no dollar sign anywhere under `#pricing`. Three of those facts are now different, and the reason
+ * is a real defect, not a redesign:
  *
- *   1. **Five plans, not four.** `Business` replaces `Institutional` as the DISPLAY name of the
- *      same ₹2,499 plan (the stored identifier `enterprise` is untouched — see
- *      `backend_app/core/subscription_engine.py`), and a fifth, custom-priced `Enterprise` plan is
- *      added above it. So the card count is 5 and the `/month` count is 4: a quoted plan has no
- *      monthly figure to label.
- *   2. **`Most Popular`, not `Recommended`.** The badge comes from the catalogue's `badge` field.
- *   3. **The annual figures are PUBLISHED, not derived.** The old toggle rendered
- *      `monthly × 12 × 0.8`, which produced ₹4,790 for a plan whose published annual price is
- *      ₹4,990 — the page quoted a number no checkout would charge. The toggle now renders the
- *      published yearly figure and divides it for the per-month equivalent, so ₹4,990 / 12 = ₹416
- *      and the saving works out at 17% (ten months for twelve) rather than a declared 20%.
- *   4. **A capacity table exists**, and the Enterprise column reads `Custom` rather than
- *      `Unlimited`. The backend enforces the Business figure for an Enterprise account with no
- *      contracted capacity recorded, so "Unlimited" would be a promise it does not keep.
- *   5. **Two new anchors** — `#workflow-full` and `#creators` — are scroll targets the page now
- *      renders. A missing id is a navigation control that silently does nothing, which is why the
- *      anchor set is asserted rather than sampled.
- *   6. **`api.billing.getPlans` is still never called**, and that assertion is now stronger than
- *      it was. It used to hold because the endpoint DISAGREED with the published list
- *      (`PricingService` FX-converted the USD base, so ₹999 came back as ~₹865). That defect is
- *      fixed at the root — `FXService.localize_plan_price` charges the published figure — so the
- *      endpoint and this component now agree. The call stays absent because a public price list
- *      should not acquire a loading state or a network dependency, not because the server is wrong.
+ *   1. **The catalogue published TWO base price columns**, INR and USD, about 4% apart, and every
+ *      other currency was derived from the DOLLAR one. So the marketing page advertised the rupee
+ *      value point while every non-Indian visitor was quoted the dollar value point — two prices
+ *      for one plan. `subscription_engine.PRICE_BASE_CURRENCY` now makes the rupee list the single
+ *      published price and `FXService.localize_plan_price` converts it; there is one value point.
+ *   2. **The hardcoded rupee list was wrong for most of the world.** A visitor in Berlin was
+ *      quoted ₹499, which is neither a number they can price a decision on nor what checkout would
+ *      charge them. The section now reads the public catalogue, which resolves the currency from
+ *      the request's own geography, and offers a selector.
+ *   3. **The two surfaces disagreed.** The authenticated billing page DID localise, so the same
+ *      plan carried two different-looking prices on two surfaces of the same product. Both now
+ *      read the same endpoint.
+ *
+ * So `#pricing` may now contain a dollar sign — when the visitor is being shown dollars. What is
+ * asserted instead, and is the stronger claim, is that **a figure and its symbol always agree**:
+ * the rupee constants are rendered only under `₹`, a card awaiting a converted figure shows a
+ * placeholder rather than a rupee number wearing another currency's symbol, and a currency the
+ * server has not priced yet relabels nothing.
+ *
+ * WHICH TRANSPORT IS USED, AND WHY IT IS ASSERTED
+ * -----------------------------------------------
+ * `api.billing.getPublicPlans`, never `api.billing.getPlans`. The endpoint is public, but the
+ * authenticated transport attaches whatever token is in `sessionStorage` and routes a 401 into the
+ * shell's `auth:expired` handler — so reading a price list as an anonymous visitor would raise a
+ * sign-out prompt. `getPlans` being absent from this surface is therefore a behavioural assertion,
+ * not a stylistic one.
  *
  * THE RECORD THIS FILE USED TO CARRY
  * ----------------------------------
  * The task 10.1 reproduction record (three outcomes, the refuted `src/pages/Landing.jsx`
  * hypothesis, and the settled `AES-256`-on-a-Fernet-vault content finding) is preserved in
  * `tests/unit/landing/landingSections.test.jsx`'s header, which is where the other two outcomes
- * were already filed. It is not repeated here because none of it concerns the price list, and a
- * reproduction record attached to the wrong subject is a record nobody finds.
+ * were already filed.
  *
- * `tests/test_pricing_ladder.py` asserts the SAME figures against the backend catalogue, from an
- * independent transcription of the published table. The two files are the reason the marketing
- * page and the thing that takes the payment cannot drift apart without a test failing.
+ * `tests/test_pricing_ladder.py` asserts the SAME rupee figures against the backend catalogue,
+ * from an independent transcription of the published table, and asserts that every other currency
+ * is a conversion of exactly that list. The two files are the reason the marketing page and the
+ * thing that takes the payment cannot drift apart without a test failing.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -61,9 +64,78 @@ import LandingPage from '../../src/components/landing/LandingPage';
 import Pricing from '../../src/components/landing/Pricing';
 import { api } from '../../src/api';
 
-describe('Landing Page & Pricing — INR-only plan contract', () => {
+/**
+ * A `GET /api/billing/plans` response, in the shape `PricingService.get_localized_plans` returns.
+ *
+ * Only the fields the component reads are built, and they are named exactly as the server names
+ * them — a typo here would make this suite pass against a payload the real endpoint never sends.
+ * `prices` maps plan id to `[monthly, annualTotal, monthlyEquivalent]` in MAJOR units, which is
+ * what `localized_price` carries.
+ */
+const catalogue = ({ currency, symbol, decimals = 2, prices, supported = null }) => ({
+  country: currency === 'INR' ? 'IN' : 'US',
+  currency,
+  currency_symbol: symbol,
+  base_currency: 'INR',
+  base_currency_symbol: '₹',
+  supported_currencies: supported,
+  plans: Object.entries(prices).map(([id, [monthly, annualTotal, monthlyEquivalent]]) => ({
+    id,
+    currency,
+    currency_symbol: symbol,
+    decimals,
+    base_currency: 'INR',
+    localized_price: monthly,
+    price_source: currency === 'INR' ? 'published' : 'fx',
+    annual:
+      annualTotal == null
+        ? null
+        : {
+            localized_price: annualTotal,
+            monthly_equivalent: monthlyEquivalent,
+            savings_percent: 17,
+            price_source: currency === 'INR' ? 'published' : 'fx',
+          },
+  })),
+});
+
+/** The dollar localisation of the published rupee list at the recorded baseline rate. */
+const USD_CATALOGUE = catalogue({
+  currency: 'USD',
+  symbol: '$',
+  prices: {
+    free: [0, null, null],
+    starter: [5.2, 51.98, 4.33],
+    pro: [10.41, 104.07, 8.67],
+    enterprise: [26.03, 260.32, 21.69],
+    scale: [0, null, null],
+  },
+});
+
+/** The same list in euros, used to prove a re-read actually re-prices. */
+const EUR_CATALOGUE = catalogue({
+  currency: 'EUR',
+  symbol: '€',
+  prices: {
+    free: [0, null, null],
+    starter: [4.58, 45.81, 3.82],
+    pro: [9.18, 91.76, 7.65],
+    enterprise: [22.96, 229.49, 19.12],
+    scale: [0, null, null],
+  },
+});
+
+describe('Landing Page & Pricing — the published plan contract', () => {
+  /** The spy every test gets; individual tests re-point it. */
+  let getPublicPlans;
+
   beforeEach(() => {
     vi.restoreAllMocks();
+    // The DEFAULT is a failed read, so the suite's baseline is the offline fallback: the published
+    // rupee list, labelled in rupees. A test that wants a localised catalogue says so.
+    getPublicPlans = vi
+      .spyOn(api.billing, 'getPublicPlans')
+      .mockRejectedValue(new Error('offline'));
   });
 
   const renderPricing = () =>
@@ -73,13 +145,15 @@ describe('Landing Page & Pricing — INR-only plan contract', () => {
       </MemoryRouter>
     );
 
+  const pricingText = (container) => container.querySelector('#pricing').textContent;
+
   describe('The five published plans', () => {
-    it('quotes ₹0, ₹499, ₹999 and ₹2,499 per month, and Custom for Enterprise', () => {
+    it('quotes ₹0, ₹499, ₹999 and ₹2,499 per month, and Custom for Enterprise', async () => {
       renderPricing();
 
       expect(screen.getByText('Start Small. Scale When You Need To.')).toBeDefined();
+      await waitFor(() => expect(screen.getByText('₹499')).toBeDefined());
       expect(screen.getByText('₹0')).toBeDefined();
-      expect(screen.getByText('₹499')).toBeDefined();
       expect(screen.getByText('₹999')).toBeDefined();
       expect(screen.getByText('₹2,499')).toBeDefined();
 
@@ -136,36 +210,245 @@ describe('Landing Page & Pricing — INR-only plan contract', () => {
     });
   });
 
-  describe('Rupee is the only currency on the surface', () => {
-    it('prints no dollar sign anywhere in the section', () => {
-      const { container } = renderPricing();
-
-      expect(container.querySelector('#pricing').textContent).not.toContain('$');
-    });
-
-    it('offers no currency selector — there is nothing to switch to', () => {
-      renderPricing();
-
-      expect(screen.queryByRole('button', { name: /USD/i })).toBeNull();
-      expect(screen.queryByRole('button', { name: /INR/i })).toBeNull();
-    });
-
-    it('does not call the billing endpoint for its figures', async () => {
+  describe('Rupees are the published list, and the fallback when the read fails', () => {
+    it('reads the PUBLIC catalogue, never the authenticated one', async () => {
       const getPlans = vi.spyOn(api.billing, 'getPlans').mockResolvedValue({ plans: [] });
 
       renderPricing();
-      // A fetch would land in a microtask after mount, so let the queue drain.
-      await Promise.resolve();
+      await waitFor(() => expect(getPublicPlans).toHaveBeenCalled());
 
+      // `getPlans` routes a 401 into the shell's sign-out handler. An anonymous visitor reading a
+      // price list must never be able to trigger that.
       expect(getPlans).not.toHaveBeenCalled();
+    });
+
+    it('asks for no particular currency first, so the server resolves it from geography', async () => {
+      renderPricing();
+
+      await waitFor(() => expect(getPublicPlans).toHaveBeenCalledTimes(1));
+      expect(getPublicPlans).toHaveBeenCalledWith(undefined);
+    });
+
+    it('falls back to the published rupee list when the read fails, and says it is rupees', async () => {
+      const { container } = renderPricing();
+
+      await waitFor(() => expect(getPublicPlans).toHaveBeenCalled());
+      expect(screen.getByText('₹499')).toBeDefined();
+      expect(screen.getByText(/All prices in Indian Rupees/)).toBeDefined();
+      // No fabricated conversion: with no catalogue in hand there is no other currency on screen.
+      expect(pricingText(container)).not.toContain('$');
+    });
+
+    it('renders rupee figures without a loading placeholder — they are already known', async () => {
+      const { container } = renderPricing();
+
+      await waitFor(() => expect(getPublicPlans).toHaveBeenCalled());
+      expect(container.querySelectorAll('#pricing [role="status"][aria-label^="Loading"]'))
+        .toHaveLength(0);
+    });
+  });
+
+  describe('The visitor is shown their own currency', () => {
+    it('renders the localized figures the server sent, under the server\'s symbol', async () => {
+      getPublicPlans.mockResolvedValue(USD_CATALOGUE);
+      renderPricing();
+
+      await waitFor(() => expect(screen.getByText('$5.20')).toBeDefined());
+      expect(screen.getByText('$10.41')).toBeDefined();
+      expect(screen.getByText('$26.03')).toBeDefined();
+      expect(screen.getByText('$0')).toBeDefined();
+    });
+
+    it('does not leave a rupee figure on screen once dollars have been served', async () => {
+      getPublicPlans.mockResolvedValue(USD_CATALOGUE);
+      const { container } = renderPricing();
+
+      await waitFor(() => expect(screen.getByText('$5.20')).toBeDefined());
+      // The whole defect, in one assertion: the published rupee constants must not survive into a
+      // dollar rendering. ₹ still appears in the disclosure sentence below, by design.
+      for (const published of ['₹499', '₹999', '₹2,499']) {
+        expect(pricingText(container), `${published} is still on screen`).not.toContain(published);
+      }
+    });
+
+    it('says the figures are converted, and names the currency charged', async () => {
+      getPublicPlans.mockResolvedValue(USD_CATALOGUE);
+      renderPricing();
+
+      await waitFor(() =>
+        expect(
+          screen.getByText(/published in Indian Rupees .*and shown in USD at today’s exchange rate/),
+        ).toBeDefined(),
+      );
+      expect(screen.getByText(/You are charged in USD/)).toBeDefined();
+    });
+
+    it('quotes the same figure in the CTA as on the card', async () => {
+      getPublicPlans.mockResolvedValue(USD_CATALOGUE);
+      const { container } = renderPricing();
+
+      await waitFor(() => expect(screen.getByText('$5.20')).toBeDefined());
+      // It used to hardcode the rupee constant, which under a dollar heading read
+      // "Start Automating — ₹499" beside "$5.20".
+      expect(container.querySelector('[data-plan="starter"]').textContent)
+        .toContain('Start Automating — $5.20');
+      // Free is free in every currency, so its CTA carries no figure at all.
+      expect(container.querySelector('[data-plan="free"]').textContent)
+        .not.toContain('$0 ');
+    });
+
+    it('shows a placeholder, not a rupee constant, for a plan the catalogue did not price', async () => {
+      // `pro` omitted entirely: the server answered, but not about this plan.
+      getPublicPlans.mockResolvedValue(
+        catalogue({
+          currency: 'USD',
+          symbol: '$',
+          prices: { free: [0, null, null], starter: [5.2, 51.98, 4.33] },
+        }),
+      );
+      const { container } = renderPricing();
+
+      await waitFor(() => expect(screen.getByText('$5.20')).toBeDefined());
+
+      const pro = container.querySelector('[data-plan="pro"]');
+      expect(pro.querySelector('[role="status"][aria-label="Loading the Pro Quant price in USD"]'))
+        .not.toBeNull();
+      expect(pro.textContent).not.toContain('999');
+    });
+  });
+
+  describe('The currency selector', () => {
+    const selector = () => screen.getByRole('combobox');
+
+    it('offers a currency selector showing the currency on screen', async () => {
+      getPublicPlans.mockResolvedValue(USD_CATALOGUE);
+      renderPricing();
+
+      await waitFor(() => expect(selector().value).toBe('USD'));
+      expect(screen.getByText('Display currency')).toBeDefined();
+    });
+
+    it('offers the server\'s own currency list when it sends one', async () => {
+      getPublicPlans.mockResolvedValue(
+        catalogue({
+          currency: 'INR',
+          symbol: '₹',
+          prices: { starter: [499, 4990, 416] },
+          supported: [
+            { code: 'INR', symbol: '₹' },
+            { code: 'BRL', symbol: 'R$' },
+          ],
+        }),
+      );
+      renderPricing();
+
+      await waitFor(() =>
+        expect([...selector().options].map((o) => o.value)).toEqual(['INR', 'BRL']),
+      );
+    });
+
+    it('falls back to a built-in currency list when the server sends none', async () => {
+      renderPricing();
+
+      await waitFor(() => expect(getPublicPlans).toHaveBeenCalled());
+      const codes = [...selector().options].map((o) => o.value);
+      expect(codes).toContain('INR');
+      expect(codes).toContain('USD');
+      expect(codes).toContain('EUR');
+    });
+
+    it('re-reads the catalogue in the chosen currency', async () => {
+      getPublicPlans.mockResolvedValue(USD_CATALOGUE);
+      renderPricing();
+      await waitFor(() => expect(screen.getByText('$5.20')).toBeDefined());
+
+      getPublicPlans.mockResolvedValue(EUR_CATALOGUE);
+      fireEvent.change(selector(), { target: { value: 'EUR' } });
+
+      await waitFor(() => expect(getPublicPlans).toHaveBeenLastCalledWith('EUR'));
+      await waitFor(() => expect(screen.getByText('€4.58')).toBeDefined());
+      expect(screen.getByText('€9.18')).toBeDefined();
+      expect(screen.getByText('€22.96')).toBeDefined();
+    });
+
+    it('relabels nothing while the chosen currency is still being priced', async () => {
+      getPublicPlans.mockResolvedValue(USD_CATALOGUE);
+      const { container } = renderPricing();
+      await waitFor(() => expect(screen.getByText('$5.20')).toBeDefined());
+
+      // A read that never answers, so the awaiting state can be observed.
+      getPublicPlans.mockReturnValue(new Promise(() => {}));
+      fireEvent.change(selector(), { target: { value: 'EUR' } });
+
+      await waitFor(() => expect(screen.getByText(/Converting prices to EUR/)).toBeDefined());
+      // The dollar figures are GONE rather than relabelled: showing `$5.20` under a sentence
+      // reading "shown in EUR" is the same class of mistake as the hardcoded rupee list.
+      expect(pricingText(container)).not.toContain('5.20');
+      expect(pricingText(container)).not.toContain('₹499');
+      expect(
+        container.querySelectorAll('#pricing [role="status"][aria-label^="Loading"]'),
+      ).toHaveLength(4);
+      // The control acknowledges the pick immediately, so it does not look unresponsive.
+      expect(selector().value).toBe('EUR');
+    });
+
+    it('snaps to the currency the server actually answered in', async () => {
+      getPublicPlans.mockResolvedValue(USD_CATALOGUE);
+      renderPricing();
+      await waitFor(() => expect(screen.getByText('$5.20')).toBeDefined());
+
+      // The visitor asks for a currency the server does not quote, so it answers in dollars again
+      // (`FXService` has no rate for it, or declines to charge in it). The selector must agree with
+      // the figures rather than wait forever for a price list that is never coming.
+      fireEvent.change(selector(), { target: { value: 'CAD' } });
+
+      await waitFor(() => expect(getPublicPlans).toHaveBeenLastCalledWith('CAD'));
+      await waitFor(() => expect(selector().value).toBe('USD'));
+      expect(screen.getByText('$5.20')).toBeDefined();
+    });
+
+    it('re-reads when the same currency is chosen again, so a failed read can be retried', async () => {
+      getPublicPlans.mockRejectedValue(new Error('offline'));
+      renderPricing();
+      await waitFor(() => expect(getPublicPlans).toHaveBeenCalledTimes(1));
+
+      fireEvent.change(selector(), { target: { value: 'EUR' } });
+      await waitFor(() => expect(getPublicPlans).toHaveBeenCalledTimes(2));
+      // The failed read put the selector back on INR, so choosing EUR again is the retry. Keying
+      // the read on the currency alone would make this a no-op and the control dead.
+      await waitFor(() => expect(selector().value).toBe('INR'));
+
+      getPublicPlans.mockResolvedValue(EUR_CATALOGUE);
+      fireEvent.change(selector(), { target: { value: 'EUR' } });
+
+      await waitFor(() => expect(screen.getByText('€4.58')).toBeDefined());
+      expect(getPublicPlans).toHaveBeenCalledTimes(3);
+    });
+
+    it('keeps the figures it has when a re-read fails', async () => {
+      getPublicPlans.mockResolvedValue(USD_CATALOGUE);
+      renderPricing();
+      await waitFor(() => expect(screen.getByText('$5.20')).toBeDefined());
+
+      getPublicPlans.mockRejectedValue(new Error('offline'));
+      fireEvent.change(selector(), { target: { value: 'EUR' } });
+
+      await waitFor(() => expect(getPublicPlans).toHaveBeenLastCalledWith('EUR'));
+      // Blanking a correct price because a re-read failed would be worse than showing the last
+      // thing the server said.
+      expect(screen.getByText('$5.20')).toBeDefined();
+      expect(screen.getByRole('combobox').value).toBe('USD');
     });
   });
 
   describe('Annual billing renders the PUBLISHED yearly price', () => {
+    const goAnnual = () => fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
+
     it('quotes ₹4,990, ₹9,990 and ₹24,990 per year, not twelve times the monthly rate', async () => {
       renderPricing();
+      await waitFor(() => expect(getPublicPlans).toHaveBeenCalled());
 
-      fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
+      goAnnual();
 
       await waitFor(() => {
         expect(screen.getByText(/Billed ₹4,990\/yr/)).toBeDefined();
@@ -176,8 +459,9 @@ describe('Landing Page & Pricing — INR-only plan contract', () => {
 
     it('derives the per-month equivalent from the published yearly figure', async () => {
       renderPricing();
+      await waitFor(() => expect(getPublicPlans).toHaveBeenCalled());
 
-      fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
+      goAnnual();
 
       await waitFor(() => {
         // 4,990 / 12 = 415.83 → 416. The old 20%-off arithmetic produced ₹399 here, against a
@@ -190,8 +474,9 @@ describe('Landing Page & Pricing — INR-only plan contract', () => {
 
     it('states the saving as 17% — ten months for twelve, computed from both published figures', async () => {
       renderPricing();
+      await waitFor(() => expect(getPublicPlans).toHaveBeenCalled());
 
-      fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
+      goAnnual();
 
       await waitFor(() => {
         expect(screen.getAllByText(/save 17%/)).toHaveLength(3);
@@ -200,8 +485,9 @@ describe('Landing Page & Pricing — INR-only plan contract', () => {
 
     it('leaves Free at ₹0 and Enterprise quoted, with no annual line on either', async () => {
       renderPricing();
+      await waitFor(() => expect(getPublicPlans).toHaveBeenCalled());
 
-      fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
+      goAnnual();
 
       await waitFor(() => {
         expect(screen.getByText('₹0')).toBeDefined();
@@ -213,8 +499,9 @@ describe('Landing Page & Pricing — INR-only plan contract', () => {
 
     it('returns to the monthly figures when Monthly is reselected', async () => {
       renderPricing();
+      await waitFor(() => expect(getPublicPlans).toHaveBeenCalled());
 
-      fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
+      goAnnual();
       await waitFor(() => expect(screen.getByText('₹416')).toBeDefined());
 
       fireEvent.click(screen.getByRole('button', { name: /Monthly/i }));
@@ -222,6 +509,38 @@ describe('Landing Page & Pricing — INR-only plan contract', () => {
         expect(screen.getByText('₹499')).toBeDefined();
         expect(screen.queryByText(/Billed ₹/)).toBeNull();
       });
+    });
+
+    it('uses the SERVER\'s monthly equivalent in a converted currency, not its own division', async () => {
+      getPublicPlans.mockResolvedValue(USD_CATALOGUE);
+      renderPricing();
+      await waitFor(() => expect(screen.getByText('$5.20')).toBeDefined());
+
+      goAnnual();
+
+      // 51.98 / 12 is 4.3316…, which rounds to 4.33 at two places — but the figure on screen is
+      // the one the server computed, because a client dividing would round differently from the
+      // charge in a currency with no minor unit.
+      await waitFor(() => expect(screen.getByText('$4.33')).toBeDefined());
+      expect(screen.getByText(/Billed \$51\.98\/yr/)).toBeDefined();
+      expect(screen.getByText(/Billed \$104\.07\/yr/)).toBeDefined();
+      expect(screen.getByText(/Billed \$260\.32\/yr/)).toBeDefined();
+      expect(screen.getAllByText(/save 17%/)).toHaveLength(3);
+    });
+
+    it('prints no decimal places for a currency that has none', async () => {
+      getPublicPlans.mockResolvedValue(
+        catalogue({
+          currency: 'JPY',
+          symbol: '¥',
+          decimals: 0,
+          prices: { starter: [818, 8180, 682] },
+        }),
+      );
+      renderPricing();
+
+      // `¥818.00` would be a conversion artefact for a currency that cannot express a fraction.
+      await waitFor(() => expect(screen.getByText('¥818')).toBeDefined());
     });
   });
 
@@ -255,7 +574,7 @@ describe('Landing Page & Pricing — INR-only plan contract', () => {
 
     it('never advertises an unlimited allowance', () => {
       const { container } = renderPricing();
-      const text = container.querySelector('#pricing').textContent;
+      const text = pricingText(container);
 
       // "Unlimited Strategy Bots" was on the old Institutional card and was not implemented.
       expect(text).not.toContain('Unlimited');
@@ -264,7 +583,7 @@ describe('Landing Page & Pricing — INR-only plan contract', () => {
 
     it('does not advertise team, workspace, RBAC or API tiers', () => {
       const { container } = renderPricing();
-      const text = container.querySelector('#pricing').textContent;
+      const text = pricingText(container);
 
       // The product is single-user and has no customer API tier, so none of these is a pricing
       // dimension. The old Institutional card listed "Granular Role-Based Access".
@@ -390,18 +709,23 @@ describe('Landing Page & Pricing — INR-only plan contract', () => {
       expect(getEntitlements).not.toHaveBeenCalled();
     });
 
-    it('shows no dollar sign anywhere on the landing page', async () => {
+    it('quotes one currency at a time across the whole page', async () => {
+      getPublicPlans.mockResolvedValue(USD_CATALOGUE);
       const { container } = render(
         <MemoryRouter>
           <LandingPage />
         </MemoryRouter>
       );
 
-      await waitFor(() =>
-        expect(screen.getByText('Start Small. Scale When You Need To.')).toBeDefined(),
-      );
+      await waitFor(() => expect(screen.getByText('$5.20')).toBeDefined());
 
-      expect(container.textContent).not.toContain('$');
+      // Every other section of the landing page — FAQ included — must not restate a price in the
+      // currency the pricing section is no longer showing. The published-list disclosure under the
+      // toggle is the one place `₹` is allowed to appear, and it is labelled as the base currency.
+      for (const published of ['₹499', '₹999', '₹2,499', '₹4,990', '₹9,990', '₹24,990']) {
+        expect(container.textContent, `${published} is quoted alongside dollars`)
+          .not.toContain(published);
+      }
     });
   });
 });

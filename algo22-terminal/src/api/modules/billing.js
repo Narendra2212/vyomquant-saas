@@ -5,7 +5,7 @@
  * Server-authoritative: all plan, pricing, subscription state comes from backend.
  * The frontend NEVER decides subscription state or plan entitlements.
  */
-import { get, post, del } from '../../apiClient';
+import { get, post, del, publicGet } from '../../apiClient';
 
 /**
  * @typedef {Object} BillingEntitlements
@@ -72,6 +72,26 @@ export const billingApi = {
    * @returns {Promise<{plans: Array, country: string, currency: string, currency_symbol: string, fx_rate: number, checkout_currency: string}>}
    */
   getPlans: (currency) => get(currency ? `/api/billing/plans?currency=${encodeURIComponent(currency)}` : '/api/billing/plans'),
+
+  /**
+   * The same catalogue, read WITHOUT a session.
+   *
+   * `GET /api/billing/plans` is public — no auth dependency, no rate limit — because the pricing
+   * page has to price itself for a visitor who has no account yet. This variant exists so that
+   * surface does not go through the authenticated transport: `get` attaches whatever token is in
+   * `sessionStorage` and routes a 401 into the shell's `auth:expired` handler, which for an
+   * anonymous visitor on a marketing page would be a sign-out prompt triggered by reading a price
+   * list.
+   *
+   * Server-resolved currency, exactly as the authenticated read: the response's `currency` is
+   * decided from the caller's IP (or the explicit override), and `plans[].localized_price` is
+   * already in it. The caller renders; it does not convert.
+   *
+   * @param {string} [currency] Optional display-currency override, e.g. "EUR".
+   * @returns {Promise<{plans: Array, currency: string, currency_symbol: string, base_currency: string, supported_currencies: Array}>}
+   */
+  getPublicPlans: (currency) =>
+    publicGet('/api/billing/plans', currency ? { currency } : {}),
 
   /**
    * Get user's current entitlements (plan, features, quotas, usage, subscription status)

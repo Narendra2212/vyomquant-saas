@@ -35,6 +35,24 @@ import { Link } from 'react-router-dom'
 
 import { Accordion } from '../ui/Accordion'
 
+/**
+ * NO PRICE FIGURE APPEARS IN ANY ANSWER BELOW.
+ *
+ * "How much does it cost to start?" used to answer with the rupee list verbatim — "Trader (₹499
+ * per month, or ₹4,990 per year)… Pro Quant (₹999 per month)". That was a second, hardcoded price
+ * list on the same page as the first, and once `Pricing.jsx` began showing the visitor's own
+ * currency it became a visible contradiction: the cards quoted `$5.20` and the FAQ two screens
+ * below still said `₹499`. A visitor cannot tell which of the two is the price.
+ *
+ * The question is about cost TO START, and the answer to that is "nothing" — which needs no
+ * figure. Everything that does need one is one scroll away in `#pricing`, where it is localised,
+ * labelled with the currency it will be charged in, and read from the catalogue that takes the
+ * payment. One surface quotes prices, and it is the one that cannot be wrong.
+ *
+ * `tests/unit/landing_page_pricing_crash_regression.test.jsx` asserts that no published rupee
+ * figure appears anywhere on the landing page while another currency is on screen, so
+ * re-introducing one here fails the build.
+ */
 const gettingStarted = [
   {
     question: 'Do I need to know how to code?',
@@ -53,8 +71,9 @@ const gettingStarted = [
   },
   {
     question: 'How much does it cost to start?',
+    // NO FIGURES HERE, DELIBERATELY. See the note above `faqSections`.
     answer:
-      'Nothing. The Free plan includes the visual builder, VectorBT backtesting, paper trading and one active strategy, with no card required. Paid plans start at Trader (₹499 per month, or ₹4,990 per year) when you want to automate a strategy on a connected exchange, and Pro Quant (₹999 per month) adds machine learning nodes, parameter optimization and the ability to publish to the marketplace.',
+      'Nothing. The Free plan includes the visual builder, VectorBT backtesting, paper trading and one active strategy, with no card required. Paid plans start with Trader, which is where a strategy can be automated on a connected exchange; Pro Quant adds machine learning nodes, parameter optimization and the ability to publish to the marketplace. The pricing section on this page lists every plan with its monthly and annual price in your own currency.',
   },
   {
     question: 'Can I earn money from strategies I build?',

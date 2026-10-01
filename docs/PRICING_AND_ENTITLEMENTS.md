@@ -47,9 +47,37 @@ Annual prices are **published figures, not derived ones**. ₹4,990 is not ₹49
 the published figure is ever charged. A client showing a per-month equivalent must divide the
 server's annual figure rather than discount the monthly one.
 
-The USD column (`$5` / `$10` / `$25`) is unchanged from the previous catalogue. It is regional
-pricing, not a conversion of the rupee figure, and altering it would change what existing Stripe
-subscribers are billed.
+### There is exactly one published price list, and it is in rupees
+
+`subscription_engine.PRICE_BASE_CURRENCY = "INR"`. Every plan's `pricing` and `pricing_annual` dict
+carries **one key**, `INR`, and every other currency is a conversion of it by
+`FXService.localize_plan_price`. `plans[].price_source` reports which a figure is: `published` for a
+currency the catalogue lists, `fx` for one it converts.
+
+The catalogue used to publish **two independent base columns**, `INR` and `USD` (`$5` / `$10` /
+`$25`), about 4% apart — and every currency it did not publish was derived from the **USD** one. So
+there were two value points for one plan, and which one a visitor was quoted depended on their
+geography:
+
+| | INR column | USD column, converted |
+|---|---|---|
+| Trader | ₹499 | $5.00 → ₹480 |
+| Pro Quant | ₹999 | $10.00 → ₹960 |
+| Business | ₹2,499 | $25.00 → ₹2,400 |
+
+The marketing page advertised the rupee column while the billing page priced everyone outside India
+off the dollar one. The fix is to delete the dollar column, not to reconcile the two: a second
+published column is a second price list, and a second price list drifts.
+
+**What this changes for new non-INR checkouts.** A dollar checkout now converts ₹499 rather than
+charging a flat $5.00 — about $5.20 at the recorded baseline rate — and it moves with the exchange
+rate. **Existing subscriptions are unaffected**: Stripe amounts are built inline per checkout
+session (`price_data`), so nothing re-prices a live subscription.
+
+**Publishing a second currency is a one-line change and is honoured automatically.** Add
+`"USD": 50000` to a plan's `pricing` dict and `localize_plan_price` charges exactly that, reports
+`price_source: "published"` and performs no conversion for it. That is the supported way to set a
+regional price point — a deliberate published figure, not a floating conversion dressed up as one.
 
 ## Capacity
 
@@ -254,6 +282,23 @@ Before this, every amount was an FX conversion of the USD base — so `GET /api/
 answered roughly ₹865 for the plan published at ₹999, and the marketing page hardcoded its figures
 precisely because the endpoint disagreed with them. That is fixed at the root: the endpoint, the
 billing page and the gateway now quote one number.
+
+### The surfaces that quote a price
+
+`components/landing/Pricing.jsx` (anonymous) and `pages/Billing.jsx` (authenticated) both read
+`GET /api/billing/plans` and render `plans[].localized_price` as sent. Neither converts. The landing
+page reads it through `api.billing.getPublicPlans`, not `getPlans`: the authenticated transport
+routes a 401 into the shell's `auth:expired` handler, so reading a price list without a session
+would raise a sign-out prompt.
+
+The landing page's rupee constants are a **fallback for a failed read only**, and they render only
+under `₹`. A card waiting on a converted figure shows a placeholder rather than a rupee number
+wearing another currency's symbol, and a currency the server has not priced yet relabels nothing —
+the selector follows the figures, not the request.
+
+`components/landing/FAQ.jsx` quotes **no** figure. It used to restate ₹499 / ₹4,990 / ₹999 inline,
+which became a visible contradiction the moment the cards above it localised. One surface quotes
+prices and it is the one that cannot be wrong.
 
 The custom `scale` tier **cannot** go through self-serve checkout — it has no published price, so
 there is no amount to charge — and is refused with `PLAN_REQUIRES_SALES_CONTACT`. It remains

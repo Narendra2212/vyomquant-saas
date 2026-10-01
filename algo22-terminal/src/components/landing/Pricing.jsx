@@ -1,39 +1,49 @@
-import React, { useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Check, Minus } from 'lucide-react'
+import { Check, Globe, Minus } from 'lucide-react'
+
+import { api } from '../../api'
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
  * Pricing — the published VyomQuant plan ladder. Anchor `#pricing`.
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * FIVE TIERS, PRICED IN RUPEES ONLY
- * ---------------------------------
- * ₹0 · ₹499 · ₹999 · ₹2,499 · custom. There is no currency selector and no `$` on this surface;
- * the authenticated billing page (`src/pages/Billing.jsx`) is where a visitor's own currency is
- * resolved, because that surface has to show what the checkout will actually charge.
+ * FIVE PLANS, PUBLISHED IN RUPEES, SHOWN IN THE VISITOR'S CURRENCY
+ * ----------------------------------------------------------------
+ * ₹0 · ₹499 · ₹999 · ₹2,499 · custom is the published list. This section reads
+ * `GET /api/billing/plans` — a public, unauthenticated endpoint — which resolves the visitor's
+ * currency from their own geography and returns the price list localised into it. A selector lets
+ * them change it.
  *
- * WHY THE FIGURES ARE CONSTANTS HERE, AND WHY THAT IS NO LONGER A CONTRADICTION
- * ---------------------------------------------------------------------------
- * These numbers are the INR column of the plan catalogue in
- * `backend_app/core/subscription_engine.py`. They used to be declared here because the server
- * DISAGREED with them: `PricingService.get_localized_plans` took the USD figure and ran it through
- * `FXService.localize_price`, so an INR request came back as an FX conversion of the dollar price
- * (~₹432 / ₹865 / ₹2,162) rather than the published ₹499 / ₹999 / ₹2,499. Rendering that response
- * would have put a number on the marketing page that contradicted the price list, and it would
- * have drifted every time the rate moved.
+ * WHY THIS STOPPED BEING A HARDCODED RUPEE LIST
+ * ---------------------------------------------
+ * It was INR-only with no detection, which was wrong in both directions at once:
  *
- * That defect is fixed at the root. `FXService.localize_plan_price` now charges the PUBLISHED figure
- * for any currency the catalogue publishes and converts only for the ones it does not, so
- * `GET /api/billing/plans` answers ₹499 for the ₹499 plan and Razorpay is asked for 49900 paise.
- * The endpoint and this component agree.
+ *   * A visitor outside India was quoted ₹499 — a number they cannot price a decision on, and not
+ *     what they would be charged.
+ *   * The authenticated billing page DID localise, so the same plan carried two different-looking
+ *     prices on two surfaces of the same product. A visitor who saw ₹499 here and $5.00 there read
+ *     the second one as broken.
  *
- * They stay constants anyway, for two reasons that have nothing to do with the old bug: a public
- * price list is a published commitment and should not acquire a loading state or a network
- * dependency, and `/api/billing/plans` is the one call this page can avoid making for every
- * anonymous visitor. `tests/unit/landing_page_pricing_crash_regression.test.jsx` pins the figures
- * rendered here, and `tests/test_pricing_ladder.py` pins the same figures in the catalogue, so the
- * two cannot drift without a test failing.
+ * And underneath both, the catalogue published TWO independent base columns, INR and USD, about 4%
+ * apart, with every other currency derived from the dollar one. So the marketing page advertised
+ * the rupee value point while every non-Indian visitor was quoted the dollar value point.
+ *
+ * That is fixed at the root: `subscription_engine.PRICE_BASE_CURRENCY` makes the rupee list the
+ * single published price, and `FXService.localize_plan_price` converts it for every other
+ * currency. One value point, one price list, and this section and the billing page now read the
+ * same endpoint and show the same number.
+ *
+ * THE FALLBACK IS THE PUBLISHED LIST, NOT A GUESS
+ * -----------------------------------------------
+ * If the read has not landed or fails, the rupee constants below are rendered — labelled in
+ * rupees. They are a real published commitment, so quoting them is honest; what is NOT done is
+ * printing them under another currency's symbol, which would be a fabricated conversion. A card
+ * waiting on a converted figure shows a placeholder instead of a number.
+ *
+ * `tests/unit/landing_page_pricing_crash_regression.test.jsx` pins the rendered figures and the
+ * currency behaviour; `tests/test_pricing_ladder.py` pins the same list in the catalogue.
  *
  * POSITIONING
  * -----------
@@ -200,8 +210,22 @@ const EVERY_PLAN = [
   'Marketplace browsing',
 ]
 
-/** The one currency this section quotes. */
+/** The currency the price list is PUBLISHED in, and the fallback when the read fails. */
+const BASE_CURRENCY = 'INR'
 const RUPEE = '₹'
+
+/** Display currencies offered up front. The server's own list replaces this once it answers. */
+const FALLBACK_CURRENCIES = Object.freeze([
+  { code: 'INR', symbol: '₹' },
+  { code: 'USD', symbol: '$' },
+  { code: 'EUR', symbol: '€' },
+  { code: 'GBP', symbol: '£' },
+  { code: 'AED', symbol: 'AED' },
+  { code: 'SGD', symbol: 'S$' },
+  { code: 'AUD', symbol: 'A$' },
+  { code: 'CAD', symbol: 'CA$' },
+  { code: 'JPY', symbol: '¥' },
+])
 
 /**
  * Where an Enterprise enquiry goes.
@@ -224,7 +248,26 @@ const formatNumber = (value) => {
   return numericValue.toLocaleString('en-IN')
 }
 
-/** Monthly rupee figure, or `null` for a quoted plan. Defensive against a malformed `inr`. */
+/**
+ * A money figure, grouped for the currency it is in and rounded to that currency's own precision.
+ *
+ * `decimals` comes from the SERVER (`plans[].decimals`), not from a guess here: JPY and KRW have
+ * no minor unit, so rounding every currency to two places prints `¥818.00` for a currency that
+ * cannot express a fraction. A whole number is printed without decimals even where the currency
+ * admits them, because `₹499.00` reads as a conversion artefact where `₹499` reads as a price.
+ */
+const formatMoney = (value, decimals) => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return '0'
+  const places = Number.isInteger(decimals) ? decimals : 2
+  const fraction = Number.isInteger(numericValue) ? 0 : places
+  return numericValue.toLocaleString('en-IN', {
+    minimumFractionDigits: fraction,
+    maximumFractionDigits: fraction,
+  })
+}
+
+/** Monthly figure in the published base currency, or `null` for a quoted plan. */
 const monthlyPrice = (plan) => {
   if (plan?.inr === null || plan?.inr === undefined) return null
   const numericValue = Number(plan.inr)
@@ -265,24 +308,178 @@ function ComparisonCell({ value }) {
 export default function Pricing() {
   const [isAnnual, setIsAnnual] = useState(false)
 
-  /*
-    The annual figure is the PUBLISHED yearly price divided by twelve — not the monthly price with a
-    percentage taken off it. The two are different numbers and only one of them is charged: ₹4,990
-    a year is ₹415.83 a month, which no arithmetic on ₹499 produces exactly. Showing a derived
-    figure here and billing the published one is how a pricing page ends up off by a rupee.
-  */
-  const displayPrice = (plan) => {
-    const monthly = monthlyPrice(plan)
-    if (monthly === null) return null
-    if (isAnnual && plan.annualInr) return Math.round(plan.annualInr / 12)
-    return monthly
+  /**
+   * The server's localized catalogue, or `null` until it answers / if it never does.
+   *
+   * `requested` is the visitor's explicit pick and drives the READ. It starts `null`, so the first
+   * read carries no `?currency=` and the server resolves the currency from the request's own
+   * geography — which is the whole point: a visitor should see their own currency without asking.
+   *
+   * It deliberately does NOT drive what is displayed. The currency on screen is the one the
+   * catalogue in hand is denominated in, so a figure and its symbol can never disagree; see
+   * `currency` / `selected` below.
+   */
+  const [catalogue, setCatalogue] = useState(null)
+  const [requested, setRequested] = useState(null)
+  /**
+   * Bumped on every pick, so choosing the SAME currency again re-reads.
+   *
+   * Without it, a read that failed could not be retried: `setRequested('EUR')` when `requested` is
+   * already `'EUR'` changes no state, so the effect would not re-run and the control would be
+   * dead exactly when the visitor is trying again.
+   */
+  const [attempt, setAttempt] = useState(0)
+  /** Whether a read is in flight. Drives the selector's optimistic value, and nothing else. */
+  const [reading, setReading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setReading(true)
+    /*
+      `getPublicPlans`, not `getPlans`: this surface is read by visitors with no account, and the
+      authenticated transport routes a 401 into the shell's `auth:expired` handler — which would
+      turn reading a price list into a sign-out prompt. The endpoint itself is public.
+
+      A failure is swallowed deliberately. The fallback below is the PUBLISHED rupee list, which is
+      a real commitment rather than an invented number, so a visitor whose read failed still sees
+      the correct price — in the currency it is published in, labelled as such. The alternative, a
+      pricing page that renders an error or nothing at all, is worse than one that quotes its base
+      currency.
+    */
+    api.billing
+      .getPublicPlans(requested ?? undefined)
+      .then((response) => {
+        if (cancelled) return
+        setCatalogue(response?.data ?? response ?? null)
+        setReading(false)
+      })
+      .catch(() => {
+        if (cancelled) return
+        // The catalogue in hand is left alone. If there is none, the rupee fallback renders; if
+        // there is one, the figures already on screen stay — they are the last thing the server
+        // actually said, and blanking them because a re-read for a different currency failed
+        // would replace a correct price with nothing. Clearing `reading` is what makes the
+        // selector fall back to the currency those figures are actually in.
+        setReading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [requested, attempt])
+
+  /** The server's per-plan payload, by plan id. Empty until the read lands. */
+  const serverPlans = useMemo(() => {
+    const offered = Array.isArray(catalogue?.plans) ? catalogue.plans : []
+    return Object.fromEntries(offered.map((plan) => [plan?.id, plan]))
+  }, [catalogue])
+
+  /**
+   * The currency the FIGURES are in — the catalogue's own, else the published base.
+   *
+   * Driven by the response and never by the pending request. The visitor's pick cannot relabel
+   * figures it has not been served: choosing EUR while the dollar catalogue is still in hand used
+   * to leave `$5.20` on screen under a sentence reading "shown in EUR", which is the same class of
+   * mistake as the hardcoded rupee list this component replaced. It also means an UNSUPPORTED pick
+   * is handled by itself — the server answers in the currency it will actually charge, the
+   * selector snaps to that, and there is no state in which the page waits forever for a currency
+   * the server declines to quote.
+   */
+  const served = typeof catalogue?.currency === 'string' ? catalogue.currency : null
+  const currency = served ?? BASE_CURRENCY
+
+  /**
+   * What the selector shows.
+   *
+   * WHILE A READ IS IN FLIGHT it shows the visitor's pick, so the control acknowledges the click
+   * immediately instead of looking broken. ONCE THE READ SETTLES it shows the currency the figures
+   * are actually in — which is the server's answer on success, and the previous currency when the
+   * re-read failed. So the control and the numbers beneath it always agree, and there is no state
+   * in which the page is stuck "converting" to a currency it will never be given.
+   */
+  const selected = reading ? (requested ?? currency) : currency
+
+  /** The pick has not been priced yet, so NO figure on screen is denominated in it. */
+  const awaitingCurrency = selected !== currency
+
+  /** Record the visitor's pick and re-read, even if they picked the same code again. */
+  const chooseCurrency = (code) => {
+    setRequested(code)
+    setAttempt((count) => count + 1)
   }
 
-  /** Whole percent saved on the annual commitment, from the two published figures. */
-  const savings = (plan) => {
+  const symbol =
+    currency === BASE_CURRENCY
+      ? RUPEE
+      : (serverPlans.pro?.currency_symbol ?? catalogue?.currency_symbol ?? currency)
+
+  /** Whether the figures on screen are the published list or a conversion of it. */
+  const isConverted = currency !== BASE_CURRENCY
+
+  /**
+   * The options in the selector: the server's own list when it sent one.
+   *
+   * The visitor's current pick is appended when the list does not carry it, because a `<select>`
+   * whose `value` matches no `<option>` silently displays the first one — so the control would
+   * claim a currency the page is not showing.
+   */
+  const currencyOptions = useMemo(() => {
+    const offered = catalogue?.supported_currencies
+    const base =
+      Array.isArray(offered) && offered.length > 0
+        ? offered
+            .filter((entry) => typeof entry?.code === 'string')
+            .map((entry) => ({ code: entry.code, symbol: entry.symbol ?? entry.code }))
+        : FALLBACK_CURRENCIES
+    return base.some((option) => option.code === selected)
+      ? base
+      : [...base, { code: selected, symbol: selected }]
+  }, [catalogue, selected])
+
+  /**
+   * The figure to print for a plan, and the precision to print it at.
+   *
+   * SERVER FIRST, PUBLISHED LIST AS THE FALLBACK. The server's `localized_price` is the amount
+   * checkout will actually charge in that currency, so it is what a price list must quote. The
+   * local rupee constants are used only when the read has not landed or failed — and only for the
+   * base currency, because a rupee constant printed under a dollar sign would be a fabricated
+   * conversion, which is the exact defect this component's history is about.
+   */
+  const priceFor = (plan) => {
+    if (plan.inr === null) return null // quoted, not listed
+    if (awaitingCurrency) return null // the pick has not been priced yet
+
+    const server = serverPlans[plan.id]
+    if (server) {
+      const annual = server.annual
+      if (isAnnual && annual) {
+        return {
+          amount: annual.monthly_equivalent,
+          annualTotal: annual.localized_price,
+          savings: annual.savings_percent,
+          decimals: server.decimals,
+        }
+      }
+      return {
+        amount: server.localized_price,
+        annualTotal: null,
+        savings: null,
+        decimals: server.decimals,
+      }
+    }
+
+    // Not yet answered. Only the base currency can be served from the local list.
+    if (isConverted) return null
+
     const monthly = monthlyPrice(plan)
-    if (!isAnnual || !plan.annualInr || !monthly) return null
-    return Math.round(100 - (plan.annualInr * 100) / (monthly * 12))
+    if (isAnnual && plan.annualInr) {
+      return {
+        amount: Math.round(plan.annualInr / 12),
+        annualTotal: plan.annualInr,
+        savings: monthly ? Math.round(100 - (plan.annualInr * 100) / (monthly * 12)) : null,
+        decimals: 2,
+      }
+    }
+    return { amount: monthly, annualTotal: null, savings: null, decimals: 2 }
   }
 
   return (
@@ -339,16 +536,61 @@ export default function Pricing() {
                   2 months free
                 </span>
               </button>
+
+              {/* The currency selector.
+                  A native `<select>` on purpose: it is keyboard- and screen-reader-correct without
+                  a custom listbox, and on mobile it opens the platform picker — which for a list of
+                  twenty-odd currencies is better than anything rendered in-page.
+
+                  The visitor's pick is NOT persisted here. Writing a currency preference needs a
+                  session (`POST /api/billing/currency`), and this page is read by people who do not
+                  have one; the preference is saved from the billing page once they sign in. */}
+              <label className="ml-1 flex items-center gap-1.5 border-l border-line-default/80 pl-3">
+                <Globe className="h-3.5 w-3.5 text-content-muted" aria-hidden="true" />
+                <span className="sr-only">Display currency</span>
+                <select
+                  value={selected}
+                  onChange={(event) => chooseCurrency(event.target.value)}
+                  className="cursor-pointer rounded-lg bg-transparent py-1.5 pr-1 text-sm font-bold text-content-secondary transition-colors hover:text-content-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                >
+                  {currencyOptions.map((option) => (
+                    <option key={option.code} value={option.code}>
+                      {option.code}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
+
+            {/* WHAT KIND OF FIGURE IS ON SCREEN.
+                The rupee list is a published commitment; every other currency is a conversion of
+                it that moves with the exchange rate. Saying so is the difference between a price
+                and an estimate, and a visitor comparing plans is entitled to know which they are
+                reading. The server reports this per plan as `price_source`. */}
+            <p className="mt-4 text-xs text-content-secondary" role="status">
+              {awaitingCurrency ? (
+                <>Converting prices to {selected}&hellip;</>
+              ) : isConverted ? (
+                <>
+                  Prices are published in Indian Rupees ({RUPEE}) and shown in {currency} at
+                  today&rsquo;s exchange rate. You are charged in {currency}.
+                </>
+              ) : (
+                <>All prices in Indian Rupees ({RUPEE}).</>
+              )}
+            </p>
           </div>
 
           {/* ── The five cards ──────────────────────────────────────────── */}
           <div className="mx-auto grid max-w-7xl items-stretch gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {PLANS.map((plan) => {
-              const price = displayPrice(plan)
-              const saved = savings(plan)
+              const priced = priceFor(plan)
               const isRecommended = plan.recommended
-              const isQuoted = price === null
+              const isQuoted = plan.inr === null
+              // `priced === null` on a listed plan means the converted figure has not arrived yet.
+              // The card renders its name, tagline and capabilities and leaves the price blank
+              // rather than printing a rupee constant under another currency's symbol.
+              const isPending = !isQuoted && priced === null
 
               return (
                 <div
@@ -384,20 +626,28 @@ export default function Pricing() {
                           Custom
                         </span>
                       </div>
+                    ) : isPending ? (
+                      // A placeholder the width of a price, not a zero and not a rupee figure
+                      // wearing the wrong symbol.
+                      <div
+                        className="h-10 w-28 animate-pulse rounded-md bg-surface-raised"
+                        aria-label={`Loading the ${plan.name} price in ${selected}`}
+                        role="status"
+                      />
                     ) : (
                       <div className="flex items-baseline gap-1.5">
                         <span className="text-4xl font-black tracking-tight text-content-primary">
-                          {RUPEE}
-                          {formatNumber(price)}
+                          {symbol}
+                          {formatMoney(priced.amount, priced.decimals)}
                         </span>
                         <span className="text-sm font-medium text-content-secondary">/month</span>
                       </div>
                     )}
-                    {isAnnual && plan.annualInr ? (
+                    {isAnnual && priced?.annualTotal ? (
                       <p className="mt-1.5 font-mono text-xs font-medium text-status-profit">
-                        Billed {RUPEE}
-                        {formatNumber(plan.annualInr)}/yr
-                        {saved ? ` — save ${saved}%` : ''}
+                        Billed {symbol}
+                        {formatMoney(priced.annualTotal, priced.decimals)}/yr
+                        {priced.savings ? ` — save ${priced.savings}%` : ''}
                       </p>
                     ) : null}
                     {isQuoted ? (
@@ -449,7 +699,12 @@ export default function Pricing() {
                         }`}
                       >
                         {plan.cta}
-                        {plan.inr > 0 ? ` — ${RUPEE}${formatNumber(plan.inr)}` : ''}
+                        {/* The CTA quotes the SAME figure the card does, in the same currency.
+                            It used to hardcode the rupee constant, which under a dollar heading
+                            would have read "Start Automating — ₹499" beside "$5.20". */}
+                        {priced && priced.amount > 0
+                          ? ` — ${symbol}${formatMoney(priced.amount, priced.decimals)}`
+                          : ''}
                       </Link>
                     )}
                     {plan.ctaSecondary ? (

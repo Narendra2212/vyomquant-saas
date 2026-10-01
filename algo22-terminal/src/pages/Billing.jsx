@@ -50,7 +50,13 @@
  *   8. **A hardcoded `$` in front of a non-dollar amount.** `` `Billed as $${p.checkout_price
  *      || p.base_price} ${p.checkout_currency}` `` rendered `$2499 INR`.
  *      `plans[].checkout_currency_symbol` is a real key. The `|| p.base_price` arm swapped in
- *      a figure that is USD by declaration (`pricing_service.py:186`) for a genuine `0`.
+ *      a figure in a DIFFERENT currency from the one being labelled for a genuine `0`:
+ *      `base_price` is the published price in `base_currency` (rupees — see
+ *      `subscription_engine.PRICE_BASE_CURRENCY`), while `checkout_price` is what the gateway
+ *      will charge in `checkout_currency`. The two are the same number only for an Indian
+ *      account. It read as USD at the time this was written, because the catalogue then
+ *      published a second, unreconciled dollar column; that column is gone, and the substitution
+ *      is wrong for the same reason either way.
  *   9. **Every non-INR invoice carried a dollar sign.** `inv.currency === "INR" ?
  *      ₹${amtINR || 0} : $${amtUSD || 0}` — the else arm was not "USD", it was *everything
  *      else*, and both arms substituted `0`, so an unreadable amount rendered as a settled

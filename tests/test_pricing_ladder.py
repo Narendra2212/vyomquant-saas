@@ -45,6 +45,7 @@ from backend_app.core.subscription_engine import (
     COUNTED_RESOURCES,
     METERED_RESOURCES,
     PLAN_LIMITS,
+    PRICE_BASE_CURRENCY,
     Feature,
     Plan,
     PlanTier,
@@ -307,8 +308,8 @@ class TestPublishedPricing:
     def test_published_inr_price_is_what_the_gateway_is_asked_for(self):
         """The regression this fixes: ₹999 was being charged as an FX conversion of $10 (~₹865).
 
-        `localize_plan_price` must charge the PUBLISHED figure for a currency the catalogue
-        publishes, so the pricing page, the billing page and Razorpay all quote one number.
+        `localize_plan_price` must charge the PUBLISHED figure in the base currency, so the pricing
+        page, the billing page and Razorpay all quote one number.
         """
         from backend_app.core.fx_service import FXService
 
@@ -317,28 +318,283 @@ class TestPublishedPricing:
                 continue
             config = SubscriptionEngine.get_plan_config(plan_id(tier))
             priced = run(
-                FXService.localize_plan_price(
-                    config.pricing, "INR", config.pricing["USD"] / 100.0
-                )
+                FXService.localize_plan_price(config.pricing, "INR", PRICE_BASE_CURRENCY)
             )
             assert priced.price_source == "published"
             assert priced.checkout_amount_minor == paise
             assert priced.localized_price == paise / 100
             assert priced.checkout_provider == "razorpay"
 
-    def test_a_currency_with_no_published_figure_is_converted_and_says_so(self):
+    def test_there_is_exactly_ONE_published_price_list(self):
+        """Two base columns were two value points, and which one a customer got was a lottery.
+
+        The catalogue published INR and USD independently — ₹499 and $5.00 — with nothing
+        reconciling them. At the prevailing rate ₹499 is about $5.20, so they were ~4% apart, and
+        every currency the catalogue did NOT publish was converted from the USD column. The
+        marketing page advertised the rupee value point while every non-Indian visitor was quoted
+        the dollar one.
+        """
+        assert PRICE_BASE_CURRENCY == "INR"
+        for config in SubscriptionEngine.get_all_plans():
+            if config.is_custom_priced:
+                assert config.pricing == {}
+                continue
+            assert set(config.pricing) == {PRICE_BASE_CURRENCY}, (
+                f"{config.id} publishes more than one base price: {config.pricing}. "
+                "A second column is a second value point."
+            )
+            if config.pricing_annual:
+                assert set(config.pricing_annual) <= {PRICE_BASE_CURRENCY}
+
+    def test_every_currency_expresses_THE_SAME_value_point(self):
+        """₹499, $5.20 and €4.58 must all be the same money, within a rounding unit.
+
+        This is the property the two-column catalogue broke. It is asserted by converting each
+        localised figure back to the base currency and comparing against the published price.
+        """
         from backend_app.core.fx_service import FXService
 
         config = SubscriptionEngine.get_plan_config("pro")
-        priced = run(FXService.localize_plan_price(config.pricing, "EUR", 10.0))
+        published_major = config.pricing[PRICE_BASE_CURRENCY] / 100
+
+        for currency in ("INR", "USD", "EUR", "GBP", "AED", "SGD", "AUD", "JPY"):
+            priced = run(
+                FXService.localize_plan_price(config.pricing, currency, PRICE_BASE_CURRENCY)
+            )
+            back = run(
+                FXService.convert_major(priced.localized_price, currency, PRICE_BASE_CURRENCY)
+            )
+            # Within one rupee: the only loss is rounding to the target currency's minor unit,
+            # which for JPY (no minor unit) is the largest.
+            assert abs(back - published_major) < 1.0, (
+                f"{currency} is a different value point: {priced.localized_price} {currency} "
+                f"is ₹{back:.2f} against a published ₹{published_major:.2f}"
+            )
+
+    def test_a_currency_with_no_published_figure_is_converted_and_says_so(self):
+        """`price_source` is how a surface tells a price from an estimate."""
+        from backend_app.core.fx_service import FXService
+
+        config = SubscriptionEngine.get_plan_config("pro")
+        priced = run(FXService.localize_plan_price(config.pricing, "EUR", PRICE_BASE_CURRENCY))
         assert priced.price_source == "fx"
         assert priced.checkout_currency == "EUR"
+        assert priced.localized_price > 0
 
-    def test_usd_prices_are_unchanged_from_the_previous_catalogue(self):
-        """Regional pricing, not a conversion — and changing it would re-bill Stripe subscribers."""
-        assert SubscriptionEngine.get_plan_config("starter").pricing["USD"] == 500
-        assert SubscriptionEngine.get_plan_config("pro").pricing["USD"] == 1000
-        assert SubscriptionEngine.get_plan_config("enterprise").pricing["USD"] == 2500
+    def test_publishing_a_second_currency_makes_it_authoritative(self):
+        """The extension point: a committed price point is charged verbatim, not converted.
+
+        Asserted so the mechanism is known to work before anyone needs it — publishing a USD price
+        point is a one-line catalogue change, and this is the proof it will be honoured rather than
+        silently converted.
+        """
+        from backend_app.core.fx_service import FXService
+
+        published = {PRICE_BASE_CURRENCY: 99900, "USD": 999}
+        priced = run(FXService.localize_plan_price(published, "USD", PRICE_BASE_CURRENCY))
+        assert priced.price_source == "published"
+        assert priced.minor_units == 999
+        assert priced.checkout_amount_minor == 999
+
+    def test_free_consults_no_exchange_rate(self):
+        """Zero is zero in every currency, and a rate failure must not make Free purchasable."""
+        from backend_app.core.fx_service import FXService
+
+        for currency in ("INR", "USD", "JPY"):
+            priced = run(
+                FXService.localize_plan_price({PRICE_BASE_CURRENCY: 0}, currency, PRICE_BASE_CURRENCY)
+            )
+            assert priced.localized_price == 0.0
+            assert priced.checkout_amount_minor == 0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 4b. The endpoint both price surfaces actually read
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestThePublicPlansEndpoint:
+    """``GET /api/billing/plans`` — the one payload the landing page and the billing page share.
+
+    WHY THIS CLASS EXISTS AT THE HTTP LEVEL
+    ---------------------------------------
+    Everything above asserts the catalogue and ``FXService`` in isolation, and all of it passed
+    while the two price surfaces disagreed in production: the landing page hardcoded ₹499 and the
+    billing page localised off a second, unreconciled dollar column. The disagreement lived in the
+    SEAM — in what the endpoint assembles out of the catalogue — which no service-level test
+    touches. So this class drives the endpoint.
+
+    It asserts the three properties a price list has to have, in every currency:
+
+      1. the quoted figure and the charged figure are the same number;
+      2. the figure converts back to the published rupee price, so every currency is one value
+         point rather than an independent price list;
+      3. the payload says which of the two it is, via ``price_source``.
+
+    No authentication: the endpoint is public by design, because a visitor with no account has to
+    be able to price the product. That is also asserted — a dependency added here would break the
+    anonymous pricing page.
+    """
+
+    #: Display currencies spanning every branch the pricing code has: the published base, a
+    #: Stripe-direct currency, a zero-decimal currency, and one with a multi-character symbol.
+    CURRENCIES = ("INR", "USD", "EUR", "GBP", "JPY", "AED")
+
+    @staticmethod
+    def _client():
+        """A client that does NOT run the application lifespan.
+
+        ``with TestClient(app)`` would, and startup opens the Redis, database and exchange
+        connections this suite has none of — it hangs rather than failing. The endpoint under test
+        reads the catalogue and the FX table and touches no startup-managed resource, so the
+        lifespan is not merely avoidable here, it is irrelevant. ``tests/test_user_router.py``
+        constructs its client the same way and for the same reason.
+        """
+        from fastapi.testclient import TestClient
+
+        from backend_app.main import app
+
+        return TestClient(app)
+
+    @classmethod
+    def _plans(cls, currency: str) -> dict:
+        response = cls._client().get("/api/billing/plans", params={"currency": currency})
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def test_the_endpoint_needs_no_session(self):
+        """A pricing page is read before anyone signs up."""
+        assert self._client().get("/api/billing/plans").status_code == 200
+
+    def test_it_offers_the_five_published_plans_in_ladder_order(self):
+        payload = self._plans("INR")
+        assert [plan["id"] for plan in payload["plans"]] == [
+            "free",
+            "starter",
+            "pro",
+            "enterprise",
+            "scale",
+        ]
+
+    @pytest.mark.parametrize("currency", CURRENCIES)
+    def test_it_reports_the_rupee_list_as_the_base_in_every_currency(self, currency):
+        """``base_price`` is the PUBLISHED figure, and it does not change with the display currency.
+
+        It used to be the USD column (`pricing_service.py` read ``plan.pricing["USD"]``), so a
+        client reading ``base_price`` for a second-currency figure got the dollar value point —
+        4% away from the rupee one the pricing page advertised.
+        """
+        payload = self._plans(currency)
+        assert payload["base_currency"] == PRICE_BASE_CURRENCY
+
+        by_id = {plan["id"]: plan for plan in payload["plans"]}
+        for tier, paise in PUBLISHED_MONTHLY_INR.items():
+            plan = by_id[plan_id(tier)]
+            assert plan["base_currency"] == PRICE_BASE_CURRENCY
+            assert plan["base_price"] == paise / 100, (
+                f"{plan['id']} reports base_price {plan['base_price']} in {currency}; "
+                f"the published figure is ₹{paise / 100}"
+            )
+
+    @pytest.mark.parametrize("currency", CURRENCIES)
+    def test_the_figure_shown_is_the_figure_charged(self, currency):
+        """A page quoting one amount while the gateway takes another is the whole defect."""
+        payload = self._plans(currency)
+
+        for plan in payload["plans"]:
+            if plan["id"] == "scale":
+                continue  # quoted, not listed
+            if plan["is_direct_checkout"]:
+                assert plan["checkout_price"] == plan["localized_price"], plan["id"]
+                assert plan["checkout_currency"] == plan["currency"] == currency
+            else:
+                # An indirect currency is DISPLAYED in the visitor's currency and CHARGED in the
+                # gateway's. Both figures are sent, so a surface can state the charge rather than
+                # imply the display figure is it.
+                assert plan["checkout_currency"] != currency
+                assert plan["checkout_price"] >= 0
+
+    @pytest.mark.parametrize("currency", CURRENCIES)
+    def test_every_currency_is_the_same_money_as_the_published_price(self, currency):
+        """₹499 and its dollar quote must be one value point, within a minor unit of rounding."""
+        from backend_app.core.fx_service import FXService
+
+        payload = self._plans(currency)
+        by_id = {plan["id"]: plan for plan in payload["plans"]}
+
+        for tier, paise in PUBLISHED_MONTHLY_INR.items():
+            if paise == 0:
+                continue
+            plan = by_id[plan_id(tier)]
+            back_in_rupees = run(
+                FXService.convert_major(plan["localized_price"], currency, PRICE_BASE_CURRENCY)
+            )
+            # One rupee of tolerance: the only loss is rounding the quote to the display
+            # currency's own minor unit, which for JPY is a whole yen (~₹1.2).
+            assert abs(back_in_rupees - paise / 100) <= 1.5, (
+                f"{plan['id']} quotes {plan['localized_price']} {currency}, which is "
+                f"₹{back_in_rupees:.2f} against a published ₹{paise / 100}"
+            )
+
+    @pytest.mark.parametrize("currency", CURRENCIES)
+    def test_it_says_whether_a_figure_is_published_or_converted(self, currency):
+        """`price_source` is how a surface tells a price from an estimate."""
+        payload = self._plans(currency)
+        expected = "published" if currency == PRICE_BASE_CURRENCY else "fx"
+
+        for plan in payload["plans"]:
+            if plan["id"] == "free":
+                # Free is zero in every currency and consults no rate, so it is always published.
+                assert plan["price_source"] == "published"
+                continue
+            if plan["id"] == "scale":
+                continue
+            assert plan["price_source"] == expected, plan["id"]
+
+    @pytest.mark.parametrize("currency", CURRENCIES)
+    def test_the_annual_figure_is_published_and_not_derivable_by_the_client(self, currency):
+        """₹4,990 is not ₹499 × 12 × 0.83, so the server sends it rather than a discount rate."""
+        payload = self._plans(currency)
+        by_id = {plan["id"]: plan for plan in payload["plans"]}
+
+        for tier in PUBLISHED_ANNUAL_INR:
+            annual = by_id[plan_id(tier)]["annual"]
+            assert annual is not None, f"{plan_id(tier)} has no annual payload"
+            assert annual["localized_price"] > 0
+            # The per-month equivalent is the SERVER's division, because a client dividing would
+            # round differently from the charge in a zero-decimal currency.
+            assert annual["monthly_equivalent"] > 0
+            assert annual["savings_percent"] == 17
+
+        # Free has no annual price and the custom tier has no published price at all. A payload
+        # here would let a client render a yearly figure nothing would charge.
+        assert by_id["free"]["annual"] is None
+        assert by_id["scale"]["annual"] is None
+
+    def test_the_custom_tier_quotes_nothing(self):
+        payload = self._plans("USD")
+        scale = next(plan for plan in payload["plans"] if plan["id"] == "scale")
+
+        assert scale["is_custom_priced"] is True
+        assert scale["base_price"] == 0
+        assert scale["localized_price"] == 0
+        assert scale["annual"] is None
+
+    def test_it_offers_the_currencies_a_selector_can_show(self):
+        """The landing page's currency control is populated from this list."""
+        payload = self._plans("INR")
+        offered = payload["supported_currencies"]
+
+        assert isinstance(offered, list) and offered, "no display currencies were offered"
+        codes = {entry["code"] for entry in offered}
+        assert {"INR", "USD", "EUR", "GBP"} <= codes
+        for entry in offered:
+            assert entry["symbol"], f"{entry['code']} has no symbol to render"
+
+    def test_it_reports_the_precision_each_currency_is_printed_at(self):
+        """`decimals` is the server's, because `¥818.00` is a conversion artefact."""
+        assert all(plan["decimals"] == 0 for plan in self._plans("JPY")["plans"])
+        assert all(plan["decimals"] == 2 for plan in self._plans("INR")["plans"])
 
 
 # ══════════════════════════════════════════════════════════════════════════

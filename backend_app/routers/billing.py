@@ -170,7 +170,7 @@ def _background_sb():
     return create_client(supabase_url, supabase_key)
 
 
-from backend_app.core.subscription_engine import Plan, SubscriptionEngine
+from backend_app.core.subscription_engine import PRICE_BASE_CURRENCY, Plan, SubscriptionEngine
 
 #: Every ``item_key`` ``_apply_billing_entitlement`` will write to ``profiles.subscription_tier``.
 #:
@@ -1566,9 +1566,12 @@ async def create_checkout_session(
     requested_currency = (body.currency or "USD").strip().upper()
 
     # Step 2: Resolve the published price for the requested plan and interval.
+    base_currency = PRICE_BASE_CURRENCY
     if body.is_addon:
-        base_usd = 3.00  # $3.00 USD for ML Addon
-        published = {"USD": 300}
+        # The ML addon's own published price, in the same base currency as the plan list. It was
+        # $3.00 against a USD base; ₹299 is that value point in the currency the catalogue now
+        # publishes, and it converts for every other currency through the same path as a plan.
+        published = {base_currency: 29900}
         if is_annual:
             # The addon is a one-off purchase, not a subscription, so there is no annual form of
             # it. Refused rather than silently billed as monthly.
@@ -1593,10 +1596,12 @@ async def create_checkout_session(
             )
 
         published = dict(plan_config.pricing_annual if is_annual else plan_config.pricing)
-        base_usd = published.get("USD", 0) / 100.0
 
-    # Free plan cannot be checked out
-    if base_usd <= 0 and not body.is_addon:
+    # Free plan cannot be checked out. Tested on the PUBLISHED base figure rather than on a USD
+    # conversion of it: a zero price is zero in every currency, and consulting an exchange rate to
+    # discover that is both pointless and a way for a rate failure to make the free tier
+    # purchasable.
+    if published.get(base_currency, 0) <= 0 and not body.is_addon:
         raise HTTPException(400, "Cannot checkout for free tier.")
 
     # Step 3: Server-Authoritative price resolution & minor-unit calculation.
@@ -1606,7 +1611,7 @@ async def create_checkout_session(
     # currency it does not. Before this, the rupee amount the gateway was asked for was an
     # exchange-rate conversion of the dollar price and so disagreed with the published price list
     # — a trader saw ₹999 advertised and a different number in Razorpay Checkout.
-    localized = await FXService.localize_plan_price(published, requested_currency, base_usd)
+    localized = await FXService.localize_plan_price(published, requested_currency, base_currency)
     checkout_currency = localized.checkout_currency
     provider = localized.checkout_provider
     amount = localized.checkout_amount_minor

@@ -38,7 +38,11 @@ from backend_app.core.fx_service import (
     RAZORPAY_SUPPORTED_CHECKOUT_CURRENCIES,
 )
 from backend_app.core.pricing_service import PricingService
-from backend_app.core.subscription_engine import Plan, SubscriptionEngine
+from backend_app.core.subscription_engine import (
+    PRICE_BASE_CURRENCY,
+    Plan,
+    SubscriptionEngine,
+)
 from backend_app.core.schemas import CheckoutRequest, SubscriptionTier
 
 
@@ -257,18 +261,63 @@ class TestCheckoutSecurity:
 
     @pytest.mark.asyncio
     async def test_server_authoritative_price_conversion(self):
-        """Base price from SubscriptionEngine ($10 for Pro) is authoritatively localized."""
-        pro_plan = SubscriptionEngine.get_plan_config("pro")
-        base_usd = pro_plan.pricing.get("USD", 0) / 100.0  # 1000 cents -> $10.00
-        assert base_usd == 10.00
+        """The charged amount comes from the catalogue's PUBLISHED price, never from a client.
 
-        localized = await FXService.localize_price(base_usd, "INR")
-        assert localized.base_price_usd == 10.00
+        This assertion used to read ``pro_plan.pricing["USD"] / 100 == 10.00``. That column no
+        longer exists, and its removal is the point rather than an incidental edit: the catalogue
+        published two independent base columns, ``INR`` (₹999) and ``USD`` ($10.00), with nothing
+        reconciling them — ₹999 is about $10.41 — and every currency the catalogue did NOT publish
+        was converted from the DOLLAR one. So the same plan had two value points roughly 4% apart
+        and which one a customer was quoted depended on their geography.
+        ``subscription_engine.PRICE_BASE_CURRENCY`` now names the ONE currency the list is
+        published in, and ``localize_plan_price`` converts that list for everything else.
+
+        What this test is actually about is unchanged: the amount is the server's, it is denominated
+        in whole minor units, and the gateway is resolved from the currency rather than supplied.
+        """
+        pro_plan = SubscriptionEngine.get_plan_config("pro")
+
+        # One published column, and it is the base currency.
+        assert list(pro_plan.pricing) == [PRICE_BASE_CURRENCY]
+        assert pro_plan.pricing[PRICE_BASE_CURRENCY] == 99900  # ₹999.00, in paise
+
+        localized = await FXService.localize_plan_price(
+            pro_plan.pricing, "INR", PRICE_BASE_CURRENCY
+        )
+        # The base currency is charged VERBATIM — never a round trip through an exchange rate.
+        assert localized.price_source == "published"
+        assert localized.minor_units == 99900
+        assert localized.localized_price == 999.00
         assert localized.target_currency == "INR"
         assert localized.checkout_currency == "INR"
         assert localized.checkout_provider == "razorpay"
-        assert localized.checkout_amount_minor > 0
+        assert localized.checkout_amount_minor == 99900
         assert isinstance(localized.checkout_amount_minor, int)
+
+    @pytest.mark.asyncio
+    async def test_a_non_base_currency_is_a_conversion_of_the_same_value_point(self):
+        """A currency the catalogue does not publish is converted, and says so.
+
+        The guard against the two-column defect returning: a dollar quote must be derived from
+        ₹999 rather than from a second published dollar figure, so it cannot drift away from the
+        rupee list without the rupee list moving too.
+        """
+        pro_plan = SubscriptionEngine.get_plan_config("pro")
+
+        localized = await FXService.localize_plan_price(
+            pro_plan.pricing, "USD", PRICE_BASE_CURRENCY
+        )
+        assert localized.price_source == "fx"
+        assert localized.checkout_provider == "stripe"
+        assert localized.checkout_currency == "USD"
+        # The charge is the quote. These being the same field is what stops a page advertising one
+        # figure and a gateway taking another.
+        assert localized.checkout_amount_minor == localized.minor_units
+
+        # It is worth the rupee price, not a round $10.00 — which is exactly what the deleted USD
+        # column would have charged.
+        expected = await FXService.convert_major(999.00, PRICE_BASE_CURRENCY, "USD")
+        assert localized.minor_units == FXService.calculate_minor_units(expected, "USD")
 
     def test_frontend_price_injection_ignored_by_schema(self):
         """CheckoutRequest schema only accepts tier, currency, and is_addon — ignores client price."""

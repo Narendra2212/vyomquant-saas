@@ -3196,7 +3196,7 @@ const PROFILE_FIELDS = [
  *   8. `` `Billed as $${p.checkout_price || p.base_price} ${p.checkout_currency}` `` — a
  *      HARDCODED `$` in front of an amount the same line labels as another currency, e.g.
  *      `$2499 INR`. `plans[].checkout_currency_symbol` is a real key. The `|| p.base_price`
- *      arm also swapped in a USD figure for a genuine `0`.
+ *      arm also swapped in a figure denominated in `base_currency` for a genuine `0`.
  *   9. The invoice amount: `inv.currency === "INR" ? ₹amtINR : $amtUSD`, so **every invoice
  *      in any currency other than INR rendered with a dollar sign** whatever it was
  *      denominated in — and both arms were `|| 0`, so an unreadable amount rendered as
@@ -3577,8 +3577,12 @@ const BILLING_FIELDS = [
       + '${p.checkout_currency}` `` — **a hardcoded dollar sign in front of an amount the '
       + 'same sentence labels as another currency.** `checkout_currency_symbol` is a real '
       + 'key on this object. The `|| p.base_price` arm was a second substitution on top: '
-      + '`base_price` is USD by declaration (`pricing_service.py:186`), so a genuine `0` '
-      + 'checkout amount was replaced with a figure in a different currency entirely.',
+      + '`base_price` is the PUBLISHED price in `base_currency` — rupees, per '
+      + '`subscription_engine.PRICE_BASE_CURRENCY` — whereas `checkout_price` is what the '
+      + 'gateway charges in `checkout_currency`, so a genuine `0` checkout amount was '
+      + 'replaced with a figure in a different currency entirely. It was a dollar figure '
+      + 'when this was written, because the catalogue then published a second, unreconciled '
+      + 'USD column; that column is gone and the substitution is wrong either way.',
   }),
 
   // ── GET /api/billing/invoices ─────────────────────────────────────────────

@@ -26,7 +26,11 @@ from backend_app.core.fx_service import (
     STRIPE_SUPPORTED_CHECKOUT_CURRENCIES,
     RAZORPAY_SUPPORTED_CHECKOUT_CURRENCIES,
 )
-from backend_app.core.subscription_engine import Plan, SubscriptionEngine
+from backend_app.core.subscription_engine import (
+    PRICE_BASE_CURRENCY,
+    Plan,
+    SubscriptionEngine,
+)
 
 logger = logging.getLogger("PricingService")
 
@@ -136,7 +140,10 @@ class PricingService:
             "country_name": CountryDetector.get_country_name(detected_country),
             "currency": resolved_currency,
             "currency_symbol": FXService.get_currency_symbol(resolved_currency),
-            "base_currency": FXService.BASE_CURRENCY,
+            # The currency the PRICE LIST is published in, which is not the same thing as the
+            # pivot currency of the rate table (`FXService.BASE_CURRENCY`, USD). Reporting the
+            # pivot here is what let a client believe the published price was a dollar figure.
+            "base_currency": PRICE_BASE_CURRENCY,
             "fx_rate": fx_result.rate,
             "fx_rate_timestamp": fx_result.timestamp,
             "currency_source": currency_source,
@@ -195,15 +202,17 @@ class PricingService:
         plans = SubscriptionEngine.get_all_plans()
         frontend_plans = []
 
+        base_currency = PRICE_BASE_CURRENCY
         for plan in plans:
-            base_usd = plan.pricing.get("USD", 0) / 100.0
-            localized_calc = await FXService.localize_plan_price(plan.pricing, currency, base_usd)
+            base_minor = plan.pricing.get(base_currency, 0)
+            localized_calc = await FXService.localize_plan_price(
+                plan.pricing, currency, base_currency
+            )
 
             annual_payload = None
-            if plan.pricing_annual and plan.pricing_annual.get("USD", 0) > 0:
-                annual_base_usd = plan.pricing_annual.get("USD", 0) / 100.0
+            if plan.pricing_annual and plan.pricing_annual.get(base_currency, 0) > 0:
                 annual_calc = await FXService.localize_plan_price(
-                    plan.pricing_annual, currency, annual_base_usd
+                    plan.pricing_annual, currency, base_currency
                 )
                 monthly_equivalent = annual_calc.minor_units / 12 if annual_calc.minor_units else 0
                 annual_payload = {
@@ -251,8 +260,12 @@ class PricingService:
                 "upgrade_to": plan.upgrade_to,
                 "is_custom_priced": plan.is_custom_priced,
                 "creator_revenue_share_percent": plan.creator_revenue_share_percent,
-                "base_price": base_usd,
-                "base_currency": "USD",
+                # The PUBLISHED price and the currency it is published in — the rupee list every
+                # other currency is derived from. This used to be the USD column, which was a
+                # second, unreconciled price list; see `subscription_engine.PRICE_BASE_CURRENCY`.
+                "base_price": FXService.major_units(base_minor, base_currency),
+                "base_currency": base_currency,
+                "base_currency_symbol": FXService.get_currency_symbol(base_currency),
                 "localized_price": localized_calc.localized_price,
                 "currency": currency,
                 "currency_symbol": localized_calc.currency_symbol,

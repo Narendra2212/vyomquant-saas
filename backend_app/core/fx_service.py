@@ -187,6 +187,16 @@ class FXService:
         return CURRENCY_DECIMALS.get(currency.upper(), 2)
 
     @classmethod
+    def major_units(cls, amount_minor: int, currency: str) -> float:
+        """``49900`` paise → ``499.0``. The inverse of :meth:`calculate_minor_units`.
+
+        Spelt once because the exponent is per-currency: dividing by 100 is wrong for JPY and KRW,
+        which have no minor unit at all.
+        """
+        decimals = cls.get_currency_decimals(currency)
+        return (amount_minor / (10 ** decimals)) if decimals > 0 else float(amount_minor)
+
+    @classmethod
     def get_currency_symbol(cls, currency: str) -> str:
         """Get official currency symbol for display."""
         return CURRENCY_SYMBOLS.get(currency.upper(), currency.upper())
@@ -400,77 +410,145 @@ class FXService:
         return int(round(amount * multiplier))
 
     @classmethod
+    async def to_usd(cls, amount_major: float, from_currency: str) -> float:
+        """``amount_major`` in ``from_currency`` → the same value in USD major units.
+
+        USD is the PIVOT of the rate table — ``get_fx_rate`` answers "how many X per USD" — so a
+        conversion between two non-USD currencies goes through it. This is the half the rate table
+        does not provide directly.
+        """
+        source = from_currency.strip().upper()
+        if source == cls.BASE_CURRENCY:
+            return amount_major
+        rate = await cls.get_fx_rate(source)
+        if not cls.is_valid_rate(rate.rate):
+            return amount_major
+        return amount_major / rate.rate
+
+    @classmethod
+    async def convert_major(
+        cls,
+        amount_major: float,
+        from_currency: str,
+        to_currency: str,
+    ) -> float:
+        """Convert a major-unit amount between any two supported currencies, via the USD pivot."""
+        source = from_currency.strip().upper()
+        target = to_currency.strip().upper()
+        if source == target:
+            return amount_major
+
+        usd = await cls.to_usd(amount_major, source)
+        if target == cls.BASE_CURRENCY:
+            return usd
+
+        rate = await cls.get_fx_rate(target)
+        if not cls.is_valid_rate(rate.rate):
+            return usd
+        return usd * rate.rate
+
+    @classmethod
     async def localize_plan_price(
         cls,
         published_minor: Dict[str, int],
         target_currency: str,
-        base_price_usd: float,
+        base_currency: str,
     ) -> LocalizedPrice:
-        """Price a plan in ``target_currency``, preferring the PUBLISHED figure over conversion.
+        """Price a plan in ``target_currency``, from its PUBLISHED price list.
 
-        WHY THIS EXISTS
-        ---------------
-        The plan catalogue publishes a price per currency — ``{"USD": 99900, "INR": 99900}`` is
-        $999.00 and ₹999.00 in minor units — and those are committed, independent price lists, not
-        conversions of one another. :meth:`localize_price` only knows how to take the USD figure
-        and multiply it by an exchange rate, which produced a real, visible defect: the ₹999 the
-        pricing page published came back from ``GET /api/billing/plans`` as roughly ₹865, because
-        that is $10 at the prevailing rate. One of those two numbers was going to be wrong on a
-        trader's screen, and it drifted every time the rate moved.
+        ONE PRICE LIST, ONE BASE, AND WHY THAT MATTERS
+        ----------------------------------------------
+        The catalogue used to publish two independent columns, INR and USD, with no declared
+        relationship: ₹499 and $5.00 for the same plan. Nothing reconciled them, and at the
+        prevailing rate ₹499 is $5.20 — so the two columns were **different value points, about 4%
+        apart**. Worse, every currency the catalogue did NOT publish was converted from the USD
+        column, so a visitor in Germany was quoted €4.41 (the dollar value point) while the pricing
+        page advertised ₹499 (the rupee one). Same plan, two prices, depending on where you stood.
 
-        So: if the catalogue publishes a figure for the requested currency, that figure is the
-        price and is charged verbatim. Only a currency with no published figure is converted, and
-        the result is flagged ``price_source="fx"`` so a caller can say so.
+        There is now ONE published list, and ``base_currency`` names the currency it is published
+        in. Everything else is a conversion OF THAT list, so every currency expresses the same
+        value and the rupee figure on the pricing page is the figure every other currency derives
+        from.
+
+        PUBLISHED STILL WINS WHERE A PUBLISHED FIGURE EXISTS
+        ---------------------------------------------------
+        A currency present in ``published_minor`` is still quoted and charged verbatim, flagged
+        ``price_source="published"``. That is what keeps the base currency exact — ₹499 is charged
+        as 49900 paise, never as a round-trip through an exchange rate — and it is also the
+        extension point: publishing a committed ``USD`` or ``EUR`` price point later makes it
+        authoritative here with no further change. Today the list holds only the base currency, so
+        every other currency reports ``price_source="fx"`` and a caller can say plainly that the
+        figure follows the exchange rate.
 
         Args:
             published_minor: The plan's published prices, currency code → minor units.
             target_currency: The currency to quote in.
-            base_price_usd: The USD price in major units, used for the conversion fallback.
+            base_currency: The currency the price list is published in.
         """
         target = target_currency.strip().upper()
+        base = base_currency.strip().upper()
         published = {str(k).upper(): int(v) for k, v in (published_minor or {}).items()}
 
-        # No published figure for this currency: convert, exactly as before.
-        if target not in published:
-            return await cls.localize_price(base_price_usd, target)
+        base_minor = published.get(base, 0)
+        base_major = cls.major_units(base_minor, base)
 
         decimals = cls.get_currency_decimals(target)
         symbol = cls.get_currency_symbol(target)
         provider, checkout_curr = cls.resolve_checkout_provider_and_currency(target)
         is_direct = (checkout_curr == target)
-        minor_units = published[target]
-        localized_price = (minor_units / (10 ** decimals)) if decimals else float(minor_units)
 
-        # The amount the gateway is actually asked for. Prefer the published figure in the
-        # checkout currency; fall back to converting the USD base when the charge has to happen in
-        # a currency the catalogue does not publish.
-        if checkout_curr in published:
-            checkout_amount_minor = published[checkout_curr]
-        else:
-            checkout_amount_minor = cls.calculate_minor_units(base_price_usd, checkout_curr)
+        # Free is free in every currency, and no rate is consulted for it.
+        if base_minor <= 0:
+            return LocalizedPrice(
+                base_price_usd=0.0,
+                target_currency=target,
+                localized_price=0.0,
+                decimals=decimals,
+                currency_symbol=symbol,
+                minor_units=0,
+                fx_rate=1.0,
+                fx_timestamp=datetime.now(timezone.utc).isoformat(),
+                checkout_currency=checkout_curr,
+                checkout_amount_minor=0,
+                checkout_provider=provider,
+                is_direct_checkout=True,
+                price_source="published",
+            )
 
-        # A published price has no exchange rate. The IMPLIED ratio is reported so the field is
-        # not empty and so an operator can see the relationship between the two price lists, but
-        # `price_source` is what tells a caller this was not a conversion.
-        implied_rate = (
-            1.0 if target == cls.BASE_CURRENCY or base_price_usd <= 0
-            else round(localized_price / base_price_usd, 6)
+        async def amount_in(currency: str) -> Tuple[int, str]:
+            """``(minor units, source)`` for one currency — published verbatim, or converted."""
+            if currency in published:
+                return published[currency], "published"
+            converted = await cls.convert_major(base_major, base, currency)
+            return cls.calculate_minor_units(converted, currency), "fx"
+
+        minor_units, price_source = await amount_in(target)
+        localized_price = cls.major_units(minor_units, target)
+
+        checkout_amount_minor = (
+            minor_units if is_direct else (await amount_in(checkout_curr))[0]
         )
 
+        # Reported for transparency, not used as the basis of anything: the USD equivalent of the
+        # published base price, so an operator can see what the one value point is worth.
+        base_usd = await cls.to_usd(base_major, base)
+
+        fx_result = await cls.get_fx_rate(target)
+
         return LocalizedPrice(
-            base_price_usd=base_price_usd,
+            base_price_usd=round(base_usd, 4),
             target_currency=target,
             localized_price=localized_price,
             decimals=decimals,
             currency_symbol=symbol,
             minor_units=minor_units,
-            fx_rate=implied_rate,
-            fx_timestamp=datetime.now(timezone.utc).isoformat(),
+            fx_rate=fx_result.rate,
+            fx_timestamp=fx_result.timestamp,
             checkout_currency=checkout_curr,
             checkout_amount_minor=checkout_amount_minor,
             checkout_provider=provider,
             is_direct_checkout=is_direct,
-            price_source="published",
+            price_source=price_source,
         )
 
     @classmethod

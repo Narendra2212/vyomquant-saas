@@ -227,6 +227,41 @@ PER_PARENT_RESOURCES: Tuple[str, ...] = (Resource.STRATEGY_VERSIONS.value,)
 #: promise of unlimited capacity and is never rendered as "Unlimited": the UI renders "Custom".
 CUSTOM_LIMIT = -1
 
+#: The currency the plan price list is PUBLISHED in. Every other currency is a conversion of it.
+#:
+#: WHY THERE IS EXACTLY ONE
+#: ------------------------
+#: The catalogue used to carry two independent columns, ``INR`` and ``USD``, with no declared
+#: relationship between them: ₹499 and $5.00 for the same plan. Nothing reconciled the two, and at
+#: the prevailing rate ₹499 is about $5.20 — so they were **different value points, roughly 4%
+#: apart**, and which one a customer got depended on their currency.
+#:
+#: It was worse than an inconsistency between two currencies, because every currency the catalogue
+#: did NOT publish was converted from the USD column. A visitor in Germany was quoted €4.41, the
+#: dollar value point, while the pricing page advertised ₹499, the rupee one. Two price lists meant
+#: the published price and the charged price were different commitments wearing the same label.
+#:
+#: So the published list is the rupee one — ₹0 / 499 / 999 / 2,499 — and every other currency is a
+#: localisation of it (``FXService.localize_plan_price``). One value point, expressed in whatever
+#: currency the visitor reads.
+#:
+#: WHAT THIS COSTS, STATED PLAINLY
+#: -------------------------------
+#: A non-base currency now FOLLOWS THE EXCHANGE RATE. A US visitor sees about $5.20 rather than a
+#: flat $5.00, and that figure moves with the rate. Each plan's payload carries
+#: ``price_source: "fx"`` for exactly this reason, so a surface can say the figure is a conversion
+#: rather than present it as a fixed price.
+#:
+#: Publishing a committed price point in another currency is a ONE-LINE change and the machinery
+#: already honours it: adding ``"USD": 599`` to a plan's ``pricing`` makes that figure authoritative
+#: and charged verbatim, reported as ``price_source: "published"``. That is a commercial decision
+#: about what the dollar price should BE, so it is left to be made deliberately rather than
+#: inherited from a column nobody reconciled.
+#:
+#: Existing subscriptions are unaffected either way: a Stripe checkout builds ``price_data`` inline
+#: per session, so a live subscription keeps the amount it was created with.
+PRICE_BASE_CURRENCY = "INR"
+
 #: The creator's share of a marketplace subscription payment, in whole percent. The authoritative
 #: arithmetic lives in :func:`backend_app.backend.marketplace.money.split_ninety_ten`, which
 #: computes the platform fee as the integer RESIDUAL so the two always sum to the amount. This
@@ -397,8 +432,9 @@ class SubscriptionEngine:
                 Resource.MARKETPLACE_SUBSCRIPTIONS.value: 0,
                 Resource.MARKETPLACE_PUBLISHED.value: 0,
             },
-            pricing={"USD": 0, "INR": 0},
-            pricing_annual={"USD": 0, "INR": 0},
+            # Free is free in every currency, and no exchange rate is consulted for it.
+            pricing={"INR": 0},
+            pricing_annual={"INR": 0},
         ),
         Plan.STARTER.value: PlanConfig(
             id=Plan.STARTER.value,
@@ -446,14 +482,9 @@ class SubscriptionEngine:
                 Resource.MARKETPLACE_SUBSCRIPTIONS.value: 3,
                 Resource.MARKETPLACE_PUBLISHED.value: 0,
             },
-            # ₹499 / month, ₹4,990 / year — both PUBLISHED figures, charged verbatim.
-            #
-            # The USD column is UNCHANGED from the previous catalogue ($5.00). It is regional
-            # pricing, not a conversion of the rupee figure, and altering it would change what
-            # existing Stripe subscribers are billed — which the pricing brief did not ask for.
-            # The annual USD figure follows the rupee ratio (ten months for twelve).
-            pricing={"USD": 500, "INR": 49900},
-            pricing_annual={"USD": 5000, "INR": 499000},
+            # ₹499 / month, ₹4,990 / year. See PRICE_BASE_CURRENCY on why this is the only column.
+            pricing={"INR": 49900},
+            pricing_annual={"INR": 499000},
         ),
         Plan.PRO.value: PlanConfig(
             id=Plan.PRO.value,
@@ -513,9 +544,9 @@ class SubscriptionEngine:
                 Resource.MARKETPLACE_SUBSCRIPTIONS.value: 10,
                 Resource.MARKETPLACE_PUBLISHED.value: 5,
             },
-            # ₹999 / month, ₹9,990 / year. USD unchanged at $10.00; see the Trader note.
-            pricing={"USD": 1000, "INR": 99900},
-            pricing_annual={"USD": 10000, "INR": 999000},
+            # ₹999 / month, ₹9,990 / year.
+            pricing={"INR": 99900},
+            pricing_annual={"INR": 999000},
         ),
         Plan.ENTERPRISE.value: PlanConfig(
             # NOTE: id "enterprise" is the BUSINESS tier. See the module docstring.
@@ -579,9 +610,9 @@ class SubscriptionEngine:
                 Resource.MARKETPLACE_SUBSCRIPTIONS.value: 25,
                 Resource.MARKETPLACE_PUBLISHED.value: 15,
             },
-            # ₹2,499 / month, ₹24,990 / year. USD unchanged at $25.00; see the Trader note.
-            pricing={"USD": 2500, "INR": 249900},
-            pricing_annual={"USD": 25000, "INR": 2499000},
+            # ₹2,499 / month, ₹24,990 / year.
+            pricing={"INR": 249900},
+            pricing_annual={"INR": 2499000},
         ),
         Plan.SCALE.value: PlanConfig(
             id=Plan.SCALE.value,
