@@ -1427,6 +1427,56 @@ exists to remove.
     - _Requirements: none — supply-chain posture, outside the numbered clauses_
 
 
+  - [ ] 13.13 The full-suite failure inventory — 84 tests, and most of them are not defects
+    - **Run the WHOLE suite, not scoped subsets.** `python -m pytest tests/ -q` : **85 failed,
+      11,334 passed, 34 skipped, 3 xpassed in 52 minutes** (84 distinct test ids). Every scoped run
+      used during waves 1-5 was green, which is exactly why this was not seen earlier. One real
+      defect was found this way and nothing else would have found it - see the lint item below
+    - **A REAL defect, mine, now fixed: `flake8 F824` in `portfolio_management.py`.**
+      `get_portfolio_manager()` stopped assigning the singleton when it stopped inventing capital,
+      so its `global _portfolio_manager` became unused. That is the same
+      `--select=E9,F63,F7,F82` invocation `01-pr-check.yml` gates on, and
+      `tests/test_no_undefined_names.py` asserts it exits zero - so it would have failed PR checks.
+      Fixed; `POST /initialize` keeps its `global`, because that is the one place that assigns
+    - **26 of the 27 `test_training_worker.py` failures are ORDER-DEPENDENT POLLUTION, not defects.**
+      Measured, not assumed: the whole suite fails 27; that file alone fails **1**; the failing
+      test alone **passes**; its whole class alone **passes**. So an earlier class in the same file
+      leaks state into it
+    - **What the surviving one is, as far as it was traced.** The assertion is
+      `result["training"]["state"] == TRAINING_QUEUED` receiving `BLOCKED`, with
+      `required: True, job_id: None, jobs: []`. In `strategy_service.save_version_with_training`
+      the only path producing that exact shape is `_assert_ml_training_entitled` raising
+      `TrainingBlocked`, whose cap branch is `require_quota(Resource.ML_TRAININGS.value, ...)` ->
+      `REASON_CAP_EXCEEDED`. So the leaked state is almost certainly consumed ML-training quota or
+      subscription state surviving between tests
+    - **DELIBERATELY NOT CHASED FURTHER, and this is the reason.** A parallel workstream is actively
+      rewriting precisely that subsystem - `core/subscription_engine.py`,
+      `core/subscription_dependencies.py`, `core/pricing_service.py`, `core/fx_service.py`, a new
+      `core/usage_ledger.py` and a new `backend_app/migrations/017_plan_entitlements.sql` were all
+      uncommitted in the tree during this run. Debugging a quota leak inside code being rewritten
+      would conflict with their work and would likely be invalidated by it. Re-measure after 017
+      and the entitlements work land
+    - **The 7 `test_baseline_unchanged` failures are NOT real.** All 62 baseline tests pass in
+      isolation. They were pollution, or the parallel workstream's uncommitted surface changes
+      being captured mid-edit. Do not re-record a baseline on the strength of a full-suite run
+    - **10 failures are the already-recorded environment gaps**, and each fails identically on a
+      clean tree: `test_atomic_order_cancellation_fix` (4) and
+      `test_transaction_isolation_serializable` (3) need a real PostgreSQL - see 13.11 for the
+      property proven by hand; `test_strategy_lifecycle_concurrency` (2) are the DELIBERATE P0
+      proofs 12.6 records; `test_exchange_safety_fix` (1) makes a real Binance call with invalid
+      keys
+    - **The remaining ~40 cluster in billing, marketplace, checkout, payment and training status** -
+      the same subsystem the parallel workstream is rewriting. Attribute nothing here until their
+      work is committed; a full-suite run over someone else's uncommitted tree measures their
+      work-in-progress, not this spec's
+    - **Method note worth keeping.** `_suite.txt` written by a PowerShell `>` redirect is **UTF-16**,
+      so a plain `utf-8` read finds zero `FAILED` lines and reports a clean suite. Decode explicitly
+      before trusting any count taken that way
+    - _Requirements: none — this is a test-suite inventory. Recorded because task 14 requires every
+      launch blocker to be proven, BLOCKED with its gap named, or closed by citation, and "85 tests_
+      _fail somewhere" is none of those until the 84 are attributed_
+
+
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
   - Every P0 and P1 clause carries a named regression test that failed against `F` and passes against `F'`
