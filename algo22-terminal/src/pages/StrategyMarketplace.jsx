@@ -215,6 +215,8 @@ import { Panel } from '../components/ds/Panel';
 import { SectionHeader } from '../components/ds/SectionHeader';
 import { StatusBadge } from '../components/ds/StatusBadge';
 import { TradingEnvironmentBadge } from '../components/ds/TradingEnvironmentBadge';
+import { LockedCommand, UpgradePrompt, useAllowance, useFeature } from '../components/gates';
+import { FEATURES, RESOURCES } from '../design/entitlements';
 import { translateError } from '../design/errorCopy';
 import { BADGE_SUBSCRIBED, resolveSubscriptionView } from '../design/subscriptionState';
 import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
@@ -515,6 +517,72 @@ const StrategyMarketplace = () => {
   const [notice, setNotice] = useState(null);
   const [cloneLoading, setCloneLoading] = useState(false);
   const [subscribeLoading, setSubscribeLoading] = useState(false);
+
+  /*
+    ── THE ENTITLEMENT GATES ────────────────────────────────────────────────────────────────
+    Read at the top of the component, not inside `renderDetail`: `renderDetail` is called
+    conditionally during render, and a hook called from there would violate the rules of hooks the
+    first time a listing was deselected.
+
+    Three server answers, never a comparison made here:
+
+      * `canSubscribe`     is `marketplace_subscribe` on the account's feature list. Absent on
+                           Free, which is the plan boundary the pricing page publishes.
+      * `subscriptionRoom` is whether the marketplace-subscription allowance has room, counted from
+                           `library_subscriptions` server-side (Trader 3, Pro Quant 10, Business 25).
+      * `strategyRoom`     is the STRATEGY allowance, which a free listing consumes: cloning writes
+                           a `strategies` row the caller owns, so `POST /api/library/{id}/clone`
+                           carries `check_strategy_quota` and an account at its strategy capacity is
+                           refused there. Without this the page would offer "Clone Free" to someone
+                           the backend was about to refuse.
+
+    For an ANONYMOUS visitor every hook reports not-ready and every refusal is `null`, so
+    `subscribeBlockFor` returns `null` and the control behaves exactly as it did before — the
+    request goes out and the auth flow handles it. A marketing surface must not tell a visitor with
+    no account that their plan is insufficient.
+  */
+  const { permitted: canSubscribe, refusal: subscribeRefusal, isReady: entitlementsReady } =
+    useFeature(FEATURES.MARKETPLACE_SUBSCRIBE);
+  const { hasRoom: subscriptionRoom, refusal: subscriptionLimitRefusal } =
+    useAllowance(RESOURCES.MARKETPLACE_SUBSCRIPTIONS);
+  const { hasRoom: strategyRoom, refusal: strategyLimitRefusal } =
+    useAllowance(RESOURCES.STRATEGIES);
+
+  /**
+   * The refusal that blocks acquiring a listing, or `null` when nothing does.
+   *
+   * @param {string} priceState `priceOf()`'s state: `'paid'`, `'free'` or `'unknown'`.
+   */
+  const subscribeBlockFor = useCallback(
+    (priceState) => {
+      if (!entitlementsReady) return null;
+      /*
+        A PAID listing is a subscription: it needs the subscribing entitlement (Trader and above)
+        and a free slot in the marketplace-subscription allowance.
+
+        A FREE listing is a clone, and a clone is not a subscription — no payment, no settlement,
+        no `library_subscriptions` row. It consumes a STRATEGY slot, because cloning writes a
+        `strategies` row the caller owns, and that is the only limit `POST /{id}/clone` enforces.
+        Requiring the subscribing entitlement for a free clone would refuse a Free account a copy
+        of a free strategy, which the published price list does not say and which would close the
+        one path a Free account has into the marketplace.
+      */
+      if (priceState === 'paid') {
+        if (!canSubscribe) return subscribeRefusal;
+        return subscriptionRoom ? null : subscriptionLimitRefusal;
+      }
+      return strategyRoom ? null : strategyLimitRefusal;
+    },
+    [
+      canSubscribe,
+      entitlementsReady,
+      strategyLimitRefusal,
+      strategyRoom,
+      subscribeRefusal,
+      subscriptionLimitRefusal,
+      subscriptionRoom,
+    ],
+  );
 
   /**
    * Report an outcome through the mechanism `AppShell` installs (Requirement 20.10).
@@ -1198,6 +1266,8 @@ const StrategyMarketplace = () => {
      * always absent — false for every subscriber, including an `ACTIVE` one.
      */
     const isSubscribed = subscriptionView?.badge === BADGE_SUBSCRIBED;
+    /** The server's reason this account cannot acquire this listing, or `null`. */
+    const subscribeBlock = subscribeBlockFor(price.state);
     const reviews = Array.isArray(strat.recent_ratings) ? strat.recent_ratings : [];
 
     return (
@@ -1276,6 +1346,25 @@ const StrategyMarketplace = () => {
                   >
                     Subscribed
                   </CommandButton>
+                ) : subscribeBlock !== null ? (
+                  /*
+                    THE PLAN GATE, AND WHY IT IS A DISABLED CONTROL RATHER THAN A HIDDEN ONE
+                    ----------------------------------------------------------------------
+                    Every plan can BROWSE the marketplace, so a Free visitor reaches this panel
+                    legitimately and is entitled to see what subscribing would cost before being
+                    told they cannot yet. Removing the button would leave them comparing a price to
+                    nothing; disabling it with the server's own reason answers "why not?" in place.
+
+                    `subscribeBlock` is the backend's refusal payload, not a comparison made here:
+                    either `marketplace_subscribe` is missing from the account's feature list
+                    (Free), or the marketplace-subscription allowance is spent (Trader at 3, Pro
+                    Quant at 10, Business at 25). The same 403 is what
+                    `POST /api/library/{id}/checkout` answers, so this control and the request it
+                    would have made say the same words.
+                  */
+                  <LockedCommand refusal={subscribeBlock}>
+                    {price.state === 'paid' ? 'Subscribe' : 'Clone Free'}
+                  </LockedCommand>
                 ) : (
                   <CommandButton
                     intent="primary"
@@ -1287,6 +1376,12 @@ const StrategyMarketplace = () => {
                     {price.state === 'paid' ? 'Subscribe' : 'Clone Free'}
                   </CommandButton>
                 )}
+                {/* The upgrade path, under the disabled control. One line, with the server's own
+                    CTA — "Upgrade to Trader — ₹499" for a Free account, "Upgrade to Pro Quant —
+                    ₹999" for a Trader at capacity, "Talk to Sales" at the top of the ladder. */}
+                {subscribeBlock !== null && !isSubscribed ? (
+                  <UpgradePrompt refusal={subscribeBlock} variant="inline" />
+                ) : null}
               </div>
             </div>
 

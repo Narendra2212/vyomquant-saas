@@ -7,11 +7,20 @@ from pydantic import BaseModel, Field
 
 
 class SubscriptionTier(str, Enum):
+    """Plan identifiers accepted on the wire.
+
+    Mirrors ``core.subscription_engine.Plan`` plus every legacy provider alias, because
+    ``CheckoutRequest.tier`` validates against this enum: a value missing here is a 422 before the
+    request reaches the billing router. ``SCALE`` is present so the custom tier can be NAMED by a
+    client (to be told it is sales-led) rather than rejected as an unknown plan.
+    """
+
     # Canonical SaaS Plans (SubscriptionEngine single source of truth)
     FREE = "free"
-    STARTER = "starter"
-    PRO = "pro"
-    ENTERPRISE = "enterprise"
+    STARTER = "starter"        # displayed as "Trader"
+    PRO = "pro"                # displayed as "Pro Quant"
+    ENTERPRISE = "enterprise"  # displayed as "Business" — the historic ₹2,499 tier
+    SCALE = "scale"            # displayed as "Enterprise" — custom, quoted not listed
 
     # Legacy Payment Provider Aliases (Backward Compatibility)
     PRO_999 = "pro_999"
@@ -21,6 +30,17 @@ class SubscriptionTier(str, Enum):
     ELITE = "elite"
 
 
+class BillingInterval(str, Enum):
+    """The billing cycle a checkout is for.
+
+    ``month`` is the default so every existing client — which sends no ``interval`` at all —
+    keeps producing exactly the monthly subscription it produced before.
+    """
+
+    MONTH = "month"
+    YEAR = "year"
+
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -28,6 +48,7 @@ class CheckoutRequest(BaseModel):
     tier: SubscriptionTier
     currency: str = "INR"  # "INR" triggers Razorpay, "USD" triggers Stripe
     is_addon: bool = False  # Set to true if buying the 199 INR ML strategy addon
+    interval: BillingInterval = BillingInterval.MONTH
 
     @field_validator("currency")
     @classmethod

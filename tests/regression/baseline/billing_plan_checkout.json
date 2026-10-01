@@ -1,4 +1,5 @@
 {
+  "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. POST /api/billing/checkout gained two ADDITIVE response members and lost none: `interval` (\"month\" | \"year\") and `price_source` (\"published\" | \"fx\"). WHY `interval`: annual billing did not exist before this change \u2014 Stripe's recurring interval was the hardcoded literal \"month\" \u2014 so a checkout could not state which cycle it was buying and the response had no cycle to report. WHY `price_source`: the amount is now charged from the catalogue's PUBLISHED price for a currency it publishes (INR, USD) and FX-converted only for one it does not. Those are different kinds of figure \u2014 a commitment versus a rate-dependent estimate \u2014 and a caller rendering a price is entitled to know which it has. Previously every amount was an FX conversion of the USD base, which is why GET /api/billing/plans answered ~Rs865 for the plan published at Rs999. Nothing was removed, renamed or retyped: `checkoutUrl`, `checkout_url`, `provider`, `currency`, `amount`, `order_id`, `key_id` and `razorpay_key` are unchanged in name, type and meaning, so every existing client keeps working.",
   "capture": "billing_plan_checkout",
   "frontend_bindings": {
     "createCheckout": [
@@ -87,7 +88,6 @@
       "handler_count": 1,
       "handlers": [
         {
-          "_baseline_note_returns": "AUTHORISED RE-RECORD of `returns[1]` on THIS handler only (`backend_app.routers.billing.create_checkout_session`, POST /api/billing/checkout) \u2014 TWO ADDED response keys, `key_id` and `razorpay_key`, and nothing removed or retyped. Authorised by commit b5a5ed3 `feat(billing): Razorpay Standard Web Checkout modal and signature verification`, which landed the change and did not re-record the three baselines that read this handler (billing_plan_checkout, surface_billing, surface_sign_up \u2014 all three carry this same note). The Razorpay arm used to answer a hosted-link URL only, so a failed link creation left the browser with nothing to open; it now also returns the public key id the Standard Checkout widget needs in `options.key` (`routers/billing.py:1376-1391`). Both spellings are sent deliberately: `key_id` for this endpoint and `razorpay_key` to match the shape `checkout_service.ProviderSession.extra` already puts on the marketplace response, so one frontend helper reads either without a per-endpoint branch. `_validate_keys` returns the key id and never the secret (`:101-106`), and RAZORPAY_KEY_SECRET is read only inside the process \u2014 so this addition does not put a secret on a response.",
           "decorators": [
             "router.post('/checkout')",
             "limiter.limit('10/minute')"
@@ -120,6 +120,8 @@
               "checkoutUrl": "computed",
               "checkout_url": "computed",
               "currency": "computed",
+              "interval": "computed",
+              "price_source": "computed",
               "provider": "str"
             },
             {
@@ -127,8 +129,10 @@
               "checkoutUrl": "computed",
               "checkout_url": "computed",
               "currency": "str",
+              "interval": "computed",
               "key_id": "computed",
               "order_id": "computed",
+              "price_source": "computed",
               "provider": "str",
               "razorpay_key": "computed"
             }

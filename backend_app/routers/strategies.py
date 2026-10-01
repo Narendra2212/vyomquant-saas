@@ -25,14 +25,17 @@ from backend_app.core.dependencies import (create_request_supabase_async,
                                            get_current_user, get_fleet,
                                            get_vault, get_ws_manager)
 from backend_app.core.subscription_dependencies import (
+    check_backtest_quota,
     check_bot_quota,
     check_ml_quota,
+    check_optimization_quota,
     check_strategy_quota,
     decrement_usage,
     increment_usage,
     get_user_plan,
     require_live_trading,
     require_ml_training,
+    require_optimization,
 )
 from backend_app.core.subscription_engine import Resource, SubscriptionEngine
 from backend_app.core.event_bus import publish_command, PublishError
@@ -1773,10 +1776,12 @@ async def delete_strategy(
         raise HTTPException(status_code=e.http_status, detail=e.to_detail())
 
     if result.get("status") == STATUS_ARCHIVED:
-        # An archived strategy is out of the owner's active list, so its quota slot is
-        # released — the same release the hard delete performed. Not done for
-        # ``already_archived``: Requirement 3.6 forbids any further state change, and a
-        # second decrement on a retried request would release a slot that was never held.
+        # Archiving releases the strategy's capacity slot. That release is now implicit: the
+        # strategy limit is COUNTED from ``strategies WHERE archived_at IS NULL``
+        # (``core.usage_ledger``), so setting ``archived_at`` IS the decrement and there is no
+        # counter left to adjust. The call is kept because it remains the honest place to express
+        # "this slot is free now", and ``decrement_usage`` is a documented no-op for counted
+        # resources — a counter here could only drift from the table it describes.
         await decrement_usage(Resource.STRATEGIES.value, user)
 
     return result
@@ -2357,8 +2362,17 @@ async def backtest(
     request: Request,
     payload: BacktestRequest,
     user: dict = Depends(get_current_user),
+    _quota=Depends(check_backtest_quota),
 ):
-    """Enqueue backtest to background worker via Redis Streams or execute directly if sync/fallback."""
+    """Enqueue backtest to background worker via Redis Streams or execute directly if sync/fallback.
+
+    ``check_backtest_quota`` RESERVES one run from the caller's monthly allowance before the job
+    is enqueued, atomically (``core.usage_ledger.reserve``). The reservation is taken up front
+    rather than on completion for two reasons: the compute is spent whether or not the run
+    succeeds, so a failed backtest must still count; and reserving before enqueue is what stops a
+    burst of concurrent requests from each seeing the last unit as free. The rate limit above is a
+    separate, technical protection and is not the commercial limit.
+    """
     import asyncio
     import uuid
     from datetime import datetime, timezone
@@ -2949,7 +2963,12 @@ async def clone_strategy(strategy_id: str, user: dict = Depends(get_current_user
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error cloning strategy. Please try again later.")
 
 @router.post("/optimize")
-async def optimize_strategy(payload: dict, user: dict = Depends(get_current_user)):
+async def optimize_strategy(
+    payload: dict,
+    user: dict = Depends(get_current_user),
+    _feature=Depends(require_optimization),
+    _quota=Depends(check_optimization_quota),
+):
     """
     Automatic DAG graph optimization (prunes unused nodes and redundant passes).
     
@@ -3013,8 +3032,18 @@ async def optimize_strategy(payload: dict, user: dict = Depends(get_current_user
     }
 
 @router.post("/monte-carlo")
-async def monte_carlo_simulation(payload: dict, user: dict = Depends(get_current_user)):
-    """Run Monte Carlo bootstrap simulation using actual backtest trade return distribution."""
+async def monte_carlo_simulation(
+    payload: dict,
+    user: dict = Depends(get_current_user),
+    _feature=Depends(require_optimization),
+    _quota=Depends(check_optimization_quota),
+):
+    """Run Monte Carlo bootstrap simulation using actual backtest trade return distribution.
+
+    Metered against the monthly optimization allowance: this runs a full backtest internally and
+    then bootstraps it, so it consumes the same class of compute as a parameter search. Free has
+    no optimization allowance, so this endpoint is closed to it.
+    """
     import numpy as np
     
     bt_res = backtest_internal(payload)
@@ -3065,7 +3094,9 @@ async def monte_carlo_simulation(payload: dict, user: dict = Depends(get_current
 async def walk_forward_optimization(
     payload: dict, 
     user: dict = Depends(get_current_user),
-    background_tasks: BackgroundTasks = BackgroundTasks()
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    _feature=Depends(require_optimization),
+    _quota=Depends(check_optimization_quota),
 ):
     """
     Run genuine rolling window walk-forward optimization on historical backtest data.

@@ -19,8 +19,14 @@
  * stakes that earns no space on a landing page. Merged and dropped respectively.
  *
  * "Protected Trading Infrastructure — execution engines run in isolated, protected VPC
- * environments" is held back to the Institutional tier in `Pricing.jsx`, where an isolated VPC
- * is an actual line item. Stating it as a universal property here contradicted that tier.
+ * environments" is NOT claimed here, because it is not a universal property of the platform. The
+ * closest real line item is the dedicated execution environment on the Business plan
+ * (`Feature.DEDICATED_EXECUTION` in `backend_app/core/subscription_engine.py`); stating isolation
+ * as something every account gets would contradict the plan that sells it.
+ *
+ * (The tier that carried this before the pricing rework was called "Institutional". The plan it
+ * became is "Business" — same ₹2,499 position, same stored identifier `enterprise`. The name is
+ * recorded here only so a reader of the old copy can follow the change.)
  *
  * Sources: `backend_app/routers/security.py`, `core/tenant.py`, `core/tenant_middleware.py`,
  * `backend/tenant_rls_validator.py`, the RLS policies in

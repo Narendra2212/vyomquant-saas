@@ -193,7 +193,10 @@ from backend_app.backend.marketplace.errors import (
     MARKETPLACE_CHECKOUT_UNAVAILABLE,
 )
 from backend_app.core.dependencies import get_current_user
-from backend_app.core.subscription_dependencies import require_marketplace_access
+from backend_app.core.subscription_dependencies import (
+    check_marketplace_subscription_quota,
+    require_marketplace_subscribe,
+)
 from backend_app.main import app
 from backend_app.routers import library as library_router
 
@@ -807,7 +810,24 @@ def run_checkout(
         raise ValueError(f"unknown provider double {provider!r}")
 
     app.dependency_overrides[get_current_user] = lambda: CALLER_USER
-    app.dependency_overrides[require_marketplace_access] = lambda: True
+    # THE TWO ENTITLEMENT GATES ON THIS ROUTE, SATISFIED SO THEY ARE NOT WHAT IS UNDER TEST.
+    #
+    # `POST /api/library/{id}/checkout` now carries `require_marketplace_subscribe` (marketplace
+    # subscriptions start with Trader) and `check_marketplace_subscription_quota` (Trader 3, Pro
+    # Quant 10, Business 25, counted from `library_subscriptions`). Both are asserted in
+    # `tests/test_saas_entitlements_gating_audit.py` and `tests/test_pricing_ladder.py`.
+    #
+    # This module drives the handler → service → provider path and asserts on the amount, the
+    # split and the pending row, so a caller who cannot subscribe would never reach the subject.
+    # Overridden rather than worked around with a fixture tier: without the override the gates
+    # resolve their own `Depends(get_request_supabase)`, which is NOT overridden here and demands a
+    # real Authorization header — the request answered 401 before the handler ran, which is the
+    # failure this pair of lines prevents.
+    #
+    # `require_marketplace_access` is deliberately no longer overridden: the route stopped using it
+    # (it resolves to browse under the feature split, which every plan has, so it asserted nothing).
+    app.dependency_overrides[require_marketplace_subscribe] = lambda: True
+    app.dependency_overrides[check_marketplace_subscription_quota] = lambda: True
     try:
         managers = [
             patch.object(library_router, "_build_service_client", return_value=db),

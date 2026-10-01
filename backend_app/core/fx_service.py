@@ -148,6 +148,15 @@ class LocalizedPrice:
     checkout_amount_minor: int
     checkout_provider: str
     is_direct_checkout: bool  # True if target_currency matches checkout_currency
+    #: ``"published"`` when the figure is the committed price list for this currency;
+    #: ``"fx"`` when it was converted from the USD base at the prevailing rate.
+    #:
+    #: This distinction is load-bearing rather than informational. A PUBLISHED price is a
+    #: commitment: ₹999 is ₹999 today and tomorrow, it is what the pricing page states and it is
+    #: what the gateway charges. An FX-CONVERTED price moves with the rate, so it can only ever be
+    #: an indicative figure. Rendering the two identically is what allowed the marketing page and
+    #: the checkout to disagree — see ``PricingService.get_localized_plans``.
+    price_source: str = "fx"
 
 
 class FXService:
@@ -389,6 +398,80 @@ class FXService:
             return int(round(amount))
         multiplier = 10 ** decimals
         return int(round(amount * multiplier))
+
+    @classmethod
+    async def localize_plan_price(
+        cls,
+        published_minor: Dict[str, int],
+        target_currency: str,
+        base_price_usd: float,
+    ) -> LocalizedPrice:
+        """Price a plan in ``target_currency``, preferring the PUBLISHED figure over conversion.
+
+        WHY THIS EXISTS
+        ---------------
+        The plan catalogue publishes a price per currency — ``{"USD": 99900, "INR": 99900}`` is
+        $999.00 and ₹999.00 in minor units — and those are committed, independent price lists, not
+        conversions of one another. :meth:`localize_price` only knows how to take the USD figure
+        and multiply it by an exchange rate, which produced a real, visible defect: the ₹999 the
+        pricing page published came back from ``GET /api/billing/plans`` as roughly ₹865, because
+        that is $10 at the prevailing rate. One of those two numbers was going to be wrong on a
+        trader's screen, and it drifted every time the rate moved.
+
+        So: if the catalogue publishes a figure for the requested currency, that figure is the
+        price and is charged verbatim. Only a currency with no published figure is converted, and
+        the result is flagged ``price_source="fx"`` so a caller can say so.
+
+        Args:
+            published_minor: The plan's published prices, currency code → minor units.
+            target_currency: The currency to quote in.
+            base_price_usd: The USD price in major units, used for the conversion fallback.
+        """
+        target = target_currency.strip().upper()
+        published = {str(k).upper(): int(v) for k, v in (published_minor or {}).items()}
+
+        # No published figure for this currency: convert, exactly as before.
+        if target not in published:
+            return await cls.localize_price(base_price_usd, target)
+
+        decimals = cls.get_currency_decimals(target)
+        symbol = cls.get_currency_symbol(target)
+        provider, checkout_curr = cls.resolve_checkout_provider_and_currency(target)
+        is_direct = (checkout_curr == target)
+        minor_units = published[target]
+        localized_price = (minor_units / (10 ** decimals)) if decimals else float(minor_units)
+
+        # The amount the gateway is actually asked for. Prefer the published figure in the
+        # checkout currency; fall back to converting the USD base when the charge has to happen in
+        # a currency the catalogue does not publish.
+        if checkout_curr in published:
+            checkout_amount_minor = published[checkout_curr]
+        else:
+            checkout_amount_minor = cls.calculate_minor_units(base_price_usd, checkout_curr)
+
+        # A published price has no exchange rate. The IMPLIED ratio is reported so the field is
+        # not empty and so an operator can see the relationship between the two price lists, but
+        # `price_source` is what tells a caller this was not a conversion.
+        implied_rate = (
+            1.0 if target == cls.BASE_CURRENCY or base_price_usd <= 0
+            else round(localized_price / base_price_usd, 6)
+        )
+
+        return LocalizedPrice(
+            base_price_usd=base_price_usd,
+            target_currency=target,
+            localized_price=localized_price,
+            decimals=decimals,
+            currency_symbol=symbol,
+            minor_units=minor_units,
+            fx_rate=implied_rate,
+            fx_timestamp=datetime.now(timezone.utc).isoformat(),
+            checkout_currency=checkout_curr,
+            checkout_amount_minor=checkout_amount_minor,
+            checkout_provider=provider,
+            is_direct_checkout=is_direct,
+            price_source="published",
+        )
 
     @classmethod
     async def localize_price(

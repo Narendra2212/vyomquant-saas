@@ -70,9 +70,11 @@ import Navbar from './Navbar'
 import Hero from './Hero'
 import ProofStrip from './ProofStrip'
 import HowItWorks from './HowItWorks'
+import WorkflowSection from './WorkflowSection'
 import TrustSection from './TrustSection'
 import ProductTour from './ProductTour'
 import MarketplaceSection from './MarketplaceSection'
+import CreatorSection from './CreatorSection'
 import SecuritySection from './SecuritySection'
 import DownloadSection from './DownloadSection'
 import Pricing from './Pricing'
@@ -88,9 +90,16 @@ export default function LandingPage() {
         <Hero />
         <ProofStrip />
         <HowItWorks />
+        {/* The seven-stage arc, after the four-step "how do I start" and before the capability
+            detail. This is where PUBLISH and EARN first appear, with the plan they need. */}
+        <WorkflowSection />
         <TrustSection />
         <ProductTour />
+        {/* Discover → Subscribe → Deploy, then the creator's side of the same market. The two sit
+            adjacent on purpose: a reader who has just understood that they can subscribe to someone
+            else's strategy is the reader most likely to wonder whether their own could be listed. */}
         <MarketplaceSection />
+        <CreatorSection />
         <SecuritySection />
         <DownloadSection />
         <Pricing />

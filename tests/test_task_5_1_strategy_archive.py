@@ -730,12 +730,27 @@ def _client():
 
 @pytest.fixture
 def quota():
-    """The quota counter needs Redis; its calls are observed instead."""
+    """The route's quota release, observed.
+
+    PATCHED ONE LAYER UP THAN IT USED TO BE, BECAUSE THE LAYER BELOW IS NOW A NO-OP
+    ------------------------------------------------------------------------------
+    This used to patch ``SubscriptionEngine.decrement_quota_usage`` — the Redis write — and assert
+    it was awaited once when a strategy was archived. The strategy limit is no longer held in a
+    counter: ``core/usage_ledger.py`` counts ``strategies WHERE archived_at IS NULL`` directly, so
+    setting ``archived_at`` IS the release and ``decrement_usage`` is a documented no-op for a
+    counted resource. The old assertion therefore observed a write that correctly stopped
+    happening, which is a pass turning into a failure for the right reason.
+
+    What is still worth asserting is that the ROUTE performs the release exactly once on the
+    archive path and not at all on the two paths that archive nothing — so the patch moves to the
+    route's own call site. ``TestTheQuotaReleaseIsTheColumn`` below asserts the other half: that the
+    call writes no counter.
+    """
     with patch(
-        "backend_app.core.subscription_engine.SubscriptionEngine.decrement_quota_usage",
+        "backend_app.routers.strategies.decrement_usage",
         new=AsyncMock(return_value=0),
-    ) as decrement:
-        yield decrement
+    ) as release:
+        yield release
 
 
 class TestDeleteEndpointIsRewiredToArchive:
@@ -770,6 +785,10 @@ class TestDeleteEndpointIsRewiredToArchive:
         self._call(sb)
 
         assert quota.await_count == 1
+        # The release is the archive, and the archive is the column. Asserted alongside the call
+        # count so this test fails if `archived_at` stops being written even though the release
+        # call still happens — the two are the same fact and only one of them bounds capacity.
+        assert sb.row("strategies", STRATEGY_ID)[ARCHIVED_AT]
 
     def test_an_already_archived_strategy_releases_nothing_further(self, quota):
         sb = _Supabase(

@@ -47,9 +47,12 @@ from backend_app.core.dependencies import (bearer_scheme, get_admin_user,
 from backend_app.core.subscription_dependencies import (
     check_feature_optional,
     check_marketplace_publish_quota,
-    require_marketplace_access,
+    check_marketplace_subscription_quota,
+    check_strategy_quota,
+    require_marketplace_browse,
     require_marketplace_publish,
-)
+    require_marketplace_subscribe,
+)  # noqa: F401  — `require_marketplace_browse` is used on the subscription-status read below
 from backend_app.core.rate_limit import limiter
 from backend_app.core.rate_limit_keys import caller_or_address, source_address
 from backend_app.backend.marketplace import eligibility_gate as _eligibility_gate
@@ -2183,11 +2186,30 @@ async def clone_strategy(
     request: Request,
     library_id: str,
     user: dict = Depends(get_current_user),
-    _feature=Depends(require_marketplace_access),
+    _strategy_quota=Depends(check_strategy_quota),
 ):
     """
     Clones a published library strategy into the authenticated user's
     personal strategy workspace.
+
+    THE STRATEGY-CAPACITY GATE, AND WHY THERE IS NO PLAN GATE HERE
+    -------------------------------------------------------------
+    ``check_strategy_quota`` closes a real bypass: a clone writes a ``strategies`` row the caller
+    owns, which is exactly what ``POST /api/strategies`` creates and counts. Without it an account
+    at its strategy capacity could keep adding strategies indefinitely by cloning them out of the
+    marketplace instead of building them. That gate is the one this endpoint needs, and it bounds
+    every plan — a Free account can hold one strategy whether it built it or cloned it.
+
+    There is deliberately NO marketplace-plan gate. Cloning is not subscribing: the published plan
+    rules say marketplace SUBSCRIPTIONS start with Trader, and a clone of a freely-published
+    listing involves no subscription, no payment and no settlement. Requiring the subscribing
+    entitlement here was tried and reverted — it refused a Free account a copy of a free strategy,
+    which is a restriction the price list does not state and which closes the one path a Free
+    account has into the marketplace. The paid path (``POST /{library_id}/checkout``) carries both
+    marketplace gates; this one carries the capacity gate that actually applies to it.
+
+    The old ``require_marketplace_access`` dependency is gone rather than replaced: it resolved to
+    browse under the new feature split, so it admitted every plan and asserted nothing.
 
     Cloning copies the author's Protected_Logic (``buy_logic``, ``sell_logic``, ``risk``,
     ``indicators``, ``ml_model_path``) into a row the caller owns, so it runs only with the
@@ -2754,9 +2776,23 @@ async def create_marketplace_checkout(
     library_id: str,
     body: MarketplaceCheckoutRequest,
     user: dict = Depends(get_current_user),
-    _feature=Depends(require_marketplace_access),
+    _feature=Depends(require_marketplace_subscribe),
+    _quota=Depends(check_marketplace_subscription_quota),
 ):
     """Create a payment checkout session for a Marketplace Subscription (task 18.2).
+
+    THE TWO SUBSCRIPTION GATES, AND WHY THEY SIT HERE RATHER THAN IN THE SERVICE
+    ---------------------------------------------------------------------------
+    ``require_marketplace_subscribe`` refuses a Free account: marketplace subscriptions start
+    with Trader. ``check_marketplace_subscription_quota`` refuses an account already holding its
+    plan's maximum (Trader 3, Pro Quant 10, Business 25), counted from ``library_subscriptions``
+    rather than from a counter — a cancelled-but-unexpired subscription still occupies a slot
+    because it still entitles its holder, which is the rule the rest of the marketplace already
+    follows.
+
+    Both are declared here, BEFORE the handler body, so the refusal happens before any read and
+    before any provider call: a checkout session must never be created for a subscription the
+    plan cannot hold, because that would take money for capacity the account cannot use.
 
     The service owns the transaction; this handler owns HTTP. That division is the whole of
     this rewrite: every one of the four defects the previous body carried lived in work the
@@ -2847,7 +2883,10 @@ async def create_marketplace_checkout(
 async def get_subscription_status(
     library_id: str,
     user: dict = Depends(get_current_user),
-    _feature=Depends(require_marketplace_access),
+    # Reading one's OWN subscription state is a browse-level action, open to every plan. It was
+    # gated by the old `require_marketplace_access`, which withheld it from Free — so a Free
+    # account could not even be told that it holds no subscription.
+    _feature=Depends(require_marketplace_browse),
 ):
     """
     Get current subscription status for a marketplace strategy.
@@ -4476,7 +4515,10 @@ async def update_library_settings(
     library_id: str,
     payload: LibrarySettingsRequest,
     user: dict = Depends(get_current_user),
-    _feature=Depends(require_marketplace_access),
+    # Changing a setting on your own Listing is a CREATOR action, so it takes the publishing
+    # entitlement rather than the old browse-level one. Only Pro Quant and Business hold
+    # listings at all, so anyone reaching this legitimately already has it.
+    _feature=Depends(require_marketplace_publish),
 ):
     """Owner-scoped toggle of ``source_cloning_enabled`` on a Listing."""
     lib_id = _safe_uuid(library_id, "library_id")

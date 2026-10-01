@@ -35,12 +35,19 @@ from backend_app.backend.marketplace import (
     subscriber_operation_guard as _subscriber_guard,
 )
 from backend_app.backend.marketplace.errors import MarketplaceError
-from backend_app.core.dependencies import get_current_user
+from backend_app.core.dependencies import get_current_user, get_request_supabase
 from backend_app.core.rate_limit import limiter
 # Task 6.3: the existing ML entitlement and quota controls, kept in force on the
 # training endpoints as declared dependencies. The caps from task 6.2 are additive to
 # these, never a replacement (Requirement 16.7).
-from backend_app.core.subscription_dependencies import check_ml_quota, require_ml_training
+from backend_app.core.subscription_dependencies import (
+    check_backtest_quota,
+    check_ml_model_slot,
+    check_ml_quota,
+    check_optimization_quota,
+    require_ml_training,
+    require_optimization,
+)
 from backend_app.core.performance_monitor import (
     performance_monitor,
     monitor_performance,
@@ -1113,12 +1120,20 @@ class DeploymentRequest(BaseModel):
 async def create_backtest(request: Request, 
     strategy_id: str,
     body: BacktestCreateRequest,
-    user: dict = Depends(get_current_user)
+    user: dict = Depends(get_current_user),
+    _quota=Depends(check_backtest_quota),
 ):
     """
     Create a new backtest for a Strategy.
 
     Every backtest is stored permanently with strategy.
+
+    METERED (Free 10, Trader 100, Pro Quant 500, Business 1500 per month)
+    --------------------------------------------------------------------
+    ``check_backtest_quota`` reserves one run from the monthly allowance before the row is
+    written. The reservation is not returned if the run fails: the compute was spent either way,
+    and returning it would make "retry until it works" an unmetered allowance. The 50/minute rate
+    limit above is a technical protection on burst, not the commercial limit.
 
     OWNERSHIP, BEFORE THE ROW IS BUILT (Requirement 20.1)
     -----------------------------------------------------
@@ -1337,9 +1352,13 @@ async def _load_backtest_version(
 async def execute_backtest(request: Request, 
     strategy_id: str,
     body: BacktestExecuteRequest,
-    user: dict = Depends(get_current_user)
+    user: dict = Depends(get_current_user),
+    _quota=Depends(check_backtest_quota),
 ):
     """Backtest one immutable version through the canonical runtime, and persist the result.
+
+    Metered against the same monthly backtest allowance as ``create_backtest``. Both paths are
+    gated because either one alone would leave the other as an unmetered way to run a backtest.
 
     Trading-lifecycle-integration task 6.1. Requirements 5.1-5.7, 22.3, and Requirement
     3.3's archived refusal (deferred to here by task 5.1).
@@ -1860,10 +1879,20 @@ async def validate_historical_data(request: Request,
 async def run_optimization(request: Request, 
     strategy_id: str,
     body: OptimizationRequest,
-    user: dict = Depends(get_current_user)
+    user: dict = Depends(get_current_user),
+    _feature=Depends(require_optimization),
+    _quota=Depends(check_optimization_quota),
 ):
     """
     Run strategy optimization using Strategy Package from compiler.
+
+    GATED AND METERED (Free 0, Trader 25, Pro Quant 100, Business 400 per month)
+    ---------------------------------------------------------------------------
+    ``require_optimization`` refuses Free outright — the plan carries no optimization allowance,
+    so a numeric limit of zero would refuse with a "capacity reached" message when the truthful
+    answer is "this is not included in your plan". ``check_optimization_quota`` then reserves one
+    run from the monthly allowance. This endpoint runs parameter search, walk-forward AND Monte
+    Carlo in one pass, which is why it costs one optimization rather than three.
     
     PHASE Research & Optimization: Executes comprehensive research including:
     - Parameter optimization (Grid Search, Random Search, Bayesian, Genetic)
@@ -5536,10 +5565,40 @@ async def save_strategy_version(request: Request,
 async def create_training_job(request: Request,
     body: TrainingJobCreateRequest,
     user: dict = Depends(get_current_user),
+    supabase: Any = Depends(get_request_supabase),
     _feature=Depends(require_ml_training),
     _quota=Depends(check_ml_quota),
 ):
     """Queue training for an existing version. Idempotent per (version, node).
+
+    THREE GATES, AND WHY THE MODEL COUNT IS SEPARATE FROM THE TRAINING METER
+    -----------------------------------------------------------------------
+    ``require_ml_training`` refuses Free and Trader: neither plan includes ML at all.
+
+    ``check_ml_quota`` bounds monthly TRAINING RUNS (Pro Quant 50, Business 200). It is the gate
+    that cannot be reset by deletion: the meter is period-scoped and is never decremented on
+    completion, successful or failed.
+
+    ``check_ml_model_slot`` — called in the body below rather than declared here — bounds the
+    number of ACTIVE models (Pro Quant 5, Business 15), counted from
+    ``model_versions WHERE is_active``. It is a point-in-time count, so deleting a model genuinely
+    frees the slot, which is correct for a stored artefact.
+
+    The two together close the delete-and-retrain bypass: the model count alone would let an
+    account train without limit as long as it kept only five models, and the run meter alone would
+    let it hoard artefacts.
+
+    WHY THE MODEL CHECK IS NOT A DEPENDENCY
+    --------------------------------------
+    Whether a run consumes a model slot depends on WHICH node it trains.
+    ``uq_mv_active_per_node`` keeps at most one active model per ``(version_id, node_id)``, so
+    retraining a node that already has a model REPLACES it and the account's model count does not
+    rise. A declared dependency cannot see the body, so it refused every retrain once an account
+    reached its model cap — wrong in the same way refusing an exchange key rotation at the
+    connection limit is wrong: the operation adds nothing to the thing being limited.
+
+    The feature gate and the meter stay declared, so a Free or Trader caller is refused before any
+    read and an out-of-allowance caller before any work.
 
     Requirement 15.13 and "idempotent per (version, node)" are held by
     ``uq_tj_active_per_node``, a partial unique index over
@@ -5573,6 +5632,10 @@ async def create_training_job(request: Request,
         UnsupportedSchemaVersion,
     )
     from backend_app.backend.strategy_service import TrainingBlocked
+
+    # The active-model capacity check. Admits a retrain of a node that already holds a model,
+    # because completing it replaces that model rather than adding one. See the docstring.
+    await check_ml_model_slot(user, supabase, body.version_id, body.node_id)
 
     try:
         service = await get_strategy_service()

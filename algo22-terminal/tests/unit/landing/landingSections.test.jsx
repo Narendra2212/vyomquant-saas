@@ -102,7 +102,9 @@ import ProofStrip from '../../../src/components/landing/ProofStrip';
 import HowItWorks from '../../../src/components/landing/HowItWorks';
 import TrustSection from '../../../src/components/landing/TrustSection';
 import ProductTour from '../../../src/components/landing/ProductTour';
+import WorkflowSection from '../../../src/components/landing/WorkflowSection';
 import MarketplaceSection from '../../../src/components/landing/MarketplaceSection';
+import CreatorSection from '../../../src/components/landing/CreatorSection';
 import SecuritySection from '../../../src/components/landing/SecuritySection';
 import DownloadSection from '../../../src/components/landing/DownloadSection';
 import Pricing from '../../../src/components/landing/Pricing';
@@ -157,15 +159,46 @@ describe('Landing_Surface — each rendered section carries its own content', ()
       mountRouted(<Hero />);
 
       expect(screen.getByText('Early access · Paper trading by default')).toBeTruthy();
+      /*
+        THE HEADLINE AND BOTH CTAs MOVED WITH THE POSITIONING, AND NOT COSMETICALLY.
+
+        "Build crypto trading bots without writing code" described one of the three things this
+        product is. It said nothing about the strategy marketplace — a public, unauthenticated
+        route — or about publishing to it for a share of subscription revenue, so a hero built on
+        it sold roughly a third of the platform and the two paid capabilities that justify its two
+        highest plans were invisible on the first screen.
+
+        "Build It. Trade It. Earn From It." names all three. The three product paths that follow it
+        (asserted below) are what keep that from being a slogan: each one is a capability with code
+        behind it, and EARN carries its plan boundary on the same line rather than in a footnote.
+      */
       expect(
         screen.getByRole('heading', {
           level: 1,
-          name: 'Build crypto trading bots without writing code',
+          name: 'Build It. Trade It. Earn From It.',
         }),
       ).toBeTruthy();
 
-      expect(screen.getByRole('link', { name: /Start free — no card required/ })).toBeTruthy();
-      expect(screen.getByRole('link', { name: /Browse strategies/ })).toBeTruthy();
+      expect(
+        screen.getByRole('link', { name: /Build Your First Strategy Free/ }),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole('link', { name: /Explore Strategy Marketplace/ }),
+      ).toBeTruthy();
+    });
+
+    it('names the three product paths, and qualifies the one that needs a plan', () => {
+      mountRouted(<Hero />);
+
+      ['Build', 'Discover', 'Earn'].forEach((path) =>
+        expect(screen.getByText(path), `the ${path} path is missing`).toBeTruthy(),
+      );
+
+      // Publishing is a Pro Quant and Business capability. A visitor reading "earn from it" on the
+      // first screen is owed that before they choose a plan, not after they have bought one.
+      expect(
+        screen.getByText(/Pro Quant and Business/),
+      ).toBeTruthy();
     });
 
     it('renders the pipeline frame, labelled as a diagram rather than a screenshot', () => {
@@ -323,31 +356,124 @@ describe('Landing_Surface — each rendered section carries its own content', ()
   });
 
   describe('7 — MarketplaceSection', () => {
-    it('renders both columns and links to the public library route', () => {
+    it('renders the three steps and links to the public library route', () => {
       mountRouted(<MarketplaceSection />);
 
       expect(
-        screen.getByRole('heading', { level: 2, name: /Start from someone else/ }),
+        screen.getByRole('heading', { level: 2, name: /Don’t Build Everything From Scratch/ }),
       ).toBeTruthy();
 
-      ['Browse the catalogue', 'List your own strategy'].forEach((heading) =>
+      // Discover → Subscribe → Deploy. The two-column "if you are looking / if you are
+      // publishing" layout is gone: publishing now has its own section (`CreatorSection`), because
+      // a creator pitch sharing a panel with a buyer pitch gave neither room to state its plan
+      // boundary.
+      ['Discover', 'Subscribe', 'Deploy'].forEach((heading) =>
         expect(screen.getByRole('heading', { level: 3, name: heading })).toBeTruthy(),
       );
 
-      const link = screen.getByRole('link', { name: /Open the strategy library/ });
+      const link = screen.getByRole('link', { name: /Explore Marketplace/ });
       expect(link.getAttribute('href')).toBe('/marketplace');
     });
 
-    it('promises no revenue share, because the settlement ledger does not exist', () => {
-      // `.kiro/specs/marketplace-subscriptions-paper-trading/requirements.md` classifies
-      // `create_marketplace_checkout` BROKEN, `renew_subscription` BROKEN (it grants access
-      // with no payment), the 90/10 split BROKEN (it queries two columns that do not exist
-      // and returns a fabricated zero) and the payout ledger MISSING.
+    it('states where subscribing starts, so the boundary is not discovered from a 403', () => {
+      mountRouted(<MarketplaceSection />);
+      expect(screen.getByText(/Marketplace subscriptions start with Trader/)).toBeTruthy();
+    });
+
+    it('claims the revenue share only where the settlement ledger backs it', () => {
+      /*
+        THIS ASSERTION IS INVERTED, AND THE INVERSION IS THE POINT.
+
+        It previously required that NO revenue share appear anywhere on this section, because
+        `.kiro/specs/marketplace-subscriptions-paper-trading/requirements.md` classified
+        `create_marketplace_checkout` BROKEN, `renew_subscription` BROKEN (it granted access with
+        no payment), the 90/10 split BROKEN (it queried two columns that did not exist and
+        returned a fabricated zero through a bare `except`) and the payout ledger MISSING.
+        Advertising a revenue stream with no settlement behind it would have been the most
+        expensive sentence on the page, and withholding it was right.
+
+        All three are implemented now, and each has a file to point at:
+
+          * `backend/marketplace/checkout_service.create_checkout` prices from the Listing's
+            integer `price_minor` and returns a real provider session.
+          * `backend/marketplace/settlement_service.settle` is the single writer of
+            `marketplace_settlements` (migration `008_marketplace_settlement.sql`) and the only
+            path permitted to set `library_subscriptions.status = 'active'` — enforced by
+            `trg_subscription_transition_guard` in the database, not by convention.
+          * `backend/marketplace/money.split_ninety_ten` computes the creator's 90% and takes the
+            platform fee as the integer RESIDUAL, and `chk_settlement_conserved` makes a row that
+            does not sum to the amount charged unrepresentable.
+
+        So the claim moves to `CreatorSection`, where it belongs, and this section keeps its own
+        job: what a BUYER does. What stays forbidden here is any earnings OUTCOME — no subscriber
+        counts, no revenue figures, no "top creators earn ₹X" — because nothing in this repository
+        produces those numbers.
+      */
       mountRouted(<MarketplaceSection />);
 
       expect(screen.queryByText(/90%/)).toBeNull();
-      expect(screen.queryByText(/earn/i)).toBeNull();
-      expect(screen.getByText(/Paid strategy subscriptions and creator payouts/)).toBeTruthy();
+      expect(screen.queryByText(/creators earn/i)).toBeNull();
+      expect(screen.queryByText(/per month/i)).toBeNull();
+    });
+  });
+
+  describe('7b — CreatorSection', () => {
+    it('states the published split and the plans that can publish', () => {
+      mountRouted(<CreatorSection />);
+
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'Turn Your Strategy Into Recurring Income' }),
+      ).toBeTruthy();
+
+      expect(screen.getByText('90%')).toBeTruthy();
+      expect(screen.getByText('10%')).toBeTruthy();
+      expect(
+        screen.getByText('Marketplace publishing is available to Pro Quant and Business users.'),
+      ).toBeTruthy();
+    });
+
+    it('describes the share as net revenue rather than gross payment', () => {
+      // `settlement_service` records reversals as their own settlement rows, which net out of a
+      // creator's earnings. "90% of every rupee" would be a claim about gross payment that the
+      // settlement path does not make.
+      mountRouted(<CreatorSection />);
+      expect(
+        screen.getByText(/payment, refund and chargeback handling/),
+      ).toBeTruthy();
+    });
+
+    it('claims no earnings outcome', () => {
+      const { container } = mountRouted(<CreatorSection />);
+      // A published commercial term can be stated. An outcome cannot: nothing here measures one.
+      expect(container.textContent).not.toMatch(/₹[\d,]+ (a|per) month/);
+      expect(container.textContent).not.toMatch(/average earnings/i);
+    });
+
+    it('routes an unentitled visitor to signup rather than to a surface that would refuse them', () => {
+      // Anonymous on this page, so `useFeature` reports not-permitted and the CTA is signup. A
+      // button leading to a publishing surface the caller cannot use is a 403 with extra steps.
+      mountRouted(<CreatorSection />);
+      const cta = screen.getByRole('link', { name: /Become a Strategy Creator/ });
+      expect(cta.getAttribute('href')).toBe('/signup');
+    });
+  });
+
+  describe('7c — WorkflowSection', () => {
+    it('renders the seven stages and marks where each becomes available', () => {
+      mountRouted(<WorkflowSection />);
+
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'From Idea to Trading System' }),
+      ).toBeTruthy();
+
+      ['Build', 'Backtest', 'Paper trade', 'Automate', 'Optimize', 'Publish', 'Earn'].forEach(
+        (stage) => expect(screen.getByText(stage), `${stage} is missing`).toBeTruthy(),
+      );
+
+      // The plan boundary is part of the diagram, not a footnote: a visitor following the arc from
+      // Build to Earn should meet it here rather than in a refusal.
+      expect(screen.getAllByText('All plans').length).toBe(3);
+      expect(screen.getAllByText('Pro Quant+').length).toBe(2);
     });
   });
 
@@ -424,21 +550,28 @@ describe('Landing_Surface — each rendered section carries its own content', ()
   });
 
   describe('10 — Pricing', () => {
-    it('renders the tier heading, all four plan names and their rupee figures', () => {
-      // Carried over untouched. The four INR figures match
-      // `backend_app/core/subscription_engine.py`, and
-      // `landing_page_pricing_crash_regression.test.jsx` owns them in depth.
+    it('renders the pricing headline, all five plan names and their rupee figures', () => {
+      // The five INR figures match `backend_app/core/subscription_engine.py`, and
+      // `landing_page_pricing_crash_regression.test.jsx` owns them in depth — including the
+      // published annual prices and the capacity table. What is checked here is only that this
+      // section renders at all and names every plan, which is this file's job.
+      //
+      // `Institutional` became `Business`: the DISPLAY name of the same ₹2,499 plan, whose stored
+      // identifier (`enterprise`) is deliberately unchanged. `Enterprise` is the new, quoted plan
+      // above it.
       mountRouted(<Pricing />);
 
-      expect(screen.getByRole('heading', { level: 2, name: 'Infrastructure Tiers' })).toBeTruthy();
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'Start Small. Scale When You Need To.' }),
+      ).toBeTruthy();
 
-      ['Free / Sandbox', 'Trader', 'Pro Quant', 'Institutional'].forEach((name) =>
-        expect(screen.getByText(name)).toBeTruthy(),
+      ['Free', 'Trader', 'Pro Quant', 'Business', 'Enterprise'].forEach((name) =>
+        expect(screen.getAllByText(name).length, `${name} is missing`).toBeGreaterThan(0),
       );
       ['₹0', '₹499', '₹999', '₹2,499'].forEach((price) =>
         expect(screen.getByText(price)).toBeTruthy(),
       );
-      expect(screen.getByText('Recommended')).toBeTruthy();
+      expect(screen.getByText('Most Popular')).toBeTruthy();
     });
   });
 

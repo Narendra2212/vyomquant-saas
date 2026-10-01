@@ -50,7 +50,8 @@ from backend_app.core.subscription_dependencies import (
     get_user_plan,
     require_feature,
     require_live_trading,
-    require_marketplace_access,
+    require_marketplace_browse,
+    require_marketplace_subscribe,
     require_marketplace_publish,
     require_ml_training,
 )
@@ -167,8 +168,9 @@ class TestCompleteRealPaymentFlow:
         is_mkt_allowed = await SubscriptionEngine.check_feature_entitlement(user_id, "pro", Feature.MARKETPLACE_ACCESS.value)
         assert is_mkt_allowed is True
 
+        # Pro Quant's published live-strategy capacity. Was 5 before the five-plan ladder.
         bot_limit = SubscriptionEngine.get_quota_limit("pro", Resource.BOTS.value)
-        assert bot_limit == 5
+        assert bot_limit == 10
 
     @pytest.mark.asyncio
     async def test_razorpay_complete_payment_flow_e2e(self):
@@ -270,14 +272,27 @@ class TestPlanEntitlementsAPIEnforcement:
             await require_live_trading(user, sb)
         assert exc.value.status_code == 403
 
-        # Marketplace -> 403
+        # Marketplace BROWSING -> allowed. The marketplace capability was split: browsing is open
+        # to every plan (`/marketplace` is a public route, so gating it for a signed-in Free
+        # account refused them something a stranger can see), and the two transacting capabilities
+        # carry their own gates. `require_marketplace_access` is now a deprecated alias of browse.
+        assert await require_marketplace_browse(user, sb) is True
+
+        # Marketplace SUBSCRIBING -> 403. Subscriptions start with Trader.
         with pytest.raises(HTTPException) as exc:
-            await require_marketplace_access(user, sb)
+            await require_marketplace_subscribe(user, sb)
         assert exc.value.status_code == 403
+        assert exc.value.detail["required_plan"] == "starter"
+
+        # Marketplace PUBLISHING -> 403. Publishing starts with Pro Quant.
+        with pytest.raises(HTTPException) as exc:
+            await require_marketplace_publish(user, sb)
+        assert exc.value.status_code == 403
+        assert exc.value.detail["required_plan"] == "pro"
 
     @pytest.mark.asyncio
     async def test_starter_tier_entitlement_gating(self):
-        """Starter user ($5): Live trading allowed (max 2 bots), ML Training blocked (403), Marketplace blocked (403)."""
+        """Trader (₹499): live trading and marketplace subscribing allowed; ML and publishing not."""
         user = make_test_user("u_starter", tier="starter")
         sb = make_supabase_mock(tier="starter", user_id="u_starter")
 
@@ -289,9 +304,13 @@ class TestPlanEntitlementsAPIEnforcement:
             await require_ml_training(user, sb)
         assert exc.value.status_code == 403
 
-        # Marketplace -> Blocked (403)
+        # Marketplace browsing AND subscribing -> allowed. Trader may hold 3 subscriptions.
+        assert await require_marketplace_browse(user, sb) is True
+        assert await require_marketplace_subscribe(user, sb) is True
+
+        # Marketplace publishing -> Blocked (403). It starts with Pro Quant.
         with pytest.raises(HTTPException) as exc:
-            await require_marketplace_access(user, sb)
+            await require_marketplace_publish(user, sb)
         assert exc.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -302,22 +321,35 @@ class TestPlanEntitlementsAPIEnforcement:
 
         assert await require_live_trading(user, sb) is True
         assert await require_ml_training(user, sb) is True
-        assert await require_marketplace_access(user, sb) is True
+        assert await require_marketplace_browse(user, sb) is True
+        assert await require_marketplace_subscribe(user, sb) is True
         assert await require_marketplace_publish(user, sb) is True
 
     @pytest.mark.asyncio
     async def test_enterprise_tier_entitlement_gating(self):
-        """Enterprise user ($25): All features unlocked, unlimited marketplace publish, high quotas."""
+        """Business (₹2,499, stored id `enterprise`): every capability, at the highest published
+        capacity.
+
+        The three quota figures moved with the published ladder, and the third one changed KIND:
+        marketplace publishing was `-1` (advertised as unlimited) and is now a finite 15.
+        "Unlimited publishing" was a claim the platform did not implement, and the custom tier that
+        replaced the top of the ladder (`scale`) records its capacity per contract in
+        `profiles.plan_limit_overrides` rather than having none.
+        """
         user = make_test_user("u_ent", tier="enterprise")
         sb = make_supabase_mock(tier="enterprise", user_id="u_ent")
 
         assert await require_live_trading(user, sb) is True
         assert await require_ml_training(user, sb) is True
-        assert await require_marketplace_access(user, sb) is True
+        assert await require_marketplace_browse(user, sb) is True
+        assert await require_marketplace_subscribe(user, sb) is True
         assert await require_marketplace_publish(user, sb) is True
-        assert SubscriptionEngine.get_quota_limit("enterprise", Resource.BOTS.value) == 12
-        assert SubscriptionEngine.get_quota_limit("enterprise", Resource.ML_TRAININGS.value) == 15
-        assert SubscriptionEngine.get_quota_limit("enterprise", Resource.MARKETPLACE_PUBLISHED.value) == -1
+        assert SubscriptionEngine.get_quota_limit("enterprise", Resource.BOTS.value) == 25
+        assert SubscriptionEngine.get_quota_limit("enterprise", Resource.ML_TRAININGS.value) == 200
+        assert (
+            SubscriptionEngine.get_quota_limit("enterprise", Resource.MARKETPLACE_PUBLISHED.value)
+            == 15
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

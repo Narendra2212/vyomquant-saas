@@ -121,3 +121,39 @@ Note on ordering: the four `TestGetAdminUserP01Regression` cases pass when `test
 7. Category A stays as-is locally. Confirm it goes green in a CI job with PostgreSQL, Redis and Supabase before treating those 13 as clean.
 
 No test or source file was modified while producing this record.
+
+---
+
+# Addendum — confirmed pre-existing at the time of the pricing-ladder change
+
+Recorded while implementing the five-plan ladder (`docs/PRICING_AND_ENTITLEMENTS.md`). These two
+were verified to fail **before** that change by checking the assertions against `HEAD`'s copy of the
+file they scan, so they are listed here rather than fixed as part of unrelated work.
+
+| Node id | Observed error | Why it is pre-existing |
+|---|---|---|
+| `test_billing_e2e.py::TestBillingJsxUI::test_billing_jsx_has_resume_button` | `assert "Resume Subscription" in source` | `Billing.jsx` renders **`Resume subscription`** — lower-case `s`. The assertion is case-sensitive and the copy was changed by the UI redesign, not by the pricing work. `HEAD:algo22-terminal/src/pages/Billing.jsx` does not contain `"Resume Subscription"` either. The control itself is present and `resumeSubscription` (the handler, asserted on the line above) resolves. |
+| `test_billing_e2e.py::TestBillingJsxUI::test_billing_jsx_websocket_reconnects` | `assert "connectWebSocket" in source` | The page no longer owns a socket. It holds a refcounted lease on the shared session client (`wsClient.acquire` / `release`), which is what removed a reconnect bug where the effect's own `onclose` armed the next connection during teardown. `connectWebSocket` is absent from `HEAD` as well. The reconnect behaviour it was asserting now lives in `websocketClient.js` and is covered by `algo22-terminal/tests/unit/lib/singleSocket.test.jsx` and `tests/unit/pages/billingSocketLifecycle.test.jsx`. |
+
+Both assertions are stale rather than the behaviour being absent: one checks capitalisation, the
+other checks for an implementation that was deliberately replaced. Fixing them means editing
+assertions about work outside the pricing change, so they are recorded here instead.
+
+## Category C items settled by the pricing-ladder change
+
+Two of the three category C entries above are resolved, and one is narrowed:
+
+- **`test_feature_entitlement_matrix_reconciliation` — ML_TRAINING on Professional.** This needed
+  "a product decision", and the published plan ladder is it: ML is a **Pro Quant and Business**
+  capability (`Feature.ML_TRAINING`, enforced by `require_ml_training`), which is what
+  `TenantPlan.PROFESSIONAL` maps to. The matrix was right and the test's Enterprise-only
+  expectation was the stale half. It now passes.
+- **`test_pricing_tier_reconciliation` quota figures.** Updated to the published ladder, with the
+  full matrix asserted independently in `tests/test_pricing_ladder.py`.
+- **`tenant_to_billing` / `billing_to_tenant` asymmetry** is unchanged and still open. It is in
+  `core/entitlement_engine.py`, which remains unwired into any route — the enforcement path is
+  `core/subscription_dependencies.py`. The asymmetry is therefore still inert, but it is a trap for
+  anyone who later adopts that engine: `tenant_to_billing(PROFESSIONAL)` returns `pro`, and while
+  that IS now a canonical `Plan` value (so it round-trips correctly through
+  `SubscriptionEngine.migrate_plan_key`), the engine's own `BillingPlan` lookup path has not been
+  revisited.

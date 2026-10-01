@@ -179,3 +179,81 @@ def _event_loop_is_always_installed():
         yield
     finally:
         _ensure_event_loop_installed()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ENTITLEMENT STATE GUARD
+#
+#  Two of the plan-ladder's mechanisms are STATEFUL across a process, and the
+#  in-memory `MockRedisClient` the suite runs on holds that state in a plain dict
+#  (`self._store`) that no test clears:
+#
+#    quota:{user}:{resource}:{YYYY-MM}   a monthly RESERVATION. `check_ml_quota`,
+#                                        `check_backtest_quota` and
+#                                        `check_optimization_quota` increment it as
+#                                        they check — reserving inside the check is
+#                                        what stops two concurrent requests both
+#                                        seeing the last unit as free — and it is
+#                                        deliberately never decremented on
+#                                        completion, so "retry until it works" is not
+#                                        an unmetered allowance.
+#    entitlement:plan:{user}             the resolved plan, cached for 15 seconds so a
+#                                        route carrying three gates makes one profile
+#                                        read instead of three.
+#
+#  Both are correct in production and both leak between tests. The reservation is the
+#  one that bites: `tests/test_training_worker.py` queues dozens of training jobs for
+#  one user id, and `tests/test_training_status.py` queues more against the same id in
+#  the same calendar month. Past Pro Quant's 50-run monthly allowance the route starts
+#  refusing, so the second file saw `state: 'BLOCKED'` where it expected `'QUEUED'` —
+#  the gate working exactly as designed, against a meter that should have been reset
+#  with the fixture rather than carried across files. "Passes alone, fails in the
+#  suite", for the third distinct reason this conftest documents.
+#
+#  Clearing the meter is the right fix and weakening the reservation is not: a
+#  reservation that does not accumulate is not a reservation, and the production
+#  behaviour under test elsewhere
+#  (`tests/test_pricing_ladder.py`, `tests/test_saas_entitlements_gating_audit.py`)
+#  depends on it accumulating.
+#
+#  Only these two namespaces are touched. Every other key in the store — rate-limit
+#  counters, cached profiles, ws tickets — is left exactly as it was, so a test that
+#  depends on its own cache writes is unaffected.
+# ══════════════════════════════════════════════════════════════════════════════
+
+#: Key prefixes the plan ladder writes. Cleared between tests; nothing else is.
+_ENTITLEMENT_KEY_PREFIXES = ("quota:", "entitlement:plan:")
+
+
+def _clear_entitlement_keys():
+    """Drop every plan-ladder key from the shared in-memory cache store.
+
+    Reaches for the mock store directly rather than going through `redis_manager.delete`
+    because the keys are not enumerable through the public surface — there is no
+    `SCAN` on the mock — and because this must work whether or not a test has left a
+    dependency-injection seam pointing somewhere else.
+    """
+    try:
+        from backend_app.core.cache import redis_manager
+    except Exception:
+        return
+
+    for holder in (redis_manager, getattr(redis_manager, "_mock_client", None)):
+        store = getattr(holder, "_store", None)
+        if not isinstance(store, dict):
+            continue
+        for key in [
+            k for k in list(store)
+            if isinstance(k, str) and k.startswith(_ENTITLEMENT_KEY_PREFIXES)
+        ]:
+            store.pop(key, None)
+
+
+@pytest.fixture(autouse=True)
+def _entitlement_state_is_per_test():
+    """Clear monthly reservations and the cached plan around every test."""
+    _clear_entitlement_keys()
+    try:
+        yield
+    finally:
+        _clear_entitlement_keys()

@@ -159,21 +159,80 @@ class PricingService:
         return context["currency"]
 
     @staticmethod
+    def _major(minor: int, currency: str) -> float:
+        """Minor units → major units for a currency. ``49900`` INR → ``499.0``."""
+        decimals = FXService.get_currency_decimals(currency)
+        return (minor / (10 ** decimals)) if decimals > 0 else float(minor)
+
+    @staticmethod
     async def get_localized_plans(
         pricing_context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """
-        Generate complete localized plan payload from canonical SubscriptionEngine base prices.
+        """The plan catalogue, localized, with both billing intervals.
+
+        PUBLISHED PRICES, NOT CONVERTED ONES
+        ------------------------------------
+        This used to run the USD figure through ``FXService.localize_price`` for every currency,
+        including the ones the catalogue publishes a committed price for. The result was that
+        ``GET /api/billing/plans`` answered roughly ₹865 for the plan whose published price is
+        ₹999 — so the marketing page (which hardcoded the published figure precisely because this
+        endpoint disagreed with it) and the billing page showed two different prices for the same
+        plan, and the figure moved with the exchange rate.
+
+        :meth:`FXService.localize_plan_price` fixes that at the root: a currency the catalogue
+        publishes is quoted and charged verbatim, and only a currency it does not publish is
+        converted. Each plan carries ``price_source`` so a client can state which it is looking at.
+
+        BOTH INTERVALS, IN ONE PAYLOAD
+        ------------------------------
+        ``monthly`` and ``annual`` are priced side by side rather than behind a query parameter, so
+        a monthly/annual toggle is a client-side render of two figures the server already sent
+        rather than a second request that could arrive with a different exchange rate than the
+        first. ``annual`` is ``None`` for a plan with no published annual price (Free, and the
+        custom tier), which is what stops a client inventing one by multiplying.
         """
         currency = pricing_context["currency"]
         plans = SubscriptionEngine.get_all_plans()
         frontend_plans = []
 
         for plan in plans:
-            # Base USD price in whole dollars (pricing["USD"] is in cents: 0, 500, 1000, 2500)
             base_usd = plan.pricing.get("USD", 0) / 100.0
+            localized_calc = await FXService.localize_plan_price(plan.pricing, currency, base_usd)
 
-            localized_calc = await FXService.localize_price(base_usd, currency)
+            annual_payload = None
+            if plan.pricing_annual and plan.pricing_annual.get("USD", 0) > 0:
+                annual_base_usd = plan.pricing_annual.get("USD", 0) / 100.0
+                annual_calc = await FXService.localize_plan_price(
+                    plan.pricing_annual, currency, annual_base_usd
+                )
+                monthly_equivalent = annual_calc.minor_units / 12 if annual_calc.minor_units else 0
+                annual_payload = {
+                    "localized_price": annual_calc.localized_price,
+                    "minor_units": annual_calc.minor_units,
+                    "checkout_price": PricingService._major(
+                        annual_calc.checkout_amount_minor, annual_calc.checkout_currency
+                    ),
+                    "checkout_currency": annual_calc.checkout_currency,
+                    "checkout_provider": annual_calc.checkout_provider,
+                    "price_source": annual_calc.price_source,
+                    # The per-month figure an annual plan works out to, rounded to the currency's
+                    # own precision. Sent by the server so a monthly/annual toggle does not have to
+                    # divide — a client dividing would round differently from the charge.
+                    "monthly_equivalent": round(
+                        PricingService._major(round(monthly_equivalent), currency),
+                        FXService.get_currency_decimals(currency),
+                    ),
+                    # Whole percent saved against twelve months at the monthly rate. `None` rather
+                    # than 0 when the monthly price is unknown, so no discount is ever implied.
+                    "savings_percent": (
+                        round(
+                            100
+                            - (annual_calc.minor_units * 100) / (localized_calc.minor_units * 12)
+                        )
+                        if localized_calc.minor_units
+                        else None
+                    ),
+                }
 
             frontend_plans.append({
                 "id": plan.id,
@@ -181,6 +240,17 @@ class PricingService:
                 "description": plan.description,
                 "features": plan.features,
                 "quotas": plan.quotas,
+                # ── The ladder, so a client renders the journey without a local plan table ──
+                "tier": plan.tier,
+                "journey": plan.journey,
+                "tagline": plan.tagline,
+                "badge": plan.badge,
+                "cta_label": plan.cta_label,
+                "cta_secondary": plan.cta_secondary,
+                "rank": plan.rank,
+                "upgrade_to": plan.upgrade_to,
+                "is_custom_priced": plan.is_custom_priced,
+                "creator_revenue_share_percent": plan.creator_revenue_share_percent,
                 "base_price": base_usd,
                 "base_currency": "USD",
                 "localized_price": localized_calc.localized_price,
@@ -188,12 +258,18 @@ class PricingService:
                 "currency_symbol": localized_calc.currency_symbol,
                 "decimals": localized_calc.decimals,
                 "minor_units": localized_calc.minor_units,
-                "checkout_price": localized_calc.checkout_amount_minor / (10 ** FXService.get_currency_decimals(localized_calc.checkout_currency)) if FXService.get_currency_decimals(localized_calc.checkout_currency) > 0 else localized_calc.checkout_amount_minor,
+                "price_source": localized_calc.price_source,
+                "checkout_price": PricingService._major(
+                    localized_calc.checkout_amount_minor, localized_calc.checkout_currency
+                ),
                 "checkout_currency": localized_calc.checkout_currency,
                 "checkout_currency_symbol": FXService.get_currency_symbol(localized_calc.checkout_currency),
                 "checkout_provider": localized_calc.checkout_provider,
                 "is_direct_checkout": localized_calc.is_direct_checkout,
-                "recommended": (plan.id == "pro"),
+                "annual": annual_payload,
+                # The catalogue's own badge decides this, rather than a hardcoded plan id. The
+                # previous `plan.id == "pro"` was a second place the ladder was encoded.
+                "recommended": plan.badge == "MOST POPULAR",
             })
 
         return {

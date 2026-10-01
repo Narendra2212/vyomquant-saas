@@ -172,7 +172,31 @@ def _background_sb():
 
 from backend_app.core.subscription_engine import Plan, SubscriptionEngine
 
-VALID_ITEM_KEYS = {Plan.FREE.value, Plan.STARTER.value, Plan.PRO.value, Plan.ENTERPRISE.value, "ml_addon"}
+#: Every ``item_key`` ``_apply_billing_entitlement`` will write to ``profiles.subscription_tier``.
+#:
+#: Derived from the ``Plan`` enum rather than listed by hand: this set is the gate a PAID webhook
+#: passes through, so a plan that exists in the catalogue but is missing here would take a
+#: customer's money and then refuse to grant them anything (the handler raises 400 and the webhook
+#: is retried into the same 400). Deriving it makes that failure mode unreachable.
+#:
+#: ``scale`` is included because an Enterprise agreement is applied by an operator through the same
+#: entitlement path; what it cannot do is go through self-serve CHECKOUT, which
+#: ``create_checkout_session`` refuses separately since the tier has no published price.
+VALID_ITEM_KEYS = {plan.value for plan in Plan} | {"ml_addon"}
+
+
+def _plan_display_name(item_key: str) -> str:
+    """The plan's customer-facing name, for a gateway line item and a notification.
+
+    The gateway's own description is what a trader reads on a bank statement and in a Razorpay
+    receipt, so it must say "Business", not "ENTERPRISE" — the stored id and the display name
+    diverge deliberately (see ``core.subscription_engine``) and ``item_key.upper()`` would print
+    the wrong one of the two.
+    """
+    if item_key == "ml_addon":
+        return "ML Add-on"
+    config = SubscriptionEngine.get_plan_config(item_key)
+    return config.name if config else item_key.upper()
 
 # The item_key prefix that marks a marketplace Subscription payment, written once. The dispatch in
 # _apply_billing_entitlement keeps its literal spelling deliberately: design.md and
@@ -990,16 +1014,57 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
     except Exception as e:
         logger.warning(f"Failed to get previous plan for user {user_id}: {e}")
     
+    # The billing cycle the payment was for, as recorded on the gateway metadata by
+    # `create_checkout_session`. Absent on every payment made before annual billing existed, and
+    # absent is NOT the same as monthly — so the column is only written when the metadata actually
+    # carries a value, leaving historic rows untouched rather than asserting a cycle for them.
+    billing_interval = None
+    if isinstance(metadata, dict):
+        candidate = metadata.get("interval")
+        if isinstance(candidate, str) and candidate.strip().lower() in ("month", "year"):
+            billing_interval = candidate.strip().lower()
+
     try:
         sb = _background_sb()
         if item_key == "ml_addon":
             sb.rpc("increment_ml_addon", {"target_user_id": user_id}).execute()
             logger.info(f"ML addon applied atomically for user {user_id}")
         else:
-            sb.table("profiles").update(
-                {"subscription_tier": item_key}
-            ).eq("id", user_id).execute()
-            logger.info(f"Subscription tier updated for user {user_id}: tier={item_key}")
+            # THE TIER IS WRITTEN EVEN IF THE INTERVAL COLUMN DOES NOT EXIST YET.
+            #
+            # This is the most expensive write in the module: it runs AFTER the customer has been
+            # charged, and if it raises, the webhook is retried into the same failure — money
+            # captured, entitlement never granted. `billing_interval` arrives with migration
+            # 017_plan_entitlements.sql, so a deploy that reaches a database which has not run it
+            # would fail this UPDATE on an undefined column and take the tier down with it.
+            #
+            # So the interval is written on a best-effort basis and the TIER is not allowed to
+            # depend on it: on failure the update is retried with the tier alone. A subscriber whose
+            # cycle could not be recorded still gets the plan they paid for, and the skew is logged
+            # with the migration named.
+            update: dict = {"subscription_tier": item_key}
+            if billing_interval:
+                update["billing_interval"] = billing_interval
+            try:
+                sb.table("profiles").update(update).eq("id", user_id).execute()
+            except Exception as interval_err:
+                if "billing_interval" not in update:
+                    raise
+                logger.warning(
+                    "Profile update carrying billing_interval failed for %s (%s); retrying with "
+                    "the subscription tier alone. Apply migration "
+                    "017_plan_entitlements.sql to record the billing cycle.",
+                    user_id,
+                    interval_err,
+                )
+                billing_interval = None
+                sb.table("profiles").update(
+                    {"subscription_tier": item_key}
+                ).eq("id", user_id).execute()
+            logger.info(
+                f"Subscription tier updated for user {user_id}: tier={item_key} "
+                f"interval={billing_interval or 'unchanged'}"
+            )
 
     except Exception as e:
         logger.error(f"Failed to update Supabase profile for user {user_id}: {e}")
@@ -1007,6 +1072,19 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
 
     # Invalidate profile cache so the new tier takes effect immediately (FIX N4)
     await invalidate_profile_cache(user_id)
+
+    # And the entitlement layer's own short-lived plan cache, for the same reason. Without this a
+    # paid upgrade could be invisible to the gates for up to `_PLAN_CACHE_TTL` seconds — the trader
+    # pays, the page shows the new plan, and the next create-strategy request is still refused
+    # against the old limit. Both caches are dropped here because they are read by different
+    # layers and neither can invalidate the other.
+    try:
+        from backend_app.core.subscription_dependencies import invalidate_plan_cache
+        await invalidate_plan_cache(user_id)
+        from backend_app.core.cache.redis_manager import redis_manager as _rm
+        await _rm.delete(f"billing:entitlements:{user_id}")
+    except Exception as cache_err:
+        logger.debug(f"[BILLING] Entitlement cache invalidation error: {cache_err}")
     
     # Realtime sync: broadcast to WebSocket
     await RealtimeSync.sync_subscription_change(
@@ -1106,20 +1184,83 @@ async def get_entitlements(
         subscription_status = "active"
         renewal_date = None
         cancel_at_period_end = False
-        try:
-            if supabase:
-                profile_res = supabase.table("profiles").select(
-                    "subscription_status,next_billing_date,cancel_at_period_end"
-                ).eq("id", user["id"]).execute()
+        billing_interval = None
+        # Widest column set first, then the set that predates migration 017. `billing_interval`
+        # arrives with that migration, and PostgREST fails the WHOLE select on an undefined column
+        # — so asking for it against an un-migrated database would lose the subscription status,
+        # the renewal date and the cancellation flag along with it, and this page would report
+        # defaults for all three. Degrading by column keeps the three real fields readable.
+        for _columns in (
+            "subscription_status,next_billing_date,cancel_at_period_end,billing_interval",
+            "subscription_status,next_billing_date,cancel_at_period_end",
+        ):
+            try:
+                if not supabase:
+                    break
+                profile_res = supabase.table("profiles").select(_columns).eq(
+                    "id", user["id"]
+                ).execute()
                 profile_resp = await profile_res if inspect.isawaitable(profile_res) else profile_res
                 if profile_resp and profile_resp.data:
                     row = profile_resp.data[0]
                     subscription_status = row.get("subscription_status") or "active"
                     renewal_date = row.get("next_billing_date")
                     cancel_at_period_end = bool(row.get("cancel_at_period_end", False))
-        except Exception as _profile_err:
-            logger.debug(f"Could not read lifecycle profile fields for {user['id']}: {_profile_err}")
-        
+                    billing_interval = row.get("billing_interval")
+                break
+            except Exception as _profile_err:
+                logger.debug(
+                    f"Could not read lifecycle profile fields for {user['id']} "
+                    f"with columns {_columns!r}: {_profile_err}"
+                )
+
+        from backend_app.core.subscription_engine import (
+            CREATOR_REVENUE_SHARE_PERCENT,
+            METERED_RESOURCES,
+            SubscriptionEngine as _SE,
+            usage_period,
+        )
+        from backend_app.core.subscription_dependencies import (
+            GATEABLE_FEATURES,
+            build_feature_refusal,
+            build_quota_refusal,
+        )
+        plan_config = _SE.get_plan_config(entitlements.plan)
+
+        # ── The refusal copy for everything this account cannot currently do ──
+        #
+        # WHY THE COPY TRAVELS WITH THE ENTITLEMENTS RATHER THAN BEING COMPOSED IN THE BROWSER
+        # -----------------------------------------------------------------------------------
+        # A locked feature panel and an at-capacity prompt need three sentences each: what is
+        # locked, what unlocks it, and what the button says. Composed in the frontend, those
+        # sentences need a local copy of the plan ladder AND of the price list to compose them
+        # from — and a bundle built before a price changed would then quote the old figure in an
+        # upgrade button that charges the new one.
+        #
+        # So the server sends the same `EntitlementRefusal` payloads its 403s carry. The UI renders
+        # them. One price list, and it is the one that takes the payment.
+        #
+        # Both blocks are pure computation over data already in hand (the plan, and the usage
+        # figures collected above), so this costs no extra read.
+        locked_features = {
+            feature: build_feature_refusal(feature, entitlements.plan).as_detail()
+            for feature in GATEABLE_FEATURES
+            if feature not in entitlements.features
+        }
+
+        # Only resources whose MEASURED usage has reached the limit. A resource whose figure could
+        # not be read is absent rather than assumed exhausted — showing an upgrade prompt for
+        # capacity a trader still has would be fabricated scarcity.
+        limit_refusals = {}
+        for _resource, _limit in entitlements.quotas.items():
+            if _SE.is_unlimited(_limit):
+                continue
+            _used = entitlements.usage.get(_resource)
+            if isinstance(_used, int) and _used >= _limit:
+                limit_refusals[_resource] = build_quota_refusal(
+                    _resource, entitlements.plan, _used, _limit
+                ).as_detail()
+
         res_data = {
             "plan": entitlements.plan,
             "features": entitlements.features,
@@ -1128,6 +1269,36 @@ async def get_entitlements(
             "subscription_status": subscription_status,
             "renewal_date": renewal_date,
             "cancel_at_period_end": cancel_at_period_end,
+            # ── The ladder, so no client has to hold a plan table of its own ──
+            "tier": entitlements.tier,
+            "display_name": entitlements.display_name,
+            "billing_interval": billing_interval,
+            "upgrade_to": plan_config.upgrade_to if plan_config else None,
+            "is_custom_priced": bool(plan_config.is_custom_priced) if plan_config else False,
+            "creator_revenue_share_percent": (
+                plan_config.creator_revenue_share_percent if plan_config else 0
+            ),
+            "platform_revenue_share_percent": (
+                (100 - CREATOR_REVENUE_SHARE_PERCENT)
+                if plan_config and plan_config.creator_revenue_share_percent
+                else 0
+            ),
+            # Which figures are a monthly allowance rather than a live count, so a client can
+            # label "342 / 500 this month" correctly instead of implying a lifetime total.
+            "metered_resources": list(METERED_RESOURCES),
+            "usage_period": usage_period(),
+            # Resources whose figure could NOT be read, each with the reason. A client renders the
+            # reason; it must not substitute a zero, because `0 / 10` is a claim and an unread
+            # figure is not one.
+            "usage_unavailable": entitlements.usage_unavailable,
+            # After a downgrade an account can hold more than its plan allows. The data is
+            # preserved and this is how the UI is told to say so.
+            "over_capacity": entitlements.over_capacity,
+            # The server's own refusal copy for every capability this plan lacks, and for every
+            # allowance it has exhausted. Same payloads the 403s carry, so a locked panel and the
+            # eventual refusal say the same words.
+            "locked_features": locked_features,
+            "limit_refusals": limit_refusals,
         }
 
         try:
@@ -1381,26 +1552,61 @@ async def create_checkout_session(
     from backend_app.core.pricing_service import PricingService
 
     item_key = "ml_addon" if body.is_addon else body.tier.value
+    # Normalise a legacy alias (`pro_999`, `basic`, …) to the canonical plan id BEFORE anything
+    # else, so the amount, the gateway metadata and the tier eventually written to
+    # `profiles.subscription_tier` are all the same string. A legacy alias reaching the webhook as
+    # the item_key is how a paid upgrade used to land on a plan whose price was never quoted.
+    if not body.is_addon:
+        item_key = SubscriptionEngine.migrate_plan_key(item_key)
+
+    interval = body.interval.value if hasattr(body.interval, "value") else str(body.interval)
+    is_annual = interval == "year"
 
     # Step 1: Resolve currency from body or user context
     requested_currency = (body.currency or "USD").strip().upper()
 
-    # Step 2: Resolve base USD price from canonical SubscriptionEngine
+    # Step 2: Resolve the published price for the requested plan and interval.
     if body.is_addon:
         base_usd = 3.00  # $3.00 USD for ML Addon
+        published = {"USD": 300}
+        if is_annual:
+            # The addon is a one-off purchase, not a subscription, so there is no annual form of
+            # it. Refused rather than silently billed as monthly.
+            raise HTTPException(400, "The ML addon is a one-time purchase and has no annual price.")
     else:
         plan_config = SubscriptionEngine.get_plan_config(item_key)
         if not plan_config:
             raise HTTPException(400, f"Invalid subscription tier: {item_key}")
-        # Pricing in SubscriptionEngine is stored in cents/paise
-        base_usd = plan_config.pricing.get("USD", 0) / 100.0
+
+        if plan_config.is_custom_priced:
+            # The custom tier is quoted, not listed. Refusing here with its own message beats
+            # falling through to "Cannot checkout for free tier", which names the wrong reason.
+            raise HTTPException(
+                400,
+                {
+                    "error": "PLAN_REQUIRES_SALES_CONTACT",
+                    "message": (
+                        f"{plan_config.name} is priced per agreement and cannot be purchased "
+                        f"self-serve. Contact sales to arrange it."
+                    ),
+                },
+            )
+
+        published = dict(plan_config.pricing_annual if is_annual else plan_config.pricing)
+        base_usd = published.get("USD", 0) / 100.0
 
     # Free plan cannot be checked out
     if base_usd <= 0 and not body.is_addon:
         raise HTTPException(400, "Cannot checkout for free tier.")
 
-    # Step 3: Server-Authoritative FX Localization & Minor Unit Calculation
-    localized = await FXService.localize_price(base_usd, requested_currency)
+    # Step 3: Server-Authoritative price resolution & minor-unit calculation.
+    #
+    # `localize_plan_price` charges the PUBLISHED figure for a currency the catalogue publishes
+    # (₹499 is charged as 49900 paise, not as an FX conversion of $5) and converts only for a
+    # currency it does not. Before this, the rupee amount the gateway was asked for was an
+    # exchange-rate conversion of the dollar price and so disagreed with the published price list
+    # — a trader saw ₹999 advertised and a different number in Razorpay Checkout.
+    localized = await FXService.localize_plan_price(published, requested_currency, base_usd)
     checkout_currency = localized.checkout_currency
     provider = localized.checkout_provider
     amount = localized.checkout_amount_minor
@@ -1433,12 +1639,15 @@ async def create_checkout_session(
                         "price_data": {
                             "currency": checkout_currency.lower(),
                             "product_data": {
-                                "name": f"Aerora Dynamics — {item_key.upper()}"
+                                "name": f"VyomQuant — {_plan_display_name(item_key)}"
                             },
                             "unit_amount": amount,
-                            # Add recurring interval for subscription mode
+                            # The recurring interval is the one the request asked for. It used to
+                            # be hardcoded `"month"`, which is why there was no annual plan: an
+                            # annual AMOUNT with a monthly interval would have billed the yearly
+                            # price every month.
                             **({
-                                "recurring": {"interval": "month"}
+                                "recurring": {"interval": interval}
                             } if not body.is_addon else {}),
                         },
                         "quantity": 1,
@@ -1458,6 +1667,8 @@ async def create_checkout_session(
                     "item_key": item_key,
                     "currency": checkout_currency,
                     "fx_rate": str(localized.fx_rate),
+                    "price_source": localized.price_source,
+                    "interval": interval,
                     "discount_applied": "true" if discount_applied else "false",
                 },
             }
@@ -1470,6 +1681,8 @@ async def create_checkout_session(
                         "item_key": item_key,
                         "currency": checkout_currency,
                         "fx_rate": str(localized.fx_rate),
+                        "price_source": localized.price_source,
+                        "interval": interval,
                         "discount_applied": "true" if discount_applied else "false",
                     }
                 }
@@ -1480,6 +1693,8 @@ async def create_checkout_session(
                 "provider": "stripe",
                 "currency": checkout_currency,
                 "amount": amount,
+                "interval": interval,
+                "price_source": localized.price_source,
             }
 
         elif provider == "razorpay":
@@ -1510,6 +1725,8 @@ async def create_checkout_session(
                         "item": item_key,
                         "currency": "INR",
                         "fx_rate": str(localized.fx_rate),
+                        "price_source": localized.price_source,
+                        "interval": interval,
                         "discount_applied": "true" if discount_applied else "false"
                     },
                 }
@@ -1519,7 +1736,10 @@ async def create_checkout_session(
                     "amount": amount,
                     "currency": "INR",
                     "reference_id": order["id"],
-                    "description": f"Aerora Dynamics - {item_key.upper()}",
+                    "description": (
+                        f"VyomQuant - {_plan_display_name(item_key)}"
+                        f" ({'Annual' if is_annual else 'Monthly'})"
+                    ),
                     "customer": {
                         # Fallback only reached when the user record carries no email. Razorpay
                         # requires a syntactically valid address; this one is on a domain we own.
@@ -1530,6 +1750,8 @@ async def create_checkout_session(
                         "item": item_key,
                         "currency": "INR",
                         "fx_rate": str(localized.fx_rate),
+                        "price_source": localized.price_source,
+                        "interval": interval,
                         "discount_applied": "true" if discount_applied else "false"
                     },
                     "callback_url": f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/app/billing?payment=success",
@@ -1566,6 +1788,8 @@ async def create_checkout_session(
                 "provider": "razorpay",
                 "currency": "INR",
                 "amount": amount,
+                "interval": interval,
+                "price_source": localized.price_source,
             }
         else:
             raise HTTPException(500, f"Unsupported payment provider for currency: {checkout_currency}")

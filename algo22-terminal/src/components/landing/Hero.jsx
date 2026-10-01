@@ -93,6 +93,35 @@ const REASSURANCES = [
   'Cancel any time',
 ]
 
+/**
+ * The three ways a trader uses VyomQuant.
+ *
+ * Stated on the first screen because the product is three things and a hero that names only the
+ * builder sells a third of it. Each line is a capability that exists: the builder and backtester
+ * (`backend_app/backend/strategy_dag/`, `backtesting_engine.py`), the public marketplace
+ * (`routers/library.py`, the unauthenticated `/marketplace` route) and creator settlement
+ * (`backend/marketplace/settlement_service.py` writing `marketplace_settlements` with the 90/10
+ * split from `marketplace/money.py`).
+ *
+ * EARN is qualified on the spot. Publishing is a Pro Quant and Business capability, and a visitor
+ * reading "earn from it" on the first screen is owed that fact before they pick a plan rather than
+ * after they have bought one.
+ */
+const PATHS = [
+  {
+    label: 'Build',
+    body: 'Create your own systematic strategy on a visual canvas.',
+  },
+  {
+    label: 'Discover',
+    body: 'Subscribe to strategies published by other VyomQuant traders.',
+  },
+  {
+    label: 'Earn',
+    body: 'Publish your own and keep 90% of marketplace revenue. Pro Quant and Business.',
+  },
+]
+
 export default function Hero() {
   return (
     <section
@@ -119,15 +148,13 @@ export default function Hero() {
             </span>
 
             <h1 className="text-4xl font-black leading-[1.05] tracking-tight text-content-primary sm:text-5xl lg:text-6xl">
-              Build crypto trading bots
-              <br className="hidden sm:block" />{' '}
-              <span className="text-gradient-cyan">without writing code</span>
+              Build It. Trade It.{' '}
+              <span className="text-gradient-cyan">Earn From It.</span>
             </h1>
 
             <p className="mt-6 max-w-2xl text-lg leading-relaxed text-content-secondary sm:text-xl">
-              Design a strategy on a visual canvas, backtest it on real historical data, then
-              stress-test it with Monte Carlo and walk-forward passes before a single rupee is at
-              stake.
+              Build your own systematic trading strategies, automate them, or discover and
+              subscribe to strategies created by other traders.
             </p>
 
             {/* ONE primary action. The secondary is a read-only route that needs no account,
@@ -137,7 +164,7 @@ export default function Hero() {
                 to="/signup"
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand px-8 py-4 text-base font-bold text-content-inverse shadow-raised transition-colors duration-150 hover:bg-brand-hover sm:w-auto"
               >
-                Start free — no card required
+                Build Your First Strategy Free
                 <ArrowRight className="h-4 w-4" />
               </Link>
               <Link
@@ -145,9 +172,25 @@ export default function Hero() {
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-line-strong bg-surface-raised px-6 py-4 text-base font-semibold text-content-primary transition-colors duration-150 hover:border-brand/40 hover:bg-surface-inset sm:w-auto"
               >
                 <Store className="h-4 w-4 text-brand" />
-                Browse strategies
+                Explore Strategy Marketplace
               </Link>
             </div>
+
+            {/* The three product paths. Equal weight, because they are three entry points rather
+                than one funnel with two detours. */}
+            <ul className="mt-12 grid w-full gap-4 text-left sm:grid-cols-3">
+              {PATHS.map(({ label, body }) => (
+                <li
+                  key={label}
+                  className="rounded-xl border border-line-default bg-surface-panel/60 p-4"
+                >
+                  <p className="font-mono text-xs font-bold uppercase tracking-[0.16em] text-brand">
+                    {label}
+                  </p>
+                  <p className="mt-1.5 text-body leading-relaxed text-content-secondary">{body}</p>
+                </li>
+              ))}
+            </ul>
 
             <ul className="mt-8 flex flex-wrap items-center justify-center gap-x-7 gap-y-2.5">
               {REASSURANCES.map((item) => (

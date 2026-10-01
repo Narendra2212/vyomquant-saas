@@ -1,4 +1,5 @@
 {
+  "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. POST /api/exchange/keys gained ONE additive parameter, `supabase=Depends(get_request_supabase)`, and lost none. The handler needs a request-scoped persistence client to count the caller's existing exchange connections against their plan's limit (Free 1, Trader 2, Pro Quant 5, Business 8). The gate distinguishes a NEW connection from a key ROTATION \u2014 `exchange_keys` holds one row per (user, venue) \u2014 so an account at its limit can still replace credentials for a venue it already holds, which is a security-relevant operation a plan limit must not obstruct. No request body field, response field or credential-handling behaviour changed.",
   "api_call_count": 8,
   "api_calls": [
     {
@@ -47,8 +48,6 @@
       "handler_count": 2,
       "handlers": [
         {
-          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` - one refusal ADDED, nothing removed and nothing re-statused. Requirements 17.2 and 28.3, the same pair `PAPER_READ_FAILED` (routers/paper_trading.py) and `MARKETPLACE_READ_FAILED` (backend/marketplace/entitlement_resolver.py) already cite for the same rule. `list_exchanges` selected `exchange_id, updated_at` from `public.exchange_keys`, a column production does not have - the live table carries exactly user_id, exchange_id, encrypted_api_key, encrypted_secret_key, encrypted_password, created_at - so PostgreSQL answered 42703 column exchange_keys.updated_at does not exist on every call, four times in a twelve-hour CloudWatch window. The handler then ran except Exception: keys = [], turning each of those failures into an empty array. An empty array is a statement about the ACCOUNT (there are no exchange credentials stored) and a read that did not complete establishes nothing of the kind, so a trader holding credentials was told they had none and no error surfaced anywhere. The read now answers 503 EXCHANGE_CONNECTIONS_READ_FAILED. The added entry is a REFUSAL being added, not an admission, and no recorded parameter, decorator or success status moved.",
-          "_baseline_note_returns": "AUTHORISED RE-RECORD of `returns` - the bare `list` entry is REMOVED because the code path that produced it no longer exists, not because a success shape narrowed. That entry was the except Exception: keys = [] fallback returning a plain list; the refusal that replaces it is recorded in `_baseline_note_raises` on this same handler. Requirements 17.2, 28.3. The surviving `computed` entry is the UNCHANGED success return - the connections array a completed read produces. Also part of this change: `last_sync` is gone from each connection object, because a credential row creation time is not a synchronisation time and nothing in this system records when a venue was last synchronised. `connected_at` is now created_at, which it answers faithfully.",
           "decorators": [
             "router.get('')",
             "router.get('/')"
@@ -88,8 +87,6 @@
           "route_path": "/api/exchanges"
         },
         {
-          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` - one refusal ADDED, nothing removed and nothing re-statused. Requirements 17.2 and 28.3, the same pair `PAPER_READ_FAILED` (routers/paper_trading.py) and `MARKETPLACE_READ_FAILED` (backend/marketplace/entitlement_resolver.py) already cite for the same rule. `list_exchanges` selected `exchange_id, updated_at` from `public.exchange_keys`, a column production does not have - the live table carries exactly user_id, exchange_id, encrypted_api_key, encrypted_secret_key, encrypted_password, created_at - so PostgreSQL answered 42703 column exchange_keys.updated_at does not exist on every call, four times in a twelve-hour CloudWatch window. The handler then ran except Exception: keys = [], turning each of those failures into an empty array. An empty array is a statement about the ACCOUNT (there are no exchange credentials stored) and a read that did not complete establishes nothing of the kind, so a trader holding credentials was told they had none and no error surfaced anywhere. The read now answers 503 EXCHANGE_CONNECTIONS_READ_FAILED. The added entry is a REFUSAL being added, not an admission, and no recorded parameter, decorator or success status moved.",
-          "_baseline_note_returns": "AUTHORISED RE-RECORD of `returns` - the bare `list` entry is REMOVED because the code path that produced it no longer exists, not because a success shape narrowed. That entry was the except Exception: keys = [] fallback returning a plain list; the refusal that replaces it is recorded in `_baseline_note_raises` on this same handler. Requirements 17.2, 28.3. The surviving `computed` entry is the UNCHANGED success return - the connections array a completed read produces. Also part of this change: `last_sync` is gone from each connection object, because a credential row creation time is not a synchronisation time and nothing in this system records when a venue was last synchronised. `connected_at` is now created_at, which it answers faithfully.",
           "decorators": [
             "router.get('')",
             "router.get('/')"
@@ -262,6 +259,10 @@
             "redis_manager": {
               "annotation": "_empty",
               "depends_on": "get_redis_manager"
+            },
+            "supabase": {
+              "annotation": "Any",
+              "depends_on": "get_request_supabase"
             },
             "user": {
               "annotation": "dict",

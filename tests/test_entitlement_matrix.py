@@ -546,7 +546,21 @@ def _clone(store: EntitlementRowStore, monkeypatch: pytest.MonkeyPatch) -> Any:
             _FakeRequest(),
             LISTING_ID,
             user={"id": CALLER_ID},
-            _feature=None,
+            # `_strategy_quota`, where this used to pass `_feature=None`.
+            #
+            # The handler's gates changed with the plan ladder. `_feature` was
+            # `Depends(require_marketplace_access)`, and that capability was split: browsing is now
+            # open to every plan, so the old gate asserts nothing and is gone rather than kept as a
+            # no-op. What replaced it is `_strategy_quota=Depends(check_strategy_quota)`, which
+            # closes a real bypass — a clone writes a `strategies` row the caller owns, so an
+            # account at its strategy capacity could otherwise keep adding strategies by cloning
+            # them out of the marketplace instead of building them.
+            #
+            # Satisfied here, exactly as `_feature` was, because this file's subject is the
+            # MARKETPLACE-SUBSCRIPTION state matrix: which wire code each of the nine subscription
+            # states produces. Plan capacity is a different axis and is asserted in
+            # `tests/test_pricing_ladder.py` and `tests/test_saas_entitlements_gating_audit.py`.
+            _strategy_quota=True,
         )
     )
 

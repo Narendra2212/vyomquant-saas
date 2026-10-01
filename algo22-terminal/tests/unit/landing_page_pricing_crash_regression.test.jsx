@@ -1,76 +1,56 @@
 /**
- * tests/unit/landing_page_pricing_crash_regression.test.jsx — the INR tier contract, and
- * retail-ui-simplification tasks 10.1 and 10.3.
+ * tests/unit/landing_page_pricing_crash_regression.test.jsx — the INR plan contract.
  *
- * Requirements 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 15.5, 18.1.
+ * WHAT THIS FILE GUARDS
+ * ---------------------
+ * The published price list, asserted against the rendered landing section. It began as a
+ * `toLocaleString` crash regression suite — the section formatted whatever
+ * `GET /api/billing/plans` returned and a null price threw on format — and the figures are now
+ * declared in the component, so what is guarded is the contract that replaced the crash: five
+ * plans, rupees only, published annual figures, and arithmetic that still cannot throw.
  *
- * WHY THIS FILE CARRIES A REPRODUCTION RECORD
- * ------------------------------------------
- * It is the only test that mounts the live landing tree end-to-end, so Requirement 13's
- * reproduction ran through it first. The record is kept here the way every guard under
- * `tests/unit/guards/` keeps its measurement history in its own header. The full three-outcome
- * recording, the outstanding question and the one filed content finding are in
- * `tests/unit/landing/landingSections.test.jsx`'s header; this is the half that was measured
- * here.
+ * WHAT CHANGED WITH THE FIVE-PLAN LADDER, AND WHY EVERY MOVED ASSERTION MOVED
+ * -------------------------------------------------------------------------
+ * This file previously pinned FOUR tiers — `Free / Sandbox`, `Trader`, `Pro Quant`,
+ * `Institutional` — under the heading `Infrastructure Tiers`, with a `Recommended` chip and an
+ * annual toggle that applied a 20% reduction computed in the browser. Six of those facts are now
+ * different, and none of the changes is cosmetic:
  *
- * **Nothing below changed when this header was written.** Eleven `it` blocks, the same eleven
- * commit 62c1e0e left green. A recording that altered an assertion would not be a recording.
+ *   1. **Five plans, not four.** `Business` replaces `Institutional` as the DISPLAY name of the
+ *      same ₹2,499 plan (the stored identifier `enterprise` is untouched — see
+ *      `backend_app/core/subscription_engine.py`), and a fifth, custom-priced `Enterprise` plan is
+ *      added above it. So the card count is 5 and the `/month` count is 4: a quoted plan has no
+ *      monthly figure to label.
+ *   2. **`Most Popular`, not `Recommended`.** The badge comes from the catalogue's `badge` field.
+ *   3. **The annual figures are PUBLISHED, not derived.** The old toggle rendered
+ *      `monthly × 12 × 0.8`, which produced ₹4,790 for a plan whose published annual price is
+ *      ₹4,990 — the page quoted a number no checkout would charge. The toggle now renders the
+ *      published yearly figure and divides it for the per-month equivalent, so ₹4,990 / 12 = ₹416
+ *      and the saving works out at 17% (ten months for twelve) rather than a declared 20%.
+ *   4. **A capacity table exists**, and the Enterprise column reads `Custom` rather than
+ *      `Unlimited`. The backend enforces the Business figure for an Enterprise account with no
+ *      contracted capacity recorded, so "Unlimited" would be a promise it does not keep.
+ *   5. **Two new anchors** — `#workflow-full` and `#creators` — are scroll targets the page now
+ *      renders. A missing id is a navigation control that silently does nothing, which is why the
+ *      anchor set is asserted rather than sampled.
+ *   6. **`api.billing.getPlans` is still never called**, and that assertion is now stronger than
+ *      it was. It used to hold because the endpoint DISAGREED with the published list
+ *      (`PricingService` FX-converted the USD base, so ₹999 came back as ~₹865). That defect is
+ *      fixed at the root — `FXService.localize_plan_price` charges the published figure — so the
+ *      endpoint and this component now agree. The call stays absent because a public price list
+ *      should not acquire a loading state or a network dependency, not because the server is wrong.
  *
- * WHAT WAS MEASURED HERE (task 10.1, commit 62c1e0e — outcome 1 of three)
- * ---------------------------------------------------------------------
- * `renders entire LandingPage end-to-end without crashing` held three assertions that could not
- * fail: `expect(container.querySelector('#pricing')).toBeDefined()` and the same for
- * `#architecture` and `#waitlist`. **`null` is defined**, so all three passed whether or not the
- * anchor existed, and a silently absent in-page anchor is one of Requirement 13.3's five
- * candidate symptoms. All three are `not.toBeNull()` now — one line each, and the repaired form
- * was proved to have teeth with a throwaway probe against an anchor that does not exist, which
- * the old form passed and the new form failed.
+ * THE RECORD THIS FILE USED TO CARRY
+ * ----------------------------------
+ * The task 10.1 reproduction record (three outcomes, the refuted `src/pages/Landing.jsx`
+ * hypothesis, and the settled `AES-256`-on-a-Fernet-vault content finding) is preserved in
+ * `tests/unit/landing/landingSections.test.jsx`'s header, which is where the other two outcomes
+ * were already filed. It is not repeated here because none of it concerns the price list, and a
+ * reproduction record attached to the wrong subject is a record nobody finds.
  *
- * The measurement, after the repair: **all three anchors are present**, the tree mounts without
- * throwing, and `Infrastructure Tiers` resolves. Task 10.2 then checked the five `Navbar` scroll
- * targets — `#platform`, `#architecture`, `#security`, `#pricing`, `#faq` — and every one
- * resolves to a section the page renders, which matters because `scrollToSection` is
- * `if (el) el.scrollIntoView(…)` and a missing target is a click that does nothing, in silence.
- * **A render failure and a navigation failure are both ruled out in jsdom**, and Requirement
- * 13.3's five candidates drop to three: a layout fault at a specific viewport, a missing or 403
- * asset, and incorrect content. None of the three is observable in jsdom.
- *
- * THE HALF OF THE STANDING HYPOTHESIS THIS FILE SETTLES (§8.3 — outcome 3 of three)
- * -------------------------------------------------------------------------------
- * §1.11 records the requester's recollection that the INR-only pricing conversion was made
- * against `src/pages/Landing.jsx`, which is routed nowhere. It was not.
- * `git log --oneline -- algo22-terminal/src/components/landing/` puts that work at `55382cb`
- * (2026-09-21) on the **live** directory, and that commit does not appear in the log for
- * `src/pages/Landing.jsx` at all. This file is the independent confirmation: what it asserts
- * below is the live `components/landing/Pricing.jsx`, INR-only, four tiers, no toggle. **That
- * half of the hypothesis is refuted — the pricing work reached the visitor.**
- *
- * The other half is confirmed: `0ecf86a` (2026-09-20) added the six missing imports to
- * `src/pages/Landing.jsx` and touched nothing under `src/components/landing/`, so that fix
- * landed in the dead file and changed nothing a visitor sees. The full log output and the diff
- * evidence are in `landingSections.test.jsx`'s header. It explains why a fix had no effect; it
- * says nothing about what the original symptom is.
- *
- * WHAT IS OUTSTANDING, AND WHAT IS NOT A DEFECT
- * --------------------------------------------
- * The question put to the requester is recorded in `landingSections.test.jsx`'s header, together
- * with §8.2's steps 4 and 5 — the deployed bundle's asset paths and a real viewport sweep — which
- * are blocked on the answer and invisible to every test here. **No symptom reproduced**
- * (Requirement 13.5), and that is the result rather than a blocker: no defect list was invented,
- * and the one concrete content finding (`SecuritySection`'s `AES-256` claim against a Fernet
- * vault) is filed under Requirement 13.6 in the other file and has since been **fixed**, by the
- * `fix(landing): stop advertising AES-256 on a Fernet vault` commit, which withdrew the claim from
- * `SecuritySection.jsx`, `FAQ.jsx` and `components/legal/LegalPage.jsx` and left the backend
- * docblocks out of scope. Nothing in this file asserted that copy, so no assertion here moved.
- *
- * WHAT MUST NOT BE LOST FROM THIS FILE
- * -----------------------------------
- * The INR contract below, which exists because this was a real crash once: the section formatted
- * whatever `GET /api/billing/plans` returned and a null price threw on `toLocaleString`. Four
- * tiers at ₹0/₹499/₹999/₹2,499, four `.card-surface` cards under `#pricing`, `Recommended` on Pro
- * Quant, no currency selector, `api.billing.getPlans` never called, and annual arithmetic that
- * cannot throw. Requirement 15.5 records the INR-only state so a token migration cannot
- * reintroduce a toggle by reverting a file.
+ * `tests/test_pricing_ladder.py` asserts the SAME figures against the backend catalogue, from an
+ * independent transcription of the published table. The two files are the reason the marketing
+ * page and the thing that takes the payment cannot drift apart without a test failing.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -81,18 +61,7 @@ import LandingPage from '../../src/components/landing/LandingPage';
 import Pricing from '../../src/components/landing/Pricing';
 import { api } from '../../src/api';
 
-/**
- * Landing pricing is INR-only and states four published tiers.
- *
- * This file began as a `toLocaleString` crash regression suite, when the section
- * rendered whatever `GET /api/billing/plans` returned and a null price threw on
- * format. The prices are now declared in the component (see the header comment
- * in `Pricing.jsx`: the endpoint FX-converts the USD base and therefore does not
- * serve the catalogue's INR column), so the crash surface is gone along with the
- * fetch. What is asserted instead is the contract that replaced it — four tiers,
- * rupees only, and arithmetic that still cannot throw.
- */
-describe('Landing Page & Pricing — INR-only tier contract', () => {
+describe('Landing Page & Pricing — INR-only plan contract', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -104,31 +73,66 @@ describe('Landing Page & Pricing — INR-only tier contract', () => {
       </MemoryRouter>
     );
 
-  describe('The four published tiers', () => {
-    it('quotes ₹0, ₹499, ₹999 and ₹2,499 per month', () => {
+  describe('The five published plans', () => {
+    it('quotes ₹0, ₹499, ₹999 and ₹2,499 per month, and Custom for Enterprise', () => {
       renderPricing();
 
-      expect(screen.getByText('Infrastructure Tiers')).toBeDefined();
+      expect(screen.getByText('Start Small. Scale When You Need To.')).toBeDefined();
       expect(screen.getByText('₹0')).toBeDefined();
       expect(screen.getByText('₹499')).toBeDefined();
       expect(screen.getByText('₹999')).toBeDefined();
       expect(screen.getByText('₹2,499')).toBeDefined();
+
+      // The quoted plan shows a word, not a figure. `getAllByText` because the capacity table's
+      // Enterprise column reads `Custom` on every row too.
+      expect(screen.getAllByText('Custom').length).toBeGreaterThan(0);
     });
 
-    it('renders exactly four tier cards, one per published plan', () => {
+    it('renders exactly five plan cards, one per published plan', () => {
       const { container } = renderPricing();
 
-      const names = ['Free / Sandbox', 'Trader', 'Pro Quant', 'Institutional'];
-      names.forEach((name) => expect(screen.getByText(name)).toBeDefined());
+      // `data-plan` is the card's own identity attribute, so the count is independent of copy.
+      expect(container.querySelectorAll('#pricing [data-plan]')).toHaveLength(5);
 
-      // One `/month` label per card is the card count, independent of copy.
-      expect(container.querySelectorAll('#pricing .card-surface')).toHaveLength(4);
+      for (const id of ['free', 'starter', 'pro', 'enterprise', 'scale']) {
+        expect(
+          container.querySelector(`[data-plan="${id}"]`),
+          `the ${id} card is missing`,
+        ).not.toBeNull();
+      }
+    });
+
+    it('labels each card with its tier key, so the stored id and the ladder stay linked', () => {
+      const { container } = renderPricing();
+
+      // `enterprise` is the BUSINESS tier. This is the assertion that fails if someone "tidies"
+      // the identifier to match the display name and silently re-points live subscribers.
+      expect(container.querySelector('[data-plan="enterprise"]').dataset.planTier).toBe('BUSINESS');
+      expect(container.querySelector('[data-plan="scale"]').dataset.planTier).toBe('ENTERPRISE');
+      expect(container.querySelector('[data-plan="starter"]').dataset.planTier).toBe('TRADER');
+      expect(container.querySelector('[data-plan="pro"]').dataset.planTier).toBe('PRO_QUANT');
+    });
+
+    it('shows four monthly figures — the quoted plan has none to label', () => {
+      renderPricing();
       expect(screen.getAllByText('/month')).toHaveLength(4);
     });
 
-    it('marks Pro Quant as the recommended tier', () => {
+    it('marks Pro Quant as the most popular plan', () => {
+      const { container } = renderPricing();
+
+      expect(screen.getByText('Most Popular')).toBeDefined();
+      // On the Pro Quant card specifically, not merely somewhere in the section.
+      expect(
+        container.querySelector('[data-plan="pro"]').textContent,
+      ).toContain('Most Popular');
+    });
+
+    it('names the journey stage above each plan name', () => {
       renderPricing();
-      expect(screen.getByText('Recommended')).toBeDefined();
+      for (const stage of ['Explore', 'Automate', 'Quantify', 'Operate', 'Scale']) {
+        expect(screen.getByText(stage), `${stage} is missing`).toBeDefined();
+      }
     });
   });
 
@@ -146,7 +150,7 @@ describe('Landing Page & Pricing — INR-only tier contract', () => {
       expect(screen.queryByRole('button', { name: /INR/i })).toBeNull();
     });
 
-    it('does not call the FX-localised billing endpoint for its figures', async () => {
+    it('does not call the billing endpoint for its figures', async () => {
       const getPlans = vi.spyOn(api.billing, 'getPlans').mockResolvedValue({ plans: [] });
 
       renderPricing();
@@ -157,26 +161,44 @@ describe('Landing Page & Pricing — INR-only tier contract', () => {
     });
   });
 
-  describe('Annual billing arithmetic', () => {
-    it('applies the 20% reduction to every paid tier without throwing', async () => {
+  describe('Annual billing renders the PUBLISHED yearly price', () => {
+    it('quotes ₹4,990, ₹9,990 and ₹24,990 per year, not twelve times the monthly rate', async () => {
       renderPricing();
 
       fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
 
       await waitFor(() => {
-        // Monthly-equivalent: 499 / 999 / 2499 less 20%, rounded.
-        expect(screen.getByText('₹399')).toBeDefined();
-        expect(screen.getByText('₹799')).toBeDefined();
-        expect(screen.getByText('₹1,999')).toBeDefined();
+        expect(screen.getByText(/Billed ₹4,990\/yr/)).toBeDefined();
       });
-
-      // Billed-at lines carry the full year at the same 20% reduction.
-      expect(screen.getByText(/Billed at ₹4,790\/yr — save 20%/)).toBeDefined();
-      expect(screen.getByText(/Billed at ₹9,590\/yr — save 20%/)).toBeDefined();
-      expect(screen.getByText(/Billed at ₹23,990\/yr — save 20%/)).toBeDefined();
+      expect(screen.getByText(/Billed ₹9,990\/yr/)).toBeDefined();
+      expect(screen.getByText(/Billed ₹24,990\/yr/)).toBeDefined();
     });
 
-    it('leaves the free tier at ₹0 with no annual billing line', async () => {
+    it('derives the per-month equivalent from the published yearly figure', async () => {
+      renderPricing();
+
+      fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
+
+      await waitFor(() => {
+        // 4,990 / 12 = 415.83 → 416. The old 20%-off arithmetic produced ₹399 here, against a
+        // yearly price of ₹4,790 that no checkout would ever charge.
+        expect(screen.getByText('₹416')).toBeDefined();
+      });
+      expect(screen.getByText('₹833')).toBeDefined();   // 9,990 / 12
+      expect(screen.getByText('₹2,083')).toBeDefined(); // 24,990 / 12
+    });
+
+    it('states the saving as 17% — ten months for twelve, computed from both published figures', async () => {
+      renderPricing();
+
+      fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
+
+      await waitFor(() => {
+        expect(screen.getAllByText(/save 17%/)).toHaveLength(3);
+      });
+    });
+
+    it('leaves Free at ₹0 and Enterprise quoted, with no annual line on either', async () => {
       renderPricing();
 
       fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
@@ -184,21 +206,87 @@ describe('Landing Page & Pricing — INR-only tier contract', () => {
       await waitFor(() => {
         expect(screen.getByText('₹0')).toBeDefined();
       });
-      // Three paid tiers carry the line; the free tier does not.
-      expect(screen.getAllByText(/Billed at ₹/)).toHaveLength(3);
+      // Three paid plans carry the billed-at line. Free has no annual price and the custom plan
+      // has no published price at all, so neither may show one.
+      expect(screen.getAllByText(/Billed ₹/)).toHaveLength(3);
     });
 
     it('returns to the monthly figures when Monthly is reselected', async () => {
       renderPricing();
 
       fireEvent.click(screen.getByRole('button', { name: /Annual/i }));
-      await waitFor(() => expect(screen.getByText('₹399')).toBeDefined());
+      await waitFor(() => expect(screen.getByText('₹416')).toBeDefined());
 
       fireEvent.click(screen.getByRole('button', { name: /Monthly/i }));
       await waitFor(() => {
         expect(screen.getByText('₹499')).toBeDefined();
-        expect(screen.queryByText(/Billed at ₹/)).toBeNull();
+        expect(screen.queryByText(/Billed ₹/)).toBeNull();
       });
+    });
+  });
+
+  describe('The capacity table states what the backend enforces', () => {
+    it('publishes the strategy, marketplace and ML rows the gates enforce', () => {
+      renderPricing();
+
+      for (const label of [
+        'Active strategies',
+        'Paper strategies',
+        'Live strategies',
+        'Exchange connections',
+        'Trading accounts',
+        'Backtests',
+        'Custom indicators',
+        'Strategy versions',
+        'ML models',
+        'ML training runs',
+        'Optimization runs',
+        'Marketplace browsing',
+        'Marketplace subscriptions',
+        'Marketplace listings',
+        'Creator revenue share',
+      ]) {
+        // `getAllByText`, not `getByText`: the four allowances available on every plan appear
+        // BOTH as a table row and in the "Included on every plan" list beneath it, which is
+        // intentional — the table answers "how much" and the list answers "is it metered at all".
+        expect(screen.getAllByText(label).length, `${label} row is missing`).toBeGreaterThan(0);
+      }
+    });
+
+    it('never advertises an unlimited allowance', () => {
+      const { container } = renderPricing();
+      const text = container.querySelector('#pricing').textContent;
+
+      // "Unlimited Strategy Bots" was on the old Institutional card and was not implemented.
+      expect(text).not.toContain('Unlimited');
+      expect(text).not.toContain('unlimited');
+    });
+
+    it('does not advertise team, workspace, RBAC or API tiers', () => {
+      const { container } = renderPricing();
+      const text = container.querySelector('#pricing').textContent;
+
+      // The product is single-user and has no customer API tier, so none of these is a pricing
+      // dimension. The old Institutional card listed "Granular Role-Based Access".
+      for (const absent of [
+        'Team member',
+        'team member',
+        'Workspace',
+        'Role-Based',
+        'role-based',
+        'RBAC',
+        'API access',
+        'read-only API',
+      ]) {
+        expect(text, `"${absent}" must not appear in pricing`).not.toContain(absent);
+      }
+    });
+
+    it('states that marketplace publishing starts with Pro Quant', () => {
+      renderPricing();
+      expect(
+        screen.getByText(/Marketplace publishing is available to Pro Quant and Business/),
+      ).toBeDefined();
     });
   });
 
@@ -211,21 +299,16 @@ describe('Landing Page & Pricing — INR-only tier contract', () => {
       );
 
       await waitFor(() => {
-        // `null` is defined, so `toBeDefined()` here passed whether or not the
-        // anchor existed. `not.toBeNull()` is what asks the question.
-        //
-        // THE ANCHOR SET CHANGED WITH THE LANDING-PAGE REDESIGN. `#architecture` was
-        // renamed `#tour` — the section stopped being a claim about architecture and became
-        // a tour of what a user works in — and `#waitlist` went with `Waitlist.jsx`, which
-        // was removed because it competed with a signup that already works. Asserting the
-        // full current set rather than the two that happened to be named before: every one
-        // of these is a scroll target `Navbar` or `Footer` offers, so a missing id is a
-        // navigation control that silently does nothing.
+        // `null` is defined, so `toBeDefined()` would pass whether or not the anchor existed.
+        // `not.toBeNull()` is what asks the question. Every id below is a scroll target `Navbar`
+        // or `Footer` offers, so a missing one is a control that silently does nothing.
         for (const anchor of [
           '#platform',
           '#workflow',
+          '#workflow-full',
           '#tour',
           '#marketplace',
+          '#creators',
           '#security',
           '#download',
           '#pricing',
@@ -233,8 +316,78 @@ describe('Landing Page & Pricing — INR-only tier contract', () => {
         ]) {
           expect(container.querySelector(anchor), `${anchor} is missing`).not.toBeNull();
         }
-        expect(screen.getByText('Infrastructure Tiers')).toBeDefined();
+        expect(screen.getByText('Start Small. Scale When You Need To.')).toBeDefined();
       });
+    });
+
+    it('leads with the Build / Trade / Earn positioning', async () => {
+      render(
+        <MemoryRouter>
+          <LandingPage />
+        </MemoryRouter>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(/Build It\. Trade It\./)).toBeDefined();
+      });
+      expect(screen.getByText('Earn From It.')).toBeDefined();
+      expect(
+        screen.getByText(/Build your own systematic trading strategies, automate them/),
+      ).toBeDefined();
+    });
+
+    it('offers the marketplace and the creator economy as first-class sections', async () => {
+      render(
+        <MemoryRouter>
+          <LandingPage />
+        </MemoryRouter>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(/Don’t Build Everything From Scratch\./)).toBeDefined();
+      });
+      expect(screen.getByText('Turn Your Strategy Into Recurring Income')).toBeDefined();
+      expect(screen.getByText('From Idea to Trading System')).toBeDefined();
+
+      // The split is stated as a published commercial term. No earnings figure is claimed.
+      //
+      // `getAllByText`: 90% appears in the creator section's split AND in the pricing table's
+      // "Creator revenue share" row, for Pro Quant, Business and Enterprise. The two surfaces
+      // quoting one number is the point.
+      expect(screen.getAllByText('90%').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('10%').length).toBeGreaterThan(0);
+    });
+
+    it('qualifies publishing as a Pro Quant and Business capability wherever it is offered', async () => {
+      render(
+        <MemoryRouter>
+          <LandingPage />
+        </MemoryRouter>
+      );
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('Marketplace publishing is available to Pro Quant and Business users.'),
+        ).toBeDefined();
+      });
+    });
+
+    it('does not read the entitlements endpoint for an anonymous visitor', async () => {
+      // `CreatorSection` routes its CTA by entitlement, so it calls `useFeature`. A visitor with
+      // no session has no plan to read, and reporting "we could not read your plan" to someone who
+      // is not signed in sends them looking for a fault that is not there.
+      const getEntitlements = vi
+        .spyOn(api.billing, 'getEntitlements')
+        .mockResolvedValue({ plan: 'free', features: [] });
+
+      render(
+        <MemoryRouter>
+          <LandingPage />
+        </MemoryRouter>
+      );
+
+      await waitFor(() => expect(screen.getByText('Most Popular')).toBeDefined());
+      expect(getEntitlements).not.toHaveBeenCalled();
     });
 
     it('shows no dollar sign anywhere on the landing page', async () => {
@@ -244,7 +397,9 @@ describe('Landing Page & Pricing — INR-only tier contract', () => {
         </MemoryRouter>
       );
 
-      await waitFor(() => expect(screen.getByText('Infrastructure Tiers')).toBeDefined());
+      await waitFor(() =>
+        expect(screen.getByText('Start Small. Scale When You Need To.')).toBeDefined(),
+      );
 
       expect(container.textContent).not.toContain('$');
     });

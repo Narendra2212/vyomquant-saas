@@ -137,13 +137,25 @@ class TestPricingTierReconciliation:
         assert enterprise_config is not None
         assert elite_config is not None
 
-        # Quota verification
-        assert free_config.quotas[Resource.STRATEGIES.value] == 5
-        assert starter_config.quotas[Resource.BOTS.value] == 2
-        assert pro_config.quotas[Resource.BOTS.value] == 5
-        assert pro_config.quotas[Resource.ML_TRAININGS.value] == 5
-        assert enterprise_config.quotas[Resource.BOTS.value] == 12
-        assert enterprise_config.quotas[Resource.ML_TRAININGS.value] == 15
+        # Quota verification, against the PUBLISHED pricing ladder.
+        #
+        # These four figures moved with the five-plan rework (Free 5→1 strategies, Trader 2→3 live
+        # strategies, Pro Quant 5→10, Business 12→25, and the ML training allowance from 5/15 to
+        # 50/200 per month). The full matrix — every plan, every resource — is asserted in
+        # `tests/test_pricing_ladder.py`, which transcribes the published table independently of the
+        # catalogue so the two cannot drift. What is checked HERE is only that a legacy billing key
+        # resolves to a config carrying those figures, which is this file's subject.
+        assert free_config.quotas[Resource.STRATEGIES.value] == 1
+        assert starter_config.quotas[Resource.BOTS.value] == 3
+        assert pro_config.quotas[Resource.BOTS.value] == 10
+        assert pro_config.quotas[Resource.ML_TRAININGS.value] == 50
+        assert enterprise_config.quotas[Resource.BOTS.value] == 25
+        assert enterprise_config.quotas[Resource.ML_TRAININGS.value] == 200
+
+        # A legacy key resolves to the SAME config object as its canonical spelling, which is what
+        # keeps a customer stored as `pro_999` or `elite_1999` on the plan they bought.
+        assert pro_999_config is pro_config
+        assert elite_config is enterprise_config
 
     def test_feature_entitlement_matrix_reconciliation(self):
         """Verify FeatureEntitlements feature matrix aligns with plan tiers."""

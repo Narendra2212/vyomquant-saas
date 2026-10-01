@@ -21,6 +21,7 @@ from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.core.dependencies import (get_current_user,
                                            get_request_supabase, get_vault, get_ws_manager)
 from backend_app.core.models import ExchangeKeysRequest, TestConnectionRequest
+from backend_app.core.subscription_dependencies import check_exchange_connection_slot
 from backend_app.backend.redis_manager import get_redis_manager
 from backend_app.core.rate_limit import limiter  # BE-CRITICAL-004 FIX
 from supabase import Client as SupabaseClient
@@ -177,12 +178,28 @@ async def store_keys(
     user: dict = Depends(get_current_user),
     vault=Depends(get_vault),
     redis_manager=Depends(get_redis_manager),
+    supabase: Any = Depends(get_request_supabase),
 ):
     """
     Store encrypted exchange API keys in vault.
     Tests connection before saving to ensure credentials are valid.
     Invalidates cache on successful storage.
+
+    THE EXCHANGE-CONNECTION LIMIT (Free 1, Trader 2, Pro Quant 5, Business 8)
+    ------------------------------------------------------------------------
+    Checked FIRST, before the venue is dialled, so an account at its limit is refused in
+    milliseconds rather than after a round trip to the exchange — and so no credential is sent
+    anywhere on a request that was going to be refused.
+
+    ``check_exchange_connection_slot`` distinguishes a NEW connection from a key ROTATION: this
+    same endpoint is how a trader replaces compromised keys for a venue they are already connected
+    to, and ``exchange_keys`` holds one row per (user, venue), so a rotation consumes no slot. An
+    account sitting at its limit can still rotate every key it owns. Nothing here disconnects or
+    invalidates an existing connection — a downgrade leaves stored credentials alone and only
+    prevents adding the next one.
     """
+    await check_exchange_connection_slot(user, supabase, body.exchange_id)
+
     bridge = None
     try:
         bridge = ConnectionEngine(

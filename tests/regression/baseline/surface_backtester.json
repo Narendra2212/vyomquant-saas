@@ -1,5 +1,5 @@
 {
-  "_baseline_note_exchange_directory_read_removed": "AUTHORISED RE-RECORD \u2014 ONE ENTRY REMOVED and ONE ADDED; `api_call_count` is unchanged at 8. REMOVED: `api.exchange.getSupported` \u2192 GET /api/exchanges/supported. The venue directory is no longer read by `pages/Backtester.jsx`; the page's market and timeframe controls are now `AssetSelector` + `TimeframeSelector`, the builder's own components (`Backtester.jsx` docblock, step 2 of the declared tiers), and `design/pageFields.js:3845-3848` declares `GET /api/exchanges/supported` as PAGES.EXCHANGE_MANAGER's read \u2014 it is not declared for the backtester. The route and `api/modules/exchange.js:getSupported` are untouched and `pages/ExchangeManager.jsx:750` still calls it, so this is a call site that moved off one surface, not an endpoint that was lost. This capture reads `pages/Backtester.jsx` alone (`_SURFACES['backtester']`), which is why the move shows here as a removal.",
+  "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. The backtest handler gained ONE additive FastAPI dependency parameter, `_quota=Depends(check_backtest_quota)`, and lost none. Backtests are now a monthly allowance (Free 10, Trader 100, Pro Quant 500, Business 1500) and were previously ungated and unmetered. The dependency reserves one run before the job is enqueued; it changes no request field, no response field and no execution behaviour for a caller within their allowance. A caller over it receives 403 with a structured `BACKTEST_LIMIT_REACHED` refusal.",
   "api_call_count": 6,
   "api_calls": [
     {
@@ -324,6 +324,10 @@
           "handler": "execute_backtest",
           "module": "backend_app.routers.strategy_operations",
           "parameters": {
+            "_quota": {
+              "annotation": "_empty",
+              "depends_on": "check_backtest_quota"
+            },
             "body": {
               "annotation": "BacktestExecuteRequest"
             },
@@ -403,7 +407,6 @@
       "via": "api.strategies.executeBacktest"
     },
     {
-      "_baseline_note_entry": "AUTHORISED RE-RECORD \u2014 this WHOLE ENTRY IS NEW. `pages/Backtester.jsx:1330` reads `dataQualityApi.forBacktestWindow({exchange, symbol, timeframe, \u2026})` for the period step's data-availability note, re-issued whenever the market, the interval or either bound changes. Recorded as `resolved: false` / `method: UNKNOWN` / `path_template: <built at runtime>` because the helper assembles its path from those arguments rather than from a literal, so the static extractor cannot name the route \u2014 that is a limit of the capture, not a claim that the call is unresolved at runtime.",
       "method": "UNKNOWN",
       "path_template": "<built at runtime>",
       "resolved": false,

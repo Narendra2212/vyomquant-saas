@@ -74,7 +74,9 @@ def make_test_user(user_id="usr_hardened_01", tier="free", status="active", is_f
     }
 
 
-def make_supabase_mock(tier="free", status="active", is_frozen=False, user_id="usr_hardened_01"):
+def make_supabase_mock(
+    tier="free", status="active", is_frozen=False, user_id="usr_hardened_01", owned_rows=0
+):
     sb = MagicMock()
     profile_data = {
         "id": user_id,
@@ -84,15 +86,37 @@ def make_supabase_mock(tier="free", status="active", is_frozen=False, user_id="u
         "next_billing_date": "2026-09-24T00:00:00",
         "cancel_at_period_end": False,
     }
-    exec_res = MagicMock(data=[profile_data])
-    query = MagicMock()
-    query.execute.return_value = exec_res
-    query.select.return_value = query
-    query.eq.return_value = query
-    query.update.return_value = query
-    query.insert.return_value = query
-    sb.table.return_value = query
-    sb.rpc.return_value = query
+    # `owned_rows` is how many rows the account owns. Counted resources (strategies, live
+    # strategies, exchange connections, ML models, marketplace listings and subscriptions) are now
+    # counted from the PERSISTENCE LAYER by `core/usage_ledger.py` rather than from a Redis
+    # counter, so a capacity check reads tables and this double has to answer them.
+    #
+    # `id` and `strategy_id` carry the same value per row: a live-strategy count reads both
+    # `strategies` and `strategy_deployments` (two deploy paths exist, and a limit seeing only one
+    # would be bypassable through the other) and unions the identifiers to avoid double-counting.
+    #
+    # `error=None` is explicit. A bare `MagicMock` answers any attribute with a truthy mock, so
+    # `response.error` was truthy and every count raised `UsageReadFailed` — which the dependency
+    # correctly turns into a 503 rather than a pass.
+    owned = [
+        {"id": f"{user_id}-row-{i}", "strategy_id": f"{user_id}-row-{i}"}
+        for i in range(owned_rows)
+    ]
+    built: dict = {}
+
+    def table(name):
+        if name in built:
+            return built[name]
+        query = MagicMock()
+        rows = [profile_data] if name == "profiles" else owned
+        query.execute.return_value = MagicMock(data=rows, error=None)
+        for method in ("select", "eq", "in_", "is_", "limit", "update", "insert", "delete", "order"):
+            getattr(query, method).return_value = query
+        built[name] = query
+        return query
+
+    sb.table.side_effect = table
+    sb.rpc.return_value = table("profiles")
     return sb
 
 
@@ -176,42 +200,58 @@ class TestQuotaBoundaryEnforcement:
     """Audit 4: Test exact limit vs limit + 1 across all tiers."""
 
     @pytest.mark.asyncio
-    async def test_starter_live_bot_limit_boundaries(self):
-        """Starter tier allows 2 bots; 1st & 2nd succeed, 3rd fails with 403."""
-        sb = make_supabase_mock(tier="starter", user_id="u_bot_starter")
+    async def test_trader_live_strategy_limit_boundaries(self):
+        """Trader allows 3 live strategies; the 1st-3rd succeed, the 4th is refused.
+
+        Two things moved here. The LIMIT is 3 rather than 2 (the published Trader plan), and the
+        USAGE comes from counted rows rather than a patched counter: `check_bot_quota` reads
+        `strategies` and `strategy_deployments` through `core/usage_ledger.py`, so patching
+        `get_quota_usage` would stub something the check no longer consults — the test would pass
+        against a counter while the real code read a table.
+        """
         user = make_test_user("u_bot_starter", tier="starter")
 
-        # 0 -> 1 (Allow)
-        with patch.object(SubscriptionEngine, "get_quota_usage", return_value=0):
+        for held in (0, 1, 2):
+            sb = make_supabase_mock(tier="starter", user_id="u_bot_starter", owned_rows=held)
             assert await check_bot_quota(user, sb) is True
 
-        # 1 -> 2 (Allow)
-        with patch.object(SubscriptionEngine, "get_quota_usage", return_value=1):
-            assert await check_bot_quota(user, sb) is True
-
-        # 2 -> 3 (Reject: Limit reached)
-        with patch.object(SubscriptionEngine, "get_quota_usage", return_value=2):
-            with pytest.raises(HTTPException) as exc:
-                await check_bot_quota(user, sb)
-            assert exc.value.status_code == 403
-            assert "Quota exceeded for bots: 2/2" in str(exc.value.detail)
+        at_limit = make_supabase_mock(tier="starter", user_id="u_bot_starter", owned_rows=3)
+        with pytest.raises(HTTPException) as exc:
+            await check_bot_quota(user, at_limit)
+        assert exc.value.status_code == 403
+        # The refusal is structured now, not a sentence a client can only render verbatim.
+        assert exc.value.detail["code"] == "LIVE_STRATEGY_LIMIT_REACHED"
+        assert exc.value.detail["current"] == 3
+        assert exc.value.detail["limit"] == 3
+        assert exc.value.detail["required_plan"] == "pro"
 
     @pytest.mark.asyncio
-    async def test_pro_ml_training_limit_boundaries(self):
-        """Pro tier allows 5 ML trainings/month; 5th succeeds, 6th fails."""
+    async def test_pro_quant_ml_training_limit_boundaries(self):
+        """Pro Quant allows 50 ML training runs a month; the 50th succeeds, the 51st is refused.
+
+        ML training is a METERED resource, so the usage still comes from the Redis meter — but the
+        key is period-scoped (`quota:{user}:{resource}:{YYYY-MM}`) and the check RESERVES as it
+        reads, so `reserve_quota` is what is patched rather than `get_quota_usage`. Reserving
+        inside the check is what stops two concurrent requests both seeing the last run as free.
+        """
         sb = make_supabase_mock(tier="pro", user_id="u_ml_pro")
         user = make_test_user("u_ml_pro", tier="pro")
 
-        # 4 used (Allow 5th)
-        with patch.object(SubscriptionEngine, "get_quota_usage", return_value=4):
+        with patch.object(
+            SubscriptionEngine, "reserve_quota", new=AsyncMock(return_value=(True, 50, 50))
+        ):
             assert await check_ml_quota(user, sb) is True
 
-        # 5 used (Reject 6th)
-        with patch.object(SubscriptionEngine, "get_quota_usage", return_value=5):
+        with patch.object(
+            SubscriptionEngine, "reserve_quota", new=AsyncMock(return_value=(False, 50, 50))
+        ):
             with pytest.raises(HTTPException) as exc:
                 await check_ml_quota(user, sb)
             assert exc.value.status_code == 403
-            assert "Quota exceeded for ml_trainings: 5/5" in str(exc.value.detail)
+            assert exc.value.detail["code"] == "ML_TRAINING_LIMIT_REACHED"
+            assert exc.value.detail["current"] == 50
+            assert exc.value.detail["limit"] == 50
+            assert exc.value.detail["required_plan"] == "enterprise"  # Business
 
 
 # ═══════════════════════════════════════════════════════════════════════════

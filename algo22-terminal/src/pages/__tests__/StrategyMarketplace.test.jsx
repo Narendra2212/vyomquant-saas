@@ -420,10 +420,24 @@ describe('StrategyMarketplace transport (Requirements 20.2, 20.10)', () => {
     //     `https://` literal and the `<script>` injection live in that module, which is why
     //     `FORBIDDEN_IN_PAGE` below is unchanged and still passes against this page's source.
     //
-    // Still an EXACT set and not a subset — a fourteenth relative import, or `../apiClient`
+    // Still an EXACT set and not a subset — a sixteenth relative import, or `../apiClient`
     // in place of `../api`, fails here exactly as it did before. `FORBIDDEN_IN_PAGE` above is
     // the other half of the same guard and still bans `fetch`, `axios`, `XMLHttpRequest` and
     // an absolute URL anywhere in the file.
+    //
+    // TWO ENTRIES ADDED BY THE PLAN-LADDER WORK, AND WHY NEITHER WEAKENS THIS GUARD
+    // ----------------------------------------------------------------------------
+    // `../design/entitlements` and `../components/gates` are what let this page render a LOCKED
+    // subscribe control instead of one that 403s: marketplace browsing is open to every plan, so a
+    // Free account reaches the listing panel legitimately and has to be told why it cannot
+    // subscribe. Both are additions to the RENDERING, not to the transport:
+    //
+    //   * `../design/entitlements` is a pure reader over the entitlements payload. It holds no
+    //     client, issues no request and imports nothing but `./reported`.
+    //   * `../components/gates` renders a refusal the SERVER composed. The one request behind it is
+    //     `api.billing.getEntitlements`, made inside `hooks/useEntitlements` through `../api` —
+    //     the same single client Requirement 20.2 exists to protect. There is still no second
+    //     client for this app's API anywhere in this page's graph.
     const specifiers = [...stripComments(source).matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)]
       .map((m) => m[1])
       .filter((s) => s.startsWith('.'));
@@ -436,6 +450,8 @@ describe('StrategyMarketplace transport (Requirements 20.2, 20.10)', () => {
       '../components/ds/SectionHeader',
       '../components/ds/StatusBadge',
       '../components/ds/TradingEnvironmentBadge',
+      '../components/gates',
+      '../design/entitlements',
       '../design/errorCopy',
       '../design/subscriptionState',
       '../hooks/usePanelState',

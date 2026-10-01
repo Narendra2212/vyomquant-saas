@@ -414,8 +414,31 @@ class _AsyncTransport:
 # ══════════════════════════════════════════════════════════════════════════
 
 
-def _profile(user_id: str, alias: str, email: str) -> Dict[str, Any]:
-    return {"id": user_id, "display_name": alias, "email": email}
+def _profile(
+    user_id: str, alias: str, email: str, subscription_tier: str = "pro"
+) -> Dict[str, Any]:
+    """A seeded ``profiles`` row, carrying the plan the entitlement gates read.
+
+    ``subscription_tier`` defaults to ``pro`` (Pro Quant) because this journey exercises the
+    marketplace end to end: the OWNER publishes a listing and the PURCHASER buys a subscription,
+    and both actions are plan-gated. ``POST /api/library`` carries
+    ``require_marketplace_publish`` (Pro Quant and above) and
+    ``POST /api/library/{id}/checkout`` carries ``require_marketplace_subscribe`` (Trader and
+    above) plus the marketplace-subscription allowance.
+
+    Seeding the plan rather than overriding the gates is deliberate. ``get_plan_context`` reads
+    ``profiles.subscription_tier`` from this same store, so the journey exercises the real
+    entitlement path — the plan a row holds decides what its owner may do — instead of asserting
+    around it. A journey that overrode the gates would pass on an account the product would refuse.
+    """
+    return {
+        "id": user_id,
+        "display_name": alias,
+        "email": email,
+        "subscription_tier": subscription_tier,
+        "subscription_status": "active",
+        "plan_limit_overrides": None,
+    }
 
 
 def _version_row(strategy_id: str, version_id: str) -> Dict[str, Any]:

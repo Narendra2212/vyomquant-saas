@@ -11,9 +11,10 @@
  *    Kraken and OKX; Kraken has no public CCXT sandbox at all. Listing five venues as
  *    "supported" flattened a real distinction that matters to anyone about to route an order.
  *
- * 2. "Is there a free trial for Pro or Elite features?" named tiers that do not exist. The four
- *    published tiers in `Pricing.jsx` are Free / Sandbox, Trader, Pro Quant and Institutional.
- *    "Elite" is from an older price list.
+ * 2. "Is there a free trial for Pro or Elite features?" named tiers that do not exist. The five
+ *    published plans in `Pricing.jsx` are Free, Trader, Pro Quant, Business and Enterprise.
+ *    "Elite" is from an older price list, and "Institutional" was the previous name of the plan
+ *    now published as Business.
  *
  * 3. The desktop question was absent entirely, which is how the old page ended up advertising
  *    installers in eleven places while `DownloadSection` said they were not published. It is
@@ -53,7 +54,12 @@ const gettingStarted = [
   {
     question: 'How much does it cost to start?',
     answer:
-      'Nothing. The Free / Sandbox tier includes the visual builder, VectorBT backtesting, paper trading and one active strategy, with no card required. Paid tiers start at ₹499 per month when you need more concurrent strategies or machine learning nodes.',
+      'Nothing. The Free plan includes the visual builder, VectorBT backtesting, paper trading and one active strategy, with no card required. Paid plans start at Trader (₹499 per month, or ₹4,990 per year) when you want to automate a strategy on a connected exchange, and Pro Quant (₹999 per month) adds machine learning nodes, parameter optimization and the ability to publish to the marketplace.',
+  },
+  {
+    question: 'Can I earn money from strategies I build?',
+    answer:
+      'Yes, on Pro Quant and Business. You can publish eligible strategies to the Strategy Marketplace — a completed backtest and a real order block are required, and submissions are moderated before they go live — and you keep 90% of the marketplace subscription revenue they generate, with VyomQuant taking 10%. The share is calculated after the marketplace\u2019s payment, refund and chargeback handling, so reversals net out of earnings. Free and Trader can browse the marketplace and Trader can subscribe to strategies, but neither can publish.',
   },
 ]
 
@@ -81,7 +87,12 @@ const platformAndRisk = [
   {
     question: 'Can I change or cancel my plan?',
     answer:
-      'Yes, from the billing panel at any time, with changes taking effect at the next cycle. If you move down to Free, your strategies stay intact and readable and live bots pause — you keep paper mode and the strategy library.',
+      'Yes, from the billing panel at any time, with changes taking effect at the next cycle. Moving down a plan never deletes anything: strategies you built above your new capacity stay intact and readable, and the billing page tells you which allowances you are over. What a lower plan prevents is creating or activating MORE than it allows — not keeping what you already have.',
+  },
+  {
+    question: 'What counts against my monthly limits?',
+    answer:
+      'Backtests, optimization runs and ML training runs are monthly allowances that reset at the start of each month, and a run counts whether it succeeds or fails — the compute is spent either way. Everything else is a live count of what exists right now: strategies, exchange connections, ML models, marketplace listings and marketplace subscriptions. Delete one and the capacity comes back immediately. Historical data, tick data, alerts and marketplace browsing carry no limit on any plan.',
   },
 ]
 

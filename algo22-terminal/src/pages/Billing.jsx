@@ -372,12 +372,20 @@ import {
   Crown,
   Database,
   ExternalLink,
+  FlaskConical,
+  Gauge,
+  GitBranch,
   Globe,
+  LineChart,
+  Link2,
   MapPin,
   RefreshCw,
   Shield,
+  ShoppingCart,
+  SlidersHorizontal,
   Star,
   TrendingUp,
+  Wallet,
   XCircle,
   Zap,
 } from 'lucide-react';
@@ -390,6 +398,8 @@ import { PageHeader } from '../components/ds/PageHeader';
 import { Panel } from '../components/ds/Panel';
 import { StatusBadge } from '../components/ds/StatusBadge';
 import { api, isAuthenticated } from '../api';
+import { overCapacity, resourceLabel } from '../design/entitlements';
+import { refreshEntitlements } from '../hooks/useEntitlements';
 import { PAGES, PAGE_FIELDS_BY_PAGE, VERDICT } from '../design/pageFields';
 import { available, fromNullable, unavailable } from '../design/reported';
 import { token } from '../design/tokens';
@@ -505,13 +515,63 @@ const PLAN_ICONS = Object.freeze({
   starter: Zap,
 });
 
-/** The four allowance tiles, in the order they have always been rendered. */
-const ALLOWANCES = Object.freeze([
-  { icon: Database, used: 'strategiesUsed', quota: 'strategiesQuota' },
-  { icon: Bot, used: 'botsUsed', quota: 'botsQuota' },
-  { icon: Cpu, used: 'mlTrainingsUsed', quota: 'mlTrainingsQuota' },
-  { icon: TrendingUp, used: 'marketplacePublishedUsed', quota: 'marketplacePublishedQuota' },
-]);
+/**
+ * The four allowance tiles that have DECLARED `pageFields` entries, keyed by resource.
+ *
+ * These four predate the five-plan ladder and keep their declarations, so their labels and their
+ * absence reasons still come from `design/pageFields.js` exactly as before. The ladder added nine
+ * more metered resources — paper and live strategies, exchange connections, trading accounts, ML
+ * models, backtests, optimization runs, marketplace subscriptions and marketplace listings — and
+ * those are rendered from the server's own vocabulary instead; see {@link allowanceIcon} and the
+ * `allowances` memo for why that is not a shortcut.
+ */
+const DECLARED_ALLOWANCES = Object.freeze({
+  strategies: { icon: Database, used: 'strategiesUsed', quota: 'strategiesQuota' },
+  bots: { icon: Bot, used: 'botsUsed', quota: 'botsQuota' },
+  ml_trainings: { icon: Cpu, used: 'mlTrainingsUsed', quota: 'mlTrainingsQuota' },
+  marketplace_published: {
+    icon: TrendingUp,
+    used: 'marketplacePublishedUsed',
+    quota: 'marketplacePublishedQuota',
+  },
+});
+
+/** The glyph for a resource tile. A treatment, not a figure — so a miss is `Database`, not an error. */
+const ALLOWANCE_ICONS = Object.freeze({
+  strategies: Database,
+  paper_strategies: FlaskConical,
+  bots: Bot,
+  exchange_connections: Link2,
+  trading_accounts: Wallet,
+  custom_indicators: SlidersHorizontal,
+  strategy_versions: GitBranch,
+  ml_models: Cpu,
+  ml_trainings: Cpu,
+  backtests: LineChart,
+  optimizations: Gauge,
+  marketplace_subscriptions: ShoppingCart,
+  marketplace_published: TrendingUp,
+});
+
+const allowanceIcon = (resource) => ALLOWANCE_ICONS[resource] ?? Database;
+
+/**
+ * What an absent allowance figure says when the server named no reason of its own.
+ *
+ * Worded about the READ rather than about the account, for the same reason
+ * `design/reported.js::UNREPORTED_REASON` is: "you have none of these" and "we could not find out"
+ * look identical on screen and mean opposite things, and only one of them is something this page
+ * actually knows.
+ */
+const QUOTA_UNREAD_FALLBACK = 'Your entitlements could not be read, so this allowance is not '
+  + 'shown rather than guessed. Refresh reads them again.';
+
+/** `'month'` → `'Monthly'`. The server's own value, or `null` when it recorded none. */
+const intervalLabel = (value) => {
+  if (value === 'month') return 'Monthly';
+  if (value === 'year') return 'Annual';
+  return null;
+};
 
 /** `-1` and `Infinity` are the server's unlimited sentinels, and both are readings. */
 const isUnlimited = (value) => value === -1 || value === Infinity;
@@ -638,6 +698,17 @@ export default function Billing() {
   const [currencyChoice, setCurrencyChoice] = useState(null);
   const [isCurrencyDropdownOpen, setIsCurrencyDropdownOpen] = useState(false);
   const [checkoutInFlight, setCheckoutInFlight] = useState('');
+  /**
+   * The billing cycle a checkout from this page will buy. `'month'` or `'year'`.
+   *
+   * Local state and not a reader parameter: `GET /api/billing/plans` returns BOTH cycles priced in
+   * one payload (each plan carries `annual` alongside its monthly figure), so switching the toggle
+   * is a re-render of figures already in hand rather than a second request. That matters beyond
+   * latency — two requests could be priced at two different exchange rates for a non-published
+   * currency, and a toggle that changed the monthly price while the trader was comparing it to the
+   * annual one would be showing them two different offers.
+   */
+  const [checkoutInterval, setCheckoutInterval] = useState('month');
   const [isCancelLoading, setIsCancelLoading] = useState(false);
   const [isResumeLoading, setIsResumeLoading] = useState(false);
   const [isPortalLoading, setIsPortalLoading] = useState(false);
@@ -718,6 +789,15 @@ export default function Billing() {
     refetchInvoices();
     refetchMethods();
     refetchPlans();
+    /*
+      And the SHARED entitlement snapshot every gate in the app reads
+      (`hooks/useEntitlements.js`). Without this line a plan change would be visible on this page
+      and nowhere else until the snapshot went stale on its own — the sidebar, the account menu and
+      every `FeatureGate` would keep showing the old plan's locked states to a trader who had just
+      paid to unlock them. This page is where billing changes happen, so it is where the rest of
+      the app has to be told.
+    */
+    refreshEntitlements();
   }, [refetchEntitlements, refetchInvoices, refetchMethods, refetchPlans]);
 
   /*
@@ -886,6 +966,14 @@ export default function Billing() {
     setCheckoutInFlight(planId);
     try {
       /*
+        `interval` is the billing cycle the trader selected above the catalogue. It is sent on
+        every checkout, including a monthly one, rather than being omitted for the default:
+        `CheckoutRequest.interval` defaults to `"month"` server-side, so omitting it would work —
+        but sending it makes the request state the cycle it is buying, and the server prices from
+        its own published annual figure for that cycle rather than from anything computed here.
+        The amount is never calculated in this bundle; see `FXService.localize_plan_price`.
+      */
+      /*
         The same request with the same body — `{ tier, currency }` — and the same currency
         value in every reachable case: the plans response sets every plan's `currency` to the
         context currency, which is the same value the page-level state held once a response had
@@ -898,6 +986,7 @@ export default function Billing() {
       const data = await api.billing.createCheckout({
         tier: planId,
         currency: planCurrency ?? plansCurrencyRef.current ?? undefined,
+        interval: checkoutInterval,
       });
 
       /*
@@ -1084,6 +1173,27 @@ export default function Billing() {
   */
   const PlanIcon = PLAN_ICONS[String(read(entitlementsBody, 'plan') ?? '').toLowerCase()] ?? Shield;
 
+  /**
+   * The plan's published name, as the server states it.
+   *
+   * `null` when the server sent none, which is when the derived `planLabel(plan)` is used instead.
+   * Not defaulted to anything: a plan name is a figure like any other on this surface.
+   */
+  const displayName = (() => {
+    const value = read(entitlementsBody, 'display_name');
+    return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+  })();
+
+  /**
+   * The billing cycle the account is on, or `null`.
+   *
+   * `null` is NOT monthly. Every subscription taken before annual billing existed has no recorded
+   * cycle (`profiles.billing_interval` is nullable with no default and no backfill — migration
+   * 017), so rendering "Monthly" for an absent value would state a fact about the subscription that
+   * nothing established. The chip simply does not appear until a renewal records one.
+   */
+  const billingCycle = intervalLabel(read(entitlementsBody, 'billing_interval'));
+
   /*
     The pricing context. A trader's explicit pick outranks the server's answer for the CODE —
     that is a choice, not a reading — and nothing outranks it for the symbol, the region or the
@@ -1103,19 +1213,73 @@ export default function Billing() {
     return Array.isArray(offered) && offered.length > 0 ? offered : FALLBACK_DISPLAY_CURRENCIES;
   }, [plansBody]);
 
-  /** The four allowance tiles: eight figures, each resolved against its own declaration. */
-  const allowances = useMemo(
-    () =>
-      ALLOWANCES.map(({ icon, used, quota }) => ({
-        key: used,
-        icon,
-        usedField: FIELD[used],
-        quotaField: FIELD[quota],
-        used: reported(entitlementsBody, FIELD[used]),
-        quota: reported(entitlementsBody, FIELD[quota]),
-      })),
-    [entitlementsBody],
-  );
+  /**
+   * Every allowance the server reports, each figure resolved to a `Reported` union.
+   *
+   * DRIVEN BY THE SERVER'S OWN `quotas`, NOT BY A LIST HERE
+   * ------------------------------------------------------
+   * This used to iterate a fixed array of four. The plan ladder meters thirteen resources, and a
+   * hardcoded list would have shown a trader four of their thirteen limits while the backend
+   * enforced all thirteen — the page would have been silent about exactly the limits most likely
+   * to surprise them (backtests, optimization runs, marketplace subscriptions). Iterating
+   * `quotas` means a resource the backend adds appears here without this file changing.
+   *
+   * THE FOUR DECLARED FIELDS KEEP THEIR DECLARATIONS
+   * -----------------------------------------------
+   * Where a `pageFields.js` entry exists, the label and the absence reason come from it, unchanged.
+   * For the nine newer resources the label comes from `design/entitlements.resourceLabel` and the
+   * absence reason comes from the SERVER, in `usage_unavailable[resource]` — which is the same
+   * discipline the declarations enforce, sourced one step closer to the cause. Neither path can
+   * substitute a zero: an unreadable figure stays unreadable and renders the marker.
+   *
+   * `isMetered` carries the server's `metered_resources` list, because a monthly allowance that
+   * does not say "this month" is read as a lifetime total.
+   */
+  const allowances = useMemo(() => {
+    const quotas = entitlementsBody?.quotas;
+    if (!quotas || typeof quotas !== 'object') return [];
+    const unreadable = entitlementsBody?.usage_unavailable ?? {};
+    const metered = Array.isArray(entitlementsBody?.metered_resources)
+      ? entitlementsBody.metered_resources
+      : [];
+
+    return Object.keys(quotas).map((resource) => {
+      const declared = DECLARED_ALLOWANCES[resource];
+      if (declared) {
+        return {
+          key: resource,
+          icon: declared.icon,
+          usedField: FIELD[declared.used],
+          quotaField: FIELD[declared.quota],
+          used: reported(entitlementsBody, FIELD[declared.used]),
+          quota: reported(entitlementsBody, FIELD[declared.quota]),
+          isMetered: metered.includes(resource),
+        };
+      }
+
+      // The server's reason for an absent figure, or a statement that it reported none. Never a
+      // sentence that guesses at the cause.
+      const reason = typeof unreadable[resource] === 'string' && unreadable[resource].trim() !== ''
+        ? unreadable[resource]
+        : QUOTA_UNREAD_FALLBACK;
+      const label = resourceLabel(resource);
+
+      return {
+        key: resource,
+        icon: allowanceIcon(resource),
+        usedField: { label, reason },
+        quotaField: { label: 'Limit', reason },
+        used: Object.prototype.hasOwnProperty.call(unreadable, resource)
+          ? unavailable(reason)
+          : fromNullable(entitlementsBody?.usage?.[resource], reason),
+        quota: fromNullable(quotas[resource], reason),
+        isMetered: metered.includes(resource),
+      };
+    });
+  }, [entitlementsBody]);
+
+  /** The resources this account currently exceeds, after a downgrade. The server's own figures. */
+  const exceeded = useMemo(() => overCapacity(entitlementsBody), [entitlementsBody]);
 
   /** One catalogue card, with its price resolved against the declaration's three inputs. */
   const cataloguePlans = useMemo(() => {
@@ -1130,11 +1294,36 @@ export default function Billing() {
         typeof plan?.checkout_currency === 'string' && plan.checkout_currency.trim() !== ''
           ? plan.checkout_currency.trim()
           : null;
+      /*
+        The annual block the server prices alongside the monthly one. `null` for a plan with no
+        published annual price (Free, and the custom Enterprise tier), which is what stops this page
+        inventing one by multiplying the monthly figure by twelve — ₹4,990 a year is not ₹499 × 12,
+        and only one of those two numbers is charged.
+      */
+      const annual = plan?.annual && typeof plan.annual === 'object' ? plan.annual : null;
+      const annualPrice = annual
+        ? fromNullable(annual.localized_price, FIELD.cataloguePlanPrice.reason)
+        : unavailable('This plan has no published annual price.');
+
       return {
         id: plan?.id ?? `plan-${index}`,
         recommended: plan?.recommended === true,
         name: fromNullable(plan?.name, FIELD.cataloguePlanName.reason),
         description: fromNullable(plan?.description, FIELD.cataloguePlanDescription.reason),
+        // ── The ladder, as the server publishes it. No plan table in this bundle. ──
+        journey: typeof plan?.journey === 'string' ? plan.journey : null,
+        tagline: typeof plan?.tagline === 'string' ? plan.tagline : null,
+        badge: typeof plan?.badge === 'string' ? plan.badge : null,
+        ctaLabel: typeof plan?.cta_label === 'string' ? plan.cta_label : null,
+        isCustomPriced: plan?.is_custom_priced === true,
+        annualPrice,
+        annualSavings: Number.isFinite(Number(annual?.savings_percent))
+          ? Number(annual.savings_percent)
+          : null,
+        annualMonthlyEquivalent: annual
+          ? fromNullable(annual.monthly_equivalent, FIELD.cataloguePlanPrice.reason)
+          : unavailable('This plan has no published annual price.'),
+        hasAnnual: annual !== null,
         // A figure with no denomination is not a price. The declaration lists
         // `plans[].currency` as an input for exactly this reason: a bare `999` on a money
         // surface is worse than a marker, because a trader will read it in whatever currency
@@ -1455,7 +1644,16 @@ export default function Billing() {
               {/* fontSize: 24 → --text-section (value — Q7, this panel's hero). At 24 it
                   equalled the page <h1>, and `tokens.css:74` reserves --text-page for that,
                   so this takes the highest step below it. The literal `"Free"` is gone. */}
-              {planName.available ? (
+              {/* The server's own `display_name` when it sent one, falling back to the derived
+                  label. This is load-bearing rather than cosmetic: the stored plan id and the
+                  published name diverge deliberately — `enterprise` is the plan sold as
+                  "Business" — so capitalising the id would print the wrong one of the two on a
+                  paid account's billing page. See `core/subscription_engine.py`'s docstring. */}
+              {displayName !== null ? (
+                <p className="truncate text-section font-extrabold text-content-primary">
+                  {displayName}
+                </p>
+              ) : planName.available ? (
                 <p className="truncate text-section font-extrabold capitalize text-content-primary">
                   {planLabel(planName.value)}
                 </p>
@@ -1477,6 +1675,12 @@ export default function Billing() {
                     <Marker field={FIELD.subscriptionStatus} reason={subscriptionStatus.reason} />
                   </span>
                 )}
+                {/* Rendered only when the server recorded a cycle. See `billingCycle`. */}
+                {billingCycle !== null ? (
+                  <span className="rounded border border-line-default px-1.5 py-0.5 text-micro uppercase tracking-wide text-content-secondary">
+                    {billingCycle}
+                  </span>
+                ) : null}
                 {/* fontSize: 11 ×2 → §2.4's one-call-site-two-roles case: the eyebrow word is
                     a label (Q4 → --text-micro) and the date is a value (Q7 → --text-body), so
                     the container loses its declaration and each child takes its own step.
@@ -1507,8 +1711,41 @@ export default function Billing() {
             </div>
           </div>
 
-          {/* ── The four allowance tiles: eight declared figures ────────────── */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {/* ── Over capacity, after a downgrade ─────────────────────────────
+              Rendered from the server's own `over_capacity` block, which is computed where both
+              the measured usage and the new plan's limits are held. Nothing is deleted when a plan
+              goes down — the strategies, models and listings an account built above its new
+              capacity stay intact and readable — so this says what IS true: the data is preserved
+              and only ADDING more is prevented. A page that said "reduce to 3 strategies" would be
+              instructing a trader to destroy their own work to satisfy a limit that does not
+              require it. */}
+          {exceeded.length > 0 ? (
+            <div className="mt-4 rounded-lg border border-status-warning/30 bg-status-warning-wash p-4">
+              <p className="text-title font-semibold text-content-primary">
+                Some allowances are above your current plan
+              </p>
+              <p className="mt-1 text-body text-content-secondary">
+                Everything you have built is preserved and still readable. While you are over an
+                allowance you cannot create or activate more of it.
+              </p>
+              <ul className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5">
+                {exceeded.map((item) => (
+                  <li key={item.resource} className="text-body text-content-secondary">
+                    {item.label}{' '}
+                    <span className="font-mono tabular-nums text-content-primary">
+                      {item.current} / {item.limit}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {/* ── The allowance tiles: every resource the server meters ─────────
+              Thirteen, not four, and driven by the server's own `quotas` — see the `allowances`
+              memo. A metered allowance is labelled "this month" because a monthly figure read as a
+              lifetime total understates consumption by an order of magnitude. */}
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {allowances.map((allowance) => {
               const AllowanceIcon = allowance.icon;
               const unlimited = allowance.quota.available && isUnlimited(allowance.quota.value);
@@ -1562,11 +1799,18 @@ export default function Billing() {
                     {allowance.quotaField.label}
                     {allowance.quota.available ? (
                       <span className="font-mono text-body normal-case tracking-normal tabular-nums text-content-secondary">
-                        {unlimited ? '\u221e' : String(allowance.quota.value)}
+                        {/* The server's `-1` means "set per agreement", which renders as
+                            *Custom* and never as ∞. An Enterprise account with no capacity
+                            recorded is enforced at the Business figure, so "unlimited" would be
+                            a promise the backend does not keep. */}
+                        {unlimited ? 'Custom' : String(allowance.quota.value)}
                       </span>
                     ) : (
                       <Marker field={allowance.quotaField} reason={allowance.quota.reason} />
                     )}
+                    {allowance.isMetered ? (
+                      <span className="normal-case tracking-normal">this month</span>
+                    ) : null}
                   </p>
                   {percent === null ? null : (
                     <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-panel">
@@ -1641,25 +1885,66 @@ export default function Billing() {
         unavailable={{ reason: 'The plan catalogue cannot be read right now.' }}
         unauthorised={{ error: plans.error }}
         actions={
-          plans.state === PANEL_STATES.REFRESHING ? (
-            // fontSize: 11 → --text-body (sentence — Q1).
-            <p className="text-body text-content-muted">Updating pricing…</p>
-          ) : null
+          <div className="flex items-center gap-3">
+            {plans.state === PANEL_STATES.REFRESHING ? (
+              // fontSize: 11 → --text-body (sentence — Q1).
+              <p className="text-body text-content-muted">Updating pricing…</p>
+            ) : null}
+            {/* Monthly / annual. Both cycles arrive priced in the same response, so this changes
+                which figure is shown and which cycle a checkout names — it issues no request and
+                computes no amount. `aria-pressed` rather than a radio group because the two
+                buttons change what the panel shows, not a form value it will submit. */}
+            <div
+              className="inline-flex items-center gap-1 rounded-md border border-line-default bg-surface-inset p-0.5"
+              role="group"
+              aria-label="Billing cycle"
+            >
+              {[
+                { value: 'month', label: 'Monthly' },
+                { value: 'year', label: 'Annual' },
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setCheckoutInterval(option.value)}
+                  aria-pressed={checkoutInterval === option.value}
+                  className={`rounded px-2.5 py-1 text-small font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand ${
+                    checkoutInterval === option.value
+                      ? 'bg-brand text-content-inverse'
+                      : 'text-content-secondary hover:text-content-primary'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
         }
       >
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {cataloguePlans.map((plan) => {
             const isCurrent =
               planName.available
               && String(planName.value).toLowerCase() === String(plan.id).toLowerCase();
+            /*
+              Annual is shown only where the server published an annual price for that plan.
+              Falling back to the monthly figure under an "Annual" toggle would quote one cycle
+              while labelling another; Free and the custom tier simply stay on their own line.
+            */
+            const showsAnnual = checkoutInterval === 'year' && plan.hasAnnual;
             const checkoutBlockedReason = isCurrent
               ? 'This is already your plan, so there is nothing to change.'
-              : isPaymentFailed
-                ? 'Update your payment method first — a plan change cannot be processed while '
-                  + 'a payment is outstanding.'
-                : checkoutInFlight !== '' && checkoutInFlight !== plan.id
-                  ? 'Another checkout is already opening.'
-                  : null;
+              : plan.isCustomPriced
+                // Refused here AND refused by the server, which answers
+                // `PLAN_REQUIRES_SALES_CONTACT` for this tier: it has no published price, so
+                // there is no amount a self-serve checkout could charge.
+                ? 'Enterprise capacity is priced per agreement. Contact us to arrange it.'
+                : isPaymentFailed
+                  ? 'Update your payment method first — a plan change cannot be processed while '
+                    + 'a payment is outstanding.'
+                  : checkoutInFlight !== '' && checkoutInFlight !== plan.id
+                    ? 'Another checkout is already opening.'
+                    : null;
             return (
               <div
                 key={plan.id}
@@ -1714,17 +1999,39 @@ export default function Billing() {
                     and `tokens.css:75` reserves it for a tier-1 figure, which this is. The
                     price is denominated by the server's own ISO code — Requirement 4.4
                     finding 3 — and `precision` is the server's `decimals`, not a currency
-                    comparison made here. A genuine 0 renders 0, which IS the free tier. */}
+                    comparison made here. A genuine 0 renders 0, which IS the free tier.
+
+                    On the annual toggle this renders the server's published YEARLY figure, not a
+                    multiple of the monthly one. The two are different published prices and the
+                    gateway is asked for whichever cycle the request names. */}
                 <div className="mt-4">
-                  <Metric
-                    label={FIELD.cataloguePlanPrice.label}
-                    value={plan.price}
-                    format="currency"
-                    precision={plan.decimals}
-                    unit={plan.denomination === null ? undefined : `${plan.denomination} / month`}
-                    tier={1}
-                    unavailableReason={FIELD.cataloguePlanPrice.reason}
-                  />
+                  {plan.isCustomPriced ? (
+                    <p className="text-figure font-black text-content-primary">Custom</p>
+                  ) : (
+                    <Metric
+                      label={FIELD.cataloguePlanPrice.label}
+                      value={showsAnnual ? plan.annualPrice : plan.price}
+                      format="currency"
+                      precision={plan.decimals}
+                      unit={
+                        plan.denomination === null
+                          ? undefined
+                          : `${plan.denomination} / ${showsAnnual ? 'year' : 'month'}`
+                      }
+                      tier={1}
+                      unavailableReason={FIELD.cataloguePlanPrice.reason}
+                    />
+                  )}
+                  {/* The per-month equivalent of an annual commitment, computed SERVER-side and
+                      read here. A client dividing by twelve would round differently from the
+                      charge, which is how a plan page ends up a rupee off the invoice. */}
+                  {showsAnnual && plan.annualMonthlyEquivalent.available ? (
+                    <p className="mt-1 font-mono text-small tabular-nums text-status-profit">
+                      ≈ {Number(plan.annualMonthlyEquivalent.value).toLocaleString()}{' '}
+                      {plan.denomination} / month
+                      {plan.annualSavings ? ` — save ${plan.annualSavings}%` : ''}
+                    </p>
+                  ) : null}
                 </div>
 
                 {/* fontSize: 10 → --text-body (sentence — Q1), +30%. The hardcoded `$` is
@@ -1781,7 +2088,11 @@ export default function Billing() {
                     disabledReason={checkoutBlockedReason ?? undefined}
                     className="w-full"
                   >
-                    {isCurrent ? 'Current plan' : 'Subscribe'}
+                    {/* The server's own CTA wording when it sent one ("Start Automating",
+                        "Scale to Business", "Talk to Sales"), so the button a trader presses is
+                        labelled by the same catalogue that prices it. `Subscribe` remains the
+                        fallback for a plan that carries no label. */}
+                    {isCurrent ? 'Current plan' : (plan.ctaLabel ?? 'Subscribe')}
                   </CommandButton>
                 </div>
               </div>
