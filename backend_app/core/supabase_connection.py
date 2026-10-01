@@ -60,7 +60,12 @@ class SupabaseConnection:
             vault = SupabaseConnection()
             client = vault.get_client()
             if client:
-                result = client.table("users").select("*").execute()
+                result = client.table("strategy_versions").select("*").execute()
+
+        Note: there is no ``public.users`` table in this schema - Supabase keeps
+        users in ``auth.users``, which PostgREST does not expose. The example
+        above deliberately names a table this application actually owns and
+        declares (``backend_app/migrations/001_strategy_architecture.sql``).
         """
         return self.client
     
@@ -74,13 +79,31 @@ class SupabaseConnection:
         
         Returns:
             True if connection is working, False otherwise
+        
+        The probe reads ``strategy_versions``. That choice is not arbitrary and
+        ``tests/test_schema_table_reference_drift.py`` pins it: the relation
+        exists in the production database, it is declared by a migration in
+        this repository (``001_strategy_architecture.sql``), and it is owned by
+        this application rather than by the Supabase platform.
+        
+        It used to read ``users``, and that is why this method was broken.
+        There is no ``public.users`` in this schema - Supabase keeps users in
+        ``auth.users``, which PostgREST does not expose - so every call got
+        ``42P01``, the bare ``except`` below swallowed it, and ``health_check``
+        returned ``False`` *whenever the client was configured*. It could only
+        ever return ``False``, which is the one answer a health check must not
+        give unconditionally. Nothing in the repository calls it (``routers/
+        health.py`` included), which is why that went unnoticed.
         """
         if not self.client:
             return False
         
         try:
-            # Simple query to verify connection
-            self.client.table("users").select("count", count="exact").limit(1).execute()
+            # Cheapest query that still proves the round trip: one column, one
+            # row, no count. The previous form asked for count="exact", which
+            # makes PostgREST count the whole relation - needless work for a
+            # liveness probe, and the cost grows with the table.
+            self.client.table("strategy_versions").select("id").limit(1).execute()
             return True
         except Exception:
             return False

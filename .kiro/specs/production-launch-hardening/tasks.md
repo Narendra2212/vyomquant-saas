@@ -1476,6 +1476,127 @@ exists to remove.
       launch blocker to be proven, BLOCKED with its gap named, or closed by citation, and "85 tests_
       _fail somewhere" is none of those until the 84 are attributed_
 
+  - [ ] 13.14 Three tables the application reads that production did not have — FIXED and APPLIED
+    - **`copilot_sessions`, `copilot_messages` and `waitlist` were absent from production.** Counted
+      against `pg_tables`: 68 tables in `public`, none of them these three. They were not forgotten,
+      they were declared in the WRONG PLACE. Their only declaration in the tree was the alembic
+      revision `e88f9911b5a2_consolidate_full_schema.py`, and alembic is vestigial here —
+      `alembic_version` holds exactly one row, `d97ffff9c3bb`, and `grep` over
+      `.github/workflows/*.yml`, `Dockerfile*`, `scripts/**` and `*.sh` finds **no step that runs
+      alembic at all**. The live schema is the numbered SQL in `backend_app/migrations/` (001..018)
+      plus `migrations/`, applied by hand through `scripts/apply_migrations.py`. A table declared
+      only in alembic reads as declared to a reviewer and is absent to a trader
+    - **`waitlist` was a LIVE break, on a mounted surface.** `src/lib/waitlistApi.js` queries
+      `supabase.from('waitlist')` straight from the browser over PostgREST;
+      `components/admin/AdminDashboard.jsx` calls its admin half; `App.jsx:634` routes
+      `/admin/waitlist` to that dashboard behind `AdminGuard`. Every visit errored on a nonexistent
+      relation. The public form is a separate matter — `components/waitlist/WaitlistForm.jsx` is
+      imported by nothing outside tests, and `LandingPage.jsx` lines 18-22 record its removal
+    - **The copilot pair was a SILENT break, which is exactly why it survived.** `main.py:660` mounts
+      the router at `/api/v1/copilot`; `routers/copilot.py` touches the two tables **9 times**; every
+      write sits inside a `try/except` that only logs a warning and `list_copilot_sessions` returns
+      `[]` on error. So the chat streamed fine, **no 500 was ever raised, and nothing was ever
+      persisted** — session history was empty by construction. No frontend caller exists yet, so
+      nobody reported it. This is the shape task 14 cares about: a swallowed failure answering
+      normally
+    - **A third defect, latent, in the archived original.**
+      `archived_migrations/terminal_supabase_migrations/20260622000001_create_waitlist.sql` guards the
+      admin read with `USING (auth.jwt() ->> 'role' = 'admin')`, which **can never be true**:
+      Supabase's top-level `role` claim is `anon` / `authenticated` / `service_role`. The admin role
+      lives at `app_metadata.role`, which is where the frontend reads it (`App.jsx:329-331`,
+      `user.app_metadata?.role === 'admin'`). Had that file ever been applied, `/admin/waitlist`
+      would have authenticated correctly and then read **zero rows**. The same file also carries
+      `USING (auth.uid()::text = id::text)` — the caller's user id compared to the row's own primary
+      key, never true — and lacks `trader_type` and `monthly_volume`, both of which
+      `waitlistApi.submit()` actually sends
+    - **FIX: `backend_app/migrations/018_copilot_and_waitlist_tables.sql`, APPLIED to production.**
+      018 because a parallel workstream owns 017. Column sets, defaults, CHECKs, the session FK with
+      `ON DELETE CASCADE` and all four waitlist indexes are `e88f9911b5a2`'s — the newer and more
+      complete definition. Fully idempotent: `IF NOT EXISTS` on every table and index, and every
+      `CREATE POLICY` guarded on `pg_policies` (PostgreSQL has no `CREATE POLICY IF NOT EXISTS`).
+      Admin policies use `(auth.jwt() -> 'app_metadata' ->> 'role') = 'admin'`, which is the fix for
+      the claim-path defect and what makes `/admin/waitlist` actually work. `ip_address` is `TEXT`,
+      not `INET`: a proxy chain hands over a comma-separated `X-Forwarded-For`, which `INET` refuses
+      outright, turning a best-effort audit field into a failed insert
+    - **RLS is on all three, and it is NOT what keeps copilot working.** The backend connects with
+      `SUPABASE_SERVICE_ROLE_KEY` (`core/supabase_connection.py:33`) and the service role bypasses
+      RLS, so the router works the moment the tables exist. The owner-scoped policies — `user_id =
+      auth.uid()` on the session table, session-ownership `EXISTS (...)` on the message table — are
+      defence in depth for a future browser-side read, stated as such in the file
+    - **No `anon` INSERT policy on `waitlist`, deliberately, and the omission is enforced.** The
+      archived file granted `FOR INSERT TO anon WITH CHECK (true)` — a world-writable production
+      table. With the form unmounted that is pure spam surface with no consumer, and RLS denies by
+      default. 018 names the policy it omits, says why, and
+      `tests/test_schema_table_reference_drift.py` fails the build the moment `WaitlistForm.jsx` is
+      imported by a non-test module under `algo22-terminal/src/` while the policy is still missing —
+      so re-mounting the form cannot silently drop every lead into a denied insert
+    - **Production verification, both ends.** Dry run first: the whole file executed inside a
+      transaction that was rolled back, twice in a row to prove idempotency, and the table count
+      returned to 68. Then applied for real with the three tables asserted ABSENT beforehand:
+      **68 → 71 tables**, all three present, `relrowsecurity` true on all three, five policies
+      (`copilot_sessions_owner_access`, `copilot_messages_owner_access`, `waitlist_admin_select` /
+      `_update` / `_delete`), all five CHECK constraints by name, all ten indexes. Separately, inside
+      a rolled-back transaction: `routers/copilot.py`'s insert payload accepted, `ON DELETE CASCADE`
+      proven to take the transcript, `waitlistApi.submit()`'s **exact** payload accepted, and each of
+      the five CHECKs plus `UNIQUE(email)` observed rejecting a bad value. All three tables still at
+      0 rows afterwards — production gained nothing
+    - **A FOURTH defect found on the way, and fixed: `health_check()` could only ever return
+      `False`.** `core/supabase_connection.py` probed `self.client.table("users")` inside
+      `try/except Exception: return False`. There is **no `public.users`** in this schema — Supabase
+      keeps users in `auth.users`, which PostgREST does not expose — so PostgREST answered `42P01`,
+      the bare `except` ate it, and the method returned `False` **whenever the client was
+      configured**. It could not return `True`. Nothing in the repo calls it, `routers/health.py`
+      included, which is why that went unnoticed. Now probes `strategy_versions`, chosen because it
+      is live in production AND declared by `001_strategy_architecture.sql` AND owned by this
+      application; `count="exact"` dropped for a plain `limit(1)`, since a liveness probe has no
+      business counting a whole relation. The `get_client()` docstring example taught the same
+      mistake and is corrected
+    - **The alembic DAG had TWO heads, so `alembic upgrade head` could not run at all.**
+      `d97ffff9c3bb` forks into `e88f9911b5a2 → 6f1b3d9c8a7e` and `add_foreign_keys →
+      implement_rls_policies`; alembic refuses outright with "Multiple head revisions are present".
+      Fixed properly with a hand-written merge revision, `merge_heads_20260820.py`, whose
+      `down_revision` is the tuple `('6f1b3d9c8a7e', 'implement_rls_policies')` and whose
+      `upgrade()`/`downgrade()` are empty. Deleting a head was rejected: both lineages descend from
+      the revision production is stamped at. **This moves nothing in production** — alembic is not
+      applied there — and it is NOT a licence to run `alembic upgrade head`, because `e88f9911b5a2`
+      still opens with `op.create_table('library_strategies')` and that table already exists, so the
+      revision would abort on a `duplicate_table`
+    - **Regression test: `tests/test_schema_table_reference_drift.py`, 29 tests, pure parse, no
+      network.** The general guard is the one that would have caught all three tables: every table
+      named as a literal in `.table("x")` / `.from_("x")` under `backend_app/**/*.py` must be
+      declared by a `CREATE TABLE` in the migration set, with the declared set **parsed** rather than
+      listed, and the failure message naming the table and the `file:line` that references it. Plus:
+      018 declares the three specifically; 018's admin policy uses the `app_metadata` path and the
+      bare `auth.jwt() ->> 'role'` form appears in no executable statement; `health_check()`'s probe
+      is resolved by **AST** over that one method and checked against the declared set; the DAG has
+      exactly one head and the merge joins exactly the two recorded heads with empty functions. SQL
+      comments are blanked before any claim is read off a migration, so 018's own header — which
+      quotes the broken predicate, the omitted INSERT policy and every table name in play — cannot
+      satisfy or trip a single assertion
+    - **Before/after, observed rather than assumed.** With 018 moved aside: **13 failed, 16 passed**.
+      With `health_check()` flipped back to `"users"`: **5 failed, 24 passed**, the general guard
+      reporting `'users' first referenced at backend_app/core/supabase_connection.py:63`. With no
+      merge revision: **3 failed, 26 passed**. All three defects restored: **29 passed**. Real
+      alembic agrees — `ScriptDirectory.get_heads()` returns `['merge_heads']`
+    - **Two exemptions in the guard, named and pinned rather than hidden.** `profiles` and
+      `strategies` are read by the application (34 and 56 reference sites) and declared by **no**
+      migration in this repository — they predate the numbered set and were created in the Supabase
+      project directly. Both are CONFIRMED PRESENT in production, which is the only reason they are
+      tolerated, and a companion test fails if either becomes undeclared-and-unreferenced or starts
+      being declared, so the exemption cannot rot. `users` is deliberately NOT exempt: it was
+      referenced and it does not exist, which is the whole of the fourth defect
+    - **Gates.** `flake8 --select=E9,F63,F7,F82` clean on every touched Python file (the exact
+      invocation `01-pr-check.yml` gates on, and which a prior fix regressed);
+      `tests/test_no_undefined_names.py` 3 passed; `backend_app.main` still imports and still exposes
+      **354 routes**; `test_no_dormant_schema_references` 2, `test_library_schema_contract` +
+      `test_schema_as_code_completeness` 20, `test_migration_tooling` 28 and
+      `test_marketplace_paper_schema_contract` 86 all green against the new migration
+    - _Requirements: 1.5 / 1.7 — a read that did not complete must answer an explicit unavailable,
+      not a fabrication. The copilot router answering 200 with an empty session list over a table_
+      _that does not exist, and `health_check()` reporting unhealthy for a query that could never_
+      _run, are both that clause. P1: a documented capability is dead (`/admin/waitlist`, copilot_
+      _history) and the release could not ship its own migrations_
+
 
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
