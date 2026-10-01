@@ -7,6 +7,13 @@ on:
     types: [completed]
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      allow_unscanned:
+        description: >-
+          Deploy a commit that has no 05 Security run. Only for dispatching an older
+          commit; a missing scan is otherwise treated as a failed gate.
+        type: boolean
+        default: false
 
 # Only ONE deployment may touch the ECS service at a time.
 #
@@ -37,6 +44,24 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # THE SECURITY SCAN NOW GATES THE DEPLOY.
+      #
+      # This workflow chains off 02 Build, and 05 Security gated nothing, so a commit whose
+      # Trivy scan found a CRITICAL vulnerability still shipped. PyJWT 2.13.0 - a
+      # key-confusion signature bypass that lets an attacker forge tokens - reached
+      # production exactly that way and stayed until the pin was bumped.
+      #
+      # The threshold is inherited, not invented: 05-security.yml already runs Trivy with
+      # severity CRITICAL and exit-code 1, so CRITICAL blocks while HIGH and below report
+      # without blocking. Gating on every severity would let a new CVE in some transitive
+      # package freeze an unrelated hotfix.
+      - name: Require the security scan to have passed for this commit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ALLOW_UNSCANNED: ${{ inputs.allow_unscanned }}
+        run: python scripts/require_security_scan.py
 
       - name: Free Disk Space on GitHub Runner
         run: |
