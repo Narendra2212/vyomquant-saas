@@ -1592,3 +1592,289 @@ class TestGuardedAbsentRelationsStayGuarded:
             f"against {mentions} mentions in the file. Comments and literals "
             "must contribute none."
         )
+
+
+# --------------------------------------------------------------------------
+# (f) a FILTER clause attaches to an aggregate, or the statement will not parse
+#
+# THE DEFECT THIS SECTION DETECTS
+# -------------------------------
+# `TestGuardedAbsentRelationsStayGuarded` above protects the GUARD. Nothing
+# protected the guarded STATEMENT from being syntactically invalid, and one of
+# them was. The `referral_wallets` initialisation read
+#
+#     COALESCE(SUM(r.commission_usd), 0) FILTER (WHERE r.status = 'pending')
+#
+# three times. `FILTER` attaches only to an aggregate call, never to an
+# ordinary function, so PostgreSQL answered `42601 syntax error at or near
+# "FILTER"` - verified on PostgreSQL 17.6, WITH the legacy `referrals` table
+# present as well as without it, because 42601 is a parse failure and no table
+# can satisfy it. That statement had therefore never executed successfully on
+# any database.
+#
+# It was fixed by moving `FILTER` inside the `COALESCE` so it attaches to the
+# `SUM`, keeping the `COALESCE` outside as the null-to-zero default for a
+# profile with no referral rows. The guard above was unaffected.
+#
+# Two assertions, deliberately at different strengths:
+#
+# * a GENERAL rule - every executable `FILTER (WHERE ...)` anywhere in the
+#   migration set must sit on a named aggregate. Tractable here because the
+#   whole set contains exactly three, all in the corrected statement; the rest
+#   of the matches on the word are prose and string literals, which the masking
+#   removes.
+# * a SPECIFIC rule - the wallets statement's four expressions keep their exact
+#   shape and their status-to-column order. A statement that merely PARSES
+#   would still be wrong if a `FILTER` landed on the wrong branch or on the
+#   wrong status, and that is the whole class of bug here.
+# --------------------------------------------------------------------------
+
+#: An executable aggregate FILTER clause. `FILTER` with anything other than
+#: `WHERE` after it is not this construct.
+_SQL_FILTER_WHERE = re.compile(r"\bFILTER\s*\(\s*WHERE\b", re.IGNORECASE)
+
+#: PostgreSQL aggregate functions - the ONLY things `FILTER` may follow.
+#: Window functions are deliberately absent: `rank() FILTER (WHERE ...)` is
+#: just as invalid as `COALESCE(...) FILTER (WHERE ...)`. If a genuine
+#: aggregate is ever missing from this set, ADD IT - do not relax the rule.
+_SQL_AGGREGATES = frozenset(
+    """
+    count sum avg min max every bool_and bool_or bit_and bit_or bit_xor
+    array_agg string_agg json_agg jsonb_agg json_object_agg jsonb_object_agg
+    json_objectagg jsonb_objectagg xmlagg range_agg range_intersect_agg
+    multirange_agg stddev stddev_pop stddev_samp variance var_pop var_samp
+    corr covar_pop covar_samp regr_avgx regr_avgy regr_count regr_intercept
+    regr_r2 regr_slope regr_sxx regr_sxy regr_syy mode percentile_cont
+    percentile_disc any_value
+    """.split()
+)
+
+#: What :func:`_filter_clause_target` reports when `FILTER` does not follow a
+#: closing parenthesis at all, so there is no call for it to attach to.
+_FILTER_NOT_A_CALL = "<not a call>"
+
+
+def _filter_clause_target(body: str, pos: int) -> str:
+    """Name of the call whose closing ``)`` sits immediately before ``pos``.
+
+    Walks backwards from the ``FILTER`` keyword: the token before it must be a
+    ``)``; its matching ``(`` is found by depth; the identifier in front of
+    that ``(`` is the call being filtered. ``agg(x) WITHIN GROUP (ORDER BY y)
+    FILTER (...)`` is resolved through the ``WITHIN GROUP`` clause to ``agg``,
+    which is how an ordered-set aggregate is written.
+    """
+    i = pos - 1
+    while i >= 0 and body[i] in " \t\r\n":
+        i -= 1
+    if i < 0 or body[i] != ")":
+        return _FILTER_NOT_A_CALL
+    depth = 0
+    while i >= 0:
+        if body[i] == ")":
+            depth += 1
+        elif body[i] == "(":
+            depth -= 1
+            if depth == 0:
+                break
+        i -= 1
+    if i < 0:
+        return _FILTER_NOT_A_CALL
+    j = i - 1
+    while j >= 0 and body[j] in " \t\r\n":
+        j -= 1
+    end = j + 1
+    while j >= 0 and _IDENT_CHAR.match(body[j]):
+        j -= 1
+    name = body[j + 1:end].lower()
+    if name == "group":
+        k = j
+        while k >= 0 and body[k] in " \t\r\n":
+            k -= 1
+        within_end = k + 1
+        while k >= 0 and _IDENT_CHAR.match(body[k]):
+            k -= 1
+        if body[k + 1:within_end].lower() == "within":
+            return _filter_clause_target(body, k + 1)
+    return name or _FILTER_NOT_A_CALL
+
+
+def _filter_clause_sites(masked: str):
+    """Yield ``(lineno, target)`` for every executable ``FILTER (WHERE ...)``.
+
+    ``masked`` must come from :func:`_mask_sql`, so the word in a comment or
+    inside a ``RAISE NOTICE`` literal - and this file's own header quotes the
+    broken form twice - contributes nothing.
+    """
+    for match in _SQL_FILTER_WHERE.finditer(masked):
+        yield (
+            masked.count("\n", 0, match.start()) + 1,
+            _filter_clause_target(masked, match.start()),
+        )
+
+
+#: The exact shape each per-status expression must keep: the aggregate filtered
+#: INSIDE, the COALESCE default OUTSIDE. Both halves matter - see the class.
+_WALLET_STATUS_EXPR = re.compile(
+    r"COALESCE\s*\(\s*SUM\s*\(\s*r\.commission_usd\s*\)\s*"
+    r"FILTER\s*\(\s*WHERE\s+r\.status\s*=\s*'(\w+)'\s*\)\s*,\s*0\s*\)",
+    re.IGNORECASE,
+)
+#: The unfiltered total. Carries no FILTER and must not acquire one.
+_WALLET_LIFETIME_EXPR = re.compile(
+    r"COALESCE\s*\(\s*SUM\s*\(\s*r\.commission_usd\s*\)\s*,\s*0\s*\)(?!\s*FILTER)",
+    re.IGNORECASE,
+)
+#: The file has three ``INSERT INTO referral_wallets``: ``(user_id)`` in
+#: ``create_referral_code_for_user``, ``(user_id, pending_balance_usd,
+#: lifetime_earnings_usd)`` in ``process_referral_commission``, and the
+#: backfill. Only the backfill names all four balance columns, so that - and
+#: not merely the first match - is what this selects.
+_WALLET_INSERT_COLUMNS = re.compile(
+    r"INSERT\s+INTO\s+referral_wallets\s*\(([^)]*)\)", re.IGNORECASE
+)
+_WALLET_BALANCE_COLUMNS = frozenset(
+    {"pending_balance_usd", "approved_balance_usd", "paid_balance_usd",
+     "lifetime_earnings_usd"}
+)
+
+_FILTER_FIXTURE_BROKEN = (
+    "SELECT COALESCE(SUM(r.commission_usd), 0) FILTER (WHERE r.status = 'pending')\n"
+    "FROM profiles p LEFT JOIN referrals r ON r.referrer_id = p.id GROUP BY p.id;\n"
+)
+_FILTER_FIXTURE_FIXED = (
+    "SELECT COALESCE(SUM(r.commission_usd) FILTER (WHERE r.status = 'pending'), 0)\n"
+    "FROM profiles p LEFT JOIN referrals r ON r.referrer_id = p.id GROUP BY p.id;\n"
+)
+_FILTER_FIXTURE_PROSE = """
+-- COALESCE(SUM(x), 0) FILTER (WHERE y = 1) is the form that will not parse.
+DO $$
+BEGIN
+    RAISE NOTICE 'COALESCE(SUM(x), 0) FILTER (WHERE y = 1) raises 42601';
+END $$;
+"""
+_FILTER_FIXTURE_OTHER_SHAPES = """
+SELECT count(*) FILTER (WHERE status IS NULL),
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY amount) FILTER (WHERE amount > 0),
+       jsonb_agg(id) FILTER (WHERE status = 'paid'),
+       GREATEST(sum(amount), 0) FILTER (WHERE status = 'paid')
+FROM real_one;
+"""
+
+
+class TestFilterClausesAttachToAggregates:
+    """``FILTER`` on a non-aggregate is ``42601``: the statement never parses,
+    so it has never run anywhere and there is no behaviour to preserve."""
+
+    def test_the_checker_fires_on_the_broken_form(self):
+        """The premise, and the thing that was actually wrong. Without this the
+        general assertion below could pass by never matching anything."""
+        sites = list(_filter_clause_sites(_mask_sql(_FILTER_FIXTURE_BROKEN)))
+        assert [target for _line, target in sites] == ["coalesce"], sites
+        assert "coalesce" not in _SQL_AGGREGATES, (
+            "COALESCE is not an aggregate; if it is ever added to "
+            "_SQL_AGGREGATES this whole class stops detecting anything."
+        )
+
+    def test_the_checker_accepts_the_corrected_form(self):
+        sites = list(_filter_clause_sites(_mask_sql(_FILTER_FIXTURE_FIXED)))
+        assert [target for _line, target in sites] == ["sum"], sites
+        assert "sum" in _SQL_AGGREGATES
+
+    def test_prose_and_literals_contribute_no_filter_sites(self):
+        """The migration's own header quotes the broken form, and so could a
+        ``RAISE NOTICE``. Neither may trip or satisfy this class."""
+        assert list(_filter_clause_sites(_mask_sql(_FILTER_FIXTURE_PROSE))) == []
+
+    def test_the_checker_resolves_the_other_shapes_it_will_meet(self):
+        """Bare aggregate, ordered-set aggregate through ``WITHIN GROUP``, a
+        non-``SUM`` aggregate, and a second non-aggregate wrapper."""
+        found = [t for _line, t in _filter_clause_sites(_mask_sql(_FILTER_FIXTURE_OTHER_SHAPES))]
+        assert found == ["count", "percentile_cont", "jsonb_agg", "greatest"], found
+        offenders = [t for t in found if t not in _SQL_AGGREGATES]
+        assert offenders == ["greatest"], (
+            f"expected GREATEST to be the only offender, got {offenders}"
+        )
+
+    def test_every_filter_in_the_migration_set_is_on_an_aggregate(self):
+        """The general rule, over every hand-applied SQL migration."""
+        offenders = []
+        total = 0
+        for path in _sql_migration_files():
+            masked = _mask_sql(path.read_text(encoding="utf-8", errors="replace"))
+            for lineno, target in _filter_clause_sites(masked):
+                total += 1
+                if target not in _SQL_AGGREGATES:
+                    offenders.append((path.name, lineno, target))
+        assert total >= 3, (
+            f"only {total} executable FILTER clauses found in "
+            f"{len(_sql_migration_files())} SQL migrations. The "
+            "referral_wallets initialisation alone has three, so the scan has "
+            "stopped matching and this assertion is vacuous."
+        )
+        if offenders:
+            pytest.fail(
+                "FILTER attaches only to an AGGREGATE call in PostgreSQL. These "
+                "clauses attach to something else, so the statement raises "
+                "42601 syntax error at or near \"FILTER\" and can never run - "
+                "on any database, with or without the relations it reads:\n"
+                + "\n".join(
+                    f"  {name}:{lineno}  FILTER follows {target!r}"
+                    for name, lineno, target in offenders
+                )
+                + "\n\nMove the FILTER inside, onto the aggregate: "
+                "COALESCE(SUM(x) FILTER (WHERE ...), 0), not "
+                "COALESCE(SUM(x), 0) FILTER (WHERE ...). If the call really is "
+                "an aggregate, add its name to _SQL_AGGREGATES."
+            )
+
+    def test_the_wallets_initialisation_keeps_its_exact_shape(self):
+        """SPECIFIC, not general: parsing is not enough.
+
+        A ``FILTER`` on the wrong branch of the ``COALESCE``, or on the wrong
+        status, parses perfectly and writes the wrong numbers. Proven against
+        PostgreSQL 17.6: a referrer with a 10.00 ``pending`` row and a 5.00
+        ``approved`` row lands ``pending_balance_usd=10.00``,
+        ``approved_balance_usd=5.00``, ``paid_balance_usd=0.00`` and
+        ``lifetime_earnings_usd=15.00``; a profile with no referral row at all
+        lands four zeros rather than four NULLs, which is what the outer
+        ``COALESCE`` is for.
+        """
+        masked = _mask_sql(
+            REFERRAL_REDESIGN.read_text(encoding="utf-8"), mask_literals=False
+        )
+        column_lists = [
+            [c.strip().lower() for c in m.group(1).split(",")]
+            for m in _WALLET_INSERT_COLUMNS.finditer(masked)
+        ]
+        backfill = [
+            cols for cols in column_lists
+            if _WALLET_BALANCE_COLUMNS.issubset(cols)
+        ]
+        assert len(backfill) == 1, (
+            "expected exactly one INSERT INTO referral_wallets naming all four "
+            f"balance columns (the backfill); found {column_lists}"
+        )
+        columns = backfill[0]
+        expected_statuses = [
+            c[: -len("_balance_usd")] for c in columns if c.endswith("_balance_usd")
+        ]
+        assert expected_statuses == ["pending", "approved", "paid"], columns
+
+        statuses = [m.group(1).lower() for m in _WALLET_STATUS_EXPR.finditer(masked)]
+        assert statuses == expected_statuses, (
+            "the per-status expressions in the referral_wallets initialisation "
+            f"are {statuses}, and the INSERT writes them into {columns}. Each "
+            "must be COALESCE(SUM(r.commission_usd) FILTER (WHERE r.status = "
+            "'<status>'), 0) in the SAME ORDER as the target columns:\n"
+            "  * FILTER outside the COALESCE is 42601 - it has never parsed;\n"
+            "  * COALESCE inside the FILTER, or dropped, writes NULL for a "
+            "profile with no referral rows and trips "
+            "chk_non_negative_balances;\n"
+            "  * the statuses out of order silently writes one balance into "
+            "another's column."
+        )
+        assert len(_WALLET_LIFETIME_EXPR.findall(masked)) == 1, (
+            "lifetime_earnings_usd must stay the UNFILTERED "
+            "COALESCE(SUM(r.commission_usd), 0) - it is the total across every "
+            "status, including ones no balance column buckets."
+        )

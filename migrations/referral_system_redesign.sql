@@ -416,9 +416,30 @@ ON CONFLICT (user_id) DO NOTHING;
 --
 -- Each statement is therefore wrapped in a to_regclass existence guard and run
 -- through EXECUTE, so its relation names are never resolved while the table is
--- absent. The statements are preserved VERBATIM inside the guard: on a database
--- that still carries the legacy table this IS the correct migration and has to
--- keep running. Deleting the backfill would throw that path away.
+-- absent. The statements are preserved VERBATIM inside the guard, with ONE
+-- deliberate exception recorded below: on a database that still carries the
+-- legacy table this IS the correct migration and has to keep running. Deleting
+-- the backfill would throw that path away.
+--
+-- THE ONE EXCEPTION: the wallets initialisation below is NOT byte-for-byte the
+-- pre-guard text. It read
+--     COALESCE(SUM(r.commission_usd), 0) FILTER (WHERE r.status = 'pending')
+-- three times, which puts FILTER on COALESCE. FILTER attaches only to an
+-- aggregate call, so PostgreSQL answered
+--     ERROR 42601: syntax error at or near "FILTER"
+-- whether or not `referrals` existed - observed on the TAKEN branch too, with
+-- the legacy table present. That statement had therefore never executed
+-- successfully on any database, so there was no legacy behaviour to preserve
+-- and nothing to be faithful to; verbatim preservation was the MEANS of keeping
+-- a working legacy path, not an end in itself. FILTER was moved inside COALESCE
+-- in all three per-status expressions -
+--     COALESCE(SUM(r.commission_usd) FILTER (WHERE r.status = 'pending'), 0)
+-- - which is the only reading consistent with the target columns
+-- (pending_/approved_/paid_balance_usd are per-status conditional sums) and
+-- keeps COALESCE where it belongs: OUTSIDE, as the null-to-zero default for a
+-- profile with no referral rows, where the filtered SUM is NULL. The fourth
+-- expression, lifetime_earnings_usd, carries no FILTER and is unchanged.
+-- Nothing else in the statement, the guard or the EXECUTE wrapper moved.
 --
 -- The guard tests the UNQUALIFIED name, exactly as the statements it guards do,
 -- so guard and statement can never disagree about which relation is meant.
@@ -475,9 +496,9 @@ BEGIN
 INSERT INTO referral_wallets (user_id, pending_balance_usd, approved_balance_usd, paid_balance_usd, lifetime_earnings_usd)
 SELECT 
     id,
-    COALESCE(SUM(r.commission_usd), 0) FILTER (WHERE r.status = 'pending'),
-    COALESCE(SUM(r.commission_usd), 0) FILTER (WHERE r.status = 'approved'),
-    COALESCE(SUM(r.commission_usd), 0) FILTER (WHERE r.status = 'paid'),
+    COALESCE(SUM(r.commission_usd) FILTER (WHERE r.status = 'pending'), 0),
+    COALESCE(SUM(r.commission_usd) FILTER (WHERE r.status = 'approved'), 0),
+    COALESCE(SUM(r.commission_usd) FILTER (WHERE r.status = 'paid'), 0),
     COALESCE(SUM(r.commission_usd), 0)
 FROM profiles p
 LEFT JOIN referrals r ON r.referrer_id = p.id

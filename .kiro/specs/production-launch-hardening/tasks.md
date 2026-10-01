@@ -1744,6 +1744,120 @@ exists to remove.
       _declared schema and the applied schema disagree, and the disagreement was invisible to the_
       _guard that exists to catch exactly it_
 
+  - [ ] 13.16 The statement 13.15 guarded has never parsed — `FILTER` on `COALESCE`, now fixed
+    - **What 13.15 left behind, and why it was not a cosmetic leftover.** The guarded
+      `referral_wallets` initialisation in `migrations/referral_system_redesign.sql` read
+      `COALESCE(SUM(r.commission_usd), 0) FILTER (WHERE r.status = 'pending')` three times.
+      `FILTER` attaches only to an **aggregate** call, never to an ordinary function, so PostgreSQL
+      answers `42601 syntax error at or near "FILTER"` — and because 42601 is a **parse** failure,
+      no table can satisfy it. 13.15 observed this three times, including on the **taken** branch
+      with the legacy table present, and recorded it as a finding rather than fixing it, on the
+      grounds that editing the statement would contradict the byte-for-byte preservation its guard
+      rested on. That reasoning was wrong in both halves
+    - **Verbatim preservation was a MEANS, not an end.** Its purpose was to avoid destroying a
+      legacy migration path that still works on a database carrying the legacy `referrals` table. A
+      statement that cannot PARSE has no such path to preserve: it has never executed successfully
+      on any database, anywhere, so there is no behaviour to regress and nothing to be faithful to.
+      Keeping it also left 13.15's claim false in the direction that matters — the guard **moved**
+      the abort rather than removing it. On a database that HAS `referrals` the file still died at
+      this statement. "Replayable" was the goal, and this was the remaining reason it was not
+    - **FIX: three expressions, `FILTER` moved inside the `COALESCE`.**
+      `COALESCE(SUM(r.commission_usd) FILTER (WHERE r.status = 'pending'), 0)`, and the same for
+      `'approved'` and `'paid'`. The intent is unambiguous from the target columns —
+      `pending_balance_usd` / `approved_balance_usd` / `paid_balance_usd` are per-status conditional
+      sums — and the `COALESCE` has to stay **outside**, because that is what turns the NULL a
+      filtered `SUM` returns for a profile with no matching row into the `0.00` the
+      `chk_non_negative_balances` CHECK requires. The fourth expression, `lifetime_earnings_usd`,
+      is `COALESCE(SUM(r.commission_usd), 0)` with no `FILTER` — already valid, left alone. **This
+      deliberately edits a statement 13.15 preserved byte for byte, and that is consistent rather
+      than a reversal**: the probe proves the HEAD text plus exactly those three substitutions
+      equals the working-tree text, character for character, so what 13.15 was protecting — the
+      legacy path, the guard, the `EXECUTE` wrapper, the relationships backfill — is untouched, and
+      the only thing changed is a token sequence that no PostgreSQL has ever accepted. The file's
+      own header previously asserted the statements were preserved VERBATIM; it now records this
+      one exception and the reason, so the migration does not carry a false claim about itself
+    - **Proven on the real PostgreSQL (17.6), before and after in ONE transcript, scratch schema
+      only.** `vq_referral_replay_probe`, created and `DROP SCHEMA … CASCADE`-ed inside the run;
+      `public` read for the baseline and never written. Nothing hand-typed: the BROKEN statement and
+      13.15's BROKEN guarded block come from `git show HEAD:`, the CORRECTED ones from the working
+      tree. Six profiles, and a legacy `referrals` carrying 10.00 `pending` + 5.00 `approved` for
+      referrer A, 7.25 `paid` + 1.00 `reversed` for referrer B, and nothing at all for C.
+      **(a) the defect, with `referrals` PRESENT** — HEAD's statement bare → `42601`; HEAD's
+      statement **inside 13.15's guard** → `42601` as well, 0 rows written.
+      **(b) the fix, with `referrals` PRESENT** — `OK`, 6 rows, and the per-status split is right,
+      not merely parseable: A → `pending 10.00, approved 5.00, paid 0.00, lifetime 15.00`;
+      B → `pending 0.00, approved 0.00, paid 7.25, lifetime 8.25`. B is the load-bearing row —
+      `reversed` belongs to no balance column, so `lifetime 8.25 > paid 7.25` is what a `FILTER`
+      attached to the wrong branch could not produce.
+      **(c) zeros, not NULLs** — C, which has no referral row in either direction, lands
+      `0.00 / 0.00 / 0.00 / 0.00`, and `count(*)` over all four columns `IS NULL` is **0**.
+      **(d) 13.15's fix still holds** — with `referrals` ABSENT the corrected statement bare still
+      raises `42P01`, so the guard is still load-bearing; guarded it is `OK` with
+      `NOTICE: … skipping the referral_wallets initialisation` and 0 rows.
+      **(e) replay** — a second run of the corrected guarded block leaves `referral_wallets` at
+      **6 → 6**, `ON CONFLICT (user_id) DO NOTHING` holding. The relationships backfill was
+      re-proven unchanged in both directions. Afterwards `public`: **71 tables**, `referral_codes` 5
+      / `referral_profiles` 2 / `referral_relationships` 1 / `referral_wallets` 5 /
+      `referral_commissions` 0 / `referral_payouts` 0 / `profiles` 180, `public.referrals` still
+      absent, and no `vq_*` schema left behind
+    - **A THIRD defect in the same statement, found by the same probe and deliberately NOT fixed —
+      and the line is principled, not arbitrary.** The statement selects `id` **unqualified** while
+      grouping by `p.id`. The Alembic revision `6f1b3d9c8a7e_add_referrals.py` — the only
+      declaration of `referrals` anywhere in the tree — gives it a `UUID PRIMARY KEY id`. With the
+      legacy table in that shape the corrected statement answers
+      `42702 column reference "id" is ambiguous`, observed. It is left alone because 42702 is
+      **shape-dependent** where 42601 was not: a legacy `referrals` without an `id` column has a
+      genuinely working path through this statement, which is exactly the thing verbatim
+      preservation exists to protect. 42601 had no such path under any shape. So the honest claim
+      remains narrower than "replayable everywhere": the file now replays past the referral section
+      on a database **without** the legacy table, and on one **with** it in the shape the statement
+      itself implies, and still aborts on one carrying the Alembic-declared `id` column
+    - **Regression assertions: `tests/test_schema_table_reference_drift.py`, 43 → 49 tests, still
+      pure parse and still no network.** `TestGuardedAbsentRelationsStayGuarded` protected the
+      GUARD; nothing protected the guarded STATEMENT from being syntactically invalid. Two
+      assertions at two strengths, and the stronger one **is** general: every executable
+      `FILTER (WHERE …)` in any `migrations/*.sql` or `backend_app/migrations/*.sql` file must sit
+      on a named PostgreSQL aggregate, resolved structurally — walk back from the keyword, require
+      a closing `)`, match it by depth, read the identifier in front of it, and step through a
+      `WITHIN GROUP (…)` clause for ordered-set aggregates. Window functions are deliberately
+      **off** the aggregate list, since `rank() FILTER (…)` is as invalid as `COALESCE(…) FILTER
+      (…)`. That rule is tractable here because the whole migration set contains exactly **three**
+      executable `FILTER` clauses, all in this statement — the other 40-odd matches on the word are
+      prose and `RAISE NOTICE` literals, which the existing offset-preserving masking removes. The
+      second assertion is **SPECIFIC to this statement**, and is stated as specific rather than
+      dressed up as general: the three per-status expressions must keep the exact
+      `COALESCE(SUM(r.commission_usd) FILTER (WHERE r.status = '…'), 0)` shape, in the **same order
+      as the INSERT's target columns** (parsed off the column list, not hardcoded), and
+      `lifetime_earnings_usd` must stay the one unfiltered `COALESCE(SUM(…), 0)`. Parsing alone
+      would miss a `FILTER` on the wrong branch or the wrong status, which is the whole class of
+      bug here. Four fixture tests guard the checker itself: the broken form must resolve to
+      `coalesce`, the corrected form to `sum`, prose and literals must contribute **zero** sites,
+      and a mixed fixture (`count(*)`, `percentile_cont(…) WITHIN GROUP (…)`, `jsonb_agg(…)`,
+      `GREATEST(sum(…), 0)`) must report `GREATEST` as the only offender
+    - **Before/after, observed rather than expected.** With the migration restored to HEAD in place
+      (swapped and restored in binary, SHA-checked both ways): **2 failed, 47 passed**, the general
+      one reporting `referral_system_redesign.sql:478 FILTER follows 'coalesce'` for lines 478, 479
+      and 480, and the specific one reporting per-status expressions `[]` against target columns
+      `['user_id', 'pending_balance_usd', 'approved_balance_usd', 'paid_balance_usd',
+      'lifetime_earnings_usd']`. With the fix: **49 passed**. The other four of the six new tests
+      pass in both directions by construction — they assert on fixtures, not on the migration — and
+      that is said here rather than counted as coverage
+    - **Gates.** `flake8 --select=E9,F63,F7,F82` clean on the touched Python; `backend_app.main`
+      still imports and still exposes **354 routes**; the suites that parse these same migration
+      files green against the edited one — `test_migration_tooling` 28,
+      `test_no_dormant_schema_references` 2, `test_schema_as_code_completeness` 6,
+      `test_library_schema_contract` 14, **50 passed** together. **`test_no_undefined_names.py` is
+      now 3 passed**: the two `F821`s 13.15 recorded in the parallel workstream's uncommitted
+      `backend_app/backend/ml_training_policy.py` (`:708 field`, `:1268 replace`) are gone — that
+      file is now 2,056 uncommitted added lines and `F821`-clean — so the gate 13.15 had to report
+      red for a reason outside its change is green without anything here touching it
+    - _Requirements: none directly — same class as 13.15, which is the same class as 13.14's "the_
+      _release could not ship its own migrations". Recorded because task 14 requires every launch_
+      _blocker to be proven, BLOCKED with its gap named, or closed by citation, and 13.15's_
+      _"replayable" was none of those while the statement it guarded could not parse. P1, and the_
+      _same P1 as 13.15: a migration the release cannot replay, with the added lesson that a guard_
+      _asserting WHERE a statement sits asserts nothing about whether it RUNS_
+
 
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
