@@ -79,8 +79,6 @@ from backend_app.core.consistency_checker import (PositionConsistencyChecker,
 # Database imports — ALL SQLAlchemy models must be imported here so that
 # Base.metadata.create_all() registers their tables at startup.
 from backend_app.core.database import Base, SessionLocal, engine
-# Safety feature flags
-from backend_app.core.feature_flags import ExecutionContext
 from backend_app.core.http_metrics import \
     MarketplacePaperHttpMetricsMiddleware
 from backend_app.core.metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS_TOTAL
@@ -96,7 +94,6 @@ from backend_app.core.reconciliation_scheduler import (
 #  SYSTEM FREEZE: Import safety config FIRST to block all execution
 # This must be imported before any engine that could execute trades
 from backend_app.core.safety_config import ExecutionFlags, SafetyMonitor
-from backend_app.core.safety_monitor import log_blocked_execution
 from backend_app.core.supabase_connection import SupabaseConnection
 from backend_app.core.state import app_state
 from backend_app.core.dependencies import get_admin_user
@@ -686,16 +683,29 @@ else:
     logger.warning("   Routes under /api/execution are BLOCKED pending safety review")
     logger.warning("   See transformation plan Phase 1 - Only /api/orders is active")
     
-    # Log blocked attempts at startup
-    log_blocked_execution(
-        source="main.py",
-        context=ExecutionContext.PRODUCTION_ROUTER.value,
-        details={
-            "reason": "PRODUCTION_ROUTER_ENABLED is False - unsafe path blocked pending safety review",
-            "router_prefix": "/api/execution",
-            "blocked_routes": "All /api/execution/* endpoints",
-            "safe_alternative": "/api/orders/* (verified safe with idempotency)"
-        }
+    # NO BLOCKED-EXECUTION EVENT IS RECORDED HERE, AND THAT IS THE FIX.
+    #
+    # This used to call log_blocked_execution(...) on every process start. That function
+    # exists to record an execution that was ATTEMPTED and stopped - which is exactly how
+    # dag_worker._run_dag_with_heartbeat and dag_event_loop._emit_signal use it, each
+    # recording a real call that a feature flag refused.
+    #
+    # Nothing is attempted here. A router simply was not mounted. Recording it as a blocked
+    # execution put a phantom event into safety_monitor._blocked_events on every container
+    # start, persisted it to Redis under the retention window, and inflated what
+    # safety_monitor.get_statistics() reports as total_blocked_events - adding a
+    # production_router entry to blocked_by_context that no caller caused. Anyone auditing
+    # blocked executions would be reading an event that never happened.
+    #
+    # It also emitted logger.critical on every start for a permanent, deliberate setting.
+    # CRITICAL is the channel that is supposed to mean someone should look now; spending it
+    # on a configuration that has not changed since STEP 1 is how a CRITICAL stops being
+    # read. The three warnings above already state the router is disabled, which is the
+    # accurate record: a fact about configuration, logged as one.
+    logger.warning(
+        "   Blocked routes: %s/* | Safe alternative: /api/orders/* "
+        "(verified safe with idempotency)",
+        "/api/execution",
     )
 #  Mount Internal Administrative routers (Protected by Admin Auth)
 app.include_router(portfolio_mgmt_router, prefix="/api/internal/portfolio-mgmt", dependencies=[Depends(get_admin_user)], tags=["Internal Portfolio Mgmt"])
