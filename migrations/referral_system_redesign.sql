@@ -392,7 +392,63 @@ FROM profiles
 WHERE referral_code IS NOT NULL
 ON CONFLICT (user_id) DO NOTHING;
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- LEGACY RELATION `referrals`: ABSENT HERE, GUARDED, DELIBERATELY NOT DELETED
+-- ═══════════════════════════════════════════════════════════════════════════
+-- `referrals` is the PRE-REDESIGN table this file supersedes: one flat row per
+-- referral, carrying referrer_id, referred_id, status and commission_usd. The
+-- two statements below read it to carry that history forward into
+-- referral_relationships and referral_wallets.
+--
+-- IT DOES NOT EXIST IN THIS DEPLOYMENT. to_regclass('public.referrals') is NULL
+-- and the relation is absent from pg_tables. Nothing in this repository creates
+-- it except the Alembic revision
+-- backend_app/alembic/versions/6f1b3d9c8a7e_add_referrals.py, and Alembic is
+-- vestigial here: production's alembic_version holds one row, d97ffff9c3bb, and
+-- no workflow, Dockerfile or script runs `alembic upgrade` at all.
+--
+-- Unguarded, these two statements abort the whole file with
+--     ERROR 42P01: relation "referrals" does not exist
+-- which made this migration NOT REPLAYABLE. Every other statement here is
+-- written to be re-runnable - CREATE TABLE IF NOT EXISTS, ON CONFLICT DO
+-- NOTHING - yet a staging or DR rebuild from the migration set died partway
+-- through the referral system on a relation that nothing declares.
+--
+-- Each statement is therefore wrapped in a to_regclass existence guard and run
+-- through EXECUTE, so its relation names are never resolved while the table is
+-- absent. The statements are preserved VERBATIM inside the guard: on a database
+-- that still carries the legacy table this IS the correct migration and has to
+-- keep running. Deleting the backfill would throw that path away.
+--
+-- The guard tests the UNQUALIFIED name, exactly as the statements it guards do,
+-- so guard and statement can never disagree about which relation is meant.
+--
+-- One consequence, stated plainly: where `referrals` is absent the wallet
+-- initialisation is skipped ENTIRELY - it is not degraded into a zero-balance
+-- insert for every profile. That matches what this deployment actually holds
+-- (5 referral_wallets rows against 180 profiles), so the guard reproduces
+-- production rather than diverging from it.
+--
+-- DO NOT RE-APPLY THIS FILE TO PRODUCTION to "pick the backfill up". Production
+-- already has all five referral_* tables, created by
+-- migrations/006_reconcile_production_database.sql, whose column sets differ
+-- from this file's; and this file's own ALTER TABLE profiles statements have
+-- never run there. The fix below is about REPLAYABILITY on a rebuilt database,
+-- nothing else.
+--
+-- tests/test_schema_table_reference_drift.py pins both halves of this: that
+-- `referrals` is still referenced and still declared by no migration, and that
+-- EVERY statement in this file that reads it sits inside a to_regclass guard.
+-- ═══════════════════════════════════════════════════════════════════════════
 -- Migrate existing referral relationships
+--   guarded: see the note above. The SQL inside EXECUTE is the original,
+--   unchanged, and is what runs on a database that still has `referrals`.
+DO $referrals_guard$
+BEGIN
+    IF to_regclass('referrals') IS NULL THEN
+        RAISE NOTICE 'referral_system_redesign: legacy relation "referrals" is absent; skipping the referral_relationships backfill';
+    ELSE
+        EXECUTE $referrals_relationships_backfill$
 INSERT INTO referral_relationships (referrer_id, referred_id, referral_code_id, status)
 SELECT 
     r.referrer_id,
@@ -402,8 +458,20 @@ SELECT
 FROM referrals r
 LEFT JOIN referral_codes rc ON rc.user_id = r.referrer_id
 ON CONFLICT (referred_id) DO NOTHING;
+$referrals_relationships_backfill$;
+    END IF;
+END
+$referrals_guard$;
 
 -- Initialize wallets for existing users
+--   guarded for the same reason. Skipped wholesale where `referrals` is absent,
+--   which is the behaviour the note above records.
+DO $referrals_wallet_guard$
+BEGIN
+    IF to_regclass('referrals') IS NULL THEN
+        RAISE NOTICE 'referral_system_redesign: legacy relation "referrals" is absent; skipping the referral_wallets initialisation';
+    ELSE
+        EXECUTE $referrals_wallets_backfill$
 INSERT INTO referral_wallets (user_id, pending_balance_usd, approved_balance_usd, paid_balance_usd, lifetime_earnings_usd)
 SELECT 
     id,
@@ -415,6 +483,10 @@ FROM profiles p
 LEFT JOIN referrals r ON r.referrer_id = p.id
 GROUP BY p.id
 ON CONFLICT (user_id) DO NOTHING;
+$referrals_wallets_backfill$;
+    END IF;
+END
+$referrals_wallet_guard$;
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- CLEANUP: Remove old available_discounts column (will be handled by payout system)

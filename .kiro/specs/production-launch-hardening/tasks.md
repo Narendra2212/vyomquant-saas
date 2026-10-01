@@ -1597,6 +1597,153 @@ exists to remove.
       _run, are both that clause. P1: a documented capability is dead (`/admin/waitlist`, copilot_
       _history) and the release could not ship its own migrations_
 
+  - [ ] 13.15 13.14's guard only scanned Python — a SQL migration reads a table nothing declares
+    - **The hole.** 13.14's general guard resolves every `.table("x")` / `.from_("x")` literal under
+      `backend_app/` against a `CREATE TABLE` in the migration set. It scans **Python call sites
+      only**. It never asks what the SQL migrations themselves READ, so a migration can reference a
+      phantom relation and keep the suite green. Running the same audit one level out found one
+    - **`public.referrals` does not exist, and `migrations/referral_system_redesign.sql` reads it
+      twice.** `to_regclass('public.referrals')` is NULL and the relation is absent from `pg_tables`
+      (71 tables in `public`, 018 applied). Its only declaration anywhere in the tree is the alembic
+      revision `6f1b3d9c8a7e_add_referrals.py`, which production never applied — `alembic_version`
+      still holds the single row `d97ffff9c3bb` and, as 13.14 established, no workflow, Dockerfile or
+      script runs `alembic upgrade` at all. The two reads were at lines 402 and 415: the
+      `referral_relationships` backfill (`FROM referrals r LEFT JOIN referral_codes rc`) and the
+      `referral_wallets` initialisation (`FROM profiles p LEFT JOIN referrals r`)
+    - **Severity, not inflated: a non-replayable migration and a hole in a new guard.** NOT lost
+      customer data and NOT a live break. Verified in production: `referral_codes` 5,
+      `referral_profiles` 2, `referral_relationships` 1, `referral_wallets` 5,
+      `referral_commissions` 0, `referral_payouts` 0, `profiles` 180. No Python and no frontend
+      module reads `referrals` — the live system uses the redesigned `referral_*` tables only, so
+      the backfill that reads the legacy table had nothing to migrate here. What is broken is the
+      rebuild: anyone reconstructing a staging or DR database from the migration set gets
+      `42P01 relation "referrals" does not exist` partway through the referral system, even though
+      every other statement in the file is written to be re-runnable
+    - **CORRECTION to the premise this task started from: the file was never applied at all, and
+      production's 5 `referral_codes` rows are not its backfill.** `profiles.referral_code` and
+      `profiles.referred_by_user_id` **do not exist** in production, so that backfill would answer
+      `42703`, not insert 5 rows; `fk_profiles_referred_by`, `uq_profiles_referral_code`, the
+      `tr_profiles_create_referral_code` trigger and `generate_unique_referral_code` are all absent
+      too. Production's referral tables came from `migrations/006_reconcile_production_database.sql`
+      — its policy names (`referral_codes_select` / `_insert` / `_service`, `ref_comm_owner_read`,
+      `ref_wallets_owner_access`, …) and index names (`idx_referral_rel_referrer` / `_referred`,
+      `idx_ref_comm_referrer`, `idx_ref_payouts_user`) are **exactly** what the database has, while
+      the redesign file's `*_select_own` policies and `idx_referral_relationships_*` indexes appear
+      nowhere. The column sets also diverge: production's `referral_wallets` is 006's
+      `balance_usd` / `total_earned_usd` / `pending_usd`, not the redesign's four `*_balance_usd` /
+      `lifetime_earnings_usd`. Two files in `migrations/` declare the same five tables differently —
+      the shape 016's header warns about — which is a finding of its own, not this one
+    - **FIX, and what it is explicitly NOT.** Each statement that reads the legacy table is wrapped
+      in `DO $…$ BEGIN IF to_regclass('referrals') IS NULL THEN RAISE NOTICE … ELSE EXECUTE $…$
+      <original> $…$; END IF; END $…$;`, so an absent relation is a logged no-op instead of an abort.
+      The statements are preserved **byte for byte** — the probe asserts the `git show HEAD:` text is
+      a verbatim substring of the guarded block — because on a database that still carries the
+      legacy table this is the correct migration and must keep running; a guard that works by
+      deleting the backfill is not the fix. The guard tests the **unqualified** name, exactly as the
+      statements it guards do, so guard and statement can never disagree about which relation is
+      meant. **This was NOT re-applied to production and must not be**: production already has all
+      five tables from 006 with different columns, and this file's `ALTER TABLE profiles ADD COLUMN`
+      statements have never run there, so a "replay to pick the backfill up" would mutate a live
+      180-row table. The fix is about replayability on a rebuilt database, nothing else
+    - **The `EXECUTE` premise was wrong, and it was checked rather than assumed.** On the production
+      server (PostgreSQL **17.6**) a plain `IF to_regclass(…) IS NOT NULL THEN <sql> END IF` inside a
+      `DO` block does **not** raise `42P01` on the untaken branch — PL/pgSQL prepares embedded SQL
+      lazily through SPI, so a branch that never runs never resolves the name. Proven in the scratch
+      schema alongside the bare statement, which did raise `42P01`; and
+      `003_signal_trace_preflight.sql` already depends on that shape for `exchanges`. `EXECUTE` is
+      used anyway, **dollar-quoted**: it removes the question entirely, it keeps the statement
+      verbatim where `EXECUTE '…'` would have doubled every quote, and — the deciding reason — a
+      single-quoted `EXECUTE` string would have hidden the reference from the new guard below, which
+      is the one thing this exemption must never do
+    - **Proven on the real PostgreSQL, both directions, in a scratch schema created and dropped
+      inside one run.** `vq_referral_replay_probe`, `search_path` set to it, `DROP SCHEMA … CASCADE`
+      at the end; the four relations built in **this file's** declared shapes, i.e. what a fresh
+      rebuild would produce. Nothing was hand-typed: the ORIGINAL statements were extracted from
+      `git show HEAD:` and the GUARDED blocks from the working tree.
+      **(a) legacy table ABSENT** — ORIGINAL relationships backfill → `42P01 relation "referrals"
+      does not exist`; GUARDED → `OK`, with `NOTICE: … "referrals" is absent; skipping the
+      referral_relationships backfill`, and 0 rows written.
+      **(b) legacy table PRESENT with one row** — GUARDED → `OK` and **1 row** in
+      `referral_relationships` carrying the right `referrer_id`, `referred_id`, `referral_code_id`
+      and `status`, so the guard did **not** silently disable the migration; a second run left it at
+      1 row, `ON CONFLICT (referred_id) DO NOTHING` holding. Afterwards `public` was re-counted:
+      **71 tables**, `referral_codes` 5 / `referral_profiles` 2 / `referral_relationships` 1 /
+      `referral_wallets` 5 / `referral_commissions` 0 / `referral_payouts` 0 / `profiles` 180 — all
+      unchanged — `public.referrals` still absent, and no `vq_*` schema left behind
+    - **A SECOND defect the probe found, pre-existing and deliberately NOT fixed here: the wallets
+      statement is invalid SQL.** `COALESCE(SUM(r.commission_usd), 0) FILTER (WHERE r.status =
+      'pending')` puts `FILTER` on `COALESCE`, and `FILTER` only attaches to an aggregate call, so
+      PostgreSQL answers `42601 syntax error at or near "FILTER"` **whether or not `referrals`
+      exists** — observed three times in the probe, including on the taken branch, which also proves
+      the `EXECUTE`d SQL really is parsed and run when the guard fires. So that statement has never
+      been runnable, and the honest claim is narrower than "replayable": the file now replays past
+      the referral section on a database **without** the legacy table, and still aborts on one
+      **with** it. The correct form is `COALESCE(SUM(…) FILTER (WHERE …), 0)`; changing the statement
+      contradicts the verbatim-preservation this fix rests on, so it is left as its own finding
+    - **Guard hole closed: `tests/test_schema_table_reference_drift.py`, 29 → 43 tests, still pure
+      parse and still no network.** A new SQL-side scanner plus three classes: the general guard
+      (every relation any `migrations/*.sql` or `backend_app/migrations/*.sql` file reads or writes
+      via `FROM`, `JOIN`, `INSERT INTO`, `UPDATE` or `DELETE FROM` must resolve to a `CREATE TABLE` /
+      `CREATE VIEW` in the SQL set or to a named exemption), a guard-the-guard, and the class that
+      protects the fix above. Alembic is deliberately **not** consulted as a declaration source — a
+      relation declared only there is the exact drift 13.14 recorded
+    - **False positives: 86 candidates down to 0, every exclusion a syntactic CLASS rather than a
+      table name.** Comments blanked; single-quoted literals blanked (`RAISE NOTICE 'rewriting rows
+      from old to new'` reported reads of `old` and `new`); double-quoted identifiers folded to one
+      token (`CREATE POLICY "Users can update own notifications"` reported a relation called `own`);
+      dollar-quote **bodies kept**, since PL/pgSQL carries real DML — which is also why
+      `EXECUTE $q$ … $q$` does not hide `referrals`; the `pg_` prefix, reserved by PostgreSQL so
+      every match is a catalog probe; any non-`public` qualifier, which covers `information_schema`,
+      other schemas, and PL/pgSQL `OLD.`/`NEW.` record rows; a `(` after the name, for
+      `unnest(…)` and `jsonb_array_elements(…)`; CTE names parsed out of `WITH`; a reserved-word
+      stoplist; `REVOKE … FROM <role>` by statement head, which alone removed 48 hits on `anon` and
+      `authenticated`; `IS DISTINCT FROM <column>`; `EXTRACT`/`SUBSTRING`/`TRIM(… FROM …)` resolved
+      by innermost enclosing call; and `FOR UPDATE` / `ON CONFLICT DO UPDATE SET` /
+      `ON UPDATE CASCADE` / `BEFORE INSERT OR UPDATE ON` / `GRANT … UPDATE ON` by leading word
+    - **The parser's own health is assertable, the way `test_declared_set_is_parsed_and_non_trivial`
+      already is for the Python side.** The masking is asserted **offset-preserving** — identical
+      length and newline count on every migration — which is what lets the DML view and the
+      guard view share offsets with the raw file. A fixture carrying every hazard listed above,
+      including the ones the current migration set happens not to contain (CTEs, `COPY … FROM
+      STDIN`, `EXTRACT(EPOCH FROM …)`), must resolve to **exactly five** relations, two of them
+      deliberately undeclared so the scanner is proven to still FIRE rather than to have gone quiet.
+      Plus floors on the real set: >50 declared, >80 DML sites, >20 distinct relations. Declarations
+      are parsed off the **masked** text, so a `CREATE TABLE` quoted inside a `RAISE NOTICE` is not a
+      declaration — the comment-only strip had been counting two phantom relations, `does` and `if`
+    - **Six exemptions in two named categories, each pinned so it cannot rot.**
+      `SQL_UNDECLARED_PRESENT_IN_PRODUCTION` — `profiles` (180 rows), `strategies` (187),
+      `execution_records` (198), `library_strategies` (0) — declared by no SQL migration and all
+      **confirmed present**, which is the only reason they are tolerated.
+      `SQL_GUARDED_ABSENT_RELATIONS` — `referrals` (`to_regclass`) and `exchanges`
+      (`information_schema`) — **absent** from production and tolerated only because every statement
+      touching them is existence-guarded; `exchanges`' single site in `003_signal_trace_preflight.sql`
+      was already guarded that way, which is how the category was found rather than invented. A
+      companion test fails if an entry stops being referenced or starts being declared, the two sets
+      may not overlap, and `profiles`/`strategies` are asserted exempt on **both** sides so the
+      Python and SQL justifications cannot drift apart. `users` is barred from both
+    - **Before/after, observed rather than expected.** With the migration restored to HEAD:
+      **3 failed, 40 passed**, the load-bearing one reporting
+      `guarded=[] unguarded=[(402, 'FROM'), (415, 'JOIN')]`. With the fix: **43 passed**. The general
+      guard was separately proven to FIRE rather than merely to be satisfied by its own lists —
+      dropping `referrals` from its exemption yields `'referrals' FROM at
+      referral_system_redesign.sql:458 (and 1 more)`, and dropping `library_strategies` yields
+      `'library_strategies' FROM at 007_marketplace_submissions.sql:1460 (and 1 more)`
+    - **Gates.** `flake8 --select=E9,F63,F7,F82` clean on the one touched Python file;
+      `backend_app.main` still imports and still exposes **354 routes**; and the suites that parse
+      these same migration files are green against the edited one — `test_migration_tooling` 28,
+      `test_no_dormant_schema_references` 2, `test_schema_as_code_completeness` 6 and
+      `test_library_schema_contract` 14. **`test_no_undefined_names.py` is 2 passed / 1 failed and
+      the failure is not this change**: the only `F821`s in the tree are
+      `backend_app/backend/ml_training_policy.py:708` (`field`) and `:1268` (`replace`), in a file
+      carrying 1,382 uncommitted lines from the parallel workstream; the HEAD version of that same
+      file is `F821`-clean, so the gate is red for a reason that belongs to that workstream
+    - _Requirements: none directly — this is a schema-as-code finding, in the same class as 13.14's
+      "the release could not ship its own migrations". Recorded because task 14 requires every_
+      _launch blocker to be proven, BLOCKED with its gap named, or closed by citation, and a_
+      _migration set that aborts on a relation nothing declares is none of those. P1: the_
+      _declared schema and the applied schema disagree, and the disagreement was invisible to the_
+      _guard that exists to catch exactly it_
+
 
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
