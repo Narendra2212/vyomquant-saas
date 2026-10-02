@@ -2400,6 +2400,157 @@ exists to remove.
     _and replay reported a NULL decision as `"BUY"`; both now report absence as absence)_
 
 
+- [ ] 13.20 The frontend deploy's WebSocket gate was a FALSE POSITIVE — it waited on a header
+  uvicorn does not emit, and blocked every frontend deploy
+  - **The defect.** `.github/workflows/06-frontend-deploy.yml`'s last step, "Verify the
+    WebSocket upgrade reaches the origin" (added in `2c33a877`), is BLOCKING and runs last. It
+    passed only if the upgrade response carried `server: uvicorn`, and otherwise failed with
+    "every socket in the product is dead" and "the terminal shows 'Not connected to the trading
+    engine' on every authenticated page". **uvicorn does not emit a `server` header on that
+    path**, so the discriminator could not be satisfied by any healthy deployment. Run
+    37035482811 on `2c33a877` red, every earlier frontend deploy green (recorded from the run
+    history, not re-measured here — Actions cannot be driven from this environment).
+    Consequence: the live frontend bundle is stale and **no frontend change can ship**. This is a
+    CI defect, not a product defect, and the product claim the step printed was false
+  - **The load-bearing fact, re-measured rather than inherited.** A local uvicorn (0.52.4)
+    running a hand-rolled ASGI app that sends `websocket.close` before `websocket.accept` — no
+    CDN, no ALB, no FastAPI — answers a raw HTTP/1.1 upgrade with, verbatim:
+    `HTTP/1.1 403 Forbidden` / `Date: …` / `Connection: close` / `Content-Length: 0` /
+    `Content-Type: text/plain; charset=utf-8`. **No `server` header.** The same app answers a
+    plain GET to the same path `404` *with* `server: uvicorn`, so the header is not absent from
+    the server, it is absent from the websocket-rejection path specifically: that path does not
+    go through the HTTP response writer that stamps `server:`. Repeated against a Starlette
+    `WebSocketRoute` (production's actual stack shape) — byte-identical. So the old gate's own
+    comment, "`server: uvicorn` is the evidence", was the premise the whole step rested on and it
+    was false
+  - **Three things ruled out first, and none of them changed — this task is a CI fix only.**
+    (1) *Not CloudFront.* `get-distribution-config --id EEOXECPHQ8SR0` re-checked: `WebACLId` is
+    `''`, `GeoRestriction` `none`, and the `/ws/*` behaviour targets `ALB-vyomquant-backend` with
+    GET among `AllowedMethods`, `CachePolicyId 4135ea2d…` (Managed-CachingDisabled) and
+    `OriginRequestPolicyId b689b0a8…` (Managed-AllViewerExceptHostHeader) — **the remediation the
+    step printed was already in place**, which is what made the message actively misleading.
+    (2) *Not the ALB.* A raw HTTP/1.1 upgrade straight to
+    `vyomquant-alb-1008390777.ap-southeast-1.elb.amazonaws.com:80`, CloudFront bypassed
+    entirely, returns the SAME `403` / `Content-Type: text/plain` / `Content-Length: 0` / no
+    `server` — so the 403 is origin-generated, not CDN-generated. (3) *The application is
+    correct.* `backend_app/api_ws/ws_routes.py:403` `/ws/telemetry` takes
+    `ticket: Optional[str] = Query(None)` and closes before `accept()` when it is missing; all
+    **nine** `@ws_router.websocket` routes do the same, and there is no anonymous WebSocket
+    endpoint in the product. `ws_routes.py` is untouched — the 403 is correct, secure behaviour
+  - **It was not merely over-strict, it was exactly INVERTED — and that is measured, not
+    argued.** Running the shipped pre-fix script against canned header blocks: the healthy state
+    (403, no `server`) **FAILS**, and a genuinely stripped upgrade (404 carrying
+    `server: uvicorn`, which is what the handshake looks like after being HTTP-routed) **PASSES**
+    — because the old gate's only test was "is `server: uvicorn` anywhere in the response", and
+    a stripped upgrade is precisely the case that satisfies it. So the step both blocked every
+    healthy deploy and would have waved through the one failure it existed to catch
+  - **The fix: two probes of the same URL, no credentials, and the asymmetry between them is the
+    test.** One probe cannot work, because the two outcomes it must separate are **the same
+    status with the same headers** — a CDN-generated 403 and an application refusal are both a
+    bare 403. So:
+    **Probe A**, a genuine HTTP/1.1 upgrade (`Connection`/`Upgrade`/`Sec-WebSocket-Version`/
+    `Sec-WebSocket-Key`) must answer `101` or `403` — reachable only if the upgrade headers
+    survived to the origin, because that status comes from Starlette's WebSocket router refusing
+    the handshake, and **with no `server`-header condition on it at all**.
+    **Probe B**, the same URL with no upgrade headers, must answer `404` carrying
+    `server: uvicorn` — `/ws/telemetry` has no HTTP route, so uvicorn falls through to HTTP
+    routing. That pairing is the origin's own fingerprint, and it is what makes A's 403
+    attributable: **B is what makes A admissible.** PASS requires both
+  - **Three failure branches, each naming the inference that failed.** `CODE_A = 404` → the
+    upgrade headers were STRIPPED in transit (probe A degenerated into probe B); this is the
+    CloudFront misconfiguration the step exists to catch and **the only branch that prints the
+    AllViewer / CachingDisabled / allow-GET remediation**, which is kept verbatim because it is
+    the right advice for exactly this case. `CODE_A` neither 101/403 nor 404 → reported as
+    itself (5xx, CDN error page, empty response), explicitly *without* a header-forwarding
+    conclusion the evidence does not support. Probe B not `404`+`server: uvicorn` → the origin is
+    not reachable through `/ws/*` or something ahead of it is answering; different message,
+    pointing at the behaviour's target origin and `vyomquant-api-tg` health, and **deliberately
+    no CloudFront-policy advice**. The old step printed the AllViewer remediation on every
+    failure including a 502, which is how a correct configuration ends up being "fixed"
+  - **`--http1.1` is still load-bearing, now for the opposite reason, and it is on both probes.**
+    h2 forbids `Connection`, so over h2 curl silently drops the upgrade headers and sends a plain
+    GET. Under the old logic that produced a false PASS (404 with `server: uvicorn`); under the
+    new logic it produces a false *stripping alarm*, because probe A would read 404. Either way
+    the flag is mandatory, and the explicit `HTTP/1.1` status-line guard is kept as a second
+    catch. It is set on probe B too so that the **only** difference between the two requests is
+    the upgrade headers — which is what makes the asymmetry attributable to them
+  - **The live two-probe asymmetry, re-verified read-only against `https://app.vyomquant.in/ws/telemetry`
+    before the logic was written.** Raw socket + `ssl`, genuine upgrade → `403`, **no `server`**;
+    plain GET, same URL → `404` with `server: uvicorn`, `x-request-id`, and the application's own
+    CSP/HSTS headers. Both halves observed, so the new gate's pass condition is satisfied by
+    production as it stands today. **One trap recorded while reading those responses:**
+    `X-Cache: Error from cloudfront` is present on **both**, including the one that demonstrably
+    came from the origin. It means CloudFront passed a 4xx through, not that CloudFront generated
+    it, and the step now says so — it is the next-most-tempting wrong discriminator after the
+    `server` header
+  - **The bundle-host derivation and the empty-`WS_BASE` guard are unchanged**, and the probe URL
+    is **masked as `***` in the Actions log** because the host matches a repository secret. A log
+    line reading `Probing : https://***/ws/telemetry` is redaction, not an unset variable; the
+    step now prints that caveat next to the URL so the next reader does not chase it
+  - **The test, and why it asserts on text AND on behaviour.** `tests/test_websocket_upgrade_gate.py`
+    (new, **22 passed**), beside 13.10's `test_security_gate_blocks_deploy.py` and in its style.
+    *Text half*: the step runs two probes, both on `--http1.1`, both on `"$PROBE_URL"`; the pass
+    is the conjunction of both inferences; `404` on probe A hits a branch that exits 1 and is
+    **not** among the accepted `CODE_A` statuses; every `server:` grep in the step reads
+    `HEADERS_PLAIN` and never `HEADERS_UPGRADE`; `AllViewer` appears exactly once and inside the
+    404 branch; and the comment no longer carries the false premise. *Behaviour half*: the step's
+    bash is **extracted out of the YAML and run** under `bash -e` (what Actions uses) with `curl`
+    shadowed by a shell function serving canned header blocks and a stub
+    `dist/assets/index-*.js`. That exercises the real shipped script rather than a transcription
+    of it, which is the strongest cover available given Actions cannot be run locally. The canned
+    blocks are the measured bytes above, not invented ones. Skipped with a named reason if no
+    usable `bash` is present (CI runs this job on `ubuntu-latest`, where it is native)
+  - **Assertions ACTUALLY OBSERVED failing before the fix — 17 of the 22**, measured by
+    restoring `996509c9`'s workflow and re-running. The two that matter:
+    `test_a_403_with_no_server_header_plus_a_404_uvicorn_passes` failed with the pre-fix step
+    printing the whole "every socket in the product is dead" + AllViewer message against a
+    healthy origin — run 37035482811's failure, reproduced locally; and
+    `test_a_stripped_upgrade_fails_and_names_the_cloudfront_misconfiguration` failed with "a
+    stripped upgrade passed the gate", which is the inversion. Also failing against `F`: both
+    two-probe structure tests, all four `CODE_A`/pass-condition tests, the three comment tests,
+    `test_a_cdn_error_is_reported_as_itself` (the pre-fix step blamed CloudFront headers for a
+    502), `test_a_missing_server_header_on_probe_b_alone_is_not_enough`,
+    `test_an_unreachable_origin_fails_without_blaming_cloudfront_headers`,
+    `test_the_pass_still_says_what_it_has_not_proven`, and
+    `test_the_two_probes_are_both_actually_issued`. **Stated rather than implied: five cannot be
+    made to fail against `F`** and are preservation cases, not regression cases —
+    `test_both_probes_pin_http_1_1` (the pre-fix single probe already had the flag),
+    `test_it_is_the_last_step_and_it_blocks`,
+    `test_the_bundle_host_derivation_and_the_empty_guard_are_intact`,
+    `test_an_accepted_handshake_passes` and `test_an_empty_ws_base_in_the_bundle_still_fails`
+  - **Gates.** `tests/test_websocket_upgrade_gate.py` → **22 passed** (new, ~100s: eight real
+    `bash` subprocesses); `tests/test_schema_table_reference_drift.py` → **73**;
+    `tests/test_mounted_endpoint_projections.py` → **19**;
+    `tests/test_marketplace_eligibility_tenant_verdict.py` → **7**;
+    `tests/test_no_undefined_names.py` → **3** (**102 together**);
+    `tests/test_release_artifacts.py` + `tests/test_no_secrets_in_bundle.py` +
+    `tests/test_stale_duplicate_frontend.py` + `tests/test_nightly_audit_workflow.py` +
+    `tests/test_security_gate_blocks_deploy.py` → **35 passed** (the other suites that assert on
+    `06-frontend-deploy.yml`'s text, re-run because this task rewrote part of it);
+    `flake8 --select=E9,F63,F7,F82` exit 0 on the new test file; `backend_app.main` imports with
+    **351** routes; the workflow parses under `yaml.safe_load` and the gate is still the last of
+    the job's 14 steps
+  - **What this still does not prove, stated rather than implied.** The gate only runs in CI, so
+    **the next frontend deploy is the real verification** — everything above is the script
+    exercised against measured header bytes, not a green Actions run. The two-probe logic is
+    proven for the statuses it was fed; a response shape nobody has seen is still unhandled by
+    construction and will land in the "reported as itself" branch, which is the intended
+    behaviour but is not the same as being anticipated. And the gate deliberately **still cannot
+    prove a socket carries data**: all nine `/ws/*` endpoints require a ticket, minting one needs
+    a session, and putting a production credential in a workflow to get it is a worse trade than
+    the coverage is worth — the pre-fix step already made that argument and it is still right.
+    No CloudFront or ALB configuration was changed, and `ws_routes.py` was not touched
+  - _Requirements: none directly — no clause in `bugfix.md` governs CI gate logic, and this is_
+    _recorded because task 14 requires every launch blocker to be proven or BLOCKED with its gap_
+    _named, and a blocking gate that cannot pass is a launch blocker: it froze the frontend_
+    _deploy path entirely. By analogy to `§Bug condition` and to 2.5 (a status SHALL come from a_
+    _real probe and SHALL be `unknown` when none is available — never a literal): the step was_
+    _asked whether the upgrade reached the origin, had no evidence either way, and answered with_
+    _a fabricated diagnosis — "the response was generated by the CDN", "every socket in the_
+    _product is dead" — rather than with the absence. 1.20's bundle/secret-masking clause is_
+    _adjacent only in that it explains the `***` in the probe URL_
+
+
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
   - Every P0 and P1 clause carries a named regression test that failed against `F` and passes against `F'`
