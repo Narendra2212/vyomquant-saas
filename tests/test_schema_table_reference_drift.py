@@ -2054,8 +2054,12 @@ PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES = {
 #:   ``latency_ms``, ``pnl`` or ``failure_reason`` to repoint those twelve
 #:   names AT. Choosing between deleting a mounted router and inventing nine
 #:   columns is not a parse's decision.
-#: * ``strategies.tenant_id`` breaks the marketplace eligibility gate, and
-#:   both candidate fixes are wrong to pick unilaterally - see the class.
+#:
+#: ``strategies.tenant_id`` WAS the 24th entry and is now FIXED at its root
+#: (production-launch-hardening task 13.18), so it has left the register: the
+#: marketplace eligibility gate reads the tenant off ``user_id``, which is what
+#: this platform's tenancy model means and the column production has. See
+#: :data:`FIXED_ELIGIBILITY_TENANT_PREDICATE` and the test that pins it.
 KNOWN_UNDECLARED_COLUMN_DEFECTS = {
     "billing_invoices.amount_inr": ("routers/billing.py", "parallel workstream"),
     "billing_invoices.amount_usd": ("routers/billing.py", "parallel workstream"),
@@ -2074,9 +2078,6 @@ KNOWN_UNDECLARED_COLUMN_DEFECTS = {
     ),
     "profiles.trial_end_date": ("core/billing_lifecycle.py", "parallel workstream"),
     "profiles.volume_usd": ("routers/admin.py", "no source of truth anywhere"),
-    "strategies.tenant_id": (
-        "backend/marketplace/eligibility_gate.py", "design decision",
-    ),
     "execution_records.confidence": ("routers/signals.py", "unreachable router"),
     "execution_records.failure_reason": ("routers/signals.py", "unreachable router"),
     "execution_records.filled_quantity": ("routers/signals.py", "unreachable router"),
@@ -2098,6 +2099,21 @@ KNOWN_UNDECLARED_COLUMN_DEFECTS = {
 #: idempotency check reads it back. Pinned as a pair so the wrong table cannot
 #: come back.
 FIXED_CLONE_ENRICHMENT = ("strategies", "library_strategies", "source_library_id")
+
+#: The column reference the marketplace Eligibility_Gate used to carry and no
+#: longer does, pinned as (table, the absent column, the column that exists).
+#: Read 1 of ``backend/marketplace/eligibility_gate.py`` selected
+#: ``id, user_id, tenant_id, archived_at`` off ``strategies``, which has no
+#: ``tenant_id``; the gate wraps its four reads so that ANY failure answers
+#: ``unevaluable=True``, so every marketplace submission eligibility evaluation
+#: in production answered "unknown" and the route turned it into a 503 - nothing
+#: could be published at all. Fixed in production-launch-hardening task 13.18 by
+#: reading the tenant off ``user_id``: this platform's tenancy model is
+#: tenant == user (``tenant-boundary-audit.md`` records ``strategies``' tenant
+#: predicate as ``user_id``; ``core/dependencies.py`` defaults a caller's
+#: ``tenant_id`` to their own ``user_id``), so no column was added to a live
+#: table to encode a distinction the system does not make.
+FIXED_ELIGIBILITY_TENANT_PREDICATE = ("strategies", "tenant_id", "user_id")
 
 #: Call sites whose owning table could not be resolved with confidence, as
 #: observed when this guard was written. A RATCHET: coverage can erode to zero
@@ -3513,6 +3529,70 @@ class TestEveryReferencedColumnIsDeclared:
         assert column not in _allowed_columns(wrong), (
             f"{wrong}.{column} now exists, so the premise of this class has "
             "changed. Re-read it before editing."
+        )
+
+    def test_the_eligibility_gate_reads_the_tenant_column_that_exists(self):
+        """The 24th defect, fixed at its root rather than registered.
+
+        ``backend/marketplace/eligibility_gate.py``'s read 1 named
+        ``tenant_id`` on ``strategies``. Production answers ``42703`` for that
+        column (proven in task 13.17, with ``user_id`` on the same table
+        answering OK), and the gate turns ANY read failure into
+        ``unevaluable=True`` - so the route answered 503 for every marketplace
+        submission and nothing could be published. The fix reads the tenant off
+        ``user_id``, because tenant == user here; it did NOT add a column to a
+        live table, which would have duplicated ``user_id`` and encoded a
+        distinction this system does not make.
+
+        Pinned in three directions, so neither the defect nor a cosmetic
+        re-registration of it can come back:
+        """
+        table, absent, present = FIXED_ELIGIBILITY_TENANT_PREDICATE
+        references, _skips, _counters = _column_references()
+        gate = "backend_app/backend/marketplace/eligibility_gate.py"
+
+        # 1. NOTHING anywhere names the column production does not have.
+        absent_sites = references.get((table, absent), [])
+        assert not absent_sites, (
+            f"{table}.{absent} is referenced again at {absent_sites}. "
+            f"public.{table} has no {absent} column - production answers "
+            f'42703 column "{absent}" does not exist - and in the gate that '
+            "read collapses the whole evaluation to "
+            "MARKETPLACE_ELIGIBILITY_UNEVALUABLE (503), which blocks every "
+            f"publication. The row's tenant is its {present}."
+        )
+
+        # 2. The gate still reads the column that DOES carry the tenant, so
+        #    the fix cannot have been "stop reading the strategy row at all".
+        present_sites = [
+            (path, line)
+            for path, line in references.get((table, present), [])
+            if path == gate
+        ]
+        assert len(present_sites) >= 2, (
+            f"{gate} should read {table}.{present} at least twice (read 1's "
+            f"projection and its owner filter); found {present_sites}. "
+            "Without them the ownership and tenant criteria have no column to "
+            "decide on and this test asserts nothing."
+        )
+
+        # 3. The premise and the register, both ways: the column is still
+        #    absent from the oracle, the owner column is still in it, and the
+        #    pair is NOT back in the register - a fixed defect that is left
+        #    registered makes the register larger than the defect, which is the
+        #    one thing it may never be.
+        assert present in _allowed_columns(table), (
+            f"{table}.{present} has left the oracle; re-establish it before "
+            "editing this test."
+        )
+        assert absent not in _allowed_columns(table), (
+            f"{table}.{absent} now exists, so the premise of this test has "
+            "changed. Re-read it before editing."
+        )
+        assert f"{table}.{absent}" not in KNOWN_UNDECLARED_COLUMN_DEFECTS, (
+            f"{table}.{absent} is fixed at its root - it must not be in "
+            "KNOWN_UNDECLARED_COLUMN_DEFECTS. Re-adding it would turn a closed "
+            "defect into a permanent hole in the guard."
         )
 
     def test_coverage_has_not_eroded(self):

@@ -245,8 +245,13 @@ _EVIDENCE_HANDLER = {
 # it) fails ``test_select_literals_are_within_manifest`` before it can be a runtime 42703.
 #
 # Four tables, one per read (design.md -> "eligibility_gate.py", the four round trips):
-#   * ``strategies``          - read 1's ``id, user_id, tenant_id, archived_at``. Pre-existing
-#                               (001); this spec creates none of it.
+#   * ``strategies``          - read 1's ``id, user_id, archived_at``. Pre-existing (001);
+#                               this spec creates none of it. ``tenant_id`` was listed here
+#                               and selected by read 1 until production-launch-hardening task
+#                               13.18: ``public.strategies`` has no such column, so the read
+#                               answered ``42703`` and every evaluation came back
+#                               ``unevaluable``. The row's tenant is its ``user_id`` (tenant ==
+#                               user), so there is nothing to add back.
 #   * ``strategy_versions``   - read 2's ``id, strategy_id, version, is_draft,
 #                               validation_state, blueprint, graph_json``. ``blueprint`` and
 #                               ``version`` and ``is_draft`` are the 001 base columns;
@@ -268,7 +273,7 @@ _ELIGIBILITY_HANDLER = {
     "module": "backend_app.backend.marketplace.eligibility_gate",
     "tables": {
         "strategies": frozenset(
-            {"id", "user_id", "tenant_id", "archived_at"}
+            {"id", "user_id", "archived_at"}
         ),
         "strategy_versions": frozenset(
             {

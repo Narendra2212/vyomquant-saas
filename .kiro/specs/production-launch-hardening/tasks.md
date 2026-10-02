@@ -2106,6 +2106,116 @@ exists to remove.
       _to the marketplace, and it was invisible to a guard that only ever asked whether the TABLE_
       _existed_
 
+  - [ ] 13.18 13.17's sharpest instance fixed at its root — `strategies.tenant_id`, the gate that could only answer "unknown"
+    - **The defect.** 13.17 measured `strategies.tenant_id` against the live database and got
+      `42703`, with the control column `user_id` on the same table answering OK — so the absence is
+      the column's, not the table's or the probe's. `backend/marketplace/eligibility_gate.py`'s read
+      1 selected `id, user_id, tenant_id, archived_at`, and `evaluate` wraps all four of its reads
+      in one `except Exception` that returns `unevaluable=True` with an **empty outcome tuple**
+      (Requirement 2.13 — a read that did not complete is not a verdict). The consequence is not
+      partial: **every marketplace submission eligibility evaluation in production answered
+      "unknown"**, on every path, for every caller, and `POST /api/library/submissions` turned that
+      into a 503. Nothing could be published to the Marketplace at all. P1 — and it was invisible
+      to 13.14–13.16's guards for a structural reason, not an oversight: those resolve
+      `.table("x")` literals against a `CREATE TABLE`, so they only ever asked whether the TABLE
+      existed. `strategies` exists. 13.17 built the column-level guard that could see this, and
+      this task is the first entry it found that is fixable at its root rather than attributable
+    - **The decision, and the alternative that was rejected.** Read the tenant off `user_id`; do
+      **not** add a `tenant_id` column to `strategies`. The spec's own `tenant-boundary-audit.md`
+      records this table's tenant predicate as `user_id` and notes it has no `tenant_id` column,
+      and `core/dependencies.py` builds every caller's `tenant_id` from the token's claim *or,
+      failing one, from their own `user_id`*. The tenancy model is **tenant == user**. Adding the
+      column would duplicate `user_id` in every row, encode a distinction the system does not make
+      anywhere else, and require backfilling a live 187-row table — three costs to restore a
+      reference whose referent was never meant to exist
+    - **Why it was not a one-line edit, and what the one-line edit would have cost.** Swapping the
+      column naively makes `strategy_tenant` *always present* — under tenant == user a strategy
+      cannot not have a tenant, because its owner is its tenant. A caller carrying no tenant
+      context then lands on `_tenant_matches`' old "exactly one side absent ⇒ no match" branch and
+      is **refused**. So the naive fix converts "always unevaluable" into "always refused" for
+      tenant-less callers: a 422 with `MP_TENANT` in its failure list instead of a 503, which is
+      quieter, looks like a legitimate verdict, and would have been attributed to the caller rather
+      than to the gate. The handling went into `_tenant_matches`' **first** branch, which now
+      returns `True` as soon as the caller carries no tenant. Refusing is not the safe default
+      here: read 1 has already filtered `.eq("user_id", caller_id)`, so the only row that can be in
+      hand is the caller's own, and the sole thing a refusal would protect against is the caller's
+      own strategy. The tenant clause sits on top of that filter as defence in depth, not as the
+      only thing standing between two tenants — the docstrings now say so, because a future reader
+      deciding how strict to make this branch needs to know what else is already holding
+    - **`_strategy_tenant` as a named seam.** The decision "the owner column IS the tenant column"
+      lives in exactly one three-line function rather than inline at the `MP_TENANT` call site, so
+      if the platform ever grows a real `tenant_id` column the change is that function and nothing
+      else. A seam is cheaper than a comment here because the thing being isolated is a *model*
+      decision, and a model decision that is inlined gets re-litigated at every call site
+    - **The manifest had to move with the projection.** `marketplace/__init__.py`'s
+      `_ELIGIBILITY_HANDLER` select-literal manifest listed `tenant_id` among `strategies`'
+      columns, and `test_select_literals_are_within_manifest` holds the gate's actual `.select`
+      literals against it — so leaving the manifest alone would have left the two disagreeing and
+      the suite red. Worth recording as a reminder rather than as bookkeeping: this repo **already
+      had a narrower version of the guard 13.17 generalised**, scoped to the marketplace modules'
+      five tables, and it would have caught this defect the day it was written had the manifest
+      been derived from the schema instead of hand-listed beside it
+    - **The register shrank, 24 → 23, and the direction is the point.**
+      `KNOWN_UNDECLARED_COLUMN_DEFECTS` in `tests/test_schema_table_reference_drift.py` is
+      documented shrink-only, and `test_every_known_defect_is_still_a_defect` fails if a fixed
+      entry is left sitting in it. So a fix cannot be recorded by *adding* an exemption and the
+      register cannot quietly become an allowlist — the only way to make it smaller is to make a
+      read correct, and the only way to make it bigger is to find a new defect. `tenant_id` left
+      the register and `FIXED_ELIGIBILITY_TENANT_PREDICATE = ("strategies", "tenant_id",
+      "user_id")` took its place beside 13.17's existing `FIXED_CLONE_ENRICHMENT`
+    - **The new drift test, pinned three ways** so it cannot pass for the wrong reason:
+      `test_the_eligibility_gate_reads_the_tenant_column_that_exists` asserts (1) nothing anywhere
+      in the scanned tree names `strategies.tenant_id` any more, (2) the gate still reads
+      `strategies.user_id` in at least two places — so the fix cannot have been "stop reading the
+      strategy row", which would also have made (1) true while deleting Criterion 2.2, and (3) the
+      oracle agreement between the register and the fixed-reference constants
+    - **Parse-level gates, all green.** `tests/test_schema_table_reference_drift.py` → **71
+      passed** (was 70; the one new test); `pytest tests/ -k "eligibility or marketplace_manifest
+      or select_literal"` → **11 passed**; `flake8 --select=E9,F63,F7,F82` exit 0 on all three
+      touched files; `backend_app.main` imports and still exposes **354 routes**;
+      `tests/test_no_undefined_names.py` → **3 passed**
+    - **Behavioural gates — the verdict itself, before and after.** The gates above are
+      parse-level and suite-level: they prove no code path names the absent column and that the
+      existing eligibility suites still pass. They say nothing about what the gate now *answers*,
+      and the production symptom was a verdict. So
+      `tests/test_marketplace_eligibility_tenant_verdict.py` (new, **7 passed**) drives the real
+      `evaluate` and observes it: the **pre-fix projection**, replayed, gives `unevaluable=True`
+      with `outcomes == ()` for a caller who owns the strategy — the production state, no decision
+      at all; a **caller with tenant context** (`tenant_id` == their own id, as `dependencies.py`
+      fills it) now reaches a populated outcome tuple with `MP_TENANT` passing; a **caller with no
+      tenant context** also passes `MP_TENANT`, which is the trap above pinned as a verdict rather
+      than as a unit of `_tenant_matches`; and **someone else's strategy** fails `MP_OWNERSHIP` and
+      `MP_TENANT` together with `unevaluable=False` — a legible refusal, where the defect produced
+      the same refusal with no reason attached
+    - **Why that needed a schema-faithful double, which is also why the existing suites never
+      caught this.** The pipeline and concurrency suites' `FakeTable.select()` ignores its
+      projection entirely, so it returns the strategy row happily with the pre-fix literal — a
+      permissive double *cannot* reproduce a `42703`, and that is precisely why those suites stayed
+      green for the whole life of the bug. The new file's double parses the projection, raises a
+      `42703`-shaped error for any column the table does not have, and narrows returned rows to the
+      projection so the gate cannot read a column it never selected. Its notion of which columns
+      exist is `_ELIGIBILITY_HANDLER`'s manifest itself, not a hand-written copy, so the double
+      cannot drift away from the guard that polices the real reads
+    - **What this still does not prove, stated rather than implied.** The behavioural cover runs
+      against that double, not against live Postgres: it shows the gate answers correctly *given*
+      that `strategies` has no `tenant_id`, which 13.17 established against production, but it is
+      not itself a production observation. The "before" case is a verbatim replica of the pre-fix
+      read body patched over `_read_strategy`, not the pre-fix module. And the one case the fix
+      leaves genuinely unresolved: a token carrying a **real** `tenant_id` claim that differs from
+      its `user_id` — reachable, since `dependencies.py` only *falls back* to `user_id` — matches
+      no strategy of its own, so `MP_TENANT` refuses everything for such a caller.
+      `test_a_foreign_tenant_claim_still_refuses` records that as the gate's actual behaviour
+      instead of asserting it cannot happen, so if the platform ever issues distinct tenant claims
+      that test is the one that fails and it names what the change means. No claim is made that
+      tenant == user is the right long-term model, only that it is the model this codebase
+      implements everywhere else
+    - _Requirements: 2.2 (the tenant clause of the Eligibility_Gate's existence/ownership/tenant_
+      _criterion, now read off the column that exists), 2.13 (a read that did not complete is_
+      _unevaluable and not a verdict — the mechanism that turned one absent column into a total_
+      _publication outage) and 21.1 (the acting identity and tenant derived from the authenticated_
+      _server-side session, which under tenant == user is what makes `user_id` the correct_
+      _predicate rather than a widening of 2.2)_
+
 
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes

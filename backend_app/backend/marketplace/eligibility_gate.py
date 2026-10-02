@@ -41,9 +41,14 @@ THE FOUR OWNER-SCOPED ROUND TRIPS (Requirements 2.2 - 2.7)
 ----------------------------------------------------------
 :func:`evaluate` issues exactly four reads, in this order, each scoped to the owner:
 
-1. ``strategies``          - ``id, user_id, tenant_id, archived_at`` for ``strategy_id``,
-   filtered ``.eq("user_id", caller.id)``. The row's existence, its owner and its tenant are
-   Criteria 2.2's three clauses.
+1. ``strategies``          - ``id, user_id, archived_at`` for ``strategy_id``, filtered
+   ``.eq("user_id", caller.id)``. The row's existence and its owner are Criterion 2.2's two
+   clauses, and its ``user_id`` is ALSO its tenant: this platform's tenancy model is
+   tenant == user, so there is no third column to read. ``strategies`` has no ``tenant_id``
+   column - the spec's ``tenant-boundary-audit.md`` records the table's tenant predicate as
+   ``user_id``, and ``core/dependencies.py`` defaults a caller's ``tenant_id`` to their own
+   ``user_id``. Selecting ``tenant_id`` here is what made every evaluation in production
+   answer ``42703`` and therefore ``unevaluable`` (production-launch-hardening task 13.18).
 2. ``strategy_versions``   - the versions of ``strategy_id``, filtered
    ``.eq("strategy_id", strategy_id)``, so ``MP_VERSION_EXISTS`` (a saved, non-draft version)
    and ``MP_VERSION_VALID`` (that version's canonical graph passes the Strategy_Builder's
@@ -365,12 +370,16 @@ async def evaluate(
 
     # A strategy that does not exist, or is not the caller's, also cannot have its tenant
     # confirmed - MP_TENANT fails alongside MP_OWNERSHIP rather than passing vacuously.
+    # Under tenant == user the row's tenant comes from its owner column, not from a
+    # ``tenant_id`` the table does not have (:func:`_strategy_tenant`), and the clause sits on
+    # top of read 1's ``.eq("user_id", caller_id)`` filter as defence in depth rather than as
+    # the only thing standing between two tenants.
     outcomes.append(
         _mp_outcome(
             MP_TENANT,
             strategy_exists
             and owner_matches
-            and _tenant_matches(_get(strategy_row, "tenant_id"), caller_tenant),
+            and _tenant_matches(_strategy_tenant(strategy_row), caller_tenant),
         )
     )
 
@@ -440,14 +449,19 @@ def _read_strategy(
 ) -> Optional[Mapping[str, Any]]:
     """Read 1: the strategy row, owner-scoped. ``None`` when it is not the caller's.
 
-    Selects only what Criterion 2.2 needs - ``id, user_id, tenant_id, archived_at`` - and
-    never ``backtest_result``: the gate derives nothing from that blob (see the module
-    docstring). Filtering ``.eq("user_id", caller_id)`` means a strategy that belongs to
-    someone else returns no row, so it is indistinguishable from one that does not exist.
+    Selects only what Criterion 2.2 needs - ``id, user_id, archived_at`` - and never
+    ``backtest_result``: the gate derives nothing from that blob (see the module docstring).
+    Filtering ``.eq("user_id", caller_id)`` means a strategy that belongs to someone else
+    returns no row, so it is indistinguishable from one that does not exist.
+
+    There is no ``tenant_id`` in this projection and there must not be: ``public.strategies``
+    has no such column, so naming it made this read raise ``42703`` and collapsed the whole
+    evaluation to ``unevaluable`` (Requirement 2.13) for every caller. The row's tenant is read
+    from the column that does exist - see :func:`_strategy_tenant`.
     """
     response = (
         supabase.table("strategies")
-        .select("id, user_id, tenant_id, archived_at")
+        .select("id, user_id, archived_at")
         .eq("id", strategy_id)
         .eq("user_id", caller_id)
         .execute()
@@ -786,21 +800,48 @@ def _same_id(left: Any, right: Any) -> bool:
     return left_text.casefold() == right_text.casefold()
 
 
+def _strategy_tenant(strategy_row: Optional[Mapping[str, Any]]) -> Any:
+    """The tenant a ``strategies`` row belongs to, which is its ``user_id``.
+
+    This platform's tenancy model is **tenant == user**. ``tenant-boundary-audit.md`` records
+    ``strategies``' tenant predicate as ``user_id`` and notes the table has no ``tenant_id``
+    column at all; ``core/dependencies.py`` builds every caller's ``tenant_id`` from the
+    token's tenant claim *or*, failing one, from their own ``user_id``. So the owner column IS
+    the tenant column, and reading it here is not a widening of Criterion 2.2 - it is the same
+    clause, read off the column that exists.
+
+    Named as its own function rather than inlined so there is one place the decision lives:
+    adding a real ``tenant_id`` column later would change this function and nothing else.
+    """
+    return _get(strategy_row, "user_id")
+
+
 def _tenant_matches(strategy_tenant: Any, caller_tenant: Any) -> bool:
     """Whether the strategy's tenant matches the caller's tenant context (Criterion 2.2).
 
-    When the caller carries no tenant context - a single-tenant deployment, or a caller whose
-    session has none - there is no tenant to violate, so a strategy that also carries none
-    matches. When either side carries a tenant, both must be present and equal: a strategy
-    tagged with a tenant the caller is not in never matches, and a caller with a tenant never
-    matches a strategy that has none, because that would cross the isolation boundary in the
-    other direction.
+    The three cases, and why each answers as it does:
+
+    * **The caller carries no tenant context** - a direct or internal caller, since
+      ``core/dependencies.py`` fills ``tenant_id`` for every HTTP one - then there is no tenant
+      boundary asserted by the session, so there is nothing to violate and this passes. That
+      holds whether or not the strategy carries a tenant, which is the one semantic this
+      function changed in task 13.18: under tenant == user a strategy ALWAYS carries a tenant
+      (its owner), so the old "exactly one side absent => False" branch would have refused
+      every tenant-less caller unconditionally. Refusing is not the safe default here: read 1
+      has already filtered ``.eq("user_id", caller_id)``, so the row in hand is the caller's
+      own, and the only thing a refusal would protect against is the caller's own strategy.
+    * **Both sides carry a tenant** - they must be equal, case-folded (a UUID arrives as text
+      from one driver and as ``uuid.UUID`` from another, and hex is case-insensitive).
+    * **The caller carries a tenant and the strategy does not** - no match. A caller inside a
+      tenant must not publish a row whose tenant cannot be read; an unreadable owner authorises
+      nothing. Reachable only for a row with no ``user_id``, which ``MP_OWNERSHIP`` has already
+      failed, so this is defence in depth rather than the live branch.
     """
-    strategy_text = _as_text(strategy_tenant)
     caller_text = _as_text(caller_tenant)
-    if strategy_text is None and caller_text is None:
+    if caller_text is None:
         return True
-    if strategy_text is None or caller_text is None:
+    strategy_text = _as_text(strategy_tenant)
+    if strategy_text is None:
         return False
     return strategy_text.casefold() == caller_text.casefold()
 
