@@ -5,8 +5,17 @@ Tests that ML/DL strategies cannot be deployed without trained models.
 This validates the deployment guards that prevent runtime failures
 when ML nodes are present but no trained model reference exists.
 
-Also tests that ML training automatically persists model_path to database,
-eliminating the manual step between training and deployment.
+Also tests that the training ROUTE admits rather than trains: it delegates to the one
+authoritative governance path and contains no trainer, no model library, no market-data
+fetch and no background task. The companion guard is on the legacy trainers themselves
+(``ml_models.assert_governed_training``), so a fit outside the governed runtime is
+refused rather than merely unreachable from the current callers.
+
+This file previously asserted the opposite — that the route persisted
+``strategies.ml_model_path`` itself, which it could only do because it also fitted the
+model itself, in the API process, outside every training cap. See
+``test_ml_training_route_admits_rather_than_trains`` for why that assertion was
+replaced rather than kept.
 
 Author: Principal Software Architect
 Date: 2025-08-02
@@ -18,6 +27,40 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+
+def _code_only(source: str) -> str:
+    """``source`` with docstrings and comments gone, so prose about the defect is not it.
+
+    The governed training route documents, at length, the ungoverned path it replaced -
+    ``BackgroundTasks``, ``train_custom_strategy``, the hardcoded bar count. A raw
+    substring search cannot tell that explanation apart from the code it describes, and
+    would report the fix as the defect.
+
+    ``ast.unparse`` drops comments for free (the AST carries none), so stripping the
+    leading string constant from every scope is the whole job. Same helper shape as
+    ``tests/test_sb06_exchange_agnostic_save.py::_python_code_only``, kept local because
+    these two files share no import.
+    """
+    import ast
+
+    tree = ast.parse(source.strip())
+    for node in ast.walk(tree):
+        if not isinstance(
+            node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            continue
+        body = getattr(node, "body", None)
+        if not body:
+            continue
+        first = body[0]
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            node.body = body[1:] or [ast.Pass()]
+    return ast.unparse(tree)
 
 
 class TestMLDeploymentGuards:
@@ -195,25 +238,160 @@ class TestMLDeploymentGuards:
         assert len(ml_nodes) == 1
         assert not source_data.get("ml_model_path")  # No model reference
 
-    def test_ml_training_auto_persists_model_path(self):
-        """Test that ML training automatically persists model_path to database."""
-        # This test verifies the database update logic exists in the training function
-        # We check the source code to ensure the update logic is present
+    def test_ml_training_route_admits_rather_than_trains(self):
+        """The training route delegates to governance and fits nothing itself.
+
+        REPLACES ``test_ml_training_auto_persists_model_path``, and the replacement is
+        the stronger assertion.
+
+        That test asserted this route wrote ``strategies.ml_model_path`` itself, which
+        it could only do because it ALSO fitted the model itself - in the API process,
+        via ``BackgroundTasks``, from a hardcoded 10,000-bar fetch, with no
+        ``training_jobs`` row and therefore no minimum-data gate, no epoch/row/feature/
+        memory cap, no concurrency accounting, no queue, no worker and no cancellation.
+        Persisting the path was the last step of a bypass, so asserting the persistence
+        was pinning the bypass in place.
+
+        Training now goes through ``StrategyService.create_training_job``, which records
+        an APPROVED configuration on a ``training_jobs`` row and binds the result as a
+        ``model_versions`` row - the artifact a deployment resolves. ``ml_model_path`` is
+        no longer written from a request path at all, by design.
+
+        So what is asserted here is what must stay true: this handler contains no
+        trainer, no model library, no market-data fetch and no background task, and it
+        calls the one authoritative admission entry point.
+        """
         import inspect
         from backend_app.routers.strategies import train_ml_strategy
-        
-        # Get the source code of the training function
+
         source = inspect.getsource(train_ml_strategy)
-        
-        # Verify the database update logic is present
-        assert "ml_model_path" in source, "ml_model_path database update logic missing"
-        assert "sb.table" in source and ".update" in source, "Database update call missing"
-        assert "strategy_id" in source, "Strategy lookup logic missing"
-        assert "model_id" in source, "ML node model_id update logic missing"
-        
-        # Verify error handling for DB write failures
-        assert "db_update_success" in source, "DB write success tracking missing"
-        assert "Database update failed" in source, "DB error handling missing"
+        code = _code_only(source)
+
+        # It admits through the one authoritative path.
+        assert "create_training_job" in code, (
+            "the training route must delegate to StrategyService.create_training_job, "
+            "the single authoritative admission entry point"
+        )
+        assert "TrainingBlocked" in code, (
+            "a governed refusal must be mapped, not swallowed"
+        )
+
+        # It still proves ownership before anything is read.
+        assert '.eq("id", strategy_id)' in source
+        assert '.eq("user_id", user["id"])' in source
+
+        # And it fits nothing. Each of these would be a trainer back in the API process.
+        # Scanned against code only: the docstring names every one of them on purpose.
+        for forbidden in (
+            "BackgroundTasks",
+            "background_tasks",
+            "train_custom_strategy",
+            "StrategyBlock",
+            "fetch_historical_ohlcv",
+            "ConnectionEngine",
+            "load_decrypted_keys",
+        ):
+            assert forbidden not in code, (
+                f"{forbidden!r} appears in the training route. This endpoint admits "
+                f"training; it must not perform it, fetch for it, or hold credentials "
+                f"for it."
+            )
+
+    def test_the_legacy_trainers_refuse_outside_the_governed_runtime(self):
+        """``train_custom_strategy`` cannot be called into from a request path.
+
+        The legacy trainers accept no epoch, batch-size, patience or validation
+        argument, so a resolved cap or budget cannot be applied to them. That makes any
+        caller ungoverned by construction. The guard is on the function rather than only
+        on the former caller, so re-introducing such a caller fails loudly.
+        """
+        import backend_app.backend.ml_models as ml_models
+
+        assert hasattr(ml_models, "assert_governed_training")
+        assert hasattr(ml_models, "UngovernedTrainingRefused")
+
+        # Outside a governed context, and with no environment escape, it refuses.
+        monkey = os.environ.pop(ml_models.UNGOVERNED_TRAINING_ENV, None)
+        try:
+            with pytest.raises(ml_models.UngovernedTrainingRefused) as caught:
+                ml_models.assert_governed_training("xgboost")
+            message = str(caught.value)
+            assert "training_jobs" in message, "the refusal must name where training lives"
+            assert ml_models.UNGOVERNED_TRAINING_ENV in message, (
+                "the refusal must name the offline escape rather than leaving it to be "
+                "discovered"
+            )
+
+            # Inside the governed runtime's own context, it permits.
+            with ml_models.governed_training("xgboost"):
+                ml_models.assert_governed_training("xgboost")
+
+            # The context does not leak past its block.
+            with pytest.raises(ml_models.UngovernedTrainingRefused):
+                ml_models.assert_governed_training("xgboost")
+
+            # The escape is an environment setting, never a request value.
+            os.environ[ml_models.UNGOVERNED_TRAINING_ENV] = "1"
+            ml_models.assert_governed_training("xgboost")
+        finally:
+            os.environ.pop(ml_models.UNGOVERNED_TRAINING_ENV, None)
+            if monkey is not None:
+                os.environ[ml_models.UNGOVERNED_TRAINING_ENV] = monkey
+
+    def test_every_concrete_legacy_trainer_carries_the_guard(self):
+        """Not one of the eight, all eight. A gap here is a working bypass."""
+        import ast
+        import inspect
+
+        import backend_app.backend.ml_models as ml_models
+
+        tree = ast.parse(inspect.getsource(ml_models))
+        guarded: dict = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for item in node.body:
+                if not (isinstance(item, ast.FunctionDef) and item.name == "train_custom_strategy"):
+                    continue
+                if any(getattr(d, "id", "") == "abstractmethod" for d in item.decorator_list):
+                    continue  # no body to guard
+                guarded[node.name] = any(
+                    isinstance(stmt, ast.Expr)
+                    and isinstance(stmt.value, ast.Call)
+                    and getattr(stmt.value.func, "id", "") == "assert_governed_training"
+                    for stmt in item.body
+                )
+
+        assert guarded, "no concrete train_custom_strategy implementations were found"
+        unguarded = sorted(name for name, ok in guarded.items() if not ok)
+        assert not unguarded, (
+            f"these trainers can be called outside the governed runtime: {unguarded}"
+        )
+
+    def test_the_legacy_connection_layer_training_route_is_retired(self):
+        """The second copy of the backend must not carry a working ungoverned trainer.
+
+        ``connection_layer`` is not the app ``startup.sh`` launches, but its router is
+        mountable and its ``POST /train-ml`` body was a complete bypass with its own
+        contradictory ``ML_BUILD_LIMITS`` table. It now refuses.
+        """
+        import inspect
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "connection_layer" / "routers" / "strategies.py"
+        source = path.read_text(encoding="utf-8")
+
+        marker = '@router.post("/train-ml")'
+        assert marker in source, "the route is expected to exist and refuse"
+        body = source[source.index(marker) :]
+        body = body[: body.index("@router.post", len(marker))]
+
+        assert "TRAINING_ROUTE_RETIRED" in body
+        for forbidden in ("train_custom_strategy", "fetch_historical_ohlcv", "ConnectionEngine"):
+            assert forbidden not in body, (
+                f"{forbidden!r} still appears in the retired route; it is a second "
+                f"training path that bypasses governance"
+            )
 
 
 class TestStrategyIdBasedTraining:
@@ -286,20 +464,43 @@ class TestStrategyIdBasedTraining:
     def test_endpoint_error_handling_for_not_found(self):
         """
         Test that the endpoint properly handles strategy not found errors.
-        
+
         Verifies that when strategy_id doesn't exist or doesn't belong to user,
-        an appropriate error is returned via WebSocket (not silent failure).
+        an appropriate error is returned to the caller AND announced over the
+        WebSocket (not silent failure).
+
+        The ``model_error`` frame now lives in ``_announce_training_refusal``, the
+        helper the handler delegates to on every refusal path, rather than being
+        inlined four times in the handler. So the assertion follows the delegation
+        instead of assuming the string is in one function - a refusal is still
+        announced, and it is announced from exactly one place.
         """
         import inspect
-        from backend_app.routers.strategies import train_ml_strategy
-        
-        # Get the source code
+        from backend_app.routers.strategies import (
+            _announce_training_refusal,
+            train_ml_strategy,
+        )
+
         source = inspect.getsource(train_ml_strategy)
-        
-        # Verify error handling is present
+
+        # The caller is told, with a status code rather than a 200 and a silence.
         assert 'not found' in source.lower(), "Should handle not found case"
-        assert 'model_error' in source.lower(), "Should broadcast model_error on failure"
-        
+        assert "STRATEGY_NOT_FOUND" in source, "Not-found must be a classified refusal"
+
+        # ... and a listening websocket client is told too, from the one announcer.
+        assert "_announce_training_refusal" in source, (
+            "a refusal must be announced to a client that is listening on the socket "
+            "rather than reading this response"
+        )
+        announcer = inspect.getsource(_announce_training_refusal)
+        assert "model_error" in announcer.lower(), (
+            "Should broadcast model_error on failure"
+        )
+        assert "job_created" in announcer, (
+            "the frame must say no job was created, so a client cannot read a refusal "
+            "as a queued run"
+        )
+
         # Verify the old silent failure (strategy_id = None) is NOT present
         assert 'strategy_id = None' not in source, "Should not leave strategy_id as None on error"
 

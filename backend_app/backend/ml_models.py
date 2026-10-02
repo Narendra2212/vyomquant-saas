@@ -16,6 +16,7 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
+import contextvars
 import importlib
 import importlib.util
 import logging
@@ -23,6 +24,7 @@ import os
 import re
 import uuid
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
@@ -72,6 +74,103 @@ def _safe_filename(user_id: str, strategy_name: str) -> str:
     safe_uid = re.sub(r"[^a-zA-Z0-9\-]", "_", str(user_id))[:64]
     safe_name = re.sub(r"[^a-zA-Z0-9\-]", "_", str(strategy_name))[:64]
     return safe_uid, safe_name
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  THE UNGOVERNED-TRAINING GUARD
+#
+#  WHAT THIS CLOSES
+#  ----------------
+#  `train_custom_strategy` is the LEGACY trainer. It accepts no epoch count, no batch
+#  size, no patience and no validation data - its figures are literals in its own body
+#  (`epochs=10, batch_size=64, validation_split=0.1` on the sequence models) - so there
+#  is no way for a resolved `MLTrainingCaps` or a `TrainingBudget` to reach it. Anything
+#  that calls it therefore trains OUTSIDE the policy engine by construction, not by
+#  oversight, and no amount of checking at the caller can fix that.
+#
+#  The HTTP path that used to call it is gone (`routers/strategies.train_ml_strategy`
+#  now admits rather than trains). This guard is the second line: it makes the function
+#  itself refuse, so re-introducing such a caller is a loud failure during development
+#  rather than a quiet capacity leak in production.
+#
+#  WHY A CONTEXT FLAG AND NOT A PARAMETER
+#  --------------------------------------
+#  A parameter can be passed by the caller, which makes it the caller's claim. The
+#  governed runtime sets this flag around a fit it has ALREADY had admitted, re-checked
+#  and budgeted, and clears it afterwards, so the flag records a fact about the call
+#  stack rather than an assertion in a request body. It is a `ContextVar`, so it is
+#  per-task and per-thread and a concurrent ungoverned call cannot ride on a governed
+#  one's permission.
+#
+#  THE ESCAPE, AND ITS SHAPE
+#  -------------------------
+#  `ML_ALLOW_UNGOVERNED_TRAINING=1` re-opens it for offline work - a notebook, a
+#  benchmark, `connection_layer/test_ml_training.py`. It is an ENVIRONMENT setting, so
+#  it cannot be set by a request, and it is read at call time so a test can set it
+#  without reimporting. It is deliberately NOT honoured as a function argument.
+# ══════════════════════════════════════════════════════════════════════════
+
+#: Set while the governed training runtime is driving a fit. Never set from a router.
+_GOVERNED_TRAINING: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "ml_models_governed_training", default=False
+)
+
+#: The one environment escape, for offline work outside the platform's request paths.
+UNGOVERNED_TRAINING_ENV = "ML_ALLOW_UNGOVERNED_TRAINING"
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+class UngovernedTrainingRefused(RuntimeError):
+    """A legacy trainer was called outside the governed training runtime.
+
+    Not a ``ValueError``: this is a refusal to consume CPU, RAM and disk for a fit that
+    no admission decision authorised, which is a control, not a bad argument.
+    """
+
+
+def ungoverned_training_allowed() -> bool:
+    """Whether this process permits fitting outside the governed runtime."""
+    return os.getenv(UNGOVERNED_TRAINING_ENV, "").strip().lower() in _TRUTHY
+
+
+@contextmanager
+def governed_training(block_id: str = ""):
+    """Mark the enclosing block as an admitted, budgeted, re-checked training run.
+
+    Used by the governed training runtime and by nothing else. Restores the previous
+    value on exit, including on an exception, so a failed fit cannot leave the flag set
+    for whatever runs next in this context.
+    """
+    token = _GOVERNED_TRAINING.set(True)
+    try:
+        logger.debug("Governed training context entered for %r", block_id or "unnamed")
+        yield
+    finally:
+        _GOVERNED_TRAINING.reset(token)
+
+
+def assert_governed_training(block_id: str) -> None:
+    """Refuse a legacy fit that no admission decision authorised.
+
+    Raises
+        :class:`UngovernedTrainingRefused` unless the call is inside
+        :func:`governed_training` or :data:`UNGOVERNED_TRAINING_ENV` is set.
+    """
+    if _GOVERNED_TRAINING.get() or ungoverned_training_allowed():
+        return
+    raise UngovernedTrainingRefused(
+        f"{block_id}.train_custom_strategy was called outside the governed training "
+        f"runtime. This trainer takes no epoch, batch-size, patience or validation "
+        f"argument, so the resolved training caps and budget cannot be applied to it "
+        f"and the run would consume CPU, memory and disk that no admission decision "
+        f"authorised. Queue training through the governed path "
+        f"(POST /api/strategy-operations/training/jobs, or "
+        f"StrategyService.create_training_job), which records an approved configuration "
+        f"on a training_jobs row and executes it in the training worker. For offline "
+        f"work outside the platform's request paths, set "
+        f"{UNGOVERNED_TRAINING_ENV}=1."
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -317,6 +416,7 @@ class XGBoostStrategyBlock(TreeStrategyBlock):
         indicator_names,
         user_selected_indicators,
     ) -> str:
+        assert_governed_training("xgboost")
         import xgboost as xgb
 
         X_clean, y_clean = self._prepare_data(
@@ -367,6 +467,7 @@ class LightGBMStrategyBlock(TreeStrategyBlock):
         indicator_names,
         user_selected_indicators,
     ) -> str:
+        assert_governed_training("lightgbm")
         import lightgbm as lgb
 
         X_clean, y_clean = self._prepare_data(
@@ -404,6 +505,7 @@ class RandomForestStrategyBlock(TreeStrategyBlock):
         indicator_names,
         user_selected_indicators,
     ) -> str:
+        assert_governed_training("random_forest")
         from sklearn.ensemble import RandomForestClassifier
 
         X_clean, y_clean = self._prepare_data(
@@ -439,6 +541,7 @@ class CatBoostStrategyBlock(TreeStrategyBlock):
         indicator_names,
         user_selected_indicators,
     ) -> str:
+        assert_governed_training("catboost")
         from catboost import CatBoostClassifier
 
         X_clean, y_clean = self._prepare_data(
@@ -726,6 +829,7 @@ class LSTMStrategyBlock(DeepLearningStrategyBlock):
         indicator_names,
         user_selected_indicators,
     ) -> str:
+        assert_governed_training("lstm")
         from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
         from tensorflow.keras.models import Sequential
 
@@ -770,6 +874,7 @@ class GRUStrategyBlock(DeepLearningStrategyBlock):
         indicator_names,
         user_selected_indicators,
     ) -> str:
+        assert_governed_training("gru")
         from tensorflow.keras.layers import GRU, Dense, Dropout, Input
         from tensorflow.keras.models import Sequential
 
@@ -812,6 +917,7 @@ class TransformerStrategyBlock(DeepLearningStrategyBlock):
         indicator_names,
         user_selected_indicators,
     ) -> str:
+        assert_governed_training("transformer")
         from tensorflow.keras.layers import (Dense, Dropout,
                                              GlobalAveragePooling1D, Input,
                                              LayerNormalization,
@@ -914,6 +1020,7 @@ class AutoencoderStrategyBlock:
         indicator_names,
         user_selected_indicators,
     ) -> str:
+        assert_governed_training("autoencoder")
         import tensorflow as tf
         from sklearn.preprocessing import StandardScaler
         from tensorflow.keras.layers import Dense, Dropout, Input
@@ -1043,6 +1150,48 @@ class ModelFamily(str, Enum):
     TREE = "TREE"
     SEQUENCE = "SEQUENCE"
     AUTOENCODER = "AUTOENCODER"
+
+
+class ModelTask(str, Enum):
+    """What a trained model's output MEANS. Drives the data-sufficiency engine.
+
+    `ModelFamily` says how rows are consumed - one row at a time, or a window. It says
+    nothing about the target, and the data a model needs depends far more on the target
+    than on the window: a classifier needs every class represented in every split, and a
+    regressor needs a target with variance. Those are different questions with different
+    answers, and before this enum existed the platform had no field that could tell them
+    apart. The task was only *implied*, by `validation_requirements.metric` being
+    `"f1_macro"` versus `"accuracy"`, which is a reporting choice rather than a contract.
+
+    The EFFECTIVE task of a run is the label mode the training configuration resolved
+    (`ml_dataset.LabelMode`) intersected with `ModelSpec.supported_tasks`. A label mode a
+    block does not support is refused rather than coerced - fitting a classifier on a
+    continuous target produces a model that scores well and means nothing.
+    """
+
+    CLASSIFICATION = "classification"
+    REGRESSION = "regression"
+    #: Unsupervised: the target IS the input. An autoencoder has no labels to balance
+    #: and no target variance to check, so the classification and regression
+    #: requirements do not apply to it and must not be asserted against it.
+    RECONSTRUCTION = "reconstruction"
+
+
+#: What each family's governed runtime can actually fit. Declared per FAMILY rather than
+#: per block because it is a property of how the runtime treats the target, and every
+#: block in a family shares that - so a new block cannot be added with its task support
+#: silently unstated. `_build_model_specs` stamps it onto every spec and
+#: `_assert_spec_integrity` refuses a spec that ended up with none, which makes a missing
+#: entry here an import-time failure rather than a runtime surprise.
+#:
+#: Deliberately conservative: it lists what the governed training runtime supports, not
+#: what the library could theoretically do. Advertising a task the runtime cannot fit
+#: would put it in the palette and fail at train time, which is the SB-04 shape.
+FAMILY_SUPPORTED_TASKS: Dict[ModelFamily, Tuple[ModelTask, ...]] = {
+    ModelFamily.TREE: (ModelTask.CLASSIFICATION, ModelTask.REGRESSION),
+    ModelFamily.SEQUENCE: (ModelTask.CLASSIFICATION, ModelTask.REGRESSION),
+    ModelFamily.AUTOENCODER: (ModelTask.RECONSTRUCTION,),
+}
 
 
 class SerializationMode(str, Enum):
@@ -1270,10 +1419,29 @@ class ModelSpec:
     runtime_ref: str = ""
     required_modules: Tuple[str, ...] = ()
     description: str = ""
+    #: What this block's governed runtime can fit. Stamped from
+    #: :data:`FAMILY_SUPPORTED_TASKS` by `_build_model_specs`; an empty tuple is refused
+    #: by `_assert_spec_integrity`, so it is never silently absent.
+    supported_tasks: Tuple[ModelTask, ...] = ()
 
     @property
     def is_sequence(self) -> bool:
         return self.model_family is ModelFamily.SEQUENCE
+
+    @property
+    def default_task(self) -> Optional[ModelTask]:
+        """The task assumed when a training configuration names no label mode.
+
+        The first supported task, which for every supervised family is
+        ``CLASSIFICATION`` - matching ``strategy_service.DEFAULT_LABEL_MODE``, so the
+        spec's assumption and the service's default cannot disagree.
+        """
+        return self.supported_tasks[0] if self.supported_tasks else None
+
+    def supports_task(self, task: Any) -> bool:
+        """Whether this block can fit ``task``. Accepts a `ModelTask` or its value."""
+        wanted = getattr(task, "value", task)
+        return any(str(supported.value) == str(wanted) for supported in self.supported_tasks)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -1299,6 +1467,11 @@ class ModelSpec:
             "runtime_ref": self.runtime_ref,
             "required_modules": list(self.required_modules),
             "description": self.description,
+            # The data-sufficiency engine reads these off the registry descriptor's
+            # ``metadata["model"]``, which is this mapping verbatim - so validator stage
+            # 11 becomes task-aware with no new import inside ``strategy_dag``.
+            "supported_tasks": [task.value for task in self.supported_tasks],
+            "default_task": None if self.default_task is None else self.default_task.value,
         }
 
 
@@ -2032,7 +2205,13 @@ def _build_model_specs() -> Dict[str, ModelSpec]:
 
     return {
         spec.block_id: replace(
-            spec, backend_available=_backend_available_for(spec.required_modules)
+            spec,
+            backend_available=_backend_available_for(spec.required_modules),
+            # Stamped from the family map rather than restated on each of the eight
+            # literals above, so a new block cannot be added with its task support
+            # silently unstated. A family absent from the map yields `()`, which
+            # `_assert_spec_integrity` refuses at import.
+            supported_tasks=FAMILY_SUPPORTED_TASKS.get(spec.model_family, ()),
         )
         for spec in specs
     }
@@ -2086,6 +2265,15 @@ def _assert_spec_integrity(specs: Dict[str, ModelSpec]) -> None:
             raise ValueError(
                 f"{block_id}: max_safe_epochs {spec.max_safe_epochs} is below "
                 f"recommended {spec.recommended_epochs}"
+            )
+        if not spec.supported_tasks:
+            # A spec with no declared task cannot be reasoned about by the
+            # data-sufficiency engine: it would not know whether to assert class balance
+            # or target variance, and "we could not tell" must not read as "no
+            # requirement". A missing FAMILY_SUPPORTED_TASKS entry fails here.
+            raise ValueError(
+                f"{block_id}: no supported_tasks. Add {spec.model_family.value} to "
+                f"FAMILY_SUPPORTED_TASKS."
             )
         if not spec.inputs:
             raise ValueError(f"{block_id}: no input ports declared")

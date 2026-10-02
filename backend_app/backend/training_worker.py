@@ -192,6 +192,12 @@ __all__ = [
     # the 6.5 seam
     "EpochTrainer",
     "TrainingBackend",
+    # training quality
+    "EarlyStoppingMonitor",
+    "STOP_REASON_CEILING",
+    "STOP_REASON_NO_IMPROVEMENT",
+    "STOP_REASON_DIVERGED",
+    "STOP_REASONS",
     "register_training_backend",
     "current_training_backend",
     "reset_training_backend",
@@ -866,6 +872,7 @@ async def _transition(
     expect_heartbeat: Any = None,
     match_heartbeat: bool = False,
     what: str = "update a training job",
+    optional: Optional[Mapping[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Write ``payload`` to one job row, conditionally, always moving ``updated_at``.
 
@@ -874,6 +881,13 @@ async def _transition(
     stale-heartbeat reaper from overwriting a job that heartbeated between the read and
     the write: PostgreSQL takes the row lock for the UPDATE and re-evaluates the WHERE
     clause afterwards, so exactly one of two racing writers matches a row.
+
+    ``optional`` carries columns that may not exist yet - the resource-accounting
+    columns ``019_training_governance.sql`` adds. They are merged into the write and
+    DROPPED on a missing-column error, with a warning naming that migration, then the
+    write is retried without them. The degradation direction is deliberate: a terminal
+    status that cannot be written leaves a job looking like it is still running, which
+    is far worse than a status written without its accounting columns.
 
     Returns the written row, or ``None`` when the condition matched nothing (which is
     an ordinary outcome here, not an error) or when the table is absent.
@@ -889,22 +903,55 @@ async def _transition(
     body = dict(payload)
     # 004d attaches no BEFORE UPDATE trigger to this table. Every writer sets this.
     body["updated_at"] = _iso()
+    required = dict(body)
+    if optional:
+        body.update(dict(optional))
 
-    try:
-        query = sb.table(TRAINING_JOBS_TABLE).update(body).eq("id", str(job_id))
+    def _build(update_body: Mapping[str, Any]) -> Any:
+        query = sb.table(TRAINING_JOBS_TABLE).update(dict(update_body)).eq("id", str(job_id))
         if expect_status is not None:
             query = query.eq("status", expect_status)
         if expect_worker_id is not None:
             query = query.eq("worker_id", expect_worker_id)
         if match_heartbeat:
             query = query.eq("last_heartbeat", expect_heartbeat)
-        result = await S._execute(query.execute())
+        return query.execute()
+
+    dropped_optional = False
+    try:
+        result = await S._execute(_build(body))
     except Exception as exc:  # noqa: BLE001 - classified, never blanket-swallowed
-        if _degraded(exc, what):
+        if optional and S.is_missing_governance_column_error(exc):
+            logger.warning(
+                "The training governance columns are absent, so this job's resource "
+                "accounting was not recorded. Apply %s. The status itself IS written. "
+                "Detail: %s",
+                S.GOVERNANCE_MIGRATION,
+                exc,
+            )
+            dropped_optional = True
+            result = await S._execute(_build(required))
+        elif _degraded(exc, what):
             return None
-        raise
+        else:
+            raise
 
     error_text = S._result_error_text(result)
+    if (
+        error_text
+        and optional
+        and not dropped_optional
+        and S.is_missing_governance_column_error(Exception(error_text))
+    ):
+        logger.warning(
+            "The training governance columns are absent (%s), so this job's resource "
+            "accounting was not recorded. Apply %s. The status itself IS written.",
+            error_text,
+            S.GOVERNANCE_MIGRATION,
+        )
+        result = await S._execute(_build(required))
+        error_text = S._result_error_text(result)
+
     if error_text:
         if S.is_missing_training_table_error(Exception(error_text)):
             logger.warning(
@@ -1246,6 +1293,7 @@ async def _finish(
     expect_status: str = STATUS_RUNNING,
     expect_heartbeat: Any = None,
     match_heartbeat: bool = False,
+    actuals: Optional[Mapping[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Write one terminal status, move the version, and announce it. One code path.
 
@@ -1276,8 +1324,11 @@ async def _finish(
         payload["failure_reason"] = None
 
     if status == STATUS_COMPLETED:
-        # Every epoch ran. Progress is 1 because the epochs completed, not because the
-        # status says so.
+        # The RUN is complete, which is what progress 1 means - not that the epoch
+        # ceiling was reached. An early-stopped run converged and is finished, and
+        # reporting it as 60% done because it used 60% of its ceiling would describe a
+        # successful model as an unfinished one. How many epochs actually ran is
+        # recorded separately, in `actual_epochs` and in the completion event.
         payload["progress"] = 1.0
     payload.update(dict(extra or {}))
 
@@ -1290,6 +1341,8 @@ async def _finish(
         expect_heartbeat=expect_heartbeat,
         match_heartbeat=match_heartbeat,
         what=f"set status {status}",
+        # The resource-accounting columns, dropped with a warning when 019 is absent.
+        optional=actuals,
     )
     if written is None:
         logger.warning(
@@ -1942,8 +1995,25 @@ def reset_isolation_latch() -> None:
     _ISOLATION_UNAVAILABLE = False
 
 
-def run_isolated(fn: Callable[[], Any]) -> Tuple[Any, bool]:
+def run_isolated(fn: Callable[[], Any], *, stateful: bool = False) -> Tuple[Any, bool]:
     """Run ``fn`` through ``ml_safety.TrainingIsolator``; fall back in-process.
+
+    **``stateful=True`` runs in-process, deliberately and always.** An incrementally
+    fitted model - a booster that adds a round per epoch, a forest that adds an
+    estimator, any trainer that carries weights from one epoch to the next - lives on
+    the trainer object in THIS process. ``TrainingIsolator`` uses a ``spawn``
+    multiprocessing pool, so the child fits a COPY and only the return value comes back:
+    the per-epoch metrics would look perfectly normal while every epoch silently
+    restarted from scratch, and the artifact would hold a one-epoch model. That is a
+    correctness failure that no test of the metrics could detect, which is exactly why
+    it is refused structurally here rather than left to a caller to remember.
+
+    The run is still isolated in the sense Requirement 16.6 is about: the worker is its
+    own process (:func:`run_worker`), sharing no interpreter with the request handlers
+    or the execution runtime. What is given up is per-epoch sub-isolation, and the
+    wall-clock and memory bounds that would have come with it are enforced in the parent
+    regardless - :func:`_assert_within_duration` at every epoch boundary and
+    ``MemoryMonitor`` around the whole run.
 
     ``(result, isolated)``. The fallback is not a shortcut, it is the precedent this
     codebase already set: ``ml_models.XGBoostStrategyBlock.train_custom_strategy`` calls
@@ -1970,6 +2040,11 @@ def run_isolated(fn: Callable[[], Any]) -> Tuple[Any, bool]:
     :func:`reset_isolation_latch` clears it.
     """
     global _ISOLATION_UNAVAILABLE
+
+    if stateful:
+        # No latch and no warning per epoch: this is not a failure, it is the only
+        # correct answer for an incremental trainer. Stated once per run by the loop.
+        return fn(), False
 
     try:
         from backend_app.core.ml_safety import TrainingIsolator
@@ -2032,6 +2107,20 @@ class TrainingContext:
     #: complete every epoch, which is what makes "cancellation binds no model" and "a
     #: cancelled run records no metrics" the same structural fact.
     split_metrics: Dict[str, Any] = field(default_factory=dict)
+    #: Why the run ended, from the closed :data:`STOP_REASONS` set. Set by the epoch
+    #: loop on every path that reaches the binder, so a COMPLETED job records whether
+    #: it converged or ran out of ceiling - two very different outcomes that a status
+    #: column alone cannot tell apart.
+    stopped_reason: str = ""
+    #: Epochs that actually completed. Not ``epochs_total``: an early-stopped run
+    #: completed fewer, and reporting the ceiling would make every run look maximal.
+    epochs_completed: int = 0
+    #: The epoch whose monitored metric was best, and that metric's value.
+    best_epoch: int = 0
+    best_metric: Optional[float] = None
+    #: Whether the artifact about to be written holds the BEST epoch's weights. False
+    #: when the trainer cannot restore them, which is reported rather than implied.
+    best_weights_restored: bool = False
     #: **The client this run is being written with.** The binder has to write to the same
     #: database this module is writing to, and ``run_training_job`` deliberately accepts
     #: an injected ``sb``, so re-deriving one from :func:`_worker_client` inside the binder
@@ -2410,6 +2499,19 @@ async def _run_claimed_job(
     # ``COMPLETED`` only now: after the artifact, the row and the binding, exactly as the
     # design's ordering has it. The version's own transition to READY is task 6.5's, and
     # it belongs there because only the binder knows whether EVERY ml node is bound.
+    # What actually happened, as opposed to what was approved. An early-stopped run
+    # completed fewer epochs than its ceiling and that is a success, not a shortfall -
+    # but it has to be REPORTED as fewer, or every run looks maximal and the epochs-used
+    # distribution that reveals a too-tight budget is flat at 1.0 forever.
+    epochs_completed = int(context.epochs_completed or epochs_total)
+    quality = {
+        "stopped_reason": context.stopped_reason or STOP_REASON_CEILING,
+        "epochs_completed": epochs_completed,
+        "epochs_approved": epochs_total,
+        "best_epoch": context.best_epoch,
+        "best_metric": context.best_metric,
+        "best_weights_restored": context.best_weights_restored,
+    }
     await _finish(
         sb,
         job,
@@ -2420,17 +2522,63 @@ async def _run_claimed_job(
             "metrics": metrics,
             "model_version": model_version,
             "split_sizes": inputs.splits.sizes,
+            **quality,
         },
+        actuals=_actuals_row(context, quality, model_version),
     )
     return TrainingRunResult(
         job_id=job_id,
         status=STATUS_COMPLETED,
         claimed=True,
-        epochs_completed=epochs_total,
+        epochs_completed=epochs_completed,
         epochs_total=epochs_total,
-        detail={"metrics": metrics, "memory": memory},
+        detail={"metrics": metrics, "memory": memory, **quality},
         model_version=model_version,
     )
+
+
+def _actuals_row(
+    context: TrainingContext,
+    quality: Mapping[str, Any],
+    model_version: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """The ``requested -> approved -> ACTUAL`` columns ``019`` adds, for a finished run.
+
+    The third term of the triple. ``requested`` and ``approved`` were written at
+    admission; without these the platform can only ever compare a request to a decision,
+    never a decision to an outcome - so the duration estimate that decided an epoch
+    ceiling could be wrong by an order of magnitude indefinitely and nothing would say
+    so.
+
+    Every figure is MEASURED from the run that just happened. A figure that could not be
+    measured is omitted rather than defaulted, so an absent column means "not measured"
+    rather than "zero".
+    """
+    row: Dict[str, Any] = {
+        "actual_epochs": int(quality.get("epochs_completed") or 0),
+        "best_epoch": int(quality.get("best_epoch") or 0),
+    }
+    reason = str(quality.get("stopped_reason") or "")
+    if reason:
+        # Omitted rather than written as '': `chk_tj_stopped_reason` admits NULL or one
+        # of the closed set, and an empty string is neither a reason nor an absence.
+        row["stopped_reason"] = reason
+    best_metric = quality.get("best_metric")
+    if isinstance(best_metric, (int, float)) and best_metric == best_metric:
+        row["best_metric"] = float(best_metric)
+
+    elapsed = elapsed_seconds(context.job)
+    if elapsed is not None and elapsed >= 0:
+        row["actual_duration_seconds"] = int(elapsed)
+
+    peak = (context.memory or {}).get("peak_mb")
+    if isinstance(peak, (int, float)) and peak > 0:
+        row["actual_peak_memory_mb"] = int(peak)
+
+    artifact_bytes = (dict(model_version or {})).get("artifact_bytes")
+    if isinstance(artifact_bytes, (int, float)) and artifact_bytes > 0:
+        row["actual_artifact_bytes"] = int(artifact_bytes)
+    return row
 
 
 def _score_splits(trainer: Any) -> Dict[str, Any]:
@@ -2454,6 +2602,269 @@ def _score_splits(trainer: Any) -> Dict[str, Any]:
     return scored
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  THE TRAINING-QUALITY CONTROL
+#
+#  WHY THE EPOCH CEILING IS NOT THIS
+#  ---------------------------------
+#  Stopping a run because it reached epoch N says nothing about whether the model
+#  generalises. The ceiling is a RESOURCE control that happens to also end training;
+#  this is the QUALITY control, and it is validation-aware: a run ends when the metric
+#  it is judged on stops improving, and the weights that are kept are the best ones
+#  seen rather than the last ones.
+#
+#  THE FLOORS ARE THE POINT
+#  ------------------------
+#  `warmup_epochs` and `min_epochs` come from the APPROVED budget, and nothing here can
+#  stop a run before both are satisfied. Without them the first few noisy epochs of a
+#  legitimate model would end its training - the underfitting failure, which is easier
+#  to cause by accident than overfitting and much harder to notice, because the run
+#  reports COMPLETED either way.
+#
+#  THE TERMS COME FROM THE ROW, NOT FROM THIS MODULE
+#  -------------------------------------------------
+#  Patience, min-delta, the monitored metric and the divergence factor were decided at
+#  admission by `ml_training_policy.EarlyStoppingPolicy.for_run` and recorded in
+#  `training_jobs.config`. The worker reads them. A worker that re-derived them could
+#  stop a run on different terms than the author was told, which is the same class of
+#  defect as a worker that re-read the requested epoch count.
+# ══════════════════════════════════════════════════════════════════════════
+
+#: Why a run stopped. A closed set, like ``FAILURE_REASONS`` - a free-text stop reason
+#: is a reason nobody can aggregate.
+STOP_REASON_CEILING = "EPOCH_CEILING"
+STOP_REASON_NO_IMPROVEMENT = "NO_IMPROVEMENT"
+STOP_REASON_DIVERGED = "DIVERGED"
+
+STOP_REASONS: frozenset = frozenset(
+    {STOP_REASON_CEILING, STOP_REASON_NO_IMPROVEMENT, STOP_REASON_DIVERGED}
+)
+
+
+@dataclass
+class EarlyStoppingMonitor:
+    """Validation-aware stopping, driven by the approved terms.
+
+    Holds the run's best observation and decides, at each epoch boundary, whether more
+    training is still productive. Decides only; the loop acts.
+    """
+
+    monitor: str = "val_loss"
+    mode: str = "min"
+    patience: int = 10
+    min_delta: float = 1e-4
+    warmup_epochs: int = 5
+    min_epochs: int = 5
+    restore_best: bool = True
+    divergence_factor: float = 4.0
+
+    best_value: Optional[float] = None
+    best_epoch: int = 0
+    epochs_without_improvement: int = 0
+    #: Set once when the monitored metric is absent from the trainer's output. The run
+    #: then completes on its ceiling rather than being stopped on a metric nobody
+    #: measured.
+    disabled_reason: str = ""
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> "EarlyStoppingMonitor":
+        """Build from ``training_jobs.config["early_stopping"]``.
+
+        A row written before this governance landed carries no ``early_stopping`` key.
+        Such a run keeps its old behaviour exactly - every approved epoch runs, the
+        ceiling ends it - because retrofitting a stop rule onto a job that was admitted
+        without one would change what its author was promised.
+        """
+        terms = config.get("early_stopping")
+        if not isinstance(terms, Mapping) or not terms:
+            monitor = cls()
+            monitor.disabled_reason = (
+                "this job was admitted without early-stopping terms, so every approved "
+                "epoch runs"
+            )
+            return monitor
+        return cls(
+            monitor=str(terms.get("monitor") or "val_loss"),
+            mode=str(terms.get("mode") or "min").lower(),
+            patience=max(1, int(terms.get("patience") or 10)),
+            min_delta=float(terms.get("min_delta") or 0.0),
+            warmup_epochs=max(0, int(terms.get("warmup_epochs") or 0)),
+            min_epochs=max(0, int(terms.get("min_epochs") or 0)),
+            restore_best=bool(terms.get("restore_best", True)),
+            divergence_factor=float(terms.get("divergence_factor") or 0.0),
+        )
+
+    @property
+    def enabled(self) -> bool:
+        return not self.disabled_reason
+
+    @property
+    def floor(self) -> int:
+        """The epoch before which no stop decision is taken, whatever the metric says."""
+        return max(int(self.warmup_epochs), int(self.min_epochs))
+
+    def _improved(self, value: float) -> bool:
+        """Whether ``value`` beats the best by at least ``min_delta``, relatively.
+
+        Relative rather than absolute so one figure means the same thing whether a
+        model's loss lives around 0.7 or around 7,000. At a best of exactly zero the
+        margin collapses to zero and any strict improvement counts, which is the only
+        sensible reading.
+        """
+        if self.best_value is None:
+            return True
+        margin = abs(self.best_value) * max(0.0, self.min_delta)
+        if self.mode == "max":
+            return value > self.best_value + margin
+        return value < self.best_value - margin
+
+    def _diverged(self, value: float) -> bool:
+        """Whether ``value`` has run away from the best by the divergence factor.
+
+        A non-finite value is divergence by definition - that is what an exploding
+        gradient looks like - and is caught regardless of the factor, because no
+        multiple of a NaN is meaningful.
+        """
+        if value != value or value in (float("inf"), float("-inf")):
+            return True
+        if self.divergence_factor <= 1.0 or self.best_value is None:
+            return False
+        if self.mode == "max":
+            return self.best_value > 0 and value < self.best_value / self.divergence_factor
+        return self.best_value > 0 and value > self.best_value * self.divergence_factor
+
+    def observe(self, epoch: int, metrics: Mapping[str, Any]) -> Optional[str]:
+        """Record one epoch. Returns a stop reason, or ``None`` to keep training.
+
+        Never returns a reason before :attr:`floor`, and never returns one at all when
+        the monitored metric was not reported.
+        """
+        if not self.enabled:
+            return None
+
+        raw = metrics.get(self.monitor)
+        if raw is None:
+            self.disabled_reason = (
+                f"the trainer reported no {self.monitor!r}, so stopping could not be "
+                f"judged and every approved epoch will run"
+            )
+            logger.warning(
+                "Early stopping is inactive for this run: %s. The epoch ceiling and the "
+                "wall-clock cap still apply.",
+                self.disabled_reason,
+            )
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            self.disabled_reason = f"{self.monitor!r} was not a number ({raw!r})"
+            logger.warning("Early stopping is inactive for this run: %s", self.disabled_reason)
+            return None
+
+        # Divergence is judged BEFORE the improvement bookkeeping, so a NaN never
+        # becomes the best value and then the baseline every later epoch is compared to.
+        diverged = self._diverged(value)
+
+        if not diverged and self._improved(value):
+            self.best_value = value
+            self.best_epoch = int(epoch)
+            self.epochs_without_improvement = 0
+        else:
+            self.epochs_without_improvement += 1
+
+        # The floor. Past this line a decision is possible; before it, none is.
+        if epoch < self.floor:
+            return None
+
+        if diverged:
+            logger.info(
+                "Training diverged at epoch %d: %s went to %s against a best of %s.",
+                epoch,
+                self.monitor,
+                value,
+                self.best_value,
+            )
+            return STOP_REASON_DIVERGED
+        if self.epochs_without_improvement >= self.patience:
+            logger.info(
+                "Training stopped at epoch %d: %s has not improved on %s (epoch %d) for "
+                "%d epochs, the approved patience.",
+                epoch,
+                self.monitor,
+                self.best_value,
+                self.best_epoch,
+                self.epochs_without_improvement,
+            )
+            return STOP_REASON_NO_IMPROVEMENT
+        return None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "monitor": self.monitor,
+            "mode": self.mode,
+            "patience": self.patience,
+            "min_delta": self.min_delta,
+            "warmup_epochs": self.warmup_epochs,
+            "min_epochs": self.min_epochs,
+            "restore_best": self.restore_best,
+            "divergence_factor": self.divergence_factor,
+            "best_value": self.best_value,
+            "best_epoch": self.best_epoch,
+            "epochs_without_improvement": self.epochs_without_improvement,
+            "enabled": self.enabled,
+            "disabled_reason": self.disabled_reason,
+        }
+
+
+def _snapshot_best(trainer: Any, epoch: int) -> None:
+    """Tell ``trainer`` that ``epoch`` is the best so far, if it can hold a snapshot.
+
+    Optional on the trainer, and silent when absent: a trainer that cannot snapshot
+    simply keeps its last weights, which :func:`_restore_best_weights` then reports
+    honestly rather than claiming a restoration that did not happen.
+    """
+    note = getattr(trainer, "note_best", None)
+    if not callable(note):
+        return
+    try:
+        note(int(epoch))
+    except Exception as exc:  # noqa: BLE001 - a missed snapshot is not a failed epoch
+        logger.warning("The best epoch's weights could not be snapshotted: %s", exc)
+
+
+def _restore_best_weights(trainer: Any, monitor: EarlyStoppingMonitor) -> bool:
+    """Ask ``trainer`` to restore its best epoch's weights. ``True`` when it did.
+
+    Optional on the trainer, and a trainer that does not implement it is reported
+    rather than assumed: a run whose best epoch was 40 and whose last was 60 would
+    otherwise persist the epoch-60 weights while the job row says the best was 40, and
+    the artifact and its metrics would disagree with nothing to reveal it.
+    """
+    if not monitor.restore_best or monitor.best_epoch <= 0:
+        return False
+    restore = getattr(trainer, "restore_best", None)
+    if not callable(restore):
+        logger.warning(
+            "This trainer cannot restore its best epoch, so the artifact holds the LAST "
+            "epoch's weights (epoch %d was the best on %s). The recorded best_epoch "
+            "says so rather than implying otherwise.",
+            monitor.best_epoch,
+            monitor.monitor,
+        )
+        return False
+    try:
+        restore()
+        logger.info(
+            "Restored the weights from epoch %d, the best %s observed.",
+            monitor.best_epoch,
+            monitor.monitor,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 - reported, never fatal to a finished run
+        logger.warning("The best epoch's weights could not be restored: %s", exc)
+        return False
+
+
 async def _epoch_loop(
     sb: Any,
     job: Dict[str, Any],
@@ -2464,18 +2875,42 @@ async def _epoch_loop(
     epochs_total: int,
     permitted_seconds: int,
 ) -> Optional[TrainingRunResult]:
-    """Drive ``trainer`` for ``epochs_total`` epochs. ``None`` when every epoch ran.
+    """Drive ``trainer`` for up to ``epochs_total`` epochs. ``None`` when the run may bind.
 
     A non-``None`` return is a terminal outcome the loop reached on its own -
     cancellation, the duration cap, or losing the job to the reaper - and the caller
     returns it unchanged rather than continuing to the model-binding step. That is how
     "bind no model on cancellation" (Requirement 15.7) is structural: there is no path
     from a cancelled loop to the binder.
+
+    **Early stopping returns ``None``**, because it is a SUCCESSFUL outcome: the run
+    learned what it was going to learn, the best weights are restored, and the model is
+    bound exactly as a ceiling-completed run's would be. The distinction is recorded on
+    the context (``stopped_reason``, ``best_epoch``) rather than expressed as a
+    different control-flow path, because treating "converged" as anything other than
+    success is how a platform ends up training every model to its ceiling.
     """
     job_id = str(job.get("id") or "")
     history: List[Dict[str, Any]] = list(job.get("metrics_history") or [])
     last_heartbeat = time.monotonic()
     completed = 0
+    monitor = EarlyStoppingMonitor.from_config(context.config)
+    if not monitor.enabled:
+        logger.info("Early stopping is not in force for job %s: %s", job_id, monitor.disabled_reason)
+
+    # A trainer that carries fitted state between epochs cannot have an epoch run in a
+    # child process - see :func:`run_isolated`. Asked once, per run, rather than per
+    # epoch, and a trainer that does not declare it is treated as stateless, which is
+    # the behaviour every existing trainer already had.
+    stateful_trainer = bool(getattr(trainer, "stateful", False))
+    if stateful_trainer:
+        logger.info(
+            "Job %s uses an incremental trainer, so its epochs are fitted in the worker "
+            "process rather than in a child process (the model's state would not survive "
+            "the boundary). The worker is itself isolated from the API and execution "
+            "runtimes, and the wall-clock and memory bounds are enforced here.",
+            job_id,
+        )
 
     for epoch in range(1, max(0, int(epochs_total)) + 1):
         # ── (a) cancellation, read fresh, before anything else ───────────
@@ -2537,9 +2972,11 @@ async def _epoch_loop(
         # ── (c) the wall clock, before the epoch ────────────────────────
         _assert_within_duration(job, permitted_seconds)
 
-        # ── (d) one epoch, isolated ─────────────────────────────────────
+        # ── (d) one epoch, isolated unless the trainer is incremental ───
         started = time.monotonic()
-        raw, isolated = run_isolated(lambda e=epoch: trainer.train_epoch(e))
+        raw, isolated = run_isolated(
+            lambda e=epoch: trainer.train_epoch(e), stateful=stateful_trainer
+        )
         duration = time.monotonic() - started
         completed = epoch
 
@@ -2600,13 +3037,87 @@ async def _epoch_loop(
         )
         _assert_within_duration(job, permitted_seconds)
 
+        # ── (g) is more training still productive? ──────────────────────
+        #
+        # Last, deliberately. The epoch's figures are already persisted and published,
+        # so a run that stops here has reported every epoch it actually ran - and the
+        # author sees the curve that led to the decision rather than a run that simply
+        # ended.
+        previous_best = monitor.best_epoch
+        stop_reason = monitor.observe(epoch, metrics)
+        if monitor.best_epoch != previous_best:
+            # A new best. Snapshotting is the trainer's job and WHICH epoch is best is
+            # the monitor's - the monitor holds the approved metric, mode and min-delta.
+            # A trainer that decided for itself would be a second early-stopping rule
+            # with its own opinion, which is how a run keeps weights the status row says
+            # it discarded.
+            _snapshot_best(trainer, monitor.best_epoch)
+        if stop_reason is not None:
+            context.stopped_reason = stop_reason
+            context.best_epoch = monitor.best_epoch
+            context.best_metric = monitor.best_value
+            context.epochs_completed = completed
+            context.best_weights_restored = _restore_best_weights(trainer, monitor)
+            _note_early_stop(stop_reason, context, epochs_total)
+            await S.publish_training_event(
+                str(job.get("user_id") or ""),
+                "training.progress",
+                {
+                    "job_id": job_id,
+                    "version_id": job.get("version_id"),
+                    "node_id": job.get("node_id"),
+                    "status": STATUS_RUNNING,
+                    "epoch": epoch,
+                    "epochs_total": epochs_total,
+                    "progress": min(1.0, epoch / max(1, epochs_total)),
+                    "stopped_reason": stop_reason,
+                    "best_epoch": monitor.best_epoch,
+                    "best_metric": monitor.best_value,
+                    "monitor": monitor.monitor,
+                },
+            )
+            # `None`, like a run that used its whole ceiling: converging is success, and
+            # the model is bound on exactly the same path.
+            return None
+
         # A heartbeat between epochs as well, so a model family whose single epoch is
         # long-running does not look lost while it is working.
         if time.monotonic() - last_heartbeat >= heartbeat_interval_seconds():
             await write_heartbeat(sb, job_id, identity)
             last_heartbeat = time.monotonic()
 
+    # Every approved epoch ran. The ceiling is the reason this run ended, which is a
+    # fact worth recording: a fleet whose runs all end this way is a fleet whose epoch
+    # budgets are too tight, and nothing else would reveal that.
+    context.stopped_reason = STOP_REASON_CEILING
+    context.best_epoch = monitor.best_epoch
+    context.best_metric = monitor.best_value
+    context.epochs_completed = completed
+    context.best_weights_restored = _restore_best_weights(trainer, monitor)
+    _note_early_stop(STOP_REASON_CEILING, context, epochs_total)
     return None
+
+
+def _note_early_stop(reason: str, context: TrainingContext, epochs_total: int) -> None:
+    """Count how a run ended, and how much of its budget it used.
+
+    The epochs-used ratio is the one figure that answers "is this governance layer
+    starving legitimate training": a distribution pinned at 1.0 means runs are hitting
+    their ceiling rather than converging, which is the underfitting failure this layer
+    exists to avoid rather than cause.
+    """
+    collector = _metrics()
+    if collector is None:
+        return
+    try:
+        recorder = getattr(collector, "record_training_early_stop", None)
+        if callable(recorder):
+            recorder(reason)
+        used = getattr(collector, "record_training_epochs_used", None)
+        if callable(used):
+            used(context.block_id, int(context.epochs_completed), int(epochs_total))
+    except Exception:  # noqa: BLE001 - instrumentation never breaks its caller
+        logger.debug("The training stop reason was not counted.", exc_info=True)
 
 
 def _assert_within_duration(job: Mapping[str, Any], permitted_seconds: int) -> None:
@@ -2845,6 +3356,29 @@ async def _main() -> None:  # pragma: no cover - process entry point
     _logging.basicConfig(
         level=_logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
     )
+
+    # Install the fit. Here, in the PROCESS entry point, rather than at module import:
+    # a global backend installed as an import side effect would make every process that
+    # happens to import this module behave differently, and the worker's own tests
+    # replace the backend per test. Without this the seam is empty and every claimed job
+    # ends FAILED / TRAINER_UNAVAILABLE - which is exactly the gap this closes.
+    try:
+        from backend_app.backend.training_runtime import install_training_runtime
+
+        if not install_training_runtime():
+            logger.error(
+                "No training runtime could be installed, so claimed jobs will end "
+                "FAILED / %s. The worker still runs, reaps stale jobs and reports "
+                "truthfully.",
+                FAILURE_TRAINER_UNAVAILABLE,
+            )
+    except Exception as exc:  # noqa: BLE001 - the worker must still start and report
+        logger.exception(
+            "The training runtime could not be imported (%s), so claimed jobs will end "
+            "FAILED / %s.",
+            exc,
+            FAILURE_TRAINER_UNAVAILABLE,
+        )
 
     worker = TrainingWorker()
     await worker.start()

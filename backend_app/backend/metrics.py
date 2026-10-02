@@ -695,6 +695,36 @@ class MetricsCollector:
             "Training requests blocked for want of data, by block reason",
             labels=["reason"],
         )
+        # -- the data-sufficiency engine's three outcomes ---------------------
+        #
+        # The counter that matters most here is the WARNING one. A block is visible
+        # because the author asks about it and a clean pass needs no attention, but a
+        # platform where most admitted runs carry CLASS_IMBALANCE or HIGH_DIMENSIONALITY
+        # is one whose authors are shipping models that will not generalise - and no
+        # refusal counter can show that.
+        self.training_dataset_warnings = Counter(
+            "training.dataset.warnings",
+            "Data-quality concerns a training job was ADMITTED with, by code",
+            labels=["code"],
+        )
+        self.training_dataset_blocks = Counter(
+            "training.dataset.blocks",
+            "Training requests blocked by the data-sufficiency engine, by code",
+            labels=["code"],
+        )
+        self.training_jobs_early_stopped = Counter(
+            "training.jobs.early_stopped",
+            "Training runs stopped by the training-quality controls, by reason",
+            labels=["reason"],
+        )
+        self.training_epochs_used_ratio = Histogram(
+            "training.epochs.used_ratio",
+            "Completed epochs as a fraction of the approved ceiling, by block",
+            # Clustering near 1.0 means the ceiling is binding and runs are being cut
+            # off; clustering low means early stopping is doing its job.
+            buckets=[0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0],
+            labels=["block_id"],
+        )
 
         # -- Requirement 24.3: the DAG runtime and the feed --------------------
         self.dag_node_execution_ms = Histogram(
@@ -1082,6 +1112,28 @@ class MetricsCollector:
             for attribute in self.MARKETPLACE_PAPER_METRIC_ATTRIBUTES
         ]
 
+    #: What the training governance layer observes that the four task 9.1 training metrics
+    #: above do not: which dataset rule warned, which one refused, why a run stopped before
+    #: its ceiling, and how much of the approved epoch budget was actually spent. A FOURTH
+    #: tuple, for the reason the second and third exist and for no other - the
+    #: strategy-builder list is asserted element-for-element against Requirements 24.1-24.3
+    #: in ``tests/test_task_9_1_builder_metrics.py``, so a governance metric appended there
+    #: fails an assertion about requirement text that does not mention it. Learned the hard
+    #: way: these four WERE in that tuple and did exactly that.
+    TRAINING_GOVERNANCE_METRIC_ATTRIBUTES: Tuple[str, ...] = (
+        "training_dataset_warnings",
+        "training_dataset_blocks",
+        "training_jobs_early_stopped",
+        "training_epochs_used_ratio",
+    )
+
+    def training_governance_metrics(self) -> List[Any]:
+        """The metric objects for :data:`TRAINING_GOVERNANCE_METRIC_ATTRIBUTES`."""
+        return [
+            getattr(self, attribute)
+            for attribute in self.TRAINING_GOVERNANCE_METRIC_ATTRIBUTES
+        ]
+
     # -- Requirement 24.1 ---------------------------------------------------
 
     @never_fails
@@ -1165,6 +1217,44 @@ class MetricsCollector:
     def record_training_blocked_insufficient_data(self, reason: str):
         """One training request blocked because there was not enough usable data."""
         self.training_jobs_blocked_insufficient_data.inc(reason=safe_label_value(reason))
+
+    # -- the data-sufficiency engine ---------------------------------------
+
+    @never_fails
+    def record_training_dataset_warning(self, code: str):
+        """One data-quality concern a job was ADMITTED with, by its gate code."""
+        self.training_dataset_warnings.inc(code=safe_label_value(code))
+
+    @never_fails
+    def record_training_dataset_block(self, code: str):
+        """One data-sufficiency refusal, by its gate code."""
+        self.training_dataset_blocks.inc(code=safe_label_value(code))
+
+    @never_fails
+    def record_training_early_stop(self, reason: str):
+        """One run ended by a training-quality control rather than by its ceiling.
+
+        ``reason`` is one of the stop reasons the worker records - no improvement for
+        the patience window, divergence, or the ceiling itself - so the ratio of
+        quality-driven stops to ceiling-driven stops is readable.
+        """
+        self.training_jobs_early_stopped.inc(reason=safe_label_value(reason))
+
+    @never_fails
+    def record_training_epochs_used(self, block_id: str, completed: int, approved: int):
+        """Completed epochs as a fraction of the approved ceiling.
+
+        The one number that answers "is the governance layer starving legitimate
+        training". A distribution pinned at 1.0 means runs are being cut off by the
+        ceiling rather than converging, which is the underfitting failure this whole
+        layer is supposed to avoid.
+        """
+        if approved <= 0:
+            return
+        ratio = float(completed) / float(approved)
+        self.training_epochs_used_ratio.observe(
+            min(1.0, max(0.0, ratio)), block_id=safe_label_value(block_id or "unknown")
+        )
 
     # -- Requirement 24.3 ---------------------------------------------------
 
@@ -1646,6 +1736,12 @@ class MetricsCollector:
         # operations and the expiry sweep. Same exposition, same endpoint, same collector.
         metrics.extend(
             metric.to_prometheus() for metric in self.marketplace_paper_metrics()
+        )
+        # Training governance: which dataset rule warned or refused, why a run stopped, and
+        # how much of the approved budget it used. Same exposition, same endpoint; a fourth
+        # list only because the strategy-builder one is pinned to its own requirement text.
+        metrics.extend(
+            metric.to_prometheus() for metric in self.training_governance_metrics()
         )
         
         return "\n\n".join(metrics)

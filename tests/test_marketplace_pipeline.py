@@ -1335,3 +1335,270 @@ class TestMarketplacePipeline:
         row = patched_db.stores["library_strategies"][0]
         assert row.get("is_featured") is True
         assert row.get("moderation_notes") == "Editor's pick."
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 3. THE ELIGIBILITY_GATE AGAINST THE COLUMNS `strategies` ACTUALLY HAS
+#    (production-launch-hardening task 13.18)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# WHY THESE TESTS NEED A STRICTER DOUBLE THAN `FakeDB`
+# ---------------------------------------------------
+# `FakeTable.select` is a no-op: it accepts any projection and returns whole rows. That is
+# exactly what made the defect invisible here. Read 1 of the gate selected
+# `id, user_id, tenant_id, archived_at` off `strategies`, and production has no `tenant_id`
+# column on that table - task 13.17 proved it with a read-only
+# `SELECT "tenant_id" FROM public."strategies" LIMIT 0` answering `42703`, with the control
+# column `user_id` on the same table answering OK. Against `FakeDB` that select succeeded and
+# every criterion was decided; against production it raised, `evaluate`'s `except Exception`
+# short-circuited to `unevaluable=True` with no outcomes (Requirement 2.13), and the route
+# turned that into a 503. Every marketplace submission eligibility evaluation in production
+# answered "unknown", so nothing could be published.
+#
+# `StrictColumnFakeDB` below is the SAME store with ONE production fact added: a projection
+# (or filter) naming a column `public.strategies` does not have RAISES, the way PostgREST
+# does. The exception TYPE is deliberately not a `postgrest` import - the gate catches bare
+# `Exception`, so the type is irrelevant to the behaviour under test; what matters is that the
+# read raises rather than returning rows, and that the SQLSTATE it carries is the one
+# production answered with.
+#
+# The tenancy decision these tests pin: tenant == user. `tenant-boundary-audit.md` records
+# `strategies`' tenant predicate as `user_id` with no `tenant_id` column, and
+# `core/dependencies.py` defaults a caller's `tenant_id` to their own `user_id`. So the row's
+# tenant IS its `user_id`, and a caller carrying no tenant context has no boundary to cross -
+# which is why the absent-caller-tenant case must answer a real verdict rather than
+# `MP_TENANT` refused. Read 1 already filters `.eq("user_id", caller_id)`, so the tenant
+# clause is defence in depth on top of the owner filter, not the only thing between tenants.
+
+from backend_app.backend.marketplace import eligibility_gate as _eligibility_gate
+
+#: The column task 13.17 proved absent from ``public.strategies`` in production (PostgreSQL
+#: 17.6). Recorded as a set so the double names the fact rather than hard-coding a branch, and
+#: so a second proven-absent column can be added without touching the table logic.
+STRATEGIES_COLUMNS_ABSENT_IN_PRODUCTION = frozenset({"tenant_id"})
+
+#: The control column from the same evidence: it answered OK on the same table in the same
+#: read-only session, so a read that names it must still succeed against the double. Without
+#: this half, a double that raised on EVERYTHING would satisfy the tests below vacuously.
+STRATEGIES_CONTROL_COLUMN = "user_id"
+
+
+class _Column42703(Exception):
+    """What the Persistence_Layer raises when a statement names a column the table lacks.
+
+    PostgREST surfaces PostgreSQL's ``42703 column … does not exist`` as an API error. The
+    gate catches bare ``Exception``, so reproducing the SQLSTATE and the message is enough to
+    reproduce the production behaviour exactly; importing ``postgrest.exceptions.APIError``
+    would add a dependency on the driver's error shape without changing what is tested.
+    """
+
+    #: The SQLSTATE production answered with for every one of task 13.17's 24 proven reads.
+    code = "42703"
+
+    def __init__(self, table: str, column: str) -> None:
+        super().__init__(f'column "{column}" of relation "{table}" does not exist')
+        self.table = table
+        self.column = column
+
+
+class _StrictColumnFakeTable(FakeTable):
+    """A :class:`FakeTable` that refuses to pretend a missing column exists.
+
+    Both verbs that name a column are guarded, because production answers ``42703`` to both:
+    the ``select`` projection and an ``eq`` filter. Everything else - the storage, the
+    filtering, the insert/update/upsert paths - is inherited unchanged, so these tests exercise
+    the same store the rest of this module does.
+    """
+
+    def __init__(self, rows: list, table_name: str, absent_columns: frozenset):
+        super().__init__(rows)
+        self._table_name = table_name
+        self._absent_columns = absent_columns
+
+    def _reject_absent(self, column: str) -> None:
+        if column in self._absent_columns:
+            raise _Column42703(self._table_name, column)
+
+    def select(self, *args, **kwargs) -> "FakeTable":
+        for literal in args:
+            if not isinstance(literal, str):
+                continue
+            for token in literal.split(","):
+                self._reject_absent(token.strip())
+        return super().select(*args, **kwargs)
+
+    def eq(self, col: str, val: Any) -> "FakeTable":
+        self._reject_absent(col)
+        return super().eq(col, val)
+
+
+class StrictColumnFakeDB(FakeDB):
+    """:class:`FakeDB` plus the column sets production does NOT have, per table."""
+
+    ABSENT_COLUMNS: Dict[str, frozenset] = {
+        "strategies": STRATEGIES_COLUMNS_ABSENT_IN_PRODUCTION,
+    }
+
+    def table(self, name: str) -> FakeTable:
+        if name not in self.stores:
+            self.stores[name] = []
+        absent = self.ABSENT_COLUMNS.get(name)
+        if absent:
+            return _StrictColumnFakeTable(self.stores[name], name, absent)
+        return FakeTable(self.stores[name])
+
+
+def _production_shaped_strategy_row(strategy_id: str, owner_id: str) -> dict:
+    """A ``strategies`` row with the columns production has - and no ``tenant_id`` key.
+
+    The absence is not an omission for brevity: production has no such column, so no row can
+    carry one, and a row that did would let a test pass that production fails.
+    """
+    return {
+        "id": strategy_id,
+        "user_id": owner_id,
+        "archived_at": None,
+        "name": "Tenant-column regression strategy",
+    }
+
+
+@pytest.fixture
+def strict_db():
+    """A fresh :class:`StrictColumnFakeDB` seeded with one eligible, owner-held strategy.
+
+    Everything the gate needs to ADMIT is present (``_seed_eligible_submission``: one saved
+    VALID version and three pairwise-distinct completed backtests with all seven metrics), so
+    any non-admission in the tests below is the criterion under test and not missing evidence.
+    """
+    _db = StrictColumnFakeDB()
+    _db.stores["strategies"].append(
+        _production_shaped_strategy_row(STRATEGY_UUID, AUTHOR_ID)
+    )
+    _db.backtest_ids = _seed_eligible_submission(_db, AUTHOR_ID, STRATEGY_UUID)
+    return _db
+
+
+class TestEligibilityGateReadsTheTenantTheRowActuallyCarries:
+    """Task 13.18. The gate must answer a VERDICT, not "unknown", against production's columns.
+
+    One class, four claims, in the order the defect is reasoned about: the double really
+    reproduces the production ``42703``; a caller WITH tenant context gets a verdict; a caller
+    WITHOUT tenant context gets a verdict rather than a refusal (the trap - swapping the
+    column alone turns "always unevaluable" into "always refused", silently); and a strategy
+    owned by someone else is still refused, by criterion rather than by unevaluable.
+    """
+
+    def _evaluate(self, caller: dict, db, backtest_ids):
+        return _run_coroutine(
+            _eligibility_gate.evaluate(caller, STRATEGY_UUID, backtest_ids, db)
+        )
+
+    def _codes(self, verdict) -> set:
+        return {o.code for o in verdict.outcomes}
+
+    def _failed_codes(self, verdict) -> set:
+        return {o.code for o in verdict.failed_outcomes}
+
+    def test_the_double_answers_42703_for_tenant_id_and_ok_for_the_control_column(
+        self, strict_db
+    ):
+        """The premise, asserted both ways, as task 13.17's evidence recorded it.
+
+        A double that raised on every projection would make the three tests below pass without
+        the fix; a double that raised on none would make them pass without the production fact.
+        """
+        with pytest.raises(_Column42703) as excinfo:
+            (
+                strict_db.table("strategies")
+                .select("id, user_id, tenant_id, archived_at")
+                .eq("id", STRATEGY_UUID)
+                .execute()
+            )
+        assert excinfo.value.code == "42703"
+        assert excinfo.value.column == "tenant_id"
+
+        response = (
+            strict_db.table("strategies")
+            .select(f"id, {STRATEGIES_CONTROL_COLUMN}, archived_at")
+            .eq("id", STRATEGY_UUID)
+            .execute()
+        )
+        assert [row["id"] for row in response.data] == [STRATEGY_UUID]
+        assert response.data[0][STRATEGIES_CONTROL_COLUMN] == AUTHOR_ID
+        assert "tenant_id" not in response.data[0], (
+            "a production-shaped strategies row cannot carry a tenant_id - the column does "
+            "not exist on the table"
+        )
+
+    def test_a_caller_with_tenant_context_gets_a_real_verdict(
+        self, strict_db, patched_audit
+    ):
+        """The defect itself. Before task 13.18 this answered ``unevaluable=True``, no outcomes.
+
+        The caller shape is the one ``core/dependencies.py`` builds for every HTTP request:
+        ``tenant_id`` defaulted to the caller's own ``user_id`` when the token carries no
+        tenant claim, which is the normal case in this deployment.
+        """
+        caller = {"id": AUTHOR_ID, "tenant_id": AUTHOR_ID}
+        verdict = self._evaluate(caller, strict_db, strict_db.backtest_ids)
+
+        assert verdict.unevaluable is False, (
+            "the gate could not complete its reads, so eligibility is unknown and the route "
+            "answers 503 - which is the defect task 13.18 fixes, not a verdict"
+        )
+        assert verdict.outcomes, "an evaluable verdict carries one outcome per criterion"
+        assert _eligibility_gate.MP_TENANT in self._codes(verdict)
+        assert self._failed_codes(verdict) == set(), (
+            "the seed satisfies every criterion, so a failure here is a real criterion "
+            "regression rather than the tenant clause"
+        )
+        assert verdict.admitted is True
+        assert verdict.version_id == VERSION_UUID
+
+    def test_a_caller_without_tenant_context_gets_a_real_verdict_not_a_refusal(
+        self, strict_db, patched_audit
+    ):
+        """The trap. Swapping the column alone would make this ``MP_TENANT`` refused, silently.
+
+        Under tenant == user the row's tenant is its ``user_id``, so it is ALWAYS present. A
+        caller with no tenant context - an internal or direct caller, since
+        ``core/dependencies.py`` fills it for every HTTP one - would then hit the "exactly one
+        absent" branch and be refused, turning "always unevaluable" into "always refused".
+        Both shapes a tenant-less caller arrives as are asserted: the key missing entirely,
+        and the key present and ``None`` (which is how ``tests/test_marketplace_concurrency.py``
+        has always built its caller).
+        """
+        for caller in ({"id": AUTHOR_ID}, {"id": AUTHOR_ID, "tenant_id": None}):
+            verdict = self._evaluate(caller, strict_db, strict_db.backtest_ids)
+            assert verdict.unevaluable is False, caller
+            assert _eligibility_gate.MP_TENANT not in self._failed_codes(verdict), (
+                "a caller carrying no tenant context has no tenant boundary to cross; "
+                "refusing it would be a worse defect than the one being fixed, and a "
+                f"silent one (caller={caller!r}, failed={self._failed_codes(verdict)})"
+            )
+            assert verdict.admitted is True, caller
+
+    def test_a_strategy_owned_by_someone_else_is_refused_by_criterion_not_unevaluable(
+        self, strict_db, patched_audit
+    ):
+        """The ownership boundary still holds, and still answers 422 rather than 503.
+
+        Read 1 filters ``.eq("user_id", caller_id)``, so a strategy belonging to another user
+        returns NO ROW and is indistinguishable from one that does not exist. That must surface
+        as a criterion failure - ``MP_OWNERSHIP``, with ``MP_TENANT`` failing alongside it
+        rather than passing vacuously - and never as ``unevaluable``, which would tell the
+        caller the platform is broken instead of that the strategy is not theirs.
+        """
+        caller = {"id": CLONER_ID, "tenant_id": CLONER_ID}
+        verdict = self._evaluate(caller, strict_db, strict_db.backtest_ids)
+
+        assert verdict.unevaluable is False, (
+            "a foreign-owned strategy is a decided ineligibility, not an unknown"
+        )
+        assert verdict.admitted is False
+        failed = self._failed_codes(verdict)
+        assert _eligibility_gate.MP_OWNERSHIP in failed, failed
+        assert _eligibility_gate.MP_TENANT in failed, failed
+        assert strict_db.stores["strategies"][0]["user_id"] == AUTHOR_ID, (
+            "the owner's row must be untouched by a foreign caller's evaluation"
+        )

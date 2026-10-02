@@ -16,6 +16,12 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - REDIS_QUEUE_URL=redis://redis:6379/1
       - REDIS_CACHE_URL=redis://redis:6379/2
+      # Must match the training worker's value: the API admits against this figure and
+      # the worker re-checks against it, so a disagreement makes one of them wrong.
+      - ML_TRAINING_MAX_CONCURRENT_GLOBAL=${ML_TRAINING_MAX_CONCURRENT_GLOBAL:-2}
+      # The API serves artifacts through the signed download exchange, so it reads the
+      # same directory the worker writes.
+      - STRATEGY_MODEL_ARTIFACT_DIR=/app/user_strategies/model_artifacts
       - ALERTS_ENABLED=true
       - ALERT_TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - ALERT_TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
@@ -26,6 +32,7 @@ services:
       - redis
     volumes:
       - backend_logs:/app/logs
+      - model_artifacts:/app/user_strategies/model_artifacts
     networks:
       - aerora_network
     deploy:
@@ -36,6 +43,84 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
+
+  # ML/DL TRAINING WORKER
+  #
+  # WHY THIS SERVICE EXISTS AT ALL
+  #   Governed training is queued, not executed inline: the API writes a QUEUED
+  #   `training_jobs` row carrying the APPROVED configuration and returns. Something
+  #   has to dequeue it. Before this service, nothing did - `startup.sh` launches only
+  #   gunicorn - so every governed job sat QUEUED forever while the only training that
+  #   actually ran was the ungoverned in-process path that is now closed.
+  #
+  # WHY IT IS A SEPARATE PROCESS AND NOT A THREAD IN THE API
+  #   `training_worker.run_worker`'s own docstring: a fitting job in the same
+  #   interpreter as the request handlers and the execution runtime is precisely what
+  #   the isolation requirement exists to prevent. The worker shares no state with the
+  #   API; its only channels are the `training_jobs` table and the Redis wake-up hint.
+  #
+  # CONCURRENCY IS THE REPLICA COUNT
+  #   One worker runs ONE job at a time, on purpose. Platform-wide concurrency is the
+  #   number of these processes, and `ML_TRAINING_MAX_CONCURRENT_GLOBAL` is what the
+  #   policy engine admits against - so the two MUST agree. Raise `replicas` and raise
+  #   that variable together, or the pool will either refuse work it could do or admit
+  #   work it cannot.
+  #
+  # IT NEEDS THE SERVICE ROLE
+  #   A worker holds no request and therefore no JWT, so it uses the service-role
+  #   client: `model_versions` has no UPDATE policy, and deactivating a superseded
+  #   model version is a backend operation by design (004d's header says so). Without
+  #   SUPABASE_SERVICE_ROLE_KEY it starts, logs that it can claim nothing, and reaps.
+  #
+  # RESOURCES MIRROR THE POLICY, THEY DO NOT REPLACE IT
+  #   The memory limit here is the container's backstop. The authoritative bounds are
+  #   per job and per plan (`MLTrainingCaps.max_memory_mb`, enforced by
+  #   `ml_safety.MemoryMonitor` inside the run), and they are lower. This limit exists
+  #   so a defect in the runtime cannot take the host down, not to decide a plan's
+  #   allowance.
+  training-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    command: ["python", "-m", "backend_app.backend.training_worker"]
+    environment:
+      - ENV=production
+      - SANDBOX_MODE=true
+      - DATABASE_URL=postgresql://aerora:${DB_PASSWORD}@postgres:5432/aerora
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_QUEUE_URL=redis://redis:6379/1
+      - REDIS_CACHE_URL=redis://redis:6379/2
+      # The service-role client the worker claims jobs and binds models with.
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      # MUST match the replica count below. See the note above.
+      - ML_TRAINING_MAX_CONCURRENT_GLOBAL=${ML_TRAINING_MAX_CONCURRENT_GLOBAL:-2}
+      # Where trained artifacts land. Shared volume so a restarted worker and the API's
+      # signed-download endpoint resolve the same bytes.
+      - STRATEGY_MODEL_ARTIFACT_DIR=/app/user_strategies/model_artifacts
+      - ALERTS_ENABLED=true
+      - ALERT_TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - ALERT_TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - backend_logs:/app/logs
+      - model_artifacts:/app/user_strategies/model_artifacts
+    networks:
+      - aerora_network
+    deploy:
+      # Keep in step with ML_TRAINING_MAX_CONCURRENT_GLOBAL above.
+      replicas: 2
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
 
   # STEP 8.1: Frontend (Next.js)
   frontend:
@@ -147,6 +232,10 @@ volumes:
   nginx_logs:
   prometheus_data:
   grafana_data:
+  # Trained model artifacts. Shared between the worker that writes them and the API
+  # that serves them through the signed, ownership-checked download exchange - the
+  # `model_versions.artifact_uri` a row records has to resolve in both containers.
+  model_artifacts:
 
 networks:
   aerora_network:

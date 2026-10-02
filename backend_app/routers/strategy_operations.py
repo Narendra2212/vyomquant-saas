@@ -1874,12 +1874,95 @@ async def validate_historical_data(request: Request,
 # OPTIMIZATION OPERATIONS
 # ══════════════════════════════════════════════════════════════════════════
 
+async def _approved_search_budget(user: dict, supabase: Any, body: Any) -> Any:
+    """The aggregate budget for one parameter search, or a 422 naming what was refused.
+
+    THE QUANTITY BEING BOUNDED
+    --------------------------
+    ``n_iterations`` and ``n_trials`` are the same cost in different clothes: both are
+    the number of backtests a search will run. A grid search caps itself at
+    ``n_iterations`` combinations; a random or Bayesian search runs ``n_iterations``
+    samples and ``n_trials`` is its own trial count. The budget is resolved against the
+    LARGER of the two, because a search that honours whichever is bigger is the search
+    that actually costs money.
+
+    WHOSE RULES THESE ARE
+    ---------------------
+    ``ml_training_policy.resolve_search_budget`` and ``enforce_search_budget``. No
+    threshold is decided here - this function resolves the caller's plan, asks the
+    policy engine, and maps a refusal to the API's error contract. The same division
+    every other gate in this router keeps.
+
+    Raises
+        ``HTTPException`` 422 with ``SEARCH_BUDGET_EXCEEDED`` and the cap's requested /
+        permitted values.
+    """
+    from backend_app.backend.ml_training_policy import (
+        CapExceeded,
+        enforce_search_budget,
+        resolve_search_budget,
+    )
+    from backend_app.core.subscription_dependencies import get_plan_context
+
+    requested = max(int(body.n_iterations or 0), int(body.n_trials or 0))
+
+    # The plan from the same authority every entitlement gate reads, so a search budget
+    # cannot disagree with the feature gate that admitted the request.
+    plan_id = None
+    try:
+        plan_id = (await get_plan_context(user["id"], supabase)).plan
+    except Exception as exc:  # noqa: BLE001 - resolved below, never silently permissive
+        logger.warning(
+            "The plan for user %s could not be read for the search budget (%s); the "
+            "most restrictive tier applies.",
+            user.get("id"),
+            exc,
+        )
+
+    budget = resolve_search_budget(requested, user, plan=plan_id)
+    try:
+        enforce_search_budget(budget)
+    except CapExceeded as exceeded:
+        payload = exceeded.to_dict()
+        logger.info(
+            "A parameter search was refused for user %s: %s requested %s, allowed %s.",
+            user.get("id"),
+            payload["cap"],
+            payload["requested"],
+            payload["allowed"],
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "SEARCH_BUDGET_EXCEEDED",
+                "message": payload["message"],
+                "cap": payload["cap"],
+                "requested": payload["requested"],
+                "allowed": payload["allowed"],
+                "unit": payload["unit"],
+                "fix_hint": payload["fix_hint"],
+                "budget": budget.to_dict(),
+                "search_started": False,
+            },
+        )
+
+    if budget.warnings:
+        logger.info(
+            "Parameter search admitted for user %s with %d concern(s): %s",
+            user.get("id"),
+            len(budget.warnings),
+            list(budget.warnings),
+        )
+    return budget
+
+
 @router.post("/strategies/{strategy_id}/optimize")
 @limiter.limit("10/minute")
 async def run_optimization(request: Request, 
     strategy_id: str,
     body: OptimizationRequest,
     user: dict = Depends(get_current_user),
+    supabase: Any = Depends(get_request_supabase),
     _feature=Depends(require_optimization),
     _quota=Depends(check_optimization_quota),
 ):
@@ -1947,6 +2030,19 @@ async def run_optimization(request: Request,
         # Inject backtest runtime
         optimization_engine.set_backtest_runtime(backtest_runtime)
         
+        # ── The aggregate search budget, before any trial runs ───────────
+        #
+        # `check_optimization_quota` above has already bounded how many SEARCHES this
+        # account may run this month. It says nothing about how big one search is, and
+        # until this gate existed the only bound on that was `n_iterations`'s own
+        # `le=1000` - so an account entitled to a 1,800-second training job could spend
+        # a thousand backtests in a single request while every individual trial looked
+        # valid. That is the aggregate bypass Phase 15 is about.
+        #
+        # Refused, not clamped: a caller who asked for 1,000 trials and silently got 200
+        # would read a best-of-200 result as a best-of-1,000 one.
+        search_budget = await _approved_search_budget(user, supabase, body)
+
         # Inject exchange instance
         import ccxt
         exchange_instance = ccxt.binance()
@@ -2020,6 +2116,10 @@ async def run_optimization(request: Request,
         return {
             "status": "completed",
             "report_id": research_report.report_id,
+            # What the search was permitted, beside what it produced. A reader can then
+            # tell a thorough search from one that ran at its ceiling - which changes
+            # how much weight the best-parameter result deserves.
+            "search_budget": search_budget.to_dict(),
             "research_report": research_report,
             "deployment_approved": deployment_approved
         }

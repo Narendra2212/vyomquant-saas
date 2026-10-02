@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend_app.core.dependencies import (create_request_supabase_async,
                                            get_current_user, get_fleet,
-                                           get_vault, get_ws_manager)
+                                           get_ws_manager)
 from backend_app.core.subscription_dependencies import (
     check_backtest_quota,
     check_bot_quota,
@@ -31,7 +31,6 @@ from backend_app.core.subscription_dependencies import (
     check_optimization_quota,
     check_strategy_quota,
     decrement_usage,
-    increment_usage,
     get_user_plan,
     require_live_trading,
     require_ml_training,
@@ -540,17 +539,29 @@ _DATA_SOURCE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{1,31}$")
 
 
 def _resolve_training_data_source(config: Dict[str, Any]) -> str:
-    """The venue a training job reads its candles from (SB-06, Requirement 12.6).
+    """Validate a client-named venue identifier. **No longer on the training path.**
 
-    Resolved from the training configuration and from nothing else. The pre-fix path
-    took the credential venue from ``body.get("exchange_id", "binance")`` and then built
+    HISTORY, BECAUSE THE NAME NO LONGER MATCHES THE CALLER
+    -----------------------------------------------------
+    This was SB-06's fix for the legacy in-process trainer: that path took the
+    credential venue from ``body.get("exchange_id", "binance")`` and then built
     ``ConnectionEngine("binance", ...)`` regardless, so a job configured for another
     venue trained on Binance candles while holding that venue's keys - two answers to
-    one question, and the model silently learned the wrong market.
+    one question, and the model silently learned the wrong market. This function made
+    one resolved value feed both.
 
-    An unnamed data source is an error, not a default. A strategy carries no exchange
-    identity at all (Requirement 12.1), so the only place this can come from is the
-    training request, and inventing a venue here is the same defect in a new location.
+    Governed training resolves the venue **further up and more strictly**: the market
+    comes from the compiled graph's DATA block
+    (``strategy_service.resolve_training_data_source``) and the venue is a server
+    setting, so a client cannot name one at all. ``train_ml_strategy`` therefore
+    REFUSES ``data_source``/``exchange_id``/``exchange`` (see
+    :data:`SERVER_RESOLVED_TRAINING_KEYS`) instead of resolving them, which closes the
+    same defect without trusting the request.
+
+    Kept, rather than deleted, because it is the one place that states what a venue
+    identifier may look like and it is covered by the SB-06 suite. It is a validator
+    available to any surface that genuinely does take a client-named venue; nothing on
+    the training path calls it.
 
     Raises
         ``HTTPException`` 422 naming the field, when the configuration names no data
@@ -2036,168 +2047,424 @@ async def stop_bot(
     return {"status": "stopped"}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# GOVERNED TRAINING ADMISSION (this router owns no training runtime)
+#
+# Every helper below exists to turn this router's legacy training request into a call
+# on the ONE authoritative governance path. None of them decides a limit, a minimum or
+# a budget: ``ml_training_policy`` owns those, ``strategy_service.prepare_training``
+# applies them, and ``training_worker.recheck_caps`` re-applies them before the first
+# epoch. A second opinion here is exactly the drift Phase 29 forbids.
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: Top-level keys this route accepts. Everything else is refused, because the only
+#: alternative - ignoring it - is how a caller ends up believing it configured something
+#: it did not.
+GOVERNED_TRAINING_BODY_KEYS: frozenset = frozenset({"training", "node_id"})
+
+#: Legacy payload keys the SERVER now resolves, with the sentence explaining where each
+#: one actually comes from. Refused with 422 rather than dropped (Requirement 12.6).
+SERVER_RESOLVED_TRAINING_KEYS: Dict[str, str] = {
+    "symbol": "the market comes from the graph's DATA block, not from this request",
+    "timeframe": "the timeframe comes from the graph's DATA block, not from this request",
+    "data_source": "the training venue is a server setting; a strategy holds no exchange identity",
+    "exchange_id": "the training venue is a server setting; a strategy holds no exchange identity",
+    "exchange": "the training venue is a server setting; a strategy holds no exchange identity",
+    "indicators": "the feature set comes from the graph's own feature pipeline",
+    "strategy_name": "the strategy is identified by the id in the path",
+    "block_id": "the model block comes from the graph's model node",
+}
+
+
+def _governed_training_config(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate the caller's training configuration with the governed model.
+
+    ``TrainingConfigRequest`` is imported from ``strategy_operations`` rather than
+    restated here. It is the model the governed endpoint already validates against, it
+    carries ``extra="forbid"``, and every field it accepts resolves server-side to the
+    model spec's own figure when omitted. Declaring a second model would give the two
+    front doors two answers to "what may an author choose", which is the inconsistency
+    this whole layer exists to remove.
+
+    Raises
+        ``HTTPException`` 422 for a body that is not an object, names a server-resolved
+        field, names an unknown field, or whose ``training`` block fails the governed
+        model's own validation.
+    """
+    from pydantic import ValidationError as PydanticValidationError
+
+    # Imported at call time: both modules are routers in one package and
+    # ``strategy_operations`` imports a large surface, so a module-scope import here
+    # would make this file's import order load-bearing for no benefit.
+    from backend_app.routers.strategy_operations import TrainingConfigRequest
+
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=DAG_INVALID_STATUS,
+            detail={
+                "error": "TRAINING_REQUEST_INVALID",
+                "message": "The training request body must be a JSON object.",
+            },
+        )
+
+    resolved = sorted(key for key in body if key in SERVER_RESOLVED_TRAINING_KEYS)
+    if resolved:
+        raise HTTPException(
+            status_code=DAG_INVALID_STATUS,
+            detail={
+                "error": "TRAINING_FIELD_SERVER_RESOLVED",
+                "message": (
+                    "This training request names field(s) the server resolves itself: "
+                    + "; ".join(
+                        f"{key} ({SERVER_RESOLVED_TRAINING_KEYS[key]})" for key in resolved
+                    )
+                    + ". They are refused rather than ignored, so a model is never fitted "
+                    "to a market you did not configure."
+                ),
+                "fields": resolved,
+                "fix_hint": (
+                    "Remove these fields. Configure the market on the strategy's DATA "
+                    "block and send only {'node_id': ..., 'training': {...}}."
+                ),
+            },
+        )
+
+    unknown = sorted(key for key in body if key not in GOVERNED_TRAINING_BODY_KEYS)
+    if unknown:
+        raise HTTPException(
+            status_code=DAG_INVALID_STATUS,
+            detail={
+                "error": "TRAINING_FIELD_UNSUPPORTED",
+                "message": (
+                    f"Unsupported training field(s): {unknown}. This endpoint accepts "
+                    f"{sorted(GOVERNED_TRAINING_BODY_KEYS)}."
+                ),
+                "fields": unknown,
+            },
+        )
+
+    raw = body.get("training")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise HTTPException(
+            status_code=DAG_INVALID_STATUS,
+            detail={
+                "error": "TRAINING_CONFIG_INVALID",
+                "message": "'training' must be a JSON object, or be omitted.",
+                "field": "training",
+            },
+        )
+    try:
+        model = TrainingConfigRequest(**raw)
+    except PydanticValidationError as exc:
+        raise HTTPException(
+            status_code=DAG_INVALID_STATUS,
+            detail={
+                "error": "TRAINING_CONFIG_INVALID",
+                "message": "The training configuration was refused.",
+                "field": "training",
+                "errors": exc.errors(include_url=False),
+            },
+        )
+    return model.model_dump(exclude_none=True)
+
+
+async def _current_version_id(sb: Any, strategy_id: str) -> Optional[str]:
+    """The id of this strategy's current ``strategy_versions`` row, or ``None``.
+
+    Training runs an IMMUTABLE saved version, never the live canvas: that is what makes
+    a model's recorded ``feature_schema`` comparable to the graph it will be deployed
+    against. ``is_current = TRUE`` is the same marker ``StrategyService.get_strategy``
+    and ``strategy_operations._load_backtest_version`` read, so this route cannot
+    disagree with them about which version is current.
+
+    ``None`` for a strategy with no saved version, and for an environment where the
+    relation is unreadable - the caller turns both into the same 422, because "there is
+    nothing to train" is true either way and no job is created on either path.
+    """
+    try:
+        result = await (
+            sb.table("strategy_versions")
+            .select("id")
+            .eq("strategy_id", strategy_id)
+            .eq("is_current", True)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001 - absence is the answer, never a 500
+        logger.warning(
+            "[ML TRAINING] The current version of strategy %s could not be read (%s); "
+            "no training job was created.",
+            strategy_id,
+            exc,
+        )
+        return None
+    rows = getattr(result, "data", None) or []
+    if not rows:
+        return None
+    return str(rows[0].get("id") or "") or None
+
+
+async def _announce_training_refusal(
+    ws_mgr: Any, user: dict, strategy_id: str, payload: Dict[str, Any]
+) -> None:
+    """Tell a listening client that training did NOT start, and why.
+
+    Best-effort by design: a browser that is not connected must never turn a governed
+    refusal into a 500. The frame carries the governance reason and message - never an
+    exception string, never a stack trace, never an internal limit the response did not
+    already state.
+    """
+    try:
+        broadcast = getattr(ws_mgr, "broadcast_user", None)
+        if broadcast is None:
+            return
+        await broadcast(
+            user["id"],
+            {
+                "type": "model_error",
+                "strategy_id": strategy_id,
+                "reason": payload.get("reason"),
+                "error": payload.get("message"),
+                "job_created": False,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - an announcement, not a control
+        logger.debug("[ML TRAINING] Refusal could not be announced: %s", exc)
+
+
 # ── POST /api/strategies/{strategy_id}/train ─────────────────────────────
 @router.post("/{strategy_id}/train")
+@limiter.limit("20/minute")
 async def train_ml_strategy(
     strategy_id: str,
+    request: Request,
     body: Dict[str, Any],
-    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
-    vault=Depends(get_vault),
     ws_mgr=Depends(get_ws_manager),
     _feature=Depends(require_ml_training),  # ← blocks users without ML feature
     _ml_check=Depends(check_ml_quota),  # ← blocks unpaid ML compute
 ):
+    """Queue governed ML training for this strategy's current saved version.
+
+    THIS ENDPOINT NO LONGER TRAINS. IT ADMITS.
+    ------------------------------------------
+    It used to fit a model **inside the API process** via ``BackgroundTasks``: it
+    fetched a hardcoded 10,000 bars, called ``XGBoostStrategyBlock.
+    train_custom_strategy`` directly and pushed the resulting path over a websocket.
+    That path wrote no ``training_jobs`` row, so it passed through **none** of the
+    platform's training governance - no minimum-data gate, no epoch/row/feature/memory
+    cap, no concurrency accounting, no queue, no worker, no ``model_versions`` row and
+    no cancellation. It was the one way a caller could consume CPU, RAM and ingestion
+    bandwidth without the policy engine ever seeing the request, and it ran in the same
+    interpreter as the request handlers and the execution runtime.
+
+    It is now a thin adapter onto the SAME authoritative path
+    ``POST /api/strategy-operations/training/jobs`` uses:
+    :meth:`StrategyService.create_training_job`, which runs
+    ``prepare_training`` -> ``check_ml_data_requirements`` -> ``resolve_caps`` ->
+    ``enforce_caps``, persists the APPROVED configuration on a ``training_jobs`` row
+    and hands it to the out-of-process worker. There is exactly one governance engine
+    and this route is one of its two front doors, not a second engine.
+
+    WHAT A CLIENT MAY SEND, AND WHAT IT MAY NOT
+    -------------------------------------------
+    ``{"node_id": "...", "training": {...}}``. ``training`` is validated by the same
+    ``TrainingConfigRequest`` model the governed endpoint uses - imported rather than
+    restated, so the two front doors cannot drift about what an author may choose.
+
+    The legacy payload's ``symbol``, ``timeframe``, ``exchange_id``/``data_source``,
+    ``indicators`` and ``strategy_name`` are **refused with 422**, not ignored. Market
+    identity is resolved from the graph's DATA block and the venue is a server setting
+    (Requirement 12.6, SB-06), so honouring a client's ``symbol`` here would train a
+    model on a market the strategy was not configured for - and silently dropping it
+    would do the same thing without saying so. Refusing is the only answer that cannot
+    mislead. This is strictly stronger than the previous
+    ``_resolve_training_data_source(body)``: a caller can no longer name a venue at all.
+
+    Auth and entitlement are unchanged: ``Depends(get_current_user)``,
+    ``Depends(require_ml_training)`` and ``Depends(check_ml_quota)`` all remain exactly
+    as they were. A rate limit is now declared, matching the governed endpoint's
+    ``20/minute``, because this route can queue real work.
+
+    Status codes
+        **200** queued, or already live for this (version, node) - the governed
+        outcome verbatim, including ``job_id``, ``state`` and any ``warnings``.
+        **422** an admission gate refused, the request named a server-resolved field,
+        or the strategy has no saved version to train. **No job row was created.**
+        **404** the strategy is not this user's, or does not exist.
+        **503** training could not be queued at all.
     """
-    Triggers XGBoost/DL training as a background task.
-    Result is pushed to the user via WebSocket when complete.
-    
-    PHASE 53: Now accepts strategy_id directly from path parameter instead of
-    ambiguous name-based lookup. Eliminates silent failure when user has multiple
-    strategies with the same name.
+    # ── 1. The request shape. Nothing is silently ignored. ──────────────
+    training_cfg = _governed_training_config(body)
+    node_id = body.get("node_id")
+    if node_id is not None and not isinstance(node_id, str):
+        raise HTTPException(
+            status_code=DAG_INVALID_STATUS,
+            detail={
+                "error": "TRAINING_NODE_ID_INVALID",
+                "message": "'node_id' must be the id of one model node, or be omitted.",
+                "field": "node_id",
+            },
+        )
 
-    SB-06 (task 3.9): the training data source is **resolved from the training
-    configuration** and used for both the credential lookup and the market-data
-    connection (Requirement 12.6). It used to be
-    ``vault.load_decrypted_keys(user, body.get("exchange_id", "binance"))`` followed by
-    ``ConnectionEngine("binance", ...)`` - so a job configured against any other venue
-    fetched its training candles from Binance while holding that venue's credentials, and
-    the model was trained on a market it was not configured for. The literal is gone; one
-    resolved value now feeds both.
+    # ── 2. Ownership, before anything else is read. ─────────────────────
+    sb = await _sb(user)
+    if sb is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "TRAINING_UNAVAILABLE",
+                "message": (
+                    "Training cannot be queued right now because no database client is "
+                    "available. Nothing was started."
+                ),
+            },
+        )
 
-    Auth and rate limiting are unchanged: ``Depends(get_current_user)``,
-    ``Depends(require_ml_training)`` and ``Depends(check_ml_quota)`` all remain exactly as
-    they were, and this endpoint carries no ``@limiter.limit`` to alter.
-    """
-    # One resolved data source for the whole job: the credential lookup and the market-data
-    # connection can no longer disagree about which venue is being read.
-    training_data_source = _resolve_training_data_source(body)
+    not_found = HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "error": "STRATEGY_NOT_FOUND",
+            "message": f"Strategy {strategy_id} not found",
+        },
+    )
 
-    async def _train():
-        try:
-            # Import here to avoid blocking on startup Numba compilation
-            from backend_app.backend.connection_engine import ConnectionEngine
-            from data_seeking_engine import DataEngine
-            from ml_models import XGBoostStrategyBlock
+    try:
+        owned = await (
+            sb.table("strategies")
+            .select("id, name")
+            .eq("id", strategy_id)
+            .eq("user_id", user["id"])
+            .limit(1)
+            .execute()
+        )
+    except Exception as lookup_error:  # noqa: BLE001 - classified, never a 500
+        logger.error(
+            "[ML TRAINING] Strategy %s could not be read for user %s: %s",
+            strategy_id,
+            user["id"],
+            lookup_error,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "TRAINING_UNAVAILABLE",
+                "message": (
+                    "The strategy could not be read, so no training job was created."
+                ),
+            },
+        )
+    if not (getattr(owned, "data", None) or []):
+        # Another tenant's strategy and a non-existent one are the same answer, so
+        # existence does not leak (Requirement 21.4).
+        logger.info(
+            "[ML TRAINING] Strategy %s not found for user %s; no training job created.",
+            strategy_id,
+            user["id"],
+        )
+        raise not_found
 
-            # Verify strategy belongs to user and fetch buy_logic for ML node updates
-            sb = await _sb(user)
-            strategy_buy_logic = None
-            if sb:
-                try:
-                    query = (
-                        sb.table("strategies")
-                        .select("id, name, buy_logic")
-                        .eq("id", strategy_id)
-                        .eq("user_id", user["id"])
-                        .single()
-                    )
-                    resp = await query.execute()
-                    if not resp.data:
-                        logger.error(f"[ML TRAINING] Strategy {strategy_id} not found for user {user['id']}")
-                        await ws_mgr.broadcast_user(
-                            user["id"], 
-                            {"type": "model_error", "error": f"Strategy {strategy_id} not found"}
-                        )
-                        return
-                    strategy_buy_logic = resp.data.get("buy_logic")
-                    logger.info(f"[ML TRAINING] Verified strategy_id: {strategy_id} for user {user['id']}")
-                except Exception as lookup_error:
-                    logger.error(f"[ML TRAINING] Strategy lookup failed: {lookup_error}")
-                    await ws_mgr.broadcast_user(
-                        user["id"], 
-                        {"type": "model_error", "error": f"Strategy lookup failed: {lookup_error}"}
-                    )
-                    return
+    # ── 3. The version governance trains against. ───────────────────────
+    version_id = await _current_version_id(sb, strategy_id)
+    if not version_id:
+        raise HTTPException(
+            status_code=DAG_INVALID_STATUS,
+            detail={
+                "error": "TRAINING_VERSION_UNAVAILABLE",
+                "message": (
+                    "This strategy has no saved version, so there is nothing to train. "
+                    "Save the strategy first; training runs against an immutable saved "
+                    "version so the model and the graph it was fitted to cannot drift "
+                    "apart."
+                ),
+                "fix_hint": "Save the strategy, then start training.",
+            },
+        )
 
-            keys = vault.load_decrypted_keys(
-                user["id"],
-                training_data_source,
-                access_token=user.get("access_token"),
-            )
-            bridge = ConnectionEngine(
-                training_data_source, keys["api_key"], keys["secret_key"]
-            )
-            exch = await bridge.connect()
-            ohlcv = await DataEngine(exch).fetch_historical_ohlcv(
-                body["symbol"], body.get("timeframe", "1m"), limit=10000
-            )
-            await bridge.disconnect()
+    # ── 4. The one authoritative governance layer. ──────────────────────
+    from backend_app.backend.strategy_service import (
+        TrainingBlocked,
+        get_strategy_service,
+    )
 
-            import numpy as np
+    try:
+        service = await get_strategy_service()
+        outcome = await service.create_training_job(
+            user,
+            version_id,
+            node_id=node_id,
+            training_cfg=training_cfg or None,
+        )
+    except TrainingBlocked as blocked:
+        payload = blocked.to_dict()
+        logger.info(
+            "[ML TRAINING] Training refused for strategy %s version %s (%s); no job row "
+            "was created.",
+            strategy_id,
+            version_id,
+            blocked.reason,
+        )
+        # A client that is listening on the websocket rather than reading this response
+        # still learns the run did not start. The frame carries the governance reason, not
+        # a stack trace.
+        await _announce_training_refusal(ws_mgr, user, strategy_id, payload)
+        raise HTTPException(
+            status_code=DAG_INVALID_STATUS,
+            detail={
+                "error": "TRAINING_BLOCKED",
+                "reason": payload["reason"],
+                "message": payload["message"],
+                "detail": payload["detail"],
+                "job_created": False,
+            },
+        )
+    except ValueError as exc:
+        logger.info("[ML TRAINING] Training target not found: %s", exc)
+        await _announce_training_refusal(
+            ws_mgr,
+            user,
+            strategy_id,
+            {"reason": "TRAINING_TARGET_NOT_FOUND", "message": str(exc)},
+        )
+        raise not_found
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - classified, never an unhandled 500
+        logger.exception(
+            "[ML TRAINING] Training could not be queued for strategy %s: %s",
+            strategy_id,
+            exc,
+        )
+        await _announce_training_refusal(
+            ws_mgr,
+            user,
+            strategy_id,
+            {"reason": "TRAINING_UNAVAILABLE", "message": "Training could not be queued."},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "TRAINING_UNAVAILABLE",
+                "message": (
+                    "Training could not be queued. Nothing was started, and no training "
+                    "job was created."
+                ),
+            },
+        )
 
-            np_data = np.array(ohlcv, dtype=np.float64)
-
-            block = XGBoostStrategyBlock(f"user_strategies/{user['id']}/")
-            path = block.train_custom_strategy(
-                user["id"],
-                body.get("strategy_name", f"strategy_{strategy_id}"),  # Fallback to ID if name not provided
-                np_data,
-                ["Open", "High", "Low", "Close", "Volume"],
-                body.get("indicators", ["Close"]),
-            )
-
-            # Increment ML training usage
-            await increment_usage(Resource.ML_TRAININGS.value, user)
-
-            # Update strategy record with ml_model_path if strategy_id was found
-            db_update_success = False
-            if strategy_id and sb:
-                try:
-                    update_query = (
-                        sb.table("strategies")
-                        .update({"ml_model_path": path})
-                        .eq("id", strategy_id)
-                        .eq("user_id", user["id"])
-                    )
-                    await update_query.execute()
-                    db_update_success = True
-                    logger.info(f"[ML TRAINING] Updated ml_model_path for strategy {strategy_id}: {path}")
-                    
-                    # Also update ML nodes in DAG with model_id
-                    if strategy_buy_logic and isinstance(strategy_buy_logic, dict):
-                        nodes = strategy_buy_logic.get("_nodes", [])
-                        ml_nodes_updated = False
-                        for node in nodes:
-                            if node.get("type", "").lower() in ["ml", "dl"]:
-                                if not node.get("model_id"):
-                                    node["model_id"] = path  # Use path as model_id
-                                    ml_nodes_updated = True
-
-                        if ml_nodes_updated:
-                            update_dag_query = (
-                                sb.table("strategies")
-                                .update({"buy_logic": strategy_buy_logic})
-                                .eq("id", strategy_id)
-                                .eq("user_id", user["id"])
-                            )
-                            await update_dag_query.execute()
-                            logger.info(f"[ML TRAINING] Updated ML nodes with model_id for strategy {strategy_id}")
-                                
-                except Exception as db_error:
-                    logger.error(f"[ML TRAINING] Database update failed for strategy {strategy_id}: {db_error}")
-                    # Continue with WebSocket broadcast even if DB update fails
-
-            await ws_mgr.broadcast_user(
-                user["id"],
-                {
-                    "type": "model_trained",
-                    "model_path": path,
-                    "strategy": body.get("strategy_name"),
-                    "strategy_id": strategy_id,
-                    "db_update_success": db_update_success,
-                },
-            )
-        except Exception as e:
-            logger.error(f"ML training failed for {user['id']}: {e}")
-            await ws_mgr.broadcast_user(
-                user["id"], {"type": "model_error", "error": str(e)}
-            )
-
-    background_tasks.add_task(_train)
+    logger.info(
+        "[ML TRAINING] Strategy %s version %s: governance answered %s (job_id=%s).",
+        strategy_id,
+        version_id,
+        outcome.get("state"),
+        outcome.get("job_id"),
+    )
     return {
-        "status": "training_started",
-        "message": "Model training started. Result arrives via WebSocket.",
+        "status": outcome.get("state"),
+        "strategy_id": strategy_id,
+        **outcome,
     }
 
 # ── POST /api/strategies/validate ────────────────────────────────────────

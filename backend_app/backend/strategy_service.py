@@ -3008,6 +3008,20 @@ class StrategyService:
                 **preparation.to_dict(),
             }
             saved["jobs"] = []
+            # The save path's refusal, recorded like the explicit path's. Same reason:
+            # no job row exists, so this is the only place it can live. The version
+            # itself WAS saved, so this is a refusal of the training half only and the
+            # audit row says so through its version_id.
+            await record_governance_decision(
+                await self._get_supabase(user),
+                user_id=user["id"],
+                decision=DECISION_REFUSED,
+                policy_version=_policy_version(),
+                strategy_id=strategy_id,
+                version_id=version_id or None,
+                reason=preparation.blocked.reason,
+                detail=preparation.blocked.to_dict(),
+            )
             logger.info(
                 "Version %s saved; training blocked (%s) and no training job was "
                 "created.",
@@ -3114,6 +3128,10 @@ class StrategyService:
                     strategy_id=strategy_id,
                     version_id=version_id,
                 ),
+                # The governance decision's audit columns. Dropped with a warning when
+                # 019 has not been applied; the decision itself is in `config` either
+                # way, so the job stays governed.
+                governance=node.governance_row(),
             )
             if not result["available"]:
                 warnings.append(result["reason"])
@@ -3131,6 +3149,34 @@ class StrategyService:
                 idempotent.append(node.node_id)
             else:
                 job_id = str(job.get("id") or "")
+                # The audit row, for the admitted half. Recorded only for a job this
+                # call actually created - for the same reason the metric below is: an
+                # idempotent hit made no decision, and recording one would double-count
+                # an admission that happened earlier.
+                admission = getattr(node, "admission", None)
+                deferred = bool(
+                    admission is not None and getattr(admission, "deferred", False)
+                )
+                fields = _decision_fields(node)
+                await record_governance_decision(
+                    sb,
+                    user_id=user["id"],
+                    decision=DECISION_DEFERRED if deferred else DECISION_ADMITTED,
+                    strategy_id=strategy_id,
+                    version_id=version_id,
+                    training_job_id=job_id or None,
+                    detail={
+                        "warnings": [
+                            dict(issue)
+                            for issue in (getattr(node.verdict, "warnings", ()) or ())
+                        ]
+                        if node.verdict is not None
+                        else [],
+                        "split_sizes": node.splits.sizes if node.splits is not None else None,
+                        "queue_position": getattr(admission, "queue_position", None),
+                    },
+                    **fields,
+                )
                 if job_id:
                     # Requirement 24.2's counts by status. Recorded only for a job this
                     # call actually created, for the same reason the audit record is: an
@@ -3348,6 +3394,20 @@ class StrategyService:
             job_counts=job_counts,
         )
         if preparation.blocked is not None:
+            # The refusal, recorded before it is raised. This is the ONLY place a
+            # refusal can be recorded: no job row exists, so there is nothing else to
+            # attach it to, and without this a blocked request leaves only a log line.
+            await record_governance_decision(
+                sb,
+                user_id=user["id"],
+                decision=DECISION_REFUSED,
+                policy_version=_policy_version(),
+                strategy_id=strategy_id,
+                version_id=version_id,
+                node_id=node_id,
+                reason=preparation.blocked.reason,
+                detail=preparation.blocked.to_dict(),
+            )
             # Raised, not returned: this endpoint's only job is to create the job, so
             # a refusal is the answer to the request rather than a footnote on a save.
             raise preparation.blocked
@@ -3728,6 +3788,60 @@ def _record_training_cap_rejection(detail: Any) -> None:
         )
 
 
+def _record_training_block_codes(detail: Any) -> None:
+    """Count each gate code a block carried, from the verdict payload on the block.
+
+    Reads ``detail["issues"][*]["code"]``, which is ``GateVerdict.to_dict()``'s own
+    shape, so this counts exactly what the author was told and cannot drift from it.
+    A block with no issues list - a data-quality or feed refusal rather than a
+    sufficiency one - records nothing here, because those have their own counters.
+    """
+    collector = _metrics()
+    if collector is None:
+        return
+    recorder = getattr(collector, "record_training_dataset_block", None)
+    if not callable(recorder):
+        return
+    issues = (dict(detail or {}) or {}).get("issues") or ()
+    if not isinstance(issues, (list, tuple)):
+        return
+    for issue in issues:
+        code = str((issue or {}).get("code") or "") if isinstance(issue, Mapping) else ""
+        if not code:
+            continue
+        try:
+            recorder(code)
+        except Exception:  # noqa: BLE001 - instrumentation never breaks its caller
+            logger.debug("A training dataset block was not counted.", exc_info=True)
+            return
+
+
+def _record_training_warnings(codes: Any) -> None:
+    """Count the data-quality concerns a job was admitted WITH.
+
+    Admitted-with-warnings is the outcome worth watching: a block is visible because
+    the author complains, and a clean pass needs no attention, but a platform where
+    most runs carry CLASS_IMBALANCE or HIGH_DIMENSIONALITY is a platform whose authors
+    are shipping models that will not generalise - and nobody finds that out from a
+    refusal counter.
+
+    Guarded like every other instrumentation call here: a metrics failure must never
+    turn an admitted job into a 500.
+    """
+    collector = _metrics()
+    if collector is None:
+        return
+    recorder = getattr(collector, "record_training_dataset_warning", None)
+    if not callable(recorder):
+        return
+    for code in codes or ():
+        try:
+            recorder(str(code))
+        except Exception:  # noqa: BLE001 - instrumentation never breaks its caller
+            logger.debug("A training dataset warning was not counted.", exc_info=True)
+            return
+
+
 #: Requirement 14.7: these two measured quality levels block training.
 #: ``DataQualityLevel`` member NAMES, because ``DataQualityLevel.POOR.value`` is
 #: the integer 50 and comparing against that would read as a score threshold this
@@ -3760,6 +3874,59 @@ _MISSING_TABLE_CODES = ("42p01", "pgrst205", "undefined_table")
 
 #: Codes that mean "a unique index rejected this row".
 _UNIQUE_VIOLATION_CODES = ("23505", "unique_violation", "duplicate key")
+
+#: The governance columns ``019_training_governance.sql`` adds to ``training_jobs``.
+#: Named here so a missing-column failure can be attributed to that migration rather
+#: than to the row being wrong.
+GOVERNANCE_MIGRATION = "backend_app/migrations/019_training_governance.sql"
+
+GOVERNANCE_JOB_COLUMNS: Tuple[str, ...] = (
+    "policy_version",
+    "task",
+    "gate_outcome",
+    "requested_epochs",
+    "recommended_epochs",
+    "approved_max_epochs",
+    "min_meaningful_epochs",
+    "max_wall_clock_seconds",
+    "estimated_seconds_per_epoch",
+    "estimated_memory_mb",
+    "training_budget",
+    "dataset_measurements",
+    "dataset_warnings",
+    "actual_epochs",
+    "actual_duration_seconds",
+    "actual_peak_memory_mb",
+    "actual_artifact_bytes",
+    "stopped_reason",
+    "best_epoch",
+    "best_metric",
+)
+
+
+def is_missing_governance_column_error(exc: BaseException) -> bool:
+    """True only when ``exc`` definitively says a GOVERNANCE column does not exist.
+
+    Narrow, for the same reason :func:`is_missing_canonical_column_error` is: anything
+    this returns ``False`` for is re-raised. A governance decision that could not be
+    RECORDED must degrade to a job that was still properly ADMITTED - the decision is
+    enforced from ``config``, which is a column 004d already created - but a genuine
+    insert failure must not be mistaken for an unapplied migration and swallowed.
+    """
+    text = str(exc).lower()
+    if not text:
+        return False
+    if "pgrst205" in text:  # a missing TABLE, not a missing column
+        return False
+    names_governance_column = any(column in text for column in GOVERNANCE_JOB_COLUMNS)
+    if not names_governance_column:
+        return False
+    if any(code in text for code in _MISSING_COLUMN_CODES):
+        return True
+    return any(
+        phrase in text
+        for phrase in ("does not exist", "schema cache", "could not find", "unknown column")
+    )
 
 
 class TrainingBlocked(Exception):
@@ -4511,6 +4678,49 @@ def split_training_dataset(dataset: Any, config: Any, *, feature_lookback: int =
         ) from exc
 
 
+def try_split_training_dataset(
+    dataset: Any, config: Any, *, feature_lookback: int = 0
+) -> Tuple[Any, Optional[TrainingBlocked]]:
+    """``(splits, None)`` or ``(None, block)``. The splitter, asked without raising.
+
+    WHY THE GATE NEEDS THE SPLITS BEFORE IT CAN DECIDE
+    -------------------------------------------------
+    "Is every target class represented in the training split" is not answerable from a
+    row count. It needs the actual split ranges, because the splits are chronological
+    and never shuffled - a class confined to the last fifteen percent of the window
+    lands entirely in test, and no amount of total-class-count arithmetic reveals that.
+    So the split has to happen BEFORE the gate runs, which means the gate cannot rely on
+    the split having succeeded.
+
+    WHY NOT JUST LET IT RAISE
+    -------------------------
+    :func:`split_training_dataset` raises a classified ``DATASET`` block, and that was
+    the only answer an infeasible geometry used to get: the gate passed the dataset,
+    the splitter then refused it, and the author was told "the dataset cannot be split"
+    with no number to act on. The gate now computes the same feasibility itself
+    (``ml_training_policy.SplitPlan`` / ``CODE_SPLIT_INFEASIBLE``) and reports the row
+    count the requested geometry needs.
+
+    This wrapper is what lets both be true at once: the geometry is attempted, a failure
+    is CARRIED rather than thrown, the gate gets its chance to explain it properly, and
+    the splitter's own block is still raised if the gate somehow passed a shape the
+    splitter rejects. Neither authority is bypassed and neither is duplicated.
+    """
+    try:
+        return (
+            split_training_dataset(dataset, config, feature_lookback=feature_lookback),
+            None,
+        )
+    except TrainingBlocked as blocked:
+        logger.info(
+            "The requested split geometry does not fit %s usable rows (%s); the "
+            "readiness gate will report the row count it needs.",
+            getattr(dataset, "n_rows", "?"),
+            blocked,
+        )
+        return None, blocked
+
+
 # --------------------------------------------------------------------------
 # 6. The recorded configuration (Requirements 12.6, 15.14)
 # --------------------------------------------------------------------------
@@ -4529,6 +4739,8 @@ def build_training_config(
     seed: int,
     label_mode: str,
     label_threshold: float,
+    budget: Any = None,
+    verdict: Any = None,
 ) -> Dict[str, Any]:
     """The ``training_jobs.config`` payload: everything a rerun needs, and nothing else.
 
@@ -4538,10 +4750,30 @@ def build_training_config(
     that lives in a constant rather than in the row makes yesterday's run
     irreproducible the moment the constant changes.
 
+    THE APPROVED BUDGET IS PART OF THE CONFIGURATION
+    ------------------------------------------------
+    ``budget`` is the ``ml_training_policy.TrainingBudget`` this request was admitted
+    under, and it is recorded here for the same reason the epoch count is: the worker
+    executes the STORED configuration, never the request, so a control that is not in
+    the row is a control the worker does not have. The early-stopping figures in
+    particular are decided once, at admission, by the policy engine - a worker that
+    re-derived them could stop a run on different terms than the author was told.
+
+    ``policy_version`` and ``gate_outcome`` are recorded beside them so a decision can
+    be told apart from one made by a later policy. Historical rows are never
+    re-evaluated (Requirement 25).
+
     Postcondition
         No key at any depth names exchange identity or credential material, asserted
-        by :func:`assert_no_exchange_identity` before the value is returned.
+        by :func:`assert_no_exchange_identity` before the value is returned. The
+        governance payload adds no such key: it carries epoch counts, seconds, byte
+        budgets and class counts, and names no venue.
     """
+    # In-function, like every other policy read in this module: `ml_training_policy` is
+    # imported by `strategy_dag.validator` at ITS import time, so this file deliberately
+    # does not pull it at module scope.
+    from backend_app.backend.ml_training_policy import POLICY_VERSION
+
     index = frame.index
     config: Dict[str, Any] = {
         # The resolved data source. A market, never a venue (SB-06).
@@ -4581,6 +4813,49 @@ def build_training_config(
         "sequence_length": spec.sequence_length,
         "epoch_unit": spec.epoch_unit,
     }
+
+    # ── The approved governance decision, recorded so the worker executes it ──
+    #
+    # Everything below is what the POLICY ENGINE decided, not what the client asked
+    # for. The worker reads this row and nothing else, so these are the figures that
+    # actually bound the run: the epoch ceiling, the wall clock, the memory and
+    # artifact budgets, and the early-stopping terms.
+    if budget is not None:
+        config["budget"] = budget.to_dict()
+        # Flattened for the worker's hot path, which reads scalars off `config` rather
+        # than walking a nested document every epoch boundary. The nested copy above
+        # stays authoritative and complete; these are the three the loop needs.
+        config["max_epochs"] = int(budget.max_epochs)
+        config["min_meaningful_epochs"] = int(budget.min_meaningful_epochs)
+        config["max_wall_clock_seconds"] = int(budget.max_wall_clock_seconds)
+        config["early_stopping"] = budget.early_stopping.to_dict()
+        config["max_checkpoints"] = int(budget.max_checkpoints)
+        config["max_model_size_mb"] = int(budget.max_model_size_mb)
+
+    if verdict is not None:
+        # The readiness answer, so a completed run can be read back against the data it
+        # was admitted on. `task` is recorded because the worker needs to know whether
+        # it is fitting a classifier or a regressor and must not re-derive it from a
+        # label mode that could be edited.
+        config["task"] = str(getattr(verdict, "task", "") or "")
+        config["gate_outcome"] = getattr(verdict, "outcome").value
+        config["gate_warnings"] = [
+            str(issue.get("code") or "") for issue in (getattr(verdict, "warnings", ()) or ())
+        ]
+        split_plan = getattr(verdict, "split_plan", None)
+        if split_plan is not None:
+            config["split_plan"] = split_plan.to_dict()
+        stats = getattr(verdict, "stats", None)
+        measurements = getattr(stats, "measurements", None) if stats is not None else None
+        if measurements:
+            # Measured facts only - counts, ratios, booleans. Never a label vector and
+            # never a feature value: `004d_training_and_models.sql` makes the
+            # data-minimisation rule for this table explicit, and a class COUNT is a
+            # statistic while a class ASSIGNMENT per row would be the model's input.
+            config["dataset_measurements"] = dict(measurements)
+
+    config["policy_version"] = POLICY_VERSION
+
     assert_no_exchange_identity(config)
     return config
 
@@ -4702,6 +4977,11 @@ class NodeTrainingPlan:
     request: Any
     admission: Any
     verdict: Any
+    #: The ``ml_training_policy.TrainingBudget`` this node was admitted under. Defaulted
+    #: so a caller constructing a plan without one (the node-filtering copy in
+    #: ``create_training_job``, and the tests that build one directly) keeps working;
+    #: ``prepare_training`` always supplies it.
+    budget: Any = None
 
     def job_row(self, *, user_id: str, strategy_id: str, version_id: str) -> Dict[str, Any]:
         """The ``training_jobs`` INSERT payload for this node.
@@ -4729,12 +5009,58 @@ class NodeTrainingPlan:
             "feature_columns": int(self.stats.usable_feature_columns),
             "feature_names": list(self.stats.feature_names),
             "split_sizes": self.splits.sizes if self.splits is not None else None,
+            # The APPROVED epoch count, which is the requested one only because
+            # `enforce_caps` refused it otherwise. It is never a clamped value: a
+            # request above the budget's ceiling never reaches this row at all.
             "epochs_total": int(self.request.epochs),
             "epoch_current": 0,
             "progress": 0,
             "created_at": now,
             "updated_at": now,
         }
+
+    def governance_row(self) -> Dict[str, Any]:
+        """The governance columns ``019_training_governance.sql`` adds, if applied.
+
+        Kept separate from :meth:`job_row` so an environment that has not applied 019
+        still gets a complete, insertable job row. The insert merges this in and retries
+        without it when PostgREST reports an unknown column, which is the same
+        degradation shape every other optional column in this file uses - a governance
+        decision that cannot be RECORDED must not stop a job that was properly
+        ADMITTED, because the decision is still enforced from ``config``.
+        """
+        budget = self.budget
+        verdict = self.verdict
+        row: Dict[str, Any] = {"policy_version": str(getattr(verdict, "policy_version", "") or "")}
+        if budget is not None:
+            row.update(
+                {
+                    "requested_epochs": int(budget.requested_epochs),
+                    "recommended_epochs": int(budget.recommended_epochs),
+                    "approved_max_epochs": int(budget.max_epochs),
+                    "min_meaningful_epochs": int(budget.min_meaningful_epochs),
+                    "max_wall_clock_seconds": int(budget.max_wall_clock_seconds),
+                    "estimated_seconds_per_epoch": float(budget.estimated_seconds_per_epoch),
+                    "estimated_memory_mb": int(budget.estimated_memory_mb),
+                    "training_budget": budget.to_dict(),
+                }
+            )
+            row["policy_version"] = str(budget.policy_version)
+        if verdict is not None:
+            row.update(
+                {
+                    "task": str(getattr(verdict, "task", "") or ""),
+                    "gate_outcome": getattr(verdict, "outcome").value,
+                    "dataset_warnings": [
+                        dict(issue) for issue in (getattr(verdict, "warnings", ()) or ())
+                    ],
+                }
+            )
+            stats = getattr(verdict, "stats", None)
+            measurements = getattr(stats, "measurements", None) if stats is not None else None
+            if measurements:
+                row["dataset_measurements"] = dict(measurements)
+        return row
 
 
 @dataclass(frozen=True)
@@ -4783,6 +5109,21 @@ class TrainingPreparation:
             "market": self.market,
             "dataset_fingerprint": self.fingerprint,
             "warnings": list(self.warnings),
+            # The structured data-quality concerns, per node. Distinct from `warnings`
+            # above, which is the caps layer's free-text list: these carry a code, a
+            # field, the measured quantity and a fix hint, so the readiness panel can
+            # render "your rarest class has 31 training rows" rather than a sentence it
+            # has to parse. A WARNING never blocks - the job is queued either way - and
+            # that is exactly why it has to be reported where the author will see it.
+            "dataset_warnings": [
+                {
+                    "node_id": node.node_id,
+                    "outcome": node.verdict.outcome.value,
+                    "warnings": [dict(issue) for issue in (node.verdict.warnings or ())],
+                }
+                for node in self.nodes
+                if node.verdict is not None and getattr(node.verdict, "warnings", ())
+            ],
             "nodes": [
                 {
                     "node_id": node.node_id,
@@ -4795,6 +5136,16 @@ class TrainingPreparation:
                         node.splits.sizes if node.splits is not None else None
                     ),
                     "admission": node.admission.to_dict(),
+                    # What the policy engine approved, so the builder can show the
+                    # requested / recommended / approved triple and the estimated
+                    # duration BEFORE the author waits for a run that cannot finish.
+                    "budget": None if node.budget is None else node.budget.to_dict(),
+                    "task": (
+                        "" if node.verdict is None else str(getattr(node.verdict, "task", "") or "")
+                    ),
+                    "readiness": (
+                        None if node.verdict is None else node.verdict.outcome.value
+                    ),
                 }
                 for node in self.nodes
             ],
@@ -4847,6 +5198,7 @@ async def prepare_training(
         check_ml_data_requirements,
         enforce_caps,
         required_row_count,
+        resolve_budget,
         resolve_caps,
     )
 
@@ -4933,7 +5285,20 @@ async def prepare_training(
                 matrix, node_id, node.block_id
             )
 
-            # ── Step 4: measured statistics, then the gate ────────────────
+            # ── Step 4: the dataset, then the splits, then the measurements,
+            #    then the gate.
+            #
+            #    The splits come BEFORE the gate, which is a change of order and a
+            #    deliberate one: "is every target class represented in the training
+            #    split" cannot be answered from a row count, because the splits are
+            #    chronological and a class confined to the last fifteen percent of the
+            #    window lands entirely in test. The gate needs the real ranges.
+            #
+            #    `try_split_training_dataset` therefore CARRIES an infeasible geometry
+            #    instead of raising it, so the gate gets its chance to report
+            #    SPLIT_INFEASIBLE with the row count that geometry needs - rather than
+            #    the author seeing a bare "the dataset cannot be split" from a step
+            #    that runs after readiness already said yes.
             dataset = build_training_dataset(
                 matrix,
                 frame,
@@ -4941,7 +5306,12 @@ async def prepare_training(
                 label_mode=label_mode,
                 label_threshold=label_threshold,
             )
-            stats = DatasetStats.from_dataset(dataset)
+            splits, split_block = try_split_training_dataset(
+                dataset, validation_cfg, feature_lookback=int(plan.warmup_bars)
+            )
+            # Measured, never estimated, and measured WITH the splits so the per-split
+            # class and variance figures are real rather than derived from totals.
+            stats = DatasetStats.from_dataset(dataset, splits, measure=True)
             verdict = check_ml_data_requirements(
                 plan,
                 stats,
@@ -4952,16 +5322,18 @@ async def prepare_training(
             )
             if not verdict.ok:
                 # Requirements 14.3, 14.4: block, create NO job, and return the
-                # required and available figures for BOTH dimensions.
+                # required and available figures for BOTH dimensions - now plus the
+                # task-specific reason when that is what failed.
                 raise TrainingBlocked(
                     REASON_ML_REQUIREMENTS, verdict.message(), verdict.to_dict()
                 )
+            if splits is None:
+                # The gate passed a geometry the splitter refuses. That is a shape the
+                # gate does not model, and the splitter's own classified block is the
+                # honest answer - inventing a reason here would be guessing.
+                raise split_block
 
-            splits = split_training_dataset(
-                dataset, validation_cfg, feature_lookback=int(plan.warmup_bars)
-            )
-
-            # ── Step 6: the caps ─────────────────────────────────────────
+            # ── Step 6: the caps, then the budget within them ────────────
             request = TrainingRequest.build(
                 spec,
                 stats,
@@ -4969,8 +5341,29 @@ async def prepare_training(
                 batch_size=cfg.get("batch_size"),
             )
             caps = resolve_caps(user, spec)
+            # Resolved BEFORE admission so the recorded decision exists whichever way
+            # admission goes, and so `enforce_caps` is still the only thing that can
+            # refuse. The budget never raises; it narrows within the caps and floors
+            # itself at the model's own recommendation.
+            budget = resolve_budget(
+                request,
+                caps,
+                spec,
+                job_counts=job_counts,
+                validation_available=splits is not None and len(splits.val) > 0,
+            )
+            warnings.extend(budget.warnings)
             admission = enforce_caps(request, caps, user, job_counts=job_counts)
             warnings.extend(admission.warnings)
+
+            if verdict.warnings:
+                logger.info(
+                    "Training admitted for node %s with %d data-quality concern(s): %s",
+                    node_id,
+                    len(verdict.warnings),
+                    list(verdict.warning_codes),
+                )
+                _record_training_warnings(verdict.warning_codes)
 
             prepared.append(
                 NodeTrainingPlan(
@@ -4994,11 +5387,14 @@ async def prepare_training(
                         seed=seed,
                         label_mode=label_mode,
                         label_threshold=label_threshold,
+                        budget=budget,
+                        verdict=verdict,
                     ),
                     fingerprint=fingerprint,
                     request=request,
                     admission=admission,
                     verdict=verdict,
+                    budget=budget,
                 )
             )
 
@@ -5013,6 +5409,11 @@ async def prepare_training(
 
     except TrainingBlocked as blocked:
         _record_training_block(blocked.reason)
+        # The specific gate code too, not only the coarse reason. `ML_REQUIREMENTS`
+        # covers a dozen distinct findings now - a single-class target, an infeasible
+        # split, an unsupported task - and an operator looking at a spike needs to know
+        # which one, because the fixes are completely different.
+        _record_training_block_codes(blocked.detail)
         return TrainingPreparation(required=True, blocked=blocked)
     except CapExceeded as exceeded:
         # Requirement 16.3: name the one cap, its requested value and its permitted
@@ -5076,7 +5477,12 @@ async def find_live_training_job(
     return rows[0] if rows else None
 
 
-async def insert_training_job(sb: Any, row: Mapping[str, Any]) -> Dict[str, Any]:
+async def insert_training_job(
+    sb: Any,
+    row: Mapping[str, Any],
+    *,
+    governance: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
     """Insert one ``training_jobs`` row, idempotently per ``(version_id, node_id)``.
 
     Returns ``{"job": row_or_None, "idempotent": bool, "available": bool,
@@ -5097,12 +5503,38 @@ async def insert_training_job(sb: Any, row: Mapping[str, Any]) -> Dict[str, Any]
 
     Every other failure PROPAGATES. The one behaviour worse than a training run that
     fails to start is one that reports a job id nothing will ever pick up.
+
+    ``governance`` carries the columns ``019_training_governance.sql`` adds - the
+    approved budget, the readiness outcome, the measured dataset facts. It is merged
+    into the insert and DROPPED on a missing-column error, with a warning naming that
+    migration. The degradation is safe because those columns are a RECORD of the
+    decision, not the decision: the worker enforces the budget from ``config``, which
+    004d already created. An environment mid-rollout therefore queues real, governed
+    jobs whose audit trail is thinner, rather than refusing to queue at all.
     """
+    base = dict(row)
+    payload = {**base, **dict(governance or {})}
+    dropped_governance = False
+
     try:
-        query = sb.table(TRAINING_JOBS_TABLE).insert(dict(row)).execute()
+        query = sb.table(TRAINING_JOBS_TABLE).insert(payload).execute()
         result = await _execute(query)
     except Exception as exc:  # noqa: BLE001 - classified below, never swallowed blindly
-        if is_missing_training_table_error(exc):
+        if governance and is_missing_governance_column_error(exc):
+            logger.warning(
+                "%s has not been applied, so the training governance columns could not "
+                "be written for this job. Apply %s. The job IS governed - the approved "
+                "budget and the early-stopping terms are in training_jobs.config, which "
+                "the worker executes - but the decision's own audit columns are absent. "
+                "Detail: %s",
+                GOVERNANCE_MIGRATION,
+                GOVERNANCE_MIGRATION,
+                exc,
+            )
+            dropped_governance = True
+            query = sb.table(TRAINING_JOBS_TABLE).insert(base).execute()
+            result = await _execute(query)
+        elif is_missing_training_table_error(exc):
             logger.warning(
                 "Training was admitted but no job could be recorded: %s does not "
                 "exist. Apply %s. The strategy version was saved and stays "
@@ -5142,6 +5574,27 @@ async def insert_training_job(sb: Any, row: Mapping[str, Any]) -> Dict[str, Any]
 
     error_text = _result_error_text(result)
     if error_text:
+        # PostgREST reports some failures on the RESULT rather than by raising, so every
+        # branch above has a twin here. The governance twin comes first for the same
+        # reason it does above: it is a recoverable degradation, and the others are not.
+        if (
+            governance
+            and not dropped_governance
+            and is_missing_governance_column_error(Exception(error_text))
+        ):
+            logger.warning(
+                "%s has not been applied, so the training governance columns could not "
+                "be written for this job (%s). Apply %s. The job IS governed from "
+                "training_jobs.config; only its audit columns are absent.",
+                GOVERNANCE_MIGRATION,
+                error_text,
+                GOVERNANCE_MIGRATION,
+            )
+            dropped_governance = True
+            retry = sb.table(TRAINING_JOBS_TABLE).insert(base).execute()
+            result = await _execute(retry)
+            error_text = _result_error_text(result)
+    if error_text:
         if is_missing_training_table_error(Exception(error_text)):
             logger.warning(
                 "Training was admitted but no job could be recorded: %s (apply %s).",
@@ -5171,11 +5624,167 @@ async def insert_training_job(sb: Any, row: Mapping[str, Any]) -> Dict[str, Any]
 
     written = (getattr(result, "data", None) or []) if result else []
     return {
-        "job": written[0] if written else dict(row),
+        # The base row on the fallback path, never `payload`: returning columns the
+        # database did not accept would hand the caller a row that does not exist.
+        "job": written[0] if written else (base if dropped_governance else dict(payload)),
         "idempotent": False,
         "available": True,
         "reason": "",
+        # True when the audit columns landed. Reported so the caller can say "queued,
+        # audit trail incomplete" rather than either lying or failing.
+        "governance_recorded": bool(governance) and not dropped_governance,
     }
+
+
+#: The append-only audit of every admission decision. ``019`` creates it.
+GOVERNANCE_DECISIONS_TABLE = "training_governance_decisions"
+
+DECISION_ADMITTED = "ADMITTED"
+DECISION_DEFERRED = "DEFERRED"
+DECISION_REFUSED = "REFUSED"
+
+
+async def record_governance_decision(
+    sb: Any,
+    *,
+    user_id: str,
+    decision: str,
+    policy_version: str,
+    strategy_id: Optional[str] = None,
+    version_id: Optional[str] = None,
+    node_id: Optional[str] = None,
+    block_id: Optional[str] = None,
+    training_job_id: Optional[str] = None,
+    reason: Optional[str] = None,
+    gate_outcome: Optional[str] = None,
+    task: Optional[str] = None,
+    plan: Optional[str] = None,
+    requested_epochs: Optional[int] = None,
+    approved_epochs: Optional[int] = None,
+    training_budget: Optional[Mapping[str, Any]] = None,
+    detail: Optional[Mapping[str, Any]] = None,
+) -> Optional[str]:
+    """Record one admission decision. Returns its id, or ``None``. **Never raises.**
+
+    WHY A REFUSAL NEEDS A HOME OF ITS OWN
+    -------------------------------------
+    An admitted job records its decision on its own row. A REFUSED request has no row -
+    ``prepare_training`` raises before the insert, deliberately, so "no job on a blocked
+    path" is structural rather than promised. The consequence was that a refusal existed
+    only as a log line and a counter: "why was this account refused last Tuesday" and
+    "how often does the single-class gate fire" were both unanswerable from stored fact.
+
+    NEVER RAISES, AND WHY THAT IS THE RIGHT DIRECTION HERE
+    -----------------------------------------------------
+    This is instrumentation, not a control. The decision has already been made and is
+    already enforced by the time this is called; failing a correctly-refused request
+    because its audit row could not be written would turn a clean 422 into a 500, and
+    failing a correctly-admitted one would destroy work to record it. So a missing table
+    (019 unapplied) is a warning naming that file, and any other failure is a warning
+    too.
+
+    What it will NOT do is invent an id. ``None`` means "not recorded", and a caller
+    that reports an audit id only when one exists cannot claim an audit trail it does
+    not have.
+    """
+    if sb is None or not user_id or not decision:
+        return None
+
+    row: Dict[str, Any] = {
+        "id": str(uuid4()),
+        "user_id": str(user_id),
+        "decision": str(decision),
+        "policy_version": str(policy_version or ""),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    optional: Dict[str, Any] = {
+        "strategy_id": strategy_id or None,
+        "version_id": version_id or None,
+        "node_id": node_id or None,
+        "block_id": block_id or None,
+        "training_job_id": training_job_id or None,
+        "reason": reason or None,
+        "gate_outcome": gate_outcome or None,
+        "task": task or None,
+        "plan": plan or None,
+        "requested_epochs": requested_epochs,
+        "approved_epochs": approved_epochs,
+        "training_budget": dict(training_budget) if training_budget else None,
+        "detail": dict(detail) if detail else None,
+    }
+    row.update({key: value for key, value in optional.items() if value is not None})
+
+    try:
+        result = await _execute(sb.table(GOVERNANCE_DECISIONS_TABLE).insert(row).execute())
+    except Exception as exc:  # noqa: BLE001 - instrumentation never breaks its caller
+        text = str(exc).lower()
+        if GOVERNANCE_DECISIONS_TABLE in text or any(
+            code in text for code in _MISSING_TABLE_CODES
+        ):
+            logger.warning(
+                "The %s decision for user %s was not recorded: %s does not exist. Apply "
+                "%s. The decision itself was made and enforced.",
+                decision,
+                user_id,
+                GOVERNANCE_DECISIONS_TABLE,
+                GOVERNANCE_MIGRATION,
+            )
+        else:
+            logger.warning("A governance decision could not be recorded: %s", exc)
+        return None
+
+    error_text = _result_error_text(result)
+    if error_text:
+        logger.warning("A governance decision could not be recorded: %s", error_text)
+        return None
+    return str(row["id"])
+
+
+def _decision_fields(node: Any) -> Dict[str, Any]:
+    """The decision fields common to an admitted node, read off its prepared plan."""
+    budget = getattr(node, "budget", None)
+    verdict = getattr(node, "verdict", None)
+    request = getattr(node, "request", None)
+    return {
+        "node_id": getattr(node, "node_id", None),
+        "block_id": getattr(node, "block_id", None),
+        "gate_outcome": (
+            None if verdict is None else getattr(verdict, "outcome").value
+        ),
+        "task": None if verdict is None else str(getattr(verdict, "task", "") or ""),
+        "plan": None if budget is None else str(getattr(budget, "plan", "") or ""),
+        "requested_epochs": (
+            None if budget is None else int(getattr(budget, "requested_epochs", 0))
+        ),
+        "approved_epochs": None if request is None else int(getattr(request, "epochs", 0)),
+        "training_budget": None if budget is None else budget.to_dict(),
+        "policy_version": (
+            POLICY_VERSION_FALLBACK
+            if budget is None
+            else str(getattr(budget, "policy_version", "") or POLICY_VERSION_FALLBACK)
+        ),
+    }
+
+
+#: Used only when a prepared node carries no budget to read a version off - which means
+#: it was built by a caller that predates the budget, not that no policy applied.
+POLICY_VERSION_FALLBACK = "unknown"
+
+
+def _policy_version() -> str:
+    """``ml_training_policy.POLICY_VERSION``, lazily and without ever raising.
+
+    In-function, like every other policy read here. An unreadable version is recorded
+    as ``"unknown"`` rather than left blank: ``policy_version`` is NOT NULL on
+    ``training_governance_decisions`` precisely so that a stored decision always says
+    which rules judged it, and a blank would satisfy the column while answering nothing.
+    """
+    try:
+        from backend_app.backend.ml_training_policy import POLICY_VERSION
+
+        return str(POLICY_VERSION)
+    except Exception:  # noqa: BLE001
+        return POLICY_VERSION_FALLBACK
 
 
 async def enqueue_training_job(job_id: str, user_id: str) -> bool:

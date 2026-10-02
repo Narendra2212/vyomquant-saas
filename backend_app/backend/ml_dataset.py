@@ -64,6 +64,12 @@ __all__ = [
     "CLASS_DOWN",
     "CLASS_FLAT",
     "CLASS_UP",
+    # measurement (the data-sufficiency engine's inputs)
+    "MeasurementThresholds",
+    "DEFAULT_MEASUREMENT_THRESHOLDS",
+    "SplitMeasurements",
+    "DatasetMeasurements",
+    "measure_dataset",
 ]
 
 
@@ -660,3 +666,557 @@ def splits_for_dataset(
         feature_lookback=feature_lookback,
         label_horizon=dataset.horizon,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  MEASUREMENT — the facts the data-sufficiency engine decides on
+#
+#  WHY THE MEASURING LIVES HERE AND THE DECIDING DOES NOT
+#  ------------------------------------------------------
+#  `ml_training_policy` owns every threshold and every verdict, and it is kept
+#  deliberately import-light: `strategy_dag.validator` imports it at ITS import time to
+#  install the ML readiness stage, so a numpy or pandas import at that module's scope
+#  would be paid by the whole validator. `tests/test_strategy_dag_architecture.py`
+#  measures that in a fresh interpreter.
+#
+#  This module already holds `y`, `index` and `X`, and already imports numpy. So the
+#  division is: measurements are taken here, thresholds and outcomes are decided there.
+#  Nothing below returns a verdict, a severity or a limit - only counts, ratios and
+#  booleans about data that exists.
+#
+#  MEASURED, NEVER ESTIMATED
+#  -------------------------
+#  Same rule the row and column counts already follow. Every field is computed from the
+#  built `(X, y)` pair and its index, never from a bar count minus a warmup figure. A
+#  quantity that could not be computed is `None`, which the gate renders as "not
+#  measured" rather than as a comfortable zero.
+#
+#  COST
+#  ----
+#  One pass per column for the feature statistics and one `np.unique` over the labels,
+#  on a matrix the caller has already materialised. `max_rows` caps the feature scan on
+#  very wide/long matrices by sampling a contiguous head-and-tail window, and says so
+#  via `feature_scan_rows`, so a measurement is never silently taken over a subset
+#  without the gate being told.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class MeasurementThresholds:
+    """Tunables for the measurements. **Not** limits: nothing here refuses anything.
+
+    They decide what counts as "near constant" and what counts as an outlier, which are
+    properties of a measurement rather than of a policy. The policy layer reads the
+    resulting counts and decides.
+    """
+
+    #: A column whose distinct-value ratio is at or below this is NEAR constant. A
+    #: strictly constant column is reported separately and needs no ratio.
+    near_constant_unique_ratio: float = 0.01
+    #: ... and which also has at most this many distinct values. Both conditions, so a
+    #: long column with 1% distinct values but thousands of levels is not called
+    #: near-constant.
+    near_constant_max_unique: int = 3
+    #: |z| beyond this is counted as a target outlier. Reported as a count, never used
+    #: to drop a row - this module removes nothing.
+    outlier_sigma: float = 6.0
+    #: A regression target whose distinct-value ratio is at or below this is reported as
+    #: degenerate-looking. Again a measurement, not a refusal.
+    degenerate_target_unique_ratio: float = 0.001
+    #: Cap on rows scanned for the per-column feature statistics. 0 disables the cap.
+    max_feature_scan_rows: int = 200_000
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.near_constant_unique_ratio <= 1.0:
+            raise MLDatasetError(
+                f"near_constant_unique_ratio must be in [0, 1]: "
+                f"{self.near_constant_unique_ratio}"
+            )
+        if self.near_constant_max_unique < 1:
+            raise MLDatasetError(
+                f"near_constant_max_unique must be >= 1: {self.near_constant_max_unique}"
+            )
+        if self.outlier_sigma <= 0:
+            raise MLDatasetError(f"outlier_sigma must be > 0: {self.outlier_sigma}")
+        if not 0.0 <= self.degenerate_target_unique_ratio <= 1.0:
+            raise MLDatasetError(
+                f"degenerate_target_unique_ratio must be in [0, 1]: "
+                f"{self.degenerate_target_unique_ratio}"
+            )
+        if self.max_feature_scan_rows < 0:
+            raise MLDatasetError(
+                f"max_feature_scan_rows must be >= 0: {self.max_feature_scan_rows}"
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """The tunables as plain JSON, recorded beside the measurements they produced.
+
+        Provenance, not configuration: a stored measurement is only interpretable
+        against the thresholds it was taken at. "41 outlier rows" means one thing at 6
+        sigma and another at 3, and a reader six months later has no other way to know
+        which.
+        """
+        return {
+            "near_constant_unique_ratio": self.near_constant_unique_ratio,
+            "near_constant_max_unique": self.near_constant_max_unique,
+            "outlier_sigma": self.outlier_sigma,
+            "degenerate_target_unique_ratio": self.degenerate_target_unique_ratio,
+            "max_feature_scan_rows": self.max_feature_scan_rows,
+        }
+
+
+DEFAULT_MEASUREMENT_THRESHOLDS = MeasurementThresholds()
+
+
+def _class_counts(labels: np.ndarray) -> Dict[int, int]:
+    """``{class: rows}`` over finite integer labels, in ascending class order."""
+    finite = labels[np.isfinite(labels)] if labels.size else labels
+    if finite.size == 0:
+        return {}
+    values, counts = np.unique(finite.astype(np.int64), return_counts=True)
+    return {int(value): int(count) for value, count in zip(values, counts)}
+
+
+def _non_finite_counts(values: np.ndarray) -> "tuple[int, int]":
+    """``(nan_rows, inf_rows)``. Counted separately because they mean different things.
+
+    A NaN label is a row that could not be labelled; an infinite one is a row whose
+    forward return divided by a zero base. Folding them together would hide which.
+    """
+    if values.size == 0:
+        return 0, 0
+    as_float = values.astype(float, copy=False)
+    return int(np.isnan(as_float).sum()), int(np.isinf(as_float).sum())
+
+
+@dataclass(frozen=True)
+class SplitMeasurements:
+    """What one split actually holds, measured over its own contiguous rows.
+
+    This is the half the row-count arithmetic cannot answer. A dataset can carry a
+    perfectly adequate total class balance and still put every example of one class in
+    the test range, which makes the training split single-class and the validation
+    metric meaningless. The gate needs the per-split figures to see that, and a
+    per-split figure cannot be derived from a total.
+    """
+
+    name: str
+    rows: int
+    class_counts: Dict[int, int] = field(default_factory=dict)
+    target_variance: Optional[float] = None
+    target_unique: Optional[int] = None
+
+    @property
+    def n_classes(self) -> int:
+        return len(self.class_counts)
+
+    @property
+    def minority_count(self) -> Optional[int]:
+        return min(self.class_counts.values()) if self.class_counts else None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "rows": self.rows,
+            "class_counts": {str(k): v for k, v in self.class_counts.items()},
+            "n_classes": self.n_classes,
+            "minority_count": self.minority_count,
+            "target_variance": self.target_variance,
+            "target_unique": self.target_unique,
+        }
+
+
+@dataclass(frozen=True)
+class DatasetMeasurements:
+    """Every fact the data-sufficiency engine needs, measured from the built dataset.
+
+    Deliberately flat and JSON-shaped: it is recorded on the training job and rendered
+    in the readiness panel, so it must survive a round trip through JSONB without a
+    custom encoder.
+    """
+
+    rows: int
+    columns: int
+    label_mode: str
+    horizon: int
+
+    # -- labels ----------------------------------------------------------
+    label_nan_rows: int = 0
+    label_inf_rows: int = 0
+    #: Classification only; empty for regression.
+    class_counts: Dict[int, int] = field(default_factory=dict)
+    #: Regression only; ``None`` for classification.
+    target_variance: Optional[float] = None
+    target_std: Optional[float] = None
+    target_mean: Optional[float] = None
+    target_min: Optional[float] = None
+    target_max: Optional[float] = None
+    target_unique: Optional[int] = None
+    target_outlier_rows: Optional[int] = None
+
+    # -- index ------------------------------------------------------------
+    index_strictly_increasing: Optional[bool] = None
+    duplicate_timestamps: Optional[int] = None
+    non_monotonic_rows: Optional[int] = None
+    median_interval: Optional[int] = None
+    irregular_interval_rows: Optional[int] = None
+
+    # -- features ---------------------------------------------------------
+    feature_nan_rows: Optional[int] = None
+    feature_inf_rows: Optional[int] = None
+    constant_feature_columns: "tuple[str, ...]" = ()
+    near_constant_feature_columns: "tuple[str, ...]" = ()
+    duplicate_feature_rows: Optional[int] = None
+    #: Rows the per-column scan actually covered. Equal to ``rows`` unless the scan was
+    #: capped, which is stated rather than silent.
+    feature_scan_rows: int = 0
+
+    # -- splits -----------------------------------------------------------
+    splits: "tuple[SplitMeasurements, ...]" = ()
+    embargo_bars: Optional[int] = None
+
+    thresholds: MeasurementThresholds = DEFAULT_MEASUREMENT_THRESHOLDS
+
+    # -- derived, so the gate does not restate the arithmetic ------------
+    @property
+    def is_classification(self) -> bool:
+        return self.label_mode == LabelMode.CLASSIFICATION.value
+
+    @property
+    def n_classes(self) -> int:
+        return len(self.class_counts)
+
+    @property
+    def minority_class(self) -> Optional[int]:
+        if not self.class_counts:
+            return None
+        return min(self.class_counts, key=lambda cls: self.class_counts[cls])
+
+    @property
+    def minority_count(self) -> Optional[int]:
+        return min(self.class_counts.values()) if self.class_counts else None
+
+    @property
+    def majority_count(self) -> Optional[int]:
+        return max(self.class_counts.values()) if self.class_counts else None
+
+    @property
+    def imbalance_ratio(self) -> Optional[float]:
+        """``majority / minority``. ``None`` when there is no minority to divide by.
+
+        1.0 is perfectly balanced. Reported rather than judged: what counts as "too
+        imbalanced" depends on the task and the model, which is the policy layer's call.
+        """
+        minority = self.minority_count
+        majority = self.majority_count
+        if not minority or majority is None:
+            return None
+        return float(majority) / float(minority)
+
+    @property
+    def target_unique_ratio(self) -> Optional[float]:
+        if self.target_unique is None or self.rows <= 0:
+            return None
+        return float(self.target_unique) / float(self.rows)
+
+    def split(self, name: str) -> Optional[SplitMeasurements]:
+        for measured in self.splits:
+            if measured.name == name:
+                return measured
+        return None
+
+    @property
+    def split_sizes(self) -> Dict[str, int]:
+        return {measured.name: measured.rows for measured in self.splits}
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "rows": self.rows,
+            "columns": self.columns,
+            "label_mode": self.label_mode,
+            "horizon": self.horizon,
+            "label_nan_rows": self.label_nan_rows,
+            "label_inf_rows": self.label_inf_rows,
+            "class_counts": {str(k): v for k, v in self.class_counts.items()},
+            "n_classes": self.n_classes,
+            "minority_class": self.minority_class,
+            "minority_count": self.minority_count,
+            "majority_count": self.majority_count,
+            "imbalance_ratio": self.imbalance_ratio,
+            "target_variance": self.target_variance,
+            "target_std": self.target_std,
+            "target_mean": self.target_mean,
+            "target_min": self.target_min,
+            "target_max": self.target_max,
+            "target_unique": self.target_unique,
+            "target_unique_ratio": self.target_unique_ratio,
+            "target_outlier_rows": self.target_outlier_rows,
+            "index_strictly_increasing": self.index_strictly_increasing,
+            "duplicate_timestamps": self.duplicate_timestamps,
+            "non_monotonic_rows": self.non_monotonic_rows,
+            "median_interval": self.median_interval,
+            "irregular_interval_rows": self.irregular_interval_rows,
+            "feature_nan_rows": self.feature_nan_rows,
+            "feature_inf_rows": self.feature_inf_rows,
+            "constant_feature_columns": list(self.constant_feature_columns),
+            "near_constant_feature_columns": list(self.near_constant_feature_columns),
+            "duplicate_feature_rows": self.duplicate_feature_rows,
+            "feature_scan_rows": self.feature_scan_rows,
+            "splits": [measured.to_dict() for measured in self.splits],
+            "embargo_bars": self.embargo_bars,
+            # The thresholds these figures were taken at, so a stored measurement stays
+            # interpretable when a default changes later.
+            "thresholds": self.thresholds.to_dict(),
+            "source": "measured",
+        }
+
+
+def _measure_index(
+    index: np.ndarray,
+) -> "tuple[Optional[bool], Optional[int], Optional[int], Optional[int], Optional[int]]":
+    """``(strictly_increasing, duplicates, non_monotonic, median_interval, irregular)``.
+
+    `make_temporal_splits` already REFUSES a non-increasing index, and that refusal
+    stays. This measures the same property *before* the refusal so the gate can report
+    "your window has N duplicate timestamps" with a number, instead of the author
+    discovering it as a `TemporalSplitError` after admission said yes.
+
+    It also notices what the strict check cannot: `strategy_service.training_frame`
+    drops duplicate timestamps with `keep="first"` before a dataset is ever built, so by
+    the time rows reach here duplicates are usually already gone. A non-zero count here
+    therefore means a dataset assembled some other way, which is worth saying out loud.
+
+    Returns ``None``s for an index too short to have an interval.
+    """
+    if index.size <= 1:
+        return True, 0, 0, None, 0
+    try:
+        as_int = index.astype("int64")
+    except (TypeError, ValueError):
+        try:
+            as_int = np.asarray(index, dtype="datetime64[ns]").astype("int64")
+        except (TypeError, ValueError):
+            # A non-temporal index. Say "not measured" rather than guess.
+            return None, None, None, None, None
+
+    deltas = np.diff(as_int)
+    duplicates = int((deltas == 0).sum())
+    backwards = int((deltas < 0).sum())
+    strictly_increasing = bool(duplicates == 0 and backwards == 0)
+
+    positive = deltas[deltas > 0]
+    if positive.size == 0:
+        return strictly_increasing, duplicates, backwards, None, None
+    median = int(np.median(positive))
+    irregular = int((deltas != median).sum()) if median > 0 else None
+    return strictly_increasing, duplicates, backwards, median, irregular
+
+
+def _scan_window(rows: int, cap: int) -> SplitRange:
+    """The contiguous row range the feature scan covers.
+
+    A head window, because a feature matrix's pathologies (a column that is constant,
+    a block of NaN that survived the warmup trim) are not uniformly distributed and a
+    random sample would need an index list - which `SplitRange` deliberately does not
+    offer. The covered row count is reported, so a capped scan is visible.
+    """
+    if cap <= 0 or rows <= cap:
+        return SplitRange(0, max(0, rows))
+    return SplitRange(0, cap)
+
+
+def _measure_features(
+    X: np.ndarray,
+    columns: Sequence[str],
+    thresholds: MeasurementThresholds,
+) -> Dict[str, Any]:
+    """Per-column constancy plus matrix-wide NaN/inf and duplicate-row counts."""
+    out: Dict[str, Any] = {
+        "feature_nan_rows": None,
+        "feature_inf_rows": None,
+        "constant_feature_columns": (),
+        "near_constant_feature_columns": (),
+        "duplicate_feature_rows": None,
+        "feature_scan_rows": 0,
+    }
+    if X.size == 0:
+        out["feature_scan_rows"] = 0
+        out["feature_nan_rows"] = 0
+        out["feature_inf_rows"] = 0
+        out["duplicate_feature_rows"] = 0
+        return out
+
+    matrix = X if X.ndim > 1 else X.reshape(-1, 1)
+    window = _scan_window(int(matrix.shape[0]), int(thresholds.max_feature_scan_rows))
+    scanned = window.take(matrix).astype(float, copy=False)
+    out["feature_scan_rows"] = int(scanned.shape[0])
+
+    out["feature_nan_rows"] = int(np.isnan(scanned).any(axis=1).sum())
+    out["feature_inf_rows"] = int(np.isinf(scanned).any(axis=1).sum())
+
+    names = [str(name) for name in (columns or ())]
+    constant: list = []
+    near_constant: list = []
+    for position in range(int(scanned.shape[1])):
+        column = scanned[:, position]
+        finite = column[np.isfinite(column)]
+        label = names[position] if position < len(names) else f"column_{position}"
+        if finite.size == 0:
+            # Every value is NaN or infinite. That is not "constant", it is unusable,
+            # and the NaN/inf counts above already say so. Recording it as constant
+            # would make a hole look like a flat feature.
+            continue
+        distinct = int(np.unique(finite).size)
+        if distinct <= 1:
+            constant.append(label)
+            continue
+        ratio = float(distinct) / float(finite.size)
+        if (
+            ratio <= thresholds.near_constant_unique_ratio
+            and distinct <= thresholds.near_constant_max_unique
+        ):
+            near_constant.append(label)
+
+    out["constant_feature_columns"] = tuple(constant)
+    out["near_constant_feature_columns"] = tuple(near_constant)
+
+    try:
+        # Exact duplicate feature rows. A handful is normal in a quantised market
+        # series; a matrix that is mostly duplicates has far less information than its
+        # row count claims, which is the thing worth reporting.
+        unique_rows = np.unique(scanned, axis=0)
+        out["duplicate_feature_rows"] = int(scanned.shape[0] - unique_rows.shape[0])
+    except (TypeError, ValueError) as exc:  # noqa: BLE001 - a count, not a control
+        logger.debug("Duplicate feature rows could not be counted: %s", exc)
+        out["duplicate_feature_rows"] = None
+    return out
+
+
+def _measure_split(
+    name: str,
+    rng: SplitRange,
+    y: np.ndarray,
+    classification: bool,
+) -> SplitMeasurements:
+    labels = rng.take(y)
+    if classification:
+        return SplitMeasurements(
+            name=name, rows=int(len(rng)), class_counts=_class_counts(labels)
+        )
+    values = labels.astype(float, copy=False)
+    finite = values[np.isfinite(values)]
+    return SplitMeasurements(
+        name=name,
+        rows=int(len(rng)),
+        target_variance=float(np.var(finite)) if finite.size else None,
+        target_unique=int(np.unique(finite).size) if finite.size else 0,
+    )
+
+
+def measure_dataset(
+    dataset: SupervisedDataset,
+    splits: Optional[TemporalSplits] = None,
+    *,
+    thresholds: MeasurementThresholds = DEFAULT_MEASUREMENT_THRESHOLDS,
+) -> DatasetMeasurements:
+    """Measure everything the data-sufficiency engine decides on. Never refuses.
+
+    Args:
+        dataset: the built ``(X, y)`` pair. Its own rows are the row space measured,
+            which is the same row space `splits_for_dataset` splits - so a per-split
+            figure here and a split size there cannot disagree.
+        splits: the temporal splits, when they exist. Supplied, the per-split class and
+            variance figures are measured; omitted, ``splits`` is empty and the gate
+            reports split feasibility from arithmetic instead of from measurement.
+        thresholds: what counts as near-constant, outlying or degenerate. Measurement
+            tunables, not limits.
+
+    Returns:
+        `DatasetMeasurements`. Every quantity is measured or ``None``; nothing is
+        estimated and nothing is defaulted to a comfortable zero.
+
+    Raises:
+        Nothing for a pathological dataset - that is the whole point. A single-class
+        target, an all-NaN label column and a constant feature matrix are *findings*,
+        and a measurement function that raised on them would hand the policy layer an
+        exception where it needed a number. It will propagate a genuine programming
+        error (a dataset whose ``X`` and ``y`` disagree in length, which
+        `SupervisedDataset` already makes unconstructible).
+    """
+    y = np.asarray(dataset.y)
+    X = np.asarray(dataset.X)
+    index = np.asarray(dataset.index)
+    mode = dataset.label_mode
+    classification = mode is LabelMode.CLASSIFICATION
+
+    label_nan, label_inf = _non_finite_counts(y)
+
+    class_counts: Dict[int, int] = {}
+    target_variance = target_std = target_mean = None
+    target_min = target_max = None
+    target_unique: Optional[int] = None
+    target_outliers: Optional[int] = None
+
+    if classification:
+        class_counts = _class_counts(y)
+    else:
+        values = y.astype(float, copy=False)
+        finite = values[np.isfinite(values)]
+        if finite.size:
+            target_variance = float(np.var(finite))
+            target_std = float(np.std(finite))
+            target_mean = float(np.mean(finite))
+            target_min = float(np.min(finite))
+            target_max = float(np.max(finite))
+            target_unique = int(np.unique(finite).size)
+            if target_std and target_std > 0:
+                deviation = np.abs(finite - target_mean) / target_std
+                target_outliers = int((deviation > thresholds.outlier_sigma).sum())
+            else:
+                # A zero-variance target has no outliers, and dividing by it would
+                # manufacture infinities. Zero is the measurement, not a fallback.
+                target_outliers = 0
+        else:
+            target_unique = 0
+
+    increasing, duplicates, backwards, median_interval, irregular = _measure_index(index)
+    features = _measure_features(X, getattr(dataset, "columns", ()) or (), thresholds)
+
+    measured_splits: list = []
+    embargo: Optional[int] = None
+    if splits is not None:
+        embargo = int(splits.embargo_bars)
+        for name, rng in (
+            ("train", splits.train),
+            ("val", splits.val),
+            ("test", splits.test),
+        ):
+            measured_splits.append(_measure_split(name, rng, y, classification))
+
+    measurements = DatasetMeasurements(
+        rows=int(dataset.n_rows),
+        columns=int(dataset.n_columns),
+        label_mode=mode.value,
+        horizon=int(dataset.horizon),
+        label_nan_rows=label_nan,
+        label_inf_rows=label_inf,
+        class_counts=class_counts,
+        target_variance=target_variance,
+        target_std=target_std,
+        target_mean=target_mean,
+        target_min=target_min,
+        target_max=target_max,
+        target_unique=target_unique,
+        target_outlier_rows=target_outliers,
+        index_strictly_increasing=increasing,
+        duplicate_timestamps=duplicates,
+        non_monotonic_rows=backwards,
+        median_interval=median_interval,
+        irregular_interval_rows=irregular,
+        splits=tuple(measured_splits),
+        embargo_bars=embargo,
+        thresholds=thresholds,
+        **features,
+    )
+    logger.debug("[DATASET] measured %s", measurements.to_dict())
+    return measurements

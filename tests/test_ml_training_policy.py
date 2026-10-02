@@ -474,7 +474,21 @@ def test_both_dimensions_are_reported_even_when_only_one_fell_short():
 
 
 def test_the_gate_collects_every_problem_in_one_pass():
-    """Collect-all, not fail-fast: the author fixes both shortfalls in one round.
+    """Collect-all, not fail-fast: the author fixes every shortfall in one round.
+
+    Ten rows and two feature columns is short on BOTH dimensions, and a 15/15 split
+    with a ten-bar embargo cannot be produced from ten rows either. All three are
+    reported together.
+
+    ``SPLIT_INFEASIBLE`` joined this set with policy 2.0.0. It is not a new failure
+    mode - ``ml_dataset.make_temporal_splits`` has always refused this geometry - it is
+    the same refusal moved to where the author can act on it. Before, the gate passed
+    the split question and ``split_training_dataset`` raised afterwards, so a ten-row
+    dataset was told about its rows and columns and then, separately, that "the dataset
+    cannot be split". Now it is told once, with the row count that geometry needs.
+
+    Asserted as a superset-free equality on purpose: a gate that quietly stopped
+    reporting one of these would still pass a subset check.
 
     Validates: Requirements 14.3, 14.4
     """
@@ -483,7 +497,9 @@ def test_the_gate_collects_every_problem_in_one_pass():
     assert set(verdict.codes) == {
         P.CODE_INSUFFICIENT_FEATURE_COLUMNS,
         P.CODE_INSUFFICIENT_ROWS,
+        P.CODE_SPLIT_INFEASIBLE,
     }
+    assert verdict.outcome is P.GateOutcome.BLOCKED
 
 
 def test_the_blocking_message_states_required_and_available_for_both_dimensions():

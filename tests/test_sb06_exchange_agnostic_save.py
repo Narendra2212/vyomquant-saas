@@ -718,11 +718,18 @@ class TestForbiddenParamVocabulary:
 
 
 class TestTrainingConfigNamesItsOwnDataSource:
-    """`training_jobs` lands with task 6.1; its `config` is what the endpoint resolves now.
+    """`training_jobs.config` is what governance resolves, and the client names none of it.
 
     The pre-fix path read `body.get("exchange_id", "binance")` for the credential lookup
     and then built `ConnectionEngine("binance", ...)` regardless - two answers to one
     question, and the model learned the wrong market.
+
+    `_resolve_training_data_source` was the fix for that shape and is still covered here:
+    it is the one place that states what a venue identifier may look like. It is no
+    longer ON the training path, because governed training resolves the market from the
+    compiled graph's DATA block and takes the venue from a server setting, so a client
+    cannot name one at all. The three tests below therefore cover the validator; the
+    fourth covers the stronger property the route now holds.
     """
 
     def test_a_config_naming_no_data_source_is_refused_not_defaulted(self):
@@ -754,19 +761,57 @@ class TestTrainingConfigNamesItsOwnDataSource:
             _resolve_training_data_source({"data_source": "Binance Spot Account!"})
         assert caught.value.detail["error"] == "TRAINING_DATA_SOURCE_INVALID"
 
-    def test_one_resolved_value_feeds_both_the_vault_and_the_connection(self):
-        """The credential lookup and the market-data connection read the same variable."""
-        from backend_app.routers.strategies import train_ml_strategy
+    def test_the_training_route_names_no_venue_and_holds_no_credential(self):
+        """Requirement 12.6, now held structurally rather than by one shared variable.
+
+        REPLACES ``test_one_resolved_value_feeds_both_the_vault_and_the_connection``.
+
+        That test asserted the route resolved the venue ONCE and fed the same value to
+        ``vault.load_decrypted_keys`` and to ``ConnectionEngine`` - the right assertion
+        while the route itself fetched candles and held credentials, because the defect
+        it guarded was those two disagreeing.
+
+        The route no longer fetches or holds anything: it admits training through
+        ``StrategyService.create_training_job``, the market is resolved from the compiled
+        graph's DATA block by ``strategy_service.resolve_training_data_source``, and the
+        venue is a server setting the fetch seam reads. A client cannot name a venue at
+        all - ``data_source``/``exchange_id``/``exchange`` are REFUSED with 422 rather
+        than resolved (see ``SERVER_RESOLVED_TRAINING_KEYS``), which is strictly stronger
+        than resolving them consistently.
+
+        So the invariant asserted is the stronger one: no venue literal, no credential
+        access, and no second place that could disagree because there is no fetch here.
+        """
+        from backend_app.routers.strategies import (
+            SERVER_RESOLVED_TRAINING_KEYS,
+            train_ml_strategy,
+        )
 
         source = _python_code_only(inspect.getsource(train_ml_strategy))
+
         assert 'ConnectionEngine("binance"' not in source
         assert "'binance'" not in source and '"binance"' not in source, (
             "the training path must name no venue literal (Requirement 12.6)"
         )
-        assert source.count("training_data_source") >= 3, (
-            "the resolved data source must feed the vault lookup and the connection, "
-            "so the two cannot disagree"
-        )
+        # No credential access and no market-data fetch on this path at all, so the
+        # "two answers to one question" shape is unrepresentable rather than avoided.
+        for forbidden in (
+            "load_decrypted_keys",
+            "ConnectionEngine",
+            "fetch_historical_ohlcv",
+            "training_data_source",
+        ):
+            assert forbidden not in source, (
+                f"{forbidden!r} appears in the training route; the route admits "
+                f"training and must neither fetch market data nor hold credentials"
+            )
+
+        # A client naming a venue is refused, not quietly overridden.
+        for key in ("data_source", "exchange_id", "exchange"):
+            assert key in SERVER_RESOLVED_TRAINING_KEYS, (
+                f"{key!r} must be refused by the training route rather than honoured "
+                f"or silently dropped"
+            )
 
     def test_the_endpoint_keeps_its_auth_and_entitlement_gates(self):
         from backend_app.routers.strategies import train_ml_strategy

@@ -1065,3 +1065,143 @@ export function deriveTrainingBlocks(payload) {
     },
   ];
 }
+
+/**
+ * Dataset readiness and the approved training budget, for the panel an author sees
+ * BEFORE a run starts.
+ *
+ * WHY THIS IS SEPARATE FROM `deriveTrainingBlocks`
+ * ===============================================
+ * That function answers "why was this refused". This one answers the two questions a
+ * refusal cannot: "is this dataset any good" and "what will actually run". They are
+ * different payload paths and different moments - a block arrives instead of a job, and
+ * a readiness report arrives alongside one - so folding them together would mean a
+ * successful save had to be inspected for a refusal that is not there.
+ *
+ * WHAT IS RENDERED AND WHAT IS DELIBERATELY NOT
+ * =============================================
+ * Rendered: the readiness outcome, the dataset's own measured figures, the split sizes,
+ * the data-quality concerns in the server's own words, and the requested / recommended /
+ * approved epoch triple with the estimated duration.
+ *
+ * NOT rendered: the plan's raw ceilings, the memory estimate, the cells-per-epoch
+ * complexity figure, the global queue depth. Those are infrastructure limits and an
+ * author cannot act on them - what they can act on is "this model normally needs 200
+ * rounds, your plan allows 300, you asked for 5,000". The budget payload carries the
+ * internals; this reads the actionable subset out of it.
+ *
+ * NOTHING IS RECOMPUTED. Every number is read from the server's payload. A client that
+ * derived "recommended epochs" or decided what counts as too imbalanced would eventually
+ * disagree with the policy engine that actually admits the job, which is the drift the
+ * whole governance layer exists to remove.
+ *
+ * @param {object|null} payload A save response's `training` field, or the body of
+ *   `POST /strategy-operations/training/jobs`, or null. Both carry `nodes[]` and
+ *   `dataset_warnings[]`.
+ * @returns {{known: boolean, outcome: string|null, nodes: Array<object>,
+ *   concerns: Array<object>, hasConcerns: boolean}}
+ */
+export function deriveTrainingReadiness(payload) {
+  const unknown = { known: false, outcome: null, nodes: [], concerns: [], hasConcerns: false };
+  if (!isPlainObject(payload)) return unknown;
+
+  const nodes = Array.isArray(payload.nodes) ? payload.nodes.filter(isPlainObject) : [];
+  const warningGroups = Array.isArray(payload.dataset_warnings)
+    ? payload.dataset_warnings.filter(isPlainObject)
+    : [];
+  if (nodes.length === 0 && warningGroups.length === 0) return unknown;
+
+  const concerns = [];
+  warningGroups.forEach((group) => {
+    const nodeId = typeof group.node_id === 'string' ? group.node_id : null;
+    const issues = Array.isArray(group.warnings) ? group.warnings.filter(isPlainObject) : [];
+    issues.forEach((issue, index) => {
+      concerns.push({
+        nodeId,
+        code: typeof issue.code === 'string' ? issue.code : null,
+        // The server's sentence, verbatim. It already names the measured quantity
+        // ("the rarest target class has only 31 rows in the training split"), and a
+        // second wording here would be a second opinion about the same finding.
+        message: typeof issue.message === 'string' ? issue.message : '',
+        fixHint:
+          typeof issue.fix_hint === 'string' && issue.fix_hint ? issue.fix_hint : null,
+        key: `${group.node_id || ''}-${issue.code || 'warning'}-${index}`,
+      });
+    });
+  });
+
+  const readyNodes = nodes.map((node) => {
+    const budget = isPlainObject(node.budget) ? node.budget : {};
+    const splits = isPlainObject(node.split_sizes) ? node.split_sizes : {};
+    const requested = numberOrNull(budget.requested_epochs);
+    const recommended = numberOrNull(budget.recommended_epochs);
+    const approved = numberOrNull(budget.max_epochs);
+    const unit = typeof budget.epoch_unit === 'string' && budget.epoch_unit
+      ? budget.epoch_unit
+      : 'epochs';
+    const estimatedSeconds = numberOrNull(budget.estimated_total_seconds);
+    return {
+      nodeId: typeof node.node_id === 'string' ? node.node_id : null,
+      blockId: typeof node.block_id === 'string' ? node.block_id : null,
+      task: typeof node.task === 'string' && node.task ? node.task : null,
+      readiness: typeof node.readiness === 'string' ? node.readiness : null,
+      // The dataset, measured. `usable_rows` is rows in the built (X, y) pair - warmup
+      // and the trailing label horizon already removed - so it is the number a model
+      // actually trains on rather than the bar count that was fetched.
+      usableRows: numberOrNull(node.usable_rows),
+      featureColumns: numberOrNull(node.feature_columns),
+      splits: {
+        train: numberOrNull(splits.train),
+        val: numberOrNull(splits.val),
+        test: numberOrNull(splits.test),
+      },
+      epochs: {
+        unit,
+        requested,
+        recommended,
+        approved,
+        // The one sentence that makes the triple readable. Omitted rather than
+        // half-built when a figure is missing: "requested 5,000, recommended null" is
+        // worse than no sentence.
+        text:
+          requested !== null && recommended !== null && approved !== null
+            ? `${formatQuantity(requested)} ${unit} requested; ${formatQuantity(
+                recommended,
+              )} recommended; up to ${formatQuantity(approved)} approved`
+            : null,
+      },
+      // Absent when the server did not estimate one. Never computed here - the estimate
+      // is a throughput model the server owns and can correct from history.
+      estimatedDuration: estimatedSeconds === null ? null : formatAge(estimatedSeconds * 1000),
+      // False means the wall clock on this plan is not expected to fit the recommended
+      // count. Worth showing BEFORE the run: the alternative is the author waiting for
+      // a job that stops on the time limit.
+      fitsRecommended: budget.fits_recommended !== false,
+      warnings: Array.isArray(budget.warnings)
+        ? budget.warnings.filter((text) => typeof text === 'string' && text)
+        : [],
+    };
+  });
+
+  // The graph's outcome is its worst node's. A strategy with one WARNING model node is
+  // a strategy an author should look at, and reporting the best node's outcome would
+  // hide it.
+  const outcomes = readyNodes.map((node) => node.readiness).filter(Boolean);
+  let outcome = null;
+  if (outcomes.includes('BLOCKED')) outcome = 'BLOCKED';
+  else if (outcomes.includes('WARNING') || concerns.length > 0) outcome = 'WARNING';
+  else if (outcomes.length > 0) outcome = 'VALID';
+
+  return {
+    known: true,
+    outcome,
+    nodes: readyNodes,
+    concerns,
+    hasConcerns: concerns.length > 0,
+  };
+}
+
+/** A finite number, or null. Never `0` standing in for "absent". */
+function numberOrNull(value) {
+  return Number.isFinite(value) ? value : null;
+}

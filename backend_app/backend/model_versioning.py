@@ -142,6 +142,11 @@ __all__ = [
     "artifact_root",
     "artifact_bucket",
     "max_artifact_bytes",
+    "effective_artifact_ceiling",
+    "user_artifact_bytes",
+    "artifact_storage_allowance_bytes",
+    "assert_artifact_storage_available",
+    "prune_superseded_artifacts",
     # documents
     "serialize_model",
     "artifact_key",
@@ -1336,6 +1341,290 @@ async def promote_version_if_ready(
 # ══════════════════════════════════════════════════════════════════════════
 
 
+def _as_positive_int(value: Any) -> Optional[int]:
+    """A positive int, or ``None``. Used for optional budget figures off a JSONB row."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+async def user_artifact_bytes(sb: Any, user_id: str) -> Optional[int]:
+    """Bytes this account's ACTIVE model artifacts occupy, or ``None`` if unreadable.
+
+    Active only, deliberately. ``model_versions`` is append-only and 004d grants DELETE
+    to nobody, so a retrain leaves the superseded row in place - counting those would
+    make an account's footprint grow forever and lock out an author who has replaced the
+    same model ten times without ever holding more than one. ``uq_mv_active_per_node``
+    keeps at most one active row per node, so the active set is exactly the models the
+    account can actually deploy, which is the thing a storage allowance should bound.
+
+    ``None`` rather than ``0`` when the figure cannot be read: zero would be an
+    assertion that the account stores nothing, and the caller treats an unreadable
+    figure as "do not enforce" with a warning rather than as "plenty of room".
+    """
+    if sb is None:
+        return None
+    try:
+        query = (
+            sb.table(MODEL_VERSIONS_TABLE)
+            .select("artifact_bytes")
+            .eq("user_id", str(user_id))
+            .eq("is_active", True)
+            .execute()
+        )
+        result = await S._execute(query)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("The stored-artifact footprint could not be read: %s", exc)
+        return None
+    if S._result_error_text(result):
+        return None
+    rows = (getattr(result, "data", None) or []) if result else []
+    total = 0
+    for row in rows:
+        value = _as_positive_int((row or {}).get("artifact_bytes"))
+        if value:
+            total += value
+    return total
+
+
+async def artifact_storage_allowance_bytes(
+    sb: Any, user_id: str, approved_model_size_mb: Optional[int]
+) -> Optional[int]:
+    """The account's total artifact allowance, DERIVED from two existing limits.
+
+    ``ml_models`` (how many active models a plan permits - Pro Quant 5, Business 15, in
+    ``SubscriptionEngine``) multiplied by ``max_model_size_mb`` (how large each may be,
+    from ``MLTrainingCaps``). Both already exist and both are already authoritative, so
+    the product is the storage allowance that plan has always implied - and deriving it
+    means there is no third per-plan table to drift out of step with the other two.
+
+    ``sb`` is passed through to the plan read rather than letting it default. That
+    matters here: this runs in the WORKER, which holds no request and no JWT, and
+    ``get_plan_context`` with no client returns the Free context in development and
+    raises in production. Either answer would be wrong - Free would refuse a paying
+    account's model, and a raise would discard a completed run.
+
+    ``None`` when either factor cannot be read, which the caller treats as "do not
+    enforce" with a warning. An invented allowance would be worse than none: it would
+    refuse writes on a number nobody chose.
+    """
+    if not approved_model_size_mb:
+        return None
+    try:
+        from backend_app.core.subscription_dependencies import get_plan_context
+        from backend_app.core.subscription_engine import Resource, SubscriptionEngine
+
+        context = await get_plan_context(str(user_id), sb)
+        limit = SubscriptionEngine.get_effective_quotas(
+            context.plan, context.overrides
+        ).get(Resource.ML_MODELS.value, 0)
+        if SubscriptionEngine.is_unlimited(limit):
+            # A custom contract. Its real figure lives in `plan_limit_overrides`, and
+            # when none is recorded there is no number to multiply - so nothing is
+            # enforced here rather than a sentinel being treated as a count.
+            return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "The active-model allowance could not be read, so the stored-artifact "
+            "footprint was not bounded for this write: %s",
+            exc,
+        )
+        return None
+
+    count = _as_positive_int(limit)
+    if count is None:
+        return None
+    return count * int(approved_model_size_mb) * 1024 * 1024
+
+
+async def assert_artifact_storage_available(
+    sb: Any,
+    *,
+    user_id: str,
+    incoming_bytes: int,
+    approved_model_size_mb: Optional[int],
+) -> None:
+    """Refuse a write that would put this account over its artifact allowance.
+
+    Checked AFTER the per-artifact ceiling and BEFORE the ``model_versions`` row, so a
+    refusal costs the account nothing: the bytes are already in the store at this point
+    (``store_artifact`` wrote them) but no row references them, so they are unreachable
+    and a later sweep can reclaim them. Reordering this before the write would be better
+    still and is not possible without serialising the model twice.
+
+    Fails OPEN, with a warning, when either the footprint or the allowance cannot be
+    read - and that is the one place in this governance layer that does. The reasoning
+    is specific: every epoch has already run, the caps were enforced at admission and
+    re-enforced before the first epoch, and the per-artifact ceiling above is already
+    applied. Discarding a completed model because a quota read failed would destroy real
+    work to enforce a limit that is the least load-bearing of the set.
+
+    Raises
+        :class:`ArtifactStoreError`, which the worker classifies as
+        ``MODEL_PERSISTENCE_UNAVAILABLE`` - "every epoch ran but nothing deployable was
+        produced", which is exactly what happened.
+    """
+    allowance = await artifact_storage_allowance_bytes(sb, user_id, approved_model_size_mb)
+    if not allowance:
+        return
+    used = await user_artifact_bytes(sb, user_id)
+    if used is None:
+        logger.warning(
+            "The stored-artifact footprint for user %s could not be measured, so the "
+            "storage allowance was not enforced for this write.",
+            user_id,
+        )
+        return
+    if used + int(incoming_bytes) <= allowance:
+        return
+    raise ArtifactStoreError(
+        f"storing this model would put the account's active model artifacts at "
+        f"{used + int(incoming_bytes)} bytes, over its {allowance}-byte allowance "
+        f"({used} already stored). Delete a model you no longer need, or upgrade for a "
+        f"larger allowance. The trained model was NOT recorded."
+    )
+
+
+async def prune_superseded_artifacts(
+    sb: Any,
+    version_id: str,
+    node_id: str,
+    *,
+    keep: int = 2,
+    store: Optional[ArtifactStore] = None,
+    dry_run: bool = True,
+) -> Dict[str, Any]:
+    """Reclaim the BLOBS of superseded model versions. Never the active one, never a row.
+
+    WHAT THIS DELETES AND WHAT IT CANNOT
+    ------------------------------------
+    ``model_versions`` is append-only by design and ``004d_training_and_models.sql``
+    grants DELETE to NOBODY, including ``service_role``. So a retrain leaves every
+    previous row in place forever and those rows' artifacts accumulate. This reclaims
+    the stored bytes of the oldest superseded versions while leaving every row intact,
+    so provenance - which model was trained when, from what dataset, with what metrics -
+    survives the storage being reclaimed.
+
+    THE INVARIANT
+    -------------
+    **The active model version is never pruned.** Not "usually not": it is excluded
+    before ``keep`` is even applied, because ``uq_mv_active_per_node`` guarantees at
+    most one and it is the artifact a running deployment resolves. ``keep`` then
+    preserves the most recent N superseded versions on top of that, so an author who
+    wants to roll back one retrain still can.
+
+    THE CONSEQUENCE, STATED
+    -----------------------
+    A pruned version's row still exists and still appears in ``GET /registry/models``,
+    but ``GET /models/{id}/download`` for it will answer 404 ("no model artifact is
+    available for this link") rather than bytes. That is a real, visible change and it
+    is why ``dry_run`` defaults to **True**: this function reports what it would reclaim
+    and does nothing unless a caller explicitly asks. It is deliberately NOT wired into
+    the training path - reclaiming storage as a side effect of a successful run is how
+    an author loses an artifact they were about to download.
+
+    Returns
+        ``{"candidates", "pruned", "bytes_reclaimed", "kept_active", "dry_run"}``.
+    """
+    rows = await read_model_versions(sb, version_id, node_id)
+    if not rows:
+        return {
+            "candidates": [],
+            "pruned": [],
+            "bytes_reclaimed": 0,
+            "kept_active": None,
+            "dry_run": bool(dry_run),
+        }
+
+    active = next((row for row in rows if row.get("is_active")), None)
+    superseded = [row for row in rows if not row.get("is_active")]
+    # Newest first, so `keep` preserves the most recent rollback targets.
+    superseded.sort(key=lambda row: int(row.get("model_version") or 0), reverse=True)
+    candidates = superseded[max(0, int(keep)) :]
+
+    target = store if store is not None else current_artifact_store()
+    pruned: List[str] = []
+    reclaimed = 0
+    for row in candidates:
+        uri = str(row.get("artifact_uri") or "")
+        size = _as_positive_int(row.get("artifact_bytes")) or 0
+        if not uri:
+            continue
+        if dry_run:
+            pruned.append(uri)
+            reclaimed += size
+            continue
+        remove = getattr(target, "delete", None)
+        if not callable(remove):
+            logger.warning(
+                "The installed artifact store cannot delete, so nothing was reclaimed "
+                "for version %s node %s.",
+                version_id,
+                node_id,
+            )
+            break
+        try:
+            remove(uri)
+            pruned.append(uri)
+            reclaimed += size
+        except Exception as exc:  # noqa: BLE001 - a failed reclaim is not a failed run
+            logger.warning("The artifact at %s could not be reclaimed: %s", uri, exc)
+
+    logger.info(
+        "Artifact retention for version %s node %s: %d superseded version(s), %d "
+        "candidate(s), %d %s, %d bytes%s. The active version (%s) was not touched.",
+        version_id,
+        node_id,
+        len(superseded),
+        len(candidates),
+        len(pruned),
+        "would be reclaimed" if dry_run else "reclaimed",
+        reclaimed,
+        " (dry run)" if dry_run else "",
+        None if active is None else active.get("model_version"),
+    )
+    return {
+        "candidates": [str(row.get("artifact_uri") or "") for row in candidates],
+        "pruned": pruned,
+        "bytes_reclaimed": reclaimed,
+        "kept_active": None if active is None else active.get("model_version"),
+        "dry_run": bool(dry_run),
+    }
+
+
+def effective_artifact_ceiling(approved_bytes: Optional[int] = None) -> Tuple[int, str]:
+    """``(bytes, whose_limit)`` - the lower of the platform and the plan ceilings.
+
+    Two ceilings exist and they answer different questions:
+
+    * :func:`max_artifact_bytes` is the PLATFORM's - ``MemoryMonitor``'s model cache.
+      An artifact that cannot be cached cannot serve inference on any plan.
+    * ``approved_bytes`` is the PLAN's - ``MLTrainingCaps.max_model_size_mb``, recorded
+      on the job as ``config["max_model_size_mb"]`` at admission. Professional gets
+      256 MB and Enterprise 1,024 MB, and before this the plan figure was resolved,
+      recorded, and then never compared to anything.
+
+    The lower wins, which is the same direction the whole caps design takes: an
+    entitlement widens a limit within a ceiling it cannot lift. ``0`` from either side
+    means "no configured ceiling" and is skipped rather than treated as zero bytes - the
+    distinction matters, because treating an unreadable ceiling as zero would refuse
+    every artifact.
+
+    The second element names which limit bound, so a refusal can tell an author whether
+    to upgrade or to shrink their model.
+    """
+    platform = max_artifact_bytes()
+    plan = max(0, int(approved_bytes or 0))
+    candidates = [(value, name) for value, name in ((platform, "platform"), (plan, "plan")) if value > 0]
+    if not candidates:
+        return 0, ""
+    return min(candidates, key=lambda pair: pair[0])
+
+
 def store_artifact(
     model: Any,
     *,
@@ -1345,6 +1634,7 @@ def store_artifact(
     node_id: str,
     model_version: int,
     store: Optional[ArtifactStore] = None,
+    max_bytes: Optional[int] = None,
 ) -> StoredArtifact:
     """Serialize, size-check, store, and verify one artifact by reading it back.
 
@@ -1352,10 +1642,17 @@ def store_artifact(
 
     1. serialize, so the bytes exist before anything is addressed;
     2. hash them, so the key is content-addressed and cannot collide with another model;
-    3. refuse anything over :func:`max_artifact_bytes` **before** writing it;
+    3. refuse anything over the effective ceiling - the lower of the platform's cache
+       bound and the PLAN's ``max_model_size_mb`` - **before** writing it;
     4. store append-only - never overwriting whatever a running deployment may be using;
     5. read the stored artifact's checksum back through
        ``SafeModelLoader.compute_checksum`` and compare.
+
+    Step 3 now honours ``max_bytes``, the plan's approved artifact budget. Before that
+    the plan figure was resolved by ``resolve_caps``, recorded on the job, and compared
+    to nothing - so ``max_model_size_mb`` was a number in a document rather than a
+    control. The refusal happens before the write, so an over-budget model consumes no
+    storage at all rather than being stored and then rejected.
 
     Step 5 is what makes the recorded checksum a fact rather than an intention. A
     truncated or altered write is caught here, no ``model_versions`` row is inserted, and
@@ -1367,13 +1664,18 @@ def store_artifact(
     checksum = hashlib.sha256(payload).hexdigest()
     size = len(payload)
 
-    ceiling = max_artifact_bytes()
+    ceiling, whose = effective_artifact_ceiling(max_bytes)
     if ceiling and size > ceiling:
         raise ArtifactTooLarge(
             f"the serialized model is {size} bytes, over the {ceiling}-byte artifact "
-            f"ceiling MemoryMonitor's model cache allows. An artifact that cannot be "
-            f"cached cannot serve inference, so it is refused here rather than at deploy "
-            f"time."
+            f"ceiling this run was admitted under ({whose} limit). "
+            + (
+                "An artifact that cannot be cached cannot serve inference, so it is "
+                "refused here rather than at deploy time."
+                if whose == "platform"
+                else "Reduce the model's size - fewer rounds, shallower trees, fewer "
+                "feature columns - or upgrade for a larger artifact allowance."
+            )
         )
 
     target = store if store is not None else current_artifact_store()
@@ -1463,6 +1765,11 @@ async def bind_trained_model(ctx: Any, model: Any, *, sb: Any = None, store: Any
     existing = await read_model_versions(client, version_id, node_id)
     number = next_model_version(existing)
 
+    # The PLAN's artifact ceiling, from the approved configuration this run was
+    # admitted under rather than re-resolved here. `resolve_caps` decided it,
+    # `build_training_config` recorded it, and this is where it finally bounds
+    # something - before any bytes are written.
+    approved_mb = _as_positive_int(dict(getattr(ctx, "config", None) or {}).get("max_model_size_mb"))
     artifact = store_artifact(
         model,
         user_id=ctx.user_id,
@@ -1471,6 +1778,16 @@ async def bind_trained_model(ctx: Any, model: Any, *, sb: Any = None, store: Any
         node_id=node_id,
         model_version=number,
         store=store,
+        max_bytes=None if approved_mb is None else approved_mb * 1024 * 1024,
+    )
+
+    # The account's total stored-artifact footprint, checked after the per-artifact
+    # ceiling and before the row that would make this artifact permanent.
+    await assert_artifact_storage_available(
+        client,
+        user_id=ctx.user_id,
+        incoming_bytes=int(artifact.bytes),
+        approved_model_size_mb=approved_mb,
     )
 
     metrics = split_metrics_document(ctx)
