@@ -139,6 +139,17 @@ Both assertions are stale rather than the behaviour being absent: one checks cap
 other checks for an implementation that was deliberately replaced. Fixing them means editing
 assertions about work outside the pricing change, so they are recorded here instead.
 
+### Also confirmed pre-existing: the risk-limits exception swallow
+
+| Node id | Observed error | Why it is pre-existing |
+|---|---|---|
+| `test_exception_swallow_regression.py::TestGetStrategyLimitsExceptionSwallow::test_db_error_returns_503_not_empty_limits` | `Expected 503 (db crash), got 200: {"limits":[],"count":0,…}` | The swallow is in `backend_app/routers/risk.py`'s `get_strategy_limits`, which returns an empty list where it should refuse. That file is **untouched** by the pricing and entitlement work — it is unmodified in the working tree and its last commit (`c69b25bc`) predates it — and it imports nothing from `core/subscription_dependencies.py`, so neither the plan read nor its fail-closed refusal reaches it. The test is a genuine open finding about `risk.py`; it is listed here so it is not mistaken for fallout from the billing changes. |
+
+This one is a REAL defect rather than a stale assertion: an empty allowance list and an unreadable
+one are different facts, and the endpoint reports the second as the first. It is left open because
+fixing it means changing refusal behaviour on a risk endpoint, which is not what the billing work
+was authorised to touch.
+
 ## Category C items settled by the pricing-ladder change
 
 Two of the three category C entries above are resolved, and one is narrowed:

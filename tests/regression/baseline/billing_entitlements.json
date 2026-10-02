@@ -1,4 +1,5 @@
 {
+  "_baseline_note_raises": "RE-RECORDED, additively, by the change that made the fail-closed entitlement refusal distinguishable from a defect. TWO ADDITIONS, NOTHING REMOVED, RENAMED OR RETYPED. (1) A second raise: 503 BILLING_PLAN_UNVERIFIABLE. `get_plan_context` fails CLOSED in production - when the profiles read does not answer it refuses rather than assuming Free, because assuming Free silently strips a paying account of the capacity it bought - and it used to raise a bare RuntimeError that fell into this handler's catch-all and produced the SAME 500 BILLING_ENTITLEMENTS_FAILED as a genuine bug in the handler. A live billing page reported that code for a transient read failure, and neither the trader nor whoever picked up the report could tell 'try again in a moment' from 'this endpoint is broken' without reading the server log. The refusal now has its own named exception (`subscription_dependencies.PlanVerificationUnavailable`, a RuntimeError subclass so every existing `except RuntimeError` around that call keeps working) and its own code and status. 503 rather than 500 because nothing here is wrong: an upstream read was unavailable, the condition is transient, and the status is what makes a client's retry classification correct. (2) `request_id` added to the detail of BOTH raises. `apiClient` mints `req_<uuid4>` per request, sends it as X-Request-ID and prints it as the support reference, but CorrelationIdMiddleware was registered with its default `is_valid_uuid4` validator, which REJECTS that value - so the middleware discarded it, generated a replacement, and the identifier in every log record was not the one on the trader's screen. `main.py` now validates the format this client produces (and a bare uuid4) and the handler reports the resolved id in the body. The 500's `error` and `message` members are unchanged in name, type and meaning, so a client that only reads those is unaffected. tests/test_billing_entitlements_endpoint.py pins all four outcomes of this endpoint over HTTP.",
   "capture": "billing_entitlements",
   "frontend_bindings": {
     "getEntitlements": [
@@ -37,10 +38,20 @@
             {
               "detail_type": {
                 "error": "str",
-                "message": "str"
+                "message": "str",
+                "request_id": "computed"
               },
               "error_code": "BILLING_ENTITLEMENTS_FAILED",
               "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str",
+                "request_id": "computed"
+              },
+              "error_code": "BILLING_PLAN_UNVERIFIABLE",
+              "status_code": 503
             }
           ],
           "returns": [

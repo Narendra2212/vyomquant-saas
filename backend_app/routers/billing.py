@@ -51,9 +51,32 @@ from backend_app.core.database import get_db
 from backend_app.core.realtime_sync import RealtimeSync
 from backend_app.core.models import AddPaymentMethodRequest, PaymentMethodModel
 from backend_app.core.schemas import CheckoutRequest, RazorpayVerificationRequest
+# The fail-closed refusal from the entitlement layer, imported so this router can tell an
+# unreadable subscription apart from a defect in its own handler. See `get_entitlements`.
+from backend_app.core.subscription_dependencies import PlanVerificationUnavailable
 
 router = APIRouter()
 logger = logging.getLogger("BillingRouter")
+
+def _correlation_id(request: Any) -> str:
+    """The identifier that links a trader's screenshot to this server's log line.
+
+    Delegates to ``marketplace.errors.current_request_id``, which is the platform's existing
+    implementation: observability helper, then ``asgi_correlation_id``, then the inbound
+    ``X-Request-ID``, then a fresh uuid4. Reused rather than reimplemented so a reference quoted
+    from a billing error and one quoted from a marketplace error are the same kind of thing.
+
+    The fallback exists because an unreadable identifier is cosmetic and must never be the reason
+    a correct error response is replaced by a wrong one.
+    """
+    try:
+        from backend_app.backend.marketplace.errors import current_request_id
+
+        return current_request_id(request)
+    except Exception:  # noqa: BLE001 - a missing correlation id cannot change an outcome
+        from uuid import uuid4
+
+        return str(uuid4())
 
 
 def _validate_keys(provider: str) -> str:
@@ -1309,23 +1332,74 @@ async def get_entitlements(
             logger.debug(f"Billing entitlements cache write error: {cache_write_err}")
 
         return res_data
+    # ── A DEPENDENCY DID NOT ANSWER. That is not the same thing as a defect. ──
+    #
+    # `get_plan_context` fails CLOSED in production: when the `profiles` read does not answer it
+    # refuses rather than assuming Free, because assuming Free would silently strip a paying
+    # customer of the capacity they bought. Correct — but it used to fall into the generic handler
+    # below and leave the page saying `BILLING_ENTITLEMENTS_FAILED`, the same code a genuine bug
+    # in this handler produces. A trader reporting that screenshot, and whoever picked up the
+    # ticket, could not tell "we could not read your plan just now, try again" from "this endpoint
+    # is broken" without reading the server log.
+    #
+    # So it answers 503 with its own code and a `Retry-After`. 503 rather than 500 because nothing
+    # here is wrong: an upstream read was unavailable, the condition is transient, and the client's
+    # own retry classification (`apiClient.ApiError.isRetryable`) is then telling the truth.
+    #
+    # Ordered BEFORE the catch-all because `except` clauses are tried in order and
+    # `PlanVerificationUnavailable` is a `RuntimeError`, so the generic arm would otherwise swallow
+    # it exactly as it did before.
+    except PlanVerificationUnavailable as plan_unreadable:
+        request_id = _correlation_id(request)
+        logger.error(
+            "[BILLING_ENTITLEMENTS_ENDPOINT] Plan verification unavailable: "
+            "request_id=%s, user_id_truncated=%s, reason=%s",
+            request_id,
+            (user.get("id") or "missing")[:8],
+            plan_unreadable,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "BILLING_PLAN_UNVERIFIABLE",
+                "message": (
+                    "Your subscription could not be read, so no entitlement was assumed. "
+                    "Nothing about your plan has changed."
+                ),
+                "request_id": request_id,
+            },
+            # `Retry-After` only. The `X-Request-ID` RESPONSE header belongs to
+            # `CorrelationIdMiddleware`, which sets it on every response; setting it here too
+            # appended a second value and the client read back `id, id`.
+            headers={"Retry-After": "5"},
+        )
     except Exception as e:
         import traceback
-        
+
         # Safe diagnostic logging - no sensitive data
         exc_type = type(e).__name__
         exc_module = type(e).__module__
         exc_message = str(e)
-        
+
         # Get caller info
         frame = inspect.currentframe()
         caller_filename = frame.f_back.f_code.co_filename if frame.f_back else "unknown"
         caller_lineno = frame.f_back.f_lineno if frame.f_back else 0
-        
+
+        # THE REFERENCE ON THE TRADER'S SCREEN, IN THE LOG LINE THAT EXPLAINS IT.
+        #
+        # `apiClient` mints `req_<uuid4>` per request and sends it as `X-Request-ID`, and
+        # `design/errorCopy.readSupportRef` prints it as the support reference. These log lines
+        # did not record it, so the one identifier a trader can quote matched nothing on the
+        # server and a report had to be correlated by guesswork over timestamps. `_correlation_id`
+        # prefers that inbound header, so the value logged here IS the value on screen.
+        request_id = _correlation_id(request)
+
         # Log comprehensive diagnostic info
         logger.error(
             f"[BILLING_ENTITLEMENTS_ENDPOINT] Exception details: "
             f"endpoint=/api/billing/entitlements, "
+            f"request_id={request_id}, "
             f"exception_type={exc_type}, "
             f"exception_module={exc_module}, "
             f"exception_message={exc_message}, "
@@ -1333,13 +1407,20 @@ async def get_entitlements(
             f"caller_line={caller_lineno}, "
             f"user_id_truncated={user['id'][:8] if user.get('id') else 'missing'}..."
         )
-        
+
         # Log full traceback for debugging
-        logger.error(f"[BILLING_ENTITLEMENTS_ENDPOINT] Full traceback:\n{traceback.format_exc()}")
-        
+        logger.error(
+            f"[BILLING_ENTITLEMENTS_ENDPOINT] Full traceback (request_id={request_id}):\n"
+            f"{traceback.format_exc()}"
+        )
+
         raise HTTPException(
             status_code=500,
-            detail={"error": "BILLING_ENTITLEMENTS_FAILED", "message": "Failed to fetch billing entitlements"}
+            detail={
+                "error": "BILLING_ENTITLEMENTS_FAILED",
+                "message": "Failed to fetch billing entitlements",
+                "request_id": request_id,
+            },
         )
 
 

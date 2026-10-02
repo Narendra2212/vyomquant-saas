@@ -424,6 +424,30 @@ def _plan_cache_key(user_id: str) -> str:
     return f"entitlement:plan:{user_id}"
 
 
+class PlanVerificationUnavailable(RuntimeError):
+    """The caller's commercial state could not be READ, so no entitlement was assumed.
+
+    NOT A BUG, AND THAT IS THE POINT OF GIVING IT A NAME
+    ---------------------------------------------------
+    :func:`get_plan_context` fails closed in production: when the ``profiles`` read does not
+    answer, it refuses rather than defaulting to Free, because defaulting would silently strip a
+    paying customer of the capacity they bought the moment the database hiccups. That refusal is
+    correct, and it is a DEPENDENCY being unavailable — not the server breaking.
+
+    Raised as a bare ``RuntimeError`` it was indistinguishable from one. Every caller funnelled it
+    into the same generic 500 as a genuine defect, so the only way to tell "we could not read your
+    plan" from "this endpoint is broken" was to read the server log — which is exactly the
+    position a production billing page was in when it reported `BILLING_ENTITLEMENTS_FAILED` for a
+    transient read failure.
+
+    A SUBCLASS of ``RuntimeError``, deliberately: ``routers/strategy_operations.py`` and
+    ``backend/model_versioning.py`` already wrap this call in broad handlers, and
+    ``tests/test_pricing_ladder.py`` asserts ``pytest.raises(RuntimeError)`` on the fail-closed
+    path. Every one of them keeps working unchanged; a caller that wants to tell the two apart
+    now can.
+    """
+
+
 async def invalidate_plan_cache(user_id: str) -> None:
     """Drop a user's cached plan so a billing change takes effect on the next request."""
     try:
@@ -455,7 +479,7 @@ async def get_plan_context(user_id: str, supabase: Any) -> PlanContext:
 
     if not supabase:
         if _is_production():
-            raise RuntimeError(
+            raise PlanVerificationUnavailable(
                 "CRITICAL: Supabase unavailable in production. Subscription verification failed "
                 "to prevent unauthorized access."
             )
@@ -484,7 +508,7 @@ async def get_plan_context(user_id: str, supabase: Any) -> PlanContext:
                 continue
             logger.error("Failed to read plan for %s: %s", user_id, exc)
             if _is_production():
-                raise RuntimeError(
+                raise PlanVerificationUnavailable(
                     f"CRITICAL: Subscription verification failed: {exc}. Operation blocked to "
                     "prevent unauthorized access in production."
                 ) from exc

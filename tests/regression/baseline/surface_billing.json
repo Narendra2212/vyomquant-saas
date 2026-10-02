@@ -1,4 +1,5 @@
 {
+  "_baseline_note_entitlement_refusal": "RE-RECORDED, additively, by the change that made the fail-closed entitlement refusal distinguishable from a defect. GET /api/billing/entitlements gained a second raise - 503 BILLING_PLAN_UNVERIFIABLE - and a `request_id` member on the detail of both of its raises. Nothing was removed, renamed or retyped. `get_plan_context` fails CLOSED in production: when the profiles read does not answer it refuses rather than assuming Free, because assuming Free silently strips a paying account of the capacity it bought. That refusal used to be a bare RuntimeError caught by this handler's catch-all, so it produced the same 500 BILLING_ENTITLEMENTS_FAILED as a real bug - a live billing page reported exactly that for a transient read failure, and the code could not tell the two apart. The `request_id` addition is the other half of the same report: the browser's `req_<uuid4>` support reference was being discarded by CorrelationIdMiddleware's default uuid4 validator and replaced by a server-generated id, so the reference a customer could quote appeared in no log line. See the note in baseline/billing_entitlements.json for the full account.",
   "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. POST /api/billing/checkout gained two ADDITIVE response members and lost none: `interval` (\"month\" | \"year\") and `price_source` (\"published\" | \"fx\"). WHY `interval`: annual billing did not exist before this change \u2014 Stripe's recurring interval was the hardcoded literal \"month\" \u2014 so a checkout could not state which cycle it was buying and the response had no cycle to report. WHY `price_source`: the amount is now charged from the catalogue's PUBLISHED price for a currency it publishes (INR, USD) and FX-converted only for one it does not. Those are different kinds of figure \u2014 a commitment versus a rate-dependent estimate \u2014 and a caller rendering a price is entitled to know which it has. Previously every amount was an FX conversion of the USD base, which is why GET /api/billing/plans answered ~Rs865 for the plan published at Rs999. Nothing was removed, renamed or retyped: `checkoutUrl`, `checkout_url`, `provider`, `currency`, `amount`, `order_id`, `key_id` and `razorpay_key` are unchanged in name, type and meaning, so every existing client keeps working.",
   "api_call_count": 11,
   "api_calls": [
@@ -61,10 +62,20 @@
             {
               "detail_type": {
                 "error": "str",
-                "message": "str"
+                "message": "str",
+                "request_id": "computed"
               },
               "error_code": "BILLING_ENTITLEMENTS_FAILED",
               "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str",
+                "request_id": "computed"
+              },
+              "error_code": "BILLING_PLAN_UNVERIFIABLE",
+              "status_code": 503
             }
           ],
           "returns": [

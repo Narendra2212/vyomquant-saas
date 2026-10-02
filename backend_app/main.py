@@ -30,6 +30,7 @@
 from datetime import datetime, timezone
 import logging
 import os
+import re
 import secrets
 import sys
 import time
@@ -600,7 +601,37 @@ app.add_middleware(PrometheusMiddleware)
 # other request, and every figure `PrometheusMiddleware` above already records, untouched.
 app.add_middleware(MarketplacePaperHttpMetricsMiddleware)
 if CorrelationIdMiddleware:
-    app.add_middleware(CorrelationIdMiddleware)
+    # ── THE CLIENT'S OWN REQUEST ID IS HONOURED, NOT DISCARDED ──────────────
+    #
+    # `apiClient` mints `req_<uuid4>` for every request, sends it as `X-Request-ID`, and
+    # `design/errorCopy.readSupportRef` prints it on the error panel as the support reference a
+    # trader is asked to quote. The middleware's DEFAULT validator is `is_valid_uuid4`, which
+    # rejects that value outright — the `req_` prefix is not a UUID — logs
+    #
+    #     Generated new request ID (…), since request header value failed validation
+    #
+    # and replaces it with a freshly generated hex id. Every log record for that request, and the
+    # `request_id` in every structured error body, then carried the SERVER's id while the trader's
+    # screen showed the browser's. So the one identifier a customer could quote matched nothing on
+    # the server, and a support report had to be correlated by guessing over timestamps. That
+    # applied to every endpoint in the application, not to one.
+    #
+    # The validator below accepts the format this application's own client produces and nothing
+    # looser. It stays strict on purpose: an unvalidated inbound header is a log-injection seam —
+    # a caller could write arbitrary text, including forged ids and newlines, into the log line
+    # that identifies its own request. A bare uuid4 is accepted too, so curl, the mobile client and
+    # an upstream proxy that already sets a correlation id all keep working, and anything else is
+    # still replaced by a generated id exactly as before.
+    _CLIENT_REQUEST_ID = re.compile(
+        r"\A(?:req_)?[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?"
+        r"[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}\Z"
+    )
+
+    def _is_acceptable_request_id(value: str) -> bool:
+        """Whether an inbound ``X-Request-ID`` may be adopted as this request's identifier."""
+        return bool(value) and _CLIENT_REQUEST_ID.match(value) is not None
+
+    app.add_middleware(CorrelationIdMiddleware, validator=_is_acceptable_request_id)
 
 # Create database tables (skip if database not available)
 try:

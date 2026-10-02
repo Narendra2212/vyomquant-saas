@@ -277,6 +277,15 @@ export const CODE_COPY = Object.freeze({
   MARKETPLACE_COVER_REFERENCE_REJECTED: { headline: 'That cover image cannot be used', detail: 'Upload the image through this page rather than linking to one elsewhere.', retryable: false },
   MARKETPLACE_ACTION_NOT_RECORDED: { headline: 'The change was rolled back', detail: 'It could not be recorded in the audit trail, so it was undone rather than left unlogged.', retryable: true },
   BILLING_ENTITLEMENTS_FAILED: { headline: 'Could not check your plan', detail: 'Your entitlements are unreadable, so none are assumed. Refresh to read again.', retryable: true },
+  // The DEPENDENCY-UNAVAILABLE half of the one above, and the distinction is the whole reason it
+  // exists. The entitlement layer fails closed: when it cannot read the subscription it refuses
+  // rather than assuming Free, because assuming Free would strip a paying account of the capacity
+  // it bought. Both outcomes used to arrive as `BILLING_ENTITLEMENTS_FAILED`, so a transient read
+  // failure and a genuine fault in the endpoint read identically on screen — and the first is
+  // worth waiting out while the second is worth reporting. This copy says which one happened, and
+  // says plainly that nothing has been changed, because "none are assumed" on a billing page is
+  // easily read as "your plan was taken away".
+  BILLING_PLAN_UNVERIFIABLE: { headline: 'Your plan could not be read just now', detail: 'Nothing about your subscription has changed, and nothing was assumed about it. Try again in a moment.', retryable: true },
 
   // ---- Shared across domains -------------------------------------------
   NOT_FOUND: { headline: 'Not found', detail: 'It does not exist, or it is not on your account.', retryable: false },
