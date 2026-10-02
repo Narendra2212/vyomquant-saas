@@ -54,7 +54,9 @@ search/HPO budget; no artifact storage accounting; and the bypass above.
 
 18 files: 15 modified, 3 added. `git diff --stat` over the 14 *tracked* modified files reports
 **5,696 insertions, 250 deletions**; the 15th (`connection_layer/routers/strategies.py`) is not
-tracked by git in this repository. The three new files add 2,438 lines (627 + 673 + 1,138).
+tracked by git — `.gitignore:239` excludes the whole `connection_layer/` directory, so that one
+edit is deliberately uncommittable and will not travel with this change. The three new files add
+2,911 lines (740 + 721 + 1,450).
 
 The figures above exclude a concurrent billing/entitlements workstream that was editing this tree
 during the work (`backend_app/core/subscription_dependencies.py`, `backend_app/routers/billing.py`,
@@ -69,7 +71,7 @@ during the work (`backend_app/core/subscription_dependencies.py`, `backend_app/r
 | `backend_app/backend/ml_models.py` | `ModelTask`, `FAMILY_SUPPORTED_TASKS`, `ModelSpec.supported_tasks/default_task/supports_task`. `assert_governed_training` + a `ContextVar` + the `ML_ALLOW_UNGOVERNED_TRAINING` escape, wired into all **8** concrete `train_custom_strategy` methods. |
 | `backend_app/backend/strategy_service.py` | `try_split_training_dataset` (carries a block instead of raising, so the gate can report it). `prepare_training` reordered so splits are known before the gate runs. `build_training_config(budget=, verdict=)`. `insert_training_job(governance=)`. `record_governance_decision` + `training_governance_decisions`. Graceful degradation when the 019 columns are absent. |
 | `backend_app/backend/training_worker.py` | `EarlyStoppingMonitor`, best-weight snapshot/restore, `STOP_REASON_*`, `run_isolated(stateful=)`, `_actuals_row`, runtime installation in `_main`. |
-| `backend_app/backend/training_runtime.py` **(new, 627 lines)** | Real incremental epoch trainers for the tree family: `_XGBoostAdapter`, `_LightGBMAdapter`, `_RandomForestAdapter`, `_CatBoostAdapter`, `TreeEpochTrainer`, `build_trainer`, `install_training_runtime`. |
+| `backend_app/backend/training_runtime.py` **(new, 740 lines)** | Real incremental epoch trainers for the tree family: `_XGBoostAdapter`, `_LightGBMAdapter`, `_RandomForestAdapter`, `_CatBoostAdapter`, `TreeEpochTrainer`, `build_trainer`, `install_training_runtime`. |
 | `backend_app/backend/model_versioning.py` | `effective_artifact_ceiling`, `user_artifact_bytes`, `artifact_storage_allowance_bytes`, `assert_artifact_storage_available`, `prune_superseded_artifacts`, `store_artifact(max_bytes=)`. |
 | `backend_app/backend/metrics.py` | 4 new series and their recorders, in their own `TRAINING_GOVERNANCE_METRIC_ATTRIBUTES` tuple folded into `get_prometheus_metrics`. |
 
@@ -80,13 +82,13 @@ during the work (`backend_app/core/subscription_dependencies.py`, `backend_app/r
 | `backend_app/routers/strategies.py` | `train_ml_strategy` rewritten from an in-process trainer into a **governed adapter**: it admits a job and returns its id. Server-resolved fields are refused with `TRAINING_FIELD_SERVER_RESOLVED`, not ignored. `@limiter.limit("20/minute")`. |
 | `backend_app/routers/strategy_operations.py` | `run_optimization` gained a resolved search budget and reports it as `search_budget`. |
 | `connection_layer/routers/strategies.py` | `POST /train-ml` → **410** `TRAINING_ROUTE_RETIRED`, naming the governed endpoint. |
-| `backend_app/migrations/019_training_governance.sql` **(new, 673 lines)** | 20 nullable columns on `training_jobs`, 5 guarded CHECKs, 2 partial indexes; new append-only `training_governance_decisions` table with owner-scoped RLS (SELECT + INSERT only, no UPDATE/DELETE policy), grants to `authenticated`/`service_role`, `REVOKE ALL` from `anon`. |
+| `backend_app/migrations/019_training_governance.sql` **(new, 721 lines)** | 20 nullable columns on `training_jobs`, 5 guarded CHECKs, 2 partial indexes; new append-only `training_governance_decisions` table with owner-scoped RLS (SELECT + INSERT only, no UPDATE/DELETE policy), grants to `authenticated`/`service_role`, `REVOKE ALL` from `anon`. |
 | `docker-compose.yml` | New `training-worker` service (2 replicas, 4G/2cpu), shared `model_artifacts` volume, governance env wired into both backend and worker. |
 
 ### Frontend and tests
 
 `algo22-terminal/src/lib/graphValidation.js` — appended `deriveTrainingReadiness`.
-`tests/test_ml_training_governance.py` **(new, 1,138 lines)**, plus updates to
+`tests/test_ml_training_governance.py` **(new, 1,450 lines)**, plus updates to
 `tests/test_ml_deployment_guards.py`, `tests/test_ml_training_policy.py`,
 `tests/test_sb06_exchange_agnostic_save.py` (see §8 for why two pre-existing tests were rewritten).
 
